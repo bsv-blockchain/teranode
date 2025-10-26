@@ -21,7 +21,15 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
 	"github.com/bsv-blockchain/teranode/util/retry"
+	"github.com/rcrowley/go-metrics"
 )
+
+// init disables go-metrics globally to prevent memory leak from exponential decay sample heap.
+// This must be set before any Sarama clients are created.
+// See: https://github.com/IBM/sarama/issues/1321
+func init() {
+	metrics.UseNilMetrics = true
+}
 
 // KafkaAsyncProducerI defines the interface for asynchronous Kafka producer operations.
 type KafkaAsyncProducerI interface {

@@ -1979,6 +1979,10 @@ func (m *MockCleanupService) UpdateBlockHeight(height uint32, doneCh ...chan str
 	return args.Error(0)
 }
 
+func (m *MockCleanupService) SetPersistedHeightGetter(getter func() uint32) {
+	m.Called(getter)
+}
+
 // containsHash is a helper to check if a slice of hashes contains a specific hash
 func containsHash(list []chainhash.Hash, target chainhash.Hash) bool {
 	for _, h := range list {
@@ -2512,4 +2516,32 @@ func TestGetMiningCandidate_SendTimeoutResetsGenerationFlag(t *testing.T) {
 	assert.False(t, ba.cachedCandidate.generating, "generating flag should still be reset")
 	assert.Nil(t, ba.cachedCandidate.generationChan, "generation channel should still be nil")
 	ba.cachedCandidate.mu.RUnlock()
+}
+
+// TestGetLastPersistedHeight tests the GetLastPersistedHeight method
+func TestGetLastPersistedHeight(t *testing.T) {
+	initPrometheusMetrics()
+
+	t.Run("GetLastPersistedHeight returns initial zero value", func(t *testing.T) {
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Initially should be 0
+		height := ba.GetLastPersistedHeight()
+		assert.Equal(t, uint32(0), height)
+	})
+
+	t.Run("GetLastPersistedHeight returns updated value", func(t *testing.T) {
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Store a value
+		ba.lastPersistedHeight.Store(uint32(100))
+
+		// Should return the stored value
+		height := ba.GetLastPersistedHeight()
+		assert.Equal(t, uint32(100), height)
+	})
 }

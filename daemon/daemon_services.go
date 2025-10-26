@@ -97,6 +97,9 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 		if err != nil {
 			logger.Warnf("failed to initialize tracer: %v", err)
 		}
+	} else {
+		// Explicitly disable tracing to ensure all tracing operations become no-ops
+		tracing.SetTracingEnabled(false)
 	}
 
 	// Create a slice of service starters

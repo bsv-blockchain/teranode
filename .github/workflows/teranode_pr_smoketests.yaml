@@ -22,16 +22,16 @@ jobs:
       # Fork PRs won't have access to secrets and will skip this step.
       - name: Login to Docker Hub
         if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/login-action@v3
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
         with:
           username: ${{ vars.DOCKER_ORG }}
           password: ${{ secrets.DOCKER_ORG_TOKEN }}
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
@@ -44,7 +44,7 @@ jobs:
 
       - name: Upload smoketest results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: smoketest-results
           path: /tmp/teranode-test-results/smoketest-results.txt
@@ -56,16 +56,16 @@ jobs:
     steps:
       - name: Login to Docker Hub
         if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/login-action@v3
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
         with:
           username: ${{ vars.DOCKER_ORG }}
           password: ${{ secrets.DOCKER_ORG_TOKEN }}
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
@@ -78,7 +78,7 @@ jobs:
 
       - name: Upload sequentialtest results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sequentialtest-sqlite-results
           path: /tmp/teranode-test-results/sequentialtest-sqlite-results.txt
@@ -90,16 +90,16 @@ jobs:
     steps:
       - name: Login to Docker Hub
         if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/login-action@v3
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
         with:
           username: ${{ vars.DOCKER_ORG }}
           password: ${{ secrets.DOCKER_ORG_TOKEN }}
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
@@ -112,7 +112,7 @@ jobs:
 
       - name: Upload sequentialtest results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sequentialtest-postgres-results
           path: /tmp/teranode-test-results/sequentialtest-postgres-results.txt
@@ -124,16 +124,16 @@ jobs:
     steps:
       - name: Login to Docker Hub
         if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/login-action@v3
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
         with:
           username: ${{ vars.DOCKER_ORG }}
           password: ${{ secrets.DOCKER_ORG_TOKEN }}
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: "false"
@@ -146,7 +146,7 @@ jobs:
 
       - name: Upload sequentialtest results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sequentialtest-aerospike-results
           path: /tmp/teranode-test-results/sequentialtest-aerospike-results.txt

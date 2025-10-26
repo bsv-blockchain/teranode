@@ -707,6 +707,8 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(dummyBlock.Header, &model.BlockHeaderMeta{Height: 1}, nil)
 	mockBlockchain.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return([]*chainhash.Hash{dummyBlock.Hash()}, nil)
 	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(dummyBlock.Header, &model.BlockHeaderMeta{Height: 1}, nil)
+	// Mock ReportPeerFailure in case catchup fails (e.g., context cancellation)
+	mockBlockchain.On("ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	blockFoundCh := make(chan processBlockFound, 1)
 	catchupCh := make(chan processBlockCatchup, 1)

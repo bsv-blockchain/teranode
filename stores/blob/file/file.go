@@ -1209,11 +1209,6 @@ func (s *File) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 //   - io.ReadCloser: Reader for streaming the blob data
 //   - error: Any error that occurred during the operation
 func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
-	if err := acquireReadPermit(ctx); err != nil {
-		return nil, errors.NewStorageError("[File][GetIoReader] failed to acquire read permit", err)
-	}
-	defer releaseReadPermit()
-
 	merged := options.MergeOptions(s.options, opts)
 
 	fileName, err := merged.ConstructFilename(s.path, key, fileType)
@@ -1254,13 +1249,18 @@ func (s *File) validateFileHeader(f io.Reader, fileName string, fileType filefor
 
 // openFileWithFallback tries to open the primary file, then persistSubDir, then longtermClient if available.
 func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options, fileName string, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
+	if err := acquireReadPermit(ctx); err != nil {
+		return nil, errors.NewStorageError("[File][openFileWithFallback] failed to acquire read permit", err)
+	}
+	defer releaseReadPermit()
+
 	f, err := os.Open(fileName)
 	if err == nil {
 		return f, nil
 	}
 
 	if !errors.Is(err, os.ErrNotExist) {
-		return nil, errors.NewStorageError("[File][GetIoReader] [%s] failed to open file", fileName, err)
+		return nil, errors.NewStorageError("[File][openFileWithFallback] [%s] failed to open file", fileName, err)
 	}
 
 	// Try persistSubDir if set
@@ -1276,7 +1276,7 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 		}
 
 		if !errors.Is(err, os.ErrNotExist) {
-			return nil, errors.NewStorageError("[File][GetIoReader] [%s] failed to open file in persist directory", persistedFilename, err)
+			return nil, errors.NewStorageError("[File][openFileWithFallback] [%s] failed to open file in persist directory", persistedFilename, err)
 		}
 	}
 
@@ -1288,7 +1288,7 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 				return nil, errors.ErrNotFound
 			}
 
-			return nil, errors.NewStorageError("[File][GetIoReader] [%s] unable to open longterm storage file", fileName, err)
+			return nil, errors.NewStorageError("[File][openFileWithFallback] [%s] unable to open longterm storage file", fileName, err)
 		}
 
 		return fileReader, nil
@@ -1344,22 +1344,42 @@ func (s *File) Get(ctx context.Context, key []byte, fileType fileformat.FileType
 //   - bool: True if the blob exists, false otherwise
 //   - error: Any error that occurred during the check (other than not found errors)
 func (s *File) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
-	// The GetIOReader method will handle file locking and error handling,
-	// This method is not updated to require fileType, as Exists is not a getter/setter for content.
-	fileReader, err := s.GetIoReader(ctx, key, fileType, opts...)
-	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
-			// If the file does not exist, return false
-			return false, nil
-		}
+	if err := acquireReadPermit(ctx); err != nil {
+		return false, errors.NewStorageError("[File][Exists] failed to acquire read permit", err)
+	}
+	defer releaseReadPermit()
 
+	merged := options.MergeOptions(s.options, opts)
+
+	fileName, err := merged.ConstructFilename(s.path, key, fileType)
+	if err != nil {
 		return false, err
 	}
 
-	defer fileReader.Close()
+	// check whether the file exists
+	fileInfo, err := os.Stat(fileName)
+	if err == nil && fileInfo != nil {
+		return true, nil
+	}
 
-	// If we can read from the fileReader, the file exists
-	return true, nil
+	// Try persistSubDir if set
+	if s.persistSubDir != "" {
+		persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), key, fileType)
+		if err != nil {
+			return false, err
+		}
+
+		fileInfo, err = os.Stat(persistedFilename)
+		if err == nil && fileInfo != nil {
+			return true, nil
+		}
+	}
+
+	if s.longtermClient != nil {
+		return s.longtermClient.Exists(ctx, key, fileType, opts...)
+	}
+
+	return false, nil
 }
 
 // Del deletes a blob from the file store.
