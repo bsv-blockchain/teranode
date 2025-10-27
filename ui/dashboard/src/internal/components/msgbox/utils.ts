@@ -183,6 +183,12 @@ export const getMessageFields = (
         fields.push({ label: t(`${key}.fsm_state`), value: nodeStatusMsg.fsm_state })
         fields.push({ label: t(`${key}.listen_mode`), value: nodeStatusMsg.listen_mode })
 
+        // Add node_mode (storage mode) if available
+        if (nodeStatusMsg.node_mode) {
+          const nodeModeDisplay = nodeStatusMsg.node_mode === 'full' ? 'Full' : nodeStatusMsg.node_mode === 'pruned' ? 'Pruned' : nodeStatusMsg.node_mode
+          fields.push({ label: t(`${key}.node_mode`), value: nodeModeDisplay })
+        }
+
         // Add peer_id if not hidden
         if (!hidePeer && nodeStatusMsg.peer_id) {
           fields.push({ label: t(`${key}.peer_id`), value: nodeStatusMsg.peer_id })

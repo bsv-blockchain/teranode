@@ -243,8 +243,8 @@
   :global(.th:nth-child(9)),
   :global(th:nth-child(10)), /* Uptime - right align */
   :global(.th:nth-child(10)),
-  :global(th:nth-child(12)), /* Last Update - right align */
-  :global(.th:nth-child(12)) {
+  :global(th:nth-child(13)), /* Last Update - right align */
+  :global(.th:nth-child(13)) {
     text-align: right !important;
   }
 
@@ -260,8 +260,8 @@
   :global(.th:nth-child(9) .table-cell-row),
   :global(th:nth-child(10) .table-cell-row),
   :global(.th:nth-child(10) .table-cell-row),
-  :global(th:nth-child(12) .table-cell-row),
-  :global(.th:nth-child(12) .table-cell-row) {
+  :global(th:nth-child(13) .table-cell-row),
+  :global(.th:nth-child(13) .table-cell-row) {
     justify-content: flex-end !important;
   }
 
