@@ -318,7 +318,7 @@ This internal method handles the two-stage process of loading subtree informatio
 #### ProcessSubtree
 
 ```go
-func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx) error
+func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error
 ```
 
 Processes a subtree of transactions, validating and storing them.
@@ -343,6 +343,7 @@ A subtree represents a hierarchical structure containing transaction references 
 - `pCtx`: Parent context for the operation, used for cancellation and tracing
 - `subtreeHash`: Hash identifier of the subtree to process
 - `coinbaseTx`: The coinbase transaction for the block containing this subtree
+- `utxoDiff`: UTXO set difference tracker for processing transaction changes
 
 **Returns** an error if any part of the subtree processing fails. Errors are wrapped with appropriate context to identify the specific failure point (storage, processing, etc.).
 
