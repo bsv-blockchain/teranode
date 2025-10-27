@@ -25,7 +25,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
@@ -416,7 +415,7 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 	b.logger.Warnf("[BlockAssembler][Reset] resetting to new best block header: %d", meta.Height)
 
 	// make sure we have processed all pending blocks before resetting
-	if err = b.waitForPendingBlocks(ctx); err != nil {
+	if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
 		return errors.NewProcessingError("[Reset] error waiting for pending blocks", err)
 	}
 
@@ -605,7 +604,7 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 
 	// Wait for any pending blocks to be processed before loading unmined transactions
 	if !b.skipWaitForPendingBlocks {
-		if err = b.waitForPendingBlocks(ctx); err != nil {
+		if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
 			// we cannot start block assembly if we have not processed all pending blocks
 			return errors.NewProcessingError("[BlockAssembler] failed to wait for pending blocks: %v", err)
 		}
@@ -1664,55 +1663,4 @@ func (b *BlockAssembler) invalidateMiningCandidateCache() {
 // This is primarily used in test environments to prevent blocking on pending blocks.
 func (b *BlockAssembler) SetSkipWaitForPendingBlocks(skip bool) {
 	b.skipWaitForPendingBlocks = skip
-}
-
-// waitForPendingBlocks waits for any pending blocks to be processed before loading unmined transactions.
-// This method continuously polls the blockchain client to check if there are any blocks that have not been
-// marked as mined yet. It will wait until the list of blocks returned by GetBlocksMinedNotSet is empty,
-// indicating that all blocks have been processed and marked as mined.
-//
-// The method implements a polling loop with a 1-second interval and includes logging to provide visibility
-// into the waiting process. This ensures that the BlockAssembly service doesn't start loading unmined
-// transactions until all pending blocks have been fully processed.
-//
-// Parameters:
-//   - ctx: Context for cancellation and timeout support
-//
-// Returns:
-//   - error: Any error encountered during the waiting process or blockchain client calls
-func (b *BlockAssembler) waitForPendingBlocks(ctx context.Context) error {
-	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "waitForPendingBlocks",
-		tracing.WithParentStat(b.stats),
-		tracing.WithLogMessage(b.logger, "[waitForPendingBlocks] checking for pending blocks"),
-	)
-	defer deferFn()
-
-	// Use retry utility with infinite retries until no pending blocks remain
-	_, err := retry.Retry(ctx, b.logger, func() (interface{}, error) {
-		blockNotMined, err := b.blockchainClient.GetBlocksMinedNotSet(ctx)
-		if err != nil {
-			return nil, errors.NewProcessingError("error getting blocks with mined not set", err)
-		}
-
-		if len(blockNotMined) == 0 {
-			b.logger.Infof("[waitForPendingBlocks] no pending blocks found, ready to load unmined transactions")
-			return nil, nil
-		}
-
-		for _, block := range blockNotMined {
-			b.logger.Debugf("[waitForPendingBlocks] waiting for block %s to be processed, height %d, ID %d", block.Hash(), block.Height, block.ID)
-		}
-
-		// Return an error to trigger retry when blocks are still pending
-		return nil, errors.NewProcessingError("waiting for %d blocks to be processed", len(blockNotMined))
-	},
-		retry.WithMessage("[waitForPendingBlocks] blockchain service check"),
-		retry.WithInfiniteRetry(),
-		retry.WithExponentialBackoff(),
-		retry.WithBackoffDurationType(1*time.Second),
-		retry.WithBackoffFactor(2.0),
-		retry.WithMaxBackoff(30*time.Second),
-	)
-
-	return err
 }

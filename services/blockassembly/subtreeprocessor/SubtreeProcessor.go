@@ -44,6 +44,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -1676,13 +1677,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		}
 	} else {
 		// other operation, wait for all blocks to be processed first, mined_set etc.
-		ok, err := stp.waitForBlocksBeingMined(ctx)
-		if err != nil {
+		if err = stp.WaitForPendingBlocks(ctx); err != nil {
 			return errors.NewProcessingError("[reorgBlocks] error waiting for blocks being mined", err)
-		}
-
-		if !ok {
-			return errors.NewProcessingError("[reorgBlocks] timeout waiting for blocks being mined")
 		}
 	}
 
@@ -2630,29 +2626,55 @@ func (stp *SubtreeProcessor) waitForBlockBeingMined(ctx context.Context, blockHa
 	}
 }
 
-func (stp *SubtreeProcessor) waitForBlocksBeingMined(ctx context.Context) (bool, error) {
-	// try to wait for all blocks to be mined for maximum of 120 sec
-	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	defer cancel()
+// WaitForPendingBlocks waits for any pending blocks to be processed before loading unmined transactions.
+// This method continuously polls the blockchain client to check if there are any blocks that have not been
+// marked as mined yet. It will wait until the list of blocks returned by GetBlocksMinedNotSet is empty,
+// indicating that all blocks have been processed and marked as mined.
+//
+// The method implements a polling loop with a 1-second interval and includes logging to provide visibility
+// into the waiting process. This ensures that the BlockAssembly service doesn't start loading unmined
+// transactions until all pending blocks have been fully processed.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout support
+//
+// Returns:
+//   - error: Any error encountered during the waiting process or blockchain client calls
+func (stp *SubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
+	_, _, deferFn := tracing.Tracer("SubtreeProcessor").Start(ctx, "WaitForPendingBlocks",
+		tracing.WithParentStat(stp.stats),
+		tracing.WithLogMessage(stp.logger, "[WaitForPendingBlocks] checking for pending blocks"),
+	)
+	defer deferFn()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return false, errors.NewProcessingError("[waitForBlocksBeingMined] blocks not mined within 120 seconds")
-		default:
-			blocksNotMined, err := stp.blockchainClient.GetBlocksMinedNotSet(ctx)
-			if err != nil {
-				return false, errors.NewProcessingError("[waitForBlocksBeingMined] error getting block mined status", err)
-			}
-
-			if len(blocksNotMined) == 0 {
-				return true, nil
-			}
-
-			stp.logger.Infof("[waitForBlocksBeingMined] waiting for %d blocks to be mined", len(blocksNotMined))
-			time.Sleep(1 * time.Second)
+	// Use retry utility with infinite retries until no pending blocks remain
+	_, err := retry.Retry(ctx, stp.logger, func() (interface{}, error) {
+		blockNotMined, err := stp.blockchainClient.GetBlocksMinedNotSet(ctx)
+		if err != nil {
+			return nil, errors.NewProcessingError("error getting blocks with mined not set", err)
 		}
-	}
+
+		if len(blockNotMined) == 0 {
+			stp.logger.Infof("[WaitForPendingBlocks] no pending blocks found, ready to load unmined transactions")
+			return nil, nil
+		}
+
+		for _, block := range blockNotMined {
+			stp.logger.Debugf("[WaitForPendingBlocks] waiting for block %s to be processed, height %d, ID %d", block.Hash(), block.Height, block.ID)
+		}
+
+		// Return an error to trigger retry when blocks are still pending
+		return nil, errors.NewProcessingError("waiting for %d blocks to be processed", len(blockNotMined))
+	},
+		retry.WithMessage("[WaitForPendingBlocks] blockchain service check"),
+		retry.WithInfiniteRetry(),
+		retry.WithExponentialBackoff(),
+		retry.WithBackoffDurationType(1*time.Second),
+		retry.WithBackoffFactor(2.0),
+		retry.WithMaxBackoff(30*time.Second),
+	)
+
+	return err
 }
 
 // dequeueDuringBlockMovement processes the transaction queue during block movement.

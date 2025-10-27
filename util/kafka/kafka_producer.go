@@ -119,10 +119,6 @@ func NewKafkaProducer(kafkaURL *url.URL, kafkaSettings *settings.KafkaSettings) 
 	config := sarama.NewConfig()
 	config.Version = sarama.V2_1_0_0
 
-	// Disable go-metrics to prevent memory leak from exponential decay sample heap
-	// See: https://github.com/IBM/sarama/issues/1321
-	config.MetricRegistry = nil
-
 	// Note: Debug logging not supported for sync producer as it doesn't have a logger parameter
 	// If needed, add a logger parameter to NewKafkaProducer function
 
@@ -202,10 +198,6 @@ func ConnectProducer(brokersURL []string, topic string, partitions int32, kafkaS
 	config.Producer.RequiredAcks = sarama.WaitForAll
 	config.Producer.Retry.Max = 5
 	config.Producer.Partitioner = sarama.NewManualPartitioner
-
-	// Disable go-metrics to prevent memory leak from exponential decay sample heap
-	// See: https://github.com/IBM/sarama/issues/1321
-	config.MetricRegistry = nil
 
 	// Apply authentication settings if kafkaSettings provided and TLS is enabled
 	if kafkaSettings != nil && kafkaSettings.EnableTLS {

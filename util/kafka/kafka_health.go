@@ -52,10 +52,6 @@ func HealthChecker(_ context.Context, brokersURL []string) func(ctx context.Cont
 		config.Net.ReadTimeout = 100 * time.Millisecond
 		config.Net.WriteTimeout = 100 * time.Millisecond
 		config.Metadata.Retry.Max = 0
-
-		// Disable go-metrics to prevent memory leak from exponential decay sample heap
-		// See: https://github.com/IBM/sarama/issues/1321
-		config.MetricRegistry = nil
 		config.Metadata.Full = true
 		config.Metadata.AllowAutoTopicCreation = false
 
