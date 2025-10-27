@@ -509,7 +509,7 @@
           </span>
         </div>
         <div class="catchup-detail-item">
-          <span class="catchup-label">Current Height</span>
+          <span class="catchup-label">Starting Height</span>
           <span class="catchup-value">#{catchupStatus.current_height?.toLocaleString()}</span>
         </div>
         <div class="catchup-detail-item">
