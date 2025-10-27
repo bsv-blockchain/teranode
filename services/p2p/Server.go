@@ -893,12 +893,13 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 
 	// Log all received node_status messages for debugging
 	if from == nodeStatusMessage.PeerID {
-		s.logger.Debugf("[handleNodeStatusTopic] DIRECT node_status from %s (is_self: %v, version: %s, height: %d)",
-			nodeStatusMessage.PeerID, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight)
+		s.logger.Infof("[handleNodeStatusTopic] DIRECT node_status from %s (is_self: %v, version: %s, height: %d, node_mode: %q)",
+			nodeStatusMessage.PeerID, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight, nodeStatusMessage.NodeMode)
 	} else {
-		s.logger.Debugf("[handleNodeStatusTopic] RELAY  node_status (originator: %s, via: %s, is_self: %v, version: %s, height: %d)",
-			nodeStatusMessage.PeerID, from, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight)
+		s.logger.Infof("[handleNodeStatusTopic] RELAY  node_status (originator: %s, via: %s, is_self: %v, version: %s, height: %d, node_mode: %q)",
+			nodeStatusMessage.PeerID, from, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight, nodeStatusMessage.NodeMode)
 	}
+	s.logger.Debugf("[handleNodeStatusTopic] Received JSON: %s", string(m))
 
 	// Skip further processing for our own messages (peer height updates, etc.)
 	// but still forward to WebSocket
@@ -1228,6 +1229,7 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 	// Determine node mode (full vs pruned) based on block persister status
 	nodeMode := s.determineNodeMode(ctx, height)
+	s.logger.Infof("[getNodeStatusMessage] Determined node_mode=%q for this node at height %d", nodeMode, height)
 
 	// Return the notification message
 	return &notificationMsg{
@@ -1261,25 +1263,24 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 // determineNodeMode determines whether this node is a full node or pruned node.
 // A full node has the block persister running and caught up (within threshold blocks of tip).
 // A pruned node either doesn't have block persister running or it's lagging behind.
-// Returns empty string if unable to determine (e.g., in test mocks or when blockchain client unavailable).
+// Always returns "full" or "pruned" - never returns empty string.
 func (s *Server) determineNodeMode(ctx context.Context, bestHeight uint32) (mode string) {
 	if s.blockchainClient == nil {
-		return "" // No blockchain client, can't determine
+		return "pruned"
 	}
 
 	// Check if context is already canceled (e.g., during test shutdown)
 	select {
 	case <-ctx.Done():
-		return "" // Context canceled, skip node mode determination
+		return "pruned"
 	default:
 	}
 
 	// Handle mock panics gracefully in tests
 	defer func() {
 		if r := recover(); r != nil {
-			// Mock panic - likely in tests without proper GetState mock setup
-			// Return empty string to let tests pass
-			mode = ""
+			// Classify as pruned for safety
+			mode = "pruned"
 		}
 	}()
 
@@ -1354,7 +1355,8 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		return errors.NewError("nodeStatusMessage - json marshal error: %w", err)
 	}
 
-	s.logger.Debugf("[handleNodeStatusNotification] P2P publishing nodeStatusMessage to topic %s (height: %d, version: %s)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version)
+	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, node_mode=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.NodeMode)
+	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
 	if err = s.P2PClient.Publish(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error: %w", err)
