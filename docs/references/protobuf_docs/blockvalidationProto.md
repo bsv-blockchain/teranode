@@ -64,6 +64,8 @@ swagger:model ProcessBlockRequest
 | ----- | ---- | ----- | ----------- |
 | block | [bytes](#bytes) |  | The block data to process |
 | height | [uint32](#uint32) |  | The height of the block in the blockchain |
+| base_url | [string](#string) |  | Base URL where the block can be retrieved from |
+| peer_id | [string](#string) |  | P2P peer identifier for peerMetrics tracking |
 
 <a name="ValidateBlockRequest"></a>
 
@@ -75,6 +77,7 @@ swagger:model ValidateBlockRequest
 | ----- | ---- | ----- | ----------- |
 | block | [bytes](#bytes) |  | The block data to validate |
 | height | [uint32](#uint32) |  | The height of the block in the blockchain |
+| is_revalidation | [bool](#bool) |  | Indicates this is a revalidation of an invalid block |
 
 <a name="ValidateBlockResponse"></a>
 
