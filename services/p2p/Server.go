@@ -1286,8 +1286,8 @@ func (s *Server) determineNodeMode(ctx context.Context, bestHeight uint32) (mode
 	// Query block persister height from blockchain state
 	stateData, err := s.blockchainClient.GetState(ctx, "BlockPersisterHeight")
 	if err != nil || len(stateData) < 4 {
-		// Block persister not running or state not available
-		return ""
+		// Block persister not running or state not available - classify as pruned
+		return "pruned"
 	}
 
 	// Decode persisted height (little-endian uint32)
