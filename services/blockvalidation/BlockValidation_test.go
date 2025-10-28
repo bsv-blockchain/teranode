@@ -1754,7 +1754,7 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 		blockHeader,
 		coinbaseTx,
 		subtreeHashes,
-		uint64(subtree.Length()),                        //nolint:gosec
+		uint64(subtree.Length()), //nolint:gosec
 		uint64(coinbaseTx.Size()+tx1.Size()+tx2.Size()), //nolint:gosec
 		100, 0,
 	)
@@ -1867,7 +1867,7 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 		blockHeader,
 		coinbaseTx,
 		subtreeHashes,
-		uint64(subtree.Length()),                        //nolint:gosec
+		uint64(subtree.Length()), //nolint:gosec
 		uint64(coinbaseTx.Size()+tx1.Size()+tx2.Size()), //nolint:gosec
 		100, 0,
 	)
@@ -2338,7 +2338,7 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 		blockHeader,
 		coinbaseTx,
 		subtreeHashes,
-		uint64(subtree.Length()),                                  //nolint:gosec
+		uint64(subtree.Length()), //nolint:gosec
 		uint64(coinbaseTx.Size()+parentTx.Size()+childTx1.Size()), //nolint:gosec
 		100, 0,
 	)
@@ -2855,7 +2855,7 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		blockHeader,
 		coinbaseTx,
 		subtreeHashes,
-		uint64(subtree.Length()),                                  //nolint:gosec
+		uint64(subtree.Length()), //nolint:gosec
 		uint64(coinbaseTx.Size()+parentTx.Size()+childTx1.Size()), //nolint:gosec
 		100, 0,
 	)
