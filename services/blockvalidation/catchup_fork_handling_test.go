@@ -1157,12 +1157,8 @@ func TestCatchup_ReorgMetrics(t *testing.T) {
 			t.Logf("Reorg result: %v", err)
 		}
 
-		// Verify peer metrics tracked the reorg
-		if server.peerMetrics != nil {
-			if metric, exists := server.peerMetrics.PeerMetrics["http://peer"]; exists {
-				t.Logf("Peer reorg metrics: %+v", metric)
-			}
-		}
+		// Note: peerMetrics field has been removed from Server struct
+		// (peer reorg metrics logging disabled)
 	})
 }
 
@@ -1366,13 +1362,8 @@ func TestCatchup_CoinbaseMaturityCheckFixed(t *testing.T) {
 			}
 		}
 
-		// Verify malicious attempt was recorded if we got that far
-		if server.peerMetrics != nil && server.peerMetrics.PeerMetrics != nil {
-			if peerMetric, exists := server.peerMetrics.PeerMetrics["http://test-peer"]; exists {
-				assert.Greater(t, peerMetric.MaliciousAttempts, int64(0),
-					"Should record malicious attempt for deep fork")
-			}
-		}
+		// Note: peerMetrics field has been removed from Server struct
+		// (malicious attempt tracking disabled)
 	})
 
 	t.Run("AcceptForkWithinCoinbaseMaturity", func(t *testing.T) {

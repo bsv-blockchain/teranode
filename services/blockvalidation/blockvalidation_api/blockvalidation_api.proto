@@ -30,7 +30,7 @@ message BlockFoundRequest {
   bytes hash = 1;
   string base_url = 2;
   bool wait_to_complete = 3;
-  string peer_id = 4; // P2P peer identifier for peerMetrics tracking
+  string peer_id = 4; // P2P peer identifier for peer tracking via P2P service
 }
 
 // swagger:model ProcessBlockRequest
@@ -38,7 +38,7 @@ message ProcessBlockRequest {
   bytes block = 1;
   uint32 height = 2;
   string base_url = 3;
-  string peer_id = 4; // P2P peer identifier for peerMetrics tracking
+  string peer_id = 4; // P2P peer identifier for peer tracking via P2P service
 }
 
 // swagger:model ValidateBlockRequest

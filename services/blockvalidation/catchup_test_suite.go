@@ -135,9 +135,6 @@ func (s *CatchupTestSuite) createServer(t *testing.T) {
 		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 		stats:               gocore.NewStat("test"),
-		peerMetrics: &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		},
 		peerCircuitBreakers: circuitBreakers,
 		headerChainCache:    catchup.NewHeaderChainCache(s.Logger),
 		isCatchingUp:        atomic.Bool{},

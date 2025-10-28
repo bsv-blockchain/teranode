@@ -149,13 +149,8 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 				"Memory grew by %d bytes, should be limited", memGrowth)
 		}
 
-		// The peer might be marked as malicious if validation detected issues
-		if server.peerMetrics != nil {
-			if peerMetric, exists := server.peerMetrics.PeerMetrics["http://malicious-peer"]; exists {
-				t.Logf("Peer metrics - Malicious: %d, Failed: %d, Total: %d",
-					peerMetric.MaliciousAttempts, peerMetric.FailedRequests, peerMetric.TotalRequests)
-			}
-		}
+		// Note: peerMetrics field has been removed from Server struct
+		// (malicious peer metrics logging disabled)
 
 		// Circuit breaker might not be initialized in this test setup
 		if server.peerCircuitBreakers != nil {

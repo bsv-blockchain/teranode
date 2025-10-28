@@ -69,7 +69,7 @@ type processBlockFound struct {
 	// if needed during validation
 	baseURL string
 
-	// peerID is the P2P peer identifier used for peerMetrics tracking
+	// peerID is the P2P peer identifier used for peer tracking via P2P service
 	peerID string
 
 	// errCh receives any errors encountered during block validation and allows
@@ -88,7 +88,7 @@ type processBlockCatchup struct {
 	// retrieved if needed during catchup
 	baseURL string
 
-	// peerID is the P2P peer identifier used for peerMetrics tracking
+	// peerID is the P2P peer identifier used for peer tracking via P2P service
 	peerID string
 }
 
@@ -169,9 +169,6 @@ type Server struct {
 	// peerCircuitBreakers manages circuit breakers for each peer to prevent
 	// cascading failures and protect against misbehaving peers
 	peerCircuitBreakers *catchup.PeerCircuitBreakers
-
-	// peerMetrics tracks performance and reputation metrics for each peer
-	peerMetrics *catchup.CatchupMetrics
 
 	// headerChainCache provides efficient access to block headers during catchup
 	// with proper chain validation to avoid redundant fetches during block validation
@@ -305,11 +302,8 @@ func New(
 		stats:               gocore.NewStat("blockvalidation"),
 		kafkaConsumerClient: kafkaConsumerClient,
 		peerCircuitBreakers: catchup.NewPeerCircuitBreakers(*cbConfig),
-		peerMetrics: &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		},
-		headerChainCache: catchup.NewHeaderChainCache(logger),
-		p2pClient:        p2pClient,
+		headerChainCache:    catchup.NewHeaderChainCache(logger),
+		p2pClient:           p2pClient,
 	}
 
 	return bVal
@@ -570,6 +564,13 @@ func (u *Server) Init(ctx context.Context) (err error) {
 								}
 							}
 						}()
+						if u.isPeerMalicious(ctx, blockFound.peerID) {
+							u.logger.Warnf("[blockFound][%s] peer %s (%s) is marked as malicious, skipping", bf.hash.String(), bf.peerID, bf.baseURL)
+							if bf.errCh != nil {
+								bf.errCh <- errors.NewProcessingError("peer %s is marked as malicious", bf.peerID)
+							}
+							return
+						}
 						u.logger.Debugf("[Init] Worker %d starting processBlockFoundChannel for block %s", workerID, bf.hash.String())
 						if err := u.processBlockFoundChannel(ctx, bf); err != nil {
 							u.logger.Errorf("[Init] processBlockFoundChannel failed for block %s: %v", bf.hash.String(), err)
@@ -649,6 +650,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 									return // Success, exit the alternative sources section
 								} else {
 									u.logger.Warnf("[catchup] Peer %s also failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
+									u.reportCatchupFailure(ctx, c.peerID)
 									// Failure will be reported by the catchup function itself
 								}
 							}
@@ -681,7 +683,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 									break
 								} else {
 									u.logger.Warnf("[catchup] Alternative peer %s also failed for block %s: %v", alt.peerID, blockHash.String(), altErr)
-									// Failure will be reported by the catchup function itself
+									u.reportCatchupFailure(ctx, c.peerID)
 								}
 							}
 						} else {
@@ -907,6 +909,10 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 		// If parent doesn't exist, always use catchup
 		if !parentExists {
+			if u.isPeerMalicious(ctx, blockFound.peerID) {
+				u.logger.Warnf("[processBlockFoundChannel][%s] peer %s is malicious, skipping catchup for block with missing parent", blockFound.hash.String(), blockFound.peerID)
+				return nil
+			}
 			u.logger.Infof("[processBlockFoundChannel] Parent block %s doesn't exist for block %s, using catchup",
 				block.Header.HashPrevBlock.String(), blockFound.hash.String())
 

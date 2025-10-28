@@ -416,3 +416,50 @@ func (c *Client) ReportValidBlock(ctx context.Context, peerID string, blockHash 
 
 	return nil
 }
+
+// IsPeerMalicious checks if a peer is considered malicious.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The P2P peer identifier to check
+//
+// Returns:
+//   - bool: True if the peer is considered malicious
+//   - string: Reason why the peer is considered malicious (if applicable)
+//   - error: Any error encountered during the operation
+func (c *Client) IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error) {
+	req := &p2p_api.IsPeerMaliciousRequest{
+		PeerId: peerID,
+	}
+
+	resp, err := c.client.IsPeerMalicious(ctx, req)
+	if err != nil {
+		return false, "", err
+	}
+
+	return resp.IsMalicious, resp.Reason, nil
+}
+
+// IsPeerUnhealthy checks if a peer is considered unhealthy.
+//
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The P2P peer identifier to check
+//
+// Returns:
+//   - bool: True if the peer is considered unhealthy
+//   - string: Reason why the peer is considered unhealthy (if applicable)
+//   - float32: The peer's current reputation score
+//   - error: Any error encountered during the operation
+func (c *Client) IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error) {
+	req := &p2p_api.IsPeerUnhealthyRequest{
+		PeerId: peerID,
+	}
+
+	resp, err := c.client.IsPeerUnhealthy(ctx, req)
+	if err != nil {
+		return false, "", 0, err
+	}
+
+	return resp.IsUnhealthy, resp.Reason, resp.ReputationScore, nil
+}

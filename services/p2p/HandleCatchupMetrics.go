@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -102,15 +103,15 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, req *p2p_api.GetPeersFo
 	protoPeers := make([]*p2p_api.PeerInfoForCatchup, 0, len(peers))
 	for _, p := range peers {
 		protoPeers = append(protoPeers, &p2p_api.PeerInfoForCatchup{
-			Id:                      p.ID.String(),
-			Height:                  p.Height,
-			BlockHash:               p.BlockHash,
-			DataHubUrl:              p.DataHubURL,
-			IsHealthy:               p.IsHealthy,
-			CatchupReputationScore:  p.ReputationScore, // Map new field to API field
-			CatchupAttempts:         p.InteractionAttempts, // Map new field to API field
-			CatchupSuccesses:        p.InteractionSuccesses, // Map new field to API field
-			CatchupFailures:         p.InteractionFailures, // Map new field to API field
+			Id:                     p.ID.String(),
+			Height:                 p.Height,
+			BlockHash:              p.BlockHash,
+			DataHubUrl:             p.DataHubURL,
+			IsHealthy:              p.IsHealthy,
+			CatchupReputationScore: p.ReputationScore,      // Map new field to API field
+			CatchupAttempts:        p.InteractionAttempts,  // Map new field to API field
+			CatchupSuccesses:       p.InteractionSuccesses, // Map new field to API field
+			CatchupFailures:        p.InteractionFailures,  // Map new field to API field
 		})
 	}
 
@@ -200,5 +201,127 @@ func (s *Server) ReportValidBlock(ctx context.Context, req *p2p_api.ReportValidB
 	return &p2p_api.ReportValidBlockResponse{
 		Success: true,
 		Message: "block validation recorded",
+	}, nil
+}
+
+// IsPeerMalicious checks if a peer is considered malicious based on their behavior
+func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMaliciousRequest) (*p2p_api.IsPeerMaliciousResponse, error) {
+	if req.PeerId == "" {
+		return &p2p_api.IsPeerMaliciousResponse{
+			IsMalicious: false,
+			Reason:      "empty peer ID",
+		}, nil
+	}
+
+	// Check if peer is in the ban list
+	if s.banManager != nil && s.banManager.IsBanned(req.PeerId) {
+		return &p2p_api.IsPeerMaliciousResponse{
+			IsMalicious: true,
+			Reason:      "peer is banned",
+		}, nil
+	}
+
+	// Check peer registry for malicious behavior
+	if s.peerRegistry != nil {
+		peerId, err := peer.Decode(req.PeerId)
+		if err != nil {
+			return &p2p_api.IsPeerMaliciousResponse{
+				IsMalicious: false,
+				Reason:      "invalid peer ID",
+			}, nil
+		}
+		peerInfo, exists := s.peerRegistry.GetPeer(peerId)
+		if exists {
+			// A peer is considered malicious if:
+			// 1. They have a very low reputation score (below 20)
+			// 2. They have multiple failed interactions
+			if peerInfo.ReputationScore < 20 {
+				return &p2p_api.IsPeerMaliciousResponse{
+					IsMalicious: true,
+					Reason:      fmt.Sprintf("very low reputation score: %.2f", peerInfo.ReputationScore),
+				}, nil
+			}
+		}
+	}
+
+	return &p2p_api.IsPeerMaliciousResponse{
+		IsMalicious: false,
+		Reason:      "",
+	}, nil
+}
+
+// IsPeerUnhealthy checks if a peer is considered unhealthy based on their performance
+func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealthyRequest) (*p2p_api.IsPeerUnhealthyResponse, error) {
+	if req.PeerId == "" {
+		return &p2p_api.IsPeerUnhealthyResponse{
+			IsUnhealthy:     true,
+			Reason:          "empty peer ID",
+			ReputationScore: 0,
+		}, nil
+	}
+
+	// Check peer registry for health status
+	if s.peerRegistry != nil {
+		peerId, err := peer.Decode(req.PeerId)
+		if err != nil {
+			return &p2p_api.IsPeerUnhealthyResponse{
+				IsUnhealthy:     true,
+				Reason:          "invalid peer ID",
+				ReputationScore: 0,
+			}, nil
+		}
+		peerInfo, exists := s.peerRegistry.GetPeer(peerId)
+		if !exists {
+			// Unknown peer - consider unhealthy
+			return &p2p_api.IsPeerUnhealthyResponse{
+				IsUnhealthy:     true,
+				Reason:          "unknown peer",
+				ReputationScore: 0,
+			}, nil
+		}
+
+		// Check if peer is marked as unhealthy
+		if !peerInfo.IsHealthy {
+			return &p2p_api.IsPeerUnhealthyResponse{
+				IsUnhealthy:     true,
+				Reason:          "peer marked as unhealthy",
+				ReputationScore: float32(peerInfo.ReputationScore),
+			}, nil
+		}
+
+		// A peer is considered unhealthy if:
+		// 1. They have a low reputation score (below 40)
+		// 2. They have a high failure rate
+		if peerInfo.ReputationScore < 40 {
+			return &p2p_api.IsPeerUnhealthyResponse{
+				IsUnhealthy:     true,
+				Reason:          fmt.Sprintf("low reputation score: %.2f", peerInfo.ReputationScore),
+				ReputationScore: float32(peerInfo.ReputationScore),
+			}, nil
+		}
+
+		// Check success rate based on attempts and successes
+		if peerInfo.InteractionAttempts > 10 && peerInfo.InteractionSuccesses < peerInfo.InteractionAttempts/2 {
+			successRate := float64(peerInfo.InteractionSuccesses) / float64(peerInfo.InteractionAttempts)
+			return &p2p_api.IsPeerUnhealthyResponse{
+				IsUnhealthy:     true,
+				Reason:          fmt.Sprintf("low success rate: %.2f%%", successRate*100),
+				ReputationScore: float32(peerInfo.ReputationScore),
+			}, nil
+		}
+
+		// Peer is healthy
+		return &p2p_api.IsPeerUnhealthyResponse{
+			IsUnhealthy:     false,
+			Reason:          "",
+			ReputationScore: float32(peerInfo.ReputationScore),
+		}, nil
+	}
+
+	// If we can't determine health, consider unhealthy
+	return &p2p_api.IsPeerUnhealthyResponse{
+		IsUnhealthy:     true,
+		Reason:          "unable to determine peer health",
+		ReputationScore: 0,
 	}, nil
 }

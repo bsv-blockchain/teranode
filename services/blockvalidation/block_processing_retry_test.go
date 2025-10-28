@@ -11,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -74,9 +73,7 @@ func TestBlockProcessingWithRetry(t *testing.T) {
 		forkManager:         NewForkManager(logger, tSettings),
 		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
-		peerMetrics: &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		},
+		// Note: peerMetrics field has been removed from Server struct
 	}
 
 	t.Run("Retry_Uses_Alternative_Peer", func(t *testing.T) {
@@ -241,10 +238,8 @@ func TestBlockProcessingWithRetry(t *testing.T) {
 		}
 
 		// Mark peer1 as malicious
-		peerMetric := server.peerMetrics.GetOrCreatePeerMetrics("malicious_peer")
-		for i := 0; i < 10; i++ {
-			peerMetric.RecordMaliciousAttempt()
-		}
+		// Note: peerMetrics field has been removed from Server struct
+		// (malicious peer marking disabled)
 
 		// Good peer responds correctly
 		maliciousBlockBytes, err := maliciousTestBlock.Bytes()
@@ -437,16 +432,11 @@ func TestProcessBlockFoundWithMaliciousPeer(t *testing.T) {
 		settings:         tSettings,
 		blockchainClient: mockBlockchainClient,
 		blockValidation:  bv,
-		peerMetrics: &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		},
+		// Note: peerMetrics field has been removed from Server struct
 	}
 
-	// Mark peer as malicious
-	peerMetric := server.peerMetrics.GetOrCreatePeerMetrics("malicious_peer")
-	for i := 0; i < 10; i++ {
-		peerMetric.RecordMaliciousAttempt()
-	}
+	// Note: peerMetrics field has been removed from Server struct
+	// (malicious peer marking disabled)
 
 	hash := &chainhash.Hash{0x04}
 
@@ -597,9 +587,7 @@ func TestChainExtendingBlocksNotSentToCatchup(t *testing.T) {
 		blockClassifier:    NewBlockClassifier(logger, 10, mockBlockchainClient),
 		forkManager:        NewForkManager(logger, tSettings),
 		catchupCh:          make(chan processBlockCatchup, 10),
-		peerMetrics: &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		},
+		// Note: peerMetrics field has been removed from Server struct
 		stats:               gocore.NewStat("test"),
 		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),

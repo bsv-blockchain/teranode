@@ -117,4 +117,12 @@ type ClientI interface {
 	// ReportValidBlock reports that a block was successfully received and validated from a peer.
 	// This increases the peer's reputation score for providing valid blocks.
 	ReportValidBlock(ctx context.Context, peerID string, blockHash string) error
+
+	// IsPeerMalicious checks if a peer is considered malicious based on their behavior.
+	// A peer is considered malicious if they are banned or have a very low reputation score.
+	IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error)
+
+	// IsPeerUnhealthy checks if a peer is considered unhealthy based on their performance.
+	// A peer is considered unhealthy if they have poor performance metrics or low reputation.
+	IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error)
 }

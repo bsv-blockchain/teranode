@@ -521,7 +521,6 @@ func TestServer_catchup(t *testing.T) {
 			catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 			headerChainCache:    catchup.NewHeaderChainCache(logger),
 			subtreeStore:        subtreeStore,
-			peerMetrics:         catchup.NewCatchupMetrics(),
 		}
 
 		// Create a chain of test blocks
@@ -737,7 +736,6 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 		blockValidation:     bv,
 		blockFoundCh:        blockFoundCh,
 		stats:               gocore.NewStat("test"),
-		peerMetrics:         catchup.NewCatchupMetrics(),
 		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 	}

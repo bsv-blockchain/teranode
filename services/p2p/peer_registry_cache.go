@@ -16,8 +16,8 @@ const PeerRegistryCacheVersion = "1.0"
 
 // PeerRegistryCache represents the persistent cache structure for peer registry data
 type PeerRegistryCache struct {
-	Version     string                         `json:"version"`
-	LastUpdated time.Time                      `json:"last_updated"`
+	Version     string                        `json:"version"`
+	LastUpdated time.Time                     `json:"last_updated"`
 	Peers       map[string]*CachedPeerMetrics `json:"peers"`
 }
 
@@ -86,7 +86,7 @@ func (pr *PeerRegistry) SavePeerRegistryCache(cacheDir string) error {
 		if info.InteractionAttempts > 0 || info.DataHubURL != "" || info.Height > 0 ||
 			info.BlocksReceived > 0 || info.SubtreesReceived > 0 || info.TransactionsReceived > 0 {
 			// Store peer ID as string
-			cache.Peers[string(id)] = &CachedPeerMetrics{
+			cache.Peers[id.String()] = &CachedPeerMetrics{
 				InteractionAttempts:    info.InteractionAttempts,
 				InteractionSuccesses:   info.InteractionSuccesses,
 				InteractionFailures:    info.InteractionFailures,

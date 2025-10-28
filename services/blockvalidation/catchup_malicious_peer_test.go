@@ -104,13 +104,9 @@ func TestCatchup_EclipseAttack(t *testing.T) {
 		// Should detect something is wrong
 		assert.Error(t, err)
 
-		// Check that an error was detected (metrics may not be recorded for early failures)
+		// Note: peerMetrics field has been removed from Server struct
 		// The important thing is that the malicious chain was rejected
-		if server.peerMetrics.PeerMetrics["peer-malicious-001"] != nil {
-			AssertPeerMetrics(t, server, "peer-malicious-001", func(m *catchup.PeerCatchupMetrics) {
-				assert.GreaterOrEqual(t, m.TotalRequests, int64(1), "Should have attempted request")
-			})
-		}
+		// (peer metrics assertions disabled)
 	})
 
 	t.Run("FindHonestPeerAmongMalicious", func(t *testing.T) {
@@ -610,11 +606,9 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 		// The circuit breaker might not immediately open on first failure
 		// Check if there were any failures recorded
 		if peerState == catchup.StateClosed {
-			t.Log("Circuit breaker is still closed, checking metrics...")
-			if server.peerMetrics.PeerMetrics["http://malicious-peer"] != nil {
-				metrics := server.peerMetrics.PeerMetrics["http://malicious-peer"]
-				t.Logf("Peer metrics - Failed: %d, Malicious: %d", metrics.FailedRequests, metrics.MaliciousAttempts)
-			}
+			t.Log("Circuit breaker is still closed")
+			// Note: peerMetrics field has been removed from Server struct
+			// (peer metrics logging disabled)
 		}
 		// For now, just verify the error was detected
 		assert.Error(t, err, "Should detect broken chain")
@@ -794,14 +788,9 @@ func TestCatchup_SecretMiningDetection(t *testing.T) {
 		// The catchup should fail - either due to common ancestor issues or secret mining detection
 		assert.Error(t, err, "Catchup with secret miner should fail")
 
+		// Note: peerMetrics field has been removed from Server struct
 		// Check if secret mining was recorded or at least failed
-		if server.peerMetrics.PeerMetrics["peer-secret-miner-001"] != nil {
-			metrics := server.peerMetrics.PeerMetrics["peer-secret-miner-001"]
-			t.Logf("Peer metrics - Failed: %d, Malicious: %d, Total: %d",
-				metrics.FailedRequests, metrics.MaliciousAttempts, metrics.TotalRequests)
-			// The metrics should show at least some activity
-			assert.True(t, metrics.TotalRequests > 0, "Should have made at least one request")
-		}
+		// (peer metrics checks disabled)
 	})
 
 	t.Run("AllowLegitimateDeepReorg", func(t *testing.T) {

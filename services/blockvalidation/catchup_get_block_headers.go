@@ -67,13 +67,9 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		}
 	}
 
-	// Check peer reputation before proceeding
-	if u.peerMetrics != nil {
-		if peerMetric, exists := u.peerMetrics.GetPeerMetrics(identifier); exists {
-			if !peerMetric.IsTrusted() {
-				u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", blockUpTo.Hash().String(), identifier, peerMetric.ReputationScore, peerMetric.MaliciousAttempts)
-			}
-		}
+	// Check peer reputation via P2P service
+	if u.isPeerMalicious(ctx, identifier) {
+		u.logger.Warnf("[catchup][%s] peer %s is marked as malicious by P2P service", blockUpTo.Hash().String(), identifier)
 	}
 
 	// Check if target block already exists
@@ -142,13 +138,13 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			u.logger.Warnf("[catchup][%s] No peerID provided for peer at %s", blockUpTo.Hash().String(), baseURL)
 			return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No peerID provided"), nil, errors.NewProcessingError("[catchup][%s] peerID is required but not provided for peer %s", blockUpTo.Hash().String(), baseURL)
 		}
-		peerMetrics := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
-		if peerMetrics != nil && peerMetrics.IsMalicious() {
-			u.logger.Warnf("[catchup][%s] peer %s is marked as malicious (%d attempts), should skip catchup", chainTipHash.String(), baseURL, peerMetrics.MaliciousAttempts)
+		// Check if peer is marked as malicious by P2P service
+		if u.isPeerMalicious(ctx, identifier) {
+			u.logger.Warnf("[catchup][%s] peer %s is marked as malicious by P2P service, should skip catchup", chainTipHash.String(), baseURL)
 			// Too many malicious attempts - skip this peer
 			// result := catchup.CreateCatchupResult(allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
 			// 	iteration, failedIterations, false, "peer is malicious")
-			// return result, nil, errors.NewServiceUnavailableError("peer %s is malicious (%d), skipping catchup", baseURL, peerMetrics.MaliciousAttempts)
+			// return result, nil, errors.NewServiceUnavailableError("peer %s is malicious, skipping catchup", baseURL)
 		}
 
 		// Create context with iteration timeout to prevent slow-loris attacks
@@ -185,13 +181,8 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 					circuitBreaker.RecordFailure()
 				}
 
-				// Update peer metrics for slow response
-				if u.peerMetrics != nil {
-					peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
-					if peerMetric != nil {
-						peerMetric.RecordFailure()
-					}
-				}
+				// Report slow response as catchup failure to P2P service
+				u.reportCatchupFailure(ctx, identifier)
 
 				iterErr := catchup.IterationError{
 					Iteration:  iteration,
@@ -225,14 +216,8 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 				circuitBreaker.RecordFailure()
 			}
 
-			// Update peer reputation for failed request
-			if u.peerMetrics != nil {
-				peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
-				peerMetric.UpdateReputation(false, time.Since(startTime))
-				peerMetric.FailedRequests++
-				peerMetric.TotalRequests++
-				peerMetric.LastRequestTime = time.Now()
-			}
+			// Report failed request to P2P service
+			u.reportCatchupFailure(ctx, identifier)
 
 			// Check if this is a malicious response
 			if errors.IsMaliciousResponseError(err) {
@@ -266,11 +251,8 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 			// Check if error indicates malicious behavior
 			if errors.IsMaliciousResponseError(parseErr) {
-				// Record malicious attempt
-				if u.peerMetrics != nil {
-					peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
-					peerMetric.RecordMaliciousAttempt()
-				}
+				// Report malicious behavior to P2P service
+				u.reportCatchupMalicious(ctx, identifier, "malicious response during header parsing")
 
 				u.logger.Errorf("[catchup][%s] SECURITY: Peer %s sent malicious headers - should be banned (banning not yet implemented)", chainTipHash.String(), baseURL)
 
@@ -311,11 +293,8 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		// Validate headers batch (checkpoint validation) and proof of work
 		if err = u.validateBatchHeaders(ctx, blockHeaders); err != nil {
 			if errors.IsMaliciousResponseError(err) {
-				// Record malicious attempt for checkpoint violation
-				if u.peerMetrics != nil {
-					peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
-					peerMetric.RecordMaliciousAttempt()
-				}
+				// Report malicious behavior for checkpoint violation to P2P service
+				u.reportCatchupMalicious(ctx, identifier, "checkpoint violation during header validation")
 
 				return catchup.CreateCatchupResult(
 					allCatchupHeaders, blockUpTo.Hash(), startHash, startHeight, startTime, baseURL,
@@ -380,25 +359,10 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		u.logger.Warnf("[catchup][%s] stopped after %d iterations without reaching target", chainTipHash.String(), iteration)
 	}
 
-	// Update peer reputation for successful fetching (if we got any headers)
+	// Report successful catchup to P2P service (if we got any headers)
 	if totalHeadersFetched > 0 {
-		if u.peerMetrics != nil {
-			peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(identifier)
-
-			responseTime := time.Since(startTime)
-			peerMetric.UpdateReputation(true, responseTime)
-			peerMetric.SuccessfulRequests++
-			peerMetric.TotalRequests++
-			peerMetric.TotalHeadersFetched += int64(totalHeadersFetched)
-			peerMetric.LastRequestTime = time.Now()
-
-			// Update average response time
-			if peerMetric.AverageResponseTime == 0 {
-				peerMetric.AverageResponseTime = responseTime
-			} else {
-				peerMetric.AverageResponseTime = (peerMetric.AverageResponseTime + responseTime) / 2
-			}
-		}
+		responseTime := time.Since(startTime)
+		u.reportCatchupSuccess(ctx, identifier, responseTime)
 	}
 
 	// Set default stop reason if none was set

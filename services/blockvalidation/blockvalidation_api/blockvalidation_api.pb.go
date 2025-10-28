@@ -126,7 +126,7 @@ type BlockFoundRequest struct {
 	Hash           []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
 	BaseUrl        string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
 	WaitToComplete bool                   `protobuf:"varint,3,opt,name=wait_to_complete,json=waitToComplete,proto3" json:"wait_to_complete,omitempty"`
-	PeerId         string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peerMetrics tracking
+	PeerId         string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peer tracking via P2P service
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -195,7 +195,7 @@ type ProcessBlockRequest struct {
 	Block         []byte                 `protobuf:"bytes,1,opt,name=block,proto3" json:"block,omitempty"`
 	Height        uint32                 `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
 	BaseUrl       string                 `protobuf:"bytes,3,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
-	PeerId        string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peerMetrics tracking
+	PeerId        string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peer tracking via P2P service
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

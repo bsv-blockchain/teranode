@@ -157,6 +157,14 @@ func (m *MockPeerServiceClient) ReportValidBlock(ctx context.Context, in *p2p_ap
 	return &p2p_api.ReportValidBlockResponse{Success: true}, nil
 }
 
+func (m *MockPeerServiceClient) IsPeerMalicious(ctx context.Context, in *p2p_api.IsPeerMaliciousRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerMaliciousResponse, error) {
+	return &p2p_api.IsPeerMaliciousResponse{IsMalicious: false}, nil
+}
+
+func (m *MockPeerServiceClient) IsPeerUnhealthy(ctx context.Context, in *p2p_api.IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerUnhealthyResponse, error) {
+	return &p2p_api.IsPeerUnhealthyResponse{IsUnhealthy: false, ReputationScore: 50.0}, nil
+}
+
 func TestSimpleClientGetPeers(t *testing.T) {
 	mockClient := &MockPeerServiceClient{
 		GetPeersFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {

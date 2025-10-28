@@ -1821,6 +1821,207 @@ func (x *ReportValidBlockResponse) GetMessage() string {
 	return ""
 }
 
+// Messages for peer status checking
+type IsPeerMaliciousRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PeerId        string                 `protobuf:"bytes,1,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IsPeerMaliciousRequest) Reset() {
+	*x = IsPeerMaliciousRequest{}
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IsPeerMaliciousRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IsPeerMaliciousRequest) ProtoMessage() {}
+
+func (x *IsPeerMaliciousRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IsPeerMaliciousRequest.ProtoReflect.Descriptor instead.
+func (*IsPeerMaliciousRequest) Descriptor() ([]byte, []int) {
+	return file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *IsPeerMaliciousRequest) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
+	}
+	return ""
+}
+
+type IsPeerMaliciousResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	IsMalicious   bool                   `protobuf:"varint,1,opt,name=is_malicious,json=isMalicious,proto3" json:"is_malicious,omitempty"`
+	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"` // Optional reason why peer is considered malicious
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IsPeerMaliciousResponse) Reset() {
+	*x = IsPeerMaliciousResponse{}
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[34]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IsPeerMaliciousResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IsPeerMaliciousResponse) ProtoMessage() {}
+
+func (x *IsPeerMaliciousResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[34]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IsPeerMaliciousResponse.ProtoReflect.Descriptor instead.
+func (*IsPeerMaliciousResponse) Descriptor() ([]byte, []int) {
+	return file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP(), []int{34}
+}
+
+func (x *IsPeerMaliciousResponse) GetIsMalicious() bool {
+	if x != nil {
+		return x.IsMalicious
+	}
+	return false
+}
+
+func (x *IsPeerMaliciousResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type IsPeerUnhealthyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PeerId        string                 `protobuf:"bytes,1,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IsPeerUnhealthyRequest) Reset() {
+	*x = IsPeerUnhealthyRequest{}
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IsPeerUnhealthyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IsPeerUnhealthyRequest) ProtoMessage() {}
+
+func (x *IsPeerUnhealthyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IsPeerUnhealthyRequest.ProtoReflect.Descriptor instead.
+func (*IsPeerUnhealthyRequest) Descriptor() ([]byte, []int) {
+	return file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *IsPeerUnhealthyRequest) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
+	}
+	return ""
+}
+
+type IsPeerUnhealthyResponse struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	IsUnhealthy     bool                   `protobuf:"varint,1,opt,name=is_unhealthy,json=isUnhealthy,proto3" json:"is_unhealthy,omitempty"`
+	Reason          string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                                            // Optional reason why peer is considered unhealthy
+	ReputationScore float32                `protobuf:"fixed32,3,opt,name=reputation_score,json=reputationScore,proto3" json:"reputation_score,omitempty"` // Current reputation score
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *IsPeerUnhealthyResponse) Reset() {
+	*x = IsPeerUnhealthyResponse{}
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IsPeerUnhealthyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IsPeerUnhealthyResponse) ProtoMessage() {}
+
+func (x *IsPeerUnhealthyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IsPeerUnhealthyResponse.ProtoReflect.Descriptor instead.
+func (*IsPeerUnhealthyResponse) Descriptor() ([]byte, []int) {
+	return file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *IsPeerUnhealthyResponse) GetIsUnhealthy() bool {
+	if x != nil {
+		return x.IsUnhealthy
+	}
+	return false
+}
+
+func (x *IsPeerUnhealthyResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *IsPeerUnhealthyResponse) GetReputationScore() float32 {
+	if x != nil {
+		return x.ReputationScore
+	}
+	return 0
+}
+
 var File_services_p2p_p2p_api_p2p_api_proto protoreflect.FileDescriptor
 
 const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
@@ -1946,7 +2147,18 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"block_hash\x18\x02 \x01(\tR\tblockHash\"N\n" +
 	"\x18ReportValidBlockResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage2\xbf\v\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"1\n" +
+	"\x16IsPeerMaliciousRequest\x12\x17\n" +
+	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"T\n" +
+	"\x17IsPeerMaliciousResponse\x12!\n" +
+	"\fis_malicious\x18\x01 \x01(\bR\visMalicious\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"1\n" +
+	"\x16IsPeerUnhealthyRequest\x12\x17\n" +
+	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"\x7f\n" +
+	"\x17IsPeerUnhealthyResponse\x12!\n" +
+	"\fis_unhealthy\x18\x01 \x01(\bR\visUnhealthy\x12\x16\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\x12)\n" +
+	"\x10reputation_score\x18\x03 \x01(\x02R\x0freputationScore2\xef\f\n" +
 	"\vPeerService\x12?\n" +
 	"\bGetPeers\x12\x16.google.protobuf.Empty\x1a\x19.p2p_api.GetPeersResponse\"\x00\x12>\n" +
 	"\aBanPeer\x12\x17.p2p_api.BanPeerRequest\x1a\x18.p2p_api.BanPeerResponse\"\x00\x12D\n" +
@@ -1965,7 +2177,9 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x17UpdateCatchupReputation\x12'.p2p_api.UpdateCatchupReputationRequest\x1a(.p2p_api.UpdateCatchupReputationResponse\"\x00\x12_\n" +
 	"\x12GetPeersForCatchup\x12\".p2p_api.GetPeersForCatchupRequest\x1a#.p2p_api.GetPeersForCatchupResponse\"\x00\x12_\n" +
 	"\x12ReportValidSubtree\x12\".p2p_api.ReportValidSubtreeRequest\x1a#.p2p_api.ReportValidSubtreeResponse\"\x00\x12Y\n" +
-	"\x10ReportValidBlock\x12 .p2p_api.ReportValidBlockRequest\x1a!.p2p_api.ReportValidBlockResponse\"\x00B\fZ\n" +
+	"\x10ReportValidBlock\x12 .p2p_api.ReportValidBlockRequest\x1a!.p2p_api.ReportValidBlockResponse\"\x00\x12V\n" +
+	"\x0fIsPeerMalicious\x12\x1f.p2p_api.IsPeerMaliciousRequest\x1a .p2p_api.IsPeerMaliciousResponse\"\x00\x12V\n" +
+	"\x0fIsPeerUnhealthy\x12\x1f.p2p_api.IsPeerUnhealthyRequest\x1a .p2p_api.IsPeerUnhealthyResponse\"\x00B\fZ\n" +
 	"./;p2p_apib\x06proto3"
 
 var (
@@ -1980,7 +2194,7 @@ func file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP() []byte {
 	return file_services_p2p_p2p_api_p2p_api_proto_rawDescData
 }
 
-var file_services_p2p_p2p_api_p2p_api_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_services_p2p_p2p_api_p2p_api_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_services_p2p_p2p_api_p2p_api_proto_goTypes = []any{
 	(*Peer)(nil),                            // 0: p2p_api.Peer
 	(*GetPeersResponse)(nil),                // 1: p2p_api.GetPeersResponse
@@ -2015,17 +2229,21 @@ var file_services_p2p_p2p_api_p2p_api_proto_goTypes = []any{
 	(*ReportValidSubtreeResponse)(nil),      // 30: p2p_api.ReportValidSubtreeResponse
 	(*ReportValidBlockRequest)(nil),         // 31: p2p_api.ReportValidBlockRequest
 	(*ReportValidBlockResponse)(nil),        // 32: p2p_api.ReportValidBlockResponse
-	(*emptypb.Empty)(nil),                   // 33: google.protobuf.Empty
+	(*IsPeerMaliciousRequest)(nil),          // 33: p2p_api.IsPeerMaliciousRequest
+	(*IsPeerMaliciousResponse)(nil),         // 34: p2p_api.IsPeerMaliciousResponse
+	(*IsPeerUnhealthyRequest)(nil),          // 35: p2p_api.IsPeerUnhealthyRequest
+	(*IsPeerUnhealthyResponse)(nil),         // 36: p2p_api.IsPeerUnhealthyResponse
+	(*emptypb.Empty)(nil),                   // 37: google.protobuf.Empty
 }
 var file_services_p2p_p2p_api_p2p_api_proto_depIdxs = []int32{
 	0,  // 0: p2p_api.GetPeersResponse.peers:type_name -> p2p_api.Peer
 	27, // 1: p2p_api.GetPeersForCatchupResponse.peers:type_name -> p2p_api.PeerInfoForCatchup
-	33, // 2: p2p_api.PeerService.GetPeers:input_type -> google.protobuf.Empty
+	37, // 2: p2p_api.PeerService.GetPeers:input_type -> google.protobuf.Empty
 	2,  // 3: p2p_api.PeerService.BanPeer:input_type -> p2p_api.BanPeerRequest
 	4,  // 4: p2p_api.PeerService.UnbanPeer:input_type -> p2p_api.UnbanPeerRequest
 	6,  // 5: p2p_api.PeerService.IsBanned:input_type -> p2p_api.IsBannedRequest
-	33, // 6: p2p_api.PeerService.ListBanned:input_type -> google.protobuf.Empty
-	33, // 7: p2p_api.PeerService.ClearBanned:input_type -> google.protobuf.Empty
+	37, // 6: p2p_api.PeerService.ListBanned:input_type -> google.protobuf.Empty
+	37, // 7: p2p_api.PeerService.ClearBanned:input_type -> google.protobuf.Empty
 	10, // 8: p2p_api.PeerService.AddBanScore:input_type -> p2p_api.AddBanScoreRequest
 	12, // 9: p2p_api.PeerService.ConnectPeer:input_type -> p2p_api.ConnectPeerRequest
 	14, // 10: p2p_api.PeerService.DisconnectPeer:input_type -> p2p_api.DisconnectPeerRequest
@@ -2037,25 +2255,29 @@ var file_services_p2p_p2p_api_p2p_api_proto_depIdxs = []int32{
 	26, // 16: p2p_api.PeerService.GetPeersForCatchup:input_type -> p2p_api.GetPeersForCatchupRequest
 	29, // 17: p2p_api.PeerService.ReportValidSubtree:input_type -> p2p_api.ReportValidSubtreeRequest
 	31, // 18: p2p_api.PeerService.ReportValidBlock:input_type -> p2p_api.ReportValidBlockRequest
-	1,  // 19: p2p_api.PeerService.GetPeers:output_type -> p2p_api.GetPeersResponse
-	3,  // 20: p2p_api.PeerService.BanPeer:output_type -> p2p_api.BanPeerResponse
-	5,  // 21: p2p_api.PeerService.UnbanPeer:output_type -> p2p_api.UnbanPeerResponse
-	7,  // 22: p2p_api.PeerService.IsBanned:output_type -> p2p_api.IsBannedResponse
-	8,  // 23: p2p_api.PeerService.ListBanned:output_type -> p2p_api.ListBannedResponse
-	9,  // 24: p2p_api.PeerService.ClearBanned:output_type -> p2p_api.ClearBannedResponse
-	11, // 25: p2p_api.PeerService.AddBanScore:output_type -> p2p_api.AddBanScoreResponse
-	13, // 26: p2p_api.PeerService.ConnectPeer:output_type -> p2p_api.ConnectPeerResponse
-	15, // 27: p2p_api.PeerService.DisconnectPeer:output_type -> p2p_api.DisconnectPeerResponse
-	17, // 28: p2p_api.PeerService.RecordCatchupAttempt:output_type -> p2p_api.RecordCatchupAttemptResponse
-	19, // 29: p2p_api.PeerService.RecordCatchupSuccess:output_type -> p2p_api.RecordCatchupSuccessResponse
-	21, // 30: p2p_api.PeerService.RecordCatchupFailure:output_type -> p2p_api.RecordCatchupFailureResponse
-	23, // 31: p2p_api.PeerService.RecordCatchupMalicious:output_type -> p2p_api.RecordCatchupMaliciousResponse
-	25, // 32: p2p_api.PeerService.UpdateCatchupReputation:output_type -> p2p_api.UpdateCatchupReputationResponse
-	28, // 33: p2p_api.PeerService.GetPeersForCatchup:output_type -> p2p_api.GetPeersForCatchupResponse
-	30, // 34: p2p_api.PeerService.ReportValidSubtree:output_type -> p2p_api.ReportValidSubtreeResponse
-	32, // 35: p2p_api.PeerService.ReportValidBlock:output_type -> p2p_api.ReportValidBlockResponse
-	19, // [19:36] is the sub-list for method output_type
-	2,  // [2:19] is the sub-list for method input_type
+	33, // 19: p2p_api.PeerService.IsPeerMalicious:input_type -> p2p_api.IsPeerMaliciousRequest
+	35, // 20: p2p_api.PeerService.IsPeerUnhealthy:input_type -> p2p_api.IsPeerUnhealthyRequest
+	1,  // 21: p2p_api.PeerService.GetPeers:output_type -> p2p_api.GetPeersResponse
+	3,  // 22: p2p_api.PeerService.BanPeer:output_type -> p2p_api.BanPeerResponse
+	5,  // 23: p2p_api.PeerService.UnbanPeer:output_type -> p2p_api.UnbanPeerResponse
+	7,  // 24: p2p_api.PeerService.IsBanned:output_type -> p2p_api.IsBannedResponse
+	8,  // 25: p2p_api.PeerService.ListBanned:output_type -> p2p_api.ListBannedResponse
+	9,  // 26: p2p_api.PeerService.ClearBanned:output_type -> p2p_api.ClearBannedResponse
+	11, // 27: p2p_api.PeerService.AddBanScore:output_type -> p2p_api.AddBanScoreResponse
+	13, // 28: p2p_api.PeerService.ConnectPeer:output_type -> p2p_api.ConnectPeerResponse
+	15, // 29: p2p_api.PeerService.DisconnectPeer:output_type -> p2p_api.DisconnectPeerResponse
+	17, // 30: p2p_api.PeerService.RecordCatchupAttempt:output_type -> p2p_api.RecordCatchupAttemptResponse
+	19, // 31: p2p_api.PeerService.RecordCatchupSuccess:output_type -> p2p_api.RecordCatchupSuccessResponse
+	21, // 32: p2p_api.PeerService.RecordCatchupFailure:output_type -> p2p_api.RecordCatchupFailureResponse
+	23, // 33: p2p_api.PeerService.RecordCatchupMalicious:output_type -> p2p_api.RecordCatchupMaliciousResponse
+	25, // 34: p2p_api.PeerService.UpdateCatchupReputation:output_type -> p2p_api.UpdateCatchupReputationResponse
+	28, // 35: p2p_api.PeerService.GetPeersForCatchup:output_type -> p2p_api.GetPeersForCatchupResponse
+	30, // 36: p2p_api.PeerService.ReportValidSubtree:output_type -> p2p_api.ReportValidSubtreeResponse
+	32, // 37: p2p_api.PeerService.ReportValidBlock:output_type -> p2p_api.ReportValidBlockResponse
+	34, // 38: p2p_api.PeerService.IsPeerMalicious:output_type -> p2p_api.IsPeerMaliciousResponse
+	36, // 39: p2p_api.PeerService.IsPeerUnhealthy:output_type -> p2p_api.IsPeerUnhealthyResponse
+	21, // [21:40] is the sub-list for method output_type
+	2,  // [2:21] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
@@ -2072,7 +2294,7 @@ func file_services_p2p_p2p_api_p2p_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_p2p_p2p_api_p2p_api_proto_rawDesc), len(file_services_p2p_p2p_api_p2p_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   33,
+			NumMessages:   37,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

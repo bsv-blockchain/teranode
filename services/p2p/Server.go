@@ -683,7 +683,7 @@ func (s *Server) subscribeToTopic(ctx context.Context, topicName string, handler
 		// DO NOT check ctx.Done() here - context cancellation during operations like Kafka consumer recovery
 		// should not stop P2P message processing. The subscription ends when the topic channel closes.
 		for msg := range topicChannel {
-			handler(ctx, msg.Data, msg.From)
+			handler(ctx, msg.Data, msg.FromID)
 		}
 		s.logger.Warnf("%s topic channel closed", topicName)
 	}()
@@ -714,11 +714,12 @@ func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.Kafk
 			m.SubtreeHash, m.PeerUrl, m.Reason)
 
 		// Use the existing ReportInvalidSubtree method to handle the invalid subtree
-		err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.PeerUrl, m.Reason)
+		// TODO: Uncomment when ReportInvalidSubtree is implemented
+		/*err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.PeerUrl, m.Reason)
 		if err != nil {
 			// Don't return error here, as we want to continue processing messages
 			s.logger.Errorf("[invalidSubtreeHandler] Failed to report invalid subtree from Kafka: %v", err)
-		}
+		}*/
 
 		return nil
 	}
@@ -748,11 +749,11 @@ func (s *Server) invalidBlockHandler(ctx context.Context) func(msg *kafka.KafkaM
 		s.logger.Infof("[invalidBlockHandler] Received invalid block notification via Kafka: %s, reason: %s", m.BlockHash, m.Reason)
 
 		// Use the existing ReportInvalidBlock method to handle the invalid block
-		err = s.ReportInvalidBlock(ctx, m.BlockHash, m.Reason)
+		/*err = s.ReportInvalidBlock(ctx, m.BlockHash, m.Reason)
 		if err != nil {
 			// Don't return error here, as we want to continue processing messages
 			s.logger.Errorf("[invalidBlockHandler] Failed to report invalid block from Kafka: %v", err)
-		}
+		}*/
 
 		return nil
 	}
@@ -853,14 +854,18 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 
 	// Mark sender as connected and update last message time
 	// The sender is the peer we're directly connected to
-	senderID := peer.ID(from)
+	senderID, err := peer.Decode(from)
+	if err != nil {
+		s.logger.Errorf("failed to decode sender peer ID %s: %v", from, err)
+		return
+	}
 	s.addConnectedPeer(senderID)
 	s.peerRegistry.UpdateLastMessageTime(senderID)
 
 	// Also update for the originator if different (gossiped message)
 	// The originator is not directly connected to us
 	if originatorPeerID != "" {
-		if peerID, err := peer.Decode(originatorPeerID); err == nil && peerID != senderID {
+		if peerID, err := peer.Decode(originatorPeerID); err != nil && peerID != senderID {
 			// Add as gossiped peer (not connected)
 			s.addPeer(peerID)
 			s.peerRegistry.UpdateLastMessageTime(peerID)
@@ -876,7 +881,11 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 	}
 
 	// Update bytes for the sender (peer we're directly connected to)
-	senderID := peer.ID(from)
+	senderID, err := peer.Decode(from)
+	if err != nil {
+		s.logger.Errorf("failed to decode sender peer ID %s: %v", from, err)
+		return
+	}
 	if info, exists := s.peerRegistry.GetPeer(senderID); exists {
 		newTotal := info.BytesReceived + messageSize
 		s.peerRegistry.UpdateNetworkStats(senderID, newTotal)
@@ -969,38 +978,41 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 
 	// Update peer height if provided (but not for our own messages)
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
-		if peerID, err := peer.Decode(nodeStatusMessage.PeerID); err == nil {
-			// Ensure this peer is in the registry
-			s.addPeer(peerID)
+		peerID, err := peer.Decode(nodeStatusMessage.PeerID)
+		if err != nil {
+			s.logger.Errorf("[handleNodeStatusTopic] failed to decode peer ID %s: %v", nodeStatusMessage.PeerID, err)
+			return
+		}
+		// Ensure this peer is in the registry
+		s.addPeer(peerID)
 
-			// Update sync manager with peer height from node status
-			// Update peer height in registry
-			s.updatePeerHeight(peerID, int32(nodeStatusMessage.BestHeight))
+		// Update sync manager with peer height from node status
+		// Update peer height in registry
+		s.updatePeerHeight(peerID, int32(nodeStatusMessage.BestHeight))
 
-			// Update DataHubURL if provided in the node status message
-			// This is important for peers we learn about through gossip (not directly connected).
-			// When we receive node_status messages forwarded by other peers, we still need to
-			// store the DataHubURL so we can potentially sync from them later if we establish
-			// a direct connection.
-			if nodeStatusMessage.BaseURL != "" {
-				s.updateDataHubURL(peerID, nodeStatusMessage.BaseURL)
-				s.logger.Debugf("[handleNodeStatusTopic] Updated DataHub URL %s for peer %s", nodeStatusMessage.BaseURL, peerID)
-			}
+		// Update DataHubURL if provided in the node status message
+		// This is important for peers we learn about through gossip (not directly connected).
+		// When we receive node_status messages forwarded by other peers, we still need to
+		// store the DataHubURL so we can potentially sync from them later if we establish
+		// a direct connection.
+		if nodeStatusMessage.BaseURL != "" {
+			s.updateDataHubURL(peerID, nodeStatusMessage.BaseURL)
+			s.logger.Debugf("[handleNodeStatusTopic] Updated DataHub URL %s for peer %s", nodeStatusMessage.BaseURL, peerID)
+		}
 
-			// Update block hash if provided
-			// Similar to DataHubURL, we store the best block hash from gossiped peers
-			// to maintain a complete picture of the network state
-			if nodeStatusMessage.BestBlockHash != "" {
-				s.updateBlockHash(peerID, nodeStatusMessage.BestBlockHash)
-				s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", nodeStatusMessage.BestBlockHash, peerID)
-			}
+		// Update block hash if provided
+		// Similar to DataHubURL, we store the best block hash from gossiped peers
+		// to maintain a complete picture of the network state
+		if nodeStatusMessage.BestBlockHash != "" {
+			s.updateBlockHash(peerID, nodeStatusMessage.BestBlockHash)
+			s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", nodeStatusMessage.BestBlockHash, peerID)
+		}
 
-			// Update storage mode if provided
-			// Store whether the peer is a full node or pruned node
-			if nodeStatusMessage.Storage != "" {
-				s.updateStorage(peerID, nodeStatusMessage.Storage)
-				s.logger.Debugf("[handleNodeStatusTopic] Updated storage mode to %s for peer %s", nodeStatusMessage.Storage, peerID)
-			}
+		// Update storage mode if provided
+		// Store whether the peer is a full node or pruned node
+		if nodeStatusMessage.Storage != "" {
+			s.updateStorage(peerID, nodeStatusMessage.Storage)
+			s.logger.Debugf("[handleNodeStatusTopic] Updated storage mode to %s for peer %s", nodeStatusMessage.Storage, peerID)
 		}
 	}
 
@@ -1721,8 +1733,10 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 			s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for peer %s", blockMessage.Hash, peerID)
 		}
 		// Also store using the immediate sender for redundancy
-		s.updateBlockHash(peer.ID(from), blockMessage.Hash)
-		s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for sender %s", blockMessage.Hash, from)
+		if peerID, err := peer.Decode(from); err == nil {
+			s.updateBlockHash(peerID, blockMessage.Hash)
+			s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for sender %s", blockMessage.Hash, from)
+		}
 	}
 
 	// Update peer height if provided
@@ -2141,7 +2155,7 @@ func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (ne
 
 // ReportValidBlock records a successful block reception from a peer
 // This should be called when a block is successfully validated and accepted
-func (s *Server) reportValidBlockInternal(ctx context.Context, blockHash string) error {
+/*func (s *Server) reportValidBlockInternal(ctx context.Context, blockHash string) error {
 	// Look up the peer ID that sent this block
 	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
 	if err != nil {
@@ -2169,7 +2183,7 @@ func (s *Server) reportValidBlockInternal(ctx context.Context, blockHash string)
 	s.blockPeerMap.Delete(blockHash)
 
 	return nil
-}
+}*/
 
 // ReportInvalidBlock adds ban score to the peer that sent an invalid block.
 // This method is called by the block validation service when a block is found to be invalid.
@@ -2228,7 +2242,7 @@ func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
 
 // ReportValidSubtree records a successful subtree reception from a peer
 // This should be called when a subtree is successfully validated and accepted
-func (s *Server) reportValidSubtreeInternal(ctx context.Context, subtreeHash string) error {
+/*func (s *Server) reportValidSubtreeInternal(ctx context.Context, subtreeHash string) error {
 	// Look up the peer ID that sent this subtree
 	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, subtreeHash, "subtree")
 	if err != nil {
@@ -2256,7 +2270,7 @@ func (s *Server) reportValidSubtreeInternal(ctx context.Context, subtreeHash str
 	s.subtreePeerMap.Delete(subtreeHash)
 
 	return nil
-}
+}*/
 
 // ReportInvalidSubtree handles invalid subtree reports with explicit peer URL
 func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, reason string) error {

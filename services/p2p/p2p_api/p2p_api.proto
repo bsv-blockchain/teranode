@@ -186,6 +186,26 @@ message AddBanScoreRequest {
     string message = 2;
   }
 
+  // Messages for peer status checking
+  message IsPeerMaliciousRequest {
+    string peer_id = 1;
+  }
+
+  message IsPeerMaliciousResponse {
+    bool is_malicious = 1;
+    string reason = 2;  // Optional reason why peer is considered malicious
+  }
+
+  message IsPeerUnhealthyRequest {
+    string peer_id = 1;
+  }
+
+  message IsPeerUnhealthyResponse {
+    bool is_unhealthy = 1;
+    string reason = 2;  // Optional reason why peer is considered unhealthy
+    float reputation_score = 3;  // Current reputation score
+  }
+
   // Add new service for peer operations
   service PeerService {
     rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
@@ -209,5 +229,9 @@ message AddBanScoreRequest {
     // Subtree and block validation reporting
     rpc ReportValidSubtree(ReportValidSubtreeRequest) returns (ReportValidSubtreeResponse) {}
     rpc ReportValidBlock(ReportValidBlockRequest) returns (ReportValidBlockResponse) {}
+
+    // Peer status checking
+    rpc IsPeerMalicious(IsPeerMaliciousRequest) returns (IsPeerMaliciousResponse) {}
+    rpc IsPeerUnhealthy(IsPeerUnhealthyRequest) returns (IsPeerUnhealthyResponse) {}
   }
   

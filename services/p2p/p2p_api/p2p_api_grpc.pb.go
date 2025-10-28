@@ -37,6 +37,8 @@ const (
 	PeerService_GetPeersForCatchup_FullMethodName      = "/p2p_api.PeerService/GetPeersForCatchup"
 	PeerService_ReportValidSubtree_FullMethodName      = "/p2p_api.PeerService/ReportValidSubtree"
 	PeerService_ReportValidBlock_FullMethodName        = "/p2p_api.PeerService/ReportValidBlock"
+	PeerService_IsPeerMalicious_FullMethodName         = "/p2p_api.PeerService/IsPeerMalicious"
+	PeerService_IsPeerUnhealthy_FullMethodName         = "/p2p_api.PeerService/IsPeerUnhealthy"
 )
 
 // PeerServiceClient is the client API for PeerService service.
@@ -64,6 +66,9 @@ type PeerServiceClient interface {
 	// Subtree and block validation reporting
 	ReportValidSubtree(ctx context.Context, in *ReportValidSubtreeRequest, opts ...grpc.CallOption) (*ReportValidSubtreeResponse, error)
 	ReportValidBlock(ctx context.Context, in *ReportValidBlockRequest, opts ...grpc.CallOption) (*ReportValidBlockResponse, error)
+	// Peer status checking
+	IsPeerMalicious(ctx context.Context, in *IsPeerMaliciousRequest, opts ...grpc.CallOption) (*IsPeerMaliciousResponse, error)
+	IsPeerUnhealthy(ctx context.Context, in *IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*IsPeerUnhealthyResponse, error)
 }
 
 type peerServiceClient struct {
@@ -244,6 +249,26 @@ func (c *peerServiceClient) ReportValidBlock(ctx context.Context, in *ReportVali
 	return out, nil
 }
 
+func (c *peerServiceClient) IsPeerMalicious(ctx context.Context, in *IsPeerMaliciousRequest, opts ...grpc.CallOption) (*IsPeerMaliciousResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IsPeerMaliciousResponse)
+	err := c.cc.Invoke(ctx, PeerService_IsPeerMalicious_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) IsPeerUnhealthy(ctx context.Context, in *IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*IsPeerUnhealthyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IsPeerUnhealthyResponse)
+	err := c.cc.Invoke(ctx, PeerService_IsPeerUnhealthy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PeerServiceServer is the server API for PeerService service.
 // All implementations must embed UnimplementedPeerServiceServer
 // for forward compatibility.
@@ -269,6 +294,9 @@ type PeerServiceServer interface {
 	// Subtree and block validation reporting
 	ReportValidSubtree(context.Context, *ReportValidSubtreeRequest) (*ReportValidSubtreeResponse, error)
 	ReportValidBlock(context.Context, *ReportValidBlockRequest) (*ReportValidBlockResponse, error)
+	// Peer status checking
+	IsPeerMalicious(context.Context, *IsPeerMaliciousRequest) (*IsPeerMaliciousResponse, error)
+	IsPeerUnhealthy(context.Context, *IsPeerUnhealthyRequest) (*IsPeerUnhealthyResponse, error)
 	mustEmbedUnimplementedPeerServiceServer()
 }
 
@@ -329,6 +357,12 @@ func (UnimplementedPeerServiceServer) ReportValidSubtree(context.Context, *Repor
 }
 func (UnimplementedPeerServiceServer) ReportValidBlock(context.Context, *ReportValidBlockRequest) (*ReportValidBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ReportValidBlock not implemented")
+}
+func (UnimplementedPeerServiceServer) IsPeerMalicious(context.Context, *IsPeerMaliciousRequest) (*IsPeerMaliciousResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method IsPeerMalicious not implemented")
+}
+func (UnimplementedPeerServiceServer) IsPeerUnhealthy(context.Context, *IsPeerUnhealthyRequest) (*IsPeerUnhealthyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method IsPeerUnhealthy not implemented")
 }
 func (UnimplementedPeerServiceServer) mustEmbedUnimplementedPeerServiceServer() {}
 func (UnimplementedPeerServiceServer) testEmbeddedByValue()                     {}
@@ -657,6 +691,42 @@ func _PeerService_ReportValidBlock_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerService_IsPeerMalicious_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IsPeerMaliciousRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).IsPeerMalicious(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_IsPeerMalicious_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).IsPeerMalicious(ctx, req.(*IsPeerMaliciousRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_IsPeerUnhealthy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IsPeerUnhealthyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).IsPeerUnhealthy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_IsPeerUnhealthy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).IsPeerUnhealthy(ctx, req.(*IsPeerUnhealthyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PeerService_ServiceDesc is the grpc.ServiceDesc for PeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -731,6 +801,14 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportValidBlock",
 			Handler:    _PeerService_ReportValidBlock_Handler,
+		},
+		{
+			MethodName: "IsPeerMalicious",
+			Handler:    _PeerService_IsPeerMalicious_Handler,
+		},
+		{
+			MethodName: "IsPeerUnhealthy",
+			Handler:    _PeerService_IsPeerUnhealthy_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

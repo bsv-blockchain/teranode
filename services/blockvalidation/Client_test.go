@@ -46,6 +46,13 @@ func (m *mockBlockValidationAPIClient) ProcessBlock(ctx context.Context, in *blo
 	}
 	return args.Get(0).(*blockvalidation_api.EmptyMessage), args.Error(1)
 }
+func (m *mockBlockValidationAPIClient) GetCatchupStatus(ctx context.Context, in *blockvalidation_api.EmptyMessage, opts ...grpc.CallOption) (*blockvalidation_api.CatchupStatusResponse, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockvalidation_api.CatchupStatusResponse), args.Error(1)
+}
 
 func (m *mockBlockValidationAPIClient) ValidateBlock(ctx context.Context, in *blockvalidation_api.ValidateBlockRequest, opts ...grpc.CallOption) (*blockvalidation_api.ValidateBlockResponse, error) {
 	args := m.Called(ctx, in, opts)
