@@ -172,7 +172,11 @@ func (pr *PeerRegistry) LoadPeerRegistryCache(cacheDir string) error {
 	for idStr, metrics := range cache.Peers {
 		// Try to decode as a peer ID
 		// Note: peer.ID is just a string type, so we can cast it directly
-		peerID := peer.ID(idStr)
+		peerID, err := peer.Decode(idStr)
+		if err != nil {
+			// Invalid peer ID in cache, skip
+			continue
+		}
 
 		// Check if peer exists in registry
 		info, exists := pr.peers[peerID]
