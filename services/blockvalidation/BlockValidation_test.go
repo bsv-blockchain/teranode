@@ -1095,7 +1095,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	tx0, tx1, tx2, tx3 := txs[0], txs[1], txs[2], txs[3]
 
 	// Store all transactions except tx3 (which will be our missing transaction)
-	for _, tx := range txs[:3] { // Store all except tx4
+	for _, tx := range txs[:3] { // Store all except tx3
 		_, err := utxoStore.Create(context.Background(), tx, 100)
 		require.NoError(t, err)
 	}
