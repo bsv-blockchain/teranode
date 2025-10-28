@@ -1091,11 +1091,11 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	defer deferFunc()
 
 	// Create a chain of transactions
-	txs := transactions.CreateTestTransactionChainWithCount(t, 7) // coinbase + 4 transactions
-	tx0, tx1, tx2, tx3, tx4 := txs[0], txs[1], txs[2], txs[3], txs[4]
+	txs := transactions.CreateTestTransactionChainWithCount(t, 5) // coinbase + 3 transactions
+	tx0, tx1, tx2, tx3 := txs[0], txs[1], txs[2], txs[3]
 
-	// Store all transactions except tx4 (which will be our missing transaction)
-	for _, tx := range txs[:4] { // Store all except tx4
+	// Store all transactions except tx3 (which will be our missing transaction)
+	for _, tx := range txs[:3] { // Store all except tx4
 		_, err := utxoStore.Create(context.Background(), tx, 100)
 		require.NoError(t, err)
 	}
@@ -1110,11 +1110,14 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	require.Equal(t, []uint32{0}, blockIDsMap[*tx0.TxIDChainHash()])
 
 	// Create a subtree with our transactions
-	subtree, err := subtreepkg.NewTreeByLeafCount(4) // 4 transactions excluding coinbase
+	subtree, err := subtreepkg.NewTreeByLeafCount(4) // 4 transactions including coinbase
 	require.NoError(t, err)
 
+	// Add coinbase placeholder
+	require.NoError(t, subtree.AddCoinbaseNode())
+
 	// Add transactions to subtree
-	for i, tx := range []*bt.Tx{tx1, tx2, tx3, tx4} {
+	for i, tx := range []*bt.Tx{tx1, tx2, tx3} {
 		hash := tx.TxIDChainHash()
 		require.NoError(t, subtree.AddNode(*hash, uint64(tx.Size()), uint64(i))) //nolint:gosec
 	}
@@ -1124,7 +1127,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 
 	// Calculate total fees for coinbase
 	fees := uint64(0)
-	for _, tx := range []*bt.Tx{tx1, tx2, tx3, tx4} {
+	for _, tx := range []*bt.Tx{tx1, tx2, tx3} {
 		fees += tx.TotalInputSatoshis() - tx.TotalOutputSatoshis()
 	}
 
@@ -1165,7 +1168,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 		func() uint64 {
 			totalSize := int64(0)
 
-			for _, tx := range []*bt.Tx{coinbaseTx, tx1, tx2, tx3, tx4} {
+			for _, tx := range []*bt.Tx{coinbaseTx, tx1, tx2, tx3} {
 				size := tx.Size()
 				if size < 0 {
 					t.Fatal("negative transaction size")
@@ -1212,10 +1215,9 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	)
 
 	subtreeData := subtreepkg.NewSubtreeData(subtree)
-	require.NoError(t, subtreeData.AddTx(tx1, 0))
-	require.NoError(t, subtreeData.AddTx(tx2, 1))
-	require.NoError(t, subtreeData.AddTx(tx3, 2))
-	require.NoError(t, subtreeData.AddTx(tx4, 3))
+	require.NoError(t, subtreeData.AddTx(tx1, 1))
+	require.NoError(t, subtreeData.AddTx(tx2, 2))
+	require.NoError(t, subtreeData.AddTx(tx3, 3))
 
 	subtreeDataBytes, err := subtreeData.Serialize()
 	require.NoError(t, err)
@@ -1254,8 +1256,6 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 					tx = tx2
 				case tx3.TxIDChainHash().String():
 					tx = tx3
-				case tx4.TxIDChainHash().String():
-					tx = tx4
 				default:
 					return nil, errors.NewError("unexpected hash in request: " + hash.String())
 				}
@@ -1277,7 +1277,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	require.NoError(t, err, "Block validation should succeed after retrieving missing transaction")
 
 	// Verify that the missing transaction was stored
-	exists, err := utxoStore.Get(context.Background(), tx4.TxIDChainHash())
+	exists, err := utxoStore.Get(context.Background(), tx3.TxIDChainHash())
 	require.NoError(t, err)
 	require.NotEmpty(t, exists, "The missing transaction should have been stored after validation")
 }
@@ -1754,7 +1754,7 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 		blockHeader,
 		coinbaseTx,
 		subtreeHashes,
-		uint64(subtree.Length()), //nolint:gosec
+		uint64(subtree.Length()),                        //nolint:gosec
 		uint64(coinbaseTx.Size()+tx1.Size()+tx2.Size()), //nolint:gosec
 		100, 0,
 	)
@@ -1867,7 +1867,7 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 		blockHeader,
 		coinbaseTx,
 		subtreeHashes,
-		uint64(subtree.Length()), //nolint:gosec
+		uint64(subtree.Length()),                        //nolint:gosec
 		uint64(coinbaseTx.Size()+tx1.Size()+tx2.Size()), //nolint:gosec
 		100, 0,
 	)
@@ -2338,7 +2338,7 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 		blockHeader,
 		coinbaseTx,
 		subtreeHashes,
-		uint64(subtree.Length()), //nolint:gosec
+		uint64(subtree.Length()),                                  //nolint:gosec
 		uint64(coinbaseTx.Size()+parentTx.Size()+childTx1.Size()), //nolint:gosec
 		100, 0,
 	)
@@ -2855,7 +2855,7 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		blockHeader,
 		coinbaseTx,
 		subtreeHashes,
-		uint64(subtree.Length()), //nolint:gosec
+		uint64(subtree.Length()),                                  //nolint:gosec
 		uint64(coinbaseTx.Size()+parentTx.Size()+childTx1.Size()), //nolint:gosec
 		100, 0,
 	)
