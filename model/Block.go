@@ -469,7 +469,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 
 		// Verify that we have at least one subtree and that it has at least one node
 		if len(b.SubtreeSlices) == 0 || len(b.SubtreeSlices[0].Nodes) == 0 {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtbree has no nodes", b.String())
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
