@@ -203,11 +203,12 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 	failedPeer := sc.currentSyncPeer
 	sc.mu.RUnlock()
 
-	// Mark the failed peer as unhealthy BEFORE clearing and triggering sync
+	// Mark the failed peer as unhealthy and record failure BEFORE clearing and triggering sync
 	// This ensures the peer selector won't re-select the same peer
 	if failedPeer != "" {
-		sc.logger.Infof("[SyncCoordinator] Marking failed peer %s as unhealthy", failedPeer)
+		sc.logger.Infof("[SyncCoordinator] Marking failed peer %s as unhealthy and recording failure", failedPeer)
 		sc.registry.UpdateHealth(failedPeer, false)
+		sc.registry.RecordCatchupFailure(failedPeer)
 	}
 
 	// Clear current sync peer
@@ -332,19 +333,11 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 				sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed (local height: %d < peer height: %d)",
 					currentPeer, localHeight, peerInfo.Height)
 
-				// Add ban score for catchup failure
-				// Disabled for now, there are many situations where this can happen, we should ban based on actual
-				// errors happening in the sync, not during FSM transitions
-				// if sc.banManager != nil {
-				//	score, banned := sc.banManager.AddScore(string(currentPeer), ReasonCatchupFailure)
-				//	if banned {
-				//		sc.logger.Warnf("[SyncCoordinator] Peer %s banned after catchup failure (score: %d)", currentPeer, score)
-				//	} else {
-				//		sc.logger.Infof("[SyncCoordinator] Added ban score to peer %s for catchup failure (score: %d)", currentPeer, score)
-				//	}
-				//	// Update the ban status in the registry so the peer selector knows about it
-				//	sc.registry.UpdateBanStatus(currentPeer, score, banned)
-				// }
+				// Record catchup failure for reputation tracking
+				if sc.registry != nil {
+					sc.registry.RecordCatchupFailure(currentPeer)
+					sc.logger.Infof("[SyncCoordinator] Recorded catchup failure for peer %s (will decrease reputation)", currentPeer)
+				}
 
 				sc.ClearSyncPeer()
 				_ = sc.TriggerSync()

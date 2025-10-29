@@ -428,12 +428,14 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 		return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to store subtreeToCheck for %s", subtreeHash.String(), err)
 	}
 
-	// Report successful subtree fetch to improve peer reputation
-	if u.p2pClient != nil {
-		if err := u.p2pClient.ReportValidSubtree(ctx, peerID, subtreeHash.String()); err != nil {
-			u.logger.Warnf("[fetchAndStoreSubtree][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
-		}
-	}
+	// Don't report subtree fetch during catchup - wait for full validation
+	// Only report success after the entire block is validated
+	// This prevents inflating reputation for peers providing invalid chains
+	// if u.p2pClient != nil {
+	// 	if err := u.p2pClient.ReportValidSubtree(ctx, peerID, subtreeHash.String()); err != nil {
+	// 		u.logger.Warnf("[fetchAndStoreSubtree][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
+	// 	}
+	// }
 
 	return subtree, nil
 }
@@ -657,12 +659,14 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, pee
 			hash.String(), len(blockBytes))
 	}
 
-	// Report successful block fetch to improve peer reputation
-	if u.p2pClient != nil && peerID != "" {
-		if err := u.p2pClient.ReportValidBlock(ctx, peerID, hash.String()); err != nil {
-			u.logger.Warnf("[fetchSingleBlock][%s] failed to report valid block: %s", hash.String(), err.Error())
-		}
-	}
+	// Don't report block fetch during catchup - wait for full validation
+	// Only report success after the block is validated to prevent
+	// inflating reputation for peers providing invalid chains
+	// if u.p2pClient != nil && peerID != "" {
+	// 	if err := u.p2pClient.ReportValidBlock(ctx, peerID, hash.String()); err != nil {
+	// 		u.logger.Warnf("[fetchSingleBlock][%s] failed to report valid block: %s", hash.String(), err.Error())
+	// 	}
+	// }
 
 	return block, nil
 }

@@ -233,6 +233,8 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		if errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid) {
 			errorType = "validation_failure"
+			// Mark peer as malicious for validation failure
+			u.reportCatchupMalicious(context.Background(), ctx.peerID, "validation_failure")
 		} else if errors.IsNetworkError(*err) {
 			errorType = "network_error"
 		} else if strings.Contains(errorMsg, "secret mining") || strings.Contains(errorMsg, "secretly mined") {
@@ -876,6 +878,9 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 					// Just log and record metrics
 					if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
 						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
+
+						// Mark peer as malicious for providing invalid block
+						u.reportCatchupMalicious(gCtx, peerID, "invalid_block_validation")
 					}
 
 					// Record metric for validation failure
@@ -886,14 +891,16 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 					return err
 				}
 
-				// Report successful block validation to P2P service
-				// This tracks individual block successes, not just overall catchup success
-				blockValidationDuration := time.Since(catchupCtx.startTime)
-				u.reportCatchupSuccess(gCtx, peerID, blockValidationDuration)
+				// Don't report individual block success during catchup
+				// Wait for entire catchup to succeed to avoid inflating reputation
+				// for peers that provide some valid blocks but ultimately invalid chains
+				// blockValidationDuration := time.Since(catchupCtx.startTime)
+				// u.reportCatchupSuccess(gCtx, peerID, blockValidationDuration)
 			} else {
-				// Quick validation succeeded, also report success
-				blockValidationDuration := time.Since(catchupCtx.startTime)
-				u.reportCatchupSuccess(gCtx, peerID, blockValidationDuration)
+				// Quick validation succeeded, but don't report yet
+				// Wait for entire catchup to complete successfully
+				// blockValidationDuration := time.Since(catchupCtx.startTime)
+				// u.reportCatchupSuccess(gCtx, peerID, blockValidationDuration)
 			}
 
 			// Update the remaining block count

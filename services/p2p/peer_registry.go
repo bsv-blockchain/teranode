@@ -334,9 +334,15 @@ func (pr *PeerRegistry) RecordMaliciousInteraction(id peer.ID) {
 
 	if info, exists := pr.peers[id]; exists {
 		info.MaliciousCount++
+		info.InteractionFailures++ // Also count as a failed interaction
+		info.LastInteractionFailure = time.Now()
 
-		// Automatically update reputation score (heavily penalized)
-		pr.calculateAndUpdateReputation(info)
+		// Immediately drop reputation to very low value for malicious behavior
+		// Providing invalid blocks is serious - don't trust this peer
+		info.ReputationScore = 5.0 // Very low score, well below selection threshold
+
+		// Log would be helpful here but PeerRegistry doesn't have a logger
+		// The impact is still significant - reputation dropped to 5.0
 	}
 }
 
@@ -388,6 +394,13 @@ func (pr *PeerRegistry) calculateAndUpdateReputation(info *PeerInfo) {
 		recencyWindow    = 1 * time.Hour
 	)
 
+	// If peer has been marked malicious, keep reputation very low
+	if info.MaliciousCount > 0 {
+		// Malicious peers get minimal reputation
+		info.ReputationScore = 5.0
+		return
+	}
+
 	// Calculate success rate (0-100)
 	totalAttempts := info.InteractionSuccesses + info.InteractionFailures
 	successRate := 0.0
@@ -405,12 +418,12 @@ func (pr *PeerRegistry) calculateAndUpdateReputation(info *PeerInfo) {
 	// Add base score weighted component
 	score += baseScore * (1.0 - successWeight)
 
-	// Apply malicious penalty
-	maliciousDeduction := float64(info.MaliciousCount) * maliciousPenalty
-	if maliciousDeduction > maliciousCap {
-		maliciousDeduction = maliciousCap
+	// Apply additional penalty for recent failures
+	recentFailurePenalty := 0.0
+	if !info.LastInteractionFailure.IsZero() && time.Since(info.LastInteractionFailure) < recencyWindow {
+		recentFailurePenalty = 15.0 // Penalty for recent failure
 	}
-	score -= maliciousDeduction
+	score -= recentFailurePenalty
 
 	// Add recency bonus if peer was successful recently
 	if !info.LastInteractionSuccess.IsZero() && time.Since(info.LastInteractionSuccess) < recencyWindow {
