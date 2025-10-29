@@ -90,7 +90,7 @@ func TestInit(t *testing.T) {
 
 		// The init logic: if version == "" && commit == "" { populateVersionInfo() }
 		// This should NOT call populateVersionInfo since version is not empty
-		shouldCallPopulate := (version == "" && commit == "")
+		shouldCallPopulate := version == "" && commit == ""
 		assert.False(t, shouldCallPopulate, "Should not call populateVersionInfo when version is set")
 
 		// Values should remain unchanged if we don't call populateVersionInfo
@@ -110,7 +110,7 @@ func TestInit(t *testing.T) {
 
 		// The init logic: if version == "" && commit == "" { populateVersionInfo() }
 		// This should NOT call populateVersionInfo since commit is not empty
-		shouldCallPopulate := (version == "" && commit == "")
+		shouldCallPopulate := version == "" && commit == ""
 		assert.False(t, shouldCallPopulate, "Should not call populateVersionInfo when commit is set")
 
 		// Values should remain unchanged if we don't call populateVersionInfo
@@ -130,7 +130,7 @@ func TestInit(t *testing.T) {
 
 		// The init logic: if version == "" && commit == "" { populateVersionInfo() }
 		// This should NOT call populateVersionInfo since both are set
-		shouldCallPopulate := (version == "" && commit == "")
+		shouldCallPopulate := version == "" && commit == ""
 		assert.False(t, shouldCallPopulate, "Should not call populateVersionInfo when both are set")
 
 		// Values should remain unchanged

@@ -661,7 +661,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 		ulogger.TestLogger{},
 		ba.settings,
 		nil,
-		nil,
+		items.blockchainClient,
 		nil,
 		items.newSubtreeChan,
 		subtreeprocessor.WithBatcherSize(1),
@@ -2403,7 +2403,7 @@ func TestWaitForPendingBlocksCoverage(t *testing.T) {
 		ba.SetSkipWaitForPendingBlocks(true)
 
 		// Test waitForPendingBlocks - should return immediately
-		_ = ba.waitForPendingBlocks(context.Background())
+		_ = ba.subtreeProcessor.WaitForPendingBlocks(context.Background())
 
 		// Should return immediately when skip is enabled
 		assert.True(t, true, "waitForPendingBlocks should skip when enabled")
@@ -2422,7 +2422,7 @@ func TestWaitForPendingBlocksCoverage(t *testing.T) {
 		defer cancel()
 
 		// Test waitForPendingBlocks with timeout
-		_ = ba.waitForPendingBlocks(ctx)
+		_ = ba.subtreeProcessor.WaitForPendingBlocks(ctx)
 
 		// Should handle timeout gracefully
 		assert.True(t, true, "waitForPendingBlocks should handle timeout")

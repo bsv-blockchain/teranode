@@ -270,11 +270,14 @@ func acquireReadPermit(ctx context.Context) error {
 	defer cancel()
 
 	if err := readSemaphore.Acquire(acquireCtx, 1); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.Canceled) {
+			// Context was canceled, propagate the cancellation
+			return errors.NewContextCanceledError("[File] read operation canceled while waiting for semaphore permit", err)
+		} else if errors.Is(err, context.DeadlineExceeded) {
 			return errors.NewServiceUnavailableError("[File] read operation timed out waiting for semaphore permit")
 		}
 
-		return errors.NewProcessingError("[File] failed to acquire read permit: %w", err)
+		return errors.NewProcessingError("[File] failed to acquire read permit", err)
 	}
 
 	return nil
