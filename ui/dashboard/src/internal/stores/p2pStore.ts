@@ -216,6 +216,7 @@ export async function connectToP2PServer() {
                 existingNode.subtree_count !== newNode.subtree_count ||
                 existingNode.uptime !== newNode.uptime ||
                 existingNode.listen_mode !== newNode.listen_mode ||
+                existingNode.storage !== newNode.storage ||
                 existingNode.client_name !== newNode.client_name ||
                 existingNode.miner_name !== newNode.miner_name ||
                 existingNode.start_time !== newNode.start_time ||

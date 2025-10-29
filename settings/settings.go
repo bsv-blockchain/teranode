@@ -387,6 +387,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerHealthCheckInterval:       getDuration("p2p_health_check_interval", 30*time.Second, alternativeContext...),
 			PeerHealthHTTPTimeout:         getDuration("p2p_health_http_timeout", 5*time.Second, alternativeContext...),
 			PeerHealthRemoveAfterFailures: getInt("p2p_health_remove_after_failures", 3, alternativeContext...),
+			// Full/pruned node selection configuration
+			AllowPrunedNodeFallback: getBool("p2p_allow_pruned_node_fallback", true, alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                          getString("coinbaseDB", "", alternativeContext...),
