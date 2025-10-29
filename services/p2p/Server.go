@@ -1263,7 +1263,7 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 
 	// Determine storage mode (full vs pruned) based on block persister status
 	storage := s.determineStorage(ctx, height)
-	s.logger.Infof("[getNodeStatusMessage] Determined storage=%q for this node at height %d", storage, height)
+	s.logger.Debugf("[getNodeStatusMessage] Determined storage=%q for this node at height %d", storage, height)
 
 	// Return the notification message
 	return &notificationMsg{
