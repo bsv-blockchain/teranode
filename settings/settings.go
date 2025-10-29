@@ -262,7 +262,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ArePreviousBlocksProcessedMaxRetry:               getInt("blockvalidation_isParentMined_retry_max_retry", 20, alternativeContext...),
 			ArePreviousBlocksProcessedRetryBackoffMultiplier: getInt("blockvalidation_isParentMined_retry_backoff_multiplier", 30, alternativeContext...),
 			BlockFoundChBufferSize:                           getInt("blockvalidation_blockFoundCh_buffer_size", 1000, alternativeContext...),
-			CatchupChBufferSize:                              getInt("blockvalidation_catchupCh_buffer_size", 10, alternativeContext...),
+			CatchupChBufferSize:                              getInt("blockvalidation_catchupCh_buffer_size", 100, alternativeContext...),
 			UseCatchupWhenBehind:                             getBool("blockvalidation_useCatchupWhenBehind", false, alternativeContext...),
 			CatchupConcurrency:                               getInt("blockvalidation_catchupConcurrency", max(4, runtime.NumCPU()/2), alternativeContext...),
 			ValidationWarmupCount:                            getInt("blockvalidation_validation_warmup_count", 128, alternativeContext...),

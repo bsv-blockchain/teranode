@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -599,7 +600,28 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						continue
 					}
 
+					u.logger.Infof("[catchup] Processing catchup request for block %s from peer %s (%s)", c.block.Hash().String(), c.peerID, c.baseURL)
+
 					if err := u.catchup(ctx, c.block, c.baseURL, c.peerID); err != nil {
+						// Check if the error is due to another catchup in progress
+						if strings.Contains(err.Error(), "another catchup is currently in progress") {
+							u.logger.Warnf("[catchup] Catchup already in progress, requeueing block %s from peer %s", c.block.Hash().String(), c.peerID)
+
+							// Requeue the catchup request with a small delay to avoid busy loop
+							go func(catchupReq processBlockCatchup) {
+								time.Sleep(5 * time.Second)
+								select {
+								case u.catchupCh <- catchupReq:
+									u.logger.Debugf("[catchup] Successfully requeued block %s", catchupReq.block.Hash().String())
+								case <-ctx.Done():
+									u.logger.Debugf("[catchup] Context cancelled, not requeueing block %s", catchupReq.block.Hash().String())
+								default:
+									u.logger.Warnf("[catchup] Failed to requeue block %s - channel full", catchupReq.block.Hash().String())
+								}
+							}(c)
+							continue
+						}
+
 						// Report catchup failure to P2P service
 						u.reportCatchupFailure(ctx, c.peerID)
 
@@ -610,19 +632,21 @@ func (u *Server) Init(ctx context.Context) (err error) {
 							u.logger.Errorf("[Init] failed to report peer failure: %v", reportErr)
 						}
 
-						// If block is invalid, don't try other peers; return early
+						// If block is invalid, don't try other peers; continue to next catchup request
 						// Block is expected to be added to the block store as invalid somewhere else
 						if errors.Is(err, errors.ErrBlockInvalid) ||
 							errors.Is(err, errors.ErrTxMissingParent) ||
 							errors.Is(err, errors.ErrTxNotFound) ||
 							errors.Is(err, errors.ErrTxInvalid) {
 							u.logger.Warnf("[catchup] Block %s is invalid, not trying alternative sources", c.block.Hash().String())
-							return
+							// Clean up the processing notification for this block so it can be retried later if needed
+							u.processBlockNotify.Delete(*c.block.Hash())
+							continue
 						}
 
 						// Try alternative sources for catchup
 						blockHash := c.block.Hash()
-						defer u.catchupAlternatives.Delete(*blockHash)
+						// Clean up alternatives after processing (no defer in loop)
 
 						// First, try to get intelligent peer selection from P2P service
 						bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, int32(c.block.Height))
@@ -645,9 +669,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 								// Try catchup with this peer
 								if altErr := u.catchup(ctx, c.block, bestPeer.DataHubURL, bestPeer.ID); altErr == nil {
 									u.logger.Infof("[catchup] Successfully processed block %s from peer %s (via P2P service)", blockHash.String(), bestPeer.ID)
-									// Clear processing marker
+									// Clear processing marker and alternatives
 									u.processBlockNotify.Delete(*blockHash)
-									return // Success, exit the alternative sources section
+									u.catchupAlternatives.Delete(*blockHash)
+									break // Success, exit the peer loop
 								} else {
 									u.logger.Warnf("[catchup] Peer %s also failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
 									u.reportCatchupFailure(ctx, c.peerID)
@@ -680,6 +705,9 @@ func (u *Server) Init(ctx context.Context) (err error) {
 								// Try catchup with alternative peer
 								if altErr := u.catchup(ctx, alt.block, alt.baseURL, alt.peerID); altErr == nil {
 									u.logger.Infof("[catchup] Successfully processed block %s from alternative peer %s", blockHash.String(), alt.peerID)
+									// Clear processing marker and alternatives
+									u.processBlockNotify.Delete(*blockHash)
+									u.catchupAlternatives.Delete(*blockHash)
 									break
 								} else {
 									u.logger.Warnf("[catchup] Alternative peer %s also failed for block %s: %v", alt.peerID, blockHash.String(), altErr)
@@ -690,8 +718,9 @@ func (u *Server) Init(ctx context.Context) (err error) {
 							u.logger.Infof("[catchup] No cached alternative sources available for block %s", blockHash.String())
 						}
 
-						// Clear processing marker to allow retries
+						// Clear processing marker and alternatives to allow retries
 						u.processBlockNotify.Delete(*blockHash)
+						u.catchupAlternatives.Delete(*blockHash)
 					} else {
 						// Success - clear alternatives for this block
 						u.catchupAlternatives.Delete(*c.block.Hash())
@@ -1612,16 +1641,20 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 
 		// Send directly to catchup channel (non-blocking)
 		go func() {
+			u.logger.Infof("[addBlockToPriorityQueue] Attempting to send block %s to catchup channel (queue size: %d/%d)",
+				blockFound.hash.String(), len(u.catchupCh), cap(u.catchupCh))
+
 			select {
 			case u.catchupCh <- processBlockCatchup{
 				block:   block,
 				baseURL: blockFound.baseURL,
 				peerID:  blockFound.peerID,
 			}:
-				u.logger.Debugf("[addBlockToPriorityQueue] Sent block %s to catchup channel", blockFound.hash.String())
+				u.logger.Infof("[addBlockToPriorityQueue] Successfully sent block %s to catchup channel", blockFound.hash.String())
 			default:
 				// Channel is full, log warning but don't block
-				u.logger.Warnf("[addBlockToPriorityQueue] Catchup channel full, dropping block %s from peer %s", blockFound.hash.String(), blockFound.peerID)
+				u.logger.Warnf("[addBlockToPriorityQueue] Catchup channel full (%d/%d), dropping block %s from peer %s",
+					len(u.catchupCh), cap(u.catchupCh), blockFound.hash.String(), blockFound.peerID)
 				// Clear the processing marker so it can be retried later
 				u.processBlockNotify.Delete(*blockFound.hash)
 			}
