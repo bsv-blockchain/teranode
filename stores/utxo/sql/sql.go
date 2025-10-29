@@ -763,6 +763,11 @@ func contains(slice []fields.FieldName, item fields.FieldName) bool {
 // The blockHeight parameter is used for coinbase maturity checking.
 // If blockHeight is 0, the current block height is used.
 func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	if blockHeight == 0 {
+		return nil, errors.NewProcessingError("blockHeight must be greater than zero")
+	}
+	
+	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 
