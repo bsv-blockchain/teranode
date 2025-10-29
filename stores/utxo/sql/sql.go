@@ -766,8 +766,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	if blockHeight == 0 {
 		return nil, errors.NewProcessingError("blockHeight must be greater than zero")
 	}
-	
-	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
+
 	ctx, cancelTimeout := context.WithTimeout(ctx, s.settings.UtxoStore.DBTimeout)
 	defer cancelTimeout()
 

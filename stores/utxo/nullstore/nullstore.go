@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -123,8 +124,7 @@ func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ig
 	if blockHeight == 0 {
 		return nil, errors.NewProcessingError("blockHeight must be greater than zero")
 	}
-	return nil, nil
-}
+
 	return nil, nil
 }
 
