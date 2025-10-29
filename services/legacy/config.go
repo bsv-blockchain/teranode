@@ -158,6 +158,7 @@ type config struct {
 	ProxyPass               string        `long:"proxypass" default-mask:"-" description:"Password for proxy server"`
 	TestNet                 bool          `long:"testnet" description:"Use the test network"`
 	RegressionTest          bool          `long:"regtest" description:"Use the regression test network"`
+	TeraTestNet             bool          `long:"teratestnet" description:"Use the Teranode test network"`
 	AddCheckpoints          []string      `long:"addcheckpoint" description:"Add a custom checkpoint.  Format: '<height>:<hash>'"`
 	DisableCheckpoints      bool          `long:"nocheckpoints" description:"Disable built-in checkpoints.  Don't do this unless you know what you're doing."`
 	Profile                 string        `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65536"`
@@ -413,9 +414,14 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		activeNetParams = &regressionNetParams
 	}
 
+	if cfg.TeraTestNet {
+		numNets++
+		activeNetParams = &teraTestNetParams
+	}
+
 	if numNets > 1 {
-		str := "%s: The testnet, regtest and segnet params " +
-			"can't be used together -- choose one of the four"
+		str := "%s: The testnet, regtest, and teratestnet params " +
+			"can't be used together -- choose one"
 		err := fmt.Errorf(str, funcName)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)

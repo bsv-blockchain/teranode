@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bsv-blockchain/teranode/services/asset/asset_api"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
@@ -160,22 +159,6 @@ func (s *Server) broadcastMessage(data []byte, clientChannels *clientChannelMap)
 	clientChannels.broadcast(data, s.logger)
 }
 
-// createPingMessage creates a ping notification message
-func (s *Server) createPingMessage(baseURL string) (*notificationMsg, error) {
-	msg := &notificationMsg{
-		Timestamp: time.Now().UTC().Format(isoFormat),
-		Type:      asset_api.Type_PING.String(),
-		BaseURL:   baseURL,
-	}
-
-	// Add PeerID if P2PClient is available
-	if s.P2PClient != nil {
-		msg.PeerID = s.P2PClient.GetID()
-	}
-
-	return msg, nil
-}
-
 // handleClientMessages processes messages for a single websocket client
 func (s *Server) handleClientMessages(ws WebSocketConn, ch chan []byte, deadClientCh chan<- chan []byte) {
 ClientMessageLoop:
@@ -214,36 +197,21 @@ func (s *Server) startNotificationProcessor(
 	newClientCh <-chan chan []byte,
 	deadClientCh <-chan chan []byte,
 	notificationCh <-chan *notificationMsg,
-	baseURL string,
 	ctx context.Context,
 ) {
-	pingTimer := time.NewTicker(10 * time.Second)
-	defer pingTimer.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
+
 		case newClient := <-newClientCh:
 			clientChannels.add(newClient)
 			// Send initial node_status messages to the new client
 			s.sendInitialNodeStatuses(newClient)
+
 		case deadClient := <-deadClientCh:
 			clientChannels.remove(deadClient)
-		case <-pingTimer.C:
-			msg, err := s.createPingMessage(baseURL)
-			if err != nil {
-				s.logger.Errorf("Failed to create ping message: %v", err)
-				continue
-			}
 
-			data, err := json.Marshal(msg)
-			if err != nil {
-				s.logger.Errorf("Failed to marshal ping message: %v", err)
-				continue
-			}
-
-			s.broadcastMessage(data, clientChannels)
 		case notification := <-notificationCh:
 			data, err := json.Marshal(notification)
 			if err != nil {
@@ -286,7 +254,7 @@ func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseURL s
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, baseURL, ctx)
+	go s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
 
 	return func(c echo.Context) error {
 		ch := make(chan []byte, 100) // Add buffer to help prevent blocking

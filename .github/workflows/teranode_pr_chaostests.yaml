@@ -64,6 +64,14 @@ jobs:
         continue-on-error: false
         timeout-minutes: 5
 
+      - name: Run Chaos Test Scenario 03 (Network Partition)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario03_NetworkPartition 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-03-results.txt
+        continue-on-error: false
+        timeout-minutes: 5
+
       - name: Upload chaostest results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

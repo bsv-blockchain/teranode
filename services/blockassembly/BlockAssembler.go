@@ -378,6 +378,40 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 	return nil
 }
 
+// reset performs a full reset of the block assembler state by clearing all subtrees and reloading from blockchain.
+//
+// This is the "nuclear option" for handling blockchain reorganizations and is used when:
+// 1. Large reorgs (>= CoinbaseMaturity blocks AND height > 1000) where incremental reorg is too expensive
+// 2. Failed reorgs where subtreeProcessor.Reorg() encountered errors
+// 3. Reorgs involving invalid blocks that require clean state
+//
+// The reset process:
+// 1. Waits for BlockValidation background jobs to complete (WaitForPendingBlocks)
+//   - Ensures all blocks have mined_set=true
+//   - Invalid blocks: Already have block_ids removed, unmined_since set
+//   - moveForward blocks: Already have unmined_since cleared (processed with onLongestChain=true)
+//
+// 2. Marks transactions from moveBackBlocks as NOT on longest chain (sets unmined_since)
+//   - These blocks were on main chain but are now on side chain
+//   - They still have mined_set=true (won't be re-processed by BlockValidation)
+//   - Must explicitly mark their transactions as unmined
+//
+// 3. Calls subtreeProcessor.Reset() to clear all subtrees
+//
+// 4. Calls loadUnminedTransactions() which:
+//   - Loads all transactions with unmined_since set into block assembly
+//   - Fixes any data inconsistencies (transactions with block_ids on main but unmined_since incorrectly set)
+//
+// Key insight: BlockValidation handles moveForward and invalid blocks via background jobs.
+// reset() only needs to handle moveBack blocks that won't be re-processed.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - fullScan: If true, loadUnminedTransactions will scan all records and fix inconsistencies
+//     If false, uses index-based query for faster reload
+//
+// Returns:
+//   - error: Any error encountered during reset
 func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 	bestBlockchainBlockHeader, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
@@ -417,6 +451,91 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 	// make sure we have processed all pending blocks before resetting
 	if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
 		return errors.NewProcessingError("[Reset] error waiting for pending blocks", err)
+	}
+
+	// Mark moveBack transactions as unmined (set unmined_since)
+	//
+	// Division of Responsibility During Reorg:
+	// - Invalid blocks: BlockValidation handles via background job (unsetMined=true removes block_ids, sets unmined_since)
+	// - moveForward blocks (side→main): BlockValidation handles via background job (mined_set=false → processes with onLongestChain=true → clears unmined_since)
+	// - moveBack blocks (main→side): reset() handles HERE (sets unmined_since)
+	//
+	// Why moveBack needs explicit handling:
+	// - These blocks were on main chain (unmined_since=NULL, mined_set=true)
+	// - Reorg moved them to side chain
+	// - BlockValidation won't re-process them (mined_set still true, not in GetBlocksMinedNotSet queue)
+	// - No background job will update them
+	// - Must explicitly mark their transactions as unmined here
+	//
+	// Why we DON'T handle moveForward:
+	// - moveForward blocks have mined_set=false (newly processed or re-validated)
+	// - BlockValidation background job processes them
+	// - Calls setTxMinedStatus with onLongestChain=CheckBlockIsInCurrentChain() = true
+	// - unmined_since is automatically cleared
+	// - No action needed from reset()
+	if len(moveBackBlocksWithMeta) > 0 {
+		// First, build a map of transactions in moveForward blocks
+		// These are transactions that are ALSO in the new main chain (don't need unmined_since set)
+		// Even though BlockValidation handles moveForward, we need this map to avoid marking
+		// transactions that appear in BOTH moveBack and moveForward as unmined
+		moveForwardTxMap := make(map[chainhash.Hash]bool)
+		for _, blockWithMeta := range moveForwardBlocksWithMeta {
+			if blockWithMeta.meta.Invalid {
+				continue
+			}
+
+			block := blockWithMeta.block
+			blockSubtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
+			if err != nil {
+				continue
+			}
+
+			for _, st := range blockSubtrees {
+				for _, node := range st.Nodes {
+					if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
+						moveForwardTxMap[node.Hash] = true
+					}
+				}
+			}
+		}
+
+		// Now collect moveBack transactions, excluding those in moveForward
+		// Net unmined = transactions ONLY in moveBack (not also in moveForward)
+		moveBackTxs := make([]chainhash.Hash, 0, len(moveBackBlocksWithMeta)*100)
+
+		for _, blockWithMeta := range moveBackBlocksWithMeta {
+			if blockWithMeta.meta.Invalid {
+				// Skip invalid blocks - BlockValidation already handled them via unsetMined=true
+				continue
+			}
+
+			block := blockWithMeta.block
+			blockSubtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
+			if err != nil {
+				b.logger.Warnf("[BlockAssembler][Reset] error getting subtrees for moveBack block %s: %v (will skip)", block.Hash().String(), err)
+				continue
+			}
+
+			for _, st := range blockSubtrees {
+				for _, node := range st.Nodes {
+					if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
+						// Only add if NOT in moveForward (these are net unmined)
+						if !moveForwardTxMap[node.Hash] {
+							moveBackTxs = append(moveBackTxs, node.Hash)
+						}
+					}
+				}
+			}
+		}
+
+		// Mark net unmined transactions as NOT on longest chain (set unmined_since)
+		if len(moveBackTxs) > 0 {
+			if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, moveBackTxs, false); err != nil {
+				b.logger.Errorf("[BlockAssembler][Reset] error marking moveBack transactions as unmined: %v", err)
+			} else {
+				b.logger.Infof("[BlockAssembler][Reset] marked %d net unmined transactions (moveBack minus moveForward)", len(moveBackTxs))
+			}
+		}
 	}
 
 	// define a post process function to be called after the reset is complete, but before we release the lock
@@ -1420,26 +1539,42 @@ func (b *BlockAssembler) getNextNbits(nextBlockTime int64) (*model.NBit, error) 
 	return nbit, nil
 }
 
-// loadUnminedTransactions loads previously unmined transactions from the UTXO store.
-// This method is called during block assembler initialization to restore the state
-// of transactions that were previously processed but not yet included in a mined block.
-// It helps maintain continuity across service restarts by reloading pending transactions.
+// loadUnminedTransactions loads transactions from the UTXO store into block assembly.
 //
-// The function performs the following operations:
-// - Checks if a UTXO store is available (logs warning and returns if not)
-// - Creates an iterator for unmined transactions from the UTXO store
-// - Processes each unmined transaction and adds it to the subtree processor
-// - Handles any errors during transaction loading and processing
+// Primary responsibility: Load unmined transactions
+//   - Iterates through transactions with unmined_since set
+//   - Filters out transactions already on main chain (skip those with block_ids on best chain)
+//   - Loads remaining transactions into block assembly for potential inclusion in next block
 //
-// This is an important initialization step that ensures the block assembler can
-// continue processing transactions that were in progress before a restart or
-// service interruption.
+// Secondary responsibility: Data integrity safety net (ALWAYS runs)
+//   - Identifies transactions with block_ids on main chain BUT unmined_since still set
+//   - Calls MarkTransactionsOnLongestChain to clear unmined_since for these transactions
+//   - This catches edge cases from: previous bugs, crashes, timing issues
+//   - Minimal performance impact since list is usually empty when system is healthy
+//
+// The fullScan parameter controls iterator behavior:
+//   - fullScan=false: Uses index on unmined_since (fast, most common)
+//   - fullScan=true: Scans ALL records (Aerospike only; SQL always uses index)
+//
+// Relationship with reorg handling:
+//   - BlockValidation background jobs: Handle moveForward blocks and invalid blocks
+//   - reset(): Handles moveBack blocks (sets unmined_since for transactions moved to side chain)
+//   - loadUnminedTransactions(): Loads everything + catches any missed edge cases
+//
+// Note: For moveForward blocks, BlockValidation has already cleared unmined_since via
+// background job (mined_set=false triggers setTxMinedStatus with onLongestChain=true).
+// This function is just a safety net for any inconsistencies, not primary reorg handling.
+//
+// Called from:
+//   - reset() as postProcessFn (after reorg processing)
+//   - Startup initialization
 //
 // Parameters:
-//   - ctx: Context for the loading operation, allowing for cancellation
+//   - ctx: Context for cancellation
+//   - fullScan: true = scan all records, false = use index (faster)
 //
 // Returns:
-//   - error: Any error encountered during transaction loading or processing
+//   - error: Any error encountered during loading
 func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan bool) (err error) {
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "loadUnminedTransactions",
 		tracing.WithParentStat(b.stats),
@@ -1558,14 +1693,15 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 		}
 	}
 
-	// If we are in a full scan, we are doing an exhaustive check of the block assembly
-	// we need to mark transactions that are already mined on the longest chain in the utxo store
-	if fullScan && len(markAsMinedOnLongestChain) > 0 {
+	// Always fix data inconsistencies: transactions with block_ids on main chain but unmined_since set
+	// This ensures data integrity on every load, catching issues from previous bugs, crashes, or edge cases
+	// The performance impact is minimal since the list is usually empty when data is correct
+	if len(markAsMinedOnLongestChain) > 0 {
 		if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, markAsMinedOnLongestChain, true); err != nil {
 			return errors.NewProcessingError("error marking transactions as mined on longest chain", err)
 		}
 
-		b.logger.Infof("[BlockAssembler] marked %d unmined transactions as mined on longest chain", len(markAsMinedOnLongestChain))
+		b.logger.Infof("[BlockAssembler] fixed %d transactions with inconsistent unmined_since (had block_ids on main but unmined_since set)", len(markAsMinedOnLongestChain))
 	}
 
 	// order the transactions by createdAt
