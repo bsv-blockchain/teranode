@@ -120,6 +120,11 @@ func (m *NullStore) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opt
 }
 
 func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	if blockHeight == 0 {
+		return nil, errors.NewProcessingError("blockHeight must be greater than zero")
+	}
+	return nil, nil
+}
 	return nil, nil
 }
 
