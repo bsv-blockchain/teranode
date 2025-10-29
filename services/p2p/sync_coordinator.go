@@ -96,9 +96,9 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 	// Get all peers
 	peers := sc.registry.GetAllPeers()
 
-	// Check if any peer is significantly ahead of us
+	// Check if any peer is significantly ahead of us and has a good reputation
 	for _, p := range peers {
-		if p.Height > localHeight {
+		if p.Height > localHeight && p.ReputationScore > 20 {
 			return false // At least one peer is ahead
 		}
 	}
@@ -359,14 +359,14 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 					currentPeer, localHeight, peerInfo.Height)
 
 				// Record catchup failure for reputation tracking
-				if sc.registry != nil {
+				/* if sc.registry != nil {
 					// Get peer info to check failure count
 					peerInfo, _ := sc.registry.GetPeer(currentPeer)
 
 					// If this peer has failed multiple times recently, treat as malicious
 					// (likely on an invalid chain)
 					if peerInfo.InteractionFailures > 2 &&
-					   time.Since(peerInfo.LastInteractionFailure) < 5*time.Minute {
+						time.Since(peerInfo.LastInteractionFailure) < 5*time.Minute {
 						sc.registry.RecordMaliciousInteraction(currentPeer)
 						sc.logger.Warnf("[SyncCoordinator] Peer %s has failed %d times recently, marking as potentially malicious",
 							currentPeer, peerInfo.InteractionFailures)
@@ -374,7 +374,7 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 						sc.registry.RecordCatchupFailure(currentPeer)
 						sc.logger.Infof("[SyncCoordinator] Recorded catchup failure for peer %s (reputation will decrease)", currentPeer)
 					}
-				}
+				}*/
 
 				sc.ClearSyncPeer()
 				_ = sc.TriggerSync()
@@ -724,12 +724,12 @@ func (sc *SyncCoordinator) checkAllPeersAttempted() {
 	for _, p := range peers {
 		// Count peers that would normally be eligible
 		if p.Height > localHeight && p.IsHealthy && !p.IsBanned &&
-		   p.DataHubURL != "" && p.URLResponsive && p.ReputationScore >= 20 {
+			p.DataHubURL != "" && p.URLResponsive && p.ReputationScore >= 20 {
 			eligibleCount++
 
 			// Check if attempted recently
 			if !p.LastSyncAttempt.IsZero() &&
-			   time.Since(p.LastSyncAttempt) < syncAttemptCooldown {
+				time.Since(p.LastSyncAttempt) < syncAttemptCooldown {
 				recentlyAttemptedCount++
 			}
 		}

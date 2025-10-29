@@ -102,16 +102,20 @@ func (s *Server) GetPeersForCatchup(ctx context.Context, req *p2p_api.GetPeersFo
 	// Convert to proto format
 	protoPeers := make([]*p2p_api.PeerInfoForCatchup, 0, len(peers))
 	for _, p := range peers {
+		// Calculate total attempts as sum of successes and failures
+		// InteractionAttempts is a separate counter that may not match
+		totalAttempts := p.InteractionSuccesses + p.InteractionFailures
+
 		protoPeers = append(protoPeers, &p2p_api.PeerInfoForCatchup{
 			Id:                     p.ID.String(),
 			Height:                 p.Height,
 			BlockHash:              p.BlockHash,
 			DataHubUrl:             p.DataHubURL,
 			IsHealthy:              p.IsHealthy,
-			CatchupReputationScore: p.ReputationScore,      // Map new field to API field
-			CatchupAttempts:        p.InteractionAttempts,  // Map new field to API field
-			CatchupSuccesses:       p.InteractionSuccesses, // Map new field to API field
-			CatchupFailures:        p.InteractionFailures,  // Map new field to API field
+			CatchupReputationScore: p.ReputationScore,
+			CatchupAttempts:        totalAttempts,          // Use calculated total, not InteractionAttempts
+			CatchupSuccesses:       p.InteractionSuccesses, // Number of successful interactions
+			CatchupFailures:        p.InteractionFailures,  // Number of failed interactions
 		})
 	}
 
@@ -300,9 +304,10 @@ func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealt
 			}, nil
 		}
 
-		// Check success rate based on attempts and successes
-		if peerInfo.InteractionAttempts > 10 && peerInfo.InteractionSuccesses < peerInfo.InteractionAttempts/2 {
-			successRate := float64(peerInfo.InteractionSuccesses) / float64(peerInfo.InteractionAttempts)
+		// Check success rate based on total interactions (successes + failures)
+		totalInteractions := peerInfo.InteractionSuccesses + peerInfo.InteractionFailures
+		if totalInteractions > 10 && peerInfo.InteractionSuccesses < totalInteractions/2 {
+			successRate := float64(peerInfo.InteractionSuccesses) / float64(totalInteractions)
 			return &p2p_api.IsPeerUnhealthyResponse{
 				IsUnhealthy:     true,
 				Reason:          fmt.Sprintf("low success rate: %.2f%%", successRate*100),
