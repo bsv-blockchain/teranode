@@ -179,11 +179,13 @@ sudo chown $USER:$USER /mnt/teranode/seed/export
 ```bash
 # Export UTXO set from Bitcoin SV node
 # Replace /mnt/bitcoin-sv-data with your actual SV node data directory
+# Instead of latest, you could use a specific version of teranode. 
+# Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 docker run -it \
     -v /mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --entrypoint="" \
-    ghcr.io/bsv-blockchain/teranode:v0.11.13 \
+    ghcr.io/bsv-blockchain/teranode:latest \
     /app/teranode-cli bitcointoutxoset \
         -bitcoinDir=/home/ubuntu/bitcoin-data \
         -outputDir=/mnt/teranode/seed/export
@@ -293,8 +295,10 @@ ls -la /mnt/teranode/seed/export/
 
 ```bash
 # Create a temporary seeder pod
+# Instead of latest, you could use a specific version of teranode. 
+# Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 kubectl run teranode-seeder \
-    --image=ghcr.io/bsv-blockchain/teranode:v0.11.13 \
+    --image=ghcr.io/bsv-blockchain/teranode:latest \
     --restart=Never \
     --rm -i --tty \
     -n teranode-operator \
@@ -390,8 +394,10 @@ Use the same seeder process as described in Method 2:
 kubectl patch cluster teranode-cluster -n teranode-operator --type=merge -p '{"spec":{"enabled":false}}'
 
 # Run seeder
+# Instead of latest, you could use a specific version of teranode. 
+# Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 kubectl run teranode-seeder \
-    --image=ghcr.io/bsv-blockchain/teranode:v0.11.13 \
+    --image=ghcr.io/bsv-blockchain/teranode:latest \
     --restart=Never --rm -i --tty \
     -n teranode-operator \
     -- /app/teranode-cli seeder \

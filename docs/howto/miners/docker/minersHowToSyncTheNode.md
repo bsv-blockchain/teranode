@@ -175,6 +175,8 @@ sudo chown $USER:$USER /mnt/teranode/seed/export
 ```bash
 # Export UTXO set from Bitcoin SV node
 # Replace /mnt/bitcoin-sv-data with your actual SV node data directory
+# Instead of latest, you could use a specific version of teranode. 
+# Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 docker run -it \
     -v /mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
@@ -376,13 +378,15 @@ docker compose up -d aerospike aerospike-2 postgres kafka-shared
 docker compose stop blockchain asset blockvalidation
 
 # Run seeder
+# Instead of latest, you could use a specific version of teranode. 
+# Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 docker run -it \
     -e SETTINGS_CONTEXT=docker.m \
     -v ${PWD}/docker/mainnet/data/teranode:/app/data \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --network my-teranode-network \
     --entrypoint="" \
-    ghcr.io/bsv-blockchain/teranode:v0.11.13 \
+    ghcr.io/bsv-blockchain/teranode:latest \
     /app/teranode-cli seeder \
         -inputDir /mnt/teranode/seed/export \
         -hash <blockhash-from-filename>

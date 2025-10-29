@@ -777,3 +777,13 @@ docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ## Settings Reference
 
 You can find the pre-configured [settings file](https://github.com/bsv-blockchain/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+
+The Docker deployment includes an empty `settings_local.conf` file by default. To help you configure your node, a comprehensive template is available at [`deploy/docker/base/settings_local.conf.template`](https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/settings_local.conf.template) that documents all commonly customized settings for Docker deployments, including:
+
+- Network participation mode (listen_only vs full)
+- Public endpoints for asset service and P2P
+- RPC authentication credentials
+- Mining configuration (coinbase text/tags)
+- Node identification
+
+Refer to the template file for detailed explanations and examples of each setting.
