@@ -970,6 +970,12 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("error getting block header and meta for BlockMessage: %w", err)
 	}
 
+	if meta.Invalid {
+		// do not announce invalid blocks
+		s.logger.Infof("[handleBlockNotification] Not announcing invalid block %s", hash.String())
+		return nil
+	}
+
 	blockMessage := BlockMessage{
 		Hash:       hash.String(),
 		Height:     meta.Height,

@@ -775,6 +775,25 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blocksFinalKafkaAsyncProducer != nil)
 
+	// Only publish to Kafka if the block is valid. Invalid blocks (marked with OptionInvalid)
+	// should not be propagated to downstream consumers via the blocks_final topic.
+	if !request.OptionInvalid {
+		if err = b.sendKafkaBlockFinalNotification(block); err != nil {
+			b.logger.Errorf("[AddBlock] error sending Kafka notification for new block %s: %v", block.Hash(), err)
+		}
+	}
+
+	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: model.NotificationType_Block,
+		Hash: block.Hash().CloneBytes(),
+	}); err != nil {
+		b.logger.Errorf("[AddBlock] error sending notification for new block %s: %v", block.Hash(), err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) sendKafkaBlockFinalNotification(block *model.Block) error {
 	if b.blocksFinalKafkaAsyncProducer != nil {
 		key := block.Header.Hash().CloneBytes()
 
@@ -795,7 +814,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		value, err := proto.Marshal(message)
 		if err != nil {
 			b.logger.Errorf("[AddBlock] error creating block bytes: %v", err)
-			return nil, errors.WrapGRPC(err)
+			return err
 		}
 
 		if len(value) >= 500_000 { // kafka default limit is actually 1MB and we don't ever expecta block to be even close to that
@@ -808,14 +827,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		}
 	}
 
-	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
-		Type: model.NotificationType_Block,
-		Hash: block.Hash().CloneBytes(),
-	}); err != nil {
-		b.logger.Errorf("[AddBlock] error sending notification for new block %s: %v", block.Hash(), err)
-	}
-
-	return &emptypb.Empty{}, nil
+	return nil
 }
 
 // GetBlock retrieves a block by its hash.
@@ -1898,17 +1910,12 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
 
-	// send notifications about the new latest block, so subscribers can update their state
-	bestBlock, _, err := b.store.GetBestBlockHeader(ctx)
-	if err != nil {
-		b.logger.Errorf("[Blockchain] Error getting best block header: %v", err)
-	} else {
-		if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
-			Type: model.NotificationType_Block,
-			Hash: bestBlock.Hash().CloneBytes(),
-		}); err != nil {
-			b.logger.Errorf("[Blockchain] Error sending notification for best block %s: %v", bestBlock.Hash(), err)
-		}
+	// send notification about the block being invalidated, this will trigger all listeners to reconsider best block
+	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: model.NotificationType_Block,
+		Hash: blockHash.CloneBytes(),
+	}); err != nil {
+		b.logger.Errorf("[Blockchain] Error sending notification for best block %s: %v", blockHash, err)
 	}
 
 	return &blockchain_api.InvalidateBlockResponse{
@@ -1974,6 +1981,15 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 	err = b.store.RevalidateBlock(ctx, blockHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
+	}
+
+	block, _, err := b.store.GetBlock(ctx, blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	if err = b.sendKafkaBlockFinalNotification(block); err != nil {
+		b.logger.Errorf("[AddBlock] error sending Kafka notification for new block %s: %v", block.Hash(), err)
 	}
 
 	// send notification about the revalidated block

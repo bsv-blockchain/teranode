@@ -163,7 +163,7 @@ longtest:
 .PHONY: sequentialtest
 sequentialtest:
 	@mkdir -p /tmp/teranode-test-results
-	logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
+	set -o pipefail && logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
 
 # run sequential tests for specific database backends
 .PHONY: sequentialtest-sqlite

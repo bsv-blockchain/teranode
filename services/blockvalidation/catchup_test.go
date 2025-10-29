@@ -989,7 +989,7 @@ func TestCatchup(t *testing.T) {
 		blockchainClient:              mockBlockchainClient,
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     mockUTXOStore,
 		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),
@@ -1138,7 +1138,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 			blockchainClient:              mockBlockchainClient,
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			bloomFilterStats:              model.NewBloomStats(),
 			utxoStore:                     mockUTXOStore,
 		}
@@ -1389,7 +1389,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		server.utxoStore.(*utxo.MockUtxostore).On("GetBlockHeight").Return(uint32(1017)).Maybe()
 
 		// Add block 17 to the blockExists cache so verifyChainContinuity can find it
-		bv.blockExists.Set(*blocks[17].Header.Hash(), true)
+		bv.blockExistsCache.Set(*blocks[17].Header.Hash(), true)
 
 		// Mock all the required methods
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Header.Hash()).Return(false, nil)
@@ -3006,7 +3006,7 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 		blockchainClient:              mockBlockchainClient,
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     mockUTXOStore,
 		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),
@@ -3103,7 +3103,7 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		blockchainClient:              mockBlockchainClient,
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     mockUTXOStore,
 		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),

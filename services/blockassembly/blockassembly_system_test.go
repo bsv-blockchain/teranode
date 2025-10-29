@@ -198,9 +198,9 @@ func Test_CoinbaseSubsidyHeight(t *testing.T) {
 	assert.NotNil(t, m, "Best block metadata should not be nil")
 	t.Logf("Best block header: %v", h)
 
-	ba.blockAssembler.bestBlockHeader.Store(h)
-	ba.blockAssembler.bestBlockHeight.Store(m.Height)
-	ba.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(ba.blockAssembler.bestBlockHeader.Load())
+	ba.blockAssembler.setBestBlockHeader(h, m.Height)
+	baBestBlockHeader, _ := ba.blockAssembler.CurrentBlock()
+	ba.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(baBestBlockHeader)
 	mc, st, err := ba.blockAssembler.getMiningCandidate()
 	require.NoError(t, err, "Failed to get mining candidate")
 	assert.NotNil(t, mc, "Mining candidate should not be nil")
@@ -426,7 +426,7 @@ func TestShouldFollowLongerChain(t *testing.T) {
 
 	WaitForBlock(t, blockA, 10*time.Second, ba.blockchainClient, ba.blockAssembler)
 
-	baBestBlock := ba.blockAssembler.bestBlockHeader.Load()
+	baBestBlock, _ := ba.blockAssembler.CurrentBlock()
 	require.NotNil(t, baBestBlock)
 	assert.Equal(t, chainAHeader1.Hash(), baBestBlock.Hash(), "Block assembler should follow the chain with higher difficulty")
 }
@@ -460,7 +460,7 @@ finished:
 	}
 
 	for currentHash.String() != expectedBlock.Header.Hash().String() {
-		currentBlockHeader := blockassembly.bestBlockHeader.Load()
+		currentBlockHeader, _ := blockassembly.CurrentBlock()
 		if currentBlockHeader != nil {
 			currentHash = *currentBlockHeader.Hash()
 		}

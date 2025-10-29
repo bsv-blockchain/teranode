@@ -31,12 +31,11 @@ func TestStartUnminedTransactionCleanup(t *testing.T) {
 			utxoStore:       mockStore,
 			logger:          logger,
 			settings:        settings,
-			bestBlockHeight: atomic.Uint32{},
 			cachedCandidate: &CachedMiningCandidate{},
 		}
 
 		// Set block height to trigger cleanup
-		ba.bestBlockHeight.Store(100)
+		ba.setBestBlockHeader(nil, 100)
 
 		// Expect at least one cleanup call
 		mockStore.On("QueryOldUnminedTransactions", mock.Anything, mock.Anything).
@@ -66,12 +65,11 @@ func TestStartUnminedTransactionCleanup(t *testing.T) {
 			utxoStore:       mockStore,
 			logger:          logger,
 			settings:        settings,
-			bestBlockHeight: atomic.Uint32{},
 			cachedCandidate: &CachedMiningCandidate{},
 		}
 
 		// Block height is 0
-		ba.bestBlockHeight.Store(0)
+		ba.setBestBlockHeader(nil, 0)
 
 		// Should not call cleanup
 		mockStore.AssertNotCalled(t, "QueryOldUnminedTransactions")
@@ -128,14 +126,14 @@ func TestCleanupDuringStartup(t *testing.T) {
 			utxoStore:        mockStore,
 			logger:           logger,
 			settings:         settings,
-			bestBlockHeight:  atomic.Uint32{},
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
 			subtreeProcessor: subtreeProcessor,
 			blockchainClient: blockchainClient,
 			cachedCandidate:  &CachedMiningCandidate{},
 		}
 
 		// Set block height
-		ba.bestBlockHeight.Store(100)
+		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions which includes cleanup
 		err := ba.loadUnminedTransactions(ctx, false)
@@ -215,7 +213,8 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		mockSubtreeProcessor.On("AddDirectly", mock.MatchedBy(func(node subtree.SubtreeNode) bool {
 			return node.Hash.String() == normalTx.Hash.String()
 		}), mock.Anything, true).Return(nil).Once()
-		mockSubtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+		// GetCurrentBlockHeader may be called multiple times during loading
+		mockSubtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil).Maybe()
 
 		blockchainClient := &blockchain.Mock{}
 		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
@@ -225,14 +224,13 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 			utxoStore:        mockStore,
 			logger:           logger,
 			settings:         settings,
-			bestBlockHeight:  atomic.Uint32{},
 			subtreeProcessor: mockSubtreeProcessor,
 			blockchainClient: blockchainClient,
 			cachedCandidate:  &CachedMiningCandidate{},
 		}
 
 		// Set block height
-		ba.bestBlockHeight.Store(100)
+		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions
 		err := ba.loadUnminedTransactions(ctx, false)

@@ -271,6 +271,11 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	return nil
 }
 
+// GetBlockAssembler returns the BlockAssembler instance.
+func (ba *BlockAssembly) GetBlockAssembler() *BlockAssembler {
+	return ba.blockAssembler
+}
+
 // runSubtreeRetryProcessor handles retry logic for failed subtree storage operations.
 // It processes subtrees that failed to be stored and retries them with exponential backoff.
 func (ba *BlockAssembly) runSubtreeRetryProcessor(ctx context.Context, subtreeRetryChan chan *subtreeRetrySend) {
@@ -993,7 +998,8 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashPrevBlock", jobID, err)
 	}
 
-	if ba.blockAssembler.bestBlockHeader.Load().HashPrevBlock.IsEqual(hashPrevBlock) {
+	bestBlockHeader, _ := ba.blockAssembler.CurrentBlock()
+	if bestBlockHeader.HashPrevBlock.IsEqual(hashPrevBlock) {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID)
 	}
 
@@ -1142,7 +1148,8 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	ba.logger.Debugf("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
 	ba.logger.Debugf("[BlockAssembly][%s][%s] block difficulty: %s", jobID, block.Header.Hash(), block.Header.Bits.CalculateDifficulty().String())
-	ba.logger.Debugf("[BlockAssembly][%s][%s] time since previous block: %s", jobID, block.Header.Hash(), time.Since(time.Unix(int64(ba.blockAssembler.bestBlockHeader.Load().Timestamp), 0)).String())
+	bestBlockHeader, _ = ba.blockAssembler.CurrentBlock()
+	ba.logger.Debugf("[BlockAssembly][%s][%s] time since previous block: %s", jobID, block.Header.Hash(), time.Since(time.Unix(int64(bestBlockHeader.Timestamp), 0)).String())
 
 	// add the new block to the blockchain
 	if err = ba.blockchainClient.AddBlock(callerCtx, block, ""); err != nil {
@@ -1365,14 +1372,16 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		return nil, errors.NewProcessingError("error converting remove map length", err)
 	}
 
+	currentHeader, currentHeight := ba.blockAssembler.CurrentBlock()
+
 	return &blockassembly_api.StateMessage{
 		BlockAssemblyState:    StateStrings[ba.blockAssembler.GetCurrentRunningState()],
 		SubtreeProcessorState: subtreeprocessor.StateStrings[ba.blockAssembler.subtreeProcessor.GetCurrentRunningState()],
 		SubtreeCount:          subtreeCountUint32,
 		TxCount:               ba.blockAssembler.TxCount(),
 		QueueCount:            ba.blockAssembler.QueueLength(),
-		CurrentHeight:         ba.blockAssembler.bestBlockHeight.Load(),
-		CurrentHash:           ba.blockAssembler.bestBlockHeader.Load().Hash().String(),
+		CurrentHeight:         currentHeight,
+		CurrentHash:           currentHeader.Hash().String(),
 		RemoveMapCount:        removeMapLen32,
 		Subtrees:              subtreeHashesStrings,
 	}, nil
@@ -1622,7 +1631,8 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 	}
 
 	// Store the current best block hash before submission
-	previousBestHash := ba.blockAssembler.bestBlockHeader.Load().Hash()
+	previousBestHeader, _ := ba.blockAssembler.CurrentBlock()
+	previousBestHash := previousBestHeader.Hash()
 
 	resp, err := ba.submitMiningSolution(ctx, req)
 	if err != nil {
@@ -1654,7 +1664,8 @@ func (ba *BlockAssembly) waitForBestBlockHeaderUpdate(ctx context.Context, previ
 			// Continue anyway - the block was submitted successfully
 			return nil
 		case <-ticker.C:
-			currentBestHash := ba.blockAssembler.bestBlockHeader.Load().Hash()
+			currentBestHeader, _ := ba.blockAssembler.CurrentBlock()
+			currentBestHash := currentBestHeader.Hash()
 			if !currentBestHash.IsEqual(previousBestHash) {
 				// Best block has been updated
 				return nil

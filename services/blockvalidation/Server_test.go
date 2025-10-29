@@ -1087,7 +1087,7 @@ func Test_BlockFound(t *testing.T) {
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		}
 
 		// Mark block as existing
@@ -1118,7 +1118,7 @@ func Test_BlockFound(t *testing.T) {
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
 
@@ -1160,7 +1160,7 @@ func Test_BlockFound(t *testing.T) {
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
 
@@ -1200,7 +1200,7 @@ func Test_BlockFound(t *testing.T) {
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
 
@@ -1274,7 +1274,7 @@ func Test_ProcessBlock(t *testing.T) {
 
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			logger:                        logger,
 			settings:                      tSettings,
 			blockchainClient:              mockBlockchainClient,
@@ -1319,7 +1319,7 @@ func Test_ProcessBlock(t *testing.T) {
 
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			logger:                        logger,
 			settings:                      tSettings,
 			blockchainClient:              mockBlockchainClient,
@@ -1422,7 +1422,7 @@ func Test_ValidateBlock(t *testing.T) {
 
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			logger:                        logger,
 			settings:                      tSettings,
 			blockchainClient:              mockBlockchainClient,
@@ -1494,7 +1494,7 @@ func Test_ValidateBlock(t *testing.T) {
 
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			logger:                        logger,
 			settings:                      tSettings,
 			blockchainClient:              mockBlockchainClient,
@@ -1557,7 +1557,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
 		}
@@ -1609,7 +1609,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
 		}
@@ -1646,7 +1646,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 		bv := &BlockValidation{
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
 		}

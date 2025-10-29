@@ -1579,7 +1579,9 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 
 		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, utxoStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.True(t, len(oldBlockIDs) == 0)
-		require.NoError(t, err)
+		// After bug fix, missing parent now returns BLOCK_INVALID error instead of nil
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
 	})
 
 	t.Run("test parent is in store and block ID is < min BlockID of last 100 blocks", func(t *testing.T) {

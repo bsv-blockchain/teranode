@@ -65,6 +65,7 @@ const (
 // TestDaemon is a struct that holds the test daemon instance and its dependencies.
 type TestDaemon struct {
 	AssetURL              string
+	BlockAssembler        *blockassembly.BlockAssembler
 	BlockAssemblyClient   *blockassembly.Client
 	BlockValidationClient *blockvalidation.Client
 	BlockValidation       *blockvalidation.BlockValidation
@@ -459,8 +460,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	assert.NotNil(t, distributorClient)
 	assert.NotNil(t, blockValidation)
 
+	blockAssemblyService, err := d.ServiceManager.GetService("BlockAssembly")
+	require.NoError(t, err)
+
+	blockAssembler, ok := blockAssemblyService.(*blockassembly.BlockAssembly)
+	require.True(t, ok)
+
 	return &TestDaemon{
 		AssetURL:              fmt.Sprintf("http://127.0.0.1:%d", appSettings.Asset.HTTPPort),
+		BlockAssembler:        blockAssembler.GetBlockAssembler(),
 		BlockAssemblyClient:   blockAssemblyClient,
 		BlockValidationClient: blockValidationClient,
 		BlockValidation:       blockValidation,
@@ -748,6 +756,13 @@ func (td *TestDaemon) VerifyNotOnLongestChainInUtxoStore(t *testing.T, tx *bt.Tx
 	readTx, err := td.UtxoStore.Get(td.Ctx, tx.TxIDChainHash(), fields.UnminedSince)
 	require.NoError(t, err, "Failed to get transaction %s", tx.String())
 	assert.Greater(t, readTx.UnminedSince, uint32(0), "Expected transaction %s to be on the longest chain", tx.TxIDChainHash().String())
+}
+
+// VerifyNotInUtxoStore verifies that the transaction does not exist in the UTXO store.
+func (td *TestDaemon) VerifyNotInUtxoStore(t *testing.T, tx *bt.Tx) {
+	_, err := td.UtxoStore.Get(td.Ctx, tx.TxIDChainHash(), fields.UnminedSince)
+	require.Error(t, err, "Expected error when getting transaction %s", tx.String())
+	assert.Equal(t, errors.Is(err, errors.ErrTxNotFound), true, "Expected ErrTxNotFound when getting transaction %s", tx.String())
 }
 
 // VerifyNotInBlockAssembly checks that the given transactions are not present in the block assembly candidate's subtrees.
@@ -1255,45 +1270,45 @@ finished:
 	}
 }
 
+func (td *TestDaemon) WaitForBlockStateChange(t *testing.T, expectedBlock *model.Block, timeout time.Duration) {
+	stateChangeCh := make(chan blockassembly.BestBlockInfo)
+	td.BlockAssembler.SetStateChangeCh(stateChangeCh)
+
+	defer func() {
+		td.BlockAssembler.SetStateChangeCh(nil)
+	}()
+
+	// wait until the block assembly reaches the expected block
+	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Timeout waiting for block assembly to reach block %s", expectedBlock.Header.Hash().String())
+		case bestBlockInfo := <-stateChangeCh:
+			t.Logf("Received BestBlockInfo: Height=%d, Hash=%s", bestBlockInfo.Height, bestBlockInfo.Header.Hash().String())
+			if bestBlockInfo.Header.Hash().IsEqual(expectedBlock.Header.Hash()) {
+				return
+			}
+		}
+	}
+}
+
 func (td *TestDaemon) WaitForBlock(t *testing.T, expectedBlock *model.Block, timeout time.Duration, skipVerifyChain ...bool) {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
+	defer cancel()
 
 	var (
-		err   error
-		state *blockassembly_api.StateMessage
+		err error
 	)
 
-finished:
-	for {
-		switch {
-		case time.Now().After(deadline):
-			t.Fatalf("Timeout waiting for block %s", expectedBlock.Header.Hash().String())
-		default:
-			_, err = td.BlockchainClient.GetBlock(td.Ctx, expectedBlock.Header.Hash())
-			if err == nil {
-				break finished
-			}
-
-			if !errors.Is(err, errors.ErrBlockNotFound) {
-				t.Fatalf("Failed to get block at hash %s: %v", expectedBlock.Header.Hash().String(), err)
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
+	_, err = td.BlockchainClient.GetBlock(ctx, expectedBlock.Header.Hash())
+	if err != nil {
+		t.Fatalf("Failed to get block at hash %s: %v", expectedBlock.Header.Hash().String(), err)
 	}
 
-	for state == nil || state.CurrentHash != expectedBlock.Header.Hash().String() || state.BlockAssemblyState != "running" {
-		state, err = td.BlockAssemblyClient.GetBlockAssemblyState(td.Ctx)
-		require.NoError(t, err)
-
-		if time.Now().After(deadline) {
-			t.Logf("Timeout waiting for block %s", expectedBlock.Header.Hash().String())
-			break
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	require.Equal(t, expectedBlock.Header.Hash().String(), state.CurrentHash, "Expected block assembly to reach hash %s but got %s", expectedBlock.Header.Hash().String(), state.CurrentHash)
+	td.WaitForBlockStateChange(t, expectedBlock, timeout)
 
 	if len(skipVerifyChain) > 0 && skipVerifyChain[0] {
 		return
@@ -1304,7 +1319,7 @@ finished:
 	for height := expectedBlock.Height - 1; height > 0; height-- {
 		var getBlockByHeight *model.Block
 
-		getBlockByHeight, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, height)
+		getBlockByHeight, err = td.BlockchainClient.GetBlockByHeight(ctx, height)
 		require.NoError(t, err)
 
 		require.Equal(t, previousBlockHash.String(), getBlockByHeight.Header.Hash().String(), blockHashMismatch, height)

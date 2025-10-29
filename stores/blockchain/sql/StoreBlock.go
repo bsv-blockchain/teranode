@@ -145,10 +145,13 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		Invalid:     invalid,
 	}
 
-	ok := s.blocksCache.AddBlockHeader(block.Header, meta)
-	if !ok {
-		if err := s.ResetBlocksCache(ctx); err != nil {
-			s.logger.Errorf("error clearing caches: %v", err)
+	// do not add invalid blocks to the cache
+	if !invalid {
+		ok := s.blocksCache.AddBlockHeader(block.Header, meta)
+		if !ok {
+			if err := s.ResetBlocksCache(ctx); err != nil {
+				s.logger.Errorf("error clearing caches: %v", err)
+			}
 		}
 	}
 

@@ -128,8 +128,7 @@ func setupBlockchainClient(t *testing.T, testItems *baTestItems) (*blockchain.Mo
 	testItems.blockAssembler.blockchainClient = blockchainClient
 
 	// Set the best block header before starting listeners
-	testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
-	testItems.blockAssembler.bestBlockHeight.Store(0)
+	testItems.blockAssembler.setBestBlockHeader(genesisBlock.Header, 0)
 
 	// Return nil for mock since we're using a real client
 	return nil, subChan, genesisBlock
@@ -285,8 +284,10 @@ func TestBlockAssembly_Start(t *testing.T) {
 		err = blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
-		assert.Equal(t, uint32(1), blockAssembler.bestBlockHeight.Load())
-		assert.Equal(t, bestBlockHeader.Hash(), blockAssembler.bestBlockHeader.Load().Hash())
+		header, height := blockAssembler.CurrentBlock()
+
+		assert.Equal(t, uint32(1), height)
+		assert.Equal(t, bestBlockHeader.Hash(), header.Hash())
 	})
 
 	t.Run("Start with cleanup service enabled", func(t *testing.T) {
@@ -508,7 +509,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		require.NotNil(t, items)
 
-		items.blockAssembler.bestBlockHeader.Store(blockHeader1)
+		items.blockAssembler.setBestBlockHeader(blockHeader1, 1)
 		_, _, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), nil, 0)
 		require.Error(t, err)
 	})
@@ -518,8 +519,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		// set the cached BlockAssembler items to the correct values
-		items.blockAssembler.bestBlockHeader.Store(blockHeader4)
-		items.blockAssembler.bestBlockHeight.Store(4)
+		items.blockAssembler.setBestBlockHeader(blockHeader4, 4)
 
 		err := items.addBlock(blockHeader1)
 		require.NoError(t, err)
@@ -563,8 +563,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NoError(t, err)
 
 		// set the cached BlockAssembler items to block 2
-		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
-		items.blockAssembler.bestBlockHeight.Store(2)
+		items.blockAssembler.setBestBlockHeader(blockHeader2, 2)
 
 		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), blockHeader3, 3)
 		require.NoError(t, err)
@@ -580,8 +579,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		// set the cached BlockAssembler items to the correct values
-		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
-		items.blockAssembler.bestBlockHeight.Store(2)
+		items.blockAssembler.setBestBlockHeader(blockHeader2, 2)
 
 		err := items.addBlock(blockHeader1)
 		require.NoError(t, err)
@@ -1100,7 +1098,8 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 
 		// Create the exact scenario from the bug report: fees only, no subsidy
 		height := uint32(1) // Height 1 (after genesis)
-		testItems.blockAssembler.bestBlockHeight.Store(height - 1)
+		currentHeader, _ := testItems.blockAssembler.CurrentBlock()
+		testItems.blockAssembler.setBestBlockHeader(currentHeader, height-1)
 
 		// Handle subtree processing
 		var wg sync.WaitGroup
@@ -1224,7 +1223,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test cache functionality by directly manipulating cache
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Set up cache manually with a fixed time for deterministic testing
 		testTime := time.Now()
@@ -1241,7 +1241,7 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 
 		// Verify cache validity check works
 		ba.cachedCandidate.mu.RLock()
-		currentHeight := ba.bestBlockHeight.Load()
+		_, currentHeight := ba.CurrentBlock()
 		isValid := ba.cachedCandidate.candidate != nil &&
 			ba.cachedCandidate.lastHeight == currentHeight &&
 			testTime.Sub(ba.cachedCandidate.lastUpdate) < 5*time.Second
@@ -1281,7 +1281,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
 
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Start listeners in a goroutine since it will wait for readyCh
 		go func() {
@@ -1289,17 +1290,18 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		}()
 
 		// First call
-		h := ba.bestBlockHeight.Load()
+		_, h := ba.CurrentBlock()
 		t.Logf("First call: height=%d", h)
 		candidate1, _, err1 := ba.GetMiningCandidate(ctx)
-		h = ba.bestBlockHeight.Load()
+		_, h = ba.CurrentBlock()
 		t.Logf("Check call: height=%d", h)
 		require.NoError(t, err1)
 		require.NotNil(t, candidate1)
 		assert.Equal(t, uint32(2), candidate1.Height)
 
 		// Change block height (simulate new block)
-		ba.bestBlockHeight.Store(2)
+		currentHeader, _ = ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 2)
 		ba.invalidateMiningCandidateCache()
 
 		// Second call - should generate new candidate due to height change
@@ -1328,7 +1330,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
 
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Start listeners in a goroutine since it will wait for readyCh
 		go func() {
@@ -1371,7 +1374,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
 
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Clear any existing cache to ensure we test fresh generation
 		ba.cachedCandidate.mu.Lock()
@@ -1624,8 +1628,7 @@ func TestBlockAssembler_CacheInvalidation(t *testing.T) {
 		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
 		require.NoError(t, err)
 
-		ba.bestBlockHeader.Store(genesisBlock.Header)
-		ba.bestBlockHeight.Store(1)
+		ba.setBestBlockHeader(genesisBlock.Header, 1)
 
 		// Add transactions to trigger subtree creation
 		// Based on the test settings, we need 4 transactions to fill a subtree
@@ -1710,7 +1713,7 @@ func TestBlockAssembly_CurrentBlock(t *testing.T) {
 		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
 		require.NoError(t, err)
 
-		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
+		testItems.blockAssembler.setBestBlockHeader(genesisBlock.Header, 0)
 
 		currentBlockHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
 		assert.Equal(t, genesisBlock.Hash(), currentBlockHeader.Hash())
@@ -1823,8 +1826,9 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify state was properly initialized
-		assert.NotNil(t, blockAssembler.bestBlockHeader.Load())
-		assert.Equal(t, uint32(0), blockAssembler.bestBlockHeight.Load())
+		header, height := blockAssembler.CurrentBlock()
+		assert.NotNil(t, header)
+		assert.Equal(t, uint32(0), height)
 	})
 }
 
@@ -1843,15 +1847,15 @@ func TestBlockAssembly_processNewBlockAnnouncement_ErrorHandling(t *testing.T) {
 		testItems.blockAssembler.blockchainClient = mockBlockchainClient
 
 		// Capture initial state
-		initialHeight := testItems.blockAssembler.bestBlockHeight.Load()
-		initialHeader := testItems.blockAssembler.bestBlockHeader.Load()
+		initialHeader, initialHeight := testItems.blockAssembler.CurrentBlock()
 
 		// Call processNewBlockAnnouncement directly
 		testItems.blockAssembler.processNewBlockAnnouncement(context.Background())
 
 		// Verify state remains unchanged after error
-		assert.Equal(t, initialHeight, testItems.blockAssembler.bestBlockHeight.Load())
-		assert.Equal(t, initialHeader, testItems.blockAssembler.bestBlockHeader.Load())
+		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
+		assert.Equal(t, initialHeight, currentHeight)
+		assert.Equal(t, initialHeader, currentHeader)
 	})
 }
 
@@ -1884,8 +1888,9 @@ func TestBlockAssembly_setBestBlockHeader_CleanupServiceFailures(t *testing.T) {
 		testItems.blockAssembler.setBestBlockHeader(newHeader, newHeight)
 
 		// Verify the block header was still set correctly
-		assert.Equal(t, newHeader, testItems.blockAssembler.bestBlockHeader.Load())
-		assert.Equal(t, newHeight, testItems.blockAssembler.bestBlockHeight.Load())
+		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
+		assert.Equal(t, newHeader, currentHeader)
+		assert.Equal(t, newHeight, currentHeight)
 
 		// Verify cleanup service was called
 		mockCleanupService.AssertCalled(t, "UpdateBlockHeight", newHeight, mock.Anything)
@@ -1913,8 +1918,9 @@ func TestBlockAssembly_setBestBlockHeader_CleanupServiceFailures(t *testing.T) {
 		testItems.blockAssembler.setBestBlockHeader(newHeader, newHeight)
 
 		// Verify the block header was set correctly
-		assert.Equal(t, newHeader, testItems.blockAssembler.bestBlockHeader.Load())
-		assert.Equal(t, newHeight, testItems.blockAssembler.bestBlockHeight.Load())
+		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
+		assert.Equal(t, newHeader, currentHeader)
+		assert.Equal(t, newHeight, currentHeight)
 	})
 }
 
@@ -1928,7 +1934,8 @@ func TestBlockAssembly_CoinbaseCalculationFix(t *testing.T) {
 
 		// Test the getMiningCandidate function directly with controlled fee values
 		ba := testItems.blockAssembler
-		ba.bestBlockHeight.Store(809) // Height from the original error
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 809) // Height from the original error
 
 		// Create a test scenario that simulates the fee calculation
 		// The original error: coinbase output (5000000098) > fees + subsidy (5000000097)
@@ -2472,7 +2479,8 @@ func TestGetMiningCandidate_SendTimeoutResetsGenerationFlag(t *testing.T) {
 	ba := testItems.blockAssembler
 
 	// Set up the block assembler with a valid height
-	ba.bestBlockHeight.Store(1)
+	currentHeader, _ := ba.CurrentBlock()
+	ba.setBestBlockHeader(currentHeader, 1)
 
 	// Don't start the listeners, so the channel send will timeout
 

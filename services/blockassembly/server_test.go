@@ -149,7 +149,8 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
-		server.blockAssembler.bestBlockHeight.Store(250) // halvings = 150
+		currentHeader, _ := server.blockAssembler.CurrentBlock()
+		server.blockAssembler.setBestBlockHeader(currentHeader, 250) // halvings = 150
 
 		resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
 		require.NoError(t, err)
