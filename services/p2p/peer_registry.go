@@ -43,6 +43,12 @@ type PeerInfo struct {
 	SubtreesReceived     int64 // Number of subtrees received from this peer
 	TransactionsReceived int64 // Number of transactions received from this peer
 	CatchupBlocks        int64 // Number of blocks received during catchup
+
+	// Sync attempt tracking for backoff and recovery
+	LastSyncAttempt      time.Time // When we last attempted to sync with this peer
+	SyncAttemptCount     int       // Number of sync attempts with this peer
+	LastReputationReset  time.Time // When reputation was last reset for recovery
+	ReputationResetCount int       // How many times reputation has been reset (for exponential cooldown)
 }
 
 // PeerRegistry maintains peer information
@@ -315,7 +321,22 @@ func (pr *PeerRegistry) RecordInteractionFailure(id peer.ID) {
 		info.InteractionFailures++
 		info.LastInteractionFailure = time.Now()
 
-		// Automatically update reputation score based on metrics
+		// Check for repeated failures in a short time window
+		recentFailureWindow := 5 * time.Minute
+		if !info.LastInteractionSuccess.IsZero() &&
+		   time.Since(info.LastInteractionSuccess) < recentFailureWindow {
+			// Multiple failures since last success - apply harsh penalty
+			failuresSinceSuccess := info.InteractionFailures - info.InteractionSuccesses
+			if failuresSinceSuccess > 2 {
+				// Reset successes to reflect current bad behavior
+				// This prevents old successes from masking current problems
+				info.InteractionSuccesses = 0
+				info.ReputationScore = 15.0 // Drop to very low score
+				return
+			}
+		}
+
+		// Normal reputation calculation for isolated failures
 		pr.calculateAndUpdateReputation(info)
 	}
 }
@@ -536,6 +557,67 @@ func (pr *PeerRegistry) GetPeersByReputation() []*PeerInfo {
 	}
 
 	return result
+}
+
+// RecordSyncAttempt records that we attempted to sync with a peer
+func (pr *PeerRegistry) RecordSyncAttempt(id peer.ID) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		info.LastSyncAttempt = time.Now()
+		info.SyncAttemptCount++
+	}
+}
+
+// ReconsiderBadPeers resets reputation for peers that have been bad for a while
+// Returns the number of peers that had their reputation recovered
+func (pr *PeerRegistry) ReconsiderBadPeers(cooldownPeriod time.Duration) int {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	peersRecovered := 0
+
+	for _, info := range pr.peers {
+		// Only consider peers with very low reputation
+		if info.ReputationScore >= 20 {
+			continue
+		}
+
+		// Check if enough time has passed since last failure
+		if info.LastInteractionFailure.IsZero() ||
+			time.Since(info.LastInteractionFailure) < cooldownPeriod {
+			continue
+		}
+
+		// Check if we haven't already reset this peer recently
+		if !info.LastReputationReset.IsZero() {
+			// Calculate exponential cooldown based on reset count
+			requiredCooldown := cooldownPeriod
+			for i := 0; i < info.ReputationResetCount; i++ {
+				requiredCooldown *= 3 // Triple cooldown for each reset
+			}
+
+			if time.Since(info.LastReputationReset) < requiredCooldown {
+				continue // Not enough time since last reset
+			}
+		}
+
+		// Reset reputation to a low but eligible value
+		oldReputation := info.ReputationScore
+		info.ReputationScore = 30 // Below neutral (50) but above threshold (20)
+		info.MaliciousCount = 0   // Clear malicious count for fresh start
+		info.LastReputationReset = time.Now()
+		info.ReputationResetCount++
+
+		// Log recovery details (would be better with logger but PeerRegistry doesn't have one)
+		// The sync coordinator will log the count of recovered peers
+		_ = oldReputation // Avoid unused variable warning
+
+		peersRecovered++
+	}
+
+	return peersRecovered
 }
 
 // GetPeersForCatchup returns peers suitable for catchup operations

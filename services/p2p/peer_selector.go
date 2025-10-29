@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"sort"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -10,9 +11,10 @@ import (
 
 // SelectionCriteria defines criteria for peer selection
 type SelectionCriteria struct {
-	LocalHeight  int32
-	ForcedPeerID peer.ID // If set, only this peer will be selected
-	PreviousPeer peer.ID // The previously selected peer, if any
+	LocalHeight         int32
+	ForcedPeerID        peer.ID       // If set, only this peer will be selected
+	PreviousPeer        peer.ID       // The previously selected peer, if any
+	SyncAttemptCooldown time.Duration // Cooldown period before retrying a peer
 }
 
 // PeerSelector handles peer selection logic
@@ -180,7 +182,7 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*PeerInfo, criteria Se
 }
 
 // isEligible checks if a peer meets selection criteria
-func (ps *PeerSelector) isEligible(p *PeerInfo, _ SelectionCriteria) bool {
+func (ps *PeerSelector) isEligible(p *PeerInfo, criteria SelectionCriteria) bool {
 	// Always exclude banned peers
 	if p.IsBanned {
 		ps.logger.Debugf("[PeerSelector] Peer %s is banned (score: %d)", p.ID, p.BanScore)
@@ -215,6 +217,16 @@ func (ps *PeerSelector) isEligible(p *PeerInfo, _ SelectionCriteria) bool {
 	if p.ReputationScore < 20.0 {
 		ps.logger.Debugf("[PeerSelector] Peer %s has very low reputation %.2f (below threshold 20.0)", p.ID, p.ReputationScore)
 		return false
+	}
+
+	// Check sync attempt cooldown if specified
+	if criteria.SyncAttemptCooldown > 0 && !p.LastSyncAttempt.IsZero() {
+		timeSinceLastAttempt := time.Since(p.LastSyncAttempt)
+		if timeSinceLastAttempt < criteria.SyncAttemptCooldown {
+			ps.logger.Debugf("[PeerSelector] Peer %s attempted recently (%v ago, cooldown: %v)",
+				p.ID, timeSinceLastAttempt.Round(time.Second), criteria.SyncAttemptCooldown)
+			return false
+		}
 	}
 
 	return true
