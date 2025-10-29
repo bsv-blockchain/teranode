@@ -1,8 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
+  import { page } from '$app/stores'
+  import { goto } from '$app/navigation'
+  import { browser } from '$app/environment'
   import PageWithMenu from '$internal/components/page/template/menu/index.svelte'
   import Card from '$internal/components/card/index.svelte'
   import Table from '$lib/components/table/index.svelte'
+  import Pager from '$internal/components/pager/index.svelte'
   import Typo from '$internal/components/typo/index.svelte'
   import Icon from '$lib/components/icon/index.svelte'
   import { Button } from '$lib/components'
@@ -73,12 +77,137 @@
     previous_attempt?: PreviousAttemptData
   }
 
-  let data: PeerData[] = []
+  let allData: PeerData[] = []  // Full dataset
+  let data: PeerData[] = []      // Paginated data for display
   let catchupStatus: CatchupStatusData | null = null
   let isLoading = false
   let error: string | null = null
   let refreshInterval: number | null = null
   let catchupRefreshInterval: number | null = null
+
+  // Persistent pagination state
+  let currentPage = 1
+  let currentPageSize = 25
+
+  // Persistent sort state
+  let sortColumn = ''
+  let sortOrder = ''
+
+  // Local storage keys for persistence
+  const PEERS_PAGE_SIZE_KEY = 'teranode-peers-pagesize'
+  const PEERS_SORT_KEY = 'teranode-peers-sort'
+
+  // Load pageSize from localStorage
+  function loadPageSizeFromStorage(): number {
+    if (browser) {
+      try {
+        const stored = localStorage.getItem(PEERS_PAGE_SIZE_KEY)
+        if (stored) {
+          const parsed = parseInt(stored, 10)
+          if (parsed > 0 && parsed <= 100) {
+            return parsed
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load pageSize from localStorage:', error)
+      }
+    }
+    return 25 // Default value
+  }
+
+  // Load sort preferences from localStorage
+  function loadSortFromStorage(): { sortColumn: string; sortOrder: string } | null {
+    if (browser) {
+      try {
+        const stored = localStorage.getItem(PEERS_SORT_KEY)
+        if (stored) {
+          return JSON.parse(stored)
+        }
+      } catch (error) {
+        console.warn('Failed to load sort from localStorage:', error)
+      }
+    }
+    return null
+  }
+
+  // Save pageSize to localStorage
+  function savePageSizeToStorage(size: number) {
+    if (browser) {
+      try {
+        localStorage.setItem(PEERS_PAGE_SIZE_KEY, size.toString())
+      } catch (error) {
+        console.warn('Failed to save pageSize to localStorage:', error)
+      }
+    }
+  }
+
+  // Save sort to localStorage
+  function saveSortToStorage(sortColumn: string, sortOrder: string) {
+    if (browser) {
+      try {
+        localStorage.setItem(PEERS_SORT_KEY, JSON.stringify({ sortColumn, sortOrder }))
+      } catch (error) {
+        console.warn('Failed to save sort to localStorage:', error)
+      }
+    }
+  }
+
+  // Load saved preferences on mount
+  if (browser) {
+    const savedSort = loadSortFromStorage()
+    if (savedSort) {
+      sortColumn = savedSort.sortColumn
+      sortOrder = savedSort.sortOrder
+    }
+  }
+
+  // Get pagination from URL and localStorage
+  $: {
+    // First, try to get pageSize from URL (highest priority)
+    const urlPageSize = $page.url.searchParams.get('pageSize')
+    if (urlPageSize) {
+      const parsed = parseInt(urlPageSize, 10)
+      if (parsed > 0 && parsed <= 100) {
+        currentPageSize = parsed
+      }
+    } else {
+      // If no URL parameter, use localStorage default
+      currentPageSize = loadPageSizeFromStorage()
+    }
+
+    // Get page from URL
+    const urlPage = $page.url.searchParams.get('page')
+    if (urlPage) {
+      const parsed = parseInt(urlPage, 10)
+      if (parsed > 0) {
+        currentPage = parsed
+      }
+    } else {
+      currentPage = 1 // Always reset to page 1 if not in URL
+    }
+
+    // Update paginated data when URL changes
+    updatePaginatedData()
+  }
+
+  // Update URL when pagination changes
+  function updateURL(newPage: number, newPageSize: number) {
+    const url = new URL($page.url)
+    url.searchParams.set('pageSize', newPageSize.toString())
+    // Only set page in URL if it's not page 1 (keep URLs clean)
+    if (newPage > 1) {
+      url.searchParams.set('page', newPage.toString())
+    } else {
+      url.searchParams.delete('page')
+    }
+    goto(url.toString(), { replaceState: true })
+  }
+
+  function updatePaginatedData() {
+    const startIndex = (currentPage - 1) * currentPageSize
+    const endIndex = startIndex + currentPageSize
+    data = allData.slice(startIndex, endIndex)
+  }
 
   // Fetch peer data from the API
   async function fetchPeers() {
@@ -101,10 +230,12 @@
       // Filter out peers whose last message was over 1 minute ago
       const now = Math.floor(Date.now() / 1000)
       const oneMinuteAgo = now - 60
-      data = (result.peers || []).filter(peer => peer.last_message_time > oneMinuteAgo)
+      allData = (result.peers || []).filter(peer => peer.last_message_time > oneMinuteAgo)
+      updatePaginatedData()
     } catch (err) {
       console.error('Failed to fetch peers:', err)
       error = err instanceof Error ? err.message : 'Unknown error'
+      allData = []
       data = []
     } finally {
       isLoading = false
@@ -159,6 +290,68 @@
     if (ms < 3600000) return `${(ms / 60000).toFixed(1)}m`
     return `${(ms / 3600000).toFixed(1)}h`
   }
+
+  // Handle pagination changes
+  function onPageChange(e) {
+    const data = e.detail
+    const newPage = data.value.page
+    const newPageSize = data.value.pageSize
+
+    // Save pageSize to localStorage if it changed
+    if (newPageSize !== currentPageSize) {
+      savePageSizeToStorage(newPageSize)
+    }
+
+    currentPage = newPage
+    currentPageSize = newPageSize
+    updatePaginatedData()
+    updateURL(newPage, newPageSize)
+  }
+
+  // Handle sort changes
+  function onSort(e) {
+    const { colId, value } = e.detail
+    sortColumn = colId
+    sortOrder = value
+
+    // Save sort to localStorage, or remove if clearing
+    if (colId && value) {
+      saveSortToStorage(colId, value)
+    } else {
+      // Clear sort from localStorage
+      if (browser) {
+        try {
+          localStorage.removeItem(PEERS_SORT_KEY)
+        } catch (error) {
+          console.warn('Failed to remove sort from localStorage:', error)
+        }
+      }
+    }
+  }
+
+  // Clear sort
+  function clearSort() {
+    onSort({ detail: { colId: '', value: '' } })
+  }
+
+  // Handle table actions
+  function handleAction(event) {
+    // Handle any table actions if needed
+    console.log('Table action:', event.detail)
+  }
+
+  $: hasSorting = sortColumn && sortOrder
+
+  let totalPages = 0
+  const onTotal = (e) => {
+    totalPages = e.detail.total
+  }
+
+  $: showPagerNav = totalPages > 1
+  $: showPagerSize = showPagerNav || (totalPages === 1 && allData.length > 5)
+  $: showTableFooter = showPagerSize
+
+  $: i18nLocal = { t, baseKey: 'comp.pager' }
 
   // Format error type to human-readable string
   function formatErrorType(errorType: string): string {
@@ -382,10 +575,11 @@
       }
     },
     catchup_success_rate: (idField, item, colId) => {
-      const attempts = item.catchup_attempts || 0
       const successes = item.catchup_successes || 0
+      const failures = item.catchup_failures || 0
+      const totalAttempts = successes + failures
 
-      if (attempts === 0) {
+      if (totalAttempts === 0) {
         return {
           component: RenderSpan,
           props: {
@@ -396,7 +590,7 @@
         }
       }
 
-      const rate = (successes / attempts) * 100
+      const rate = (successes / totalAttempts) * 100
       let className = 'num'
 
       if (rate >= 90) {
@@ -587,7 +781,7 @@
     </div>
   {/if}
 
-  <Card contentPadding="0">
+  <Card contentPadding="0" showFooter={showTableFooter}>
     <div class="title" slot="title">
       <Typo variant="title" size="h4" value={t(`${pageKey}.title`, { defaultValue: 'Peer Registry' })} />
     </div>
@@ -595,25 +789,45 @@
       <div class="stats">
         <span class="stat-item">
           <span class="stat-label">Total:</span>
-          <span class="stat-value">{data.length}</span>
+          <span class="stat-value">{allData.length}</span>
         </span>
         <span class="stat-item">
           <span class="stat-label">Connected:</span>
           <span class="stat-value"
-            >{data.filter((p) => p.is_connected && !p.is_banned).length}</span
+            >{allData.filter((p) => p.is_connected && !p.is_banned).length}</span
           >
         </span>
         <span class="stat-item">
           <span class="stat-label">Healthy:</span>
           <span class="stat-value"
-            >{data.filter((p) => p.is_healthy && p.is_connected && !p.is_banned).length}</span
+            >{allData.filter((p) => p.is_healthy && p.is_connected && !p.is_banned).length}</span
           >
         </span>
       </div>
-      {#if data.length > 0}
+      <Pager
+        i18n={i18nLocal}
+        expandUp={true}
+        totalItems={allData?.length}
+        showPageSize={false}
+        showQuickNav={false}
+        showNav={showPagerNav}
+        value={{
+          page: currentPage,
+          pageSize: currentPageSize,
+        }}
+        hasBoundaryRight={true}
+        on:change={onPageChange}
+        on:total={onTotal}
+      />
+      {#if allData.length > 0}
         <Button size="small" on:click={fetchPeers} disabled={isLoading}>
           {isLoading ? 'Refreshing...' : 'Refresh'}
         </Button>
+      {/if}
+      {#if hasSorting}
+        <button class="clear-sort-btn" on:click={clearSort} title="Clear sorting">
+          <Icon name="icon-close-line" size={16} />
+        </button>
       {/if}
       <div class="live">
         <div class="live-icon connected">
@@ -649,19 +863,42 @@
         idField="id"
         {colDefs}
         {data}
+        sort={{
+          sortColumn,
+          sortOrder,
+        }}
+        sortEnabled={true}
         pagination={{
           page: 1,
-          pageSize: 25,
+          pageSize: -1,
         }}
+        paginationEnabled={false}
         i18n={{ t, baseKey: 'comp.pager' }}
-        pager={true}
+        pager={false}
         expandUp={true}
         {renderCells}
         getRenderProps={null}
         getRowIconActions={null}
-        on:action={() => {}}
+        on:sort={onSort}
+        on:action={handleAction}
       />
     {/if}
+    <div slot="footer">
+      <Pager
+        i18n={i18nLocal}
+        expandUp={true}
+        totalItems={allData?.length}
+        showPageSize={showPagerSize}
+        showQuickNav={showPagerNav}
+        showNav={showPagerNav}
+        value={{
+          page: currentPage,
+          pageSize: currentPageSize,
+        }}
+        hasBoundaryRight={true}
+        on:change={onPageChange}
+      />
+    </div>
   </Card>
 </PageWithMenu>
 
@@ -1140,5 +1377,30 @@
 
   .error-message-box::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 107, 107, 0.5);
+  }
+
+  /* Clear sort button styling */
+  .clear-sort-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.66);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border-radius: 4px;
+  }
+
+  .clear-sort-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .clear-sort-btn:active {
+    background: rgba(255, 255, 255, 0.15);
   }
 </style>
