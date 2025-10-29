@@ -89,7 +89,14 @@ curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", 
 
 ### Step 8: Check Synchronization Status
 
-Monitor the blockchain synchronization process:
+Monitor the blockchain synchronization process using the blockchain viewer:
+
+```bash
+# Open the blockchain viewer in your browser to view current blockchain state
+# http://localhost:8090/viewer
+```
+
+Alternatively, query the RPC endpoint for programmatic access:
 
 ```bash
 curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getblockchaininfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:9292/

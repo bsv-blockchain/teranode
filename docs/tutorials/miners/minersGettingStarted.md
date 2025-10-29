@@ -109,14 +109,21 @@ docker-compose up -d
 
 Force the node to transition to Run mode:
 
+**Option 1: Using Admin Dashboard (Easiest)**
+
 ```bash
-grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.Run
+# Access the dashboard at http://localhost:8090/admin
+# Navigate to FSM State section and select RUNNING or LEGACYSYNCING
 ```
 
-or LegacySync mode:
+**Option 2: Using teranode-cli**
 
 ```bash
-grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.LegacySync
+# Transition to Run mode
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate RUNNING
+
+# Or transition to LegacySync mode
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate LEGACYSYNCING
 ```
 
 - Verify services are running:
@@ -277,7 +284,7 @@ curl http://localhost:8090/api/v1/utxo/<utxohash>
 1. [Installation Guide](../../howto/miners/docker/minersHowToInstallation.md)
 2. [Starting and Stopping Teranode](../../howto/miners/docker/minersHowToStopStartDockerTeranode.md)
 3. [Configuration Guide](../../howto/miners/docker/minersHowToConfigureTheNode.md)
-4. [Blockchain Synchronization](../../howto/miners/minersHowToSyncTheNode.md)
+4. [Blockchain Synchronization](../../howto/miners/docker/minersHowToSyncTheNode.md)
 5. [Update Procedures](../../howto/miners/docker/minersUpdatingTeranode.md)
 6. [Troubleshooting Guide](../../howto/miners/docker/minersHowToTroubleshooting.md)
 7. [Security Best Practices](../../howto/miners/docker/minersSecurityBestPractices.md)
@@ -287,9 +294,9 @@ curl http://localhost:8090/api/v1/utxo/<utxohash>
 1. [Installation with Kubernetes Operator](../../howto/miners/kubernetes/minersHowToInstallation.md)
 2. [Starting and Stopping Teranode](../../howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode.md)
 3. [Configuration Guide](../../howto/miners/kubernetes/minersHowToConfigureTheNode.md)
-4. [Blockchain Synchronization](../../howto/miners/minersHowToSyncTheNode.md)
+4. [Blockchain Synchronization](../../howto/miners/kubernetes/minersHowToSyncTheNode.md)
 5. [Update Procedures](../../howto/miners/kubernetes/minersUpdatingTeranode.md)
-6. [Backup Procedures](../../howto/miners/kubernetes/minersHowToBackup.md)
+6. [Backup Procedures](../../howto/miners/minersHowToBackup.md)
 7. [Troubleshooting Guide](../../howto/miners/kubernetes/minersHowToTroubleshooting.md)
 8. [Security Best Practices](../../howto/miners/kubernetes/minersSecurityBestPractices.md)
 9. [Remote Debugging Guide](../../howto/howToRemoteDebugTeranode.md)
