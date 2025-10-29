@@ -5,7 +5,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
   id-token: write
 
 env:
@@ -16,8 +16,13 @@ env:
 jobs:
   golangci-lint:
     name: golangci-lint
-    runs-on: teranode-runner
+    runs-on: teranode-runner-8-core
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
@@ -41,8 +46,13 @@ jobs:
 
   test:
     name: test
-    runs-on: teranode-runner
+    runs-on: teranode-runner-16-core
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
       # Only login to Docker Hub for internal PRs to avoid rate limits.
@@ -77,7 +87,7 @@ jobs:
 
   filename-check-report:
     name: filename check report
-    runs-on: teranode-runner
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
