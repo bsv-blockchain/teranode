@@ -154,6 +154,12 @@ type BlockAssembler struct {
 	// cleanupServiceLoaded indicates if the cleanup service has been loaded
 	cleanupServiceLoaded atomic.Bool
 
+	// cleanupQueueCh queues cleanup operations (parent preserve + DAH cleanup) to prevent flooding during catchup
+	cleanupQueueCh chan uint32
+
+	// cleanupQueueWorkerStarted tracks if the cleanup queue worker is running
+	cleanupQueueWorkerStarted atomic.Bool
+
 	// unminedCleanupTicker manages periodic cleanup of old unmined transactions
 	unminedCleanupTicker *time.Ticker
 	// cachedCandidate stores the cached mining candidate
@@ -702,9 +708,17 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 	// Invalidate cache when block height changes
 	b.invalidateMiningCandidateCache()
 
-	if b.cleanupServiceLoaded.Load() && b.cleanupService != nil && height > 0 {
-		if err := b.cleanupService.UpdateBlockHeight(height); err != nil {
-			b.logger.Errorf("[BlockAssembler] cleanup service error updating block height: %v", err)
+	// Queue cleanup operations to prevent flooding during catchup
+	// The cleanup queue worker processes operations sequentially (parent preserve → DAH cleanup)
+	// Capture channel reference to avoid race condition if worker restarts
+	ch := b.cleanupQueueCh
+	if b.utxoStore != nil && b.cleanupServiceLoaded.Load() && b.cleanupService != nil && height > 0 && ch != nil {
+		// Non-blocking send - drop if queue is full (shouldn't happen with 100 buffer, but safety check)
+		select {
+		case ch <- height:
+			// Successfully queued
+		default:
+			b.logger.Warnf("[BlockAssembler] cleanup queue full, dropping cleanup for height %d", height)
 		}
 	}
 }
@@ -733,6 +747,98 @@ func (b *BlockAssembler) GetCurrentRunningState() State {
 //   - uint32: Last persisted block height
 func (b *BlockAssembler) GetLastPersistedHeight() uint32 {
 	return b.lastPersistedHeight.Load()
+}
+
+// startCleanupQueueWorker starts a background worker that processes cleanup operations sequentially.
+// This prevents flooding the system with concurrent cleanup operations during block catchup.
+//
+// The worker processes one block height at a time, running parent preserve followed by DAH cleanup.
+// If multiple heights are queued, only the latest is processed (deduplication).
+//
+// Parameters:
+//   - ctx: Context for cancellation
+func (b *BlockAssembler) startCleanupQueueWorker(ctx context.Context) {
+	// Only start once
+	if !b.cleanupQueueWorkerStarted.CompareAndSwap(false, true) {
+		return
+	}
+
+	// Initialize the cleanup queue channel with a buffer to handle bursts during catchup
+	b.cleanupQueueCh = make(chan uint32, 100)
+
+	go func() {
+		defer func() {
+			// Close the channel to signal no more work will be sent
+			if b.cleanupQueueCh != nil {
+				close(b.cleanupQueueCh)
+				b.cleanupQueueCh = nil
+			}
+			b.cleanupQueueWorkerStarted.Store(false)
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				b.logger.Infof("[BlockAssembler] cleanup queue worker stopping")
+				return
+
+			case height := <-b.cleanupQueueCh:
+				// Deduplicate: drain any additional heights and only process the latest
+				latestHeight := height
+				drained := false
+				for {
+					select {
+					case nextHeight := <-b.cleanupQueueCh:
+						latestHeight = nextHeight
+						drained = true
+					default:
+						// No more heights in queue
+						if drained {
+							b.logger.Debugf("[BlockAssembler] deduplicating cleanup operations, skipping to height %d", latestHeight)
+						}
+						goto processHeight
+					}
+				}
+
+			processHeight:
+				// Step 1: Preserve parents of old unmined transactions FIRST
+				// This sets preserve_until and clears delete_at_height on parent transactions
+				if b.utxoStore != nil {
+					_, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, b.utxoStore, latestHeight, b.settings, b.logger)
+					if err != nil {
+						b.logger.Errorf("[BlockAssembler] error preserving parents during block height %d update: %v", latestHeight, err)
+						continue
+					}
+				}
+
+				// Step 2: Then trigger DAH cleanup and WAIT for it to complete
+				// This ensures true sequential execution: preserve → cleanup (complete) → next height
+				// Without waiting, the cleanup is queued but runs async, which could cause races
+				if b.cleanupServiceLoaded.Load() && b.cleanupService != nil {
+					// Create a channel to wait for completion
+					doneCh := make(chan string, 1)
+
+					if err := b.cleanupService.UpdateBlockHeight(latestHeight, doneCh); err != nil {
+						b.logger.Errorf("[BlockAssembler] cleanup service error updating block height %d: %v", latestHeight, err)
+						continue
+					}
+
+					// Wait for cleanup to complete or context cancellation
+					select {
+					case status := <-doneCh:
+						if status != "completed" {
+							b.logger.Warnf("[BlockAssembler] cleanup for height %d finished with status: %s", latestHeight, status)
+						}
+					case <-ctx.Done():
+						b.logger.Infof("[BlockAssembler] context cancelled while waiting for cleanup at height %d", latestHeight)
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	b.logger.Infof("[BlockAssembler] cleanup queue worker started")
 }
 
 // Start initializes and begins the block assembler operations.
@@ -833,15 +939,15 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 			}
 
 			b.cleanupServiceLoaded.Store(true)
+
+			// Start the cleanup queue worker to process parent preserve and DAH cleanup operations
+			// This prevents flooding the system with concurrent operations during block catchup
+			b.startCleanupQueueWorker(ctx)
 		}
 	}
 
 	_, height := b.CurrentBlock()
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(height))
-
-	// Start background cleanup of unmined transactions every 10 minutes
-	// This is started after initial cleanup and loading is complete
-	b.startUnminedTransactionCleanup(ctx)
 
 	return nil
 }
@@ -1774,56 +1880,6 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 	}
 
 	return nil
-}
-
-// startUnminedTransactionCleanup starts a background goroutine that periodically cleans up old unmined transactions.
-// The cleanup runs every 10 minutes and uses the store-agnostic cleanup function.
-func (b *BlockAssembler) startUnminedTransactionCleanup(ctx context.Context) {
-	if b.utxoStore == nil {
-		b.logger.Warnf("[BlockAssembler] no utxostore, skipping unmined transaction cleanup background job")
-		return
-	}
-
-	// Don't start if already running
-	if b.unminedCleanupTicker != nil {
-		b.logger.Debugf("[BlockAssembler] unmined transaction cleanup background job already running")
-		return
-	}
-
-	// Create a ticker for 10-minute intervals
-	b.unminedCleanupTicker = time.NewTicker(10 * time.Minute)
-
-	b.logger.Infof("[BlockAssembler] starting background cleanup of unmined transactions every 10 minutes")
-
-	go func() {
-		defer func() {
-			b.unminedCleanupTicker.Stop()
-			b.unminedCleanupTicker = nil
-		}()
-
-		for {
-			select {
-			case <-ctx.Done():
-				b.logger.Infof("[BlockAssembler] stopping unmined transaction cleanup background job")
-				return
-
-			case <-b.unminedCleanupTicker.C:
-				_, currentBlockHeight := b.CurrentBlock()
-				if currentBlockHeight > 0 {
-					cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, b.utxoStore, currentBlockHeight, b.settings, b.logger)
-
-					switch {
-					case err != nil:
-						b.logger.Errorf("[BlockAssembler] background cleanup of unmined transactions failed: %v", err)
-					case cleanupCount > 0:
-						b.logger.Infof("[BlockAssembler] background cleanup removed %d old unmined transactions", cleanupCount)
-					default:
-						b.logger.Debugf("[BlockAssembler] background cleanup found no old unmined transactions to remove")
-					}
-				}
-			}
-		}
-	}()
 }
 
 // invalidateMiningCandidateCache invalidates the cached mining candidate

@@ -3,11 +3,9 @@ package smoke
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/daemon"
-	"github.com/bsv-blockchain/teranode/services/rpc"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/stretchr/testify/require"

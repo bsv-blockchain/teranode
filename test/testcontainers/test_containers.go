@@ -20,7 +20,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/propagation"
-	"github.com/bsv-blockchain/teranode/services/propagation"
 	"github.com/bsv-blockchain/teranode/settings"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/test/utils/wait"

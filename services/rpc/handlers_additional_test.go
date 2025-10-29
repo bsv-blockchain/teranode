@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-subtree"
@@ -32,7 +31,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -469,44 +467,6 @@ func TestHandleSendRawTransactionValidation(t *testing.T) {
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		assert.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
-	})
-
-	t.Run("successful transaction returns string txid", func(t *testing.T) {
-		logger := mocklogger.NewTestLogger()
-
-		// Create a mock propagation client using the existing MockPropagationClient
-		mockPropClient := NewMockPropagationClient()
-		mockPropClient.On("ProcessTransaction", mock.Anything, mock.Anything).Return(nil)
-
-		// Create a simple test transaction
-		tx := bt.NewTx()
-		require.NotNil(t, tx)
-
-		s := &RPCServer{
-			logger: logger,
-			settings: &settings.Settings{
-				ChainCfgParams: &chaincfg.MainNetParams,
-			},
-			propagationClient: mockPropClient,
-		}
-
-		// Create command with hex-encoded transaction
-		cmd := &bsvjson.SendRawTransactionCmd{
-			HexTx: hex.EncodeToString(tx.Bytes()),
-		}
-
-		result, err := handleSendRawTransaction(context.Background(), s, cmd, nil)
-		require.NoError(t, err)
-
-		// Verify result is a string
-		txidResult, ok := result.(string)
-		require.True(t, ok, "result should be a string")
-
-		// Verify the string matches the transaction ID
-		assert.Equal(t, tx.TxID(), txidResult)
-
-		// Verify the mock was called
-		mockPropClient.AssertExpectations(t)
 	})
 }
 

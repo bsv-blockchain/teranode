@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -17,77 +16,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
-
-func TestStartUnminedTransactionCleanup(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	t.Run("starts and stops cleanup ticker", func(t *testing.T) {
-		mockStore := new(utxo.MockUtxostore)
-		logger := ulogger.TestLogger{}
-		settings := test.CreateBaseTestSettings(t)
-
-		ba := &BlockAssembler{
-			utxoStore:       mockStore,
-			logger:          logger,
-			settings:        settings,
-			cachedCandidate: &CachedMiningCandidate{},
-		}
-
-		// Set block height to trigger cleanup
-		ba.setBestBlockHeader(nil, 100)
-
-		// Expect at least one cleanup call
-		mockStore.On("QueryOldUnminedTransactions", mock.Anything, mock.Anything).
-			Return([]chainhash.Hash{}, nil).
-			Maybe() // May or may not be called depending on timing
-
-		// Start cleanup
-		ba.startUnminedTransactionCleanup(ctx)
-
-		// Give it a moment to potentially run
-		time.Sleep(50 * time.Millisecond)
-
-		// Cancel context to stop
-		cancel()
-
-		// Give it time to stop
-		time.Sleep(50 * time.Millisecond)
-	})
-
-	t.Run("does not cleanup when block height is 0", func(t *testing.T) {
-		ctx := context.Background()
-		mockStore := new(utxo.MockUtxostore)
-		logger := ulogger.TestLogger{}
-		settings := test.CreateBaseTestSettings(t)
-
-		ba := &BlockAssembler{
-			utxoStore:       mockStore,
-			logger:          logger,
-			settings:        settings,
-			cachedCandidate: &CachedMiningCandidate{},
-		}
-
-		// Block height is 0
-		ba.setBestBlockHeader(nil, 0)
-
-		// Should not call cleanup
-		mockStore.AssertNotCalled(t, "QueryOldUnminedTransactions")
-
-		// Create a short-lived context
-		ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		defer cancel()
-
-		ba.startUnminedTransactionCleanup(ctx)
-
-		// Wait for context to expire
-		<-ctx.Done()
-		time.Sleep(50 * time.Millisecond)
-
-		// Verify no cleanup was called
-		mockStore.AssertNotCalled(t, "QueryOldUnminedTransactions")
-	})
-}
 
 // TestCleanupDuringStartup tests that cleanup runs before loading unmined transactions
 func TestCleanupDuringStartup(t *testing.T) {

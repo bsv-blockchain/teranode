@@ -124,7 +124,7 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 
 		td.Logger.Infof("Transaction created: %s", spendingTx.String())
 
-	err = td.PropagationClient.ProcessTransaction(td.Ctx, spendingTx)
+		err = td.PropagationClient.ProcessTransaction(td.Ctx, spendingTx)
 
 		return spendingTx, err
 	}

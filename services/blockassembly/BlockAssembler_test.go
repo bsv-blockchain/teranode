@@ -1873,6 +1873,14 @@ func TestBlockAssembly_setBestBlockHeader_CleanupServiceFailures(t *testing.T) {
 		testItems.blockAssembler.cleanupService = mockCleanupService
 		testItems.blockAssembler.cleanupServiceLoaded.Store(true)
 
+		// Start the cleanup queue worker
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		testItems.blockAssembler.startCleanupQueueWorker(ctx)
+
+		// Set state to running so cleanup is triggered
+		testItems.blockAssembler.setCurrentRunningState(StateRunning)
+
 		// Create a new block header
 		newHeader := &model.BlockHeader{
 			Version:        1,
@@ -1891,6 +1899,9 @@ func TestBlockAssembly_setBestBlockHeader_CleanupServiceFailures(t *testing.T) {
 		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
 		assert.Equal(t, newHeader, currentHeader)
 		assert.Equal(t, newHeight, currentHeight)
+
+		// Wait for background goroutine to complete (parent preserve + cleanup trigger)
+		time.Sleep(100 * time.Millisecond)
 
 		// Verify cleanup service was called
 		mockCleanupService.AssertCalled(t, "UpdateBlockHeight", newHeight, mock.Anything)
@@ -2158,51 +2169,6 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 
 	// tx2 should be in the assembler (it's still unmined)
 	assert.True(t, containsHash(hashes, *txHash2), "unmined transaction not on current chain should be loaded into assembler")
-}
-
-// TestStartUnminedTransactionCleanupCoverage tests startUnminedTransactionCleanup method (52.2% coverage)
-func TestStartUnminedTransactionCleanupCoverage(t *testing.T) {
-	initPrometheusMetrics()
-
-	t.Run("startUnminedTransactionCleanup with cleanup enabled", func(t *testing.T) {
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// Test startUnminedTransactionCleanup - uses hardcoded 10-minute interval
-
-		// Test startUnminedTransactionCleanup
-		ba.startUnminedTransactionCleanup(ctx)
-
-		// Allow some time for cleanup to potentially run
-		time.Sleep(100 * time.Millisecond)
-
-		// Cancel context to stop cleanup
-		cancel()
-
-		// Test passes if no panic occurs
-		assert.True(t, true, "startUnminedTransactionCleanup should handle cleanup gracefully")
-	})
-
-	t.Run("startUnminedTransactionCleanup with cleanup disabled", func(t *testing.T) {
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// startUnminedTransactionCleanup uses hardcoded 10-minute interval
-
-		// Test startUnminedTransactionCleanup - should return early
-		ba.startUnminedTransactionCleanup(ctx)
-
-		// Test passes if method returns without starting goroutine
-		assert.True(t, true, "startUnminedTransactionCleanup should return early when disabled")
-	})
 }
 
 // TestResetCoverage tests reset method (60.5% coverage)
