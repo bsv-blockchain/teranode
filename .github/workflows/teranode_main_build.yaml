@@ -53,7 +53,7 @@ jobs:
         GIT_COMMIT=${{ needs.calculate-version.outputs.git_commit }}
         GIT_SHA=${{ needs.calculate-version.outputs.git_sha }}
       architectures: '["amd64", "arm64"]'
-      runner_labels: '{"amd64":"teranode-runner","arm64":"teranode-runner-arm","manifest":"ubuntu-latest"}'
+      runner_labels: '{"amd64":"teranode-runner-16-core","arm64":"teranode-runner-16-core-arm","manifest":"ubuntu-latest"}'
     secrets: inherit
 
   # Run chain integrity test

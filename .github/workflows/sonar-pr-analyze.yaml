@@ -28,7 +28,7 @@ env:
 jobs:
   sonarqube:
     name: SonarQube Analysis
-    runs-on: teranode-runner
+    runs-on: teranode-runner-4-core
     # Only run if:
     # 1. The triggering workflow succeeded (ensures all artifacts were generated)
     # 2. It was triggered by a pull_request event (not push to main)
@@ -37,6 +37,10 @@ jobs:
       github.event.workflow_run.conclusion == 'success'
 
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
 
       - name: Get PR number and metadata
         id: pr

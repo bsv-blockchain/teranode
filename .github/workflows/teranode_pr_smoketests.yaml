@@ -16,8 +16,13 @@ env:
 jobs:
   smoketest:
     name: smoketest
-    runs-on: teranode-runner
+    runs-on: teranode-runner-8-core
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       # Only login to Docker Hub for internal PRs to avoid rate limits.
       # Fork PRs won't have access to secrets and will skip this step.
       - name: Login to Docker Hub
@@ -52,8 +57,13 @@ jobs:
 
   sequential-sqlite:
     name: sequential-sqlite
-    runs-on: teranode-runner
+    runs-on: teranode-runner-8-core
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       - name: Login to Docker Hub
         if: github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
@@ -86,8 +96,13 @@ jobs:
 
   sequential-postgres:
     name: sequential-postgres
-    runs-on: teranode-runner
+    runs-on: teranode-runner-8-core
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       - name: Login to Docker Hub
         if: github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
@@ -120,8 +135,13 @@ jobs:
 
   sequential-aerospike:
     name: sequential-aerospike
-    runs-on: teranode-runner
+    runs-on: teranode-runner-8-core
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       - name: Login to Docker Hub
         if: github.event.pull_request.head.repo.full_name == github.repository
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3

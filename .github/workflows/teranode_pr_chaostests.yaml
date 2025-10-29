@@ -16,8 +16,13 @@ env:
 jobs:
   chaostest:
     name: chaostest
-    runs-on: teranode-runner
+    runs-on: teranode-runner-4-core
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       # Only login to Docker Hub for internal PRs to avoid rate limits.
       # Fork PRs won't have access to secrets and will skip this step.
       - name: Login to Docker Hub
