@@ -856,15 +856,14 @@ func (b *Block) checkTxInRecentBlocks(ctx context.Context, deps *validationDepen
 }
 
 func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) ([]uint32, error) {
+	var oldBlockIDs []uint32
+
 	// check whether the parent transaction has already been mined in a block on our chain
 	// we need to get back to the txMetaStore for this, to make sure we have the latest data
 	// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 	// for the first situation we don't start validating the current block until the parent is validated.
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
 	parentTxMeta, err := getParentTxMetaBlockIDs(gCtx, txMetaStore, parentTxStruct)
-
-	var oldBlockIDs []uint32
-
 	if err != nil {
 		return oldBlockIDs, err
 	}
@@ -1026,7 +1025,7 @@ func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, paren
 	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, fields.BlockIDs)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxNotFound) {
-			return nil, nil
+			return nil, errors.NewBlockInvalidError("parent transaction %s of tx %s not found in txMetaStore", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
 		}
 
 		return nil, errors.NewStorageError("error getting parent transaction %s from txMetaStore", parentTxStruct.parentTxHash.String(), err)

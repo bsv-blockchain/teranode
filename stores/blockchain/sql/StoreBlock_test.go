@@ -230,8 +230,7 @@ func TestStoreBlock_InvalidBlock(t *testing.T) {
 	defer s.Close()
 
 	// Store block marked as invalid
-	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer",
-		options.WithInvalid(true))
+	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer", options.WithInvalid(true))
 	require.NoError(t, err)
 	assert.Greater(t, blockID, uint64(0))
 	assert.Equal(t, uint32(1), height)
@@ -664,11 +663,20 @@ func TestStoreBlock_InheritInvalidFromParent(t *testing.T) {
 	_, _, err = s.StoreBlock(context.Background(), block2, "test-peer")
 	require.NoError(t, err)
 
-	// Verify both blocks are marked as invalid in cache
+	// Verify both blocks are not in the cache
 	_, meta1 := s.blocksCache.GetBlockHeader(*block1.Hash())
 	_, meta2 := s.blocksCache.GetBlockHeader(*block2.Hash())
-	assert.True(t, meta1.Invalid)
-	assert.True(t, meta2.Invalid) // Should inherit invalid status
+	assert.Nil(t, meta1)
+	assert.Nil(t, meta2)
+
+	// Verify both blocks are marked invalid in the database
+	_, meta, err := s.GetBlockHeader(t.Context(), block1.Hash())
+	require.NoError(t, err)
+	assert.True(t, meta.Invalid)
+
+	_, meta, err = s.GetBlockHeader(t.Context(), block2.Hash())
+	require.NoError(t, err)
+	assert.True(t, meta.Invalid)
 }
 
 func TestStoreBlock_ContextCancellationDuringPrevBlockLookup(t *testing.T) {

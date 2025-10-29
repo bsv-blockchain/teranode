@@ -336,6 +336,41 @@ func TestBlockchainCacheEdgeCases(t *testing.T) {
 			_ = exists // Just access it to test the code path
 		}
 	})
+
+	t.Run("Not enough headers in cache", func(t *testing.T) {
+		cache := NewBlockchainCache(&settings.Settings{
+			Block: settings.BlockSettings{
+				StoreCacheSize: 5,
+			},
+		})
+
+		// Add blocks to trigger eviction
+		var (
+			prevHash   = &chainhash.Hash{0}
+			allHeaders = make([]*model.BlockHeader, 0)
+		)
+
+		for i := 1; i <= 5; i++ {
+			header := &model.BlockHeader{
+				Version:        1,
+				Timestamp:      1234567890,
+				Nonce:          uint32(i),
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: &chainhash.Hash{byte(i)},
+				Bits:           *bits,
+			}
+			meta := &model.BlockHeaderMeta{Height: uint32(i)}
+			allHeaders = append(allHeaders, header)
+
+			result := cache.addBlockHeader(header, meta)
+			assert.True(t, result) // First two should be added
+			prevHash = header.Hash()
+		}
+
+		headers, metas := cache.GetBlockHeaders(allHeaders[0].Hash(), 5)
+		assert.Nil(t, headers)
+		assert.Nil(t, metas)
+	})
 }
 
 // TestExportBlockchainCSVErrorScenarios tests error paths in ExportBlockchainCSV
