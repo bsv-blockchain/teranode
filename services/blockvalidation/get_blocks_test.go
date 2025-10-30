@@ -521,7 +521,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		)
 
 		// Call fetchSingleBlock
-		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "test-peer-id", "http://test-peer")
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		require.NoError(t, err)
 		require.NotNil(t, fetchedBlock)
 		assert.Equal(t, targetHash, fetchedBlock.Header.Hash())
@@ -679,7 +679,7 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 		)
 
 		// Call fetchSingleBlock
-		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "test-peer-id", "http://test-peer")
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		require.NoError(t, err)
 		require.NotNil(t, fetchedBlock)
 		assert.Equal(t, targetHash, fetchedBlock.Header.Hash())
@@ -802,7 +802,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		)
 
 		// Call fetchSingleBlock
-		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "test-peer-id", "http://test-peer")
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		require.NoError(t, err)
 		require.NotNil(t, fetchedBlock)
 		assert.Equal(t, targetHash, fetchedBlock.Header.Hash())
@@ -826,7 +826,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		)
 
 		// Call fetchSingleBlock - should return error
-		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "test-peer-id", "http://test-peer")
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get block from peer")
 		require.Nil(t, fetchedBlock)
@@ -850,7 +850,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		)
 
 		// Call fetchSingleBlock - should return error
-		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "test-peer-id", "http://test-peer")
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create block from bytes")
 		require.Nil(t, fetchedBlock)
@@ -1541,7 +1541,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err = suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "test-peer-id", "http://test-peer")
+		err = suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "http://test-peer", "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.NoError(t, err)
 
 		// Verify both were stored in subtreeStore
@@ -1593,7 +1593,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Height: 100,
 		}
 
-		err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "http://test-peer", "test-peer-id")
+		err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "http://test-peer", "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree from")
 	})
@@ -1632,7 +1632,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "http://test-peer", "test-peer-id")
+		err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "http://test-peer", "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
 	})
@@ -1646,7 +1646,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Subtrees: []*chainhash.Hash{}, // Empty subtrees
 		}
 
-		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "http://test-peer", "test-peer-id")
+		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "http://test-peer", "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.NoError(t, err) // Should return early with no error
 	})
 
@@ -1671,7 +1671,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(500, "Internal Server Error"))
 
-		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "http://test-peer", "test-peer-id")
+		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "http://test-peer", "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1706,7 +1706,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(404, "Not Found"))
 
-		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "http://test-peer", "test-peer-id")
+		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "http://test-peer", "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1825,7 +1825,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 			Subtrees: []*chainhash.Hash{}, // Empty subtrees
 		}
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "test-peer-id")
+		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.NoError(t, err)
 	})
 
@@ -1852,7 +1852,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewBytesResponder(200, subtreeDataBytes))
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "test-peer-id")
+		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.NoError(t, err)
 	})
 
@@ -1885,7 +1885,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 				httpmock.NewBytesResponder(200, subtreeDataBytes))
 		}
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "test-peer-id")
+		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.NoError(t, err)
 	})
 
@@ -1900,7 +1900,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeURL,
 			httpmock.NewErrorResponder(errors.NewNetworkError("subtree fetch error")))
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "test-peer-id")
+		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1939,7 +1939,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel() // Cancel immediately
 
-		err := server.fetchSubtreeDataForBlock(cancelCtx, block, baseURL, "test-peer-id")
+		err := server.fetchSubtreeDataForBlock(cancelCtx, block, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.Error(t, err)
 		// Check for either context canceled or the wrapped error containing context cancellation
 		assert.True(t,
@@ -2017,7 +2017,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "test-peer-id")
+		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.NoError(t, err)
 	})
 
@@ -2050,7 +2050,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "test-peer-id")
+		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree")
 	})
@@ -2092,7 +2092,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "test-peer-id")
+		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
 	})
@@ -2146,7 +2146,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "test-peer-id")
+		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.Error(t, err)
 	})
 
@@ -2197,7 +2197,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(cancelCtx, testBlock, subtreeHash, baseURL, "test-peer-id")
+		err := server.fetchAndStoreSubtreeAndSubtreeData(cancelCtx, testBlock, subtreeHash, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.Error(t, err)
 		// Check for either context canceled or the wrapped error containing context cancellation
 		assert.True(t,
@@ -2480,7 +2480,7 @@ func TestBlockWorker(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, baseURL, "test-peer-id", blockUpTo)
+			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", blockUpTo)
 		}()
 
 		// Wait for worker to finish
@@ -2527,7 +2527,7 @@ func TestBlockWorker(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, baseURL, "test-peer-id", blockUpTo)
+			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", blockUpTo)
 		}()
 
 		// Wait for worker to finish
@@ -2554,7 +2554,7 @@ func TestBlockWorker(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, baseURL, "test-peer-id", blockUpTo)
+			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, baseURL, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", blockUpTo)
 		}()
 
 		// Wait for worker to finish
@@ -2799,7 +2799,7 @@ func TestFetchSingleBlock_ImprovedErrorHandling(t *testing.T) {
 			httpmock.NewBytesResponder(200, []byte("invalid_block_data")),
 		)
 
-		block, err := server.fetchSingleBlock(context.Background(), hash, "test-peer-id", "http://test-peer")
+		block, err := server.fetchSingleBlock(context.Background(), hash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		// Should fail with better error context
 		assert.Error(t, err)
@@ -2852,7 +2852,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		}
 
 		// Fetch the subtree (should load from store, not network)
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "test-peer-id", "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -2890,7 +2890,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "test-peer-id", "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -2932,7 +2932,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "test-peer-id", "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -2957,7 +2957,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "test-peer-id", "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -2984,7 +2984,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "test-peer-id", "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -3006,7 +3006,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "test-peer-id", "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -3044,7 +3044,7 @@ func TestFetchAndStoreSubtreeDataEdgeCases(t *testing.T) {
 		}
 
 		// This should skip fetching since data already exists
-		err = suite.Server.fetchAndStoreSubtreeData(suite.Ctx, testBlock, &subtreeHash, subtree, "http://test-peer", "test-peer-id")
+		err = suite.Server.fetchAndStoreSubtreeData(suite.Ctx, testBlock, &subtreeHash, subtree, "http://test-peer", "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		assert.NoError(t, err)
 	})
 }
