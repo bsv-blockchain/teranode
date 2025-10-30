@@ -39,6 +39,7 @@ const (
 	PeerService_ReportValidBlock_FullMethodName        = "/p2p_api.PeerService/ReportValidBlock"
 	PeerService_IsPeerMalicious_FullMethodName         = "/p2p_api.PeerService/IsPeerMalicious"
 	PeerService_IsPeerUnhealthy_FullMethodName         = "/p2p_api.PeerService/IsPeerUnhealthy"
+	PeerService_GetPeerRegistry_FullMethodName         = "/p2p_api.PeerService/GetPeerRegistry"
 )
 
 // PeerServiceClient is the client API for PeerService service.
@@ -69,6 +70,8 @@ type PeerServiceClient interface {
 	// Peer status checking
 	IsPeerMalicious(ctx context.Context, in *IsPeerMaliciousRequest, opts ...grpc.CallOption) (*IsPeerMaliciousResponse, error)
 	IsPeerUnhealthy(ctx context.Context, in *IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*IsPeerUnhealthyResponse, error)
+	// Get full peer registry data with all metadata
+	GetPeerRegistry(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetPeerRegistryResponse, error)
 }
 
 type peerServiceClient struct {
@@ -269,6 +272,16 @@ func (c *peerServiceClient) IsPeerUnhealthy(ctx context.Context, in *IsPeerUnhea
 	return out, nil
 }
 
+func (c *peerServiceClient) GetPeerRegistry(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetPeerRegistryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPeerRegistryResponse)
+	err := c.cc.Invoke(ctx, PeerService_GetPeerRegistry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PeerServiceServer is the server API for PeerService service.
 // All implementations must embed UnimplementedPeerServiceServer
 // for forward compatibility.
@@ -297,6 +310,8 @@ type PeerServiceServer interface {
 	// Peer status checking
 	IsPeerMalicious(context.Context, *IsPeerMaliciousRequest) (*IsPeerMaliciousResponse, error)
 	IsPeerUnhealthy(context.Context, *IsPeerUnhealthyRequest) (*IsPeerUnhealthyResponse, error)
+	// Get full peer registry data with all metadata
+	GetPeerRegistry(context.Context, *emptypb.Empty) (*GetPeerRegistryResponse, error)
 	mustEmbedUnimplementedPeerServiceServer()
 }
 
@@ -363,6 +378,9 @@ func (UnimplementedPeerServiceServer) IsPeerMalicious(context.Context, *IsPeerMa
 }
 func (UnimplementedPeerServiceServer) IsPeerUnhealthy(context.Context, *IsPeerUnhealthyRequest) (*IsPeerUnhealthyResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method IsPeerUnhealthy not implemented")
+}
+func (UnimplementedPeerServiceServer) GetPeerRegistry(context.Context, *emptypb.Empty) (*GetPeerRegistryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPeerRegistry not implemented")
 }
 func (UnimplementedPeerServiceServer) mustEmbedUnimplementedPeerServiceServer() {}
 func (UnimplementedPeerServiceServer) testEmbeddedByValue()                     {}
@@ -727,6 +745,24 @@ func _PeerService_IsPeerUnhealthy_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerService_GetPeerRegistry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).GetPeerRegistry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_GetPeerRegistry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).GetPeerRegistry(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PeerService_ServiceDesc is the grpc.ServiceDesc for PeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -809,6 +845,10 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "IsPeerUnhealthy",
 			Handler:    _PeerService_IsPeerUnhealthy_Handler,
+		},
+		{
+			MethodName: "GetPeerRegistry",
+			Handler:    _PeerService_GetPeerRegistry_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

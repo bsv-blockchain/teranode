@@ -515,8 +515,6 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 
 	e.GET("/p2p-ws", s.HandleWebSocket(s.notificationCh, s.AssetHTTPAddressURL))
 
-	e.GET("/peers", s.HandleGetPeers())
-
 	return e
 }
 
@@ -1960,10 +1958,40 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, from string)
 	// If we wanted to take action (e.g., remove from our mempool), we would do it here.
 }
 
-// GetPeers returns a list of connected peers.
+// GetPeers returns a list of connected peers with full registry data.
 func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeersResponse, error) {
 	s.logger.Debugf("GetPeers called")
 
+	// If peer registry is available, use it as it has richer data
+	if s.peerRegistry != nil {
+		// Get connected peers from the registry with full metadata
+		connectedPeers := s.peerRegistry.GetConnectedPeers()
+
+		resp := &p2p_api.GetPeersResponse{}
+		for _, peer := range connectedPeers {
+			// Get address from libp2p if available
+			addr := ""
+			if s.P2PClient != nil {
+				libp2pPeers := s.P2PClient.GetPeers()
+				for _, sp := range libp2pPeers {
+					if sp.ID == peer.ID.String() && len(sp.Addrs) > 0 {
+						addr = sp.Addrs[0]
+						break
+					}
+				}
+			}
+
+			resp.Peers = append(resp.Peers, &p2p_api.Peer{
+				Id:       peer.ID.String(),
+				Addr:     addr,
+				Banscore: int32(peer.BanScore), //nolint:gosec
+			})
+		}
+
+		return resp, nil
+	}
+
+	// Fallback to libp2p client data if registry not available
 	if s.P2PClient == nil {
 		return nil, errors.NewError("[GetPeers] P2PClient is not initialised")
 	}

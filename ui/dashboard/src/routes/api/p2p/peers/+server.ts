@@ -4,35 +4,39 @@ import { dev } from '$app/environment'
 
 /**
  * GET handler for /api/p2p/peers
- * Proxies requests to the P2P service's peers endpoint
+ * Proxies requests to the Asset service's peers endpoint
+ * (which in turn proxies to P2P's gRPC service)
  */
 export const GET: RequestHandler = async () => {
   try {
-    let p2pUrl: string
+    let assetUrl: string
 
     if (dev) {
-      // In development, P2P HTTP service runs on localhost:9906
-      p2pUrl = 'http://localhost:9906/peers'
+      // In development, Asset HTTP service runs on localhost:8090
+      assetUrl = 'http://localhost:8090/api/v1/peers'
     } else {
       // In production, construct URL based on configuration
-      const port = process.env.P2P_HTTP_PORT || '9906'
-      p2pUrl = `http://localhost:${port}/peers`
+      const port = process.env.ASSET_HTTP_PORT || '8090'
+      assetUrl = `http://localhost:${port}/api/v1/peers`
     }
 
-    const response = await fetch(p2pUrl)
+    const response = await fetch(assetUrl)
 
     if (!response.ok) {
-      throw new Error(`P2P service returned ${response.status}: ${response.statusText}`)
+      throw new Error(`Asset service returned ${response.status}: ${response.statusText}`)
     }
 
     const data = await response.json()
     return json(data)
   } catch (error) {
-    console.error('P2P peers proxy error:', error)
+    console.error('Peers proxy error:', error)
     return json(
       {
         error: 'Failed to fetch peer data',
         details: error instanceof Error ? error.message : 'Unknown error',
+        // Return empty peers list on error
+        peers: [],
+        count: 0,
       },
       { status: 500 },
     )

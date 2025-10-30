@@ -2022,6 +2022,296 @@ func (x *IsPeerUnhealthyResponse) GetReputationScore() float32 {
 	return 0
 }
 
+// Comprehensive peer information with all registry metadata
+type PeerRegistryInfo struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Id               string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Height           int32                  `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
+	BlockHash        string                 `protobuf:"bytes,3,opt,name=block_hash,json=blockHash,proto3" json:"block_hash,omitempty"`
+	DataHubUrl       string                 `protobuf:"bytes,4,opt,name=data_hub_url,json=dataHubUrl,proto3" json:"data_hub_url,omitempty"`
+	IsHealthy        bool                   `protobuf:"varint,5,opt,name=is_healthy,json=isHealthy,proto3" json:"is_healthy,omitempty"`
+	HealthDurationMs int64                  `protobuf:"varint,6,opt,name=health_duration_ms,json=healthDurationMs,proto3" json:"health_duration_ms,omitempty"`
+	LastHealthCheck  int64                  `protobuf:"varint,7,opt,name=last_health_check,json=lastHealthCheck,proto3" json:"last_health_check,omitempty"` // Unix timestamp
+	BanScore         int32                  `protobuf:"varint,8,opt,name=ban_score,json=banScore,proto3" json:"ban_score,omitempty"`
+	IsBanned         bool                   `protobuf:"varint,9,opt,name=is_banned,json=isBanned,proto3" json:"is_banned,omitempty"`
+	IsConnected      bool                   `protobuf:"varint,10,opt,name=is_connected,json=isConnected,proto3" json:"is_connected,omitempty"`
+	ConnectedAt      int64                  `protobuf:"varint,11,opt,name=connected_at,json=connectedAt,proto3" json:"connected_at,omitempty"` // Unix timestamp
+	BytesReceived    uint64                 `protobuf:"varint,12,opt,name=bytes_received,json=bytesReceived,proto3" json:"bytes_received,omitempty"`
+	LastBlockTime    int64                  `protobuf:"varint,13,opt,name=last_block_time,json=lastBlockTime,proto3" json:"last_block_time,omitempty"`       // Unix timestamp
+	LastMessageTime  int64                  `protobuf:"varint,14,opt,name=last_message_time,json=lastMessageTime,proto3" json:"last_message_time,omitempty"` // Unix timestamp
+	UrlResponsive    bool                   `protobuf:"varint,15,opt,name=url_responsive,json=urlResponsive,proto3" json:"url_responsive,omitempty"`
+	LastUrlCheck     int64                  `protobuf:"varint,16,opt,name=last_url_check,json=lastUrlCheck,proto3" json:"last_url_check,omitempty"` // Unix timestamp
+	// Interaction/catchup metrics
+	InteractionAttempts    int64   `protobuf:"varint,17,opt,name=interaction_attempts,json=interactionAttempts,proto3" json:"interaction_attempts,omitempty"`
+	InteractionSuccesses   int64   `protobuf:"varint,18,opt,name=interaction_successes,json=interactionSuccesses,proto3" json:"interaction_successes,omitempty"`
+	InteractionFailures    int64   `protobuf:"varint,19,opt,name=interaction_failures,json=interactionFailures,proto3" json:"interaction_failures,omitempty"`
+	LastInteractionAttempt int64   `protobuf:"varint,20,opt,name=last_interaction_attempt,json=lastInteractionAttempt,proto3" json:"last_interaction_attempt,omitempty"` // Unix timestamp
+	LastInteractionSuccess int64   `protobuf:"varint,21,opt,name=last_interaction_success,json=lastInteractionSuccess,proto3" json:"last_interaction_success,omitempty"` // Unix timestamp
+	LastInteractionFailure int64   `protobuf:"varint,22,opt,name=last_interaction_failure,json=lastInteractionFailure,proto3" json:"last_interaction_failure,omitempty"` // Unix timestamp
+	ReputationScore        float64 `protobuf:"fixed64,23,opt,name=reputation_score,json=reputationScore,proto3" json:"reputation_score,omitempty"`
+	MaliciousCount         int64   `protobuf:"varint,24,opt,name=malicious_count,json=maliciousCount,proto3" json:"malicious_count,omitempty"`
+	AvgResponseTimeMs      int64   `protobuf:"varint,25,opt,name=avg_response_time_ms,json=avgResponseTimeMs,proto3" json:"avg_response_time_ms,omitempty"`
+	Storage                string  `protobuf:"bytes,26,opt,name=storage,proto3" json:"storage,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *PeerRegistryInfo) Reset() {
+	*x = PeerRegistryInfo{}
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PeerRegistryInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PeerRegistryInfo) ProtoMessage() {}
+
+func (x *PeerRegistryInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PeerRegistryInfo.ProtoReflect.Descriptor instead.
+func (*PeerRegistryInfo) Descriptor() ([]byte, []int) {
+	return file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *PeerRegistryInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *PeerRegistryInfo) GetHeight() int32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetBlockHash() string {
+	if x != nil {
+		return x.BlockHash
+	}
+	return ""
+}
+
+func (x *PeerRegistryInfo) GetDataHubUrl() string {
+	if x != nil {
+		return x.DataHubUrl
+	}
+	return ""
+}
+
+func (x *PeerRegistryInfo) GetIsHealthy() bool {
+	if x != nil {
+		return x.IsHealthy
+	}
+	return false
+}
+
+func (x *PeerRegistryInfo) GetHealthDurationMs() int64 {
+	if x != nil {
+		return x.HealthDurationMs
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetLastHealthCheck() int64 {
+	if x != nil {
+		return x.LastHealthCheck
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetBanScore() int32 {
+	if x != nil {
+		return x.BanScore
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetIsBanned() bool {
+	if x != nil {
+		return x.IsBanned
+	}
+	return false
+}
+
+func (x *PeerRegistryInfo) GetIsConnected() bool {
+	if x != nil {
+		return x.IsConnected
+	}
+	return false
+}
+
+func (x *PeerRegistryInfo) GetConnectedAt() int64 {
+	if x != nil {
+		return x.ConnectedAt
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetBytesReceived() uint64 {
+	if x != nil {
+		return x.BytesReceived
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetLastBlockTime() int64 {
+	if x != nil {
+		return x.LastBlockTime
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetLastMessageTime() int64 {
+	if x != nil {
+		return x.LastMessageTime
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetUrlResponsive() bool {
+	if x != nil {
+		return x.UrlResponsive
+	}
+	return false
+}
+
+func (x *PeerRegistryInfo) GetLastUrlCheck() int64 {
+	if x != nil {
+		return x.LastUrlCheck
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetInteractionAttempts() int64 {
+	if x != nil {
+		return x.InteractionAttempts
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetInteractionSuccesses() int64 {
+	if x != nil {
+		return x.InteractionSuccesses
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetInteractionFailures() int64 {
+	if x != nil {
+		return x.InteractionFailures
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetLastInteractionAttempt() int64 {
+	if x != nil {
+		return x.LastInteractionAttempt
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetLastInteractionSuccess() int64 {
+	if x != nil {
+		return x.LastInteractionSuccess
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetLastInteractionFailure() int64 {
+	if x != nil {
+		return x.LastInteractionFailure
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetReputationScore() float64 {
+	if x != nil {
+		return x.ReputationScore
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetMaliciousCount() int64 {
+	if x != nil {
+		return x.MaliciousCount
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetAvgResponseTimeMs() int64 {
+	if x != nil {
+		return x.AvgResponseTimeMs
+	}
+	return 0
+}
+
+func (x *PeerRegistryInfo) GetStorage() string {
+	if x != nil {
+		return x.Storage
+	}
+	return ""
+}
+
+type GetPeerRegistryResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Peers         []*PeerRegistryInfo    `protobuf:"bytes,1,rep,name=peers,proto3" json:"peers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPeerRegistryResponse) Reset() {
+	*x = GetPeerRegistryResponse{}
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPeerRegistryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPeerRegistryResponse) ProtoMessage() {}
+
+func (x *GetPeerRegistryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_p2p_p2p_api_p2p_api_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPeerRegistryResponse.ProtoReflect.Descriptor instead.
+func (*GetPeerRegistryResponse) Descriptor() ([]byte, []int) {
+	return file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *GetPeerRegistryResponse) GetPeers() []*PeerRegistryInfo {
+	if x != nil {
+		return x.Peers
+	}
+	return nil
+}
+
 var File_services_p2p_p2p_api_p2p_api_proto protoreflect.FileDescriptor
 
 const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
@@ -2158,7 +2448,40 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x17IsPeerUnhealthyResponse\x12!\n" +
 	"\fis_unhealthy\x18\x01 \x01(\bR\visUnhealthy\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12)\n" +
-	"\x10reputation_score\x18\x03 \x01(\x02R\x0freputationScore2\xef\f\n" +
+	"\x10reputation_score\x18\x03 \x01(\x02R\x0freputationScore\"\xa4\b\n" +
+	"\x10PeerRegistryInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
+	"\x06height\x18\x02 \x01(\x05R\x06height\x12\x1d\n" +
+	"\n" +
+	"block_hash\x18\x03 \x01(\tR\tblockHash\x12 \n" +
+	"\fdata_hub_url\x18\x04 \x01(\tR\n" +
+	"dataHubUrl\x12\x1d\n" +
+	"\n" +
+	"is_healthy\x18\x05 \x01(\bR\tisHealthy\x12,\n" +
+	"\x12health_duration_ms\x18\x06 \x01(\x03R\x10healthDurationMs\x12*\n" +
+	"\x11last_health_check\x18\a \x01(\x03R\x0flastHealthCheck\x12\x1b\n" +
+	"\tban_score\x18\b \x01(\x05R\bbanScore\x12\x1b\n" +
+	"\tis_banned\x18\t \x01(\bR\bisBanned\x12!\n" +
+	"\fis_connected\x18\n" +
+	" \x01(\bR\visConnected\x12!\n" +
+	"\fconnected_at\x18\v \x01(\x03R\vconnectedAt\x12%\n" +
+	"\x0ebytes_received\x18\f \x01(\x04R\rbytesReceived\x12&\n" +
+	"\x0flast_block_time\x18\r \x01(\x03R\rlastBlockTime\x12*\n" +
+	"\x11last_message_time\x18\x0e \x01(\x03R\x0flastMessageTime\x12%\n" +
+	"\x0eurl_responsive\x18\x0f \x01(\bR\rurlResponsive\x12$\n" +
+	"\x0elast_url_check\x18\x10 \x01(\x03R\flastUrlCheck\x121\n" +
+	"\x14interaction_attempts\x18\x11 \x01(\x03R\x13interactionAttempts\x123\n" +
+	"\x15interaction_successes\x18\x12 \x01(\x03R\x14interactionSuccesses\x121\n" +
+	"\x14interaction_failures\x18\x13 \x01(\x03R\x13interactionFailures\x128\n" +
+	"\x18last_interaction_attempt\x18\x14 \x01(\x03R\x16lastInteractionAttempt\x128\n" +
+	"\x18last_interaction_success\x18\x15 \x01(\x03R\x16lastInteractionSuccess\x128\n" +
+	"\x18last_interaction_failure\x18\x16 \x01(\x03R\x16lastInteractionFailure\x12)\n" +
+	"\x10reputation_score\x18\x17 \x01(\x01R\x0freputationScore\x12'\n" +
+	"\x0fmalicious_count\x18\x18 \x01(\x03R\x0emaliciousCount\x12/\n" +
+	"\x14avg_response_time_ms\x18\x19 \x01(\x03R\x11avgResponseTimeMs\x12\x18\n" +
+	"\astorage\x18\x1a \x01(\tR\astorage\"J\n" +
+	"\x17GetPeerRegistryResponse\x12/\n" +
+	"\x05peers\x18\x01 \x03(\v2\x19.p2p_api.PeerRegistryInfoR\x05peers2\xbe\r\n" +
 	"\vPeerService\x12?\n" +
 	"\bGetPeers\x12\x16.google.protobuf.Empty\x1a\x19.p2p_api.GetPeersResponse\"\x00\x12>\n" +
 	"\aBanPeer\x12\x17.p2p_api.BanPeerRequest\x1a\x18.p2p_api.BanPeerResponse\"\x00\x12D\n" +
@@ -2179,7 +2502,8 @@ const file_services_p2p_p2p_api_p2p_api_proto_rawDesc = "" +
 	"\x12ReportValidSubtree\x12\".p2p_api.ReportValidSubtreeRequest\x1a#.p2p_api.ReportValidSubtreeResponse\"\x00\x12Y\n" +
 	"\x10ReportValidBlock\x12 .p2p_api.ReportValidBlockRequest\x1a!.p2p_api.ReportValidBlockResponse\"\x00\x12V\n" +
 	"\x0fIsPeerMalicious\x12\x1f.p2p_api.IsPeerMaliciousRequest\x1a .p2p_api.IsPeerMaliciousResponse\"\x00\x12V\n" +
-	"\x0fIsPeerUnhealthy\x12\x1f.p2p_api.IsPeerUnhealthyRequest\x1a .p2p_api.IsPeerUnhealthyResponse\"\x00B\fZ\n" +
+	"\x0fIsPeerUnhealthy\x12\x1f.p2p_api.IsPeerUnhealthyRequest\x1a .p2p_api.IsPeerUnhealthyResponse\"\x00\x12M\n" +
+	"\x0fGetPeerRegistry\x12\x16.google.protobuf.Empty\x1a .p2p_api.GetPeerRegistryResponse\"\x00B\fZ\n" +
 	"./;p2p_apib\x06proto3"
 
 var (
@@ -2194,7 +2518,7 @@ func file_services_p2p_p2p_api_p2p_api_proto_rawDescGZIP() []byte {
 	return file_services_p2p_p2p_api_p2p_api_proto_rawDescData
 }
 
-var file_services_p2p_p2p_api_p2p_api_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
+var file_services_p2p_p2p_api_p2p_api_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
 var file_services_p2p_p2p_api_p2p_api_proto_goTypes = []any{
 	(*Peer)(nil),                            // 0: p2p_api.Peer
 	(*GetPeersResponse)(nil),                // 1: p2p_api.GetPeersResponse
@@ -2233,54 +2557,59 @@ var file_services_p2p_p2p_api_p2p_api_proto_goTypes = []any{
 	(*IsPeerMaliciousResponse)(nil),         // 34: p2p_api.IsPeerMaliciousResponse
 	(*IsPeerUnhealthyRequest)(nil),          // 35: p2p_api.IsPeerUnhealthyRequest
 	(*IsPeerUnhealthyResponse)(nil),         // 36: p2p_api.IsPeerUnhealthyResponse
-	(*emptypb.Empty)(nil),                   // 37: google.protobuf.Empty
+	(*PeerRegistryInfo)(nil),                // 37: p2p_api.PeerRegistryInfo
+	(*GetPeerRegistryResponse)(nil),         // 38: p2p_api.GetPeerRegistryResponse
+	(*emptypb.Empty)(nil),                   // 39: google.protobuf.Empty
 }
 var file_services_p2p_p2p_api_p2p_api_proto_depIdxs = []int32{
 	0,  // 0: p2p_api.GetPeersResponse.peers:type_name -> p2p_api.Peer
 	27, // 1: p2p_api.GetPeersForCatchupResponse.peers:type_name -> p2p_api.PeerInfoForCatchup
-	37, // 2: p2p_api.PeerService.GetPeers:input_type -> google.protobuf.Empty
-	2,  // 3: p2p_api.PeerService.BanPeer:input_type -> p2p_api.BanPeerRequest
-	4,  // 4: p2p_api.PeerService.UnbanPeer:input_type -> p2p_api.UnbanPeerRequest
-	6,  // 5: p2p_api.PeerService.IsBanned:input_type -> p2p_api.IsBannedRequest
-	37, // 6: p2p_api.PeerService.ListBanned:input_type -> google.protobuf.Empty
-	37, // 7: p2p_api.PeerService.ClearBanned:input_type -> google.protobuf.Empty
-	10, // 8: p2p_api.PeerService.AddBanScore:input_type -> p2p_api.AddBanScoreRequest
-	12, // 9: p2p_api.PeerService.ConnectPeer:input_type -> p2p_api.ConnectPeerRequest
-	14, // 10: p2p_api.PeerService.DisconnectPeer:input_type -> p2p_api.DisconnectPeerRequest
-	16, // 11: p2p_api.PeerService.RecordCatchupAttempt:input_type -> p2p_api.RecordCatchupAttemptRequest
-	18, // 12: p2p_api.PeerService.RecordCatchupSuccess:input_type -> p2p_api.RecordCatchupSuccessRequest
-	20, // 13: p2p_api.PeerService.RecordCatchupFailure:input_type -> p2p_api.RecordCatchupFailureRequest
-	22, // 14: p2p_api.PeerService.RecordCatchupMalicious:input_type -> p2p_api.RecordCatchupMaliciousRequest
-	24, // 15: p2p_api.PeerService.UpdateCatchupReputation:input_type -> p2p_api.UpdateCatchupReputationRequest
-	26, // 16: p2p_api.PeerService.GetPeersForCatchup:input_type -> p2p_api.GetPeersForCatchupRequest
-	29, // 17: p2p_api.PeerService.ReportValidSubtree:input_type -> p2p_api.ReportValidSubtreeRequest
-	31, // 18: p2p_api.PeerService.ReportValidBlock:input_type -> p2p_api.ReportValidBlockRequest
-	33, // 19: p2p_api.PeerService.IsPeerMalicious:input_type -> p2p_api.IsPeerMaliciousRequest
-	35, // 20: p2p_api.PeerService.IsPeerUnhealthy:input_type -> p2p_api.IsPeerUnhealthyRequest
-	1,  // 21: p2p_api.PeerService.GetPeers:output_type -> p2p_api.GetPeersResponse
-	3,  // 22: p2p_api.PeerService.BanPeer:output_type -> p2p_api.BanPeerResponse
-	5,  // 23: p2p_api.PeerService.UnbanPeer:output_type -> p2p_api.UnbanPeerResponse
-	7,  // 24: p2p_api.PeerService.IsBanned:output_type -> p2p_api.IsBannedResponse
-	8,  // 25: p2p_api.PeerService.ListBanned:output_type -> p2p_api.ListBannedResponse
-	9,  // 26: p2p_api.PeerService.ClearBanned:output_type -> p2p_api.ClearBannedResponse
-	11, // 27: p2p_api.PeerService.AddBanScore:output_type -> p2p_api.AddBanScoreResponse
-	13, // 28: p2p_api.PeerService.ConnectPeer:output_type -> p2p_api.ConnectPeerResponse
-	15, // 29: p2p_api.PeerService.DisconnectPeer:output_type -> p2p_api.DisconnectPeerResponse
-	17, // 30: p2p_api.PeerService.RecordCatchupAttempt:output_type -> p2p_api.RecordCatchupAttemptResponse
-	19, // 31: p2p_api.PeerService.RecordCatchupSuccess:output_type -> p2p_api.RecordCatchupSuccessResponse
-	21, // 32: p2p_api.PeerService.RecordCatchupFailure:output_type -> p2p_api.RecordCatchupFailureResponse
-	23, // 33: p2p_api.PeerService.RecordCatchupMalicious:output_type -> p2p_api.RecordCatchupMaliciousResponse
-	25, // 34: p2p_api.PeerService.UpdateCatchupReputation:output_type -> p2p_api.UpdateCatchupReputationResponse
-	28, // 35: p2p_api.PeerService.GetPeersForCatchup:output_type -> p2p_api.GetPeersForCatchupResponse
-	30, // 36: p2p_api.PeerService.ReportValidSubtree:output_type -> p2p_api.ReportValidSubtreeResponse
-	32, // 37: p2p_api.PeerService.ReportValidBlock:output_type -> p2p_api.ReportValidBlockResponse
-	34, // 38: p2p_api.PeerService.IsPeerMalicious:output_type -> p2p_api.IsPeerMaliciousResponse
-	36, // 39: p2p_api.PeerService.IsPeerUnhealthy:output_type -> p2p_api.IsPeerUnhealthyResponse
-	21, // [21:40] is the sub-list for method output_type
-	2,  // [2:21] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	37, // 2: p2p_api.GetPeerRegistryResponse.peers:type_name -> p2p_api.PeerRegistryInfo
+	39, // 3: p2p_api.PeerService.GetPeers:input_type -> google.protobuf.Empty
+	2,  // 4: p2p_api.PeerService.BanPeer:input_type -> p2p_api.BanPeerRequest
+	4,  // 5: p2p_api.PeerService.UnbanPeer:input_type -> p2p_api.UnbanPeerRequest
+	6,  // 6: p2p_api.PeerService.IsBanned:input_type -> p2p_api.IsBannedRequest
+	39, // 7: p2p_api.PeerService.ListBanned:input_type -> google.protobuf.Empty
+	39, // 8: p2p_api.PeerService.ClearBanned:input_type -> google.protobuf.Empty
+	10, // 9: p2p_api.PeerService.AddBanScore:input_type -> p2p_api.AddBanScoreRequest
+	12, // 10: p2p_api.PeerService.ConnectPeer:input_type -> p2p_api.ConnectPeerRequest
+	14, // 11: p2p_api.PeerService.DisconnectPeer:input_type -> p2p_api.DisconnectPeerRequest
+	16, // 12: p2p_api.PeerService.RecordCatchupAttempt:input_type -> p2p_api.RecordCatchupAttemptRequest
+	18, // 13: p2p_api.PeerService.RecordCatchupSuccess:input_type -> p2p_api.RecordCatchupSuccessRequest
+	20, // 14: p2p_api.PeerService.RecordCatchupFailure:input_type -> p2p_api.RecordCatchupFailureRequest
+	22, // 15: p2p_api.PeerService.RecordCatchupMalicious:input_type -> p2p_api.RecordCatchupMaliciousRequest
+	24, // 16: p2p_api.PeerService.UpdateCatchupReputation:input_type -> p2p_api.UpdateCatchupReputationRequest
+	26, // 17: p2p_api.PeerService.GetPeersForCatchup:input_type -> p2p_api.GetPeersForCatchupRequest
+	29, // 18: p2p_api.PeerService.ReportValidSubtree:input_type -> p2p_api.ReportValidSubtreeRequest
+	31, // 19: p2p_api.PeerService.ReportValidBlock:input_type -> p2p_api.ReportValidBlockRequest
+	33, // 20: p2p_api.PeerService.IsPeerMalicious:input_type -> p2p_api.IsPeerMaliciousRequest
+	35, // 21: p2p_api.PeerService.IsPeerUnhealthy:input_type -> p2p_api.IsPeerUnhealthyRequest
+	39, // 22: p2p_api.PeerService.GetPeerRegistry:input_type -> google.protobuf.Empty
+	1,  // 23: p2p_api.PeerService.GetPeers:output_type -> p2p_api.GetPeersResponse
+	3,  // 24: p2p_api.PeerService.BanPeer:output_type -> p2p_api.BanPeerResponse
+	5,  // 25: p2p_api.PeerService.UnbanPeer:output_type -> p2p_api.UnbanPeerResponse
+	7,  // 26: p2p_api.PeerService.IsBanned:output_type -> p2p_api.IsBannedResponse
+	8,  // 27: p2p_api.PeerService.ListBanned:output_type -> p2p_api.ListBannedResponse
+	9,  // 28: p2p_api.PeerService.ClearBanned:output_type -> p2p_api.ClearBannedResponse
+	11, // 29: p2p_api.PeerService.AddBanScore:output_type -> p2p_api.AddBanScoreResponse
+	13, // 30: p2p_api.PeerService.ConnectPeer:output_type -> p2p_api.ConnectPeerResponse
+	15, // 31: p2p_api.PeerService.DisconnectPeer:output_type -> p2p_api.DisconnectPeerResponse
+	17, // 32: p2p_api.PeerService.RecordCatchupAttempt:output_type -> p2p_api.RecordCatchupAttemptResponse
+	19, // 33: p2p_api.PeerService.RecordCatchupSuccess:output_type -> p2p_api.RecordCatchupSuccessResponse
+	21, // 34: p2p_api.PeerService.RecordCatchupFailure:output_type -> p2p_api.RecordCatchupFailureResponse
+	23, // 35: p2p_api.PeerService.RecordCatchupMalicious:output_type -> p2p_api.RecordCatchupMaliciousResponse
+	25, // 36: p2p_api.PeerService.UpdateCatchupReputation:output_type -> p2p_api.UpdateCatchupReputationResponse
+	28, // 37: p2p_api.PeerService.GetPeersForCatchup:output_type -> p2p_api.GetPeersForCatchupResponse
+	30, // 38: p2p_api.PeerService.ReportValidSubtree:output_type -> p2p_api.ReportValidSubtreeResponse
+	32, // 39: p2p_api.PeerService.ReportValidBlock:output_type -> p2p_api.ReportValidBlockResponse
+	34, // 40: p2p_api.PeerService.IsPeerMalicious:output_type -> p2p_api.IsPeerMaliciousResponse
+	36, // 41: p2p_api.PeerService.IsPeerUnhealthy:output_type -> p2p_api.IsPeerUnhealthyResponse
+	38, // 42: p2p_api.PeerService.GetPeerRegistry:output_type -> p2p_api.GetPeerRegistryResponse
+	23, // [23:43] is the sub-list for method output_type
+	3,  // [3:23] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_services_p2p_p2p_api_p2p_api_proto_init() }
@@ -2294,7 +2623,7 @@ func file_services_p2p_p2p_api_p2p_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_p2p_p2p_api_p2p_api_proto_rawDesc), len(file_services_p2p_p2p_api_p2p_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   37,
+			NumMessages:   39,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

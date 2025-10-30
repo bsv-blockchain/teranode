@@ -75,6 +75,10 @@ type HTTP struct {
 //	- GET /rest/block/{hash}.bin: Get block in legacy format
 //	- GET /api/v1/block_legacy/{hash}: Get block in legacy format
 //
+//	Network and P2P:
+//	- GET /api/v1/catchup/status: Get blockchain catchup status
+//	- GET /api/v1/peers: Get peer registry data
+//
 // Configuration:
 //   - ECHO_DEBUG: Enable debug logging
 //   - http_sign_response: Enable response signing
@@ -329,6 +333,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	// Register catchup status endpoint
 	apiGroup.GET("/catchup/status", h.GetCatchupStatus)
+
+	// Register peers endpoint
+	apiGroup.GET("/peers", h.GetPeers)
 
 	// Add OPTIONS handlers for block operations
 	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {

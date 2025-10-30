@@ -10,6 +10,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+const MaliciousReputationThreshold = 20.0
+
 // RecordCatchupAttempt records that a catchup attempt was made to a peer
 func (s *Server) RecordCatchupAttempt(ctx context.Context, req *p2p_api.RecordCatchupAttemptRequest) (*p2p_api.RecordCatchupAttemptResponse, error) {
 	if s.peerRegistry == nil {

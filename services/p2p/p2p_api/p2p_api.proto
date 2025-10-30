@@ -206,6 +206,42 @@ message AddBanScoreRequest {
     float reputation_score = 3;  // Current reputation score
   }
 
+  // Comprehensive peer information with all registry metadata
+  message PeerRegistryInfo {
+    string id = 1;
+    int32 height = 2;
+    string block_hash = 3;
+    string data_hub_url = 4;
+    bool is_healthy = 5;
+    int64 health_duration_ms = 6;
+    int64 last_health_check = 7;  // Unix timestamp
+    int32 ban_score = 8;
+    bool is_banned = 9;
+    bool is_connected = 10;
+    int64 connected_at = 11;  // Unix timestamp
+    uint64 bytes_received = 12;
+    int64 last_block_time = 13;  // Unix timestamp
+    int64 last_message_time = 14;  // Unix timestamp
+    bool url_responsive = 15;
+    int64 last_url_check = 16;  // Unix timestamp
+
+    // Interaction/catchup metrics
+    int64 interaction_attempts = 17;
+    int64 interaction_successes = 18;
+    int64 interaction_failures = 19;
+    int64 last_interaction_attempt = 20;  // Unix timestamp
+    int64 last_interaction_success = 21;  // Unix timestamp
+    int64 last_interaction_failure = 22;  // Unix timestamp
+    double reputation_score = 23;
+    int64 malicious_count = 24;
+    int64 avg_response_time_ms = 25;
+    string storage = 26;
+  }
+
+  message GetPeerRegistryResponse {
+    repeated PeerRegistryInfo peers = 1;
+  }
+
   // Add new service for peer operations
   service PeerService {
     rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
@@ -233,5 +269,8 @@ message AddBanScoreRequest {
     // Peer status checking
     rpc IsPeerMalicious(IsPeerMaliciousRequest) returns (IsPeerMaliciousResponse) {}
     rpc IsPeerUnhealthy(IsPeerUnhealthyRequest) returns (IsPeerUnhealthyResponse) {}
+
+    // Get full peer registry data with all metadata
+    rpc GetPeerRegistry(google.protobuf.Empty) returns (GetPeerRegistryResponse) {}
   }
   
