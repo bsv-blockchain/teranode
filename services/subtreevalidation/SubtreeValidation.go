@@ -486,6 +486,9 @@ type ValidateSubtree struct {
 	// SubtreeHash is the unique identifier hash of the subtree to be validated
 	SubtreeHash chainhash.Hash
 
+	// PeerID is the ID of the peer from which we received the subtree
+	PeerID string
+
 	// BaseURL is the source URL for retrieving missing transactions if needed
 	BaseURL string
 

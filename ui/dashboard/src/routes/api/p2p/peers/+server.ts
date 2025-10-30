@@ -7,7 +7,7 @@ import { dev } from '$app/environment'
  * Proxies requests to the Asset service's peers endpoint
  * (which in turn proxies to P2P's gRPC service)
  */
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async ({ url }) => {
   try {
     let assetUrl: string
 
@@ -15,9 +15,11 @@ export const GET: RequestHandler = async () => {
       // In development, Asset HTTP service runs on localhost:8090
       assetUrl = 'http://localhost:8090/api/v1/peers'
     } else {
-      // In production, construct URL based on configuration
+      // In production, construct URL based on current request
+      const protocol = url.protocol === 'https:' ? 'https:' : 'http:'
+      const host = url.hostname
       const port = process.env.ASSET_HTTP_PORT || '8090'
-      assetUrl = `http://localhost:${port}/api/v1/peers`
+      assetUrl = `${protocol}//${host}:${port}/api/v1/peers`
     }
 
     const response = await fetch(assetUrl)
