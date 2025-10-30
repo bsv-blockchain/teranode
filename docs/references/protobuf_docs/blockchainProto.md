@@ -72,7 +72,6 @@
     - [LocateBlockHeadersResponse](#LocateBlockHeadersResponse)
     - [Notification](#Notification)
     - [NotificationMetadata](#NotificationMetadata)
-    - [ReportPeerFailureRequest](#ReportPeerFailureRequest)
     - [RevalidateBlockRequest](#RevalidateBlockRequest)
     - [SendFSMEventRequest](#SendFSMEventRequest)
     - [SetBlockMinedSetRequest](#SetBlockMinedSetRequest)
