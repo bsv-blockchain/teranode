@@ -193,7 +193,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	go func() {
 		logger.Infof("Sending second transaction %s %s", tx2.TxIDChainHash(), tx2.TxID())
 
-	err = txDistributor.ProcessTransaction(ctx, tx2)
+		err = txDistributor.ProcessTransaction(ctx, tx2)
 		if err != nil {
 			errChan <- errors.NewProcessingError("failed to send second transaction", err)
 			return
@@ -529,7 +529,7 @@ func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
 	for i := 0; i < numTx; i++ {
 		go func(tx *bt.Tx, idx int) {
 			txStart := time.Now()
-	err = txDistributor.ProcessTransaction(ctx, tx)
+			err = txDistributor.ProcessTransaction(ctx, tx)
 			timingChan <- time.Since(txStart)
 			errChan <- err
 

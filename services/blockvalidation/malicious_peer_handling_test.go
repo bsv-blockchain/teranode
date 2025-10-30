@@ -62,7 +62,7 @@ func TestBlockHandlerWithMaliciousPeer(t *testing.T) {
 		blockFoundCh:        make(chan processBlockFound, 10),
 		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
-		stats: gocore.NewStat("test"),
+		stats:               gocore.NewStat("test"),
 	}
 
 	// Note: peerMetrics field has been removed from Server struct
@@ -155,7 +155,7 @@ func TestKafkaConsumerMessageHandling(t *testing.T) {
 		catchupCh:           make(chan processBlockCatchup, 10),
 		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
-		stats: gocore.NewStat("test"),
+		stats:               gocore.NewStat("test"),
 	}
 
 	// Initialize the server to start background workers

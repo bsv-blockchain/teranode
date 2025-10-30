@@ -87,7 +87,7 @@ func TestIntegrationRetryWithMultipleFailures(t *testing.T) {
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 		catchupCh:           make(chan processBlockCatchup, 10),
 		kafkaConsumerClient: mockKafkaConsumer,
-		stats: gocore.NewStat("test"),
+		stats:               gocore.NewStat("test"),
 	}
 
 	// Initialize server
