@@ -87,7 +87,6 @@ func TestHandleBlockTopic_UnhealthyPeer(t *testing.T) {
 		mockP2PNode := new(MockServerP2PClient)
 		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		unhealthyPeerID, _ := peer.Decode("12D3KooWEyX7hgdXy8zUjCs9CqvMGpB5dKVFj9MX2nUBLwajdSZH")
-		originatorPeerIDStr := "12D3KooWQYVQJfrw4RZnNHgRxGFLXoXswE5wuoUBgWpeJYeGDjvA"
 
 		mockP2PNode.On("GetID").Return(selfPeerID)
 
@@ -115,7 +114,7 @@ func TestHandleBlockTopic_UnhealthyPeer(t *testing.T) {
 		}
 
 		// Call handler with message from unhealthy peer
-		blockMsg := fmt.Sprintf(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"%s"}`, originatorPeerIDStr)
+		blockMsg := fmt.Sprintf(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"%s"}`, unhealthyPeerID.String())
 		server.handleBlockTopic(ctx, []byte(blockMsg), unhealthyPeerID.String())
 
 		// Verify notification was still sent (happens before health check)
@@ -141,7 +140,7 @@ func TestHandleBlockTopic_UnhealthyPeer(t *testing.T) {
 
 		// Create mock ban manager
 		mockBanManager := new(MockPeerBanManager)
-		mockBanManager.On("IsBanned", healthyPeerID.String()).Return(false)
+		mockBanManager.On("IsBanned", originatorPeerIDStr).Return(false)
 
 		// Create peer registry with healthy peer
 		peerRegistry := NewPeerRegistry()
@@ -469,7 +468,7 @@ func TestConnectedVsGossipedPeers(t *testing.T) {
 		}
 
 		// Call handler with message from unhealthy connected peer
-		blockMsg := `{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooWQYVQJfrw4RZnNHgRxGFLXoXswE5wuoUBgWpeJYeGDjvA"}`
+		blockMsg := `{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooWEyX7hgdXy8zUjCs9CqvMGpB5dKVFj9MX2nUBLwajdSZH"}`
 		server.handleBlockTopic(context.Background(), []byte(blockMsg), unhealthyConnectedPeerID.String())
 
 		// Verify Kafka producer was NOT called (message was filtered)
@@ -486,7 +485,7 @@ func TestConnectedVsGossipedPeers(t *testing.T) {
 
 		// Create mock ban manager
 		mockBanManager := new(MockPeerBanManager)
-		mockBanManager.On("IsBanned", unhealthyGossipedPeerID.String()).Return(false)
+		mockBanManager.On("IsBanned", "12D3KooWQYVQJfrw4RZnNHgRxGFLXoXswE5wuoUBgWpeJYeGDjvA").Return(false)
 
 		// Create peer registry with unhealthy GOSSIPED peer (not connected)
 		peerRegistry := NewPeerRegistry()

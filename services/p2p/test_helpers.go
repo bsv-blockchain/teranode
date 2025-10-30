@@ -63,6 +63,7 @@ func CreateTestPeerInfo(id peer.ID, height int32, healthy bool, banned bool, dat
 		IsHealthy:       healthy,
 		IsBanned:        banned,
 		BanScore:        0,
+		ReputationScore: 50,
 		ConnectedAt:     time.Now(),
 		BytesReceived:   0,
 		LastBlockTime:   time.Now(),

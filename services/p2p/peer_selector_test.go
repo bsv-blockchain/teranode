@@ -10,6 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const (
+	testPeer1 = "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+	testPeer2 = "12D3KooWEyX7hgdXy8zUjCs9CqvMGpB5dKVFj9MX2nUBLwajdSZH"
+	testPeer3 = "12D3KooWQYVQJfrw4RZnNHgRxGFLXoXswE5wuoUBgWpeJYeGDjvA"
+	testPeer4 = "12D3KooWB9kmtfHg5Ct1Sj5DX6fmqRnatrXnE5zMRg25d6rbwLzp"
+)
+
 func TestPeerSelector_SelectSyncPeer_NoPeers(t *testing.T) {
 	logger := ulogger.New("test")
 	ps := NewPeerSelector(logger, nil)
@@ -111,12 +118,17 @@ func TestPeerSelector_SelectSyncPeer_BasicSelection(t *testing.T) {
 	logger := ulogger.New("test")
 	ps := NewPeerSelector(logger, nil)
 
+	peer1, _ := peer.Decode(testPeer1)
+	peer2, _ := peer.Decode(testPeer2)
+	peer3, _ := peer.Decode(testPeer3)
+	peer4, _ := peer.Decode(testPeer4)
+
 	// Create peers with different heights
 	peers := []*PeerInfo{
-		CreateTestPeerInfo(peer.ID("A"), 90, true, false, "http://test.com"),  // behind
-		CreateTestPeerInfo(peer.ID("B"), 110, true, false, "http://test.com"), // ahead
-		CreateTestPeerInfo(peer.ID("C"), 120, true, false, "http://test.com"), // ahead more
-		CreateTestPeerInfo(peer.ID("D"), 100, true, false, "http://test.com"), // same height
+		CreateTestPeerInfo(peer1, 90, true, false, "http://test.com"),  // behind
+		CreateTestPeerInfo(peer2, 110, true, false, "http://test.com"), // ahead
+		CreateTestPeerInfo(peer3, 120, true, false, "http://test.com"), // ahead more
+		CreateTestPeerInfo(peer4, 100, true, false, "http://test.com"), // same height
 	}
 	// Mark URLs as responsive
 	for _, p := range peers {
@@ -127,7 +139,7 @@ func TestPeerSelector_SelectSyncPeer_BasicSelection(t *testing.T) {
 		LocalHeight: 100,
 	})
 
-	assert.Contains(t, []peer.ID{"B", "C"}, selected, "Should select a peer that is ahead")
+	assert.Contains(t, []peer.ID{peer2, peer3}, selected, "Should select a peer that is ahead")
 }
 
 func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
@@ -137,34 +149,37 @@ func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
 	// Create peers with different ban scores
 	peers := []*PeerInfo{
 		{
-			ID:            peer.ID("A"),
-			Height:        110,
-			IsHealthy:     true,
-			IsBanned:      false,
-			BanScore:      50,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("A"),
+			Height:          110,
+			IsHealthy:       true,
+			IsBanned:        false,
+			ReputationScore: 50,
+			BanScore:        50,
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("B"),
-			Height:        110,
-			IsHealthy:     true,
-			IsBanned:      false,
-			BanScore:      10, // Lower ban score, should be preferred
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("B"),
+			Height:          110,
+			IsHealthy:       true,
+			IsBanned:        false,
+			ReputationScore: 50,
+			BanScore:        10, // Lower ban score, should be preferred
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("C"),
-			Height:        110,
-			IsHealthy:     true,
-			IsBanned:      false,
-			BanScore:      30,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("C"),
+			Height:          110,
+			IsHealthy:       true,
+			IsBanned:        false,
+			ReputationScore: 50,
+			BanScore:        30,
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 	}
 
@@ -188,34 +203,37 @@ func TestPeerSelector_SelectSyncPeer_PreferHigherHeight(t *testing.T) {
 	// Create peers with same ban score but different heights
 	peers := []*PeerInfo{
 		{
-			ID:            peer.ID("A"),
-			Height:        110,
-			IsHealthy:     true,
-			IsBanned:      false,
-			BanScore:      10,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("A"),
+			Height:          110,
+			IsHealthy:       true,
+			IsBanned:        false,
+			BanScore:        10,
+			ReputationScore: 50,
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("B"),
-			Height:        120, // Higher, should be preferred
-			IsHealthy:     true,
-			IsBanned:      false,
-			BanScore:      10,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("B"),
+			Height:          120, // Higher, should be preferred
+			IsHealthy:       true,
+			IsBanned:        false,
+			ReputationScore: 50,
+			BanScore:        10,
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("C"),
-			Height:        115,
-			IsHealthy:     true,
-			IsBanned:      false,
-			BanScore:      10,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("C"),
+			Height:          115,
+			IsHealthy:       true,
+			IsBanned:        false,
+			BanScore:        10,
+			ReputationScore: 50,
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 	}
 
@@ -271,28 +289,31 @@ func TestPeerSelector_SelectSyncPeer_RequireResponsiveURL(t *testing.T) {
 
 	peers := []*PeerInfo{
 		{
-			ID:            peer.ID("A"),
-			Height:        110,
-			IsHealthy:     true,
-			DataHubURL:    "http://hub1.com",
-			URLResponsive: false, // not responsive
-			Storage:       "full",
+			ID:              peer.ID("A"),
+			Height:          110,
+			IsHealthy:       true,
+			ReputationScore: 50,
+			DataHubURL:      "http://hub1.com",
+			URLResponsive:   false, // not responsive
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("B"),
-			Height:        120,
-			IsHealthy:     true,
-			DataHubURL:    "http://hub2.com",
-			URLResponsive: true, // responsive
-			Storage:       "full",
+			ID:              peer.ID("B"),
+			Height:          120,
+			ReputationScore: 50,
+			IsHealthy:       true,
+			DataHubURL:      "http://hub2.com",
+			URLResponsive:   true, // responsive
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("C"),
-			Height:        115,
-			IsHealthy:     true,
-			DataHubURL:    "",
-			URLResponsive: false, // no URL
-			Storage:       "full",
+			ID:              peer.ID("C"),
+			Height:          115,
+			IsHealthy:       true,
+			ReputationScore: 50,
+			DataHubURL:      "",
+			URLResponsive:   false, // no URL
+			Storage:         "full",
 		},
 	}
 
@@ -350,28 +371,31 @@ func TestPeerSelector_SelectSyncPeer_InvalidHeight(t *testing.T) {
 
 	peers := []*PeerInfo{
 		{
-			ID:            peer.ID("A"),
-			Height:        0, // Invalid height
-			IsHealthy:     true,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("A"),
+			Height:          0, // Invalid height
+			IsHealthy:       true,
+			ReputationScore: 50,
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("B"),
-			Height:        -1, // Invalid height
-			IsHealthy:     true,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("B"),
+			Height:          -1, // Invalid height
+			IsHealthy:       true,
+			ReputationScore: 50,
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("C"),
-			Height:        110, // Valid height
-			IsHealthy:     true,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("C"),
+			Height:          110, // Valid height
+			IsHealthy:       true,
+			DataHubURL:      "http://test.com",
+			ReputationScore: 50,
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 	}
 
@@ -388,54 +412,59 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 
 	peers := []*PeerInfo{
 		{
-			ID:            peer.ID("A"),
-			Height:        110,
-			IsHealthy:     false, // fails health check
-			IsBanned:      false,
-			DataHubURL:    "http://hub.com",
-			URLResponsive: true,
-			BanScore:      0,
-			Storage:       "full",
+			ID:              peer.ID("A"),
+			Height:          110,
+			IsHealthy:       false, // fails health check
+			IsBanned:        false,
+			ReputationScore: 50,
+			DataHubURL:      "http://hub.com",
+			URLResponsive:   true,
+			BanScore:        0,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("B"),
-			Height:        120,
-			IsHealthy:     true,
-			IsBanned:      true, // fails ban check
-			DataHubURL:    "http://hub.com",
-			URLResponsive: true,
-			BanScore:      100,
-			Storage:       "full",
+			ID:              peer.ID("B"),
+			Height:          120,
+			ReputationScore: 50,
+			IsHealthy:       true,
+			IsBanned:        true, // fails ban check
+			DataHubURL:      "http://hub.com",
+			URLResponsive:   true,
+			BanScore:        100,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("C"),
-			Height:        115,
-			IsHealthy:     true,
-			IsBanned:      false,
-			DataHubURL:    "", // fails DataHub requirement
-			URLResponsive: false,
-			BanScore:      10,
-			Storage:       "full",
+			ID:              peer.ID("C"),
+			Height:          115,
+			IsHealthy:       true,
+			ReputationScore: 50,
+			IsBanned:        false,
+			DataHubURL:      "", // fails DataHub requirement
+			URLResponsive:   false,
+			BanScore:        10,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("D"),
-			Height:        125,
-			IsHealthy:     true,
-			IsBanned:      false,
-			DataHubURL:    "http://hub.com",
-			URLResponsive: false, // fails responsive URL check
-			BanScore:      20,
-			Storage:       "full",
+			ID:              peer.ID("D"),
+			Height:          125,
+			IsHealthy:       true,
+			ReputationScore: 50,
+			IsBanned:        false,
+			DataHubURL:      "http://hub.com",
+			URLResponsive:   false, // fails responsive URL check
+			BanScore:        20,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("E"),
-			Height:        130,
-			IsHealthy:     true,
-			IsBanned:      false,
-			DataHubURL:    "http://hub.com",
-			URLResponsive: true, // passes all checks
-			BanScore:      5,
-			Storage:       "full",
+			ID:              peer.ID("E"),
+			Height:          130,
+			IsHealthy:       true,
+			ReputationScore: 50,
+			IsBanned:        false,
+			DataHubURL:      "http://hub.com",
+			URLResponsive:   true, // passes all checks
+			BanScore:        5,
+			Storage:         "full",
 		},
 	}
 
@@ -459,13 +488,14 @@ func TestPeerSelector_isEligible(t *testing.T) {
 		{
 			name: "healthy peer passes basic criteria",
 			peer: &PeerInfo{
-				ID:            peer.ID("A"),
-				Height:        100,
-				IsHealthy:     true,
-				IsBanned:      false,
-				DataHubURL:    "http://test.com",
-				URLResponsive: true,
-				Storage:       "full",
+				ID:              peer.ID("A"),
+				Height:          100,
+				IsHealthy:       true,
+				ReputationScore: 50,
+				IsBanned:        false,
+				DataHubURL:      "http://test.com",
+				URLResponsive:   true,
+				Storage:         "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: true,
@@ -473,13 +503,14 @@ func TestPeerSelector_isEligible(t *testing.T) {
 		{
 			name: "banned peer is always excluded",
 			peer: &PeerInfo{
-				ID:            peer.ID("B"),
-				Height:        100,
-				IsHealthy:     true,
-				IsBanned:      true,
-				DataHubURL:    "http://test.com",
-				URLResponsive: true,
-				Storage:       "full",
+				ID:              peer.ID("B"),
+				Height:          100,
+				IsHealthy:       true,
+				IsBanned:        true,
+				ReputationScore: 50,
+				DataHubURL:      "http://test.com",
+				URLResponsive:   true,
+				Storage:         "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: false,
@@ -487,10 +518,11 @@ func TestPeerSelector_isEligible(t *testing.T) {
 		{
 			name: "unhealthy peer fails health requirement",
 			peer: &PeerInfo{
-				ID:        peer.ID("C"),
-				Height:    100,
-				IsHealthy: false,
-				Storage:   "full",
+				ID:              peer.ID("C"),
+				Height:          100,
+				IsHealthy:       false,
+				ReputationScore: 50,
+				Storage:         "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: false,
@@ -498,11 +530,12 @@ func TestPeerSelector_isEligible(t *testing.T) {
 		{
 			name: "peer without DataHub fails DataHub requirement",
 			peer: &PeerInfo{
-				ID:         peer.ID("D"),
-				Height:     100,
-				IsHealthy:  true,
-				DataHubURL: "",
-				Storage:    "full",
+				ID:              peer.ID("D"),
+				Height:          100,
+				ReputationScore: 50,
+				IsHealthy:       true,
+				DataHubURL:      "",
+				Storage:         "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: false,
@@ -510,12 +543,13 @@ func TestPeerSelector_isEligible(t *testing.T) {
 		{
 			name: "peer with unresponsive URL fails responsive requirement",
 			peer: &PeerInfo{
-				ID:            peer.ID("E"),
-				Height:        100,
-				IsHealthy:     true,
-				DataHubURL:    "http://hub.com",
-				URLResponsive: false,
-				Storage:       "full",
+				ID:              peer.ID("E"),
+				Height:          100,
+				IsHealthy:       true,
+				ReputationScore: 50,
+				DataHubURL:      "http://hub.com",
+				URLResponsive:   false,
+				Storage:         "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: false,
@@ -523,10 +557,11 @@ func TestPeerSelector_isEligible(t *testing.T) {
 		{
 			name: "peer with invalid height fails",
 			peer: &PeerInfo{
-				ID:        peer.ID("F"),
-				Height:    0,
-				IsHealthy: true,
-				Storage:   "full",
+				ID:              peer.ID("F"),
+				Height:          0,
+				ReputationScore: 50,
+				IsHealthy:       true,
+				Storage:         "full",
 			},
 			criteria: SelectionCriteria{},
 			expected: false,
@@ -548,31 +583,34 @@ func TestPeerSelector_DeterministicSelectionAmongEqualPeers(t *testing.T) {
 	// Create multiple peers with same ban score and height
 	peers := []*PeerInfo{
 		{
-			ID:            peer.ID("A"),
-			Height:        110,
-			IsHealthy:     true,
-			BanScore:      10,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("A"),
+			ReputationScore: 50,
+			Height:          110,
+			IsHealthy:       true,
+			BanScore:        10,
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("B"),
-			Height:        110,
-			IsHealthy:     true,
-			BanScore:      10,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("B"),
+			Height:          110,
+			ReputationScore: 50,
+			IsHealthy:       true,
+			BanScore:        10,
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 		{
-			ID:            peer.ID("C"),
-			Height:        110,
-			IsHealthy:     true,
-			BanScore:      10,
-			DataHubURL:    "http://test.com",
-			URLResponsive: true,
-			Storage:       "full",
+			ID:              peer.ID("C"),
+			Height:          110,
+			ReputationScore: 50,
+			IsHealthy:       true,
+			BanScore:        10,
+			DataHubURL:      "http://test.com",
+			URLResponsive:   true,
+			Storage:         "full",
 		},
 	}
 

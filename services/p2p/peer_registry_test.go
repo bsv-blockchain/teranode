@@ -534,7 +534,7 @@ func TestPeerRegistry_GetPeersForCatchup_SameReputation(t *testing.T) {
 
 func TestPeerRegistry_CatchupMetrics_ConcurrentAccess(t *testing.T) {
 	pr := NewPeerRegistry()
-	peerID := peer.ID("test-peer-1")
+	peerID, _ := peer.Decode(testPeer1)
 	pr.AddPeer(peerID)
 	pr.UpdateDataHubURL(peerID, "http://test.com")
 	pr.UpdateHealth(peerID, true)

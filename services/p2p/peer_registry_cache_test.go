@@ -20,9 +20,9 @@ func TestPeerRegistryCache_SaveAndLoad(t *testing.T) {
 
 	// Add some peers with metrics
 	// Use actual peer ID encoding to ensure proper format
-	peerID1 := peer.ID("test-peer-1")
-	peerID2 := peer.ID("test-peer-2")
-	peerID3 := peer.ID("test-peer-3")
+	peerID1, _ := peer.Decode(testPeer1)
+	peerID2, _ := peer.Decode(testPeer2)
+	peerID3, _ := peer.Decode(testPeer3)
 
 	// Log the peer IDs to see their format
 	t.Logf("PeerID1: %s", peerID1)
@@ -158,7 +158,7 @@ func TestPeerRegistryCache_MergeWithExisting(t *testing.T) {
 
 	// Create initial registry and save cache
 	pr1 := NewPeerRegistry()
-	peerID1 := peer.ID("test-peer-1")
+	peerID1, _ := peer.Decode(testPeer1)
 	pr1.AddPeer(peerID1)
 	pr1.UpdateDataHubURL(peerID1, "http://peer1.example.com:8090")
 	pr1.RecordCatchupAttempt(peerID1)
@@ -172,7 +172,7 @@ func TestPeerRegistryCache_MergeWithExisting(t *testing.T) {
 	pr2.AddPeer(peerID1)
 	pr2.UpdateDataHubURL(peerID1, "http://different.example.com:8090")
 	// Add a new peer
-	peerID2 := peer.ID("test-peer-2")
+	peerID2, _ := peer.Decode(testPeer2)
 	pr2.AddPeer(peerID2)
 
 	// Load cache - should restore metrics but keep existing peers
@@ -219,7 +219,7 @@ func TestPeerRegistryCache_AtomicWrite(t *testing.T) {
 
 	// Create a registry with test data
 	pr := NewPeerRegistry()
-	peerID := peer.ID("test-peer-1")
+	peerID, _ := peer.Decode(testPeer1)
 	pr.AddPeer(peerID)
 	pr.UpdateDataHubURL(peerID, "http://peer1.example.com:8090")
 
@@ -307,12 +307,6 @@ func TestPeerRegistryCache_InvalidPeerID(t *testing.T) {
 	pr := NewPeerRegistry()
 	err = pr.LoadPeerRegistryCache(tempDir)
 	assert.NoError(t, err)
-	// The "invalid" peer ID will actually be loaded since we're just casting strings
-	assert.Equal(t, 1, pr.PeerCount())
-
-	// Verify the peer was loaded with correct metrics
-	info, exists := pr.GetPeer(peer.ID("invalid-peer-id-!@#$"))
-	assert.True(t, exists)
-	assert.Equal(t, int64(10), info.InteractionAttempts)
-	assert.Equal(t, int64(9), info.InteractionSuccesses)
+	// The "invalid" peer ID should not be stored
+	assert.Equal(t, 0, pr.PeerCount())
 }

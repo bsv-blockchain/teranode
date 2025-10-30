@@ -865,7 +865,7 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 	// Also update for the originator if different (gossiped message)
 	// The originator is not directly connected to us
 	if originatorPeerID != "" {
-		if peerID, err := peer.Decode(originatorPeerID); err != nil && peerID != senderID {
+		if peerID, err := peer.Decode(originatorPeerID); err == nil && peerID != senderID {
 			// Add as gossiped peer (not connected)
 			s.addPeer(peerID)
 			s.peerRegistry.UpdateLastMessageTime(peerID)
@@ -1704,12 +1704,12 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 	s.updateBytesReceived(from, blockMessage.PeerID, uint64(len(m)))
 
 	// Skip notifications from banned peers
-	if s.shouldSkipBannedPeer(from, "handleBlockTopic") {
+	if s.shouldSkipBannedPeer(blockMessage.PeerID, "handleBlockTopic") {
 		return
 	}
 
 	// Skip notifications from unhealthy peers
-	if s.shouldSkipUnhealthyPeer(from, "handleBlockTopic") {
+	if s.shouldSkipUnhealthyPeer(blockMessage.PeerID, "handleBlockTopic") {
 		return
 	}
 
