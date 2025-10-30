@@ -74,20 +74,18 @@ services:
 
   kafka-console-shared:
     container_name: kafka-console-shared
-    image: docker.redpanda.com/redpandadata/console:latest
+    image: docker.redpanda.com/redpandadata/console:v3.2.2
     networks:
       - teranode-network
     restart: on-failure
-    entrypoint: /bin/sh
-    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
     environment:
-      CONFIG_FILEPATH: /tmp/config.yml
-      CONSOLE_CONFIG_FILE: |
-        kafka:
-          brokers: ["kafka-shared:9092"]
-          schemaRegistry:
-            enabled: true
-            urls: ["http://kafka-shared:8081"]
+      CONFIG_FILEPATH: /etc/console/config.yml
+    volumes:
+      - ../../../errors/error.proto:/etc/protos/errors/error.proto:ro
+      - ../../../util/kafka/kafka_message/kafka_messages.proto:/etc/protos/kafka_messages.proto:ro
+      - ../../../model/model.proto:/etc/protos/model.proto:ro
+      - ../../../services/propagation/propagation_api/propagation_api.proto:/etc/protos/propagation_api.proto:ro
+      - ../base/kafka-console-config.yml:/etc/console/config.yml:ro
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

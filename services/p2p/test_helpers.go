@@ -70,6 +70,7 @@ func CreateTestPeerInfo(id peer.ID, height int32, healthy bool, banned bool, dat
 		URLResponsive:   dataHubURL != "",
 		LastURLCheck:    time.Now(),
 		LastHealthCheck: time.Now(),
+		Storage:         "full", // Default test peers to full nodes
 	}
 }
 
@@ -115,6 +116,7 @@ func CreateTestPeerInfoList(count int) []*PeerInfo {
 			URLResponsive:   false,
 			LastURLCheck:    time.Now(),
 			LastHealthCheck: time.Now(),
+			Storage:         "full", // Default test peers to full nodes
 		}
 	}
 

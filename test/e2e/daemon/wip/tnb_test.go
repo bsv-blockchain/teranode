@@ -61,7 +61,7 @@ func TestUTXOValidation(t *testing.T) {
 	err = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: pk})
 	require.NoError(t, err)
 
-	_, err = td.DistributorClient.SendTransaction(ctx, tx)
+	err = td.PropagationClient.ProcessTransaction(ctx, tx)
 	require.NoError(t, err)
 
 	utxo = &bt.UTXO{
@@ -85,7 +85,7 @@ func TestUTXOValidation(t *testing.T) {
 	_, err = td.UtxoStore.Spend(ctx, tx)
 	require.NoError(t, err)
 
-	_, err = td.DistributorClient.SendTransaction(ctx, anotherTx)
+	err = td.PropagationClient.ProcessTransaction(ctx, anotherTx)
 
 	require.Nil(t, err)
 }
@@ -139,7 +139,7 @@ func TestScriptValidation(t *testing.T) {
 	err = invalidTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: wrongPrivateKey})
 	require.NoError(t, err)
 
-	_, err = td.DistributorClient.SendTransaction(ctx, invalidTx)
+	err = td.PropagationClient.ProcessTransaction(ctx, invalidTx)
 	require.Error(t, err, "Transaction with invalid signature should be rejected")
 	require.Contains(t, err.Error(), "failed to validate transaction", "Error should indicate script validation failure")
 

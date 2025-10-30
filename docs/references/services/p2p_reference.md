@@ -13,10 +13,10 @@ The P2P Server is implemented through the Server struct, which coordinates all p
 ```go
 type Server struct {
     p2p_api.UnimplementedPeerServiceServer
-    P2PClient                         p2pMessageBus.P2PClient   // The P2P network client
+    P2PClient                         p2pMessageBus.P2PClient   // The P2P network client from github.com/bsv-blockchain/go-p2p-message-bus
     logger                            ulogger.Logger            // Logger instance for the server
     settings                          *settings.Settings       // Configuration settings
-    bitcoinProtocolVersion            string                    // Bitcoin protocol identifier
+    bitcoinProtocolVersion            string                    // Bitcoin protocol version identifier
     blockchainClient                  blockchain.ClientI       // Client for blockchain interactions
     blockValidationClient             blockvalidation.Interface
     blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
@@ -57,47 +57,16 @@ type Server struct {
 
 The server manages several key components, each serving a specific purpose in the P2P network:
 
-- The P2PClient handles direct peer connections and message routing through the p2pMessageBus.P2PClient interface
-- The bitcoinProtocolVersion contains the protocol version identifier for Bitcoin network communication
+- The P2PClient handles direct peer connections and message routing through the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package
+- The bitcoinProtocolVersion contains the node's protocol version identifier
 - The various Kafka clients manage message distribution across the network
 - The ban system maintains network security by managing peer access through BanListI and PeerBanManager
 - The notification channel handles real-time event propagation
+- The peerRegistry, peerSelector, peerHealthChecker, and syncCoordinator provide comprehensive peer management and synchronization capabilities
 
-### p2p.NodeI Interface
+### P2P Client Interface
 
-The P2P Server uses the p2p.NodeI interface from the public github.com/bsv-blockchain/go-p2p package. This interface-based design enables better testability and allows external developers to create custom P2P implementations:
-
-```go
-type NodeI interface {
-    // Core lifecycle methods
-    Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error
-    Stop(ctx context.Context) error
-
-    // Topic-related methods
-    SetTopicHandler(ctx context.Context, topicName string, handler Handler) error
-    GetTopic(topicName string) *pubsub.Topic
-    Publish(ctx context.Context, topicName string, msgBytes []byte) error
-
-    // Peer management methods
-    HostID() peer.ID
-    ConnectedPeers() []PeerInfo
-    CurrentlyConnectedPeers() []PeerInfo
-    DisconnectPeer(ctx context.Context, peerID peer.ID) error
-    SendToPeer(ctx context.Context, pid peer.ID, msg []byte) error
-    SetPeerConnectedCallback(callback func(context.Context, peer.ID))
-    UpdatePeerHeight(peerID peer.ID, height int32)
-
-    // Stats methods
-    LastSend() time.Time
-    LastRecv() time.Time
-    BytesSent() uint64
-    BytesReceived() uint64
-
-    // Additional accessors
-    GetProcessName() string
-    UpdateBytesReceived(bytesCount uint64)
-}
-```
+The P2P Server uses the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package. This interface-based design enables better testability and allows external developers to create custom P2P implementations that integrate with Teranode's messaging system.
 
 ## Server Operations
 
@@ -459,16 +428,17 @@ The following settings can be configured for the p2p service:
 The P2P Server depends on several components:
 
 - `blockchain.ClientI`: Interface for blockchain operations
-- `blockvalidation.Client`: Client for block validation operations
-- `p2p.NodeI`: P2P node interface from the public `github.com/bsv-blockchain/go-p2p` package
+- `blockvalidation.Interface`: Interface for block validation operations
+- `blockassembly.ClientI`: Interface for block assembly operations
+- `p2pMessageBus.P2PClient`: P2P client interface from the `github.com/bsv-blockchain/go-p2p-message-bus` package
 - Kafka producers and consumers for message distribution
 
 These dependencies are injected into the `Server` struct during initialization.
 
-The use of the public go-p2p package enables external developers to:
+The use of the go-p2p-message-bus package enables external developers to:
 
-- Create custom P2P node implementations that are compatible with Teranode
-- Build applications that can directly integrate with Teranode's P2P network
+- Create custom P2P client implementations that are compatible with Teranode
+- Build applications that can directly integrate with Teranode's P2P messaging system
 - Extend P2P functionality while maintaining compatibility with the standard interface
 
 ## Error Handling

@@ -377,7 +377,8 @@ func TestBlockHeadersN(t *testing.T) {
 }
 
 func Test_Server_processBlockFound(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	tSettings := test.CreateBaseTestSettings(t)
 	// regtest SubsidyReductionInterval is 150
@@ -703,6 +704,9 @@ func createServerTestBlockChain(t *testing.T, numBlocks int) []*model.Block {
 func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	tSettings := test.CreateBaseTestSettings(t)
 
 	blocks := testhelpers.CreateTestBlockChain(t, 3)
@@ -729,7 +733,7 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 	mockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 
-	bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 
 	server := &Server{
 		logger:              ulogger.TestLogger{},

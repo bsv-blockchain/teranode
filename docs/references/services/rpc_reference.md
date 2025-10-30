@@ -208,13 +208,11 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error
 
     This method performs several critical initialization tasks:
 
-```text
-1. **Validates the server** has not already been started (using atomic operations)
-2. **Initializes network listeners** on all configured interfaces and ports
-3. **Launches goroutines** to accept and process incoming connections
-4. **Sets up proper handling** for clean shutdown
-5. **Signals readiness** through the provided channel
-```
+    1. **Validates the server** has not already been started (using atomic operations)
+    2. **Initializes network listeners** on all configured interfaces and ports
+    3. **Launches goroutines** to accept and process incoming connections
+    4. **Sets up proper handling** for clean shutdown
+    5. **Signals readiness** through the provided channel
 
 The server supports binding to multiple addresses simultaneously, allowing both IPv4 and IPv6 connections, as well as restricting access to localhost-only if configured for development or testing environments.
 
@@ -226,12 +224,10 @@ func (s *RPCServer) Stop(ctx context.Context) error
 
 Gracefully stops the RPC server by:
 
-```text
 1. **Setting shutdown flag** to prevent new connections
 2. **Closing all active listeners** to stop accepting new requests
 3. **Waiting for active connections** to complete their current operations
 4. **Cleaning up resources** and releasing network ports
-```
 
 This method implements a thread-safe shutdown mechanism using atomic operations to prevent multiple concurrent shutdown attempts. When called, it closes the quit channel to signal all goroutines to terminate, then waits for them to exit using the wait group before returning.
 
@@ -266,8 +262,8 @@ This method implements the standard Teranode health checking interface used acro
 !!! success "Health Check Types"
     It provides both readiness and liveness checking capabilities to support different operational scenarios:
 
-- **Readiness**: Indicates whether the service is ready to accept requests (listeners are bound and core dependencies are available)
-- **Liveness**: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)
+    - **Readiness**: Indicates whether the service is ready to accept requests (listeners are bound and core dependencies are available)
+    - **Liveness**: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)
 
 **Health Check Components:**
 
@@ -438,14 +434,14 @@ Creates a raw Bitcoin transaction without signing it.
 
 1. `inputs` (array, required):
 
-   ```json
-   [
-     {
-       "txid": "hex_string",       // The transaction id
-       "vout": n                   // The output number
-     }
-   ]
-   ```
+    ```json
+    [
+      {
+        "txid": "hex_string",       // The transaction id
+        "vout": n                   // The output number
+      }
+    ]
+    ```
 
 2. `outputs` (object, required):
 

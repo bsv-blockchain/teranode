@@ -55,12 +55,16 @@ teranode/
 │   └── utxo/                     # UTXO storage implementation
 │
 ├── docs/                         # Documentation for the project
+│   ├── howto/                    # How-to guides and tutorials
+│   ├── misc/                     # Miscellaneous documentation
 │   ├── references/               # Reference documentation
 │   │   ├── protobuf_docs/        # Protobuf API documentation
 │   │   ├── services/            # Service reference documentation
 │   │   ├── stores/              # Store reference documentation
+│   │   ├── settings/            # Settings reference documentation
 │   │   └── kafkaMessageFormat.md # Kafka message format documentation
-│   └── topics/                   # Topic-based documentation
+│   ├── topics/                   # Topic-based documentation
+│   └── tutorials/                # Step-by-step tutorials
 │
 ├── compose/                      # Docker compose configurations
 │

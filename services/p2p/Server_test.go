@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -2095,6 +2096,11 @@ func TestServerStartFull(t *testing.T) {
 
 	state := blockchain_api.FSMStateType_RUNNING
 	mockBlockchain.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+	// Mock GetState for BlockPersisterHeight query in determineStorage
+	blockPersisterHeightData := make([]byte, 4)
+	binary.LittleEndian.PutUint32(blockPersisterHeightData, 0)
+	mockBlockchain.On("GetState", mock.Anything, "BlockPersisterHeight").Return(blockPersisterHeightData, nil).Maybe()
 
 	mockRejectedKafka := new(MockKafkaConsumerGroup)
 	mockRejectedKafka.On("Start", mock.Anything, mock.Anything, mock.Anything).Return()

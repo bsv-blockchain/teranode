@@ -98,7 +98,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
 	node1 := framework.Nodes[0]
-	txDistributor := &node1.DistributorClient
+	txDistributor := &node1.PropagationClient
 
 	// Generate private keys and addresses
 	privateKey0, err := bec.NewPrivateKey()
@@ -164,7 +164,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	tx1, err := createTx(parentTx.Outputs[:firstSet], 0)
 	require.NoError(t, err, "Failed to create first transaction")
 
-	_, err = txDistributor.SendTransaction(ctx, tx1)
+	err = txDistributor.ProcessTransaction(ctx, tx1)
 	require.NoError(t, err, "Failed to send first transaction")
 	logger.Infof("First Transaction sent: %s %s", tx1.TxIDChainHash(), tx1.TxID())
 
@@ -193,7 +193,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	go func() {
 		logger.Infof("Sending second transaction %s %s", tx2.TxIDChainHash(), tx2.TxID())
 
-		_, err = txDistributor.SendTransaction(ctx, tx2)
+	err = txDistributor.ProcessTransaction(ctx, tx2)
 		if err != nil {
 			errChan <- errors.NewProcessingError("failed to send second transaction", err)
 			return
@@ -276,7 +276,7 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
 	node1 := framework.Nodes[0]
-	txDistributor := &node1.DistributorClient
+	txDistributor := &node1.PropagationClient
 
 	// Generate private keys and addresses
 	privateKey, err := bec.NewPrivateKey()
@@ -309,7 +309,7 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	require.NoError(t, err, "Error filling transaction inputs")
 
-	_, err = txDistributor.SendTransaction(ctx, newTx)
+	err = txDistributor.ProcessTransaction(ctx, newTx)
 	require.NoError(t, err, "Failed to send transaction")
 
 	logger.Infof("Transaction sent: %s %s", newTx.TxIDChainHash(), newTx.TxID())
@@ -363,7 +363,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 	framework.StopNode("teranode2")
 
 	node1 := framework.Nodes[0]
-	txDistributor := &node1.DistributorClient
+	txDistributor := &node1.PropagationClient
 
 	// Generate private key and address
 	privateKey0, err := bec.NewPrivateKey()
@@ -393,7 +393,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
 	require.NoError(t, err, "Error filling transaction inputs")
 
-	_, err = txDistributor.SendTransaction(ctx, newTx)
+	err = txDistributor.ProcessTransaction(ctx, newTx)
 	require.NoError(t, err, "Failed to send transaction")
 
 	logger.Infof("Transaction sent: %s with %d outputs", newTx.TxIDChainHash(), len(newTx.Outputs))
@@ -440,7 +440,7 @@ func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
 	framework := suite.TeranodeTestEnv
 	logger := framework.Logger
 	ctx := framework.Context
-	txDistributor := &framework.Nodes[0].DistributorClient
+	txDistributor := &framework.Nodes[0].PropagationClient
 	coinbaseClient := framework.Nodes[0].CoinbaseClient
 
 	// Generate keys and address
@@ -452,7 +452,7 @@ func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
 	// Request funds with many outputs
 	faucetTx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	require.NoError(t, err)
-	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	err = txDistributor.ProcessTransaction(ctx, faucetTx)
 	require.NoError(t, err)
 
 	// Get the connection queue size from settings
@@ -529,7 +529,7 @@ func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
 	for i := 0; i < numTx; i++ {
 		go func(tx *bt.Tx, idx int) {
 			txStart := time.Now()
-			_, err := txDistributor.SendTransaction(ctx, tx)
+	err = txDistributor.ProcessTransaction(ctx, tx)
 			timingChan <- time.Since(txStart)
 			errChan <- err
 

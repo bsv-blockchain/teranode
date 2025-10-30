@@ -45,6 +45,7 @@ import (
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -785,20 +786,29 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 	s.logger.Debugf("tx to send: %v", tx)
 
-	d, err := NewDistributor(context.Background(), s.logger, s.settings)
-	if err != nil {
-		return nil, errors.NewServiceError("could not create distributor", err)
+	// Store the transaction in blob store first (following the pattern from propagation service)
+	if s.txStore != nil {
+		err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())
+		if err != nil {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCInternal.Code,
+				Message: "Failed to store transaction: " + err.Error(),
+			}
+		}
 	}
 
-	res, err := d.SendTransaction(context.Background(), tx)
+	// Validate the transaction synchronously
+	// This will validate scripts, check UTXOs, spend them, create new UTXOs, and send to block assembly
+	_, err = s.validatorClient.Validate(ctx, tx, 0)
 	if err != nil {
 		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInvalidParameter,
+			Code:    bsvjson.ErrRPCVerify,
 			Message: "TX rejected: " + err.Error(),
 		}
 	}
 
-	return res, nil
+	// Return the transaction ID as a hex string per Bitcoin RPC spec
+	return tx.TxID(), nil
 }
 
 // handleGenerate implements the generate command, which instructs the node to

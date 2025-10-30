@@ -19,7 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	ba "github.com/bsv-blockchain/teranode/services/blockassembly"
 	bc "github.com/bsv-blockchain/teranode/services/blockchain"
-	distributor "github.com/bsv-blockchain/teranode/services/rpc"
+	"github.com/bsv-blockchain/teranode/services/propagation"
 	"github.com/bsv-blockchain/teranode/settings"
 	bhttp "github.com/bsv-blockchain/teranode/stores/blob/http"
 	bcs "github.com/bsv-blockchain/teranode/stores/blockchain"
@@ -53,7 +53,7 @@ type TeranodeTestClient struct {
 	SettingsContext     string
 	BlockchainClient    bc.ClientI
 	BlockassemblyClient ba.Client
-	DistributorClient   distributor.Distributor
+	PropagationClient   *propagation.Client
 	ClientBlockstore    *bhttp.HTTPStore
 	ClientSubtreestore  *bhttp.HTTPStore
 	UtxoStore           *utxostore.Store
@@ -200,7 +200,7 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 			return err
 		}
 
-		if err := t.setupDistributorClient(node); err != nil {
+		if err := t.setupPropagationClient(node); err != nil {
 			return err
 		}
 
@@ -359,7 +359,7 @@ func (t *TeranodeTestEnv) setupBlockassemblyClient(node *TeranodeTestClient) err
 	return nil
 }
 
-func (t *TeranodeTestEnv) setupDistributorClient(node *TeranodeTestClient) error {
+func (t *TeranodeTestEnv) setupPropagationClient(node *TeranodeTestClient) error {
 	if os.Getenv(testEnvKey) != containerMode {
 		// we have multiple addresses separated by |
 		propagationServers := node.Settings.Propagation.GRPCAddresses
@@ -394,12 +394,12 @@ func (t *TeranodeTestEnv) setupDistributorClient(node *TeranodeTestClient) error
 		node.Settings.Propagation.GRPCAddresses = mappedAddresses
 	}
 
-	distributorClient, err := distributor.NewDistributor(t.Context, t.Logger, node.Settings)
+	propagationClient, err := propagation.NewClient(t.Context, t.Logger, node.Settings)
 	if err != nil {
-		return errors.NewConfigurationError("error creating distributor client:", err)
+		return errors.NewConfigurationError("error creating propagation client:", err)
 	}
 
-	node.DistributorClient = *distributorClient
+	node.PropagationClient = propagationClient
 
 	return nil
 }
@@ -736,7 +736,7 @@ func (tc *TeranodeTestClient) CreateAndSendTx(t *testing.T, ctx context.Context,
 	err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 	require.NoError(t, err)
 
-	_, err = tc.DistributorClient.SendTransaction(ctx, newTx)
+	err = tc.PropagationClient.ProcessTransaction(ctx, newTx)
 	require.NoError(t, err)
 
 	logger.Infof("Transaction sent: %s", newTx.TxID())
@@ -783,7 +783,7 @@ func (tc *TeranodeTestClient) CreateAndSendTxs(t *testing.T, ctx context.Context
 		err = newTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey})
 		require.NoError(t, err)
 
-		_, err = tc.DistributorClient.SendTransaction(ctx, newTx)
+		err = tc.PropagationClient.ProcessTransaction(ctx, newTx)
 		require.NoError(t, err)
 
 		logger.Infof("Transaction %d sent: %s", i+1, newTx.TxID())
@@ -829,7 +829,7 @@ func (tc *TeranodeTestClient) CreateAndSendTxsConcurrently(t *testing.T, ctx con
 	require.NoError(t, err)
 
 	// Send the split transaction
-	_, err = tc.DistributorClient.SendTransaction(ctx, splitTx)
+	err = tc.PropagationClient.ProcessTransaction(ctx, splitTx)
 	require.NoError(t, err)
 
 	logger.Infof("Split transaction sent: %s", splitTx.TxID())
@@ -880,7 +880,7 @@ func (tc *TeranodeTestClient) CreateAndSendTxsConcurrently(t *testing.T, ctx con
 				return
 			}
 
-			_, err = tc.DistributorClient.SendTransaction(ctx, newTx)
+			err = tc.PropagationClient.ProcessTransaction(ctx, newTx)
 			if err != nil {
 				errChan <- errors.NewProcessingError("error sending tx %d: %v", index, err)
 				return

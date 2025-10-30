@@ -38,7 +38,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
-	distributor "github.com/bsv-blockchain/teranode/services/rpc"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -71,7 +70,6 @@ type TestDaemon struct {
 	BlockValidation       *blockvalidation.BlockValidation
 	BlockchainClient      blockchain.ClientI
 	Ctx                   context.Context
-	DistributorClient     *distributor.Distributor
 	Logger                ulogger.Logger
 	PropagationClient     *propagation.Client
 	Settings              *settings.Settings
@@ -390,15 +388,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	blockValidationClient, err = blockvalidation.NewClient(ctx, logger, appSettings, "test")
 	require.NoError(t, err)
 
-	var distributorClient *distributor.Distributor
-
-	distributorClient, err = distributor.NewDistributor(ctx, logger, appSettings,
-		distributor.WithBackoffDuration(500*time.Millisecond),
-		distributor.WithRetryAttempts(10),
-		distributor.WithFailureTolerance(0),
-	)
-	require.NoError(t, err)
-
 	validatorClient, err := d.daemonStores.GetValidatorClient(ctx, logger, appSettings)
 	require.NoError(t, err)
 
@@ -457,7 +446,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	assert.NotNil(t, subtreeStore)
 	assert.NotNil(t, utxoStore)
 	assert.NotNil(t, p2pClient)
-	assert.NotNil(t, distributorClient)
 	assert.NotNil(t, blockValidation)
 
 	blockAssemblyService, err := d.ServiceManager.GetService("BlockAssembly")
@@ -474,7 +462,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		BlockValidation:       blockValidation,
 		BlockchainClient:      blockchainClient,
 		Ctx:                   ctx,
-		DistributorClient:     distributorClient,
 		Logger:                logger,
 		PropagationClient:     propagationClient,
 		Settings:              appSettings,
@@ -1520,7 +1507,7 @@ func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int)
 		err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.privKey})
 		require.NoError(t, err)
 
-		_, err = td.DistributorClient.SendTransaction(td.Ctx, newTx)
+		err = td.PropagationClient.ProcessTransaction(td.Ctx, newTx)
 		require.NoError(t, err)
 
 		td.Logger.Infof("Transaction %d sent: %s", i+1, newTx.TxID())
@@ -1735,14 +1722,10 @@ func (td *TestDaemon) CreateParentTransactionWithNOutputs(t *testing.T, parentTx
 	}
 
 	// Send the transaction
-	var response []*distributor.ResponseWrapper
-
-	response, err = td.DistributorClient.SendTransaction(td.Ctx, newTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, newTx)
 	require.NoError(t, err)
 
-	require.Equal(t, len(response), 1)
-
-	td.Logger.Infof("Created parent transaction with %d outputs: %s, error: %v", count, newTx.TxID(), response[0].Error)
+	td.Logger.Infof("Created parent transaction with %d outputs: %s", count, newTx.TxID())
 
 	// Wait for the transaction to be processed by block assembly
 	err = td.WaitForTransactionInBlockAssembly(newTx, 10*time.Second)
@@ -1796,7 +1779,7 @@ func (td *TestDaemon) CreateAndSendTxsConcurrently(_ *testing.T, parentTx *bt.Tx
 				errorChan <- errors.NewProcessingError("Error filling inputs", err)
 			}
 
-			if _, err := td.DistributorClient.SendTransaction(td.Ctx, newTx); err != nil {
+			if err := td.PropagationClient.ProcessTransaction(td.Ctx, newTx); err != nil {
 				errorChan <- errors.NewProcessingError("Error sending transaction", err)
 			}
 
