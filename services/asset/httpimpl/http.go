@@ -337,11 +337,14 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Register peers endpoint
 	apiGroup.GET("/peers", h.GetPeers)
 
-	// Register peers endpoint for dashboard API route compatibility
+	// Register dashboard-compatible API routes
 	// The dashboard's SvelteKit +server.ts endpoints don't work in production (adapter-static)
 	// so we need to provide the same endpoints directly in the Go backend
 	apiP2PGroup := e.Group("/api/p2p")
 	apiP2PGroup.GET("/peers", h.GetPeers)
+
+	apiCatchupGroup := e.Group("/api/catchup")
+	apiCatchupGroup.GET("/status", h.GetCatchupStatus)
 
 	// Add OPTIONS handlers for block operations
 	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {
