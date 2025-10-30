@@ -1,6 +1,6 @@
-# Syncing the Blockchain
+# Syncing the Blockchain (Docker Compose)
 
-Last modified: 15-October-2025
+Last modified: 29-October-2025
 
 ## Table of Contents
 
@@ -15,7 +15,7 @@ Last modified: 15-October-2025
 
 ## Overview
 
-This guide covers the different methods available for synchronizing a Teranode instance with the Bitcoin SV blockchain. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.
+This guide covers the different methods available for synchronizing a Teranode instance with the Bitcoin SV blockchain using Docker Compose. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.
 
 ---
 
@@ -29,7 +29,7 @@ Choose the synchronization method that best fits your situation:
 | **Legacy SV Node Seeding** | Have existing BSV node | • Faster than P2P<br>• Proven data source<br>• Reduced bandwidth | • Requires SV Node setup<br>• Additional export steps | 1 Hour<br>(assumes SV node<br>already in sync) |
 | **Teranode Data Seeding** | Have existing Teranode | • Fastest method<br>• Direct data transfer<br>• Minimal processing | • Requires access to existing data<br>• Version compatibility needed | 1 Hour |
 
-![seedingOptions.svg](img/mermaid/seedingOptions.svg)
+![seedingOptions.svg](../img/mermaid/seedingOptions.svg)
 
 > **💡 Recommendation:** For production deployments, we recommend using the Legacy SV Node seeding method when possible, as it provides the best balance of speed and data integrity verification.
 
@@ -50,24 +50,15 @@ This is the standard synchronization method where Teranode downloads the complet
 
 ### Process Overview
 
-![syncStateFlow.svg](img/mermaid/syncStateFlow.svg)
+![syncStateFlow.svg](../img/mermaid/syncStateFlow.svg)
 
 ### Step 1: Initialize Sync Process
 
 Upon startup, Teranode begins in IDLE state. You must explicitly set the state to `legacysyncing` to begin synchronization.
 
-#### For Kubernetes Deployments
-
 ```bash
 # Set FSM state to begin legacy syncing
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
-```
-
-#### For Docker Deployments
-
-```bash
-# Set FSM state to begin legacy syncing
-docker exec -it blockchain teranode-cli setfsmstate -fsmstate legacysyncing
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate legacysyncing
 ```
 
 ### Step 2: Peer Discovery and Block Download
@@ -87,33 +78,15 @@ As blocks are received, multiple Teranode services work in parallel:
 
 ### Step 4: Monitor Progress
 
-#### Kubernetes Monitoring
-
 ```bash
 # View real-time sync logs
-kubectl logs -n teranode-operator -l app=blockchain -f
+docker compose logs -f blockchain
 
 # Check service health
-kubectl get pods -n teranode-operator | grep -E 'aerospike|postgres|kafka|teranode-operator'
+docker compose ps
 
-# Wait for services to be ready
-kubectl wait --for=condition=ready pod -l app=blockchain -n teranode-operator --timeout=300s
-
-# Get detailed blockchain info
-kubectl exec <blockchain-pod-name> -n teranode-operator -- teranode-cli getblockchaininfo
-```
-
-#### Docker Monitoring
-
-```bash
-# View real-time sync logs
-docker-compose logs -f blockchain
-
-# Check service health
-docker-compose ps
-
-# Get detailed blockchain info
-docker exec -it blockchain teranode-cli getblockchaininfo
+# View blockchain info in the blockchain viewer
+# Access http://localhost:8090/viewer in your browser
 ```
 
 ### Expected Timeline
@@ -137,10 +110,10 @@ This method allows you to bootstrap a Teranode instance using data exported from
 
 - ✅ Access to a fully synchronized Bitcoin SV node (bitcoind)
 - ✅ SV Node gracefully shut down (using `bitcoin-cli stop`)
-- ✅ Fresh Teranode instance with no existing blockchain data (use [reset guide](./minersHowToResetTeranode.md) to clear existing data if needed)
+- ✅ Fresh Teranode instance with no existing blockchain data (see [reset guide](minersHowToResetTeranode.md) to clear existing data if needed)
 - ✅ Sufficient disk space for export files (~1TB recommended, temporary during process)
 - ✅ Sufficient disk space for Teranode data (~10TB recommended, permanent)
-- ✅ Docker or Kubernetes environment set up
+- ✅ Docker Compose environment set up
 
 > **⚠️ Critical:** Only perform this operation on a gracefully shut down SV Node to ensure data consistency.
 
@@ -202,11 +175,13 @@ sudo chown $USER:$USER /mnt/teranode/seed/export
 ```bash
 # Export UTXO set from Bitcoin SV node
 # Replace /mnt/bitcoin-sv-data with your actual SV node data directory
+# Instead of latest, you could use a specific version of teranode. 
+# Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 docker run -it \
     -v /mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --entrypoint="" \
-    ghcr.io/bsv-blockchain/teranode:v0.11.13 \
+    ghcr.io/bsv-blockchain/teranode:latest \
     /app/teranode-cli bitcointoutxoset \
         -bitcoinDir=/home/ubuntu/bitcoin-data \
         -outputDir=/mnt/teranode/seed/export
@@ -217,7 +192,7 @@ docker run -it \
 - `{blockhash}.utxo-headers` - Block headers data
 - `{blockhash}.utxo-set` - UTXO set data
 
-#### Step 3: Verify Export
+#### Step 4: Verify Export
 
 ```bash
 # Check exported files
@@ -237,7 +212,7 @@ If you encounter issues during export or need to retry the process:
    sudo rm -rf /mnt/teranode/seed/export/*
    ```
 
-2. **Reset the target Teranode instance** (see [reset guide](./minersHowToResetTeranode.md))
+2. **Reset the target Teranode instance** (see [reset guide](minersHowToResetTeranode.md))
 
 3. **Verify SV node was gracefully shutdown** and repeat from Step 1
 
@@ -269,40 +244,15 @@ If you encounter issues during export or need to retry the process:
 
 #### Step 1: Prepare Teranode Environment
 
-**For Docker Deployments:**
-
 ```bash
 # Start required services (adjust service names as needed)
-docker compose up -d aerospike aerospike-2 postgres kafka-shared
+docker compose up -d aerospike postgres kafka-shared
 
 # Verify services are running
 docker compose ps
 
 # CRITICAL: Ensure Teranode services are NOT running
 docker compose stop blockchain asset blockvalidation # Add other services as needed
-```
-
-**For Kubernetes Deployments:**
-
-You can scale down the Teranode services using the `spec.enabled` option in the CR:
-
-```yaml
----
-apiVersion: teranode.bsvblockchain.org/v1alpha1
-kind: Cluster
-metadata:
-  name: teranode-cluster
-spec:
-  enabled: false
-  alertSystem:
-    ...
-```
-
-```bash
-kubectl apply -f <path-to-your-cr-file>.yaml
-
-# Verify pods are terminated
-kubectl get pods -n teranode-operator
 ```
 
 #### Step 2: Identify the Block Hash
@@ -329,8 +279,6 @@ ls -la /mnt/teranode/seed/export/
 
 #### Step 3: Run Seeder
 
-**For Docker Deployments:**
-
 ```bash
 # Run the seeder (replace the hash with your actual block hash from Step 2)
 # Make sure to add any environment variables you have defined in your docker-compose.yml
@@ -341,55 +289,26 @@ docker run -it \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --network my-teranode-network \
     --entrypoint="" \
-    ghcr.io/bsv-blockchain/teranode:v0.11.13 \
+    ghcr.io/bsv-blockchain/teranode:latest \
     /app/teranode-cli seeder \
         -inputDir /mnt/teranode/seed/export \
         -hash 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
 ```
 
-**For Kubernetes Deployments:**
-
-```bash
-# Create a temporary seeder pod
-kubectl run teranode-seeder \
-    --image=ghcr.io/bsv-blockchain/teranode:v0.11.13 \
-    --restart=Never \
-    --rm -i --tty \
-    -n teranode-operator \
-    -- /app/teranode-cli seeder \
-        -inputDir /mnt/teranode/seed/export \
-        -hash 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
-```
-
-#### Step 3: Monitor Seeding Progress
+#### Step 4: Monitor Seeding Progress
 
 ```bash
 # Monitor seeder logs
-# For Docker:
 docker logs -f <seeder-container-id>
-
-# For Kubernetes:
-kubectl logs -f teranode-seeder -n teranode-operator
 ```
 
-#### Step 4: Start Teranode Services
+#### Step 5: Start Teranode Services
 
 After successful seeding:
-
-**For Docker:**
 
 ```bash
 # Start all Teranode services
 docker compose up -d
-```
-
-**For Kubernetes:**
-
-```bash
-# Scale services back up
-kubectl scale deployment blockchain --replicas=1 -n teranode-operator
-kubectl scale deployment asset --replicas=1 -n teranode-operator
-# Scale up other services as needed
 ```
 
 ### Expected Timeline
@@ -413,7 +332,7 @@ This is the fastest synchronization method, using UTXO set and header files from
 
 - ✅ Access to a synchronized Teranode instance
 - ✅ UTXO set files from Block/UTXO Persister
-- ✅ Fresh target Teranode instance with no existing blockchain data (use [reset guide](./minersHowToResetTeranode.md) to clear existing data if needed)
+- ✅ Fresh target Teranode instance with no existing blockchain data (see [reset guide](minersHowToResetTeranode.md) to clear existing data if needed)
 - ✅ Network access between source and target systems
 - ✅ Sufficient storage for data transfer
 
@@ -426,13 +345,9 @@ This method uses the same seeder tool as Method 2, but with data files generated
 On your source Teranode instance, locate the persisted data files:
 
 ```bash
-# Typical locations for persisted data
-# Docker deployments:
+# Typical locations for persisted data in Docker deployments
 ls -la /app/data/blockstore/
 ls -la /app/data/utxo-persister/
-
-# Kubernetes deployments:
-kubectl exec -it <blockchain-pod> -n teranode-operator -- ls -la /app/data/blockstore/
 ```
 
 **Required Files:**
@@ -457,38 +372,22 @@ Ensure the required UTXO files are available in your target Teranode's export di
 
 Use the same seeder process as described in Method 2:
 
-**For Docker:**
-
 ```bash
 # Prepare environment
 docker compose up -d aerospike aerospike-2 postgres kafka-shared
 docker compose stop blockchain asset blockvalidation
 
 # Run seeder
+# Instead of latest, you could use a specific version of teranode. 
+# Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 docker run -it \
     -e SETTINGS_CONTEXT=docker.m \
     -v ${PWD}/docker/mainnet/data/teranode:/app/data \
     -v /mnt/teranode/seed:/mnt/teranode/seed \
     --network my-teranode-network \
     --entrypoint="" \
-    ghcr.io/bsv-blockchain/teranode:v0.11.13 \
+    ghcr.io/bsv-blockchain/teranode:latest \
     /app/teranode-cli seeder \
-        -inputDir /mnt/teranode/seed/export \
-        -hash <blockhash-from-filename>
-```
-
-**For Kubernetes:**
-
-```bash
-# Scale down services
-kubectl scale deployment blockchain --replicas=0 -n teranode-operator
-
-# Run seeder
-kubectl run teranode-seeder \
-    --image=ghcr.io/bsv-blockchain/teranode:v0.11.13 \
-    --restart=Never --rm -i --tty \
-    -n teranode-operator \
-    -- /app/teranode-cli seeder \
         -inputDir /mnt/teranode/seed/export \
         -hash <blockhash-from-filename>
 ```
@@ -517,8 +416,6 @@ For brief interruptions (minutes to hours), Teranode typically recovers automati
 #### Automatic Recovery Process
 
 1. **Service Restart**
-
-    - Kubernetes automatically restarts crashed pods via ReplicaSet controllers
     - Docker Compose can be configured with restart policies
 
 2. **Peer Reconnection**
@@ -532,33 +429,15 @@ For brief interruptions (minutes to hours), Teranode typically recovers automati
 
 #### Monitor Normal Recovery
 
-**For Kubernetes:**
-
-```bash
-# Check pod status and restarts
-kubectl get pods -n teranode-operator -o wide
-
-# View recovery logs
-kubectl logs -n teranode-operator -l app=blockchain -f --tail=100
-
-# Check for pod events and issues
-kubectl describe pod -n teranode-operator -l app=blockchain
-
-# Verify sync progress
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getblockchaininfo
-```
-
-**For Docker:**
-
 ```bash
 # Check container status
-docker-compose ps
+docker compose ps
 
 # View recovery logs
-docker-compose logs -f blockchain --tail=100
+docker compose logs -f blockchain --tail=100
 
-# Verify sync progress
-docker exec -it blockchain teranode-cli getblockchaininfo
+# View sync progress in blockchain viewer
+# Access http://localhost:8090/viewer in your browser
 ```
 
 ### Extended Downtime Recovery
@@ -567,23 +446,13 @@ For longer outages (days to weeks), additional considerations apply.
 
 #### Assessment Phase
 
-#### Step 1: Check Data Integrity
+Check current sync status:
 
 ```bash
-# Examine logs for corruption warnings
-kubectl logs -n teranode-operator -l app=blockchain --previous | grep -i "corrupt\|error\|fail"
+# Check current block height vs network tip using the blockchain viewer
+# Access http://localhost:8090/viewer in your browser
+# Compare the displayed height with a block explorer
 
-# Check database connectivity
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli settings | grep -E "postgres\|aerospike"
-```
-
-#### Step 2: Evaluate Catch-up Requirements
-
-```bash
-# Check current block height vs network tip
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getblockchaininfo
-
-# Calculate blocks behind (compare with block explorer)
 # If >10,000 blocks behind, consider reseeding
 ```
 
@@ -601,10 +470,10 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getblockc
 
 ```bash
 # Reset FSM state and restart sync
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate legacysyncing
 
 # Monitor progress closely
-kubectl logs -n teranode-operator -l app=blockchain -f
+docker compose logs -f blockchain
 ```
 
 ##### Option 2: Reseed from Recent Data
@@ -616,7 +485,6 @@ If catch-up is too slow, use Method 2 or Method 3 from this guide with recent da
 #### Issue: Sync Stalled
 
 **Symptoms:**
-
 - Block height not increasing
 - No new blocks being processed
 - Peer connections established but inactive
@@ -625,53 +493,50 @@ If catch-up is too slow, use Method 2 or Method 3 from this guide with recent da
 
 ```bash
 # Check peer connections
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getpeerinfo
+docker exec -it blockchain teranode-cli getpeerinfo
 
 # Restart peer service
-kubectl delete pod -n teranode-operator -l app=peer
+docker compose restart peer
 
 # Reset FSM state
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate legacysyncing
 ```
 
 #### Issue: Database Connection Errors
 
 **Symptoms:**
-
 - Connection timeouts to PostgreSQL/Aerospike
 - "Database unavailable" errors in logs
 
 **Solutions:**
 
 ```bash
-# Check database pod status
-kubectl get pods -n teranode-operator | grep -E "postgres\|aerospike"
+# Check database container status
+docker compose ps | grep -E "postgres\|aerospike"
 
 # Test database connectivity
-kubectl exec -it postgres-pod -n teranode-operator -- psql -U <username> -d <database> -c "SELECT 1;"
+docker exec -it postgres psql -U postgres -d teranode -c "SELECT 1;"
 
-# Restart database pods if needed
-kubectl delete pod -n teranode-operator -l app=postgres
+# Restart database containers if needed
+docker compose restart postgres aerospike
 ```
 
 #### Issue: Storage Space Exhausted
 
 **Symptoms:**
-
 - "No space left on device" errors
-- Pods in CrashLoopBackOff state
+- Containers crashing
 
 **Solutions:**
 
 ```bash
 # Check storage usage
-kubectl exec -it <blockchain-pod> -n teranode-operator -- df -h
+df -h
 
 # Clean up old logs (if applicable)
-kubectl exec -it <blockchain-pod> -n teranode-operator -- find /app/logs -name "*.log" -mtime +7 -delete
+docker compose logs --tail=0
 
-# Scale up storage (requires cluster admin)
-# Consider implementing log rotation
+# Ensure log rotation is configured
 ```
 
 ### Performance Monitoring During Recovery
@@ -687,14 +552,14 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- find /app/logs -name "
 #### Monitoring Commands
 
 ```bash
-# Watch block height progress
-watch "kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getblockchaininfo | grep height"
+# Monitor block height progress via blockchain viewer
+# Access http://localhost:8090/viewer in your browser
 
 # Monitor resource usage
-kubectl top pods -n teranode-operator
+docker stats
 
 # Check service health endpoints
-kubectl exec -it <blockchain-pod> -n teranode-operator -- curl -s http://localhost:8000/health
+docker exec -it blockchain curl -s http://localhost:8000/health
 ```
 
 > **📈 Tip:** Use monitoring tools like Prometheus and Grafana to track recovery progress and estimate completion times. Set up alerts for stalled sync or resource exhaustion.
@@ -711,18 +576,18 @@ After completing synchronization using any method, it's important to verify that
 
 ```bash
 # Check if services are running
-kubectl get pods -n teranode-operator
-# All pods should be in "Running" status
+docker compose ps
+# All services should show "Up" status
 
 # Test CLI connectivity
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getblockchaininfo
+docker exec -it blockchain teranode-cli getfsmstate
 ```
 
 #### ✅ Synchronization Status
 
 ```bash
-# Check current block height
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getblockchaininfo | grep -E "height|hash"
+# Check current block height using blockchain viewer
+# Access http://localhost:8090/viewer in your browser
 
 # Compare with network tip (use block explorer or other nodes)
 # Heights should match within 1-2 blocks
@@ -732,7 +597,7 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getblockc
 
 ```bash
 # Verify peer connections
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getpeerinfo | grep -E "addr|version"
+docker exec -it blockchain teranode-cli getpeerinfo | grep -E "addr|version"
 
 # Should have 8+ active peer connections
 ```
@@ -741,17 +606,17 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getpeerin
 
 ```bash
 # Check PostgreSQL connectivity
-kubectl exec -it <postgres-pod> -n teranode-operator -- psql -U <username> -d <database> -c "SELECT COUNT(*) FROM blocks;"
+docker exec -it postgres psql -U postgres -d teranode -c "SELECT COUNT(*) FROM blocks;"
 
 # Check Aerospike connectivity
-kubectl exec -it <aerospike-pod> -n teranode-operator -- asinfo -v "statistics" | grep "objects"
+docker exec -it aerospike asinfo -v "statistics" | grep "objects"
 ```
 
 #### ✅ FSM State
 
 ```bash
 # Verify FSM is in correct state
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getfsmstate
+docker exec -it blockchain teranode-cli getfsmstate
 
 # Should show "running" or "synced" for a fully synchronized node
 ```
@@ -767,47 +632,47 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getfsmsta
 echo "=== Teranode Health Check ==="
 echo "Timestamp: $(date)"
 
-# Check pod status
-echo "\n--- Pod Status ---"
-kubectl get pods -n teranode-operator
+# Check container status
+echo "\n--- Container Status ---"
+docker compose ps
 
-# Check block height
+# Check block height via blockchain viewer
 echo "\n--- Block Height ---"
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getblockchaininfo | grep height
+echo "View at http://localhost:8090/viewer"
 
 # Check peer count
 echo "\n--- Peer Count ---"
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getpeerinfo | wc -l
+docker exec -it blockchain teranode-cli getpeerinfo | wc -l
 
 # Check FSM state
 echo "\n--- FSM State ---"
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getfsmstate
+docker exec -it blockchain teranode-cli getfsmstate
 ```
 
 #### Performance Metrics
 
 ```bash
 # Monitor resource usage
-kubectl top pods -n teranode-operator
+docker stats --no-stream
 
 # Check storage usage
-kubectl exec -it <blockchain-pod> -n teranode-operator -- df -h
+df -h
 
 # Monitor network traffic
-kubectl exec -it <blockchain-pod> -n teranode-operator -- netstat -i
+docker exec -it blockchain netstat -i
 ```
 
 #### Log Analysis
 
 ```bash
 # Check for errors in recent logs
-kubectl logs -n teranode-operator -l app=blockchain --tail=1000 | grep -i error
+docker compose logs blockchain --tail=1000 | grep -i error
 
 # Monitor sync progress
-kubectl logs -n teranode-operator -l app=blockchain -f | grep -E "height|block|sync"
+docker compose logs -f blockchain | grep -E "height|block|sync"
 
 # Check for warnings
-kubectl logs -n teranode-operator -l app=blockchain --tail=1000 | grep -i warn
+docker compose logs blockchain --tail=1000 | grep -i warn
 ```
 
 ---
@@ -816,19 +681,17 @@ kubectl logs -n teranode-operator -l app=blockchain --tail=1000 | grep -i warn
 
 ### Documentation
 
-- **[Teranode CLI Reference](./minersHowToTeranodeCLI.md)** - Complete CLI command reference
-- **[Reset Teranode Guide](./minersHowToResetTeranode.md)** - How to reset and clean Teranode data
-- **[Seeder Command Details](../../topics/commands/seeder.md)** - Advanced seeder configuration
-- **[UTXO Persister Service](../../topics/services/utxoPersister.md)** - UTXO persistence configuration
-- **[UTXO Store Documentation](../../topics/stores/utxo.md)** - UTXO storage mechanisms
+- **[Teranode CLI Reference](../minersHowToTeranodeCLI.md)** - Complete CLI command reference
+- **[Reset Teranode (Docker)](minersHowToResetTeranode.md)** - How to reset Docker Compose deployments
+- **[Seeder Command Details](../../../topics/commands/seeder.md)** - Advanced seeder configuration
+- **[UTXO Persister Service](../../../topics/services/utxoPersister.md)** - UTXO persistence configuration
+- **[UTXO Store Documentation](../../../topics/stores/utxo.md)** - UTXO storage mechanisms
 
 ### Installation and Configuration
 
-- **[Docker Installation](docker/minersHowToInstallation.md)** - Docker-based setup
-- **[Kubernetes Installation](kubernetes/minersHowToInstallation.md)** - Kubernetes deployment
-- **[Docker Configuration](docker/minersHowToConfigureTheNode.md)** - Docker configuration guide
-- **[Kubernetes Configuration](kubernetes/minersHowToConfigureTheNode.md)** - Kubernetes configuration guide
-- **[Third Party Requirements](../../references/thirdPartySoftwareRequirements.md)** - External dependencies
+- **[Docker Installation](minersHowToInstallation.md)** - Docker-based setup
+- **[Docker Configuration](minersHowToConfigureTheNode.md)** - Docker configuration guide
+- **[Third Party Requirements](../../../references/thirdPartySoftwareRequirements.md)** - External dependencies
 
 ### Support and Community
 

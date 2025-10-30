@@ -1,4 +1,4 @@
-# GRPC Documentation - AlertAPI
+# GRPC Documentation - AlertAPI 
 <a name="top"></a>
 
 ## Table of Contents
@@ -16,6 +16,8 @@
 <p align="right"><a href="#top">Top</a></p>
 
 ## alert_api.proto
+
+#this is for testing the commit message only
 
 > Package alert_api defines the gRPC service interface for the Bitcoin SV Alert System.
 
