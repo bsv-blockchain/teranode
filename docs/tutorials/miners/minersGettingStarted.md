@@ -96,7 +96,7 @@ cd $YOUR_WORKING_DIR/teranode/deploy/docker/testnet
 - Pull required images:
 
 ```bash
-docker-compose pull
+docker compose pull
 ```
 
 ### Step 3: Start Teranode
@@ -104,7 +104,7 @@ docker-compose pull
 - Launch all services:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 Force the node to transition to Run mode:
@@ -129,15 +129,15 @@ docker exec -it blockchain teranode-cli setfsmstate --fsmstate LEGACYSYNCING
 - Verify services are running:
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 - Check individual service logs:
 
 ```bash
 # Example commands
-docker-compose logs asset
-docker-compose logs blockchain
+docker compose logs asset
+docker compose logs blockchain
 ```
 
 - Verify legacy sync status:
@@ -145,7 +145,7 @@ docker-compose logs blockchain
 When the node is started for the first time, its first action is to perform a initial blockchain sync. You can check the sync progress by checking the Legacy service logs:
 
 ```bash
-docker-compose logs legacy
+docker compose logs legacy
 ```
 
 ### Step 4: Verify Installation
@@ -167,13 +167,13 @@ curl http://localhost:8090/health
 
 1. **Services fail to start**
 
-    - Check logs: `docker-compose logs`
+    - Check logs: `docker compose logs`
     - Verify disk space: `df -h`
     - Ensure all ports are available
 
 2. **Cannot connect to services**
 
-    - Verify services are running: `docker-compose ps`
+    - Verify services are running: `docker compose ps`
     - Check service logs for specific errors
     - Ensure ports are not blocked by firewall
 
@@ -184,7 +184,7 @@ curl http://localhost:8090/health
 1. View all services status:
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 2. Check blockchain sync:
@@ -196,9 +196,9 @@ curl http://localhost:8090/api/v1/blockstats
 3. Monitor specific service logs:
 
 ```bash
-docker-compose logs -f legacy
-docker-compose logs -f blockchain
-docker-compose logs -f asset
+docker compose logs -f legacy
+docker compose logs -f blockchain
+docker compose logs -f asset
 ```
 
 ### Working with Transactions
@@ -229,10 +229,10 @@ curl http://localhost:8090/api/v1/tx/<txid>
 
 ```bash
 # All services
-docker-compose logs
+docker compose logs
 
 # Specific service
-docker-compose logs blockchain
+docker compose logs blockchain
 ```
 
 2. Check disk usage:
@@ -244,14 +244,14 @@ df -h
 3. Restart a specific service:
 
 ```bash
-docker-compose restart blockchain
+docker compose restart blockchain
 ```
 
 4. Restart all services:
 
 ```bash
-docker-compose down
-docker-compose up -d
+docker compose down
+docker compose up -d
 ```
 
 ### Common Operations

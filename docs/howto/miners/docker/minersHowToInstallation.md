@@ -247,7 +247,7 @@ cd $YOUR_WORKING_DIR/teranode/deploy/docker/mainnet
 Pull the required Docker images:
 
 ```bash
-docker-compose pull
+docker compose pull
 ```
 
 #### Step 5: Start the Teranode Stack
@@ -255,7 +255,7 @@ docker-compose pull
 Launch the entire Teranode stack using Docker Compose:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 Force the node to transition to Run mode:
@@ -289,7 +289,7 @@ Or view it in the Admin Dashboard at <http://localhost:8090/admin>
 Check if all services are running correctly:
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 Example output:
@@ -342,7 +342,7 @@ Note: You must set the setting `dashboard_enabled` as true in order to see the v
     - **P2P service**: Ports 9905, 9906
     - **RPC service**: 9292
 
-Notice that those ports might be mapped to random ports on your host machine. You can check the mapping by running `docker-compose ps`.
+Notice that those ports might be mapped to random ports on your host machine. You can check the mapping by running `docker compose ps`.
 
 #### Step 9: Logging and Troubleshooting
 
@@ -351,7 +351,7 @@ Notice that those ports might be mapped to random ports on your host machine. Yo
 View logs for all services:
 
 ```bash
-docker-compose logs
+docker compose logs
 ```
 
 ##### View Specific Service Logs
@@ -359,9 +359,9 @@ docker-compose logs
 View logs for a specific service (e.g., teranode-blockchain):
 
 ```bash
-docker-compose logs -f legacy
-docker-compose logs -f blockchain
-docker-compose logs -f asset
+docker compose logs -f legacy
+docker compose logs -f blockchain
+docker compose logs -f asset
 ```
 
 #### Step 10: Docker Log Rotation
@@ -382,7 +382,7 @@ services:
 1. To stop all services:
 
    ```bash
-   docker-compose down
+   docker compose down
    ```
 
 Additional Notes:

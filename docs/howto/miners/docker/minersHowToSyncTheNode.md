@@ -534,7 +534,7 @@ docker compose restart postgres aerospike
 df -h
 
 # Clean up old logs (if applicable)
-docker-compose logs --tail=0
+docker compose logs --tail=0
 
 # Ensure log rotation is configured
 ```
