@@ -787,11 +787,13 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	s.logger.Debugf("tx to send: %v", tx)
 
 	// Store the transaction in blob store first (following the pattern from propagation service)
-	err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())
-	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: "Failed to store transaction: " + err.Error(),
+	if s.txStore != nil {
+		err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())
+		if err != nil {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCInternal.Code,
+				Message: "Failed to store transaction: " + err.Error(),
+			}
 		}
 	}
 

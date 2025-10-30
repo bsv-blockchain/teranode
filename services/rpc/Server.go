@@ -1411,6 +1411,8 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		blockAssemblyClient:    blockAssemblyClient,
 		peerClient:             peerClient,
 		p2pClient:              p2pClient,
+		txStore:                txStore,
+		validatorClient:        validatorClient,
 	}
 
 	rpcUser := tSettings.RPC.RPCUser
