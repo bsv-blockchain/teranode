@@ -6042,6 +6042,10 @@
 <span class="w">    </span><span class="c1">// Used for retrieving block information, chain state, and blockchain operations</span>
 <span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span>
 
+<span class="w">    </span><span class="c1">// blockValidationClient provides access to block validation services</span>
+<span class="w">    </span><span class="c1">// Used for validating blocks and triggering revalidation of invalid blocks</span>
+<span class="w">    </span><span class="nx">blockValidationClient</span><span class="w"> </span><span class="nx">blockvalidation</span><span class="p">.</span><span class="nx">Interface</span>
+
 <span class="w">    </span><span class="c1">// blockAssemblyClient provides access to block assembly and mining services</span>
 <span class="w">    </span><span class="c1">// Used for mining-related RPC commands like getminingcandidate and generate</span>
 <span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span>
@@ -6071,7 +6075,7 @@
 <p>The RPCServer is designed for concurrent operation, employing synchronization mechanisms to handle multiple simultaneous client connections without race conditions or resource conflicts. It implements proper connection management, graceful shutdown, and health monitoring.</p>
 <h2 id="functions">Functions</h2>
 <h3 id="newserver">NewServer</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">NewServer</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">peerClient</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">p2p</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">RPCServer</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">NewServer</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">blockValidationClient</span><span class="w"> </span><span class="nx">blockvalidation</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">peerClient</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">p2p</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">RPCServer</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
 <p>Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, UTXO store, and service clients.</p>
 <p>This factory function creates a fully configured RPCServer instance, setting up:</p>
@@ -6086,6 +6090,7 @@
 <li><code>logger</code>: Structured logger for operational and debug messages</li>
 <li><code>tSettings</code>: Configuration settings for the RPC server and related features</li>
 <li><code>blockchainClient</code>: Interface to the blockchain service for block and chain operations</li>
+<li><code>blockValidationClient</code>: Interface to the block validation service for block validation operations</li>
 <li><code>utxoStore</code>: Interface to the UTXO database for transaction validation</li>
 <li><code>blockAssemblyClient</code>: Interface to the block assembly service for mining operations</li>
 <li><code>peerClient</code>: Interface to the legacy peer network services</li>
@@ -6100,23 +6105,25 @@
 <p class="admonition-title">Initialization Tasks</p>
 <p>Starts the RPC server, begins listening for client connections, and signals readiness by closing the readyCh channel once initialization is complete.</p>
 <p>This method performs several critical initialization tasks:</p>
+<ol>
+<li><strong>Validates the server</strong> has not already been started (using atomic operations)</li>
+<li><strong>Initializes network listeners</strong> on all configured interfaces and ports</li>
+<li><strong>Launches goroutines</strong> to accept and process incoming connections</li>
+<li><strong>Sets up proper handling</strong> for clean shutdown</li>
+<li><strong>Signals readiness</strong> through the provided channel</li>
+</ol>
 </div>
-<div class="highlight"><pre><span></span><code>1. **Validates the server** has not already been started (using atomic operations)
-2. **Initializes network listeners** on all configured interfaces and ports
-3. **Launches goroutines** to accept and process incoming connections
-4. **Sets up proper handling** for clean shutdown
-5. **Signals readiness** through the provided channel
-</code></pre></div>
 <p>The server supports binding to multiple addresses simultaneously, allowing both IPv4 and IPv6 connections, as well as restricting access to localhost-only if configured for development or testing environments.</p>
 <h3 id="stop">Stop</h3>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">RPCServer</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </code></pre></div>
 <p>Gracefully stops the RPC server by:</p>
-<div class="highlight"><pre><span></span><code>1. **Setting shutdown flag** to prevent new connections
-2. **Closing all active listeners** to stop accepting new requests
-3. **Waiting for active connections** to complete their current operations
-4. **Cleaning up resources** and releasing network ports
-</code></pre></div>
+<ol>
+<li><strong>Setting shutdown flag</strong> to prevent new connections</li>
+<li><strong>Closing all active listeners</strong> to stop accepting new requests</li>
+<li><strong>Waiting for active connections</strong> to complete their current operations</li>
+<li><strong>Cleaning up resources</strong> and releasing network ports</li>
+</ol>
 <p>This method implements a thread-safe shutdown mechanism using atomic operations to prevent multiple concurrent shutdown attempts. When called, it closes the quit channel to signal all goroutines to terminate, then waits for them to exit using the wait group before returning.</p>
 <h3 id="init">Init</h3>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">RPCServer</span><span class="p">)</span><span class="w"> </span><span class="nx">Init</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
@@ -6141,11 +6148,11 @@
 <div class="admonition success">
 <p class="admonition-title">Health Check Types</p>
 <p>It provides both readiness and liveness checking capabilities to support different operational scenarios:</p>
-</div>
 <ul>
 <li><strong>Readiness</strong>: Indicates whether the service is ready to accept requests (listeners are bound and core dependencies are available)</li>
 <li><strong>Liveness</strong>: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)</li>
 </ul>
+</div>
 <p><strong>Health Check Components:</strong></p>
 <ul>
 <li><strong>Verifying network listeners</strong> are active</li>
@@ -6313,8 +6320,8 @@
 <p>Creates a raw Bitcoin transaction without signing it.</p>
 <p><strong>Parameters:</strong></p>
 <ol>
-<li><code>inputs</code> (array, required):</li>
-</ol>
+<li>
+<p><code>inputs</code> (array, required):</p>
 <div class="highlight"><pre><span></span><code><span class="p">[</span>
 <span class="w">  </span><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;txid&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hex_string&quot;</span><span class="p">,</span><span class="w">       </span><span class="c1">// The transaction id</span>
@@ -6322,8 +6329,10 @@
 <span class="w">  </span><span class="p">}</span>
 <span class="p">]</span>
 </code></pre></div>
-<ol>
-<li><code>outputs</code> (object, required):</li>
+</li>
+<li>
+<p><code>outputs</code> (object, required):</p>
+</li>
 </ol>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;address&quot;</span><span class="p">:</span><span class="w"> </span><span class="err">x.xxx</span><span class="p">,</span><span class="w">            </span><span class="c1">// Bitcoin address:amount pairs</span>

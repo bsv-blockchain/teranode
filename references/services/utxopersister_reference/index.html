@@ -5614,6 +5614,22 @@
 
 <span class="w">    </span><span class="c1">// UTXOs contains the unspent transaction outputs</span>
 <span class="w">    </span><span class="nx">UTXOs</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">UTXO</span>
+
+<span class="w">    </span><span class="c1">// UTXOTotalValue is the total value of all UTXOs in this wrapper</span>
+<span class="w">    </span><span class="c1">// This field is not serialized but can be used for quick access to the total value</span>
+<span class="w">    </span><span class="c1">// without needing to sum the individual UTXOs each time.</span>
+<span class="w">    </span><span class="nx">UTXOTotalValue</span><span class="w"> </span><span class="kt">uint64</span>
+
+<span class="w">    </span><span class="c1">// UTXOCount is the number of UTXOs in this wrapper</span>
+<span class="w">    </span><span class="c1">// This field is not serialized but can be used for quick access to the count</span>
+<span class="w">    </span><span class="c1">// without needing to compute len(UTXOs) each time.</span>
+<span class="w">    </span><span class="nx">UTXOCount</span><span class="w"> </span><span class="kt">int</span>
+
+<span class="w">    </span><span class="c1">// Reusable buffer for reading fixed-size fields</span>
+<span class="w">    </span><span class="c1">// not concurrently accessed</span>
+<span class="w">    </span><span class="nx">b8</span><span class="w">             </span><span class="p">[</span><span class="mi">8</span><span class="p">]</span><span class="kt">byte</span>
+<span class="w">    </span><span class="nx">b16</span><span class="w">            </span><span class="p">[</span><span class="mi">16</span><span class="p">]</span><span class="kt">byte</span>
+<span class="w">    </span><span class="nx">reusableScript</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span>
 <span class="p">}</span>
 </code></pre></div>
 <h4 id="methods_3">Methods</h4>

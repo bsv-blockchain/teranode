@@ -5823,7 +5823,7 @@
 </ul>
 <h3 id="subtree-processing">Subtree Processing</h3>
 <h4 id="processsubtree">ProcessSubtree</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ProcessSubtree</span><span class="p">(</span><span class="nx">pCtx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">coinbaseTx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ProcessSubtree</span><span class="p">(</span><span class="nx">pCtx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">coinbaseTx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoDiff</span><span class="w"> </span><span class="o">*</span><span class="nx">utxopersister</span><span class="p">.</span><span class="nx">UTXOSet</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </code></pre></div>
 <p>Processes a subtree of transactions, validating and storing them.</p>
 <p>A subtree represents a hierarchical structure containing transaction references that make up part of a block. This method retrieves a subtree from the subtree store, processes all the transactions it contains, and creates subtree data for persistent storage.</p>
@@ -5848,6 +5848,7 @@
 <li><code>pCtx</code>: Parent context for the operation, used for cancellation and tracing</li>
 <li><code>subtreeHash</code>: Hash identifier of the subtree to process</li>
 <li><code>coinbaseTx</code>: The coinbase transaction for the block containing this subtree</li>
+<li><code>utxoDiff</code>: UTXO set difference tracker for processing transaction changes</li>
 </ul>
 <p><strong>Returns</strong> an error if any part of the subtree processing fails. Errors are wrapped with appropriate context to identify the specific failure point (storage, processing, etc.).</p>
 <div class="admonition warning">

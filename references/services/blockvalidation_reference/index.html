@@ -3726,54 +3726,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#subtreefound" class="md-nav__link">
+  <a href="#validateblock" class="md-nav__link">
     <span class="md-ellipsis">
-      SubtreeFound
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#get" class="md-nav__link">
-    <span class="md-ellipsis">
-      Get
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#exists" class="md-nav__link">
-    <span class="md-ellipsis">
-      Exists
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#settxmeta" class="md-nav__link">
-    <span class="md-ellipsis">
-      SetTxMeta
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltxmeta" class="md-nav__link">
-    <span class="md-ellipsis">
-      DelTxMeta
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#setminedmulti" class="md-nav__link">
-    <span class="md-ellipsis">
-      SetMinedMulti
+      ValidateBlock
     </span>
   </a>
   
@@ -3795,7 +3750,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#validateblock" class="md-nav__link">
+  <a href="#validateblock_1" class="md-nav__link">
     <span class="md-ellipsis">
       ValidateBlock
     </span>
@@ -5333,54 +5288,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#subtreefound" class="md-nav__link">
+  <a href="#validateblock" class="md-nav__link">
     <span class="md-ellipsis">
-      SubtreeFound
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#get" class="md-nav__link">
-    <span class="md-ellipsis">
-      Get
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#exists" class="md-nav__link">
-    <span class="md-ellipsis">
-      Exists
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#settxmeta" class="md-nav__link">
-    <span class="md-ellipsis">
-      SetTxMeta
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deltxmeta" class="md-nav__link">
-    <span class="md-ellipsis">
-      DelTxMeta
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#setminedmulti" class="md-nav__link">
-    <span class="md-ellipsis">
-      SetMinedMulti
+      ValidateBlock
     </span>
   </a>
   
@@ -5402,7 +5312,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#validateblock" class="md-nav__link">
+  <a href="#validateblock_1" class="md-nav__link">
     <span class="md-ellipsis">
       ValidateBlock
     </span>
@@ -5623,13 +5533,17 @@
 <span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w">       </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">                   </span><span class="c1">// Block assembly service client</span>
 
 <span class="w">    </span><span class="nx">blockFoundCh</span><span class="w">              </span><span class="kd">chan</span><span class="w"> </span><span class="nx">processBlockFound</span><span class="w">                  </span><span class="c1">// Channel for newly discovered blocks</span>
+<span class="w">    </span><span class="nx">blockPriorityQueue</span><span class="w">        </span><span class="o">*</span><span class="nx">BlockPriorityQueue</span><span class="w">                     </span><span class="c1">// Priority queue for block processing</span>
+<span class="w">    </span><span class="nx">blockClassifier</span><span class="w">           </span><span class="o">*</span><span class="nx">BlockClassifier</span><span class="w">                        </span><span class="c1">// Block priority classification</span>
+<span class="w">    </span><span class="nx">forkManager</span><span class="w">               </span><span class="o">*</span><span class="nx">ForkManager</span><span class="w">                            </span><span class="c1">// Fork processing management</span>
 <span class="w">    </span><span class="nx">catchupCh</span><span class="w">                 </span><span class="kd">chan</span><span class="w"> </span><span class="nx">processBlockCatchup</span><span class="w">                </span><span class="c1">// Channel for catchup block processing</span>
 
 <span class="w">    </span><span class="nx">blockValidation</span><span class="w">           </span><span class="o">*</span><span class="nx">BlockValidation</span><span class="w">                        </span><span class="c1">// Core validation logic and state</span>
 <span class="w">    </span><span class="nx">validatorClient</span><span class="w">           </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="w">                     </span><span class="c1">// Transaction validation services</span>
 
 <span class="w">    </span><span class="nx">kafkaConsumerClient</span><span class="w">       </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="w">              </span><span class="c1">// Kafka message consumption client</span>
-<span class="w">    </span><span class="nx">processSubtreeNotify</span><span class="w">      </span><span class="o">*</span><span class="nx">ttlcache</span><span class="p">.</span><span class="nx">Cache</span><span class="p">[</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="kt">bool</span><span class="p">]</span><span class="w">   </span><span class="c1">// Cache for subtree processing state</span>
+<span class="w">    </span><span class="nx">processBlockNotify</span><span class="w">        </span><span class="o">*</span><span class="nx">ttlcache</span><span class="p">.</span><span class="nx">Cache</span><span class="p">[</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="kt">bool</span><span class="p">]</span><span class="w">   </span><span class="c1">// Cache for block processing state</span>
+<span class="w">    </span><span class="nx">catchupAlternatives</span><span class="w">       </span><span class="o">*</span><span class="nx">ttlcache</span><span class="p">.</span><span class="nx">Cache</span><span class="p">[</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="p">[]</span><span class="nx">processBlockCatchup</span><span class="p">]</span><span class="w"> </span><span class="c1">// Alternative peer sources for catchup</span>
 <span class="w">    </span><span class="nx">stats</span><span class="w">                     </span><span class="o">*</span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Stat</span><span class="w">                            </span><span class="c1">// Operational metrics tracking</span>
 <span class="w">    </span><span class="nx">peerCircuitBreakers</span><span class="w">       </span><span class="o">*</span><span class="nx">catchup</span><span class="p">.</span><span class="nx">PeerCircuitBreakers</span><span class="w">            </span><span class="c1">// Circuit breakers for peer management</span>
 <span class="w">    </span><span class="nx">peerMetrics</span><span class="w">               </span><span class="o">*</span><span class="nx">catchup</span><span class="p">.</span><span class="nx">CatchupMetrics</span><span class="w">                 </span><span class="c1">// Peer performance metrics</span>
@@ -5713,6 +5627,9 @@
 <span class="w">    </span><span class="c1">// blockHashesCurrentlyValidated tracks blocks in validation process</span>
 <span class="w">    </span><span class="nx">blockHashesCurrentlyValidated</span><span class="w"> </span><span class="o">*</span><span class="nx">txmap</span><span class="p">.</span><span class="nx">SwissMap</span>
 
+<span class="w">    </span><span class="c1">// blocksCurrentlyValidating tracks blocks being validated to prevent concurrent validation</span>
+<span class="w">    </span><span class="nx">blocksCurrentlyValidating</span><span class="w"> </span><span class="o">*</span><span class="nx">txmap</span><span class="p">.</span><span class="nx">SyncedMap</span><span class="p">[</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="nx">validationResult</span><span class="p">]</span>
+
 <span class="w">    </span><span class="c1">// blockBloomFiltersBeingCreated tracks bloom filters being generated</span>
 <span class="w">    </span><span class="nx">blockBloomFiltersBeingCreated</span><span class="w"> </span><span class="o">*</span><span class="nx">txmap</span><span class="p">.</span><span class="nx">SwissMap</span>
 
@@ -5739,7 +5656,7 @@
 <h2 id="functions">Functions</h2>
 <h3 id="server_1">Server</h3>
 <h4 id="new">New</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">kafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">kafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span><span class="w"> </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span>
 </code></pre></div>
 <p>Creates a new instance of the <code>Server</code> with:</p>
 <ul>
@@ -5821,32 +5738,12 @@
 <li>Handles height calculation</li>
 <li>Integrates with blockchain state</li>
 </ul>
-<h4 id="subtreefound">SubtreeFound</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">SubtreeFound</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">SubtreeFoundRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">EmptyMessage</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
-<p>Handles notification of new subtrees.</p>
-<h4 id="get">Get</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Get</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">GetSubtreeRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">GetSubtreeResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
-<p>Retrieves subtree data from storage.</p>
-<h4 id="exists">Exists</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">Exists</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">ExistsSubtreeRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">ExistsSubtreeResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
-<p>Verifies subtree existence in storage.</p>
-<h4 id="settxmeta">SetTxMeta</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">SetTxMeta</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">SetTxMetaRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">SetTxMetaResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
-<p>Queues transaction metadata updates.</p>
-<h4 id="deltxmeta">DelTxMeta</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">DelTxMeta</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">DelTxMetaRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">DelTxMetaResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
-<p>Removes transaction metadata.</p>
-<h4 id="setminedmulti">SetMinedMulti</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">SetMinedMulti</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">SetMinedMultiRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">SetMinedMultiResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
-<p>Marks multiple transactions as mined in a block.</p>
-<h3 id="blockvalidation_1">BlockValidation</h3>
 <h4 id="validateblock">ValidateBlock</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">ValidateBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">ValidateBlockResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Validates a block directly from the block bytes without needing to fetch it from the network or database. This method is typically used for testing or when the block is already available in memory, and no internal updates or database operations are needed.</p>
+<h3 id="blockvalidation_1">BlockValidation</h3>
+<h4 id="validateblock_1">ValidateBlock</h4>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">BlockValidation</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Block</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">bloomStats</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BloomStats</span><span class="p">,</span><span class="w"> </span><span class="nx">disableOptimisticMining</span><span class="w"> </span><span class="o">...</span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </code></pre></div>
 <p>Performs comprehensive block validation:</p>

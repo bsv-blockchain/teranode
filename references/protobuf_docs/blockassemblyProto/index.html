@@ -3412,15 +3412,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#newchaintipandheightrequest" class="md-nav__link">
-    <span class="md-ellipsis">
-      NewChaintipAndHeightRequest
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#removetxrequest" class="md-nav__link">
     <span class="md-ellipsis">
       RemoveTxRequest
@@ -5077,15 +5068,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#newchaintipandheightrequest" class="md-nav__link">
-    <span class="md-ellipsis">
-      NewChaintipAndHeightRequest
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#removetxrequest" class="md-nav__link">
     <span class="md-ellipsis">
       RemoveTxRequest
@@ -5192,7 +5174,6 @@
 <li><a href="#getcurrentdifficultyresponse">GetCurrentDifficultyResponse</a></li>
 <li><a href="#getminingcandidaterequest">GetMiningCandidateRequest</a></li>
 <li><a href="#healthresponse">HealthResponse</a></li>
-<li><a href="#newchaintipandheightrequest">NewChaintipAndHeightRequest</a></li>
 <li><a href="#removetxrequest">RemoveTxRequest</a></li>
 <li><a href="#statemessage">StateMessage</a></li>
 <li><a href="#submitminingsolutionrequest">SubmitMiningSolutionRequest</a></li>
@@ -5436,33 +5417,6 @@
 </tr>
 </tbody>
 </table>
-<p><a name="NewChaintipAndHeightRequest"></a></p>
-<h3 id="newchaintipandheightrequest">NewChaintipAndHeightRequest</h3>
-<p>Request for adding a new chaintip and height information.</p>
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th>Label</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>chaintip</td>
-<td><a href="#bytes">bytes</a></td>
-<td></td>
-<td>the chaintip hash</td>
-</tr>
-<tr>
-<td>height</td>
-<td><a href="#uint32">uint32</a></td>
-<td></td>
-<td>the height of the chaintip in the blockchain</td>
-</tr>
-</tbody>
-</table>
 <p><a name="RemoveTxRequest"></a></p>
 <h3 id="removetxrequest">RemoveTxRequest</h3>
 <p>Request for removing a transaction from the mining candidate block.</p>
@@ -5508,18 +5462,6 @@
 <td><a href="#string">string</a></td>
 <td></td>
 <td>the state of the block assembly subtree processor</td>
-</tr>
-<tr>
-<td>resetWaitCount</td>
-<td><a href="#uint32">uint32</a></td>
-<td></td>
-<td>the number of blocks the reset has to wait for</td>
-</tr>
-<tr>
-<td>resetWaitTime</td>
-<td><a href="#uint32">uint32</a></td>
-<td></td>
-<td>the time in seconds the reset has to wait for</td>
 </tr>
 <tr>
 <td>subtreeCount</td>
@@ -5745,6 +5687,12 @@
 <td><a href="#blockassembly_api-EmptyMessage">EmptyMessage</a></td>
 <td><a href="#blockassembly_api-EmptyMessage">EmptyMessage</a></td>
 <td>Resets the block assembly state. Useful for handling reorgs or recovering from errors.</td>
+</tr>
+<tr>
+<td>ResetBlockAssemblyFully</td>
+<td><a href="#blockassembly_api-EmptyMessage">EmptyMessage</a></td>
+<td><a href="#blockassembly_api-EmptyMessage">EmptyMessage</a></td>
+<td>Performs a complete reset of the block assembly state. This includes clearing all transactions and resetting internal structures. This will traverse the whole UTXO set and is more intensive than a standard reset.</td>
 </tr>
 <tr>
 <td>GetBlockAssemblyState</td>

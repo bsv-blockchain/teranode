@@ -4023,6 +4023,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#reportpeerfailure" class="md-nav__link">
+    <span class="md-ellipsis">
+      ReportPeerFailure
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5910,6 +5919,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#reportpeerfailure" class="md-nav__link">
+    <span class="md-ellipsis">
+      ReportPeerFailure
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6406,6 +6424,10 @@
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">SendNotification</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">Notification</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
 <p>Broadcasts a notification to all subscribers.</p>
+<h3 id="reportpeerfailure">ReportPeerFailure</h3>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">ReportPeerFailure</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">ReportPeerFailureRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Handles reports of peer download failures and broadcasts notifications to subscribers. This method is used by other services to report when a peer fails to provide requested data, allowing the blockchain service to notify subscribers (including P2P services) about peer reliability issues.</p>
 <h2 id="state-management-functions">State Management Functions</h2>
 <h3 id="getstate">GetState</h3>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">GetState</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">GetStateRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">StateResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>

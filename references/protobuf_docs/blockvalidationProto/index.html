@@ -5127,6 +5127,18 @@
 <td></td>
 <td>The height of the block in the blockchain</td>
 </tr>
+<tr>
+<td>base_url</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>Base URL where the block can be retrieved from</td>
+</tr>
+<tr>
+<td>peer_id</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>P2P peer identifier for peerMetrics tracking</td>
+</tr>
 </tbody>
 </table>
 <p><a name="ValidateBlockRequest"></a></p>
@@ -5153,6 +5165,12 @@
 <td><a href="#uint32">uint32</a></td>
 <td></td>
 <td>The height of the block in the blockchain</td>
+</tr>
+<tr>
+<td>is_revalidation</td>
+<td><a href="#bool">bool</a></td>
+<td></td>
+<td>Indicates this is a revalidation of an invalid block</td>
 </tr>
 </tbody>
 </table>

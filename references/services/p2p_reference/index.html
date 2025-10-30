@@ -3805,9 +3805,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#p2pnodei-interface" class="md-nav__link">
+  <a href="#p2p-client-interface" class="md-nav__link">
     <span class="md-ellipsis">
-      p2p.NodeI Interface
+      P2P Client Interface
     </span>
   </a>
   
@@ -5101,9 +5101,9 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#p2pnodei-interface" class="md-nav__link">
+  <a href="#p2p-client-interface" class="md-nav__link">
     <span class="md-ellipsis">
-      p2p.NodeI Interface
+      P2P Client Interface
     </span>
   </a>
   
@@ -5378,11 +5378,11 @@
 <p>The P2P Server is implemented through the Server struct, which coordinates all peer-to-peer communication:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Server</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UnimplementedPeerServiceServer</span>
-<span class="w">    </span><span class="nx">P2PNode</span><span class="w">                           </span><span class="nx">p2p</span><span class="p">.</span><span class="nx">NodeI</span><span class="w">          </span><span class="c1">// The P2P network node instance from github.com/bsv-blockchain/go-p2p</span>
-<span class="w">    </span><span class="nx">logger</span><span class="w">                            </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="w">     </span><span class="c1">// Logger instance for the server</span>
-<span class="w">    </span><span class="nx">settings</span><span class="w">                          </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="w"> </span><span class="c1">// Configuration settings</span>
-<span class="w">    </span><span class="nx">bitcoinProtocolID</span><span class="w">                 </span><span class="kt">string</span><span class="w">             </span><span class="c1">// Bitcoin protocol identifier (format: &quot;teranode/bitcoin/{version}&quot;)</span>
-<span class="w">    </span><span class="nx">blockchainClient</span><span class="w">                  </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="w"> </span><span class="c1">// Client for blockchain interactions</span>
+<span class="w">    </span><span class="nx">P2PClient</span><span class="w">                         </span><span class="nx">p2pMessageBus</span><span class="p">.</span><span class="nx">P2PClient</span><span class="w">   </span><span class="c1">// The P2P network client from github.com/bsv-blockchain/go-p2p-message-bus</span>
+<span class="w">    </span><span class="nx">logger</span><span class="w">                            </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="w">            </span><span class="c1">// Logger instance for the server</span>
+<span class="w">    </span><span class="nx">settings</span><span class="w">                          </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="w">       </span><span class="c1">// Configuration settings</span>
+<span class="w">    </span><span class="nx">bitcoinProtocolVersion</span><span class="w">            </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// Bitcoin protocol version identifier</span>
+<span class="w">    </span><span class="nx">blockchainClient</span><span class="w">                  </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">       </span><span class="c1">// Client for blockchain interactions</span>
 <span class="w">    </span><span class="nx">blockValidationClient</span><span class="w">             </span><span class="nx">blockvalidation</span><span class="p">.</span><span class="nx">Interface</span>
 <span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w">               </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">     </span><span class="c1">// Client for block assembly operations</span>
 <span class="w">    </span><span class="nx">AssetHTTPAddressURL</span><span class="w">               </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// HTTP address URL for assets</span>
@@ -5399,19 +5399,19 @@
 <span class="w">    </span><span class="nx">gCtx</span><span class="w">                              </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span>
 <span class="w">    </span><span class="nx">blockTopicName</span><span class="w">                    </span><span class="kt">string</span>
 <span class="w">    </span><span class="nx">subtreeTopicName</span><span class="w">                  </span><span class="kt">string</span>
-<span class="w">    </span><span class="nx">miningOnTopicName</span><span class="w">                 </span><span class="kt">string</span>
 <span class="w">    </span><span class="nx">rejectedTxTopicName</span><span class="w">               </span><span class="kt">string</span>
-<span class="w">    </span><span class="nx">invalidBlocksTopicName</span><span class="w">            </span><span class="kt">string</span><span class="w">       </span><span class="c1">// Kafka topic for invalid blocks</span>
-<span class="w">    </span><span class="nx">invalidSubtreeTopicName</span><span class="w">           </span><span class="kt">string</span><span class="w">       </span><span class="c1">// Kafka topic for invalid subtrees</span>
-<span class="w">    </span><span class="nx">handshakeTopicName</span><span class="w">                </span><span class="kt">string</span><span class="w">       </span><span class="c1">// pubsub topic for version/verack</span>
-<span class="w">    </span><span class="nx">nodeStatusTopicName</span><span class="w">               </span><span class="kt">string</span><span class="w">       </span><span class="c1">// pubsub topic for node status messages</span>
-<span class="w">    </span><span class="nx">topicPrefix</span><span class="w">                       </span><span class="kt">string</span><span class="w">       </span><span class="c1">// Chain identifier prefix for topic validation</span>
-<span class="w">    </span><span class="nx">blockPeerMap</span><span class="w">                      </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">     </span><span class="c1">// Map to track which peer sent each block (hash -&gt; peerMapEntry)</span>
-<span class="w">    </span><span class="nx">subtreePeerMap</span><span class="w">                    </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">     </span><span class="c1">// Map to track which peer sent each subtree (hash -&gt; peerMapEntry)</span>
-<span class="w">    </span><span class="nx">startTime</span><span class="w">                         </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w">    </span><span class="c1">// Server start time for uptime calculation</span>
-<span class="w">    </span><span class="nx">syncManager</span><span class="w">                       </span><span class="o">*</span><span class="nx">SyncManager</span><span class="w"> </span><span class="c1">// Manager for peer synchronization and best peer selection</span>
-<span class="w">    </span><span class="nx">peerBlockHashes</span><span class="w">                   </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">     </span><span class="c1">// Map to track peer best block hashes (peerID -&gt; hash string)</span>
-<span class="w">    </span><span class="nx">syncConnectionTimes</span><span class="w">               </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">     </span><span class="c1">// Map to track when we first connected to each sync peer (peerID -&gt; timestamp)</span>
+<span class="w">    </span><span class="nx">invalidBlocksTopicName</span><span class="w">            </span><span class="kt">string</span><span class="w">             </span><span class="c1">// Kafka topic for invalid blocks</span>
+<span class="w">    </span><span class="nx">invalidSubtreeTopicName</span><span class="w">           </span><span class="kt">string</span><span class="w">             </span><span class="c1">// Kafka topic for invalid subtrees</span>
+<span class="w">    </span><span class="nx">nodeStatusTopicName</span><span class="w">               </span><span class="kt">string</span><span class="w">             </span><span class="c1">// pubsub topic for node status messages</span>
+<span class="w">    </span><span class="nx">topicPrefix</span><span class="w">                       </span><span class="kt">string</span><span class="w">             </span><span class="c1">// Chain identifier prefix for topic validation</span>
+<span class="w">    </span><span class="nx">blockPeerMap</span><span class="w">                      </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">           </span><span class="c1">// Map to track which peer sent each block (hash -&gt; peerMapEntry)</span>
+<span class="w">    </span><span class="nx">subtreePeerMap</span><span class="w">                    </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">           </span><span class="c1">// Map to track which peer sent each subtree (hash -&gt; peerMapEntry)</span>
+<span class="w">    </span><span class="nx">startTime</span><span class="w">                         </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w">          </span><span class="c1">// Server start time for uptime calculation</span>
+<span class="w">    </span><span class="nx">peerRegistry</span><span class="w">                      </span><span class="o">*</span><span class="nx">PeerRegistry</span><span class="w">      </span><span class="c1">// Central registry for all peer information</span>
+<span class="w">    </span><span class="nx">peerSelector</span><span class="w">                      </span><span class="o">*</span><span class="nx">PeerSelector</span><span class="w">      </span><span class="c1">// Stateless peer selection logic</span>
+<span class="w">    </span><span class="nx">peerHealthChecker</span><span class="w">                 </span><span class="o">*</span><span class="nx">PeerHealthChecker</span><span class="w"> </span><span class="c1">// Async health monitoring</span>
+<span class="w">    </span><span class="nx">syncCoordinator</span><span class="w">                   </span><span class="o">*</span><span class="nx">SyncCoordinator</span><span class="w">   </span><span class="c1">// Orchestrates sync operations</span>
+<span class="w">    </span><span class="nx">syncConnectionTimes</span><span class="w">               </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">           </span><span class="c1">// Map to track when we first connected to each sync peer (peerID -&gt; timestamp)</span>
 
 <span class="w">    </span><span class="c1">// Cleanup configuration</span>
 <span class="w">    </span><span class="nx">peerMapCleanupTicker</span><span class="w"> </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Ticker</span><span class="w">  </span><span class="c1">// Ticker for periodic cleanup of peer maps</span>
@@ -5421,52 +5421,27 @@
 </code></pre></div>
 <p>The server manages several key components, each serving a specific purpose in the P2P network:</p>
 <ul>
-<li>The P2PNode handles direct peer connections and message routing through the p2p.NodeI interface from the public github.com/bsv-blockchain/go-p2p package</li>
-<li>The bitcoinProtocolID contains the node's user agent string in format "teranode/bitcoin/{version}" where version is dynamically determined at build time from Git tags (e.g., "v1.2.3") or generated as a pseudo-version (e.g., "v0.0.0-20250731141601-18714b9")</li>
+<li>The P2PClient handles direct peer connections and message routing through the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package</li>
+<li>The bitcoinProtocolVersion contains the node's protocol version identifier</li>
 <li>The various Kafka clients manage message distribution across the network</li>
 <li>The ban system maintains network security by managing peer access through BanListI and PeerBanManager</li>
 <li>The notification channel handles real-time event propagation</li>
+<li>The peerRegistry, peerSelector, peerHealthChecker, and syncCoordinator provide comprehensive peer management and synchronization capabilities</li>
 </ul>
-<h3 id="p2pnodei-interface">p2p.NodeI Interface</h3>
-<p>The P2P Server uses the p2p.NodeI interface from the public github.com/bsv-blockchain/go-p2p package. This interface-based design enables better testability and allows external developers to create custom P2P implementations:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">NodeI</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// Core lifecycle methods</span>
-<span class="w">    </span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">streamHandler</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">network</span><span class="p">.</span><span class="nx">Stream</span><span class="p">),</span><span class="w"> </span><span class="nx">topicNames</span><span class="w"> </span><span class="o">...</span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-<span class="w">    </span><span class="nx">Stop</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-
-<span class="w">    </span><span class="c1">// Topic-related methods</span>
-<span class="w">    </span><span class="nx">SetTopicHandler</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">topicName</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">handler</span><span class="w"> </span><span class="nx">Handler</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-<span class="w">    </span><span class="nx">GetTopic</span><span class="p">(</span><span class="nx">topicName</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">pubsub</span><span class="p">.</span><span class="nx">Topic</span>
-<span class="w">    </span><span class="nx">Publish</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">topicName</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">msgBytes</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-
-<span class="w">    </span><span class="c1">// Peer management methods</span>
-<span class="w">    </span><span class="nx">HostID</span><span class="p">()</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ID</span>
-<span class="w">    </span><span class="nx">ConnectedPeers</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="nx">PeerInfo</span>
-<span class="w">    </span><span class="nx">CurrentlyConnectedPeers</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="nx">PeerInfo</span>
-<span class="w">    </span><span class="nx">DisconnectPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peerID</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ID</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-<span class="w">    </span><span class="nx">SendToPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">pid</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ID</span><span class="p">,</span><span class="w"> </span><span class="nx">msg</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
-<span class="w">    </span><span class="nx">SetPeerConnectedCallback</span><span class="p">(</span><span class="nx">callback</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ID</span><span class="p">))</span>
-<span class="w">    </span><span class="nx">UpdatePeerHeight</span><span class="p">(</span><span class="nx">peerID</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ID</span><span class="p">,</span><span class="w"> </span><span class="nx">height</span><span class="w"> </span><span class="kt">int32</span><span class="p">)</span>
-
-<span class="w">    </span><span class="c1">// Stats methods</span>
-<span class="w">    </span><span class="nx">LastSend</span><span class="p">()</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span>
-<span class="w">    </span><span class="nx">LastRecv</span><span class="p">()</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span>
-<span class="w">    </span><span class="nx">BytesSent</span><span class="p">()</span><span class="w"> </span><span class="kt">uint64</span>
-<span class="w">    </span><span class="nx">BytesReceived</span><span class="p">()</span><span class="w"> </span><span class="kt">uint64</span>
-
-<span class="w">    </span><span class="c1">// Additional accessors</span>
-<span class="w">    </span><span class="nx">GetProcessName</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span>
-<span class="w">    </span><span class="nx">UpdateBytesReceived</span><span class="p">(</span><span class="nx">bytesCount</span><span class="w"> </span><span class="kt">uint64</span><span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div>
+<h3 id="p2p-client-interface">P2P Client Interface</h3>
+<p>The P2P Server uses the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package. This interface-based design enables better testability and allows external developers to create custom P2P implementations that integrate with Teranode's messaging system.</p>
 <h2 id="server-operations">Server Operations</h2>
 <h3 id="server-initialization">Server Initialization</h3>
 <p>The server initializes through the NewServer function:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">NewServer</span><span class="p">(</span><span class="w"> </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">NewServer</span><span class="p">(</span>
+<span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">rejectedTxKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">invalidBlocksKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">invalidSubtreeKafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">subtreeKafkaProducerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">blocksKafkaProducerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaAsyncProducerI</span><span class="p">,</span>
 <span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Server</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
@@ -5725,15 +5700,16 @@
 <p>The P2P Server depends on several components:</p>
 <ul>
 <li><code>blockchain.ClientI</code>: Interface for blockchain operations</li>
-<li><code>blockvalidation.Client</code>: Client for block validation operations</li>
-<li><code>p2p.NodeI</code>: P2P node interface from the public <code>github.com/bsv-blockchain/go-p2p</code> package</li>
+<li><code>blockvalidation.Interface</code>: Interface for block validation operations</li>
+<li><code>blockassembly.ClientI</code>: Interface for block assembly operations</li>
+<li><code>p2pMessageBus.P2PClient</code>: P2P client interface from the <code>github.com/bsv-blockchain/go-p2p-message-bus</code> package</li>
 <li>Kafka producers and consumers for message distribution</li>
 </ul>
 <p>These dependencies are injected into the <code>Server</code> struct during initialization.</p>
-<p>The use of the public go-p2p package enables external developers to:</p>
+<p>The use of the go-p2p-message-bus package enables external developers to:</p>
 <ul>
-<li>Create custom P2P node implementations that are compatible with Teranode</li>
-<li>Build applications that can directly integrate with Teranode's P2P network</li>
+<li>Create custom P2P client implementations that are compatible with Teranode</li>
+<li>Build applications that can directly integrate with Teranode's P2P messaging system</li>
 <li>Extend P2P functionality while maintaining compatibility with the standard interface</li>
 </ul>
 <h2 id="error-handling">Error Handling</h2>

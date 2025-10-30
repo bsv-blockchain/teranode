@@ -5149,6 +5149,9 @@
 <span class="w">    </span><span class="c1">// SubtreeIdx is the index of the subtree where the transaction appears</span>
 <span class="w">    </span><span class="nx">SubtreeIdx</span><span class="w">  </span><span class="kt">int</span>
 
+<span class="w">    </span><span class="c1">// OnLongestChain indicates if this block is on the longest chain</span>
+<span class="w">    </span><span class="nx">OnLongestChain</span><span class="w"> </span><span class="kt">bool</span>
+
 <span class="w">    </span><span class="c1">// UnsetMined if true, the mined info will be removed from the tx</span>
 <span class="w">    </span><span class="nx">UnsetMined</span><span class="w">  </span><span class="kt">bool</span>
 <span class="p">}</span>
@@ -5183,6 +5186,12 @@
 <span class="w">    </span><span class="nx">CreatedAt</span><span class="w">  </span><span class="kt">int</span>
 <span class="w">    </span><span class="c1">// Locked indicates whether the transaction outputs are marked as locked</span>
 <span class="w">    </span><span class="nx">Locked</span><span class="w">     </span><span class="kt">bool</span>
+<span class="w">    </span><span class="c1">// Skip indicates whether this transaction should be skipped during iteration</span>
+<span class="w">    </span><span class="nx">Skip</span><span class="w">       </span><span class="kt">bool</span>
+<span class="w">    </span><span class="c1">// UnminedSince is the block height since when this transaction has been unmined</span>
+<span class="w">    </span><span class="nx">UnminedSince</span><span class="w"> </span><span class="kt">int</span>
+<span class="w">    </span><span class="c1">// BlockIDs is the list of blocks the transaction has been mined into</span>
+<span class="w">    </span><span class="nx">BlockIDs</span><span class="w">   </span><span class="p">[]</span><span class="kt">uint32</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="unminedtxiterator">UnminedTxIterator</h3>
@@ -5283,6 +5292,11 @@
 <span class="w">    </span><span class="c1">// SetLocked marks transactions as locked and not spendable.</span>
 <span class="w">    </span><span class="nx">SetLocked</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">txHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">value</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 
+<span class="w">    </span><span class="c1">// MarkTransactionsOnLongestChain marks transactions as being on the longest chain or not.</span>
+<span class="w">    </span><span class="c1">// When onLongestChain is true, the unminedSince field is unset (transaction is mined).</span>
+<span class="w">    </span><span class="c1">// When onLongestChain is false, the unminedSince field is set to the current block height.</span>
+<span class="w">    </span><span class="nx">MarkTransactionsOnLongestChain</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">txHashes</span><span class="w"> </span><span class="p">[]</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">onLongestChain</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+
 <span class="w">    </span><span class="c1">// SetBlockHeight updates the current block height in the store.</span>
 <span class="w">    </span><span class="nx">SetBlockHeight</span><span class="p">(</span><span class="nx">height</span><span class="w"> </span><span class="kt">uint32</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 
@@ -5297,7 +5311,8 @@
 
 <span class="w">    </span><span class="c1">// GetUnminedTxIterator returns an iterator for all unmined transactions in the store.</span>
 <span class="w">    </span><span class="c1">// This is used by the Block Assembly service to recover transactions on startup.</span>
-<span class="w">    </span><span class="nx">GetUnminedTxIterator</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="nx">UnminedTxIterator</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// The fullScan parameter determines whether to perform a full scan of all transactions.</span>
+<span class="w">    </span><span class="nx">GetUnminedTxIterator</span><span class="p">(</span><span class="nx">fullScan</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">UnminedTxIterator</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 
 <span class="w">    </span><span class="c1">// QueryOldUnminedTransactions returns transaction hashes for unmined transactions older than the cutoff height.</span>
 <span class="w">    </span><span class="c1">// This method is used by the store-agnostic cleanup implementation to identify transactions for removal.</span>
@@ -5326,6 +5341,7 @@
 <li><code>BatchDecorate</code>: Efficiently fetches metadata for multiple transactions in a single operation.</li>
 <li><code>FreezeUTXOs</code>/<code>UnFreezeUTXOs</code>: Manages frozen status of UTXOs for the alert system.</li>
 <li><code>SetConflicting</code>/<code>SetLocked</code>: Controls transaction conflict and spendability status.</li>
+<li><code>MarkTransactionsOnLongestChain</code>: Marks transactions as being on the longest chain or not, managing the unminedSince field.</li>
 <li><code>GetMeta</code>: Retrieves transaction metadata for a single transaction.</li>
 <li><code>SetMinedMulti</code>: Updates block information for multiple mined transactions and returns a map of transaction hashes to block IDs.</li>
 <li><code>PreviousOutputsDecorate</code>: Fetches information about transaction inputs' previous outputs from a transaction.</li>

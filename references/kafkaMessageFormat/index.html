@@ -3514,6 +3514,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#peer_id_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      peer_id
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4070,6 +4079,15 @@
   <a href="#reason_2" class="md-nav__link">
     <span class="md-ellipsis">
       reason
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer_id_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      peer_id
     </span>
   </a>
   
@@ -6358,6 +6376,15 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#peer_id_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      peer_id
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6914,6 +6941,15 @@
   <a href="#reason_2" class="md-nav__link">
     <span class="md-ellipsis">
       reason
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer_id_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      peer_id
     </span>
   </a>
   
@@ -7672,6 +7708,7 @@
 <div class="highlight"><pre><span></span><code><span class="kd">message</span><span class="w"> </span><span class="nc">KafkaSubtreeTopicMessage</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">hash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// Subtree hash (as hex string)</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">URL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w">  </span><span class="c1">// URL pointing to subtree data</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">peer_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w">  </span><span class="c1">// Originator peer ID</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="field-specifications_2">Field Specifications</h3>
@@ -7687,11 +7724,18 @@
 <li>Description: URL pointing to the location where the full subtree data can be retrieved</li>
 <li>Required: Yes</li>
 </ul>
+<h4 id="peer_id_1">peer_id</h4>
+<ul>
+<li>Type: string</li>
+<li>Description: Originator peer identifier that created or provided this subtree</li>
+<li>Required: Yes</li>
+</ul>
 <h3 id="example_2">Example</h3>
 <p>Here's a JSON representation of the message content (for illustration purposes only; actual messages are protobuf-encoded):</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;45a2b856743012ce25a4dabddd5f5bdf534c27c9347b34862bca5a14176d07&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;URL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://datahub.example.com/subtrees/123&quot;</span>
+<span class="w">  </span><span class="nt">&quot;URL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://datahub.example.com/subtrees/123&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;peer_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;peer_67890&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="code-examples_2">Code Examples</h3>
@@ -7704,6 +7748,7 @@
 <span class="nx">message</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">kafkamessage</span><span class="p">.</span><span class="nx">KafkaSubtreeTopicMessage</span><span class="p">{</span>
 <span class="w">    </span><span class="nx">Hash</span><span class="p">:</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="c1">// convert the hash to a string</span>
 <span class="w">    </span><span class="nx">URL</span><span class="p">:</span><span class="w">  </span><span class="nx">dataHubUrl</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">PeerId</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;peer_67890&quot;</span><span class="p">,</span><span class="w"> </span><span class="c1">// Originator peer identifier</span>
 <span class="p">}</span>
 
 <span class="c1">// Serialize to protobuf format</span>
@@ -7736,11 +7781,12 @@
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;invalid subtree hash: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="c1">// Extract DataHub URL</span>
+<span class="w">    </span><span class="c1">// Extract DataHub URL and peer ID</span>
 <span class="w">    </span><span class="nx">dataHubUrl</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">subtreeMessage</span><span class="p">.</span><span class="nx">URL</span>
+<span class="w">    </span><span class="nx">peerID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">subtreeMessage</span><span class="p">.</span><span class="nx">PeerId</span>
 
 <span class="w">    </span><span class="c1">// Process the subtree notification...</span>
-<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Received subtree notification for %s, data at: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="nx">dataHubUrl</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Received subtree notification for %s from peer %s, data at: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="nx">peerID</span><span class="p">,</span><span class="w"> </span><span class="nx">dataHubUrl</span><span class="p">)</span>
 <span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 <span class="p">}</span>
 </code></pre></div>
@@ -8164,6 +8210,7 @@
 <div class="highlight"><pre><span></span><code><span class="kd">message</span><span class="w"> </span><span class="nc">KafkaRejectedTxTopicMessage</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">txHash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">  </span><span class="c1">// Transaction hash (as hex string)</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">reason</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w"> </span><span class="c1">// Rejection reason</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">peer_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w">  </span><span class="c1">// Empty = internal rejection, non-empty = external peer</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="field-specifications_6">Field Specifications</h3>
@@ -8180,11 +8227,18 @@
 <li>Description: Human-readable description of why the transaction was rejected</li>
 <li>Required: Yes</li>
 </ul>
+<h4 id="peer_id_2">peer_id</h4>
+<ul>
+<li>Type: string</li>
+<li>Description: Peer identifier indicating the source of rejection. Empty string indicates internal rejection, non-empty indicates rejection from external peer</li>
+<li>Required: Yes</li>
+</ul>
 <h3 id="example_6">Example</h3>
 <p>Here's a JSON representation of the message content (for illustration purposes only; actual messages are protobuf-encoded):</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;txHash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Insufficient fee for transaction size&quot;</span>
+<span class="w">  </span><span class="nt">&quot;reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Insufficient fee for transaction size&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;peer_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="code-examples_6">Code Examples</h3>
@@ -8197,6 +8251,7 @@
 <span class="nx">message</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">kafkamessage</span><span class="p">.</span><span class="nx">KafkaRejectedTxTopicMessage</span><span class="p">{</span>
 <span class="w">    </span><span class="nx">TxHash</span><span class="p">:</span><span class="w"> </span><span class="nx">txHash</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">Reason</span><span class="p">:</span><span class="w"> </span><span class="nx">reasonStr</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">PeerId</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="p">,</span><span class="w"> </span><span class="c1">// Empty string indicates internal rejection</span>
 <span class="p">}</span>
 
 <span class="c1">// Serialize to protobuf format</span>
@@ -8223,9 +8278,10 @@
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;failed to deserialize rejected transaction message: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="c1">// Extract transaction hash and reason</span>
+<span class="w">    </span><span class="c1">// Extract transaction hash, reason, and peer ID</span>
 <span class="w">    </span><span class="nx">txHashStr</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">rejectedTxMessage</span><span class="p">.</span><span class="nx">TxHash</span>
 <span class="w">    </span><span class="nx">reason</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">rejectedTxMessage</span><span class="p">.</span><span class="nx">Reason</span>
+<span class="w">    </span><span class="nx">peerID</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">rejectedTxMessage</span><span class="p">.</span><span class="nx">PeerId</span>
 
 <span class="w">    </span><span class="c1">// Convert hex string to chainhash.Hash if needed</span>
 <span class="w">    </span><span class="nx">txHash</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">NewHashFromStr</span><span class="p">(</span><span class="nx">txHashStr</span><span class="p">)</span>
@@ -8234,7 +8290,11 @@
 <span class="w">    </span><span class="p">}</span>
 
 <span class="w">    </span><span class="c1">// Process the rejected transaction notification...</span>
-<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Transaction %s was rejected: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">txHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="nx">reason</span><span class="p">)</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">peerID</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Transaction %s was rejected internally: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">txHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="nx">reason</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Transaction %s was rejected by peer %s: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">txHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="nx">peerID</span><span class="p">,</span><span class="w"> </span><span class="nx">reason</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
 <span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 <span class="p">}</span>
 </code></pre></div>
