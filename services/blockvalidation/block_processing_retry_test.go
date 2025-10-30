@@ -405,47 +405,6 @@ func TestAlternativeSourceTracking(t *testing.T) {
 	assert.False(t, ok)
 }
 
-// TestProcessBlockFoundWithMaliciousPeer tests that malicious peers are properly handled
-func TestProcessBlockFoundWithMaliciousPeer(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Create mock blockchain store and client
-	mockBlockchainStore := blockchain_store.NewMockStore()
-	mockBlockchainClient, err := blockchain.NewLocalClient(logger, tSettings, mockBlockchainStore, nil, nil)
-	require.NoError(t, err)
-
-	// Create mock validator
-	mockValidator := &validator.MockValidator{}
-
-	// Create memory stores for testing
-	subtreeStore := memory.New()
-	txStore := memory.New()
-	mockUtxoStore := &utxo.MockUtxostore{}
-
-	// Create block validation
-	bv := NewBlockValidation(ctx, logger, tSettings, mockBlockchainClient, subtreeStore, txStore, mockUtxoStore, mockValidator, nil)
-
-	server := &Server{
-		logger:           logger,
-		settings:         tSettings,
-		blockchainClient: mockBlockchainClient,
-		blockValidation:  bv,
-		// Note: peerMetrics field has been removed from Server struct
-	}
-
-	// Note: peerMetrics field has been removed from Server struct
-	// (malicious peer marking disabled)
-
-	hash := &chainhash.Hash{0x04}
-
-	// Try to process block from malicious peer
-	err = server.processBlockFound(ctx, hash, "http://malicious", "malicious_peer")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "is malicious")
-}
-
 // TestBlockProcessingWorkerRetry tests the worker retry mechanism
 func TestBlockProcessingWorkerRetry(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

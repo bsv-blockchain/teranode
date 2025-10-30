@@ -30,12 +30,12 @@ type PeerInfoResponse struct {
 	CatchupAttempts        int64   `json:"catchup_attempts"`
 	CatchupSuccesses       int64   `json:"catchup_successes"`
 	CatchupFailures        int64   `json:"catchup_failures"`
-	CatchupLastAttempt     int64   `json:"catchup_last_attempt"`      // Unix timestamp
-	CatchupLastSuccess     int64   `json:"catchup_last_success"`      // Unix timestamp
-	CatchupLastFailure     int64   `json:"catchup_last_failure"`      // Unix timestamp
-	CatchupReputationScore float64 `json:"catchup_reputation_score"`  // 0-100
+	CatchupLastAttempt     int64   `json:"catchup_last_attempt"`     // Unix timestamp
+	CatchupLastSuccess     int64   `json:"catchup_last_success"`     // Unix timestamp
+	CatchupLastFailure     int64   `json:"catchup_last_failure"`     // Unix timestamp
+	CatchupReputationScore float64 `json:"catchup_reputation_score"` // 0-100
 	CatchupMaliciousCount  int64   `json:"catchup_malicious_count"`
-	CatchupAvgResponseTime int64   `json:"catchup_avg_response_ms"`   // Duration in milliseconds
+	CatchupAvgResponseTime int64   `json:"catchup_avg_response_ms"` // Duration in milliseconds
 }
 
 // PeersResponse represents the JSON response containing all peers

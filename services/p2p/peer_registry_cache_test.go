@@ -117,7 +117,7 @@ func TestPeerRegistryCache_LoadCorruptedFile(t *testing.T) {
 
 	// Create a corrupted cache file
 	cacheFile := filepath.Join(tempDir, "teranode_peer_registry.json")
-	err := os.WriteFile(cacheFile, []byte("not valid json"), 0644)
+	err := os.WriteFile(cacheFile, []byte("not valid json"), 0600)
 	require.NoError(t, err)
 
 	// Try to load the corrupted file
@@ -140,7 +140,7 @@ func TestPeerRegistryCache_VersionMismatch(t *testing.T) {
 		"last_updated": "2025-10-22T10:00:00Z",
 		"peers": {}
 	}`
-	err := os.WriteFile(cacheFile, []byte(cacheData), 0644)
+	err := os.WriteFile(cacheFile, []byte(cacheData), 0600)
 	require.NoError(t, err)
 
 	// Try to load the file with wrong version
@@ -300,7 +300,7 @@ func TestPeerRegistryCache_InvalidPeerID(t *testing.T) {
 			}
 		}
 	}`
-	err := os.WriteFile(cacheFile, []byte(cacheData), 0644)
+	err := os.WriteFile(cacheFile, []byte(cacheData), 0600)
 	require.NoError(t, err)
 
 	// Load the cache - since we're casting strings, this will be loaded

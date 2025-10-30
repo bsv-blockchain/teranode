@@ -5221,12 +5221,13 @@ func (m *mockLegacyPeerClient) ClearBanned(ctx context.Context, req *emptypb.Emp
 }
 
 type mockP2PClient struct {
-	getPeersFunc    func(ctx context.Context) (*p2p_api.GetPeersResponse, error)
-	isBannedFunc    func(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error)
-	listBannedFunc  func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ListBannedResponse, error)
-	clearBannedFunc func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ClearBannedResponse, error)
-	banPeerFunc     func(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error)
-	unbanPeerFunc   func(ctx context.Context, req *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error)
+	getPeersFunc           func(ctx context.Context) (*p2p_api.GetPeersResponse, error)
+	getPeersForCatchupFunc func(ctx context.Context) (*p2p_api.GetPeersForCatchupResponse, error)
+	isBannedFunc           func(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error)
+	listBannedFunc         func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ListBannedResponse, error)
+	clearBannedFunc        func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ClearBannedResponse, error)
+	banPeerFunc            func(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error)
+	unbanPeerFunc          func(ctx context.Context, req *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error)
 }
 
 func (m *mockP2PClient) GetPeers(ctx context.Context) (*p2p_api.GetPeersResponse, error) {
@@ -5234,6 +5235,21 @@ func (m *mockP2PClient) GetPeers(ctx context.Context) (*p2p_api.GetPeersResponse
 		return m.getPeersFunc(ctx)
 	}
 	return &p2p_api.GetPeersResponse{Peers: []*p2p_api.Peer{}}, nil
+}
+
+func (m *mockP2PClient) GetPeersForCatchup(ctx context.Context) (*p2p_api.GetPeersForCatchupResponse, error) {
+	if m.getPeersFunc != nil {
+		return m.getPeersForCatchupFunc(ctx)
+	}
+	return &p2p_api.GetPeersForCatchupResponse{Peers: []*p2p_api.PeerInfoForCatchup{}}, nil
+}
+
+func (m *mockP2PClient) IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error) {
+	return false, "", nil
+}
+
+func (m *mockP2PClient) IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error) {
+	return false, "", 0, nil
 }
 
 func (m *mockP2PClient) BanPeer(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
@@ -5280,6 +5296,34 @@ func (m *mockP2PClient) ConnectPeer(ctx context.Context, peerAddr string) error 
 }
 
 func (m *mockP2PClient) DisconnectPeer(ctx context.Context, peerID string) error {
+	return nil
+}
+
+func (m *mockP2PClient) RecordCatchupAttempt(ctx context.Context, peerID string) error {
+	return nil
+}
+
+func (m *mockP2PClient) RecordCatchupSuccess(ctx context.Context, peerID string, durationMs int64) error {
+	return nil
+}
+
+func (m *mockP2PClient) RecordCatchupFailure(ctx context.Context, peerID string) error {
+	return nil
+}
+
+func (m *mockP2PClient) RecordCatchupMalicious(ctx context.Context, peerID string) error {
+	return nil
+}
+
+func (m *mockP2PClient) UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error {
+	return nil
+}
+
+func (m *mockP2PClient) ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error {
+	return nil
+}
+
+func (m *mockP2PClient) ReportValidBlock(ctx context.Context, peerID string, blockHash string) error {
 	return nil
 }
 

@@ -29,7 +29,7 @@ func (h *HTTP) GetCatchupStatus(c echo.Context) error {
 	if err != nil {
 		h.logger.Errorf("[GetCatchupStatus] Failed to connect to BlockValidation service: %v", err)
 		return c.JSON(http.StatusServiceUnavailable, map[string]interface{}{
-			"error": "Failed to connect to BlockValidation service",
+			"error":          "Failed to connect to BlockValidation service",
 			"is_catching_up": false,
 		})
 	}
@@ -41,7 +41,7 @@ func (h *HTTP) GetCatchupStatus(c echo.Context) error {
 	if err != nil {
 		h.logger.Errorf("[GetCatchupStatus] Failed to get catchup status: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Failed to get catchup status",
+			"error":          "Failed to get catchup status",
 			"is_catching_up": false,
 		})
 	}

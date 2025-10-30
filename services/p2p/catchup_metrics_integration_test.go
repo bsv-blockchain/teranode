@@ -437,12 +437,12 @@ func TestDistributedCatchupMetrics_ConcurrentUpdates(t *testing.T) {
 						PeerId:     testPeerID.String(),
 						DurationMs: 100,
 					}
-					p2pServer.RecordCatchupSuccess(ctx, req)
+					_, _ = p2pServer.RecordCatchupSuccess(ctx, req)
 				} else {
 					req := &p2p_api.RecordCatchupFailureRequest{
 						PeerId: testPeerID.String(),
 					}
-					p2pServer.RecordCatchupFailure(ctx, req)
+					_, _ = p2pServer.RecordCatchupFailure(ctx, req)
 				}
 			}
 			done <- true

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -110,7 +111,7 @@ func (pr *PeerRegistry) SavePeerRegistryCache(cacheDir string) error {
 	// Marshal to JSON with indentation for readability
 	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal peer registry cache: %w", err)
+		return errors.NewProcessingError("failed to marshal peer registry cache: %v", err)
 	}
 
 	// Write to temporary file first, then rename for atomicity
@@ -118,15 +119,15 @@ func (pr *PeerRegistry) SavePeerRegistryCache(cacheDir string) error {
 	// Use unique temp file name to avoid concurrent write conflicts
 	tempFile := fmt.Sprintf("%s.tmp.%d", cacheFile, time.Now().UnixNano())
 
-	if err := os.WriteFile(tempFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write peer registry cache: %w", err)
+	if err := os.WriteFile(tempFile, data, 0600); err != nil {
+		return errors.NewProcessingError("failed to write peer registry cache: %v", err)
 	}
 
 	// Atomic rename
 	if err := os.Rename(tempFile, cacheFile); err != nil {
 		// Clean up temp file if rename failed
 		_ = os.Remove(tempFile)
-		return fmt.Errorf("failed to finalize peer registry cache: %w", err)
+		return errors.NewProcessingError("failed to finalize peer registry cache: %v", err)
 	}
 
 	return nil
@@ -144,25 +145,25 @@ func (pr *PeerRegistry) LoadPeerRegistryCache(cacheDir string) error {
 
 	file, err := os.Open(cacheFile)
 	if err != nil {
-		return fmt.Errorf("failed to open peer registry cache: %w", err)
+		return errors.NewProcessingError("failed to open peer registry cache: %v", err)
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return fmt.Errorf("failed to read peer registry cache: %w", err)
+		return errors.NewProcessingError("failed to read peer registry cache: %v", err)
 	}
 
 	var cache PeerRegistryCache
 	if err := json.Unmarshal(data, &cache); err != nil {
 		// Log error but don't fail - cache might be corrupted
-		return fmt.Errorf("failed to unmarshal peer registry cache (will start fresh): %w", err)
+		return errors.NewProcessingError("failed to unmarshal peer registry cache (will start fresh): %v", err)
 	}
 
 	// Check version compatibility
 	if cache.Version != PeerRegistryCacheVersion {
 		// Different version, skip loading to avoid compatibility issues
-		return fmt.Errorf("cache version mismatch (expected %s, got %s), will start fresh", PeerRegistryCacheVersion, cache.Version)
+		return errors.NewProcessingError("cache version mismatch (expected %s, got %s), will start fresh", PeerRegistryCacheVersion, cache.Version)
 	}
 
 	pr.mu.Lock()

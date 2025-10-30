@@ -324,7 +324,7 @@ func (pr *PeerRegistry) RecordInteractionFailure(id peer.ID) {
 		// Check for repeated failures in a short time window
 		recentFailureWindow := 5 * time.Minute
 		if !info.LastInteractionSuccess.IsZero() &&
-		   time.Since(info.LastInteractionSuccess) < recentFailureWindow {
+			time.Since(info.LastInteractionSuccess) < recentFailureWindow {
 			// Multiple failures since last success - apply harsh penalty
 			failuresSinceSuccess := info.InteractionFailures - info.InteractionSuccesses
 			if failuresSinceSuccess > 2 {
