@@ -16,7 +16,7 @@ var (
 	blockWait = 5 * time.Second
 )
 
-func setupLongestChainTest(t *testing.T, utxoStoreOverride string) (td *daemon.TestDaemon, block101 *model.Block) {
+func setupLongestChainTest(t *testing.T, utxoStoreOverride string) (td *daemon.TestDaemon, block3 *model.Block) {
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
 		// EnableFullLogging: true,
 		SettingsContext: "dev.system.test",
@@ -24,6 +24,7 @@ func setupLongestChainTest(t *testing.T, utxoStoreOverride string) (td *daemon.T
 			url, err := url.Parse(utxoStoreOverride)
 			require.NoError(t, err)
 			tSettings.UtxoStore.UtxoStore = url
+			tSettings.ChainCfgParams.CoinbaseMaturity = 2
 		},
 	})
 
@@ -31,13 +32,13 @@ func setupLongestChainTest(t *testing.T, utxoStoreOverride string) (td *daemon.T
 	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err)
 
-	err = td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 101})
+	err = td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 3})
 	require.NoError(t, err)
 
-	block101, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
+	block3, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
 	require.NoError(t, err)
 
-	td.WaitForBlockHeight(t, block101, blockWait, true)
+	td.WaitForBlockHeight(t, block3, blockWait, true)
 
-	return td, block101
+	return td, block3
 }

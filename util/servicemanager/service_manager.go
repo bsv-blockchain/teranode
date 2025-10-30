@@ -81,6 +81,25 @@ func NewServiceManager(ctx context.Context, logger ulogger.Logger) *ServiceManag
 	return sm
 }
 
+// GetService retrieves a service instance by its name.
+// If the service is not found, it returns an error.
+//
+// Parameters:
+//   - serviceName: The name of the service to retrieve.
+//
+// Returns:
+//   - Service: The service instance if found.
+//   - error: An error if the service is not found.
+func (sm *ServiceManager) GetService(serviceName string) (Service, error) {
+	for _, service := range sm.services {
+		if service.name == serviceName {
+			return service.instance, nil
+		}
+	}
+
+	return nil, errors.NewServiceError("service %s not found", serviceName)
+}
+
 // AddListenerInfo adds a listener name to the global listeners list in a thread-safe manner.
 // This function is used to track active listeners for monitoring and debugging purposes.
 func AddListenerInfo(name string) {

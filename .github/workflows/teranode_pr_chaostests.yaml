@@ -16,8 +16,13 @@ env:
 jobs:
   chaostest:
     name: chaostest
-    runs-on: teranode-runner
+    runs-on: teranode-runner-4-core
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       # Only login to Docker Hub for internal PRs to avoid rate limits.
       # Fork PRs won't have access to secrets and will skip this step.
       - name: Login to Docker Hub
@@ -61,6 +66,14 @@ jobs:
           set -o pipefail
           mkdir -p /tmp/teranode-test-results
           go test -v ./test/chaos -run TestScenario02_KafkaBrokerFailure 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-02-results.txt
+        continue-on-error: false
+        timeout-minutes: 5
+
+      - name: Run Chaos Test Scenario 03 (Network Partition)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario03_NetworkPartition 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-03-results.txt
         continue-on-error: false
         timeout-minutes: 5
 

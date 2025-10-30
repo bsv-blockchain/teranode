@@ -124,7 +124,7 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 
 		td.Logger.Infof("Transaction created: %s", spendingTx.String())
 
-		_, err = td.DistributorClient.SendTransaction(td.Ctx, spendingTx)
+		err = td.PropagationClient.ProcessTransaction(td.Ctx, spendingTx)
 
 		return spendingTx, err
 	}
@@ -216,7 +216,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	require.NoError(t, err, "Failed to create parent transaction")
 
 	// Send the parent transaction
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, parentTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, parentTx)
 	require.NoError(t, err, "Failed to send parent transaction")
 
 	// Generate a block to confirm the parent transaction
@@ -257,7 +257,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	// Sign and send the spending transaction
 	err = spendingTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.GetPrivateKey(t)})
 	require.NoError(t, err)
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, spendingTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, spendingTx)
 	require.NoError(t, err)
 
 	// Generate a block to confirm the spending transaction
@@ -321,7 +321,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	require.NoError(t, err, "Failed to create parent transaction")
 
 	// Send the parent transaction
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, parentTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, parentTx)
 	require.NoError(t, err, "Failed to send parent transaction")
 
 	// Generate a block to confirm the parent transaction
@@ -365,7 +365,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	// Sign and send the spending transaction
 	err = spendingTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.GetPrivateKey(t)})
 	require.NoError(t, err)
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, spendingTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, spendingTx)
 	require.NoError(t, err)
 
 	// make sure the tx is processed by blockassembly

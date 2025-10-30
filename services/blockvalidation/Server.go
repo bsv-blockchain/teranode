@@ -17,7 +17,6 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
-	"math"
 	"net/http"
 	"net/url"
 	"sync"
@@ -1126,7 +1125,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 	defer deferFn()
 
 	// Wait for block assembly to be ready before processing the block
-	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, uint32(u.settings.ChainCfgParams.CoinbaseMaturity/2)); err != nil {
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return nil, errors.WrapGRPC(err)
 	}
@@ -1239,10 +1238,8 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 		return nil
 	}
 
-	waitForBlockHeight := math.Ceil(float64(u.settings.ChainCfgParams.CoinbaseMaturity) / 2)
-
 	// Wait for block assembly to be ready before processing the block
-	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, uint32(waitForBlockHeight)); err != nil {
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}

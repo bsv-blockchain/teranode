@@ -7,6 +7,8 @@
 package subtreeprocessor
 
 import (
+	"context"
+
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -170,4 +172,9 @@ func (m *MockSubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*subtr
 // InitCurrentBlockHeader implements Interface.InitCurrentBlockHeader
 func (m *MockSubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHeader) {
 	m.Called(blockHeader)
+}
+
+func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
 }

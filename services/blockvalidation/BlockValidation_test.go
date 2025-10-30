@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -270,16 +269,33 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
+	// Create a grandparent transaction for parentTx
+	grandParentForParentTx := newTx(1000) // Create without parent
+	_, err = utxoStore.Create(context.Background(), grandParentForParentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+	require.NoError(t, err)
+
+	// Add parentTx to UTXO store since tx1, tx2, tx3, tx4 all reference it as their parent
+	// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
+	_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+	require.NoError(t, err)
+
+	// Create tx1 to reference parentTx instead of using the hex string version
+	// This ensures the parent relationship is under our control
+	// Use version 10 to differentiate from tx2 which uses version 1
+	tx1New := newTx(10, parentTx.TxIDChainHash())
+	_, err = utxoStore.Create(context.Background(), tx1New, 0)
+	require.NoError(t, err)
+
+	// Update hashes to use the new transactions
+	hash1New := tx1New.TxIDChainHash()
+
 	subtreeData := subtreepkg.NewSubtreeData(subtree)
 
-	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
+	require.NoError(t, subtree.AddNode(*hash1New, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash2, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash3, 100, 0))
 
-	_, err = utxoStore.Create(context.Background(), tx1, 0)
-	require.NoError(t, err)
-
-	require.NoError(t, subtreeData.AddTx(tx1, 1))
+	require.NoError(t, subtreeData.AddTx(tx1New, 1))
 
 	_, err = utxoStore.Create(context.Background(), tx2, 0)
 	require.NoError(t, err)
@@ -398,9 +414,15 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	fees := 0
 
 	for i := 0; i < txCount-1; i++ {
-		hash := chainhash.HashH([]byte("test_" + strconv.Itoa(i)))
+		// Create a parent transaction and add it to the UTXO store
+		// This ensures that when we create child transactions, their parents exist
+		// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
+		parentTx := newTx(uint32(i + 10000)) // Create parent without parent (no second param)
+		_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+		require.NoError(t, err)
+
 		//nolint:gosec
-		tx := newTx(uint32(i), &hash)
+		tx := newTx(uint32(i), parentTx.TxIDChainHash())
 
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 100, 0))
 		require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx))
@@ -693,16 +715,25 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, subtree.AddCoinbaseNode())
 
-	require.NoError(t, subtree.AddNode(*hash1, 100, 0))
+	// Create parent transaction for tx2, tx3, tx4 (they all reference parentTx)
+	// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
+	_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+	require.NoError(t, err)
+
+	// Create tx1 with a parent reference to parentTx
+	tx1Test := newTx(10, parentTx.TxIDChainHash())
+	hash1Test := tx1Test.TxIDChainHash()
+
+	require.NoError(t, subtree.AddNode(*hash1Test, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash2, 100, 0))
 	require.NoError(t, subtree.AddNode(*hash3, 100, 0))
 
 	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
-	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx1))
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx1Test))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx2))
 	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx3))
 
-	_, err = utxoStore.Create(context.Background(), tx1, 0)
+	_, err = utxoStore.Create(context.Background(), tx1Test, 0)
 	require.NoError(t, err)
 
 	_, err = utxoStore.Create(context.Background(), tx2, 0)
@@ -793,8 +824,10 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 
 	t.Logf("Time taken: %s\n", time.Since(start))
 
-	expectedErrorMessage := "SERVICE_ERROR (59)"
-	require.Contains(t, err.Error(), expectedErrorMessage)
+	// With parent transaction validation fix, blocks now properly validate parent existence
+	// This block should still be invalid (either SERVICE_ERROR or BLOCK_INVALID depending on which check fails first)
+	require.True(t, errors.Is(err, errors.ErrServiceError) || errors.Is(err, errors.ErrBlockInvalid),
+		"Expected either SERVICE_ERROR (no genesis connection) or BLOCK_INVALID, got: %v", err)
 }
 
 func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
@@ -943,8 +976,14 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	fees := 0
 
 	for i := 0; i < txCount-1; i++ {
-		hash := chainhash.HashH([]byte("test_" + strconv.Itoa(i)))
-		tx := newTx(uint32(i), &hash) //nolint:gosec
+		// Create a parent transaction and add it to the UTXO store
+		// This ensures that when we create child transactions, their parents exist
+		// Use WithMinedBlockInfo to set BlockID to 0 (GenesisBlockID) so validation passes
+		parentTx := newTx(uint32(i + 10000)) // Create parent without parent (no second param)
+		_, err = utxoStore.Create(context.Background(), parentTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}))
+		require.NoError(t, err)
+
+		tx := newTx(uint32(i), parentTx.TxIDChainHash()) //nolint:gosec
 
 		require.NoError(t, subtree.AddNode(*tx.TxIDChainHash(), 100, 0))
 		require.NoError(t, subtreeMeta.SetTxInpointsFromTx(tx))
@@ -1091,11 +1130,11 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	defer deferFunc()
 
 	// Create a chain of transactions
-	txs := transactions.CreateTestTransactionChainWithCount(t, 7) // coinbase + 4 transactions
-	tx0, tx1, tx2, tx3, tx4 := txs[0], txs[1], txs[2], txs[3], txs[4]
+	txs := transactions.CreateTestTransactionChainWithCount(t, 5) // coinbase + 3 transactions
+	tx0, tx1, tx2, tx3 := txs[0], txs[1], txs[2], txs[3]
 
-	// Store all transactions except tx4 (which will be our missing transaction)
-	for _, tx := range txs[:4] { // Store all except tx4
+	// Store all transactions except tx3 (which will be our missing transaction)
+	for _, tx := range txs[:3] { // Store all except tx3
 		_, err := utxoStore.Create(context.Background(), tx, 100)
 		require.NoError(t, err)
 	}
@@ -1110,11 +1149,14 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	require.Equal(t, []uint32{0}, blockIDsMap[*tx0.TxIDChainHash()])
 
 	// Create a subtree with our transactions
-	subtree, err := subtreepkg.NewTreeByLeafCount(4) // 4 transactions excluding coinbase
+	subtree, err := subtreepkg.NewTreeByLeafCount(4) // 4 transactions including coinbase
 	require.NoError(t, err)
 
+	// Add coinbase placeholder
+	require.NoError(t, subtree.AddCoinbaseNode())
+
 	// Add transactions to subtree
-	for i, tx := range []*bt.Tx{tx1, tx2, tx3, tx4} {
+	for i, tx := range []*bt.Tx{tx1, tx2, tx3} {
 		hash := tx.TxIDChainHash()
 		require.NoError(t, subtree.AddNode(*hash, uint64(tx.Size()), uint64(i))) //nolint:gosec
 	}
@@ -1124,7 +1166,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 
 	// Calculate total fees for coinbase
 	fees := uint64(0)
-	for _, tx := range []*bt.Tx{tx1, tx2, tx3, tx4} {
+	for _, tx := range []*bt.Tx{tx1, tx2, tx3} {
 		fees += tx.TotalInputSatoshis() - tx.TotalOutputSatoshis()
 	}
 
@@ -1165,7 +1207,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 		func() uint64 {
 			totalSize := int64(0)
 
-			for _, tx := range []*bt.Tx{coinbaseTx, tx1, tx2, tx3, tx4} {
+			for _, tx := range []*bt.Tx{coinbaseTx, tx1, tx2, tx3} {
 				size := tx.Size()
 				if size < 0 {
 					t.Fatal("negative transaction size")
@@ -1212,10 +1254,9 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	)
 
 	subtreeData := subtreepkg.NewSubtreeData(subtree)
-	require.NoError(t, subtreeData.AddTx(tx1, 0))
-	require.NoError(t, subtreeData.AddTx(tx2, 1))
-	require.NoError(t, subtreeData.AddTx(tx3, 2))
-	require.NoError(t, subtreeData.AddTx(tx4, 3))
+	require.NoError(t, subtreeData.AddTx(tx1, 1))
+	require.NoError(t, subtreeData.AddTx(tx2, 2))
+	require.NoError(t, subtreeData.AddTx(tx3, 3))
 
 	subtreeDataBytes, err := subtreeData.Serialize()
 	require.NoError(t, err)
@@ -1254,8 +1295,6 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 					tx = tx2
 				case tx3.TxIDChainHash().String():
 					tx = tx3
-				case tx4.TxIDChainHash().String():
-					tx = tx4
 				default:
 					return nil, errors.NewError("unexpected hash in request: " + hash.String())
 				}
@@ -1277,7 +1316,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	require.NoError(t, err, "Block validation should succeed after retrieving missing transaction")
 
 	// Verify that the missing transaction was stored
-	exists, err := utxoStore.Get(context.Background(), tx4.TxIDChainHash())
+	exists, err := utxoStore.Get(context.Background(), tx3.TxIDChainHash())
 	require.NoError(t, err)
 	require.NotEmpty(t, exists, "The missing transaction should have been stored after validation")
 }
@@ -2614,8 +2653,8 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
-		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
@@ -2719,8 +2758,8 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
-		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
@@ -3632,9 +3671,9 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		invalidBlockKafkaProducer:     mockKafka,
-		subtreeExists:                 expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
+		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),

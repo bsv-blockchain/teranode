@@ -15,8 +15,13 @@ env:
 jobs:
   longtest:
     name: Long Tests (${{ github.event.inputs.run_id || 'scheduled' }})
-    runs-on: teranode-runner
+    runs-on: teranode-runner-16-core
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       - name: Checkout code
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 

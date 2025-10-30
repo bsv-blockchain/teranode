@@ -128,7 +128,6 @@ func TestWaitForBlockAssemblyReady(t *testing.T) {
 				logger,
 				mockClient,
 				tt.blockHeight,
-				1, // Allow 1 block behind for the test
 			)
 
 			if tt.expectedError {
@@ -172,7 +171,6 @@ func TestWaitForBlockAssemblyReadyContextCancellation(t *testing.T) {
 		logger,
 		mockClient,
 		100,
-		1, // Allow 1 block behind for the test
 	)
 
 	assert.Error(t, err)

@@ -20,7 +20,6 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
-	"github.com/bsv-blockchain/go-p2p"
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -829,7 +828,6 @@ func TestReceiveBestBlockStreamHandler(t *testing.T) {
 
 		// Connect the mock stream to the mock connection
 		mockStream.On("Conn").Return(mockConn).Maybe() // Allow any number of calls
-		mockStream.On("Conn").Return(network.Conn(mockConn)).Maybe()
 
 		// Directly verify our mock is set up correctly
 		testConn := mockStream.Conn()
@@ -1146,17 +1144,17 @@ func TestHandleBanEvent(t *testing.T) {
 		addr2, err := ma.NewMultiaddr("/ip4/10.0.0.50/tcp/8333")
 		require.NoError(t, err)
 
-		peer1 := p2p.PeerInfo{
-			ID:    peerID1,
-			Addrs: []ma.Multiaddr{addr1},
+		peer1 := p2pMessageBus.PeerInfo{
+			ID:    peerID1.String(),
+			Addrs: []string{addr1.String()},
 		}
-		peer2 := p2p.PeerInfo{
-			ID:    peerID2,
-			Addrs: []ma.Multiaddr{addr2},
+		peer2 := p2pMessageBus.PeerInfo{
+			ID:    peerID2.String(),
+			Addrs: []string{addr2.String()},
 		}
 
 		// Setup mocks - return both peers as connected
-		mockP2PNode.On("GetPeers").Return([]p2p.PeerInfo{peer1, peer2})
+		mockP2PNode.On("GetPeers").Return([]p2pMessageBus.PeerInfo{peer1, peer2})
 
 		// Store some test data for peer1
 		// Add peer to registry and set block hash
@@ -1378,6 +1376,15 @@ func (m *MockNetworkConn) ConnState() network.ConnectionState {
 	return state // Return the zero value of the type
 }
 
+// As implements the network.Conn interface
+// As finds the first conn in Conn's wrapped types that matches target, and
+// if one is found, sets target to that conn value and returns true.
+// For this mock implementation, we return false as we don't wrap other connections.
+func (m *MockNetworkConn) As(target any) bool {
+	args := m.Called(target)
+	return args.Bool(0)
+}
+
 // MockConnScope implements the network.ConnScope interface for testing
 type MockConnScope struct{}
 
@@ -1512,205 +1519,6 @@ func TestBlacklistBaseURL(t *testing.T) {
 	})
 }
 
-// Test removed - old sync manager architecture no longer exists
-/*
-func TestServer_checkAndTriggerSync(t *testing.T) {
-	tSettings := createBaseTestSettings()
-	tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
-	tSettings.P2P.MinPeersForSync = 1
-	tSettings.P2P.MaxWaitForMinPeers = 10 * time.Millisecond
-
-	t.Run("sync in running sync mode", func(t *testing.T) {
-		blockchainClient := new(blockchain.Mock)
-		fsmState := blockchain_api.FSMStateType_RUNNING
-		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
-
-		mockBlocksProducer := kafka.NewKafkaAsyncProducerMock()
-		publishCh := mockBlocksProducer.PublishChannel()
-
-		mockP2PNode := new(MockServerP2PClient)
-		mockP2PNode.On("GetPeerStartingHeight", mock.Anything).Return(int32(0), false)
-		mockP2PNode.On("SetPeerStartingHeight", mock.Anything, mock.Anything).Return()
-		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
-
-		// Create the sync peer ID that we'll use for testing
-		syncPeerID, err := peer.Decode("12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg")
-		require.NoError(t, err)
-
-		// Create a real SyncManager with the sync peer set
-		syncManager := NewSyncManager(ulogger.New("test-syncmanager"), tSettings, nil)
-		// Manually set the sync peer for testing
-		syncManager.syncPeer = syncPeerID
-
-		server := &Server{
-			settings:                  tSettings,
-			logger:                    ulogger.New("test-server"),
-			blockchainClient:          blockchainClient,
-			blocksKafkaProducerClient: mockBlocksProducer,
-			gCtx:                      context.Background(),
-			P2PClient:                   mockP2PNode,
-			syncManager:               syncManager,
-		}
-
-		// Use a valid peer ID for testing
-		peerIDStr := "12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg"
-
-		server.checkAndTriggerSync(p2p.HandshakeMessage{
-			PeerID:     peerIDStr,
-			BestHeight: 1111,
-			BestHash:   "00000000000000000007d3c1e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3",
-		}, 123)
-
-		// Wait for message with timeout
-		select {
-		case msg := <-publishCh:
-			assert.NotNil(t, msg)
-		case <-time.After(100 * time.Millisecond):
-			t.Fatal("Expected message to be published but timeout occurred")
-		}
-
-		// do not send message of BestHeight is less than or equal to the current height
-		server.checkAndTriggerSync(p2p.HandshakeMessage{
-			BestHeight: 111,
-		}, 123)
-
-		select {
-		case msg2 := <-publishCh:
-			t.Errorf("Expected no message to be sent, but got: %v", msg2)
-		default:
-			// No message received, which is expected
-		}
-	})
-*/
-
-// Test removed - old sync manager architecture
-/*
-	t.Run("do not sync in legacy sync mode", func(t *testing.T) {
-		blockchainClient := new(blockchain.Mock)
-		fsmState := blockchain_api.FSMStateType_LEGACYSYNCING
-		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
-
-		mockBlocksProducer := kafka.NewKafkaAsyncProducerMock()
-		publishCh := mockBlocksProducer.PublishChannel()
-
-		mockP2PNode := new(MockServerP2PClient)
-		// P2PClient methods should not be called when in LEGACYSYNCING mode
-
-		server := &Server{
-			settings:                  tSettings,
-			logger:                    ulogger.New("test-server"),
-			blockchainClient:          blockchainClient,
-			blocksKafkaProducerClient: mockBlocksProducer,
-			gCtx:                      context.Background(),
-			P2PClient:                   mockP2PNode,
-		}
-
-		// Use a valid peer ID for testing
-		peerIDStr := "12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg"
-
-		server.checkAndTriggerSync(p2p.HandshakeMessage{
-			PeerID:     peerIDStr,
-			BestHeight: 1111,
-			BestHash:   "00000000000000000007d3c1e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3",
-		}, 123)
-
-		// make sure not message was sent to the producer
-		select {
-		case msg := <-publishCh:
-			t.Errorf("Expected no message to be sent, but got: %v", msg)
-		default:
-			// No message received, which is expected
-		}
-	})
-
-	t.Run("selects sync peer when multiple blocks ahead", func(t *testing.T) {
-		// Create a test HTTP server that simulates a DataHub
-		testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Respond with 200 OK for any request
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"test": "data"}`))
-		}))
-		defer testServer.Close()
-
-		blockchainClient := new(blockchain.Mock)
-		fsmState := blockchain_api.FSMStateType_RUNNING
-		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&fsmState, nil)
-
-		mockBlocksProducer := kafka.NewKafkaAsyncProducerMock()
-		publishCh := mockBlocksProducer.PublishChannel()
-
-		mockP2PNode := new(MockServerP2PClient)
-		mockP2PNode.On("GetPeerStartingHeight", mock.Anything).Return(int32(0), false)
-		mockP2PNode.On("SetPeerStartingHeight", mock.Anything, mock.Anything).Return()
-		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
-
-		// Create a real SyncManager
-		syncManager := NewSyncManager(ulogger.New("test-syncmanager"), tSettings, nil)
-
-		// Use a valid peer ID for testing
-		peerIDStr := "12D3KooWKd2kacFFXWtbYtkDAsTP8fhEX1TbunV9Afimr7m1E8Yg"
-		peerID, err := peer.Decode(peerIDStr)
-		require.NoError(t, err)
-
-		// Add peer as sync candidate
-		syncManager.peerStates.AddPeer(peerID, true)
-
-		// Set up callbacks
-		syncManager.SetPeerHeightCallback(func(p peer.ID) int32 {
-			if p == peerID {
-				return 105 // Multiple blocks ahead
-			}
-			return 100
-		})
-		syncManager.SetLocalHeightCallback(func() uint32 {
-			return 100
-		})
-		// Add DataHub URL callback - return the test server URL
-		syncManager.SetPeerDataHubURLCallback(func(p peer.ID) string {
-			if p == peerID {
-				return testServer.URL // Use the test server URL
-			}
-			return ""
-		})
-		// TODO: Uncomment when SetIsPeerBannedCallback is implemented in SyncManager
-		// // Add banned peer callback - no peers are banned in this test
-		// syncManager.SetIsPeerBannedCallback(func(p peer.ID) bool {
-		// 	return false // No peers are banned
-		// })
-
-		server := &Server{
-			settings:                  tSettings,
-			logger:                    ulogger.New("test-server"),
-			blockchainClient:          blockchainClient,
-			blocksKafkaProducerClient: mockBlocksProducer,
-			gCtx:                      context.Background(),
-			P2PClient:                   mockP2PNode,
-			syncManager:               syncManager,
-		}
-
-		localHeight := uint32(100)
-
-		// Send notification for multiple blocks ahead (height > localHeight + 1)
-		server.checkAndTriggerSync(p2p.HandshakeMessage{
-			PeerID:     peerIDStr,
-			BestHeight: localHeight + 5, // Multiple blocks ahead
-			BestHash:   "00000000000000000007d3c1e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3",
-		}, localHeight)
-
-		// Should publish to Kafka for sync
-		select {
-		case msg := <-publishCh:
-			assert.NotNil(t, msg, "Should publish for multiple blocks ahead")
-		case <-time.After(100 * time.Millisecond):
-			t.Error("Expected message to be published for multiple blocks ahead")
-		}
-
-		// Verify sync peer was selected
-		assert.Equal(t, peerID, syncManager.GetSyncPeer(), "Should select sync peer when multiple blocks ahead")
-	})
-}
-*/
-
 func TestSelfMessageFiltering(t *testing.T) {
 	t.Run("filters_own_block_messages", func(t *testing.T) {
 		tSettings := createBaseTestSettings()
@@ -1735,7 +1543,7 @@ func TestSelfMessageFiltering(t *testing.T) {
 		}
 
 		// Create a block message from our own node
-		blockMsg := p2p.BlockMessage{
+		blockMsg := BlockMessage{
 			Hash:       "00000000000000000007d3c1e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3",
 			Height:     100,
 			PeerID:     GetID.String(), // Our own PeerID
@@ -1779,7 +1587,7 @@ func TestSelfMessageFiltering(t *testing.T) {
 		}
 
 		// Create a subtree message from our own node
-		subtreeMsg := p2p.SubtreeMessage{
+		subtreeMsg := SubtreeMessage{
 			Hash:       "00000000000000000007d3c1e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3",
 			PeerID:     GetID.String(), // Our own PeerID
 			DataHubURL: "https://example.com",
@@ -1823,7 +1631,7 @@ func TestSelfMessageFiltering(t *testing.T) {
 		}
 
 		// Create a block message from a different peer
-		blockMsg := p2p.BlockMessage{
+		blockMsg := BlockMessage{
 			Hash:       "00000000000000000007d3c1e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3e3b3",
 			Height:     100,
 			PeerID:     "12D3KooWRj9ajsNaVuT2fNv7k2AyLnrC5NQQzZS9GixSVWKZZYRE", // Different peer
@@ -2334,7 +2142,7 @@ func TestServerStartFull(t *testing.T) {
 	mockP2PNode.On("SetTopicHandler", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockP2PNode.On("GetTopic", mock.Anything).Return(topic)
 	mockP2PNode.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{}) // Return empty list of connected peers
+	mockP2PNode.On("ConnectedPeers").Return([]p2pMessageBus.PeerInfo{}) // Return empty list of connected peers
 
 	server.blockValidationClient = mockValidation
 
@@ -2686,7 +2494,7 @@ func TestServerRejectedHandler(t *testing.T) {
 
 		// Matching on published payload
 		published := mock.MatchedBy(func(b []byte) bool {
-			var m p2p.RejectedTxMessage
+			var m RejectedTxMessage
 			if err := json.Unmarshal(b, &m); err != nil {
 				return false
 			}
@@ -3768,7 +3576,7 @@ func createEnhancedTestServer(t *testing.T) (*Server, *MockServerP2PClient, *Moc
 
 	// Set up common mock expectations with Maybe() to avoid conflicts
 	mockP2PNode.On("GetID").Return(testPeerID).Maybe()
-	mockP2PNode.On("ConnectedPeers").Return([]p2p.PeerInfo{}).Maybe()
+	mockP2PNode.On("ConnectedPeers").Return([]p2pMessageBus.PeerInfo{}).Maybe()
 	mockP2PNode.On("GetPeerIPs", mock.AnythingOfType("peer.ID")).Return([]string{"192.168.1.1"}).Maybe()
 	mockP2PNode.On("DisconnectPeer", mock.Anything, mock.AnythingOfType("peer.ID")).Return(nil).Maybe()
 	mockP2PNode.On("GetPeerStartingHeight", mock.AnythingOfType("peer.ID")).Return(int32(100), true).Maybe()

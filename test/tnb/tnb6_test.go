@@ -139,7 +139,7 @@ func (suite *TNB6TestSuite) TestUnspentTransactionOutputs() {
 	err = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: coinbaseTxPrivateKey})
 	require.NoError(t, err)
 
-	_, err = node1.DistributorClient.SendTransaction(ctx, tx)
+	err = node1.PropagationClient.ProcessTransaction(ctx, tx)
 	require.NoError(t, err, "Failed to send transaction")
 
 	ctxTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)

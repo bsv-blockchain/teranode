@@ -17,6 +17,11 @@ jobs:
   pull-image:
     runs-on: ubuntu-latest
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       - name: Checkout code
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -38,7 +43,7 @@ jobs:
 
   run-docker-tests:
     needs: pull-image
-    runs-on: teranode-runner
+    runs-on: teranode-runner-16-core
     strategy:
       matrix:
         test_config:
@@ -136,6 +141,11 @@ jobs:
       fail-fast: false
 
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       - name: Checkout code
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -170,8 +180,13 @@ jobs:
       #   run: npx github-actions-ctrf ${{ matrix.test_config.report_name }}
 
   run-daemon-tests:
-    runs-on: teranode-runner
+    runs-on: teranode-runner-16-core
     steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+
       - name: Checkout code
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 

@@ -15,6 +15,14 @@ func TestLongestChainSQLite(t *testing.T) {
 	t.Run("simple", func(t *testing.T) {
 		testLongestChainSimple(t, utxoStore)
 	})
+
+	t.Run("invalid block", func(t *testing.T) {
+		testLongestChainInvalidateBlock(t, utxoStore)
+	})
+
+	t.Run("invalid block with old tx", func(t *testing.T) {
+		testLongestChainInvalidateBlockWithOldTx(t, utxoStore)
+	})
 }
 
 func TestLongestChainPostgres(t *testing.T) {
@@ -28,6 +36,14 @@ func TestLongestChainPostgres(t *testing.T) {
 
 	t.Run("simple", func(t *testing.T) {
 		testLongestChainSimple(t, utxoStore)
+	})
+
+	t.Run("invalid block", func(t *testing.T) {
+		testLongestChainInvalidateBlock(t, utxoStore)
+	})
+
+	t.Run("invalid block with old tx", func(t *testing.T) {
+		testLongestChainInvalidateBlockWithOldTx(t, utxoStore)
 	})
 }
 
@@ -55,7 +71,7 @@ func TestLongestChainAerospike(t *testing.T) {
 
 func testLongestChainSimple(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, block101 := setupLongestChainTest(t, utxoStore)
+	td, block3 := setupLongestChainTest(t, utxoStore)
 	defer func() {
 		td.Stop(t)
 	}()
@@ -72,40 +88,41 @@ func testLongestChainSimple(t *testing.T, utxoStore string) {
 	tx2 := td.CreateTransaction(t, block2.CoinbaseTx, 0)
 
 	td.VerifyInBlockAssembly(t, tx1)
+	// td.VerifyInBlockAssembly(t, tx2)
 
-	_, block102a := td.CreateTestBlock(t, block101, 10201, tx1)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102a, block102a.Height, "legacy", ""), "Failed to process block")
-	td.WaitForBlock(t, block102a, blockWait)
-	td.WaitForBlockBeingMined(t, block102a)
+	_, block4a := td.CreateTestBlock(t, block3, 4001, tx1)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", nil, false), "Failed to process block")
+	td.WaitForBlock(t, block4a, blockWait)
+	td.WaitForBlockBeingMined(t, block4a)
 
-	// 0 -> 1 ... 101 -> 102a (*)
+	// 0 -> 1 ... 2 -> 3 -> 4a (*)
 
 	td.VerifyNotInBlockAssembly(t, tx1) // mined and removed from block assembly
 	td.VerifyOnLongestChainInUtxoStore(t, tx1)
 
-	_, block102b := td.CreateTestBlock(t, block101, 10202, tx2)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102b, block102b.Height, "legacy", ""), "Failed to process block")
-	td.WaitForBlockBeingMined(t, block102b)
+	_, block4b := td.CreateTestBlock(t, block3, 4002, tx2)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4b, "legacy", nil, false), "Failed to process block")
+	td.WaitForBlockBeingMined(t, block4b)
 
 	time.Sleep(1 * time.Second) // give some time for the block to be processed
 
-	//                   / 102a (*)
-	// 0 -> 1 ... 101 ->
-	//                   \ 102b
+	//                   / 4a (*)
+	// 0 -> 1 ... 2 -> 3
+	//                   \ 4b
 
 	td.VerifyNotInBlockAssembly(t, tx1) // mined and removed from block assembly
 	td.VerifyOnLongestChainInUtxoStore(t, tx1)
 	td.VerifyInBlockAssembly(t, tx2)
 	td.VerifyNotOnLongestChainInUtxoStore(t, tx2)
 
-	_, block103b := td.CreateTestBlock(t, block102b, 10302) // empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "legacy", ""), "Failed to process block")
-	td.WaitForBlock(t, block103b, blockWait)
-	td.WaitForBlockBeingMined(t, block103b)
+	_, block5b := td.CreateTestBlock(t, block4b, 5002) // empty block
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5b, "legacy", nil, false, false), "Failed to process block")
+	td.WaitForBlock(t, block5b, blockWait)
+	td.WaitForBlockBeingMined(t, block5b)
 
-	//                   / 102a
-	// 0 -> 1 ... 101 ->
-	//                   \ 102b -> 103b (*)
+	//                   / 4a
+	// 0 -> 1 ... 2 -> 3
+	//                   \ 4b -> 5b (*)
 
 	// tx1 should now be back in block assembly and marked as not on longest chain in the utxo store
 	td.VerifyInBlockAssembly(t, tx1) // added back to block assembly
@@ -113,17 +130,17 @@ func testLongestChainSimple(t *testing.T, utxoStore string) {
 	td.VerifyNotInBlockAssembly(t, tx2)
 	td.VerifyOnLongestChainInUtxoStore(t, tx2)
 
-	_, block103a := td.CreateTestBlock(t, block102a, 10301) // empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "legacy", ""), "Failed to process block")
+	_, block5a := td.CreateTestBlock(t, block4a, 5001) // empty block
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "legacy", nil, false, false), "Failed to process block")
 
-	_, block104a := td.CreateTestBlock(t, block103a, 10401) // empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "legacy", ""), "Failed to process block")
-	td.WaitForBlock(t, block104a, blockWait)
-	td.WaitForBlockBeingMined(t, block104a)
+	_, block6a := td.CreateTestBlock(t, block5a, 6001) // empty block
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block6a, "legacy", nil, false, false), "Failed to process block")
+	td.WaitForBlock(t, block6a, blockWait)
+	td.WaitForBlockBeingMined(t, block6a)
 
-	//                   / 102a -> 103a -> 104a (*)
-	// 0 -> 1 ... 101 ->
-	//                   \ 102b -> 103b
+	//                   / 4a -> 5a -> 6a (*)
+	// 0 -> 1 ... 2 -> 3
+	//                   \ 4b -> 5b
 
 	td.VerifyNotInBlockAssembly(t, tx1)
 	td.VerifyOnLongestChainInUtxoStore(t, tx1)
@@ -133,7 +150,7 @@ func testLongestChainSimple(t *testing.T, utxoStore string) {
 
 func testLongestChainInvalidateBlock(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, block101 := setupLongestChainTest(t, utxoStore)
+	td, block3 := setupLongestChainTest(t, utxoStore)
 	defer func() {
 		td.Stop(t)
 	}()
@@ -146,19 +163,27 @@ func testLongestChainInvalidateBlock(t *testing.T, utxoStore string) {
 
 	td.VerifyInBlockAssembly(t, tx1)
 
-	_, block102a := td.CreateTestBlock(t, block101, 10201, tx1)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102a, block102a.Height, "legacy", ""), "Failed to process block")
-	td.WaitForBlock(t, block102a, blockWait)
-	td.WaitForBlockBeingMined(t, block102a)
+	_, block4a := td.CreateTestBlock(t, block3, 4001, tx1)
+	// require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4a, block4a.Height, "legacy", ""))
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", nil, false, true), "Failed to process block")
+	td.WaitForBlock(t, block4a, blockWait)
+	td.WaitForBlockBeingMined(t, block4a)
+	t.Logf("block3: %s", block3.Hash().String())
+	t.Logf("block4a: %s", block4a.Hash().String())
 
-	// 0 -> 1 ... 101 -> 102a (*)
+	// 0 -> 1 ... 2 -> 3 -> 4a (*)
 
 	td.VerifyNotInBlockAssembly(t, tx1) // mined and removed from block assembly
 	td.VerifyOnLongestChainInUtxoStore(t, tx1)
 
-	_, err = td.BlockchainClient.InvalidateBlock(t.Context(), block102a.Hash())
+	_, err = td.BlockchainClient.InvalidateBlock(t.Context(), block4a.Hash())
 	require.NoError(t, err)
-	td.WaitForBlock(t, block101, blockWait)
+
+	bestBlockHeader, _, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
+	require.NoError(t, err)
+	require.Equal(t, block3.Hash().String(), bestBlockHeader.Hash().String())
+
+	td.WaitForBlock(t, block3, blockWait)
 
 	td.VerifyInBlockAssembly(t, tx1) // re-added to block assembly
 	td.VerifyNotOnLongestChainInUtxoStore(t, tx1)
@@ -166,7 +191,7 @@ func testLongestChainInvalidateBlock(t *testing.T, utxoStore string) {
 
 func testLongestChainInvalidateBlockWithOldTx(t *testing.T, utxoStore string) {
 	// Setup test environment
-	td, block101 := setupLongestChainTest(t, utxoStore)
+	td, block3 := setupLongestChainTest(t, utxoStore)
 	defer func() {
 		td.Stop(t)
 	}()
@@ -188,29 +213,33 @@ func testLongestChainInvalidateBlockWithOldTx(t *testing.T, utxoStore string) {
 	td.VerifyInBlockAssembly(t, tx1)
 	td.VerifyInBlockAssembly(t, tx2)
 
-	_, block102a := td.CreateTestBlock(t, block101, 10201, tx2)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102a, block102a.Height, "legacy", ""), "Failed to process block")
-	td.WaitForBlock(t, block102a, blockWait)
-	td.WaitForBlockBeingMined(t, block102a)
+	_, block4a := td.CreateTestBlock(t, block3, 4001, tx2)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", nil, false, true), "Failed to process block")
+	td.WaitForBlock(t, block4a, blockWait)
+	td.WaitForBlockBeingMined(t, block4a)
 
-	// 0 -> 1 ... 101 -> 102a (*)
+	// 0 -> 1 ... 2 -> 3 -> 4a (*)
 
 	td.VerifyInBlockAssembly(t, tx1)    // not mined yet
 	td.VerifyNotInBlockAssembly(t, tx2) // mined and removed from block assembly
 	td.VerifyNotOnLongestChainInUtxoStore(t, tx1)
 	td.VerifyOnLongestChainInUtxoStore(t, tx2)
 
-	// create a block with tx1 and tx2 that will be invalid as tx2 is already on block102a
-	_, block103a := td.CreateTestBlock(t, block102a, 10301, tx1, tx2)
+	// create a block with tx1 and tx2 that will be invalid as tx2 is already on block4a
+	_, block5a := td.CreateTestBlock(t, block4a, 5001, tx1, tx2)
 	// processing the block as "test" will allow us to do optimistic mining
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "test", "test"), "Failed to process block")
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "test", nil, false), "Failed to process block")
 
-	time.Sleep(1000 * time.Millisecond) // give some time for the block to be processed and invalidated
+	td.WaitForBlock(t, block5a, blockWait)
 
-	// 0 -> 1 ... 101 -> 102a (*)
+	// should return back to block4a as block5a is invalid
+
+	td.WaitForBlock(t, block4a, blockWait)
+
+	// 0 -> 1 ... 2 -> 3 -> 4a (*)
 
 	td.VerifyInBlockAssembly(t, tx1)    // re-added to block assembly
-	td.VerifyNotInBlockAssembly(t, tx2) // removed as already mined in block102a
+	td.VerifyNotInBlockAssembly(t, tx2) // removed as already mined in block4a
 	td.VerifyNotOnLongestChainInUtxoStore(t, tx1)
 	td.VerifyOnLongestChainInUtxoStore(t, tx2)
 }

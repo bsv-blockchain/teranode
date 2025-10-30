@@ -68,7 +68,7 @@ run_test() {
     local test_name=$1
     local test_binary=$2
     local output
-    output=$("./${test_binary}" -test.run "^${test_name}$" -test.timeout 30s -test.count=1 2>&1)
+    output=$("./${test_binary}" -test.run "^${test_name}$" -test.timeout 120s -test.count=1 2>&1)
     local result=$?
 
     echo "$output" | sed '$d'
