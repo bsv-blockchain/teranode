@@ -328,9 +328,6 @@ func (pr *PeerRegistry) RecordInteractionFailure(id peer.ID) {
 			// Multiple failures since last success - apply harsh penalty
 			failuresSinceSuccess := info.InteractionFailures - info.InteractionSuccesses
 			if failuresSinceSuccess > 2 {
-				// Reset successes to reflect current bad behavior
-				// This prevents old successes from masking current problems
-				info.InteractionSuccesses = 0
 				info.ReputationScore = 15.0 // Drop to very low score
 				return
 			}
