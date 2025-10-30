@@ -271,14 +271,6 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 
 Validates a block directly from the block bytes without needing to fetch it from the network or database. This method is typically used for testing or when the block is already available in memory, and no internal updates or database operations are needed.
 
-#### ValidateBlock
-
-```go
-func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api.ValidateBlockRequest) (*blockvalidation_api.ValidateBlockResponse, error)
-```
-
-Validates a block and returns validation results without adding it to the blockchain. This method performs comprehensive block validation including structure checks, transaction validation, and consensus rule verification.
-
 ### Internal Methods
 
 #### processBlockFound
