@@ -21,6 +21,7 @@ jobs:
         uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
         with:
           theme: "dark"
+          comment_on_pr: "false"
 
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
@@ -57,6 +58,7 @@ jobs:
         uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
         with:
           theme: "dark"
+          comment_on_pr: "false"
 
       - name: Login to Docker Hub
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
@@ -97,6 +99,7 @@ jobs:
         uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
         with:
           theme: "dark"
+          comment_on_pr: "false"
 
       - name: Checkout
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4

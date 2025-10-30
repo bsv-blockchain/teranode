@@ -262,6 +262,9 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
@@ -382,7 +385,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	require.NoError(t, err)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	start := time.Now()
 
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -398,6 +401,9 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 // and block structure.
 func TestBlockValidationValidateBlock(t *testing.T) {
 	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	txCount := 1024
 	// subtreeHashes := make([]*chainhash.Hash, 0)
@@ -518,7 +524,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	start := time.Now()
 
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -533,6 +539,9 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 // This test ensures the integrity of block reward distribution.
 func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T) {
 	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
@@ -604,7 +613,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	}
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	start := time.Now()
 	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
@@ -618,6 +627,9 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 // multiple block rewards within a single block.
 func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
@@ -693,7 +705,7 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	require.NoError(t, err)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	start := time.Now()
 	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
 	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
@@ -707,6 +719,9 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 // preventing any potential chain splits or invalid block sequences.
 func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
@@ -816,7 +831,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	start := time.Now()
 
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -833,6 +848,9 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 	// Given: A blockchain setup with a chain that does not connect to the Genesis block
 	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
@@ -933,7 +951,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 	// When: The last block in the chain is validated
 	start := time.Now()
@@ -957,6 +975,9 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 // - Proper handling of block header verification
 func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -1069,7 +1090,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	tSettings.BlockValidation.OptimisticMining = false
 
 	tSettings.GlobalBlockHeightRetention = uint32(0)
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 	// Test valid merkle root
 	err = blockValidation.ValidateBlock(context.Background(), validBlock, "http://localhost:8000", model.NewBloomStats())
@@ -1124,6 +1145,8 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
@@ -1309,7 +1332,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	// Create block validation instance with optimistic mining disabled
 	tSettings.BlockValidation.OptimisticMining = false
 	tSettings.GlobalBlockHeightRetention = uint32(0)
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 	// Test block validation - it should request the missing transaction
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
@@ -1451,6 +1474,8 @@ func TestBlockValidationExcessiveBlockSize(t *testing.T) {
 func Test_validateBlockSubtrees(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
 
 	blockHeader := &model.BlockHeader{
@@ -1479,7 +1504,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+		blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 		block := &model.Block{
 			Header:   blockHeader,
@@ -1498,7 +1523,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-		blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+		blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 		block := &model.Block{
 			Header:           blockHeader,
@@ -1531,7 +1556,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 				require.NoError(t, subtreeStore.Set(context.Background(), subtree1.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
 			})
 
-		blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+		blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 		block := &model.Block{
 			Header:           blockHeader,
@@ -1554,6 +1579,8 @@ func Test_validateBlockSubtrees(t *testing.T) {
 func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 
 	defer deferFunc()
@@ -1568,7 +1595,7 @@ func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
 	block := createValidBlock(t, tSettings, txMetaStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore)
 	block.CoinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x01}) // Too short
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
 	require.ErrorContains(t, err, "BLOCK_INVALID")
 }
@@ -1674,6 +1701,8 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
@@ -1798,7 +1827,7 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 		100, 0,
 	)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost", model.NewBloomStats())
 	require.Error(t, err)
@@ -1809,6 +1838,8 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 
 	defer deferFunc()
@@ -1911,7 +1942,7 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 		100, 0,
 	)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
 	require.Error(t, err)
 	require.ErrorContains(t, err, "BLOCK_INVALID")
@@ -1921,6 +1952,8 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 
 	defer deferFunc()
@@ -2021,7 +2054,7 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 		100, 0,
 	)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
 	require.Error(t, err)
 }
@@ -2242,6 +2275,8 @@ func Test_createAppendBloomFilter(t *testing.T) {
 func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
@@ -2382,7 +2417,7 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 		100, 0,
 	)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
 	require.NoError(t, err, "Block with parent and child tx in correct order should be valid")
 }
@@ -2391,6 +2426,8 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
@@ -2500,7 +2537,7 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
 	require.NoError(t, err, "Block with transaction chain in correct order should be valid")
 }
@@ -2509,6 +2546,8 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
@@ -2601,7 +2640,7 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
 	require.Error(t, err, "Block with duplicate transaction should be invalid")
 	// Optionally check for a specific error message if the implementation provides one
@@ -2993,6 +3032,8 @@ func TestBlockValidation_reValidateBlock_InvalidBlock(t *testing.T) {
 func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
 
 	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
@@ -3072,7 +3113,7 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 	subChan := make(chan *blockchain_api.Notification, 1)
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 
-	bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 
 	bv.revalidateBlockChan <- revalidateBlockData{block: block}
 
@@ -3097,6 +3138,8 @@ func TestBlockValidation_RevalidateBlockChan_Retries(t *testing.T) {
 func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.OptimisticMining = true
 
@@ -3167,10 +3210,7 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
-	bv := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
@@ -3193,6 +3233,8 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
@@ -3291,7 +3333,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
 	require.NoError(t, err, "Block should be valid")
 
@@ -3319,13 +3361,15 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	// Use the real setup to get all dependencies
 	utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 	// Create a valid block and validate it so it is in the stores
 	privateKey, _ := bec.NewPrivateKey()
@@ -3428,6 +3472,8 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	initPrometheusMetrics()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
 
@@ -3537,7 +3583,7 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil)
 	mockBlockchain.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
 	require.NoError(t, err, "Block should be valid")
 

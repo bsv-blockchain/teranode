@@ -128,6 +128,10 @@ type RPCServer struct {
     // Used for retrieving block information, chain state, and blockchain operations
     blockchainClient blockchain.ClientI
 
+    // blockValidationClient provides access to block validation services
+    // Used for validating blocks and triggering revalidation of invalid blocks
+    blockValidationClient blockvalidation.Interface
+
     // blockAssemblyClient provides access to block assembly and mining services
     // Used for mining-related RPC commands like getminingcandidate and generate
     blockAssemblyClient blockassembly.ClientI
@@ -164,7 +168,7 @@ The RPCServer is designed for concurrent operation, employing synchronization me
 ### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI) (*RPCServer, error)
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI) (*RPCServer, error)
 ```
 
 Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, UTXO store, and service clients.
@@ -181,6 +185,7 @@ This factory function creates a fully configured RPCServer instance, setting up:
 - `logger`: Structured logger for operational and debug messages
 - `tSettings`: Configuration settings for the RPC server and related features
 - `blockchainClient`: Interface to the blockchain service for block and chain operations
+- `blockValidationClient`: Interface to the block validation service for block validation operations
 - `utxoStore`: Interface to the UTXO database for transaction validation
 - `blockAssemblyClient`: Interface to the block assembly service for mining operations
 - `peerClient`: Interface to the legacy peer network services
@@ -201,13 +206,11 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error
 
     This method performs several critical initialization tasks:
 
-```text
-1. **Validates the server** has not already been started (using atomic operations)
-2. **Initializes network listeners** on all configured interfaces and ports
-3. **Launches goroutines** to accept and process incoming connections
-4. **Sets up proper handling** for clean shutdown
-5. **Signals readiness** through the provided channel
-```
+    1. **Validates the server** has not already been started (using atomic operations)
+    2. **Initializes network listeners** on all configured interfaces and ports
+    3. **Launches goroutines** to accept and process incoming connections
+    4. **Sets up proper handling** for clean shutdown
+    5. **Signals readiness** through the provided channel
 
 The server supports binding to multiple addresses simultaneously, allowing both IPv4 and IPv6 connections, as well as restricting access to localhost-only if configured for development or testing environments.
 
@@ -219,12 +222,10 @@ func (s *RPCServer) Stop(ctx context.Context) error
 
 Gracefully stops the RPC server by:
 
-```text
 1. **Setting shutdown flag** to prevent new connections
 2. **Closing all active listeners** to stop accepting new requests
 3. **Waiting for active connections** to complete their current operations
 4. **Cleaning up resources** and releasing network ports
-```
 
 This method implements a thread-safe shutdown mechanism using atomic operations to prevent multiple concurrent shutdown attempts. When called, it closes the quit channel to signal all goroutines to terminate, then waits for them to exit using the wait group before returning.
 
@@ -259,8 +260,8 @@ This method implements the standard Teranode health checking interface used acro
 !!! success "Health Check Types"
     It provides both readiness and liveness checking capabilities to support different operational scenarios:
 
-- **Readiness**: Indicates whether the service is ready to accept requests (listeners are bound and core dependencies are available)
-- **Liveness**: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)
+    - **Readiness**: Indicates whether the service is ready to accept requests (listeners are bound and core dependencies are available)
+    - **Liveness**: Indicates whether the service is functioning correctly (listeners are still working and not in a hung state)
 
 **Health Check Components:**
 
@@ -439,14 +440,14 @@ Creates a raw Bitcoin transaction without signing it.
 
 1. `inputs` (array, required):
 
-   ```json
-   [
-     {
-       "txid": "hex_string",       // The transaction id
-       "vout": n                   // The output number
-     }
-   ]
-   ```
+    ```json
+    [
+      {
+        "txid": "hex_string",       // The transaction id
+        "vout": n                   // The output number
+      }
+    ]
+    ```
 
 2. `outputs` (object, required):
 

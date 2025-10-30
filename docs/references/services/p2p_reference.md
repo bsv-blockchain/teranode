@@ -13,11 +13,11 @@ The P2P Server is implemented through the Server struct, which coordinates all p
 ```go
 type Server struct {
     p2p_api.UnimplementedPeerServiceServer
-    P2PNode                           p2p.NodeI          // The P2P network node instance from github.com/bsv-blockchain/go-p2p
-    logger                            ulogger.Logger     // Logger instance for the server
-    settings                          *settings.Settings // Configuration settings
-    bitcoinProtocolID                 string             // Bitcoin protocol identifier (format: "teranode/bitcoin/{version}")
-    blockchainClient                  blockchain.ClientI // Client for blockchain interactions
+    P2PClient                         p2pMessageBus.P2PClient   // The P2P network client from github.com/bsv-blockchain/go-p2p-message-bus
+    logger                            ulogger.Logger            // Logger instance for the server
+    settings                          *settings.Settings       // Configuration settings
+    bitcoinProtocolVersion            string                    // Bitcoin protocol version identifier
+    blockchainClient                  blockchain.ClientI       // Client for blockchain interactions
     blockValidationClient             blockvalidation.Interface
     blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
     AssetHTTPAddressURL               string                    // HTTP address URL for assets
@@ -34,19 +34,19 @@ type Server struct {
     gCtx                              context.Context
     blockTopicName                    string
     subtreeTopicName                  string
-    miningOnTopicName                 string
     rejectedTxTopicName               string
-    invalidBlocksTopicName            string       // Kafka topic for invalid blocks
-    invalidSubtreeTopicName           string       // Kafka topic for invalid subtrees
-    handshakeTopicName                string       // pubsub topic for version/verack
-    nodeStatusTopicName               string       // pubsub topic for node status messages
-    topicPrefix                       string       // Chain identifier prefix for topic validation
-    blockPeerMap                      sync.Map     // Map to track which peer sent each block (hash -> peerMapEntry)
-    subtreePeerMap                    sync.Map     // Map to track which peer sent each subtree (hash -> peerMapEntry)
-    startTime                         time.Time    // Server start time for uptime calculation
-    syncManager                       *SyncManager // Manager for peer synchronization and best peer selection
-    peerBlockHashes                   sync.Map     // Map to track peer best block hashes (peerID -> hash string)
-    syncConnectionTimes               sync.Map     // Map to track when we first connected to each sync peer (peerID -> timestamp)
+    invalidBlocksTopicName            string             // Kafka topic for invalid blocks
+    invalidSubtreeTopicName           string             // Kafka topic for invalid subtrees
+    nodeStatusTopicName               string             // pubsub topic for node status messages
+    topicPrefix                       string             // Chain identifier prefix for topic validation
+    blockPeerMap                      sync.Map           // Map to track which peer sent each block (hash -> peerMapEntry)
+    subtreePeerMap                    sync.Map           // Map to track which peer sent each subtree (hash -> peerMapEntry)
+    startTime                         time.Time          // Server start time for uptime calculation
+    peerRegistry                      *PeerRegistry      // Central registry for all peer information
+    peerSelector                      *PeerSelector      // Stateless peer selection logic
+    peerHealthChecker                 *PeerHealthChecker // Async health monitoring
+    syncCoordinator                   *SyncCoordinator   // Orchestrates sync operations
+    syncConnectionTimes               sync.Map           // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
     // Cleanup configuration
     peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
@@ -57,47 +57,16 @@ type Server struct {
 
 The server manages several key components, each serving a specific purpose in the P2P network:
 
-- The P2PNode handles direct peer connections and message routing through the p2p.NodeI interface from the public github.com/bsv-blockchain/go-p2p package
-- The bitcoinProtocolID contains the node's user agent string in format "teranode/bitcoin/{version}" where version is dynamically determined at build time from Git tags (e.g., "v1.2.3") or generated as a pseudo-version (e.g., "v0.0.0-20250731141601-18714b9")
+- The P2PClient handles direct peer connections and message routing through the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package
+- The bitcoinProtocolVersion contains the node's protocol version identifier
 - The various Kafka clients manage message distribution across the network
 - The ban system maintains network security by managing peer access through BanListI and PeerBanManager
 - The notification channel handles real-time event propagation
+- The peerRegistry, peerSelector, peerHealthChecker, and syncCoordinator provide comprehensive peer management and synchronization capabilities
 
-### p2p.NodeI Interface
+### P2P Client Interface
 
-The P2P Server uses the p2p.NodeI interface from the public github.com/bsv-blockchain/go-p2p package. This interface-based design enables better testability and allows external developers to create custom P2P implementations:
-
-```go
-type NodeI interface {
-    // Core lifecycle methods
-    Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error
-    Stop(ctx context.Context) error
-
-    // Topic-related methods
-    SetTopicHandler(ctx context.Context, topicName string, handler Handler) error
-    GetTopic(topicName string) *pubsub.Topic
-    Publish(ctx context.Context, topicName string, msgBytes []byte) error
-
-    // Peer management methods
-    HostID() peer.ID
-    ConnectedPeers() []PeerInfo
-    CurrentlyConnectedPeers() []PeerInfo
-    DisconnectPeer(ctx context.Context, peerID peer.ID) error
-    SendToPeer(ctx context.Context, pid peer.ID, msg []byte) error
-    SetPeerConnectedCallback(callback func(context.Context, peer.ID))
-    UpdatePeerHeight(peerID peer.ID, height int32)
-
-    // Stats methods
-    LastSend() time.Time
-    LastRecv() time.Time
-    BytesSent() uint64
-    BytesReceived() uint64
-
-    // Additional accessors
-    GetProcessName() string
-    UpdateBytesReceived(bytesCount uint64)
-}
-```
+The P2P Server uses the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package. This interface-based design enables better testability and allows external developers to create custom P2P implementations that integrate with Teranode's messaging system.
 
 ## Server Operations
 
@@ -106,11 +75,15 @@ type NodeI interface {
 The server initializes through the NewServer function:
 
 ```go
-func NewServer( ctx context.Context,
+func NewServer(
+    ctx context.Context,
     logger ulogger.Logger,
     tSettings *settings.Settings,
     blockchainClient blockchain.ClientI,
+    blockAssemblyClient blockassembly.ClientI,
     rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI,
+    invalidBlocksKafkaConsumerClient kafka.KafkaConsumerGroupI,
+    invalidSubtreeKafkaConsumerClient kafka.KafkaConsumerGroupI,
     subtreeKafkaProducerClient kafka.KafkaAsyncProducerI,
     blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
 ) (*Server, error)
@@ -428,16 +401,17 @@ The following settings can be configured for the p2p service:
 The P2P Server depends on several components:
 
 - `blockchain.ClientI`: Interface for blockchain operations
-- `blockvalidation.Client`: Client for block validation operations
-- `p2p.NodeI`: P2P node interface from the public `github.com/bsv-blockchain/go-p2p` package
+- `blockvalidation.Interface`: Interface for block validation operations
+- `blockassembly.ClientI`: Interface for block assembly operations
+- `p2pMessageBus.P2PClient`: P2P client interface from the `github.com/bsv-blockchain/go-p2p-message-bus` package
 - Kafka producers and consumers for message distribution
 
 These dependencies are injected into the `Server` struct during initialization.
 
-The use of the public go-p2p package enables external developers to:
+The use of the go-p2p-message-bus package enables external developers to:
 
-- Create custom P2P node implementations that are compatible with Teranode
-- Build applications that can directly integrate with Teranode's P2P network
+- Create custom P2P client implementations that are compatible with Teranode
+- Build applications that can directly integrate with Teranode's P2P messaging system
 - Extend P2P functionality while maintaining compatibility with the standard interface
 
 ## Error Handling

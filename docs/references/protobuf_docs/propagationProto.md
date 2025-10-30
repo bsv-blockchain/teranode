@@ -43,6 +43,8 @@ swagger:model EmptyMessage
 ### BatchTransactionItem
 Represents a single transaction item in a batch request with trace context support.
 
+swagger:model BatchTransactionItem
+
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |

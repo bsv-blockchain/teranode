@@ -352,6 +352,14 @@ func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.N
 
 Broadcasts a notification to all subscribers.
 
+### ReportPeerFailure
+
+```go
+func (b *Blockchain) ReportPeerFailure(ctx context.Context, req *blockchain_api.ReportPeerFailureRequest) (*emptypb.Empty, error)
+```
+
+Handles reports of peer download failures and broadcasts notifications to subscribers. This method is used by other services to report when a peer fails to provide requested data, allowing the blockchain service to notify subscribers (including P2P services) about peer reliability issues.
+
 ## State Management Functions
 
 ### GetState
