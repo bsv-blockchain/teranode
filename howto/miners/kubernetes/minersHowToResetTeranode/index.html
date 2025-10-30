@@ -9,10 +9,10 @@
       
       
       
-        <link rel="prev" href="../../minersHowToUseListenMode/">
+        <link rel="prev" href="../../docker/minersHowToResetTeranode/">
       
       
-        <link rel="next" href="../../../../topics/teranodeIntro/">
+        <link rel="next" href="../../docker/minersHowToSyncTheNode/">
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
@@ -20,7 +20,7 @@
     
     
       
-        <title>Backup (Kubernetes) - Teranode</title>
+        <title>Kubernetes - Teranode</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#how-to-backup-teranode-data" class="md-skip">
+        <a href="#how-to-reset-teranode-kubernetes" class="md-skip">
           Skip to content
         </a>
       
@@ -99,7 +99,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Backup (Kubernetes)
+              Kubernetes
             
           </span>
         </div>
@@ -1532,7 +1532,7 @@
   
   
   <span class="md-ellipsis">
-    Additional
+    Reset Teranode
     
   </span>
   
@@ -1543,9 +1543,419 @@
         <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_7_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3_12_7">
             <span class="md-nav__icon md-icon"></span>
+            Reset Teranode
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../docker/minersHowToResetTeranode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Docker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Kubernetes
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Kubernetes
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#index" class="md-nav__link">
+    <span class="md-ellipsis">
+      Index
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#introduction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Introduction
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prerequisites
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scale-down-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scale Down Services
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#database-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database Cleanup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Database Cleanup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#aerospike-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Aerospike Cleanup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#postgresql-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      PostgreSQL Cleanup
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#persistent-volume-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Persistent Volume Cleanup
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restart-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      Restart Services
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#post-reset-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Post-Reset Steps
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Post-Reset Steps">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#verify-services-are-running" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verify Services Are Running
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set-fsm-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      Set FSM State
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#monitor-synchronization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Monitor Synchronization
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#consider-data-seeding" class="md-nav__link">
+    <span class="md-ellipsis">
+      Consider Data Seeding
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Related Documentation
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Sync the Node
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_12_8">
+            <span class="md-nav__icon md-icon"></span>
+            Sync the Node
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../docker/minersHowToSyncTheNode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Docker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../minersHowToSyncTheNode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Kubernetes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Additional
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_12_9">
+            <span class="md-nav__icon md-icon"></span>
             Additional
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../minersHowToBackup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Backup Teranode
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1560,52 +1970,6 @@
   
   <span class="md-ellipsis">
     CPU Mining Setup
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../minersHowToResetTeranode/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Reset Teranode
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../minersHowToSyncTheNode/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Sync the Node
     
   </span>
   
@@ -1680,119 +2044,6 @@
   
 
       </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-    
-  
-  
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Backup (Kubernetes)
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
-        
-  
-  
-  <span class="md-ellipsis">
-    Backup (Kubernetes)
-    
-  </span>
-  
-
-      </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#option-1-full-system-backup" class="md-nav__link">
-    <span class="md-ellipsis">
-      Option 1: Full System Backup
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Option 1: Full System Backup">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#procedure" class="md-nav__link">
-    <span class="md-ellipsis">
-      Procedure:
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#option-2-archive-mode-backup" class="md-nav__link">
-    <span class="md-ellipsis">
-      Option 2: Archive Mode Backup
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Option 2: Archive Mode Backup">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#procedure_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      Procedure:
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -4824,19 +5075,64 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#option-1-full-system-backup" class="md-nav__link">
+  <a href="#index" class="md-nav__link">
     <span class="md-ellipsis">
-      Option 1: Full System Backup
+      Index
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Option 1: Full System Backup">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#introduction" class="md-nav__link">
+    <span class="md-ellipsis">
+      Introduction
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prerequisites
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#scale-down-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      Scale Down Services
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#database-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database Cleanup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Database Cleanup">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#procedure" class="md-nav__link">
+  <a href="#aerospike-cleanup" class="md-nav__link">
     <span class="md-ellipsis">
-      Procedure:
+      Aerospike Cleanup
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#postgresql-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      PostgreSQL Cleanup
     </span>
   </a>
   
@@ -4848,19 +5144,64 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#option-2-archive-mode-backup" class="md-nav__link">
+  <a href="#persistent-volume-cleanup" class="md-nav__link">
     <span class="md-ellipsis">
-      Option 2: Archive Mode Backup
+      Persistent Volume Cleanup
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Option 2: Archive Mode Backup">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#restart-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      Restart Services
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#post-reset-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Post-Reset Steps
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Post-Reset Steps">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#procedure_1" class="md-nav__link">
+  <a href="#verify-services-are-running" class="md-nav__link">
     <span class="md-ellipsis">
-      Procedure:
+      Verify Services Are Running
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set-fsm-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      Set FSM State
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#monitor-synchronization" class="md-nav__link">
+    <span class="md-ellipsis">
+      Monitor Synchronization
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#consider-data-seeding" class="md-nav__link">
+    <span class="md-ellipsis">
+      Consider Data Seeding
     </span>
   </a>
   
@@ -4868,6 +5209,15 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Related Documentation
+    </span>
+  </a>
   
 </li>
       
@@ -4887,31 +5237,159 @@
 
 
 
-<h1 id="how-to-backup-teranode-data">How to Backup Teranode Data</h1>
-<p>Last modified: 6-March-2025</p>
-<p>Regular and secure backups are essential for protecting a Teranode installation, ensuring data integrity, and safeguarding your wallet. The next steps outline how to back up your Teranode wallet and data:</p>
-<p>There are three main options for backing up and restoring a Teranode system. Each option has its own use cases and procedures.</p>
-<h4 id="option-1-full-system-backup">Option 1: Full System Backup</h4>
-<p>This option involves stopping all services, then performing backups of both the UTXO data and the blockchain data, plus the node data (typically under the /data directory).</p>
-<p>In a production environment, UTXOs will be typically stored in Aerospike, and the blockchain data will be stored in Postgres.</p>
-<p>The below is an example procedure, however you must adapt this to your specific needs.</p>
-<h5 id="procedure">Procedure:</h5>
-<p>Note: This is not a hot backup. All services must be stopped before performing the backup.</p>
-<ol>
-<li>Stop all Teranode services.</li>
-<li>Perform an UTXO data backup.</li>
-<li>Perform a blockchain data backup.</li>
-<li>Perform a backup of the filesystem data (typically under /data).</li>
-<li>Restart services after backup completion.</li>
-</ol>
-<h4 id="option-2-archive-mode-backup">Option 2: Archive Mode Backup</h4>
-<p>If running the node in Archive mode (with Block Persister and UTXO Persister), users can use their own exported UTXO set as an alternative to exporting the Aerospike data.</p>
-<h5 id="procedure_1">Procedure:</h5>
-<ol>
-<li>Ensure Block Persister and UTXO Persister are enabled and running.</li>
-<li>Use the persisted UTXO set and header files, together with a blockchain postgres export, for backup purposes.</li>
-<li>Follow the restoration procedure in the Installation section.</li>
-</ol>
+<h1 id="how-to-reset-teranode-kubernetes">How to Reset Teranode (Kubernetes)</h1>
+<p>Last modified: 29-October-2025</p>
+<h2 id="index">Index</h2>
+<ul>
+<li><a href="#introduction">Introduction</a></li>
+<li><a href="#prerequisites">Prerequisites</a></li>
+<li><a href="#scale-down-services">Scale Down Services</a></li>
+<li><a href="#database-cleanup">Database Cleanup</a><ul>
+<li><a href="#aerospike-cleanup">Aerospike Cleanup</a></li>
+<li><a href="#postgresql-cleanup">PostgreSQL Cleanup</a></li>
+</ul>
+</li>
+<li><a href="#persistent-volume-cleanup">Persistent Volume Cleanup</a></li>
+<li><a href="#restart-services">Restart Services</a></li>
+<li><a href="#post-reset-steps">Post-Reset Steps</a><ul>
+<li><a href="#verify-services-are-running">Verify Services Are Running</a></li>
+<li><a href="#set-fsm-state">Set FSM State</a></li>
+<li><a href="#monitor-synchronization">Monitor Synchronization</a></li>
+<li><a href="#consider-data-seeding">Consider Data Seeding</a></li>
+</ul>
+</li>
+<li><a href="#related-documentation">Related Documentation</a></li>
+</ul>
+<h2 id="introduction">Introduction</h2>
+<p>If you need to sync Teranode from scratch, restore from a backup, or clean up after testing, you'll need to reset the blockchain data. This guide provides reset procedures for Kubernetes deployments using the Teranode Operator.</p>
+<p><strong>When to reset:</strong></p>
+<ul>
+<li>Starting a fresh synchronization from genesis</li>
+<li>Switching between networks (mainnet/testnet)</li>
+<li>Recovering from data corruption</li>
+<li>Cleaning up after testing or development</li>
+<li>Preparing for a data seeding operation</li>
+</ul>
+<h2 id="prerequisites">Prerequisites</h2>
+<ul>
+<li><strong>Backup important data</strong> before proceeding (if applicable)</li>
+<li><strong>Stop all Teranode services</strong> before reset</li>
+<li><strong>kubectl access</strong> to the Kubernetes cluster</li>
+<li><strong>Appropriate RBAC permissions</strong> for the teranode-operator namespace</li>
+</ul>
+<blockquote>
+<p><strong>⚠️ Warning:</strong> These operations are <strong>irreversible</strong> and will delete all blockchain data. Ensure you have backups if needed.</p>
+</blockquote>
+<h2 id="scale-down-services">Scale Down Services</h2>
+<p>First, scale down the Teranode services to prevent data access during cleanup:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Scale down by disabling the cluster in the CR</span>
+kubectl<span class="w"> </span>patch<span class="w"> </span>cluster<span class="w"> </span>teranode-cluster<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;enabled&quot;:false}}&#39;</span>
+
+<span class="c1"># Wait for pods to terminate</span>
+kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span>delete<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/managed-by<span class="o">=</span>teranode-operator<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--timeout<span class="o">=</span>300s
+
+<span class="c1"># Verify all Teranode pods are terminated</span>
+kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</code></pre></div>
+<h2 id="database-cleanup">Database Cleanup</h2>
+<h3 id="aerospike-cleanup">Aerospike Cleanup</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Get Aerospike pod name</span>
+<span class="nv">AEROSPIKE_POD</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>aerospike<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span>
+
+<span class="c1"># Access Aerospike pod</span>
+kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="nv">$AEROSPIKE_POD</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>bash
+
+<span class="c1"># Truncate the UTXO set</span>
+asadm<span class="w"> </span>--enable<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;manage truncate ns utxo-store set utxo&quot;</span>
+
+<span class="c1"># Verify the total records count (should slowly decrease to 0)</span>
+asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;info&quot;</span>
+
+<span class="c1"># Exit</span>
+<span class="nb">exit</span>
+</code></pre></div>
+<h3 id="postgresql-cleanup">PostgreSQL Cleanup</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Get Postgres pod name</span>
+<span class="nv">POSTGRES_POD</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>postgres<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span>
+
+<span class="c1"># Access Postgres pod</span>
+kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="nv">$POSTGRES_POD</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>postgres<span class="w"> </span>-d<span class="w"> </span>teranode
+
+<span class="c1"># Once in psql, run these commands:</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="c1">-- Sanity count check</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">blocks</span><span class="p">;</span>
+
+<span class="c1">-- Truncate tables</span>
+<span class="k">TRUNCATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">blocks</span><span class="w"> </span><span class="k">RESTART</span><span class="w"> </span><span class="k">IDENTITY</span><span class="w"> </span><span class="k">CASCADE</span><span class="p">;</span>
+<span class="k">TRUNCATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">state</span><span class="w"> </span><span class="k">RESTART</span><span class="w"> </span><span class="k">IDENTITY</span><span class="w"> </span><span class="k">CASCADE</span><span class="p">;</span>
+<span class="k">TRUNCATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="n">bans</span><span class="w"> </span><span class="k">RESTART</span><span class="w"> </span><span class="k">IDENTITY</span><span class="w"> </span><span class="k">CASCADE</span><span class="p">;</span>
+
+<span class="c1">-- Verify truncation</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">COUNT</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">blocks</span><span class="p">;</span>
+
+<span class="c1">-- (Optional) Drop indexes for faster seeding</span>
+<span class="k">DROP</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="n">idx_chain_work_id</span><span class="p">;</span>
+<span class="k">DROP</span><span class="w"> </span><span class="k">INDEX</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="n">idx_chain_work_peer_id</span><span class="p">;</span>
+
+<span class="c1">-- Exit</span>
+<span class="err">\</span><span class="n">q</span>
+</code></pre></div>
+<blockquote>
+<p><strong>💡 Performance Tip:</strong> Dropping the indexes before seeding significantly speeds up the initial data load. The blockchain service will recreate them automatically on startup.</p>
+</blockquote>
+<h2 id="persistent-volume-cleanup">Persistent Volume Cleanup</h2>
+<p>If you need to clean up filesystem data from shared PVCs:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># List persistent volume claims</span>
+kubectl<span class="w"> </span>get<span class="w"> </span>pvc<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+
+<span class="c1"># If you need to delete PVC data, you can:</span>
+<span class="c1"># 1. Delete the PVC (this will delete all data on it)</span>
+kubectl<span class="w"> </span>delete<span class="w"> </span>pvc<span class="w"> </span>shared-pvc<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+
+<span class="c1"># 2. Recreate the PVC (it will be recreated automatically by the operator)</span>
+<span class="c1"># Or manually create it if needed</span>
+
+<span class="c1"># Alternatively, access a pod with the PVC mounted and clean specific directories</span>
+kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;pod-with-pvc&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/app/data/*
+</code></pre></div>
+<h2 id="restart-services">Restart Services</h2>
+<p>Once cleanup is complete, scale services back up:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Re-enable the cluster in the CR</span>
+kubectl<span class="w"> </span>patch<span class="w"> </span>cluster<span class="w"> </span>teranode-cluster<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;enabled&quot;:true}}&#39;</span>
+
+<span class="c1"># Wait for pods to be ready</span>
+kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>ready<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--timeout<span class="o">=</span>300s
+
+<span class="c1"># Verify all pods are running</span>
+kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</code></pre></div>
+<h2 id="post-reset-steps">Post-Reset Steps</h2>
+<p>After resetting Teranode, follow these steps to resume operations:</p>
+<h3 id="verify-services-are-running">Verify Services Are Running</h3>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</code></pre></div>
+<h3 id="set-fsm-state">Set FSM State</h3>
+<p>Teranode starts in IDLE state. You need to transition to the appropriate state:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Via teranode-cli</span>
+kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>LEGACYSYNCING
+</code></pre></div>
+<h3 id="monitor-synchronization">Monitor Synchronization</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># View blockchain logs</span>
+kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f
+
+<span class="c1"># Port-forward to access dashboard</span>
+kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
+<span class="c1"># Then open http://localhost:8090/viewer</span>
+</code></pre></div>
+<h3 id="consider-data-seeding">Consider Data Seeding</h3>
+<p>For faster synchronization, consider using data seeding instead of syncing from genesis. See the <a href="../minersHowToSyncTheNode/">How to Sync the Node</a> guide for seeding procedures.</p>
+<h2 id="related-documentation">Related Documentation</h2>
+<ul>
+<li><a href="../minersHowToSyncTheNode/">How to Sync the Node</a> - Blockchain synchronization methods</li>
+<li><a href="../minersHowToInstallation/">Kubernetes Installation Guide</a> - Kubernetes deployment</li>
+<li><a href="../../minersHowToInteractWithFSM/">How to Interact with FSM</a> - FSM state management</li>
+</ul>
 
 
 

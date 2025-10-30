@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#how-to-manage-teranode-states-using-rpc" class="md-skip">
+        <a href="#how-to-manage-teranode-states" class="md-skip">
           Skip to content
         </a>
       
@@ -1118,23 +1118,46 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#methods" class="md-nav__link">
+  <a href="#recommended-method-using-admin-dashboard" class="md-nav__link">
     <span class="md-ellipsis">
-      Methods
+      Recommended Method: Using Admin Dashboard
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Methods">
+    <nav class="md-nav" aria-label="Recommended Method: Using Admin Dashboard">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#using-teranode-cli-recommended" class="md-nav__link">
+  <a href="#accessing-the-dashboard" class="md-nav__link">
     <span class="md-ellipsis">
-      Using teranode-cli (Recommended)
+      Accessing the Dashboard
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Using teranode-cli (Recommended)">
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#managing-fsm-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      Managing FSM State
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alternative-method-using-teranode-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Alternative Method: Using teranode-cli
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Alternative Method: Using teranode-cli">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1207,8 +1230,8 @@
     </nav>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#valid-fsm-states" class="md-nav__link">
     <span class="md-ellipsis">
       Valid FSM States
@@ -1216,15 +1239,24 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#using-grpcurl" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
     <span class="md-ellipsis">
-      Using grpcurl
+      Validation
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Using grpcurl">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-method-using-grpcurl" class="md-nav__link">
+    <span class="md-ellipsis">
+      Advanced Method: Using grpcurl
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Advanced Method: Using grpcurl">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1233,21 +1265,6 @@
       Docker Compose Environment
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Docker Compose Environment">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-check-current-state_2" class="md-nav__link">
-    <span class="md-ellipsis">
-      1. Check Current State
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -1258,31 +1275,12 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Kubernetes Environment">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-check-current-state_3" class="md-nav__link">
-    <span class="md-ellipsis">
-      1. Check Current State
-    </span>
-  </a>
-  
 </li>
         
           <li class="md-nav__item">
-  <a href="#2-send-state-transition-events-docker-compose" class="md-nav__link">
+  <a href="#wait-for-state-change" class="md-nav__link">
     <span class="md-ellipsis">
-      2. Send State Transition Events (Docker Compose)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-send-state-transition-events-kubernetes" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. Send State Transition Events (Kubernetes)
+      Wait for State Change
     </span>
   </a>
   
@@ -1290,43 +1288,6 @@
         
       </ul>
     </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#available-events" class="md-nav__link">
-    <span class="md-ellipsis">
-      Available Events
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-wait-for-state-change" class="md-nav__link">
-    <span class="md-ellipsis">
-      3. Wait for State Change
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Validation
-    </span>
-  </a>
   
 </li>
       
@@ -1805,7 +1766,7 @@
   
   
   <span class="md-ellipsis">
-    Additional
+    Reset Teranode
     
   </span>
   
@@ -1816,9 +1777,230 @@
         <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_7_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_12_7">
             <span class="md-nav__icon md-icon"></span>
+            Reset Teranode
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../docker/minersHowToResetTeranode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Docker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kubernetes/minersHowToResetTeranode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Kubernetes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Sync the Node
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_12_8">
+            <span class="md-nav__icon md-icon"></span>
+            Sync the Node
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../docker/minersHowToSyncTheNode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Docker
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kubernetes/minersHowToSyncTheNode/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Kubernetes
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_12_9" id="__nav_3_12_9_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Additional
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_12_9">
+            <span class="md-nav__icon md-icon"></span>
             Additional
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../minersHowToBackup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Backup Teranode
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1833,52 +2015,6 @@
   
   <span class="md-ellipsis">
     CPU Mining Setup
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../minersHowToResetTeranode/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Reset Teranode
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../minersHowToSyncTheNode/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Sync the Node
     
   </span>
   
@@ -1948,29 +2084,6 @@
   
   <span class="md-ellipsis">
     Using Listen Mode
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../kubernetes/minersHowToBackup/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    Backup (Kubernetes)
     
   </span>
   
@@ -5016,23 +5129,46 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#methods" class="md-nav__link">
+  <a href="#recommended-method-using-admin-dashboard" class="md-nav__link">
     <span class="md-ellipsis">
-      Methods
+      Recommended Method: Using Admin Dashboard
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Methods">
+    <nav class="md-nav" aria-label="Recommended Method: Using Admin Dashboard">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#using-teranode-cli-recommended" class="md-nav__link">
+  <a href="#accessing-the-dashboard" class="md-nav__link">
     <span class="md-ellipsis">
-      Using teranode-cli (Recommended)
+      Accessing the Dashboard
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Using teranode-cli (Recommended)">
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#managing-fsm-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      Managing FSM State
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alternative-method-using-teranode-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      Alternative Method: Using teranode-cli
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Alternative Method: Using teranode-cli">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -5105,8 +5241,8 @@
     </nav>
   
 </li>
-        
-          <li class="md-nav__item">
+      
+        <li class="md-nav__item">
   <a href="#valid-fsm-states" class="md-nav__link">
     <span class="md-ellipsis">
       Valid FSM States
@@ -5114,15 +5250,24 @@
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#using-grpcurl" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#validation" class="md-nav__link">
     <span class="md-ellipsis">
-      Using grpcurl
+      Validation
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Using grpcurl">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#advanced-method-using-grpcurl" class="md-nav__link">
+    <span class="md-ellipsis">
+      Advanced Method: Using grpcurl
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Advanced Method: Using grpcurl">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -5131,21 +5276,6 @@
       Docker Compose Environment
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Docker Compose Environment">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-check-current-state_2" class="md-nav__link">
-    <span class="md-ellipsis">
-      1. Check Current State
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -5156,31 +5286,12 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Kubernetes Environment">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-check-current-state_3" class="md-nav__link">
-    <span class="md-ellipsis">
-      1. Check Current State
-    </span>
-  </a>
-  
 </li>
         
           <li class="md-nav__item">
-  <a href="#2-send-state-transition-events-docker-compose" class="md-nav__link">
+  <a href="#wait-for-state-change" class="md-nav__link">
     <span class="md-ellipsis">
-      2. Send State Transition Events (Docker Compose)
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-send-state-transition-events-kubernetes" class="md-nav__link">
-    <span class="md-ellipsis">
-      2. Send State Transition Events (Kubernetes)
+      Wait for State Change
     </span>
   </a>
   
@@ -5188,43 +5299,6 @@
         
       </ul>
     </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#available-events" class="md-nav__link">
-    <span class="md-ellipsis">
-      Available Events
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-wait-for-state-change" class="md-nav__link">
-    <span class="md-ellipsis">
-      3. Wait for State Change
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Validation
-    </span>
-  </a>
   
 </li>
       
@@ -5253,31 +5327,52 @@
 
 
 
-<h1 id="how-to-manage-teranode-states-using-rpc">How to Manage Teranode States Using RPC</h1>
-<p>This guide explains how to change and monitor Teranode's state using gRPC commands. Note that Teranode instances start in IDLE state and require manual state transitions.</p>
+<h1 id="how-to-manage-teranode-states">How to Manage Teranode States</h1>
+<p>This guide explains how to change and monitor Teranode's state. Note that Teranode instances start in IDLE state and require manual state transitions.</p>
 <h2 id="prerequisites">Prerequisites</h2>
 <ul>
 <li>Access to a running Teranode instance</li>
-<li>
-<p>One of the following:</p>
-<ul>
-<li><code>grpcurl</code> installed on your system (requires network access to the RPC Server on port 18087)</li>
-<li>Access to the <code>teranode-cli</code> (recommended, requires direct access to RPC container)</li>
+<li>One of the following access methods:<ul>
+<li>Admin Dashboard (easiest - web-based interface)</li>
+<li><code>teranode-cli</code> (recommended for scripting - available in all Teranode containers)</li>
+<li><code>grpcurl</code> (advanced - requires network access to the RPC Server on port 18087)</li>
 </ul>
 </li>
 </ul>
-<h2 id="methods">Methods</h2>
-<p>You can manage Teranode states using either <code>teranode-cli</code> (recommended) or <code>grpcurl</code> directly. The exact commands will depend on your deployment environment (Docker Compose or Kubernetes).</p>
-<h3 id="using-teranode-cli-recommended">Using teranode-cli (Recommended)</h3>
-<h4 id="docker-compose-environment">Docker Compose Environment</h4>
-<h5 id="1-check-current-state">1. Check Current State</h5>
+<h2 id="recommended-method-using-admin-dashboard">Recommended Method: Using Admin Dashboard</h2>
+<p>The Admin Dashboard provides the easiest way to view and manage Teranode FSM states through a web interface.</p>
+<h3 id="accessing-the-dashboard">Accessing the Dashboard</h3>
+<p><strong>Docker Compose:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Access the dashboard in your browser</span>
+<span class="c1"># http://localhost:8090/admin</span>
+</code></pre></div>
+<p><strong>Kubernetes:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Port-forward the asset service</span>
+kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/asset<span class="w"> </span><span class="m">8090</span>:8090
+
+<span class="c1"># Then access http://localhost:8090/admin in your browser</span>
+</code></pre></div>
+<h3 id="managing-fsm-state">Managing FSM State</h3>
+<ol>
+<li>Navigate to the FSM State section in the dashboard</li>
+<li>View the current state</li>
+<li>Use the state transition controls to change states</li>
+<li>Monitor state transition logs in real-time</li>
+</ol>
+<blockquote>
+<p><strong>Note:</strong> The dashboard must be enabled via the <code>dashboard_enabled</code> setting and may require authentication depending on your configuration (<code>dashboard.auth.enabled</code>).</p>
+</blockquote>
+<h2 id="alternative-method-using-teranode-cli">Alternative Method: Using teranode-cli</h2>
+<p>The <code>teranode-cli</code> is recommended for scripting and automation. It provides a command-line interface that works directly with the blockchain service.</p>
+<h3 id="docker-compose-environment">Docker Compose Environment</h3>
+<h4 id="1-check-current-state">1. Check Current State</h4>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
 </code></pre></div>
-<h5 id="2-set-new-state">2. Set New State</h5>
+<h4 id="2-set-new-state">2. Set New State</h4>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>RUNNING
 </code></pre></div>
-<h4 id="kubernetes-environment">Kubernetes Environment</h4>
-<h5 id="1-check-current-state_1">1. Check Current State</h5>
+<h3 id="kubernetes-environment">Kubernetes Environment</h3>
+<h4 id="1-check-current-state_1">1. Check Current State</h4>
 <p>Access any Teranode pod and use teranode-cli directly:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Get the name of a pod (blockchain or asset are good options)</span>
 kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain
@@ -5288,11 +5383,11 @@ kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </sp
 <span class="c1"># Alternative one-liner</span>
 kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
 </code></pre></div>
-<h5 id="2-set-new-state_1">2. Set New State</h5>
+<h4 id="2-set-new-state_1">2. Set New State</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Change state to RUNNING</span>
 kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>RUNNING
 </code></pre></div>
-<h3 id="valid-fsm-states">Valid FSM States</h3>
+<h2 id="valid-fsm-states">Valid FSM States</h2>
 <p>The following states are valid for all environments:</p>
 <ul>
 <li>IDLE</li>
@@ -5300,53 +5395,65 @@ kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </sp
 <li>LEGACYSYNCING</li>
 <li>CATCHINGBLOCKS</li>
 </ul>
-<h3 id="using-grpcurl">Using grpcurl</h3>
-<h4 id="docker-compose-environment_1">Docker Compose Environment</h4>
-<h5 id="1-check-current-state_2">1. Check Current State</h5>
-<p>To check the current state of Teranode in a Docker Compose environment:</p>
-<div class="highlight"><pre><span></span><code>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>rpcserver:18087<span class="w"> </span>blockchain_api.BlockchainAPI.GetFSMCurrentState
-</code></pre></div>
-<h4 id="kubernetes-environment_1">Kubernetes Environment</h4>
-<h5 id="1-check-current-state_3">1. Check Current State</h5>
-<p>For Kubernetes, you need to forward the RPC server port or access it through a service:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Port forward the RPC service</span>
-kubectl<span class="w"> </span>port-forward<span class="w"> </span>service/rpcserver<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="m">18087</span>:18087
-
-<span class="c1"># In a new terminal</span>
-grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.GetFSMCurrentState
-</code></pre></div>
-<p>Expected output:
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Idle&quot;</span>
-<span class="p">}</span>
-</code></pre></div></p>
-<h5 id="2-send-state-transition-events-docker-compose">2. Send State Transition Events (Docker Compose)</h5>
-<p>To start Teranode's normal operations in Docker Compose:</p>
-<div class="highlight"><pre><span></span><code>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>rpcserver:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Run
-</code></pre></div>
-<h5 id="2-send-state-transition-events-kubernetes">2. Send State Transition Events (Kubernetes)</h5>
-<p>In a Kubernetes environment with port forwarding active:</p>
-<div class="highlight"><pre><span></span><code>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Run
-</code></pre></div>
-<h4 id="available-events">Available Events</h4>
-<p>The following events are available for both environments:</p>
-<ul>
-<li><code>Run</code> - Transitions to RUNNING state</li>
-<li><code>LegacySync</code> - Transitions to LEGACYSYNCING state</li>
-<li><code>CatchUpBlocks</code> - Transitions to CATCHINGBLOCKS state</li>
-<li><code>Idle</code> - Transitions to IDLE state</li>
-</ul>
-<h4 id="3-wait-for-state-change">3. Wait for State Change</h4>
-<p>To wait for a specific state transition:</p>
-<div class="highlight"><pre><span></span><code>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;state&quot;:&quot;Running&quot;}&#39;</span><span class="w"> </span>rpcserver:18087<span class="w"> </span>blockchain_api.BlockchainAPI.WaitForFSMtoTransitionToGivenState
-</code></pre></div>
 <h2 id="validation">Validation</h2>
 <p>After each state change, verify the new state:</p>
 <ol>
-<li>Use the "get current state" command (see instructions above for <code>grpcurl</code> or <code>teranode-cli</code>)</li>
-<li>Check the logs for transition messages</li>
-<li>Verify that expected services are running/stopped according to the state</li>
+<li><strong>Admin Dashboard</strong>: View the current state in the FSM State section</li>
+<li><strong>teranode-cli</strong>: Use <code>getfsmstate</code> command (see above)</li>
+<li><strong>Logs</strong>: Check the logs for transition messages</li>
+<li><strong>Services</strong>: Verify that expected services are running/stopped according to the state</li>
 </ol>
+<h2 id="advanced-method-using-grpcurl">Advanced Method: Using grpcurl</h2>
+<p>For advanced users or automated scripts, you can use <code>grpcurl</code> directly. This method requires network access to the blockchain gRPC service on port 18087.</p>
+<h3 id="docker-compose-environment_1">Docker Compose Environment</h3>
+<p>Access the blockchain gRPC service directly:</p>
+<p><strong>Check Current State:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Connect to blockchain service on port 18087</span>
+grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>blockchain:18087<span class="w"> </span>blockchain_api.BlockchainAPI.GetFSMCurrentState
+</code></pre></div>
+<p><strong>Trigger State Transitions:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Transition to RUNNING state</span>
+grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>blockchain:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Run
+
+<span class="c1"># Transition to LEGACYSYNCING state</span>
+grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>blockchain:18087<span class="w"> </span>blockchain_api.BlockchainAPI.LegacySync
+
+<span class="c1"># Transition to CATCHINGBLOCKS state</span>
+grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>blockchain:18087<span class="w"> </span>blockchain_api.BlockchainAPI.CatchUpBlocks
+
+<span class="c1"># Transition to IDLE state</span>
+grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>blockchain:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Idle
+</code></pre></div>
+<h3 id="kubernetes-environment_1">Kubernetes Environment</h3>
+<p>Port-forward the blockchain service:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Port forward the blockchain gRPC service</span>
+kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>service/blockchain<span class="w"> </span><span class="m">18087</span>:18087
+</code></pre></div>
+<p><strong>Check Current State:</strong></p>
+<div class="highlight"><pre><span></span><code>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.GetFSMCurrentState
+</code></pre></div>
+<p>Expected output:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;state&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Idle&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Trigger State Transitions:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Transition to RUNNING state</span>
+grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Run
+
+<span class="c1"># Transition to LEGACYSYNCING state</span>
+grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.LegacySync
+
+<span class="c1"># Transition to CATCHINGBLOCKS state</span>
+grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.CatchUpBlocks
+
+<span class="c1"># Transition to IDLE state</span>
+grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.Idle
+</code></pre></div>
+<h3 id="wait-for-state-change">Wait for State Change</h3>
+<p>You can wait for a specific state transition to complete:</p>
+<div class="highlight"><pre><span></span><code>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;state&quot;:&quot;Running&quot;}&#39;</span><span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.WaitForFSMtoTransitionToGivenState
+</code></pre></div>
 <h2 id="further-reading">Further Reading</h2>
 <ul>
 <li><a href="../minersHowToInteractWithRPCServer/">How To Interact With the RPC Server</a></li>

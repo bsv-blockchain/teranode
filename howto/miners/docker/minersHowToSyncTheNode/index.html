@@ -9,10 +9,10 @@
       
       
       
-        <link rel="prev" href="../../docker/minersHowToInstallation/">
+        <link rel="prev" href="../../kubernetes/minersHowToResetTeranode/">
       
       
-        <link rel="next" href="../minersHowToInstallationDeprecated/">
+        <link rel="next" href="../../kubernetes/minersHowToSyncTheNode/">
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
@@ -20,7 +20,7 @@
     
     
       
-        <title>Kubernetes - Teranode</title>
+        <title>Docker - Teranode</title>
       
     
     
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#how-to-install-teranode-with-kubernetes-helm" class="md-skip">
+        <a href="#syncing-the-blockchain-docker-compose" class="md-skip">
           Skip to content
         </a>
       
@@ -99,7 +99,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Kubernetes
+              Docker
             
           </span>
         </div>
@@ -797,8 +797,6 @@
                 
   
   
-    
-  
   
   
     
@@ -811,11 +809,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -831,7 +831,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_1_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_12_1">
             <span class="md-nav__icon md-icon"></span>
             Installation
@@ -845,7 +845,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToInstallation/" class="md-nav__link">
+      <a href="../minersHowToInstallation/" class="md-nav__link">
         
   
   
@@ -865,32 +865,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    Kubernetes
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../kubernetes/minersHowToInstallation/" class="md-nav__link">
         
   
   
@@ -901,272 +879,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#index" class="md-nav__link">
-    <span class="md-ellipsis">
-      Index
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#introduction" class="md-nav__link">
-    <span class="md-ellipsis">
-      Introduction
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
-    <span class="md-ellipsis">
-      Prerequisites
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#download-the-teranode-source-code" class="md-nav__link">
-    <span class="md-ellipsis">
-      Download the Teranode source code
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#deployment-with-minikube" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deployment with Minikube
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deployment with Minikube">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#start-minikube" class="md-nav__link">
-    <span class="md-ellipsis">
-      Start Minikube
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deploy Dependencies
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deploy Dependencies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#create-namespace" class="md-nav__link">
-    <span class="md-ellipsis">
-      Create Namespace
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-backing-services" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deploy Backing Services
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#create-persistent-volume-provider" class="md-nav__link">
-    <span class="md-ellipsis">
-      Create Persistent Volume Provider
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Create Persistent Volume Provider">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#standard-x86x64-systems" class="md-nav__link">
-    <span class="md-ellipsis">
-      Standard x86/x64 Systems
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#arm-based-systems" class="md-nav__link">
-    <span class="md-ellipsis">
-      ARM-based Systems
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#load-teranode-images" class="md-nav__link">
-    <span class="md-ellipsis">
-      Load Teranode Images
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Load Teranode Images">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#identify-available-versions" class="md-nav__link">
-    <span class="md-ellipsis">
-      Identify Available Versions
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#set-image-versions" class="md-nav__link">
-    <span class="md-ellipsis">
-      Set Image Versions
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#load-images-into-minikube" class="md-nav__link">
-    <span class="md-ellipsis">
-      Load Images into Minikube
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-teranode" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deploy Teranode
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deploy Teranode">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#install-teranode-operator" class="md-nav__link">
-    <span class="md-ellipsis">
-      Install Teranode Operator
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#apply-teranode-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Apply Teranode Configuration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#start-syncing-process" class="md-nav__link">
-    <span class="md-ellipsis">
-      Start Syncing Process
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#verifying-the-deployment" class="md-nav__link">
-    <span class="md-ellipsis">
-      Verifying the Deployment
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#production-considerations" class="md-nav__link">
-    <span class="md-ellipsis">
-      Production Considerations
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#resetting-teranode" class="md-nav__link">
-    <span class="md-ellipsis">
-      Resetting Teranode
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#other-resources" class="md-nav__link">
-    <span class="md-ellipsis">
-      Other Resources
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1179,7 +891,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToInstallationDeprecated/" class="md-nav__link">
+      <a href="../../kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
   
@@ -1255,7 +967,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToConfigureTheNode/" class="md-nav__link">
+      <a href="../minersHowToConfigureTheNode/" class="md-nav__link">
         
   
   
@@ -1278,7 +990,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToConfigureTheNode/" class="md-nav__link">
+      <a href="../../kubernetes/minersHowToConfigureTheNode/" class="md-nav__link">
         
   
   
@@ -1446,7 +1158,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToStopStartDockerTeranode/" class="md-nav__link">
+      <a href="../minersHowToStopStartDockerTeranode/" class="md-nav__link">
         
   
   
@@ -1469,7 +1181,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
+      <a href="../../kubernetes/minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
         
   
   
@@ -1545,7 +1257,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersUpdatingTeranode/" class="md-nav__link">
+      <a href="../minersUpdatingTeranode/" class="md-nav__link">
         
   
   
@@ -1568,7 +1280,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersUpdatingTeranode/" class="md-nav__link">
+      <a href="../../kubernetes/minersUpdatingTeranode/" class="md-nav__link">
         
   
   
@@ -1644,7 +1356,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersSecurityBestPractices/" class="md-nav__link">
+      <a href="../minersSecurityBestPractices/" class="md-nav__link">
         
   
   
@@ -1667,7 +1379,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersSecurityBestPractices/" class="md-nav__link">
+      <a href="../../kubernetes/minersSecurityBestPractices/" class="md-nav__link">
         
   
   
@@ -1743,7 +1455,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToTroubleshooting/" class="md-nav__link">
+      <a href="../minersHowToTroubleshooting/" class="md-nav__link">
         
   
   
@@ -1766,7 +1478,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToTroubleshooting/" class="md-nav__link">
+      <a href="../../kubernetes/minersHowToTroubleshooting/" class="md-nav__link">
         
   
   
@@ -1842,7 +1554,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToResetTeranode/" class="md-nav__link">
+      <a href="../minersHowToResetTeranode/" class="md-nav__link">
         
   
   
@@ -1865,7 +1577,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToResetTeranode/" class="md-nav__link">
+      <a href="../../kubernetes/minersHowToResetTeranode/" class="md-nav__link">
         
   
   
@@ -1893,8 +1605,10 @@
                 
   
   
+    
   
   
+  
     
     
     
@@ -1905,13 +1619,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_8" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_8" checked>
         
           
           <label class="md-nav__link" for="__nav_3_12_8" id="__nav_3_12_8_label" tabindex="0">
@@ -1927,7 +1639,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_8_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_8_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_3_12_8">
             <span class="md-nav__icon md-icon"></span>
             Sync the Node
@@ -1938,10 +1650,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../docker/minersHowToSyncTheNode/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Docker
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1952,6 +1686,719 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#table-of-contents" class="md-nav__link">
+    <span class="md-ellipsis">
+      Table of Contents
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#synchronization-methods-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      Synchronization Methods Comparison
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#method-1-default-network-sync-p2p" class="md-nav__link">
+    <span class="md-ellipsis">
+      Method 1: Default Network Sync (P2P)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Method 1: Default Network Sync (P2P)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prerequisites
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#process-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Process Overview
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-1-initialize-sync-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 1: Initialize Sync Process
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-peer-discovery-and-block-download" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 2: Peer Discovery and Block Download
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-validation-and-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 3: Validation and Storage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-monitor-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 4: Monitor Progress
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-timeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expected Timeline
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#method-2-seeding-from-legacy-sv-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      Method 2: Seeding from Legacy SV Node
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Method 2: Seeding from Legacy SV Node">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prerequisites
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overview_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-convert-sv-node-data-to-teranode-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 1: Convert SV Node Data to Teranode Format
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 1: Convert SV Node Data to Teranode Format">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-verify-sv-node-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 1: Verify SV Node Requirements
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-ensure-data-consistency" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional: Ensure Data Consistency
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-prepare-export-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 2: Prepare Export Directory
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-export-utxo-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 3: Export UTXO Data
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-verify-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 4: Verify Export
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#important-cleanup-for-retries" class="md-nav__link">
+    <span class="md-ellipsis">
+      ⚠️ Important: Cleanup for Retries
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-seed-teranode-with-exported-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Phase 2: Seed Teranode with Exported Data
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 2: Seed Teranode with Exported Data">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-prepare-teranode-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 1: Prepare Teranode Environment
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-identify-the-block-hash" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 2: Identify the Block Hash
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-run-seeder" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 3: Run Seeder
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-monitor-seeding-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 4: Monitor Seeding Progress
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-5-start-teranode-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 5: Start Teranode Services
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-timeline_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expected Timeline
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#method-3-seeding-from-existing-teranode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Method 3: Seeding from Existing Teranode
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Method 3: Seeding from Existing Teranode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#prerequisites_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Prerequisites
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#overview_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-1-locate-source-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 1: Locate Source Data
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-make-data-available" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 2: Make Data Available
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-run-seeder_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 3: Run Seeder
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-timeline_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expected Timeline
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovery-and-troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recovery and Troubleshooting
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Recovery and Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#normal-recovery-short-downtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      Normal Recovery (Short Downtime)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Normal Recovery (Short Downtime)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-recovery-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      Automatic Recovery Process
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#monitor-normal-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      Monitor Normal Recovery
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extended-downtime-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extended Downtime Recovery
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Extended Downtime Recovery">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#assessment-phase" class="md-nav__link">
+    <span class="md-ellipsis">
+      Assessment Phase
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovery-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recovery Options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-intervention-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Manual Intervention Steps
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Manual Intervention Steps">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-1-force-catch-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option 1: Force Catch-up
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-reseed-from-recent-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option 2: Reseed from Recent Data
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#troubleshooting-common-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting Common Issues
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting Common Issues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#issue-sync-stalled" class="md-nav__link">
+    <span class="md-ellipsis">
+      Issue: Sync Stalled
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#issue-database-connection-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Issue: Database Connection Errors
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#issue-storage-space-exhausted" class="md-nav__link">
+    <span class="md-ellipsis">
+      Issue: Storage Space Exhausted
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-monitoring-during-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Monitoring During Recovery
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance Monitoring During Recovery">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#key-metrics-to-watch" class="md-nav__link">
+    <span class="md-ellipsis">
+      Key Metrics to Watch
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#monitoring-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Monitoring Commands
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitoring-and-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      Monitoring and Verification
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Monitoring and Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#verification-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verification Checklist
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verification Checklist">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-connectivity" class="md-nav__link">
+    <span class="md-ellipsis">
+      ✅ Basic Connectivity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#synchronization-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      ✅ Synchronization Status
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-connections" class="md-nav__link">
+    <span class="md-ellipsis">
+      ✅ Peer Connections
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#database-health" class="md-nav__link">
+    <span class="md-ellipsis">
+      ✅ Database Health
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fsm-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      ✅ FSM State
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ongoing-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      Ongoing Monitoring
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ongoing Monitoring">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#daily-health-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily Health Checks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Metrics
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      Log Analysis
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#additional-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      Additional Resources
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Additional Resources">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Documentation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#installation-and-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Installation and Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#support-and-community" class="md-nav__link">
+    <span class="md-ellipsis">
+      Support and Community
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1964,7 +2411,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToSyncTheNode/" class="md-nav__link">
+      <a href="../../kubernetes/minersHowToSyncTheNode/" class="md-nav__link">
         
   
   
@@ -5174,24 +5621,43 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#index" class="md-nav__link">
+  <a href="#table-of-contents" class="md-nav__link">
     <span class="md-ellipsis">
-      Index
+      Table of Contents
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#introduction" class="md-nav__link">
+  <a href="#overview" class="md-nav__link">
     <span class="md-ellipsis">
-      Introduction
+      Overview
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
+  <a href="#synchronization-methods-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      Synchronization Methods Comparison
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#method-1-default-network-sync-p2p" class="md-nav__link">
+    <span class="md-ellipsis">
+      Method 1: Default Network Sync (P2P)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Method 1: Default Network Sync (P2P)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
   <a href="#prerequisites" class="md-nav__link">
     <span class="md-ellipsis">
       Prerequisites
@@ -5199,58 +5665,153 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#download-the-teranode-source-code" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#process-overview" class="md-nav__link">
     <span class="md-ellipsis">
-      Download the Teranode source code
+      Process Overview
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-1-initialize-sync-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 1: Initialize Sync Process
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-peer-discovery-and-block-download" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 2: Peer Discovery and Block Download
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-validation-and-storage" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 3: Validation and Storage
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-monitor-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 4: Monitor Progress
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-timeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expected Timeline
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#deployment-with-minikube" class="md-nav__link">
+  <a href="#method-2-seeding-from-legacy-sv-node" class="md-nav__link">
     <span class="md-ellipsis">
-      Deployment with Minikube
+      Method 2: Seeding from Legacy SV Node
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Deployment with Minikube">
+    <nav class="md-nav" aria-label="Method 2: Seeding from Legacy SV Node">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#start-minikube" class="md-nav__link">
+  <a href="#prerequisites_1" class="md-nav__link">
     <span class="md-ellipsis">
-      Start Minikube
+      Prerequisites
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deploy-dependencies" class="md-nav__link">
+  <a href="#overview_1" class="md-nav__link">
     <span class="md-ellipsis">
-      Deploy Dependencies
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deploy Dependencies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#create-namespace" class="md-nav__link">
-    <span class="md-ellipsis">
-      Create Namespace
+      Overview
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#deploy-backing-services" class="md-nav__link">
+  <a href="#phase-1-convert-sv-node-data-to-teranode-format" class="md-nav__link">
     <span class="md-ellipsis">
-      Deploy Backing Services
+      Phase 1: Convert SV Node Data to Teranode Format
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Phase 1: Convert SV Node Data to Teranode Format">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-verify-sv-node-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 1: Verify SV Node Requirements
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optional-ensure-data-consistency" class="md-nav__link">
+    <span class="md-ellipsis">
+      Optional: Ensure Data Consistency
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-prepare-export-directory" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 2: Prepare Export Directory
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-export-utxo-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 3: Export UTXO Data
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-verify-export" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 4: Verify Export
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#important-cleanup-for-retries" class="md-nav__link">
+    <span class="md-ellipsis">
+      ⚠️ Important: Cleanup for Retries
     </span>
   </a>
   
@@ -5262,28 +5823,55 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#create-persistent-volume-provider" class="md-nav__link">
+  <a href="#phase-2-seed-teranode-with-exported-data" class="md-nav__link">
     <span class="md-ellipsis">
-      Create Persistent Volume Provider
+      Phase 2: Seed Teranode with Exported Data
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Create Persistent Volume Provider">
+    <nav class="md-nav" aria-label="Phase 2: Seed Teranode with Exported Data">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#standard-x86x64-systems" class="md-nav__link">
+  <a href="#step-1-prepare-teranode-environment" class="md-nav__link">
     <span class="md-ellipsis">
-      Standard x86/x64 Systems
+      Step 1: Prepare Teranode Environment
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#arm-based-systems" class="md-nav__link">
+  <a href="#step-2-identify-the-block-hash" class="md-nav__link">
     <span class="md-ellipsis">
-      ARM-based Systems
+      Step 2: Identify the Block Hash
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-run-seeder" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 3: Run Seeder
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-4-monitor-seeding-progress" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 4: Monitor Seeding Progress
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-5-start-teranode-services" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 5: Start Teranode Services
     </span>
   </a>
   
@@ -5295,37 +5883,78 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#load-teranode-images" class="md-nav__link">
+  <a href="#expected-timeline_1" class="md-nav__link">
     <span class="md-ellipsis">
-      Load Teranode Images
+      Expected Timeline
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Load Teranode Images">
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#method-3-seeding-from-existing-teranode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Method 3: Seeding from Existing Teranode
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Method 3: Seeding from Existing Teranode">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#identify-available-versions" class="md-nav__link">
+  <a href="#prerequisites_2" class="md-nav__link">
     <span class="md-ellipsis">
-      Identify Available Versions
+      Prerequisites
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#set-image-versions" class="md-nav__link">
+  <a href="#overview_2" class="md-nav__link">
     <span class="md-ellipsis">
-      Set Image Versions
+      Overview
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#load-images-into-minikube" class="md-nav__link">
+  <a href="#step-1-locate-source-data" class="md-nav__link">
     <span class="md-ellipsis">
-      Load Images into Minikube
+      Step 1: Locate Source Data
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-make-data-available" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 2: Make Data Available
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-run-seeder_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      Step 3: Run Seeder
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-timeline_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expected Timeline
     </span>
   </a>
   
@@ -5335,39 +5964,181 @@
     </nav>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-teranode" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#recovery-and-troubleshooting" class="md-nav__link">
     <span class="md-ellipsis">
-      Deploy Teranode
+      Recovery and Troubleshooting
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Deploy Teranode">
+    <nav class="md-nav" aria-label="Recovery and Troubleshooting">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#install-teranode-operator" class="md-nav__link">
+  <a href="#normal-recovery-short-downtime" class="md-nav__link">
     <span class="md-ellipsis">
-      Install Teranode Operator
+      Normal Recovery (Short Downtime)
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Normal Recovery (Short Downtime)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-recovery-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      Automatic Recovery Process
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#apply-teranode-configuration" class="md-nav__link">
+  <a href="#monitor-normal-recovery" class="md-nav__link">
     <span class="md-ellipsis">
-      Apply Teranode Configuration
+      Monitor Normal Recovery
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extended-downtime-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      Extended Downtime Recovery
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Extended Downtime Recovery">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#assessment-phase" class="md-nav__link">
+    <span class="md-ellipsis">
+      Assessment Phase
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#start-syncing-process" class="md-nav__link">
+  <a href="#recovery-options" class="md-nav__link">
     <span class="md-ellipsis">
-      Start Syncing Process
+      Recovery Options
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-intervention-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      Manual Intervention Steps
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Manual Intervention Steps">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-1-force-catch-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option 1: Force Catch-up
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-reseed-from-recent-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      Option 2: Reseed from Recent Data
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#troubleshooting-common-issues" class="md-nav__link">
+    <span class="md-ellipsis">
+      Troubleshooting Common Issues
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting Common Issues">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#issue-sync-stalled" class="md-nav__link">
+    <span class="md-ellipsis">
+      Issue: Sync Stalled
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#issue-database-connection-errors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Issue: Database Connection Errors
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#issue-storage-space-exhausted" class="md-nav__link">
+    <span class="md-ellipsis">
+      Issue: Storage Space Exhausted
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-monitoring-during-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Monitoring During Recovery
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Performance Monitoring During Recovery">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#key-metrics-to-watch" class="md-nav__link">
+    <span class="md-ellipsis">
+      Key Metrics to Watch
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#monitoring-commands" class="md-nav__link">
+    <span class="md-ellipsis">
+      Monitoring Commands
     </span>
   </a>
   
@@ -5384,38 +6155,161 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#verifying-the-deployment" class="md-nav__link">
+  <a href="#monitoring-and-verification" class="md-nav__link">
     <span class="md-ellipsis">
-      Verifying the Deployment
+      Monitoring and Verification
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Monitoring and Verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#verification-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      Verification Checklist
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Verification Checklist">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-connectivity" class="md-nav__link">
+    <span class="md-ellipsis">
+      ✅ Basic Connectivity
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#production-considerations" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#synchronization-status" class="md-nav__link">
     <span class="md-ellipsis">
-      Production Considerations
+      ✅ Synchronization Status
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#resetting-teranode" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#peer-connections" class="md-nav__link">
     <span class="md-ellipsis">
-      Resetting Teranode
+      ✅ Peer Connections
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#other-resources" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#database-health" class="md-nav__link">
     <span class="md-ellipsis">
-      Other Resources
+      ✅ Database Health
     </span>
   </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fsm-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      ✅ FSM State
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ongoing-monitoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      Ongoing Monitoring
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Ongoing Monitoring">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#daily-health-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Daily Health Checks
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Metrics
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#log-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      Log Analysis
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#additional-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      Additional Resources
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Additional Resources">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Documentation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#installation-and-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Installation and Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#support-and-community" class="md-nav__link">
+    <span class="md-ellipsis">
+      Support and Community
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -5435,181 +6329,708 @@
 
 
 
-<h1 id="how-to-install-teranode-with-kubernetes-helm">How to Install Teranode with Kubernetes Helm</h1>
+<h1 id="syncing-the-blockchain-docker-compose">Syncing the Blockchain (Docker Compose)</h1>
 <p>Last modified: 29-October-2025</p>
-<h2 id="index">Index</h2>
+<h2 id="table-of-contents">Table of Contents</h2>
 <ul>
-<li><a href="#introduction">Introduction</a></li>
-<li><a href="#prerequisites">Prerequisites</a></li>
-<li><a href="#deployment-with-minikube">Deployment with Minikube</a><ul>
-<li><a href="#start-minikube">Start Minikube</a></li>
-<li><a href="#deploy-dependencies">Deploy Dependencies</a></li>
-<li><a href="#create-persistent-volume-provider">Create Persistent Volume Provider</a></li>
-<li><a href="#load-teranode-images">Load Teranode Images</a></li>
-<li><a href="#deploy-teranode">Deploy Teranode</a></li>
+<li><a href="#overview">Overview</a></li>
+<li><a href="#synchronization-methods-comparison">Synchronization Methods Comparison</a></li>
+<li><a href="#method-1-default-network-sync-p2p">Method 1: Default Network Sync (P2P)</a></li>
+<li><a href="#method-2-seeding-from-legacy-sv-node">Method 2: Seeding from Legacy SV Node</a></li>
+<li><a href="#method-3-seeding-from-existing-teranode">Method 3: Seeding from Existing Teranode</a></li>
+<li><a href="#recovery-and-troubleshooting">Recovery and Troubleshooting</a></li>
+<li><a href="#monitoring-and-verification">Monitoring and Verification</a></li>
+<li><a href="#additional-resources">Additional Resources</a></li>
+</ul>
+<h2 id="overview">Overview</h2>
+<p>This guide covers the different methods available for synchronizing a Teranode instance with the Bitcoin SV blockchain using Docker Compose. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.</p>
+<hr />
+<h2 id="synchronization-methods-comparison">Synchronization Methods Comparison</h2>
+<p>Choose the synchronization method that best fits your situation:</p>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Use Case</th>
+<th>Advantages</th>
+<th>Disadvantages</th>
+<th>Time Required</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Default Network Sync</strong></td>
+<td>Fresh install, no existing data</td>
+<td>• Simple setup<br>• No additional requirements<br>• Complete validation</td>
+<td>• Slowest method<br>• High bandwidth usage</td>
+<td>5-8 days</td>
+</tr>
+<tr>
+<td><strong>Legacy SV Node Seeding</strong></td>
+<td>Have existing BSV node</td>
+<td>• Faster than P2P<br>• Proven data source<br>• Reduced bandwidth</td>
+<td>• Requires SV Node setup<br>• Additional export steps</td>
+<td>1 Hour<br>(assumes SV node<br>already in sync)</td>
+</tr>
+<tr>
+<td><strong>Teranode Data Seeding</strong></td>
+<td>Have existing Teranode</td>
+<td>• Fastest method<br>• Direct data transfer<br>• Minimal processing</td>
+<td>• Requires access to existing data<br>• Version compatibility needed</td>
+<td>1 Hour</td>
+</tr>
+</tbody>
+</table>
+<p><img alt="seedingOptions.svg" src="../../img/mermaid/seedingOptions.svg" /></p>
+<blockquote>
+<p><strong>💡 Recommendation:</strong> For production deployments, we recommend using the Legacy SV Node seeding method when possible, as it provides the best balance of speed and data integrity verification.</p>
+</blockquote>
+<hr />
+<h2 id="method-1-default-network-sync-p2p">Method 1: Default Network Sync (P2P)</h2>
+<p>This is the standard synchronization method where Teranode downloads the complete blockchain from other nodes in the network via peer-to-peer connections.</p>
+<h3 id="prerequisites">Prerequisites</h3>
+<ul>
+<li>✅ Teranode instance deployed and running</li>
+<li>✅ Network connectivity to BSV peers</li>
+<li>✅ Sufficient storage space (minimum 4TB with default prune settings of 288 blocks)</li>
+<li>✅ Stable internet connection with adequate bandwidth</li>
+</ul>
+<blockquote>
+<p><strong>⚠️ Important:</strong> This method can take around 14 days depending on your network connection and hardware specifications.</p>
+</blockquote>
+<h3 id="process-overview">Process Overview</h3>
+<p><img alt="syncStateFlow.svg" src="../../img/mermaid/syncStateFlow.svg" /></p>
+<h3 id="step-1-initialize-sync-process">Step 1: Initialize Sync Process</h3>
+<p>Upon startup, Teranode begins in IDLE state. You must explicitly set the state to <code>legacysyncing</code> to begin synchronization.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Set FSM state to begin legacy syncing</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>legacysyncing
+</code></pre></div>
+<h3 id="step-2-peer-discovery-and-block-download">Step 2: Peer Discovery and Block Download</h3>
+<ul>
+<li><strong>Peer Connection</strong>: Teranode automatically discovers and connects to BSV network peers</li>
+<li><strong>Block Requests</strong>: Downloads blocks sequentially from genesis, starting with the first available peer</li>
+<li><strong>Legacy Mode</strong>: In <code>legacysyncing</code> state, connects to traditional BSV nodes for compatibility</li>
+</ul>
+<h3 id="step-3-validation-and-storage">Step 3: Validation and Storage</h3>
+<p>As blocks are received, multiple Teranode services work in parallel:</p>
+<ul>
+<li><strong>Block Validation</strong>: <code>block-validator</code> service validates block headers and structure</li>
+<li><strong>Subtree Validation</strong>: <code>subtree-validator</code> service validates transaction subtrees</li>
+<li><strong>Storage</strong>: <code>blockchain</code> service stores validated blocks in the database</li>
+<li><strong>UTXO Updates</strong>: <code>asset</code> service maintains the UTXO set</li>
+</ul>
+<h3 id="step-4-monitor-progress">Step 4: Monitor Progress</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># View real-time sync logs</span>
+docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>blockchain
+
+<span class="c1"># Check service health</span>
+docker<span class="w"> </span>compose<span class="w"> </span>ps
+
+<span class="c1"># View blockchain info in the blockchain viewer</span>
+<span class="c1"># Access http://localhost:8090/viewer in your browser</span>
+</code></pre></div>
+<h3 id="expected-timeline">Expected Timeline</h3>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Duration</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Initial Setup</strong></td>
+<td>5-10 minutes</td>
+<td>Peer discovery and connection establishment</td>
+</tr>
+<tr>
+<td><strong>Early Blocks</strong></td>
+<td>1-2 days</td>
+<td>Genesis to block ~500,000 (smaller blocks, faster processing)</td>
+</tr>
+<tr>
+<td><strong>Recent Blocks</strong></td>
+<td>3-6 days</td>
+<td>Block ~500,000 to current tip (larger blocks, slower processing)</td>
+</tr>
+<tr>
+<td><strong>Catch-up</strong></td>
+<td>Ongoing</td>
+<td>Maintaining sync with new blocks</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>📊 Performance Tip:</strong> Monitor your system resources during sync. CPU and I/O intensive operations are normal during this process.</p>
+</blockquote>
+<hr />
+<h2 id="method-2-seeding-from-legacy-sv-node">Method 2: Seeding from Legacy SV Node</h2>
+<p>This method allows you to bootstrap a Teranode instance using data exported from an existing Bitcoin SV node (bitcoind). This significantly reduces synchronization time compared to P2P sync.</p>
+<h3 id="prerequisites_1">Prerequisites</h3>
+<ul>
+<li>✅ Access to a fully synchronized Bitcoin SV node (bitcoind)</li>
+<li>✅ SV Node gracefully shut down (using <code>bitcoin-cli stop</code>)</li>
+<li>✅ Fresh Teranode instance with no existing blockchain data (see <a href="../minersHowToResetTeranode/">reset guide</a> to clear existing data if needed)</li>
+<li>✅ Sufficient disk space for export files (~1TB recommended, temporary during process)</li>
+<li>✅ Sufficient disk space for Teranode data (~10TB recommended, permanent)</li>
+<li>✅ Docker Compose environment set up</li>
+</ul>
+<blockquote>
+<p><strong>⚠️ Critical:</strong> Only perform this operation on a gracefully shut down SV Node to ensure data consistency.</p>
+</blockquote>
+<h3 id="overview_1">Overview</h3>
+<p>This process involves two main phases:</p>
+<ol>
+<li><strong>Export Phase</strong>: Convert SV Node database data (UTXO set and headers) into a Teranode-compatible format</li>
+<li><strong>Seeding Phase</strong>: Import the converted data files into Teranode</li>
+</ol>
+<blockquote>
+<p><strong>💡 What's happening:</strong> The <code>bitcointoutxoset</code> tool reads the SV Node's LevelDB database files (<code>chainstate</code> and <code>blocks</code>) and converts them into Teranode's native format for fast import.</p>
+</blockquote>
+<hr />
+<h3 id="phase-1-convert-sv-node-data-to-teranode-format">Phase 1: Convert SV Node Data to Teranode Format</h3>
+<h4 id="step-1-verify-sv-node-requirements">Step 1: Verify SV Node Requirements</h4>
+<p>Before proceeding with the export, ensure your Bitcoin SV node meets these critical requirements:</p>
+<div class="admonition info">
+<p class="admonition-title">Data Location Requirements</p>
+<ul>
+<li>For this guide, we assume SV node data is located at <code>/mnt/bitcoin-sv-data</code></li>
+<li>Replace this path with your actual SV node data directory in all commands</li>
+<li>Verify the directory contains both <code>blocks</code> and <code>chainstate</code> subdirectories</li>
+</ul>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Node State Requirements</p>
+<ul>
+<li><strong>✅ SV Node must be completely stopped</strong> - Use <code>bitcoin-cli stop</code> for graceful shutdown</li>
+<li><strong>❌ Node cannot be actively syncing</strong> - Export will fail if the node is processing blocks</li>
+<li><strong>❌ Node cannot have active network connections</strong> during export</li>
+</ul>
+</div>
+<h4 id="optional-ensure-data-consistency">Optional: Ensure Data Consistency</h4>
+<p>If you failed to stop gracefully, and you want to guarantee data consistency before export, you can start the SV node one final time in isolated mode:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Start SV node in isolated mode (no network activity)</span>
+bitcoind<span class="w"> </span>-listen<span class="o">=</span><span class="m">0</span><span class="w"> </span>-connect<span class="o">=</span><span class="m">0</span><span class="w"> </span>-daemon
+
+<span class="c1"># Wait for any pending operations to complete (check logs)</span>
+tail<span class="w"> </span>-f<span class="w"> </span>~/.bitcoin/debug.log
+
+<span class="c1"># Once stable, stop gracefully</span>
+bitcoin-cli<span class="w"> </span>stop
+</code></pre></div>
+<div class="admonition danger">
+<p class="admonition-title">Critical Warning</p>
+<p>The SV node must be completely stopped before proceeding. Active syncing or network activity during export will cause data corruption or export failure.</p>
+</div>
+<h4 id="step-2-prepare-export-directory">Step 2: Prepare Export Directory</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Create export directory</span>
+sudo<span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/mnt/teranode/seed/export
+sudo<span class="w"> </span>chown<span class="w"> </span><span class="nv">$USER</span>:<span class="nv">$USER</span><span class="w"> </span>/mnt/teranode/seed/export
+</code></pre></div>
+<h4 id="step-3-export-utxo-data">Step 3: Export UTXO Data</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Export UTXO set from Bitcoin SV node</span>
+<span class="c1"># Replace /mnt/bitcoin-sv-data with your actual SV node data directory</span>
+<span class="c1"># Instead of latest, you could use a specific version of teranode. </span>
+<span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
+docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/mnt/teranode/seed:/mnt/teranode/seed<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--entrypoint<span class="o">=</span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>/app/teranode-cli<span class="w"> </span>bitcointoutxoset<span class="w"> </span><span class="se">\</span>
+<span class="w">        </span>-bitcoinDir<span class="o">=</span>/home/ubuntu/bitcoin-data<span class="w"> </span><span class="se">\</span>
+<span class="w">        </span>-outputDir<span class="o">=</span>/mnt/teranode/seed/export
+</code></pre></div>
+<p><strong>Expected Output Files:</strong></p>
+<ul>
+<li><code>{blockhash}.utxo-headers</code> - Block headers data</li>
+<li><code>{blockhash}.utxo-set</code> - UTXO set data</li>
+</ul>
+<h4 id="step-4-verify-export">Step 4: Verify Export</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check exported files</span>
+ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
+<span class="c1"># You should see .utxo-headers and .utxo-set files</span>
+</code></pre></div>
+<blockquote>
+<p><strong>🔧 Troubleshooting:</strong> If you encounter a <code>Block hash mismatch between last block and chainstate</code> error, restart your SV Node once more with <code>bitcoin-cli stop</code> followed by a clean restart.</p>
+</blockquote>
+<h4 id="important-cleanup-for-retries">⚠️ Important: Cleanup for Retries</h4>
+<p>If you encounter issues during export or need to retry the process:</p>
+<ol>
+<li><strong>Clear the export directory completely:</strong></li>
+</ol>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/mnt/teranode/seed/export/*
+</code></pre></div>
+<ol>
+<li>
+<p><strong>Reset the target Teranode instance</strong> (see <a href="../minersHowToResetTeranode/">reset guide</a>)</p>
+</li>
+<li>
+<p><strong>Verify SV node was gracefully shutdown</strong> and repeat from Step 1</p>
+</li>
+</ol>
+<div class="admonition note">
+<p class="admonition-title">Important for Retries</p>
+<p>Partial or corrupted export files can cause seeding failures. Always start with a clean export directory and fresh Teranode instance when retrying.</p>
+</div>
+<hr />
+<h3 id="phase-2-seed-teranode-with-exported-data">Phase 2: Seed Teranode with Exported Data</h3>
+<div class="admonition warning">
+<p class="admonition-title">Critical Service Requirements</p>
+<p>During the seeding process, only the following services should be running for Teranode:</p>
+<ul>
+<li><strong>Aerospike</strong> (database)</li>
+<li><strong>Postgres</strong> (database)</li>
+<li><strong>Kafka</strong> (messaging)</li>
+</ul>
+<p><strong>All other Teranode services must be stopped</strong> (blockchain, asset, blockvalidation, etc.) to prevent conflicts during data import.</p>
+</div>
+<div class="admonition danger">
+<p class="admonition-title">Network Configuration Alignment</p>
+<p>The export and import target networks must be consistent:</p>
+<ul>
+<li>If SV node was running <strong>mainnet</strong>, Teranode must be configured for <strong>mainnet</strong></li>
+<li>If SV node was running <strong>testnet</strong>, Teranode must be configured for <strong>testnet</strong></li>
+<li><strong>Check development configurations</strong> - Some setups may be set to "regtest" mode</li>
+<li><strong>Verify network settings</strong> in Teranode configuration before proceeding with Step 1</li>
+</ul>
+<p><strong>Mismatched networks will cause seeding failure or data corruption.</strong></p>
+</div>
+<h4 id="step-1-prepare-teranode-environment">Step 1: Prepare Teranode Environment</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Start required services (adjust service names as needed)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>aerospike<span class="w"> </span>postgres<span class="w"> </span>kafka-shared
+
+<span class="c1"># Verify services are running</span>
+docker<span class="w"> </span>compose<span class="w"> </span>ps
+
+<span class="c1"># CRITICAL: Ensure Teranode services are NOT running</span>
+docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>blockchain<span class="w"> </span>asset<span class="w"> </span>blockvalidation<span class="w"> </span><span class="c1"># Add other services as needed</span>
+</code></pre></div>
+<h4 id="step-2-identify-the-block-hash">Step 2: Identify the Block Hash</h4>
+<p>Before running the seeder, you need to identify the correct block hash from your exported files:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># List the exported files to see the block hash</span>
+ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
+
+<span class="c1"># You should see files like:</span>
+<span class="c1"># 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af.utxo-headers</span>
+<span class="c1"># 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af.utxo-set</span>
+</code></pre></div>
+<div class="admonition info">
+<p class="admonition-title">Understanding the Hash Parameter</p>
+<p>The <code>-hash</code> parameter specifies the <strong>block hash of the last block</strong> in the exported UTXO set. This hash:</p>
+<ul>
+<li><strong>Identifies the exported files</strong> - Files are named <code>{blockhash}.utxo-headers</code> and <code>{blockhash}.utxo-set</code></li>
+<li><strong>Represents the blockchain tip</strong> at the time of export from the SV node</li>
+<li><strong>Must match exactly</strong> with the filenames in your export directory</li>
+</ul>
+<p><strong>How to find it:</strong> Extract the hash from your exported filenames (the part before <code>.utxo-headers</code> or <code>.utxo-set</code>)</p>
+</div>
+<h4 id="step-3-run-seeder">Step 3: Run Seeder</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Run the seeder (replace the hash with your actual block hash from Step 2)</span>
+<span class="c1"># Make sure to add any environment variables you have defined in your docker-compose.yml</span>
+docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>docker.m<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">network</span><span class="o">=</span>mainnet<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span><span class="si">${</span><span class="nv">PWD</span><span class="si">}</span>/docker/mainnet/data/teranode:/app/data<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/mnt/teranode/seed:/mnt/teranode/seed<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--network<span class="w"> </span>my-teranode-network<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--entrypoint<span class="o">=</span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>/app/teranode-cli<span class="w"> </span>seeder<span class="w"> </span><span class="se">\</span>
+<span class="w">        </span>-inputDir<span class="w"> </span>/mnt/teranode/seed/export<span class="w"> </span><span class="se">\</span>
+<span class="w">        </span>-hash<span class="w"> </span>0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
+</code></pre></div>
+<h4 id="step-4-monitor-seeding-progress">Step 4: Monitor Seeding Progress</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Monitor seeder logs</span>
+docker<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>&lt;seeder-container-id&gt;
+</code></pre></div>
+<h4 id="step-5-start-teranode-services">Step 5: Start Teranode Services</h4>
+<p>After successful seeding:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Start all Teranode services</span>
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+<h3 id="expected-timeline_1">Expected Timeline</h3>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Duration</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Export</strong></td>
+<td>2-4 hours</td>
+<td>Extracting UTXO set from SV Node</td>
+</tr>
+<tr>
+<td><strong>Seeding</strong></td>
+<td>4-8 hours</td>
+<td>Importing data into Teranode</td>
+</tr>
+<tr>
+<td><strong>Verification</strong></td>
+<td>30 minutes</td>
+<td>Starting services and verifying sync</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td>1-12 hours</td>
+<td>Complete process</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>💾 Storage Note:</strong> The seeder writes directly to Aerospike, PostgreSQL, and the filesystem. Ensure your environment variables and volume mounts are correctly configured.</p>
+</blockquote>
+<hr />
+<h2 id="method-3-seeding-from-existing-teranode">Method 3: Seeding from Existing Teranode</h2>
+<p>This is the fastest synchronization method, using UTXO set and header files from an existing Teranode instance. This method is ideal when you have access to another synchronized Teranode node.</p>
+<h3 id="prerequisites_2">Prerequisites</h3>
+<ul>
+<li>✅ Access to a synchronized Teranode instance</li>
+<li>✅ UTXO set files from Block/UTXO Persister</li>
+<li>✅ Fresh target Teranode instance with no existing blockchain data (see <a href="../minersHowToResetTeranode/">reset guide</a> to clear existing data if needed)</li>
+<li>✅ Network access between source and target systems</li>
+<li>✅ Sufficient storage for data transfer</li>
+</ul>
+<h3 id="overview_2">Overview</h3>
+<p>This method uses the same seeder tool as Method 2, but with data files generated by Teranode's Block Persister and UTXO Persister services instead of exporting from a legacy SV node.</p>
+<h3 id="step-1-locate-source-data">Step 1: Locate Source Data</h3>
+<p>On your source Teranode instance, locate the persisted data files:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Typical locations for persisted data in Docker deployments</span>
+ls<span class="w"> </span>-la<span class="w"> </span>/app/data/blockstore/
+ls<span class="w"> </span>-la<span class="w"> </span>/app/data/utxo-persister/
+</code></pre></div>
+<p><strong>Required Files:</strong></p>
+<ul>
+<li><code>{blockhash}.utxo-headers</code> - Block headers</li>
+<li><code>{blockhash}.utxo-set</code> - UTXO set data</li>
+</ul>
+<h3 id="step-2-make-data-available">Step 2: Make Data Available</h3>
+<p>Ensure the required UTXO files are available in your target Teranode's export directory:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Target location for the files</span>
+/mnt/teranode/seed/export/<span class="o">{</span>blockhash<span class="o">}</span>.utxo-headers
+/mnt/teranode/seed/export/<span class="o">{</span>blockhash<span class="o">}</span>.utxo-set
+</code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Data Transfer</p>
+<p>Use your preferred method to transfer the files from the source Teranode to the target location (scp, rsync, container volumes, shared storage, etc.).</p>
+</div>
+<h3 id="step-3-run-seeder_1">Step 3: Run Seeder</h3>
+<p>Use the same seeder process as described in Method 2:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Prepare environment</span>
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>aerospike<span class="w"> </span>aerospike-2<span class="w"> </span>postgres<span class="w"> </span>kafka-shared
+docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>blockchain<span class="w"> </span>asset<span class="w"> </span>blockvalidation
+
+<span class="c1"># Run seeder</span>
+<span class="c1"># Instead of latest, you could use a specific version of teranode. </span>
+<span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
+docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-e<span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>docker.m<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span><span class="si">${</span><span class="nv">PWD</span><span class="si">}</span>/docker/mainnet/data/teranode:/app/data<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-v<span class="w"> </span>/mnt/teranode/seed:/mnt/teranode/seed<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--network<span class="w"> </span>my-teranode-network<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--entrypoint<span class="o">=</span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>/app/teranode-cli<span class="w"> </span>seeder<span class="w"> </span><span class="se">\</span>
+<span class="w">        </span>-inputDir<span class="w"> </span>/mnt/teranode/seed/export<span class="w"> </span><span class="se">\</span>
+<span class="w">        </span>-hash<span class="w"> </span>&lt;blockhash-from-filename&gt;
+</code></pre></div>
+<h3 id="expected-timeline_2">Expected Timeline</h3>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>Duration</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Data Transfer</strong></td>
+<td>1-3 hours</td>
+<td>Copying files between systems</td>
+</tr>
+<tr>
+<td><strong>Seeding</strong></td>
+<td>2-4 hours</td>
+<td>Importing data into target Teranode</td>
+</tr>
+<tr>
+<td><strong>Verification</strong></td>
+<td>15 minutes</td>
+<td>Starting services and verification</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td>1-6 hours</td>
+<td>Complete process</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>⚡ Speed Advantage:</strong> This method is typically 2-3x faster than Method 2 since the data is already in Teranode's optimized format.</p>
+</blockquote>
+<hr />
+<h2 id="recovery-and-troubleshooting">Recovery and Troubleshooting</h2>
+<p>Teranode is designed for resilience and can recover from various types of downtime or disconnections. This section covers different recovery scenarios and troubleshooting approaches.</p>
+<h3 id="normal-recovery-short-downtime">Normal Recovery (Short Downtime)</h3>
+<p>For brief interruptions (minutes to hours), Teranode typically recovers automatically.</p>
+<h4 id="automatic-recovery-process">Automatic Recovery Process</h4>
+<ol>
+<li>
+<p><strong>Service Restart</strong></p>
+<ul>
+<li>Docker Compose can be configured with restart policies</li>
 </ul>
 </li>
-<li><a href="#verifying-the-deployment">Verifying the Deployment</a></li>
-<li><a href="#production-considerations">Production Considerations</a></li>
-<li><a href="#other-resources">Other Resources</a></li>
-</ul>
-<h2 id="introduction">Introduction</h2>
-<p>This guide provides instructions for deploying Teranode in a Kubernetes environment. While this guide shows the steps to deploy on a single server cluster using Minikube, these configurations can be adapted for production use with appropriate modifications.</p>
-<p><img alt="kubernetesOperatorComponents.svg" src="../img/mermaid/kubernetesOperatorComponents.svg" /></p>
-<h2 id="prerequisites">Prerequisites</h2>
-<p>Before you begin, ensure you have the following tools installed and configured:</p>
+<li>
+<p><strong>Peer Reconnection</strong></p>
 <ul>
-<li><a href="https://docs.docker.com/get-docker/">Docker</a></li>
-<li><a href="https://minikube.sigs.k8s.io/docs/start/">Minikube</a></li>
-<li><a href="https://kubernetes.io/docs/tasks/tools/">kubectl</a></li>
-<li><a href="https://helm.sh/docs/intro/install/">Helm</a></li>
+<li>The <code>peer</code> service re-establishes network connections</li>
+<li>Automatic discovery of available BSV network peers</li>
 </ul>
-<p>Additionally, ensure you have a storage provider capable of providing ReadWriteMany (RWX) storage. As an example, this guide includes setting up an NFS server via Docker for this purpose.</p>
-<p><img alt="miniKubeOperatorPrerequisites.svg" src="../img/mermaid/miniKubeOperatorPrerequisites.svg" /></p>
-<h2 id="download-the-teranode-source-code">Download the Teranode source code</h2>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span><span class="nv">$YOUR_WORKING_DIR</span>
-git<span class="w"> </span>clone<span class="w"> </span>git@github.com:bsv-blockchain/teranode.git
-<span class="nb">cd</span><span class="w"> </span>teranode
-</code></pre></div>
-<h2 id="deployment-with-minikube">Deployment with Minikube</h2>
-<p>Minikube creates a local Kubernetes cluster on your machine. For running Teranode, we recommend the following process:</p>
-<p><img alt="KubernetesOperatorInstallationSteps.svg" src="../img/mermaid/KubernetesOperatorInstallationSteps.svg" /></p>
-<h3 id="start-minikube">Start Minikube</h3>
-<p>Start minikube with recommended resources and verify its status:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Start minikube with recommended resources</span>
-minikube<span class="w"> </span>start<span class="w"> </span>--cpus<span class="o">=</span><span class="m">4</span><span class="w"> </span>--memory<span class="o">=</span><span class="m">8192</span><span class="w"> </span>--disk-size<span class="o">=</span>20gb
-
-<span class="c1"># Verify minikube status</span>
-minikube<span class="w"> </span>status
-</code></pre></div>
-<h3 id="deploy-dependencies">Deploy Dependencies</h3>
-<p>Teranode requires several backing services. While these services should be deployed separately in production, for local development we'll deploy them within the same cluster.</p>
-<h4 id="create-namespace">Create Namespace</h4>
-<p>Create a namespace for the deployment:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>create<span class="w"> </span>namespace<span class="w"> </span>teranode-operator
-</code></pre></div>
-<h4 id="deploy-backing-services">Deploy Backing Services</h4>
-<p>Deploy all dependencies in the teranode namespace:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/aerospike/<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/postgres/<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/kafka/<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-</code></pre></div>
-<p>To know more, please refer to the <a href="../../../../references/thirdPartySoftwareRequirements/">Third Party Reference Documentation</a></p>
-<h3 id="create-persistent-volume-provider">Create Persistent Volume Provider</h3>
-<p>For this example, we will create a local folder and expose it to Minikube via a docker based NFS server.</p>
-<h4 id="standard-x86x64-systems">Standard x86/x64 Systems</h4>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>volume<span class="w"> </span>create<span class="w"> </span>nfs-volume
-
-docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--name<span class="w"> </span>nfs-server<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-e<span class="w"> </span><span class="nv">NFS_EXPORT_0</span><span class="o">=</span><span class="s1">&#39;/minikube-storage *(rw,no_subtree_check,fsid=0,no_root_squash)&#39;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-v<span class="w"> </span>nfs-volume:/minikube-storage<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--cap-add<span class="w"> </span>SYS_ADMIN<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-p<span class="w"> </span><span class="m">2049</span>:2049<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>erichough/nfs-server
-
-<span class="c1"># connect the nfs-server to the minikube network</span>
-docker<span class="w"> </span>network<span class="w"> </span>connect<span class="w"> </span>minikube<span class="w"> </span>nfs-server
-
-<span class="c1"># create the PersistentVolume</span>
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/nfs/
-</code></pre></div>
-<h4 id="arm-based-systems">ARM-based Systems</h4>
-<p>For arm based systems, you can use this variant:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>volume<span class="w"> </span>create<span class="w"> </span>nfs-volume
-
-docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>nfs-server<span class="w"> </span>--privileged<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-v<span class="w"> </span>nfs-volume:/minikube-storage<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>alpine:latest<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;apk add --no-cache nfs-utils &amp;&amp; \</span>
-<span class="s2">        mkdir -p /minikube-storage &amp;&amp; \</span>
-<span class="s2">        chmod 777 /minikube-storage &amp;&amp; \</span>
-<span class="s2">        echo &#39;/minikube-storage *(rw,sync,no_subtree_check,no_root_squash,insecure,fsid=0)&#39; &gt; /etc/exports &amp;&amp; \</span>
-<span class="s2">        exportfs -r &amp;&amp; \</span>
-<span class="s2">        rpcbind &amp;&amp; \</span>
-<span class="s2">        rpc.statd &amp;&amp; \</span>
-<span class="s2">        rpc.nfsd 8 &amp;&amp; \</span>
-<span class="s2">        rpc.mountd &amp;&amp; \</span>
-<span class="s2">        tail -f /dev/null&quot;</span>
-
-<span class="c1"># connect the nfs-server to the minikube network</span>
-docker<span class="w"> </span>network<span class="w"> </span>connect<span class="w"> </span>minikube<span class="w"> </span>nfs-server
-
-<span class="c1"># create the PersistentVolume</span>
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/nfs/
-</code></pre></div>
-<h3 id="load-teranode-images">Load Teranode Images</h3>
-<p>Pull and load the required Teranode images into Minikube:</p>
-<h4 id="identify-available-versions">Identify Available Versions</h4>
-<p>You can find the latest available version published on GitHub Container Registry:</p>
+</li>
+<li>
+<p><strong>Block Catch-up</strong></p>
 <ul>
-<li><a href="https://github.com/bsv-blockchain/teranode/pkgs/container/teranode">https://github.com/bsv-blockchain/teranode/pkgs/container/teranode</a></li>
-<li><a href="https://github.com/bsv-blockchain/teranode-operator/pkgs/container/teranode-operator">https://github.com/bsv-blockchain/teranode-operator/pkgs/container/teranode-operator</a></li>
+<li>Node determines last processed block height</li>
+<li>Requests missing blocks from peers automatically</li>
+<li>Processes blocks sequentially to catch up</li>
 </ul>
-<h4 id="set-image-versions">Set Image Versions</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">OPERATOR_VERSION</span><span class="o">=</span>v0.5.5<span class="w"> </span><span class="c1"># Or use &#39;latest&#39;</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_VERSION</span><span class="o">=</span>v0.11.13<span class="w"> </span><span class="c1"># Or use &#39;latest&#39;</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">ECR_REGISTRY</span><span class="o">=</span>ghcr.io/bsv-blockchain
-</code></pre></div>
-<h4 id="load-images-into-minikube">Load Images into Minikube</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Load Teranode Operator</span>
-docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
-minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
+</li>
+</ol>
+<h4 id="monitor-normal-recovery">Monitor Normal Recovery</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check container status</span>
+docker<span class="w"> </span>compose<span class="w"> </span>ps
 
-<span class="c1"># Load Teranode Public</span>
-docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
-minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
-</code></pre></div>
-<h3 id="deploy-teranode">Deploy Teranode</h3>
-<p>The Teranode Operator manages the lifecycle of Teranode instances:</p>
-<h4 id="install-teranode-operator">Install Teranode Operator</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Install operator</span>
-helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>teranode-operator<span class="w"> </span>oci://ghcr.io/bsv-blockchain/teranode-operator<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-operator.yaml
-</code></pre></div>
-<h4 id="apply-teranode-configuration">Apply Teranode Configuration</h4>
-<p>Apply the Teranode configuration and custom resources:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-configmap.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-cr.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-</code></pre></div>
-<h4 id="start-syncing-process">Start Syncing Process</h4>
-<p>A fresh Teranode starts up in IDLE state by default. To start syncing from the legacy network, you can run:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>-fsmstate<span class="w"> </span>legacysyncing
-</code></pre></div>
-<p>To know more about the syncing process, please refer to the <a href="../minersHowToSyncTheNode/">Teranode Sync Guide</a></p>
-<h2 id="verifying-the-deployment">Verifying the Deployment</h2>
-<p><img alt="kubernetesOperatorVerification.svg" src="../img/mermaid/kubernetesOperatorVerification.svg" /></p>
-<p>To verify your deployment:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check all pods are running</span>
-kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;aerospike|postgres|kafka|teranode-operator&#39;</span>
+<span class="c1"># View recovery logs</span>
+docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>blockchain<span class="w"> </span>--tail<span class="o">=</span><span class="m">100</span>
 
-<span class="c1"># Check Teranode services are ready</span>
-kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>ready<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--timeout<span class="o">=</span>300s
-
-<span class="c1"># View Teranode logs</span>
-kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f
+<span class="c1"># View sync progress in blockchain viewer</span>
+<span class="c1"># Access http://localhost:8090/viewer in your browser</span>
 </code></pre></div>
-<h2 id="production-considerations">Production Considerations</h2>
-<p>For production deployments, consider:</p>
+<h3 id="extended-downtime-recovery">Extended Downtime Recovery</h3>
+<p>For longer outages (days to weeks), additional considerations apply.</p>
+<h4 id="assessment-phase">Assessment Phase</h4>
+<p>Check current sync status:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check current block height vs network tip using the blockchain viewer</span>
+<span class="c1"># Access http://localhost:8090/viewer in your browser</span>
+<span class="c1"># Compare the displayed height with a block explorer</span>
+
+<span class="c1"># If &gt;10,000 blocks behind, consider reseeding</span>
+</code></pre></div>
+<h4 id="recovery-options">Recovery Options</h4>
+<table>
+<thead>
+<tr>
+<th>Blocks Behind</th>
+<th>Recommended Action</th>
+<th>Expected Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>&lt; 1,000</strong></td>
+<td>Normal catch-up</td>
+<td>1-4 hours</td>
+</tr>
+<tr>
+<td><strong>1,000 - 10,000</strong></td>
+<td>Monitor catch-up progress</td>
+<td>4-24 hours</td>
+</tr>
+<tr>
+<td><strong>&gt; 10,000</strong></td>
+<td>Consider reseeding (Method 2 or 3)</td>
+<td>6-12 hours</td>
+</tr>
+</tbody>
+</table>
+<h4 id="manual-intervention-steps">Manual Intervention Steps</h4>
+<h5 id="option-1-force-catch-up">Option 1: Force Catch-up</h5>
+<div class="highlight"><pre><span></span><code><span class="c1"># Reset FSM state and restart sync</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>legacysyncing
+
+<span class="c1"># Monitor progress closely</span>
+docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>blockchain
+</code></pre></div>
+<h5 id="option-2-reseed-from-recent-data">Option 2: Reseed from Recent Data</h5>
+<p>If catch-up is too slow, use Method 2 or Method 3 from this guide with recent data.</p>
+<h3 id="troubleshooting-common-issues">Troubleshooting Common Issues</h3>
+<h4 id="issue-sync-stalled">Issue: Sync Stalled</h4>
+<p><strong>Symptoms:</strong>
+- Block height not increasing
+- No new blocks being processed
+- Peer connections established but inactive</p>
+<p><strong>Solutions:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check peer connections</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>getpeerinfo
+
+<span class="c1"># Restart peer service</span>
+docker<span class="w"> </span>compose<span class="w"> </span>restart<span class="w"> </span>peer
+
+<span class="c1"># Reset FSM state</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>legacysyncing
+</code></pre></div>
+<h4 id="issue-database-connection-errors">Issue: Database Connection Errors</h4>
+<p><strong>Symptoms:</strong>
+- Connection timeouts to PostgreSQL/Aerospike
+- "Database unavailable" errors in logs</p>
+<p><strong>Solutions:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check database container status</span>
+docker<span class="w"> </span>compose<span class="w"> </span>ps<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;postgres\|aerospike&quot;</span>
+
+<span class="c1"># Test database connectivity</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>postgres<span class="w"> </span>-d<span class="w"> </span>teranode<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;SELECT 1;&quot;</span>
+
+<span class="c1"># Restart database containers if needed</span>
+docker<span class="w"> </span>compose<span class="w"> </span>restart<span class="w"> </span>postgres<span class="w"> </span>aerospike
+</code></pre></div>
+<h4 id="issue-storage-space-exhausted">Issue: Storage Space Exhausted</h4>
+<p><strong>Symptoms:</strong>
+- "No space left on device" errors
+- Containers crashing</p>
+<p><strong>Solutions:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check storage usage</span>
+df<span class="w"> </span>-h
+
+<span class="c1"># Clean up old logs (if applicable)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>--tail<span class="o">=</span><span class="m">0</span>
+
+<span class="c1"># Ensure log rotation is configured</span>
+</code></pre></div>
+<h3 id="performance-monitoring-during-recovery">Performance Monitoring During Recovery</h3>
+<h4 id="key-metrics-to-watch">Key Metrics to Watch</h4>
 <ul>
-<li>Deploying dependencies (Aerospike, PostgreSQL, Kafka) in separate clusters or using managed services</li>
-<li>Implementing proper security measures (network policies, RBAC, etc.)</li>
-<li>Setting up monitoring and alerting</li>
-<li>Configuring appropriate resource requests and limits</li>
-<li>Setting up proper backup and disaster recovery procedures</li>
+<li><strong>Block Processing Rate</strong>: Blocks per minute</li>
+<li><strong>Peer Connection Count</strong>: Active peer connections</li>
+<li><strong>Database Performance</strong>: Query response times</li>
+<li><strong>Storage I/O</strong>: Disk read/write rates</li>
+<li><strong>Memory Usage</strong>: RAM consumption patterns</li>
 </ul>
-<p>An example CR for a mainnet deployment is available in <a href="https://github.com/bsv-blockchain/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml">kubernetes/teranode/teranode-cr-mainnet.yaml</a>.</p>
-<h2 id="resetting-teranode">Resetting Teranode</h2>
-<p>If you need to reset your Teranode deployment, see the <a href="../minersHowToResetTeranode/">How to Reset Teranode</a> guide for complete instructions on cleaning up Aerospike, PostgreSQL, and persistent volumes.</p>
-<h2 id="other-resources">Other Resources</h2>
+<h4 id="monitoring-commands">Monitoring Commands</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Monitor block height progress via blockchain viewer</span>
+<span class="c1"># Access http://localhost:8090/viewer in your browser</span>
+
+<span class="c1"># Monitor resource usage</span>
+docker<span class="w"> </span>stats
+
+<span class="c1"># Check service health endpoints</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8000/health
+</code></pre></div>
+<blockquote>
+<p><strong>📈 Tip:</strong> Use monitoring tools like Prometheus and Grafana to track recovery progress and estimate completion times. Set up alerts for stalled sync or resource exhaustion.</p>
+</blockquote>
+<hr />
+<h2 id="monitoring-and-verification">Monitoring and Verification</h2>
+<p>After completing synchronization using any method, it's important to verify that your Teranode instance is properly synchronized and functioning correctly.</p>
+<h3 id="verification-checklist">Verification Checklist</h3>
+<h4 id="basic-connectivity">✅ Basic Connectivity</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check if services are running</span>
+docker<span class="w"> </span>compose<span class="w"> </span>ps
+<span class="c1"># All services should show &quot;Up&quot; status</span>
+
+<span class="c1"># Test CLI connectivity</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
+</code></pre></div>
+<h4 id="synchronization-status">✅ Synchronization Status</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check current block height using blockchain viewer</span>
+<span class="c1"># Access http://localhost:8090/viewer in your browser</span>
+
+<span class="c1"># Compare with network tip (use block explorer or other nodes)</span>
+<span class="c1"># Heights should match within 1-2 blocks</span>
+</code></pre></div>
+<h4 id="peer-connections">✅ Peer Connections</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Verify peer connections</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>getpeerinfo<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;addr|version&quot;</span>
+
+<span class="c1"># Should have 8+ active peer connections</span>
+</code></pre></div>
+<h4 id="database-health">✅ Database Health</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check PostgreSQL connectivity</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>postgres<span class="w"> </span>psql<span class="w"> </span>-U<span class="w"> </span>postgres<span class="w"> </span>-d<span class="w"> </span>teranode<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;SELECT COUNT(*) FROM blocks;&quot;</span>
+
+<span class="c1"># Check Aerospike connectivity</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>aerospike<span class="w"> </span>asinfo<span class="w"> </span>-v<span class="w"> </span><span class="s2">&quot;statistics&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s2">&quot;objects&quot;</span>
+</code></pre></div>
+<h4 id="fsm-state">✅ FSM State</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Verify FSM is in correct state</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
+
+<span class="c1"># Should show &quot;running&quot; or &quot;synced&quot; for a fully synchronized node</span>
+</code></pre></div>
+<h3 id="ongoing-monitoring">Ongoing Monitoring</h3>
+<h4 id="daily-health-checks">Daily Health Checks</h4>
+<div class="highlight"><pre><span></span><code><span class="ch">#!/bin/bash</span>
+<span class="c1"># Save as teranode-health-check.sh</span>
+
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;=== Teranode Health Check ===&quot;</span>
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;Timestamp: </span><span class="k">$(</span>date<span class="k">)</span><span class="s2">&quot;</span>
+
+<span class="c1"># Check container status</span>
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- Container Status ---&quot;</span>
+docker<span class="w"> </span>compose<span class="w"> </span>ps
+
+<span class="c1"># Check block height via blockchain viewer</span>
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- Block Height ---&quot;</span>
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;View at http://localhost:8090/viewer&quot;</span>
+
+<span class="c1"># Check peer count</span>
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- Peer Count ---&quot;</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>getpeerinfo<span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-l
+
+<span class="c1"># Check FSM state</span>
+<span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;\n--- FSM State ---&quot;</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
+</code></pre></div>
+<h4 id="performance-metrics">Performance Metrics</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Monitor resource usage</span>
+docker<span class="w"> </span>stats<span class="w"> </span>--no-stream
+
+<span class="c1"># Check storage usage</span>
+df<span class="w"> </span>-h
+
+<span class="c1"># Monitor network traffic</span>
+docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>netstat<span class="w"> </span>-i
+</code></pre></div>
+<h4 id="log-analysis">Log Analysis</h4>
+<div class="highlight"><pre><span></span><code><span class="c1"># Check for errors in recent logs</span>
+docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>blockchain<span class="w"> </span>--tail<span class="o">=</span><span class="m">1000</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>error
+
+<span class="c1"># Monitor sync progress</span>
+docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>blockchain<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;height|block|sync&quot;</span>
+
+<span class="c1"># Check for warnings</span>
+docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>blockchain<span class="w"> </span>--tail<span class="o">=</span><span class="m">1000</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>warn
+</code></pre></div>
+<hr />
+<h2 id="additional-resources">Additional Resources</h2>
+<h3 id="documentation">Documentation</h3>
 <ul>
-<li><a href="../../../../references/thirdPartySoftwareRequirements/">Third Party Reference Documentation</a></li>
-<li><a href="../minersHowToSyncTheNode/">Teranode Sync Guide</a></li>
-<li><a href="../minersHowToResetTeranode/">How to Reset Teranode</a></li>
-<li><a href="../minersHowToConfigureTheNode/">How-To Configure the Node</a></li>
+<li><strong><a href="../../minersHowToTeranodeCLI/">Teranode CLI Reference</a></strong> - Complete CLI command reference</li>
+<li><strong><a href="../minersHowToResetTeranode/">Reset Teranode (Docker)</a></strong> - How to reset Docker Compose deployments</li>
+<li><strong><a href="../../../../topics/commands/seeder/">Seeder Command Details</a></strong> - Advanced seeder configuration</li>
+<li><strong><a href="../../../../topics/services/utxoPersister/">UTXO Persister Service</a></strong> - UTXO persistence configuration</li>
+<li><strong><a href="../../../../topics/stores/utxo/">UTXO Store Documentation</a></strong> - UTXO storage mechanisms</li>
 </ul>
+<h3 id="installation-and-configuration">Installation and Configuration</h3>
+<ul>
+<li><strong><a href="../minersHowToInstallation/">Docker Installation</a></strong> - Docker-based setup</li>
+<li><strong><a href="../minersHowToConfigureTheNode/">Docker Configuration</a></strong> - Docker configuration guide</li>
+<li><strong><a href="../../../../references/thirdPartySoftwareRequirements/">Third Party Requirements</a></strong> - External dependencies</li>
+</ul>
+<h3 id="support-and-community">Support and Community</h3>
+<p>For additional support:</p>
+<ol>
+<li><strong>Check Logs</strong>: Always start with examining service logs</li>
+<li><strong>Documentation</strong>: Review related documentation sections</li>
+<li><strong>Community Forums</strong>: Search existing discussions and solutions</li>
+<li><strong>Issue Reporting</strong>: Report bugs with detailed logs and reproduction steps</li>
+</ol>
 
 
 
