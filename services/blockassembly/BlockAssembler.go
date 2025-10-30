@@ -632,6 +632,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	case bestBlockAccordingToBlockchain.Hash().IsEqual(bestBlockAccordingToBlockAssembly.Hash()):
 		b.logger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), bestBlockAccordingToBlockAssembly.Hash())
 		return
+
 	case !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(bestBlockAccordingToBlockAssembly.Hash()):
 		b.logger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), bestBlockAccordingToBlockAssembly.Hash())
 		b.setCurrentRunningState(StateReorging)
@@ -710,7 +711,7 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 
 	// Queue cleanup operations to prevent flooding during catchup
 	// The cleanup queue worker processes operations sequentially (parent preserve → DAH cleanup)
-	// Capture channel reference to avoid race condition if worker restarts
+	// Capture channel reference to avoid TOCTOU race between nil check and send
 	ch := b.cleanupQueueCh
 	if b.utxoStore != nil && b.cleanupServiceLoaded.Load() && b.cleanupService != nil && height > 0 && ch != nil {
 		// Non-blocking send - drop if queue is full (shouldn't happen with 100 buffer, but safety check)
@@ -768,11 +769,10 @@ func (b *BlockAssembler) startCleanupQueueWorker(ctx context.Context) {
 
 	go func() {
 		defer func() {
-			// Close the channel to signal no more work will be sent
-			if b.cleanupQueueCh != nil {
-				close(b.cleanupQueueCh)
-				b.cleanupQueueCh = nil
-			}
+			// Close the channel - no need to drain because:
+			// 1. Senders use non-blocking send (select with default)
+			// 2. Channel is never set to nil, so no risk of blocking on nil channel
+			close(b.cleanupQueueCh)
 			b.cleanupQueueWorkerStarted.Store(false)
 		}()
 
