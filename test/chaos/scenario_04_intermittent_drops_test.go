@@ -39,10 +39,10 @@ func TestScenario04_IntermittentDrops(t *testing.T) {
 
 	// Configuration
 	const (
-		postgresToxiURL   = "http://localhost:8474"
-		kafkaProxyURL     = "http://localhost:8475"
-		postgresProxy     = "postgres"
-		kafkaProxy        = "kafka"
+		postgresToxiURL = "http://localhost:8474"
+		kafkaProxyURL   = "http://localhost:8475"
+		postgresProxy   = "postgres"
+		kafkaProxy      = "kafka"
 
 		// Connection strings
 		postgresDirectURL = "postgres://postgres:really_strong_password_change_me@localhost:5432/postgres?sslmode=disable"
@@ -51,14 +51,14 @@ func TestScenario04_IntermittentDrops(t *testing.T) {
 		kafkaToxiURL      = "localhost:19092"
 
 		// Toxic parameters
-		timeoutMs         = 0     // 0ms timeout = immediate drop
-		lowToxicity       = 0.3   // 30% of connections drop
-		highToxicity      = 0.6   // 60% of connections drop
-		testTopic         = "chaos_test_scenario_04"
+		timeoutMs    = 0   // 0ms timeout = immediate drop
+		lowToxicity  = 0.3 // 30% of connections drop
+		highToxicity = 0.6 // 60% of connections drop
+		testTopic    = "chaos_test_scenario_04"
 
 		// Retry parameters
-		maxRetries        = 3
-		retryDelay        = 300 * time.Millisecond
+		maxRetries = 3
+		retryDelay = 300 * time.Millisecond
 	)
 
 	// Create toxiproxy clients for both services
