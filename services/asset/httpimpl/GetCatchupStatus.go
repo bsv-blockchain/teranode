@@ -16,10 +16,14 @@ func (h *HTTP) GetCatchupStatus(c echo.Context) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
 
-	// Connect to BlockValidation gRPC service
-	blockvalidationAddr := h.settings.BlockValidation.GRPCListenAddress
+	// Connect to BlockValidation gRPC service using the configured GRPCAddress
+	blockvalidationAddr := h.settings.BlockValidation.GRPCAddress
 	if blockvalidationAddr == "" {
-		blockvalidationAddr = "localhost:8082" // default
+		h.logger.Errorf("[GetCatchupStatus] BlockValidation gRPC address not configured (blockvalidation_grpcAddress)")
+		return c.JSON(http.StatusServiceUnavailable, map[string]interface{}{
+			"error":          "BlockValidation service address not configured",
+			"is_catching_up": false,
+		})
 	}
 
 	conn, err := grpc.DialContext(ctx, blockvalidationAddr,

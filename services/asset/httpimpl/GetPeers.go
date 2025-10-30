@@ -55,10 +55,14 @@ func (h *HTTP) GetPeers(c echo.Context) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
 
-	// Connect to P2P gRPC service
-	p2pAddr := h.settings.P2P.GRPCListenAddress
+	// Connect to P2P gRPC service using the configured GRPCAddress
+	p2pAddr := h.settings.P2P.GRPCAddress
 	if p2pAddr == "" {
-		p2pAddr = "localhost:9905" // default P2P gRPC port
+		h.logger.Errorf("[GetPeers] P2P gRPC address not configured (p2p_grpcAddress)")
+		return c.JSON(http.StatusServiceUnavailable, PeersResponse{
+			Peers: []PeerInfoResponse{},
+			Count: 0,
+		})
 	}
 
 	conn, err := grpc.DialContext(ctx, p2pAddr,

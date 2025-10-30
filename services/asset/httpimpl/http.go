@@ -337,6 +337,12 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Register peers endpoint
 	apiGroup.GET("/peers", h.GetPeers)
 
+	// Register peers endpoint for dashboard API route compatibility
+	// The dashboard's SvelteKit +server.ts endpoints don't work in production (adapter-static)
+	// so we need to provide the same endpoints directly in the Go backend
+	apiP2PGroup := e.Group("/api/p2p")
+	apiP2PGroup.GET("/peers", h.GetPeers)
+
 	// Add OPTIONS handlers for block operations
 	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
