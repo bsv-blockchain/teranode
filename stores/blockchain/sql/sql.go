@@ -557,7 +557,7 @@ func (c *blockchainCache) addBlockHeader(blockHeader *model.BlockHeader, blockHe
 		c.chain = append(c.chain, *blockHeader.Hash())
 
 		// only keep last 200 blocks in cache
-		if len(c.chain) >= c.cacheSize {
+		if len(c.chain) > c.cacheSize {
 			oldestHash := c.chain[0]
 			delete(c.headers, oldestHash)
 			delete(c.metas, oldestHash)

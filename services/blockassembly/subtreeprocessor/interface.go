@@ -13,6 +13,8 @@
 package subtreeprocessor
 
 import (
+	"context"
+
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -233,4 +235,11 @@ type Interface interface {
 	// Returns:
 	//   - int: Total number of subtrees
 	SubtreeCount() int
+
+	// WaitForPendingBlocks waits for any pending block operations to complete.
+	// This ensures that all block-related processing is finalized before proceeding.
+	//
+	// Returns:
+	//   - error: Any error encountered while waiting
+	WaitForPendingBlocks(ctx context.Context) error
 }

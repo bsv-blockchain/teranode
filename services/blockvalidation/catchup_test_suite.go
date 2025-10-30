@@ -102,7 +102,7 @@ func (s *CatchupTestSuite) createServer(t *testing.T) {
 		settings:                      tSettings,
 		blockchainClient:              s.MockBlockchain,
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     s.MockUTXOStore,
 		validatorClient:               s.MockValidator,

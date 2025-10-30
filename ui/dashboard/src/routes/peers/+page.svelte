@@ -128,6 +128,7 @@
             uptime: msg.uptime,
             miner_name: msg.miner_name,
             listen_mode: msg.listen_mode,
+            storage: msg.storage,
             chain_work: msg.chain_work,
             sync_peer_id: msg.sync_peer_id || null, // Explicitly set to null if undefined
             sync_peer_height: msg.sync_peer_height,

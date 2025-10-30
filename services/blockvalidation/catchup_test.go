@@ -710,6 +710,10 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	// Mock ReportPeerFailure in case catchup fails (e.g., context cancellation)
 	mockBlockchain.On("ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 
+	// Create context first so BlockValidation can use it
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	blockFoundCh := make(chan processBlockFound, 1)
 	catchupCh := make(chan processBlockCatchup, 1)
 
@@ -719,7 +723,7 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 		blockFoundCh:        blockFoundCh,
 		catchupCh:           catchupCh,
 		stats:               gocore.NewStat("test"),
-		blockValidation:     NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, nil, nil, nil, nil, nil),
+		blockValidation:     NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, nil, nil, nil, nil, nil),
 		blockchainClient:    mockBlockchain,
 		forkManager:         NewForkManager(ulogger.TestLogger{}, tSettings),
 		subtreeStore:        nil,
@@ -730,8 +734,6 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	defer baseServer.processBlockNotify.Stop()
 
 	err = baseServer.Init(ctx)
@@ -758,6 +760,9 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 func TestServer_blockFoundCh_triggersCatchupCh_BlockLocator(t *testing.T) {
 	t.Skip("Skipping test that hangs - needs proper cleanup")
 	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockValidation.UseCatchupWhenBehind = true
@@ -807,7 +812,7 @@ func TestServer_blockFoundCh_triggersCatchupCh_BlockLocator(t *testing.T) {
 	blockFoundCh := make(chan processBlockFound, 1)
 	catchupCh := make(chan processBlockCatchup, 1)
 
-	blockValidation := NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchain, nil, nil, nil, nil, nil)
+	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, nil, nil, nil, nil, nil)
 	baseServer := &Server{
 		logger:              ulogger.TestLogger{},
 		settings:            tSettings,
@@ -860,6 +865,9 @@ func TestServer_blockFoundCh_triggersCatchupCh_BlockLocator(t *testing.T) {
 
 func TestProcessBlockFoundChannelCatchup(t *testing.T) {
 	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	// Use the shared setup for proper in-memory stores and fixtures
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -906,7 +914,7 @@ func TestProcessBlockFoundChannelCatchup(t *testing.T) {
 		settings:            tSettings,
 		blockFoundCh:        make(chan processBlockFound, 10),
 		catchupCh:           make(chan processBlockCatchup, 10),
-		blockValidation:     NewBlockValidation(context.Background(), ulogger.TestLogger{}, tSettings, mockBlockchainClient, nil, nil, nil, nil, nil),
+		blockValidation:     NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchainClient, nil, nil, nil, nil, nil),
 		blockchainClient:    mockBlockchainClient,
 		forkManager:         NewForkManager(ulogger.TestLogger{}, tSettings),
 		subtreeStore:        nil,
@@ -934,7 +942,6 @@ func TestProcessBlockFoundChannelCatchup(t *testing.T) {
 	server.blockFoundCh <- pbf3
 	server.blockFoundCh <- pbf4
 
-	ctx := context.Background()
 	// Call processBlockFoundChannel with the first block
 	err := server.processBlockFoundChannel(ctx, pbf1)
 	require.NoError(t, err)
@@ -989,7 +996,7 @@ func TestCatchup(t *testing.T) {
 		blockchainClient:              mockBlockchainClient,
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     mockUTXOStore,
 		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),
@@ -1138,7 +1145,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 			blockchainClient:              mockBlockchainClient,
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			bloomFilterStats:              model.NewBloomStats(),
 			utxoStore:                     mockUTXOStore,
 		}
@@ -1389,7 +1396,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		server.utxoStore.(*utxo.MockUtxostore).On("GetBlockHeight").Return(uint32(1017)).Maybe()
 
 		// Add block 17 to the blockExists cache so verifyChainContinuity can find it
-		bv.blockExists.Set(*blocks[17].Header.Hash(), true)
+		bv.blockExistsCache.Set(*blocks[17].Header.Hash(), true)
 
 		// Mock all the required methods
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Header.Hash()).Return(false, nil)
@@ -3006,7 +3013,7 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 		blockchainClient:              mockBlockchainClient,
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     mockUTXOStore,
 		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),
@@ -3103,7 +3110,7 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		blockchainClient:              mockBlockchainClient,
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     mockUTXOStore,
 		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),

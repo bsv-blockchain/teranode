@@ -49,7 +49,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 	_, err = helper.CallRPC(node3.RPCURL, "setban", []interface{}{node2.IPAddress, "add", 180, false})
 	require.NoError(t, err)
 
-	txDistributor := testEnv.Nodes[0].DistributorClient
+	txDistributor := testEnv.Nodes[0].PropagationClient
 
 	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
 
@@ -79,7 +79,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 
 	t.Logf("Transaction: %s %s\n", tx.TxIDChainHash(), tx.TxID())
 
-	_, err = txDistributor.SendTransaction(ctx, tx)
+	err = txDistributor.ProcessTransaction(ctx, tx)
 	if err != nil {
 		t.Errorf("Failed to send transaction: %v", err)
 	}
@@ -111,7 +111,7 @@ func (suite *PeerTestSuite) TestBanPeerList() {
 		t.Errorf("Error filling transaction inputs: %v", err)
 	}
 
-	_, err = txDistributor.SendTransaction(ctx, newTx)
+	err = txDistributor.ProcessTransaction(ctx, newTx)
 	if err != nil {
 		t.Errorf("Failed to send new transaction: %v", err)
 	}

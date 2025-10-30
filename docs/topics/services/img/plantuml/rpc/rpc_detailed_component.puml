@@ -44,7 +44,7 @@ Component(utxo_handlers, "UTXO Handlers", "Go", "UTXO query and management handl
 
 Component(admin_handlers, "Admin Handlers", "Go", "Administrative operation handlers")
 
-Component(transaction_distributor, "Transaction Distributor", "Go", "Manages reliable transaction propagation to multiple propagation services")
+Component(transaction_handlers, "Transaction Handlers", "Go", "Transaction submission handlers")
 
 Component(help_cacher, "Help Cacher", "Go", "Caches RPC command help text")
 
@@ -60,7 +60,7 @@ Component(p2p_client, "P2P Client", "Go gRPC", "Interface to P2P service")
 
 Component(legacy_peer_client, "Legacy Peer Client", "Go gRPC", "Interface to Legacy Peer service")
 
-Component(propagation_clients, "Propagation Clients", "Go gRPC", "Multiple clients to Propagation service instances")
+Component(propagation_client, "Propagation Client", "Go gRPC", "Interface to Propagation service")
 
 Component(utxo_store_client, "UTXO Store Client", "Go", "Interface to UTXO database")
 
@@ -112,13 +112,15 @@ Rel(command_router, utxo_handlers, "UTXO commands")
 
 Rel(command_router, admin_handlers, "Admin commands")
 
+Rel(command_router, transaction_handlers, "Transaction commands")
+
 ' Handler to client interactions
 
 Rel(blockchain_handlers, blockchain_client, "Blockchain operations")
 
 Rel(mining_handlers, block_assembly_client, "Mining operations")
 
-Rel(mining_handlers, transaction_distributor, "Transaction distribution")
+Rel(transaction_handlers, propagation_client, "Submit transactions")
 
 Rel(peer_handlers, p2p_client, "P2P operations")
 
@@ -130,10 +132,6 @@ Rel(admin_handlers, blockchain_client, "Administrative operations")
 
 Rel(blockchain_handlers, asset_http_client, "Transaction hex data")
 
-' Transaction distribution (CODE-VERIFIED)
-
-Rel(transaction_distributor, propagation_clients, "Distribute transactions to multiple instances")
-
 ' Service client connections (CODE-VERIFIED)
 
 Rel(blockchain_client, blockchain, "gRPC calls", "gRPC")
@@ -144,7 +142,7 @@ Rel(p2p_client, p2p_service, "gRPC calls", "gRPC")
 
 Rel(legacy_peer_client, legacy_peer, "gRPC calls", "gRPC")
 
-Rel(propagation_clients, propagation, "gRPC calls", "gRPC")
+Rel(propagation_client, propagation, "gRPC calls", "gRPC")
 
 Rel(utxo_store_client, utxo_store, "Database queries", "Direct")
 
@@ -164,7 +162,7 @@ Rel(health_monitor, p2p_client, "Health checks")
 
 Rel(health_monitor, utxo_store_client, "Health checks")
 
-Rel(health_monitor, propagation_clients, "Health checks")
+Rel(health_monitor, propagation_client, "Health checks")
 
 Rel(health_monitor, asset_http_client, "Health checks")
 

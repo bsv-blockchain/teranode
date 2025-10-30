@@ -21,11 +21,9 @@ type Server struct {
     blockAssemblyClient       blockassembly.ClientI                   // Block assembly service client
 
     blockFoundCh              chan processBlockFound                  // Channel for newly discovered blocks
-
-    blockPriorityQueue        *BlockPriorityQueue                     // Priority-based block processing queue
-    blockClassifier           *BlockClassifier                        // Block priority classification logic
-    forkManager               *ForkManager                            // Parallel fork branch processing manager
-
+    blockPriorityQueue        *BlockPriorityQueue                     // Priority queue for block processing
+    blockClassifier           *BlockClassifier                        // Block priority classification
+    forkManager               *ForkManager                            // Fork processing management
     catchupCh                 chan processBlockCatchup                // Channel for catchup block processing
 
     blockValidation           *BlockValidation                        // Core validation logic and state
@@ -128,6 +126,9 @@ type BlockValidation struct {
 
     // blockHashesCurrentlyValidated tracks blocks in validation process
     blockHashesCurrentlyValidated *txmap.SwissMap
+
+    // blocksCurrentlyValidating tracks blocks being validated to prevent concurrent validation
+    blocksCurrentlyValidating *txmap.SyncedMap[chainhash.Hash, *validationResult]
 
     // blockBloomFiltersBeingCreated tracks bloom filters being generated
     blockBloomFiltersBeingCreated *txmap.SwissMap
@@ -262,53 +263,13 @@ Processes complete blocks:
 - Handles height calculation
 - Integrates with blockchain state
 
-#### SubtreeFound
+#### ValidateBlock
 
 ```go
-func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*blockvalidation_api.EmptyMessage, error)
+func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api.ValidateBlockRequest) (*blockvalidation_api.ValidateBlockResponse, error)
 ```
 
-Handles notification of new subtrees.
-
-#### Get
-
-```go
-func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error)
-```
-
-Retrieves subtree data from storage.
-
-#### Exists
-
-```go
-func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.ExistsSubtreeRequest) (*blockvalidation_api.ExistsSubtreeResponse, error)
-```
-
-Verifies subtree existence in storage.
-
-#### SetTxMeta
-
-```go
-func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error)
-```
-
-Queues transaction metadata updates.
-
-#### DelTxMeta
-
-```go
-func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error)
-```
-
-Removes transaction metadata.
-
-#### SetMinedMulti
-
-```go
-func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api.SetMinedMultiRequest) (*blockvalidation_api.SetMinedMultiResponse, error)
-```
-
-Marks multiple transactions as mined in a block.
+Validates a block directly from the block bytes without needing to fetch it from the network or database. This method is typically used for testing or when the block is already available in memory, and no internal updates or database operations are needed.
 
 #### ValidateBlock
 

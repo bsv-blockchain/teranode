@@ -356,7 +356,7 @@ The subtree notification message is defined in protobuf as `KafkaSubtreeTopicMes
 message KafkaSubtreeTopicMessage {
   string hash = 1;  // Subtree hash (as hex string)
   string URL = 2;  // URL pointing to subtree data
-  string peer_id = 3; // Originator peer ID
+  string peer_id = 3;  // Originator peer ID
 }
 ```
 
@@ -377,7 +377,7 @@ message KafkaSubtreeTopicMessage {
 #### peer_id
 
 - Type: string
-- Description: Originator peer identifier for tracking the source of the subtree
+- Description: Originator peer identifier that created or provided this subtree
 - Required: Yes
 
 ### Example
@@ -939,7 +939,7 @@ The rejected transaction message is defined in protobuf as `KafkaRejectedTxTopic
 message KafkaRejectedTxTopicMessage {
   string txHash = 1;  // Transaction hash (as hex string)
   string reason = 2; // Rejection reason
-  string peer_id = 3; // Empty = internal rejection, non-empty = external peer
+  string peer_id = 3;  // Empty = internal rejection, non-empty = external peer
 }
 ```
 
@@ -989,7 +989,7 @@ reasonStr := "Insufficient fee for transaction size"
 message := &kafkamessage.KafkaRejectedTxTopicMessage{
     TxHash: txHash,
     Reason: reasonStr,
-    PeerId: "", // Empty for internal rejection
+    PeerId: "", // Empty string indicates internal rejection
 }
 
 // Serialize to protobuf format

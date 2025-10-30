@@ -7,9 +7,10 @@
     - [AddBlockRequest](#AddBlockRequest)
     - [CheckBlockIsCurrentChainRequest](#CheckBlockIsCurrentChainRequest)
     - [CheckBlockIsCurrentChainResponse](#CheckBlockIsCurrentChainResponse)
+    - [FindBlocksContainingSubtreeRequest](#FindBlocksContainingSubtreeRequest)
+    - [FindBlocksContainingSubtreeResponse](#FindBlocksContainingSubtreeResponse)
     - [GetBestHeightAndTimeResponse](#GetBestHeightAndTimeResponse)
     - [GetBlockByHeightRequest](#GetBlockByHeightRequest)
-    - [GetChainTipsResponse](#GetChainTipsResponse)
     - [GetBlockByIDRequest](#GetBlockByIDRequest)
     - [GetBlocksByHeightRequest](#GetBlocksByHeightRequest)
     - [GetBlocksByHeightResponse](#GetBlocksByHeightResponse)
@@ -20,8 +21,10 @@
     - [GetBlockHeaderResponse](#GetBlockHeaderResponse)
     - [GetBlockHeadersByHeightRequest](#GetBlockHeadersByHeightRequest)
     - [GetBlockHeadersByHeightResponse](#GetBlockHeadersByHeightResponse)
+    - [GetBlockHeadersFromCommonAncestorRequest](#GetBlockHeadersFromCommonAncestorRequest)
     - [GetBlockHeadersFromHeightRequest](#GetBlockHeadersFromHeightRequest)
     - [GetBlockHeadersFromHeightResponse](#GetBlockHeadersFromHeightResponse)
+    - [GetBlockHeadersFromOldestRequest](#GetBlockHeadersFromOldestRequest)
     - [GetBlockHeadersFromTillRequest](#GetBlockHeadersFromTillRequest)
     - [GetBlockHeadersRequest](#GetBlockHeadersRequest)
     - [GetBlockHeadersResponse](#GetBlockHeadersResponse)
@@ -34,22 +37,25 @@
     - [GetBlockLocatorResponse](#GetBlockLocatorResponse)
     - [GetBlockRequest](#GetBlockRequest)
     - [GetBlockResponse](#GetBlockResponse)
+    - [GetBlocksByHeightRequest](#GetBlocksByHeightRequest)
+    - [GetBlocksByHeightResponse](#GetBlocksByHeightResponse)
     - [GetBlocksMinedNotSetResponse](#GetBlocksMinedNotSetResponse)
     - [GetBlocksRequest](#GetBlocksRequest)
     - [GetBlocksResponse](#GetBlocksResponse)
-    - [GetLastNInvalidBlocksRequest](#GetLastNInvalidBlocksRequest)
-    - [GetLastNInvalidBlocksResponse](#GetLastNInvalidBlocksResponse)
     - [GetBlocksSubtreesNotSetResponse](#GetBlocksSubtreesNotSetResponse)
+    - [GetChainTipsResponse](#GetChainTipsResponse)
     - [GetFSMStateResponse](#GetFSMStateResponse)
     - [GetFullBlockResponse](#GetFullBlockResponse)
     - [GetHashOfAncestorBlockRequest](#GetHashOfAncestorBlockRequest)
     - [GetHashOfAncestorBlockResponse](#GetHashOfAncestorBlockResponse)
-    - [GetLatestBlockHeaderFromBlockLocatorRequest](#GetLatestBlockHeaderFromBlockLocatorRequest)
-    - [GetBlockHeadersFromOldestRequest](#GetBlockHeadersFromOldestRequest)
     - [GetLastNBlocksRequest](#GetLastNBlocksRequest)
     - [GetLastNBlocksResponse](#GetLastNBlocksResponse)
+    - [GetLastNInvalidBlocksRequest](#GetLastNInvalidBlocksRequest)
+    - [GetLastNInvalidBlocksResponse](#GetLastNInvalidBlocksResponse)
+    - [GetLatestBlockHeaderFromBlockLocatorRequest](#GetLatestBlockHeaderFromBlockLocatorRequest)
     - [GetMedianTimeRequest](#GetMedianTimeRequest)
     - [GetMedianTimeResponse](#GetMedianTimeResponse)
+    - [GetNextBlockIDResponse](#GetNextBlockIDResponse)
     - [GetNextWorkRequiredRequest](#GetNextWorkRequiredRequest)
     - [GetNextWorkRequiredResponse](#GetNextWorkRequiredResponse)
     - [GetNextBlockIDResponse](#GetNextBlockIDResponse)
@@ -66,7 +72,7 @@
     - [LocateBlockHeadersResponse](#LocateBlockHeadersResponse)
     - [Notification](#Notification)
     - [NotificationMetadata](#NotificationMetadata)
-    - [NotificationMetadata.MetadataEntry](#NotificationMetadata.MetadataEntry)
+    - [ReportPeerFailureRequest](#ReportPeerFailureRequest)
     - [RevalidateBlockRequest](#RevalidateBlockRequest)
     - [SendFSMEventRequest](#SendFSMEventRequest)
     - [SetBlockMinedSetRequest](#SetBlockMinedSetRequest)
@@ -110,6 +116,10 @@ AddBlockRequest contains data for adding a new block to the blockchain.
 | size_in_bytes | [uint64](#uint64) |  | Block size |
 | external | [bool](#bool) |  | External block flag |
 | peer_id | [string](#string) |  | Peer identifier |
+| optionMinedSet | [bool](#bool) |  | Option to mark block as mined |
+| optionSubtreesSet | [bool](#bool) |  | Option to mark subtrees as set |
+| optionInvalid | [bool](#bool) |  | Option to invalidate block when adding |
+| optionID | [uint64](#uint64) |  | Optional block ID |
 
 
 
@@ -260,13 +270,20 @@ swagger:model GetBlockHeaderResponse
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| blockHeader | [bytes](#bytes) |  |  |
-| height | [uint32](#uint32) |  |  |
-| tx_count | [uint64](#uint64) |  |  |
-| size_in_bytes | [uint64](#uint64) |  |  |
-| miner | [string](#string) |  |  |
-| block_time | [uint32](#uint32) |  |  |
-| timestamp | [uint32](#uint32) |  |  |
+| blockHeader | [bytes](#bytes) |  | Serialized block header |
+| id | [uint32](#uint32) |  | Block identifier |
+| height | [uint32](#uint32) |  | Block height |
+| tx_count | [uint64](#uint64) |  | Transaction count |
+| size_in_bytes | [uint64](#uint64) |  | Block size |
+| miner | [string](#string) |  | Miner identifier |
+| peer_id | [string](#string) |  | Peer identifier |
+| block_time | [uint32](#uint32) |  | Block timestamp |
+| timestamp | [uint32](#uint32) |  | Processing timestamp |
+| chain_work | [bytes](#bytes) |  | Accumulated chain work |
+| mined_set | [bool](#bool) |  | Mined status |
+| subtrees_set | [bool](#bool) |  | Subtrees status |
+| invalid | [bool](#bool) |  | Validity status |
+| processed_at | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Timestamp when block was processed |
 
 
 
@@ -456,12 +473,13 @@ swagger:model GetBlockResponse
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| header | [bytes](#bytes) |  |  |
-| height | [uint32](#uint32) |  |  |
-| coinbase_tx | [bytes](#bytes) |  |  |
-| transaction_count | [uint64](#uint64) |  |  |
-| subtree_hashes | [bytes](#bytes) | repeated |  |
-| size_in_bytes | [uint64](#uint64) |  |  |
+| header | [bytes](#bytes) |  | Block header bytes |
+| height | [uint32](#uint32) |  | Block height |
+| coinbase_tx | [bytes](#bytes) |  | Coinbase transaction bytes |
+| transaction_count | [uint64](#uint64) |  | Total number of transactions |
+| subtree_hashes | [bytes](#bytes) | repeated | Merkle tree subtree hashes |
+| size_in_bytes | [uint64](#uint64) |  | Total block size in bytes |
+| id | [uint32](#uint32) |  | Block identifier |
 
 
 
@@ -650,6 +668,17 @@ swagger:model GetMedianTimeResponse
 
 
 
+<a name="GetNextBlockIDResponse"></a>
+
+### GetNextBlockIDResponse
+GetNextBlockIDResponse represents the response containing the next available block ID.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| next_block_id | [uint64](#uint64) |  | Next available block ID |
+
+
 
 
 <a name="GetNextWorkRequiredRequest"></a>
@@ -660,7 +689,8 @@ swagger:model GGetNextWorkRequiredRequest
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| blockHash | [bytes](#bytes) |  |  |
+| previousBlockHash | [bytes](#bytes) |  | Reference block hash |
+| currentBlockTime | [int64](#int64) |  | Current block time is only used for emergency difficulty adjustment on testnet-type networks |
 
 
 
@@ -752,9 +782,20 @@ swagger:model InvalidateBlockRequest
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| blockHash | [bytes](#bytes) |  |  |
+| blockHash | [bytes](#bytes) |  | Hash of the block to invalidate |
 
 
+
+
+<a name="InvalidateBlockResponse"></a>
+
+### InvalidateBlockResponse
+InvalidateBlockResponse contains the result of block invalidation.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| invalidatedBlocks | [bytes](#bytes) | repeated | List of invalidated block hashes |
 
 
 
@@ -817,23 +858,7 @@ swagger:model NotificationMetadata
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
-| metadata | [NotificationMetadata.MetadataEntry](#blockchain_api-NotificationMetadata-MetadataEntry) | repeated | define a map of string to string |
-
-
-
-
-
-
-<a name="NotificationMetadata.MetadataEntry"></a>
-
-### NotificationMetadata.MetadataEntry
-
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| key | [string](#string) |  |  |
-| value | [string](#string) |  |  |
+| metadata | map<string, string> |  | Key-value pairs of metadata |
 
 
 
@@ -973,6 +998,91 @@ swagger:model WaitFSMToTransitionRequest
 
 
 
+<a name="GetBlockHeadersFromCommonAncestorRequest"></a>
+
+### GetBlockHeadersFromCommonAncestorRequest
+GetBlockHeadersFromCommonAncestorRequest retrieves headers from a common ancestor to a target block.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| targetHash | [bytes](#bytes) |  | Target block hash |
+| blockLocatorHashes | [bytes](#bytes) | repeated | Block locator hashes |
+| maxHeaders | [uint32](#uint32) |  | Maximum number of headers to retrieve |
+
+
+
+
+<a name="GetBlocksByHeightRequest"></a>
+
+### GetBlocksByHeightRequest
+GetBlocksByHeightRequest requests full blocks between two heights.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| startHeight | [uint32](#uint32) |  | Starting height |
+| endHeight | [uint32](#uint32) |  | Ending height |
+
+
+
+
+<a name="GetBlocksByHeightResponse"></a>
+
+### GetBlocksByHeightResponse
+GetBlocksByHeightResponse contains full blocks between heights.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| blocks | [bytes](#bytes) | repeated | List of serialized full blocks |
+
+
+
+
+<a name="FindBlocksContainingSubtreeRequest"></a>
+
+### FindBlocksContainingSubtreeRequest
+FindBlocksContainingSubtreeRequest specifies a subtree hash to search for.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| subtree_hash | [bytes](#bytes) |  | Subtree hash to find |
+| max_blocks | [uint32](#uint32) |  | Maximum number of blocks to return (0 = no limit) |
+
+
+
+
+<a name="FindBlocksContainingSubtreeResponse"></a>
+
+### FindBlocksContainingSubtreeResponse
+FindBlocksContainingSubtreeResponse contains blocks that contain the subtree.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| blocks | [bytes](#bytes) | repeated | List of serialized full blocks containing the subtree |
+
+
+
+
+<a name="ReportPeerFailureRequest"></a>
+
+### ReportPeerFailureRequest
+ReportPeerFailureRequest reports a peer download failure to the blockchain service.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| hash | [bytes](#bytes) |  | Hash of the block/subtree being processed |
+| peer_id | [string](#string) |  | Identifier of the failing peer |
+| failure_type | [string](#string) |  | Type of failure (e.g., "catchup", "subtree", "block") |
+| reason | [string](#string) |  | Description of the failure |
+
+
+
+
  <!-- end messages -->
 
 
@@ -1057,7 +1167,7 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | GetNextWorkRequired | [GetNextWorkRequiredRequest](#blockchain_api-GetNextWorkRequiredRequest) | [GetNextWorkRequiredResponse](#blockchain_api-GetNextWorkRequiredResponse) | Calculates the required proof of work for the next block. |
 | GetBlockExists | [GetBlockRequest](#blockchain_api-GetBlockRequest) | [GetBlockExistsResponse](#blockchain_api-GetBlockExistsResponse) | Checks if a block exists in the blockchain. |
 | GetBlockHeaders | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers for multiple blocks. |
-| GetBlockHeadersToCommonAncestor | [GetBlockHeadersToCommonAncestorRequest](#blockchain_api-GetBlockHeadersToCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers from a block to its common ancestor. |
+| GetBlockHeadersToCommonAncestor | [GetBlockHeadersToCommonAncestorRequest](#blockchain_api-GetBlockHeadersToCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers up to a common ancestor point between chains. |
 | GetBlockHeadersFromCommonAncestor | [GetBlockHeadersFromCommonAncestorRequest](#blockchain_api-GetBlockHeadersFromCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers from a common ancestor to a target block. |
 | GetBlockHeadersFromTill | [GetBlockHeadersFromTillRequest](#blockchain_api-GetBlockHeadersFromTillRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers between two specified blocks. |
 | GetBlockHeadersFromHeight | [GetBlockHeadersFromHeightRequest](#blockchain_api-GetBlockHeadersFromHeightRequest) | [GetBlockHeadersFromHeightResponse](#blockchain_api-GetBlockHeadersFromHeightResponse) | Retrieves block headers starting from a specific height. |
@@ -1091,6 +1201,7 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | CatchUpBlocks | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Initiates block catch-up process. |
 | LegacySync | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Initiates legacy synchronization process. |
 | Idle | [.google.protobuf.Empty](#google-protobuf-Empty) | [.google.protobuf.Empty](#google-protobuf-Empty) | Marks the service as idle. |
+| ReportPeerFailure | [ReportPeerFailureRequest](#blockchain_api-ReportPeerFailureRequest) | [.google.protobuf.Empty](#google-protobuf-Empty) | Notifies about peer download failures (catchup, subtree, block, etc). |
 | GetBlockLocator | [GetBlockLocatorRequest](#blockchain_api-GetBlockLocatorRequest) | [GetBlockLocatorResponse](#blockchain_api-GetBlockLocatorResponse) | Retrieves a block locator for chain synchronization. |
 | LocateBlockHeaders | [LocateBlockHeadersRequest](#blockchain_api-LocateBlockHeadersRequest) | [LocateBlockHeadersResponse](#blockchain_api-LocateBlockHeadersResponse) | Finds block headers using a locator. |
 | GetBestHeightAndTime | [.google.protobuf.Empty](#google-protobuf-Empty) | [GetBestHeightAndTimeResponse](#blockchain_api-GetBestHeightAndTimeResponse) | Retrieves the current best height and median time. |

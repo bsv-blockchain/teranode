@@ -13,7 +13,6 @@
     - [GetCurrentDifficultyResponse](#getcurrentdifficultyresponse)
     - [GetMiningCandidateRequest](#getminingcandidaterequest)
     - [HealthResponse](#healthresponse)
-    - [NewChaintipAndHeightRequest](#newchaintipandheightrequest)
     - [RemoveTxRequest](#removetxrequest)
     - [StateMessage](#statemessage)
     - [SubmitMiningSolutionRequest](#submitminingsolutionrequest)
@@ -168,19 +167,6 @@ Contains the health status of the service. Includes an 'ok' flag indicating heal
 
 
 
-
-
-
-<a name="NewChaintipAndHeightRequest"></a>
-
-### NewChaintipAndHeightRequest
-Request for adding a new chaintip and height information.
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| chaintip | [bytes](#bytes) |  | the chaintip hash |
-| height | [uint32](#uint32) |  | the height of the chaintip in the blockchain |
 
 
 

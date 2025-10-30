@@ -120,11 +120,11 @@ type UnminedTransaction struct {
     CreatedAt  int
     // Locked indicates whether the transaction outputs are marked as locked
     Locked     bool
-    // Skip indicates whether this transaction should be skipped during processing
+    // Skip indicates whether this transaction should be skipped during iteration
     Skip       bool
     // UnminedSince is the block height since when this transaction has been unmined
     UnminedSince int
-    // BlockIDs is the list of blocks where this transaction has appeared
+    // BlockIDs is the list of blocks the transaction has been mined into
     BlockIDs   []uint32
 }
 ```
@@ -292,7 +292,7 @@ type Store interface {
 - `BatchDecorate`: Efficiently fetches metadata for multiple transactions in a single operation.
 - `FreezeUTXOs`/`UnFreezeUTXOs`: Manages frozen status of UTXOs for the alert system.
 - `SetConflicting`/`SetLocked`: Controls transaction conflict and spendability status.
-- `MarkTransactionsOnLongestChain`: Marks transactions as being on the longest chain, managing the unminedSince field.
+- `MarkTransactionsOnLongestChain`: Marks transactions as being on the longest chain or not, managing the unminedSince field.
 - `GetMeta`: Retrieves transaction metadata for a single transaction.
 - `SetMinedMulti`: Updates block information for multiple mined transactions and returns a map of transaction hashes to block IDs.
 - `PreviousOutputsDecorate`: Fetches information about transaction inputs' previous outputs from a transaction.

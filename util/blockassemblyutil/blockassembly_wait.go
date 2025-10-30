@@ -17,14 +17,15 @@ import (
 // transactions) has been processed before allowing block validation to proceed.
 //
 // The function implements a retry mechanism with exponential backoff, checking if the
-// block assembly service has caught up to within maxBlocksBehind blocks of the target height.
+// block assembly service is at most 1 block behind the target height. This prevents the
+// blockchain state from running too far ahead of block assembly, which would cause
+// coinbase maturity checks to fail incorrectly in the UTXO store.
 //
 // Parameters:
 //   - ctx: Context for cancellation
 //   - logger: Logger for recording operations
 //   - blockAssemblyClient: Client interface to the block assembly service
 //   - blockHeight: The height of the block to be processed
-//   - maxBlocksBehind: Maximum number of blocks the block assembly can be behind the target height
 //
 // Returns:
 //   - error: nil if block assembly is ready, error if timeout or other failure
@@ -33,14 +34,17 @@ func WaitForBlockAssemblyReady(
 	logger ulogger.Logger,
 	blockAssemblyClient blockassembly.ClientI,
 	blockHeight uint32,
-	maxBlocksBehind uint32,
 ) error {
 	// Skip if block assembly client is not available (e.g., in tests)
 	if blockAssemblyClient == nil {
 		return nil
 	}
 
-	// Check that block assembly is not more than maxBlocksBehind blocks behind
+	// Block assembly must be at most 1 block behind to prevent UTXO store
+	// coinbase maturity checks from failing with incorrect "current height"
+	const maxBlocksBehind uint32 = 1
+
+	// Check that block assembly is not more than 1 block behind
 	// This is to make sure all the coinbases have been processed in the block assembly
 	_, err := retry.Retry(ctx, logger, func() (uint32, error) {
 		blockAssemblyStatus, err := blockAssemblyClient.GetBlockAssemblyState(ctx)
