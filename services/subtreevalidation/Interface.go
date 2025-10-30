@@ -93,10 +93,11 @@ type Interface interface {
 	//   - blockHash: The hash of the block containing the subtrees to validate
 	//   - blockHeight: The height of the block containing the subtrees
 	//   - baseURL: URL to fetch missing transactions from if needed
+	//   - peerID: P2P peer identifier used for peer reputation tracking
 	//
 	// Returns:
 	//   - error: Any error encountered during validation, nil if successful
-	CheckBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error
+	CheckBlockSubtrees(ctx context.Context, block *model.Block, baseURL string, peerID string) error
 }
 
 var _ Interface = &MockSubtreeValidation{}
@@ -123,7 +124,7 @@ func (mv *MockSubtreeValidation) CheckSubtreeFromBlock(ctx context.Context, hash
 	return args.Error(0)
 }
 
-func (mv *MockSubtreeValidation) CheckBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
-	args := mv.Called(ctx, block, baseURL)
+func (mv *MockSubtreeValidation) CheckBlockSubtrees(ctx context.Context, block *model.Block, baseURL string, peerID string) error {
+	args := mv.Called(ctx, block, baseURL, peerID)
 	return args.Error(0)
 }

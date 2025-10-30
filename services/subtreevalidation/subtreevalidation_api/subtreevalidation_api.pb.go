@@ -257,7 +257,9 @@ type CheckBlockSubtreesRequest struct {
 	// block_hash identifies the block containing the subtrees to be checked
 	Block []byte `protobuf:"bytes,1,opt,name=block,proto3" json:"block,omitempty"`
 	// base_url specifies the endpoint for retrieving missing transaction data
-	BaseUrl       string `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	BaseUrl string `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
+	// peer_id is the P2P peer identifier used for peer reputation tracking
+	PeerId        string `protobuf:"bytes,3,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -302,6 +304,13 @@ func (x *CheckBlockSubtreesRequest) GetBlock() []byte {
 func (x *CheckBlockSubtreesRequest) GetBaseUrl() string {
 	if x != nil {
 		return x.BaseUrl
+	}
+	return ""
+}
+
+func (x *CheckBlockSubtreesRequest) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
 	}
 	return ""
 }
@@ -370,10 +379,11 @@ const file_services_subtreevalidation_subtreevalidation_api_subtreevalidation_ap
 	"block_hash\x18\x04 \x01(\fR\tblockHash\x12.\n" +
 	"\x13previous_block_hash\x18\x05 \x01(\fR\x11previousBlockHash\"9\n" +
 	"\x1dCheckSubtreeFromBlockResponse\x12\x18\n" +
-	"\ablessed\x18\x01 \x01(\bR\ablessed\"L\n" +
+	"\ablessed\x18\x01 \x01(\bR\ablessed\"e\n" +
 	"\x19CheckBlockSubtreesRequest\x12\x14\n" +
 	"\x05block\x18\x01 \x01(\fR\x05block\x12\x19\n" +
-	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\"6\n" +
+	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x17\n" +
+	"\apeer_id\x18\x03 \x01(\tR\x06peerId\"6\n" +
 	"\x1aCheckBlockSubtreesResponse\x12\x18\n" +
 	"\ablessed\x18\x01 \x01(\bR\ablessed2\xf6\x02\n" +
 	"\x14SubtreeValidationAPI\x12Z\n" +

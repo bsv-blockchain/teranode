@@ -165,6 +165,12 @@ func (m *MockPeerServiceClient) IsPeerUnhealthy(ctx context.Context, in *p2p_api
 	return &p2p_api.IsPeerUnhealthyResponse{IsUnhealthy: false, ReputationScore: 50.0}, nil
 }
 
+func (m *MockPeerServiceClient) GetPeerRegistry(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeerRegistryResponse, error) {
+	return &p2p_api.GetPeerRegistryResponse{
+		Peers: []*p2p_api.PeerRegistryInfo{},
+	}, nil
+}
+
 func TestSimpleClientGetPeers(t *testing.T) {
 	mockClient := &MockPeerServiceClient{
 		GetPeersFunc: func(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*p2p_api.GetPeersResponse, error) {

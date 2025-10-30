@@ -867,6 +867,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 					CachedHeaders:           cachedHeaders,
 					IsCatchupMode:           true,
 					DisableOptimisticMining: true,
+					PeerID:                  peerID,
 				}
 
 				// Validate the block using standard validation
