@@ -22,6 +22,7 @@ jobs:
         uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
         with:
           theme: "dark"
+          comment_on_pr: "false"
 
       # Only login to Docker Hub for internal PRs to avoid rate limits.
       # Fork PRs won't have access to secrets and will skip this step.
