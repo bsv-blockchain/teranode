@@ -48,7 +48,6 @@ jobs:
       repository: ${{ github.repository }}
       tag_latest: true
       build_args: |
-        DEBUG=true
         GIT_VERSION=${{ needs.calculate-version.outputs.git_version }}
         GIT_COMMIT=${{ needs.calculate-version.outputs.git_commit }}
         GIT_SHA=${{ needs.calculate-version.outputs.git_sha }}

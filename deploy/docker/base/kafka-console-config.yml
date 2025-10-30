@@ -1,0 +1,37 @@
+kafka:
+  brokers: ["kafka-shared:9092"]
+
+serde:
+  protobuf:
+    enabled: true
+    fileSystem:
+      enabled: true
+      paths:
+        - "/etc/protos"
+      refreshInterval: "5m"
+    mappings:
+      # Block topics
+      - topicName: "blocks"
+        valueProtoType: "kafkamessage.KafkaBlockTopicMessage"
+      - topicName: "blocks-final"
+        valueProtoType: "kafkamessage.KafkaBlocksFinalTopicMessage"
+      - topicName: "invalid-blocks"
+        valueProtoType: "kafkamessage.KafkaInvalidBlockTopicMessage"
+
+      # Subtree topics
+      - topicName: "subtrees"
+        valueProtoType: "kafkamessage.KafkaSubtreeTopicMessage"
+      - topicName: "invalid-subtrees"
+        valueProtoType: "kafkamessage.KafkaInvalidSubtreeTopicMessage"
+
+      # Transaction topics
+      - topicName: "validatortxs"
+        valueProtoType: "kafkamessage.KafkaTxValidationTopicMessage"
+      - topicName: "txmeta"
+        valueProtoType: "kafkamessage.KafkaTxMetaTopicMessage"
+      - topicName: "rejectedtx"
+        valueProtoType: "kafkamessage.KafkaRejectedTxTopicMessage"
+
+      # P2P topics
+      - topicName: "legacy-inv"
+        valueProtoType: "kafkamessage.KafkaInvTopicMessage"
