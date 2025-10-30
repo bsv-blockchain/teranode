@@ -48,6 +48,8 @@
     - [freeze](#freeze) - Freezes specified UTXOs or OUTPUTs
     - [unfreeze](#unfreeze) - Unfreezes specified UTXOs or OUTPUTs
     - [reassign](#reassign) - Reassigns specified frozen UTXOs to a new address
+    - [getrawmempool](#getrawmempool) - Returns all transaction IDs available for block assembly
+    - [getchaintips](#getchaintips) - Returns information about all known chain tips
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
 - [Error Handling](#error-handling)
 - [Rate Limiting](#rate-limiting)
@@ -171,7 +173,7 @@ The RPCServer is designed for concurrent operation, employing synchronization me
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI) (*RPCServer, error)
 ```
 
-Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, UTXO store, and service clients.
+Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, block validation client, UTXO store, and service clients.
 
 This factory function creates a fully configured RPCServer instance, setting up:
 
@@ -354,16 +356,8 @@ Some key handlers include:
 
     **Connection Settings:**
 
-    - **`rpc_max_clients`**: Maximum number of concurrent RPC clients (default: 1000)
-    - **`rpc_listener_url`**: URL for the RPC listener (default: "http://localhost:8332")
-    - **`rpc_listeners`**: List of URLs for multiple RPC listeners (overrides rpc_listener_url if set)
-
-    **Security Settings:**
-
-    - **`rpc_tls_enabled`**: Enables TLS for secure RPC connections (default: false)
-    - **`rpc_tls_cert_file`**: Path to TLS certificate file
-    - **`rpc_tls_key_file`**: Path to TLS private key file
-    - **`rpc_auth_timeouts_seconds`**: Timeout for authentication in seconds (default: 10)
+    - **`rpc_max_clients`**: Maximum number of concurrent RPC clients (default: 1)
+    - **`rpc_listener_url`**: URL for the RPC listener
 
     **Timeout Settings:**
 
@@ -374,13 +368,13 @@ Some key handlers include:
         - Used when RPC handlers call P2P, Legacy peer, or other internal services
         - Prevents hanging when dependent services are unresponsive
 
+    **Performance Settings:**
+
+    - **`rpc_cache_enabled`**: Enables RPC response caching (default: true)
+
     **Compatibility Settings:**
 
-    - **`rpc_quirks`**: Enables compatibility quirks for legacy clients (default: false)
-
-!!! warning "Production Warnings"
-    - **`rpc_disable_auth`**: Disables authentication (NOT recommended for production)
-    - **`rpc_cross_origin`**: Allows cross-origin requests (NOT recommended for production)
+    - **`rpc_quirks`**: Enables compatibility quirks for legacy clients (default: true)
 
 Configuration values can be provided through the configuration file, environment variables, or command-line flags, with precedence in that order.
 
@@ -1367,54 +1361,6 @@ Returns the server version information.
 }
 ```
 
-### getchaintips
-
-Returns information about all known chain tips in the block tree, including the main chain as well as orphaned branches.
-
-**Parameters:** none
-
-**Returns:**
-
-- `array` - Array of chain tip objects, each containing:
-
-    - `height` (number) - Height of the chain tip
-    - `hash` (string) - Block hash of the chain tip
-    - `branchlen` (number) - Zero for main chain, otherwise length of branch connecting the tip to the main chain
-    - `status` (string) - Status of the chain tip ("active" for main chain, "valid-fork", "valid-headers", "headers-only", "invalid")
-
-**Example Request:**
-
-```json
-{
-    "jsonrpc": "1.0",
-    "id": "curltest",
-    "method": "getchaintips",
-    "params": []
-}
-```
-
-**Example Response:**
-
-```json
-{
-    "result": [
-        {
-            "height": 700001,
-            "hash": "000000000000000004a1b6d6fdfa0d0a...",
-            "branchlen": 0,
-            "status": "active"
-        },
-        {
-            "height": 700000,
-            "hash": "000000000000000003f2c4e5b8d9a1b2...",
-            "branchlen": 1,
-            "status": "valid-fork"
-        }
-    ],
-    "error": null,
-    "id": "curltest"
-}
-```
 
 **Example Request:**
 
@@ -1734,6 +1680,89 @@ Returns raw transaction data for a specific transaction.
 }
 ```
 
+### getrawmempool
+
+Returns all transaction IDs currently available for block assembly. Note that Teranode uses a subtree-based architecture instead of a traditional mempool, but this command provides compatibility with standard Bitcoin RPC interfaces by returning transaction IDs from the block assembly service.
+
+**Parameters:** none
+
+**Returns:**
+
+- `array` - Array of transaction IDs (strings) currently available for block assembly
+
+**Example Request:**
+
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getrawmempool",
+    "params": []
+}
+```
+
+**Example Response:**
+
+```json
+{
+    "result": [
+        "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
+        "b19f7908eced4e820887efdc6e93f482c865fe949c5666e83f574679ef2bbef1"
+    ],
+    "error": null,
+    "id": "curltest"
+}
+```
+
+### getchaintips
+
+Returns information about all known chain tips in the block tree, including the main chain as well as orphaned branches.
+
+**Parameters:** none
+
+**Returns:**
+
+- `array` - Array of chain tip objects, each containing:
+
+    - `height` (number) - Height of the chain tip
+    - `hash` (string) - Block hash of the chain tip
+    - `branchlen` (number) - Zero for main chain, otherwise length of branch connecting the tip to the main chain
+    - `status` (string) - Status of the chain tip ("active" for main chain, "valid-fork", "valid-headers", "headers-only", "invalid")
+
+**Example Request:**
+
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getchaintips",
+    "params": []
+}
+```
+
+**Example Response:**
+
+```json
+{
+    "result": [
+        {
+            "height": 700001,
+            "hash": "000000000000000004a1b6d6fdfa0d0a...",
+            "branchlen": 0,
+            "status": "active"
+        },
+        {
+            "height": 700000,
+            "hash": "000000000000000003f2c4e5b8d9a1b2...",
+            "branchlen": 1,
+            "status": "valid-fork"
+        }
+    ],
+    "error": null,
+    "id": "curltest"
+}
+```
+
 ## Unimplemented RPC Commands
 
 The following commands are recognized by the RPC server but are not currently implemented (they would return an ErrRPCUnimplemented error):
@@ -1754,7 +1783,6 @@ The following commands are recognized by the RPC server but are not currently im
 - `getgenerate` - Returns if the server is generating coins
 - `gethashespersec` - Returns hashes per second
 - `getheaders` - Returns header information
-- `getmempoolinfo` - Returns mempool information (Not in scope for Teranode)
 - `getnettotals` - Returns network statistics
 - `getnetworkhashps` - Returns estimated network hashes per second
 - `gettxout` - Returns unspent transaction output
