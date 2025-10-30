@@ -58,7 +58,7 @@ Upon startup, Teranode begins in IDLE state. You must explicitly set the state t
 
 ```bash
 # Set FSM state to begin legacy syncing
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate legacysyncing
 ```
 
 ### Step 2: Peer Discovery and Block Download
@@ -498,7 +498,7 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 
 ```bash
 # Reset FSM state and restart sync
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
+kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate legacysyncing
 
 # Monitor progress closely
 kubectl logs -n teranode-operator -l app=blockchain -f
@@ -527,7 +527,7 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getpeerin
 kubectl delete pod -n teranode-operator -l app=peer
 
 # Reset FSM state
-kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
+kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmstate --fsmstate legacysyncing
 ```
 
 #### Issue: Database Connection Errors

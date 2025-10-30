@@ -58,7 +58,7 @@ Upon startup, Teranode begins in IDLE state. You must explicitly set the state t
 
 ```bash
 # Set FSM state to begin legacy syncing
-docker exec -it blockchain teranode-cli setfsmstate -fsmstate legacysyncing
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate legacysyncing
 ```
 
 ### Step 2: Peer Discovery and Block Download
@@ -80,10 +80,10 @@ As blocks are received, multiple Teranode services work in parallel:
 
 ```bash
 # View real-time sync logs
-docker-compose logs -f blockchain
+docker compose logs -f blockchain
 
 # Check service health
-docker-compose ps
+docker compose ps
 
 # View blockchain info in the blockchain viewer
 # Access http://localhost:8090/viewer in your browser
@@ -431,10 +431,10 @@ For brief interruptions (minutes to hours), Teranode typically recovers automati
 
 ```bash
 # Check container status
-docker-compose ps
+docker compose ps
 
 # View recovery logs
-docker-compose logs -f blockchain --tail=100
+docker compose logs -f blockchain --tail=100
 
 # View sync progress in blockchain viewer
 # Access http://localhost:8090/viewer in your browser
@@ -470,10 +470,10 @@ Check current sync status:
 
 ```bash
 # Reset FSM state and restart sync
-docker exec -it blockchain teranode-cli setfsmstate -fsmstate legacysyncing
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate legacysyncing
 
 # Monitor progress closely
-docker-compose logs -f blockchain
+docker compose logs -f blockchain
 ```
 
 ##### Option 2: Reseed from Recent Data
@@ -496,10 +496,10 @@ If catch-up is too slow, use Method 2 or Method 3 from this guide with recent da
 docker exec -it blockchain teranode-cli getpeerinfo
 
 # Restart peer service
-docker-compose restart peer
+docker compose restart peer
 
 # Reset FSM state
-docker exec -it blockchain teranode-cli setfsmstate -fsmstate legacysyncing
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate legacysyncing
 ```
 
 #### Issue: Database Connection Errors
@@ -512,13 +512,13 @@ docker exec -it blockchain teranode-cli setfsmstate -fsmstate legacysyncing
 
 ```bash
 # Check database container status
-docker-compose ps | grep -E "postgres\|aerospike"
+docker compose ps | grep -E "postgres\|aerospike"
 
 # Test database connectivity
 docker exec -it postgres psql -U postgres -d teranode -c "SELECT 1;"
 
 # Restart database containers if needed
-docker-compose restart postgres aerospike
+docker compose restart postgres aerospike
 ```
 
 #### Issue: Storage Space Exhausted
@@ -576,7 +576,7 @@ After completing synchronization using any method, it's important to verify that
 
 ```bash
 # Check if services are running
-docker-compose ps
+docker compose ps
 # All services should show "Up" status
 
 # Test CLI connectivity
@@ -634,7 +634,7 @@ echo "Timestamp: $(date)"
 
 # Check container status
 echo "\n--- Container Status ---"
-docker-compose ps
+docker compose ps
 
 # Check block height via blockchain viewer
 echo "\n--- Block Height ---"
@@ -666,13 +666,13 @@ docker exec -it blockchain netstat -i
 
 ```bash
 # Check for errors in recent logs
-docker-compose logs blockchain --tail=1000 | grep -i error
+docker compose logs blockchain --tail=1000 | grep -i error
 
 # Monitor sync progress
-docker-compose logs -f blockchain | grep -E "height|block|sync"
+docker compose logs -f blockchain | grep -E "height|block|sync"
 
 # Check for warnings
-docker-compose logs blockchain --tail=1000 | grep -i warn
+docker compose logs blockchain --tail=1000 | grep -i warn
 ```
 
 ---
