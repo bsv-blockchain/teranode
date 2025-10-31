@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -19,18 +20,24 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/ordishs/gocore"
+	"google.golang.org/grpc"
 )
 
 var AssetStat = gocore.NewStat("Asset")
 
 // HTTP handles blockchain data API endpoints using the Echo framework.
 type HTTP struct {
-	logger     ulogger.Logger
-	settings   *settings.Settings
-	repository repository.Interface
-	e          *echo.Echo
-	startTime  time.Time
-	privKey    crypto.PrivKey
+	logger                ulogger.Logger
+	settings              *settings.Settings
+	repository            repository.Interface
+	e                     *echo.Echo
+	startTime             time.Time
+	privKey               crypto.PrivKey
+	p2pClientConn         *grpc.ClientConn
+	blockvalClientConn    *grpc.ClientConn
+	p2pClientInitErr      error
+	blockvalClientInitErr error
+	clientInitOnce        sync.Once
 }
 
 // New creates and configures a new HTTP server instance with all routes and middleware.
@@ -471,4 +478,45 @@ func customLoggerMiddleware(logger ulogger.Logger) echo.MiddlewareFunc {
 			return err
 		}
 	}
+}
+
+// initGRPCClients initializes persistent gRPC connections to P2P and BlockValidation services.
+// Uses lazy initialization with sync.Once to ensure connections are only created once.
+// These persistent connections automatically reconnect on failure (using grpc.NewClient).
+func (h *HTTP) initGRPCClients(ctx context.Context) {
+	h.clientInitOnce.Do(func() {
+		// Initialize P2P client connection
+		p2pAddr := h.settings.P2P.GRPCAddress
+		if p2pAddr != "" {
+			h.p2pClientConn, h.p2pClientInitErr = util.GetGRPCClient(ctx, p2pAddr, &util.ConnectionOptions{
+				MaxRetries:   h.settings.GRPCMaxRetries,
+				RetryBackoff: h.settings.GRPCRetryBackoff,
+				APIKey:       h.settings.GRPCAdminAPIKey,
+			}, h.settings)
+			if h.p2pClientInitErr != nil {
+				h.logger.Warnf("[initGRPCClients] Failed to create P2P client connection (will retry on demand): %v", h.p2pClientInitErr)
+			} else {
+				h.logger.Infof("[initGRPCClients] P2P gRPC client initialized to %s", p2pAddr)
+			}
+		} else {
+			h.logger.Warnf("[initGRPCClients] P2P gRPC address not configured")
+		}
+
+		// Initialize BlockValidation client connection
+		blockvalAddr := h.settings.BlockValidation.GRPCAddress
+		if blockvalAddr != "" {
+			h.blockvalClientConn, h.blockvalClientInitErr = util.GetGRPCClient(ctx, blockvalAddr, &util.ConnectionOptions{
+				MaxRetries:   h.settings.GRPCMaxRetries,
+				RetryBackoff: h.settings.GRPCRetryBackoff,
+				APIKey:       h.settings.GRPCAdminAPIKey,
+			}, h.settings)
+			if h.blockvalClientInitErr != nil {
+				h.logger.Warnf("[initGRPCClients] Failed to create BlockValidation client connection (will retry on demand): %v", h.blockvalClientInitErr)
+			} else {
+				h.logger.Infof("[initGRPCClients] BlockValidation gRPC client initialized to %s", blockvalAddr)
+			}
+		} else {
+			h.logger.Warnf("[initGRPCClients] BlockValidation gRPC address not configured")
+		}
+	})
 }

@@ -7,8 +7,6 @@ import (
 
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
 	"github.com/labstack/echo/v4"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // GetCatchupStatus returns the current catchup status from the BlockValidation service
@@ -16,31 +14,20 @@ func (h *HTTP) GetCatchupStatus(c echo.Context) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
 
-	// Connect to BlockValidation gRPC service using the configured GRPCAddress
-	blockvalidationAddr := h.settings.BlockValidation.GRPCAddress
-	if blockvalidationAddr == "" {
-		h.logger.Errorf("[GetCatchupStatus] BlockValidation gRPC address not configured (blockvalidation_grpcAddress)")
+	// Initialize persistent gRPC clients if not already done
+	h.initGRPCClients(ctx)
+
+	// Check if BlockValidation client connection is available
+	if h.blockvalClientConn == nil {
+		h.logger.Errorf("[GetCatchupStatus] BlockValidation gRPC client not available: %v", h.blockvalClientInitErr)
 		return c.JSON(http.StatusServiceUnavailable, map[string]interface{}{
-			"error":          "BlockValidation service address not configured",
+			"error":          "BlockValidation service not available",
 			"is_catching_up": false,
 		})
 	}
 
-	conn, err := grpc.DialContext(ctx, blockvalidationAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
-	)
-	if err != nil {
-		h.logger.Errorf("[GetCatchupStatus] Failed to connect to BlockValidation service: %v", err)
-		return c.JSON(http.StatusServiceUnavailable, map[string]interface{}{
-			"error":          "Failed to connect to BlockValidation service",
-			"is_catching_up": false,
-		})
-	}
-	defer conn.Close()
-
-	// Call the GetCatchupStatus gRPC method
-	client := blockvalidation_api.NewBlockValidationAPIClient(conn)
+	// Create BlockValidation API client from persistent connection
+	client := blockvalidation_api.NewBlockValidationAPIClient(h.blockvalClientConn)
 	resp, err := client.GetCatchupStatus(ctx, &blockvalidation_api.EmptyMessage{})
 	if err != nil {
 		h.logger.Errorf("[GetCatchupStatus] Failed to get catchup status: %v", err)

@@ -7,8 +7,6 @@ import (
 
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/labstack/echo/v4"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -55,31 +53,20 @@ func (h *HTTP) GetPeers(c echo.Context) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
 
-	// Connect to P2P gRPC service using the configured GRPCAddress
-	p2pAddr := h.settings.P2P.GRPCAddress
-	if p2pAddr == "" {
-		h.logger.Errorf("[GetPeers] P2P gRPC address not configured (p2p_grpcAddress)")
+	// Initialize persistent gRPC clients if not already done
+	h.initGRPCClients(ctx)
+
+	// Check if P2P client connection is available
+	if h.p2pClientConn == nil {
+		h.logger.Errorf("[GetPeers] P2P gRPC client not available: %v", h.p2pClientInitErr)
 		return c.JSON(http.StatusServiceUnavailable, PeersResponse{
 			Peers: []PeerInfoResponse{},
 			Count: 0,
 		})
 	}
 
-	conn, err := grpc.DialContext(ctx, p2pAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(),
-	)
-	if err != nil {
-		h.logger.Errorf("[GetPeers] Failed to connect to P2P service: %v", err)
-		return c.JSON(http.StatusServiceUnavailable, PeersResponse{
-			Peers: []PeerInfoResponse{},
-			Count: 0,
-		})
-	}
-	defer conn.Close()
-
-	// Create P2P service client
-	client := p2p_api.NewPeerServiceClient(conn)
+	// Create P2P service client from persistent connection
+	client := p2p_api.NewPeerServiceClient(h.p2pClientConn)
 
 	// Get comprehensive peer registry data
 	registryResp, err := client.GetPeerRegistry(ctx, &emptypb.Empty{})
