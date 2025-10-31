@@ -356,7 +356,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CleanupParentUpdateBatcherDurationMillis: getInt("utxostore_cleanupParentUpdateBatcherDurationMillis", 10, alternativeContext...),
 			CleanupDeleteBatcherSize:                 getInt("utxostore_cleanupDeleteBatcherSize", 256, alternativeContext...),
 			CleanupDeleteBatcherDurationMillis:       getInt("utxostore_cleanupDeleteBatcherDurationMillis", 10, alternativeContext...),
-			CleanupMaxConcurrentOperations:           getInt("utxostore_cleanupMaxConcurrentOperations", 128, alternativeContext...),
+			CleanupMaxConcurrentOperations:           getInt("utxostore_cleanupMaxConcurrentOperations", 0, alternativeContext...),
 		},
 		P2P: P2PSettings{
 			BlockTopic:         getString("p2p_block_topic", "", alternativeContext...),

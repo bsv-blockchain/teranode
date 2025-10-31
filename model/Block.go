@@ -37,9 +37,11 @@ import (
 )
 
 // bufioReaderPool reduces GC pressure by reusing bufio.Reader instances for subtree deserialization.
+// Using 32KB buffers provides excellent I/O performance for sequential reads
+// while dramatically reducing memory pressure and GC overhead (16x reduction from previous 512KB).
 var bufioReaderPool = sync.Pool{
 	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 512*1024) // 512KB buffer
+		return bufio.NewReaderSize(nil, 32*1024) // 32KB buffer - optimized for sequential I/O
 	},
 }
 
