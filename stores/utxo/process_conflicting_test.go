@@ -48,7 +48,7 @@ func TestProcessConflicting_Success(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, affectedSpends, mock.Anything).Return(nil)
 
 	// Mock Spend call for winning transaction
-	mockStore.On("Spend", mock.Anything, testTx, mock.Anything).Return([]*Spend{}, nil)
+	mockStore.On("Spend", mock.Anything, testTx, mock.Anything, mock.Anything).Return([]*Spend{}, nil)
 
 	// Mock SetConflicting call for marking winning txs as not conflicting
 	mockStore.On("SetConflicting", mock.Anything, conflictingTxHashes, false).
@@ -219,7 +219,7 @@ func TestProcessConflicting_SpendError(t *testing.T) {
 		Vout: 0,
 		Err:  errors.NewProcessingError("spend error"),
 	}
-	mockStore.On("Spend", mock.Anything, testTx, mock.Anything).
+	mockStore.On("Spend", mock.Anything, testTx, mock.Anything, mock.Anything).
 		Return([]*Spend{spendWithError}, errors.NewTxInvalidError("spend failed"))
 
 	// Execute test

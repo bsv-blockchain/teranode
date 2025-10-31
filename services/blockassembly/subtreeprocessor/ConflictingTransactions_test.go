@@ -69,6 +69,9 @@ func TestProcessConflictingTransactions(t *testing.T) {
 
 	// Setup mock expectations
 	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{
+		Height: 1,
+	}, nil)
 
 	// Create a TxMap for the losing transactions - using the same implementation as in ProcessConflicting
 	losingTxMap := txmap.NewSplitSwissMap(2)
@@ -81,7 +84,7 @@ func TestProcessConflictingTransactions(t *testing.T) {
 	mockUtxoStore.On("GetCounterConflicting", mock.Anything, mock.Anything).Return([]chainhash.Hash{conflictingTx1, conflictingTx2}, nil)
 	mockUtxoStore.On("SetConflicting", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
 	mockUtxoStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockUtxoStore.On("Spend", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
+	mockUtxoStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
 	mockUtxoStore.On("SetLocked", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Mock the markConflictingTxsInSubtrees method
