@@ -78,8 +78,8 @@ func (m *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*met
 
 // Spend mocks the spending of transaction outputs in the UTXO store.
 // Returns the configured mock response for transaction spending operations.
-func (m *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...IgnoreFlags) ([]*Spend, error) {
-	args := m.Called(ctx, tx, ignoreFlags)
+func (m *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error) {
+	args := m.Called(ctx, tx, blockHeight, ignoreFlags)
 	return args.Get(0).([]*Spend), args.Error(1)
 }
 

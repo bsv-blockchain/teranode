@@ -70,7 +70,7 @@ func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*met
 	return nil, nil
 }
 
-func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil
 }
 

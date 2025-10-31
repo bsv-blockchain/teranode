@@ -379,7 +379,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	if blockHeight == 0 {
 		// set block height from the utxo store
-		blockHeight = v.GetBlockHeight()
+		blockHeight = v.GetBlockHeight() + 1 // +1 since we are validating for the next block
 	}
 
 	// We do not check IsFinal for transactions before BIP113 change (block height 419328)
@@ -394,7 +394,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 
 		// this function should be moved into go-bt
-		if err = util.IsTransactionFinal(tx, blockHeight+1, utxoStoreMedianBlockTime); err != nil {
+		if err = util.IsTransactionFinal(tx, blockHeight, utxoStoreMedianBlockTime); err != nil {
 			err = errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
 			span.RecordError(err)
 
@@ -473,7 +473,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	)
 
 	// this will reverse the spends if there is an error
-	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, validationOptions.IgnoreLocked); err != nil {
+	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, blockHeight, validationOptions.IgnoreLocked); err != nil {
 		if errors.Is(err, errors.ErrUtxoError) {
 			saveAsConflicting := false
 
@@ -812,7 +812,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 
 // spendUtxos attempts to spend the UTXOs referenced by transaction inputs.
 // Returns the spent UTXOs and error if spending fails.
-func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, ignoreLocked bool) ([]*utxo.Spend, error) {
+func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreLocked bool) ([]*utxo.Spend, error) {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "spendUtxos",
 		tracing.WithHistogram(prometheusTransactionSpendUtxos),
 	)
@@ -822,7 +822,7 @@ func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, ignoreLocked bool
 		err error
 	)
 
-	spends, err := v.utxoStore.Spend(ctx, tx, utxo.IgnoreFlags{
+	spends, err := v.utxoStore.Spend(ctx, tx, blockHeight, utxo.IgnoreFlags{
 		IgnoreConflicting: false,
 		IgnoreLocked:      ignoreLocked,
 	})

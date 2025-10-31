@@ -119,7 +119,7 @@ func (m *NullStore) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opt
 	return txMetaData, nil
 }
 
-func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil
 }
 

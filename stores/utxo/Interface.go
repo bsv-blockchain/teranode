@@ -241,7 +241,7 @@ type Store interface {
 	// Blockchain specific functions
 
 	// Spend marks all the UTXOs of the transaction as spent.
-	Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
+	Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
 
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.

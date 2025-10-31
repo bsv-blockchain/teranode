@@ -227,7 +227,17 @@ func (u *BlockValidation) spendAllTransactions(ctx context.Context, block *model
 		}
 
 		g.Go(func() error {
-			if _, err := u.utxoStore.Spend(gCtx, tx, utxo.IgnoreFlags{IgnoreLocked: true}); err != nil {
+			if block.Height == 0 {
+				// get the block height from the blockchain client
+				_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(gCtx, block.Hash())
+				if err != nil {
+					return errors.NewProcessingError("[spendAllTransactions][%s] failed to get block header for genesis block", block.Hash().String(), err)
+				}
+
+				block.Height = blockHeaderMeta.Height
+			}
+
+			if _, err := u.utxoStore.Spend(gCtx, tx, block.Height, utxo.IgnoreFlags{IgnoreLocked: true}); err != nil {
 				return errors.NewProcessingError("[spendAllTransactions][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 			}
 

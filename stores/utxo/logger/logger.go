@@ -174,8 +174,8 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.
 	return data, err
 }
 
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	spends, err := s.store.Spend(ctx, tx, ignoreFlags...)
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	spends, err := s.store.Spend(ctx, tx, 0, ignoreFlags...)
 	spendDetails := make([]string, len(spends))
 
 	for i, spend := range spends {

@@ -65,7 +65,7 @@ func (m *MockStore) Get(ctx context.Context, hash *chainhash.Hash, fieldsArg ...
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
-func (m *MockStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (m *MockStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	args := m.Called(ctx, tx, ignoreFlags)
 	return args.Get(0).([]*utxo.Spend), args.Error(1)
 }
@@ -451,7 +451,7 @@ func TestSpend(t *testing.T) {
 	mockStore.On("GetBlockHeight").Return(uint32(100))
 	mockStore.On("Spend", ctx, tx, ignoreFlags).Return(expectedSpends, expectedErr)
 
-	spends, err := store.Spend(ctx, tx, ignoreFlags...)
+	spends, err := store.Spend(ctx, tx, store.GetBlockHeight()+1, ignoreFlags...)
 
 	assert.Equal(t, expectedSpends, spends)
 	assert.Equal(t, expectedErr, err)
