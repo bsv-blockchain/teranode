@@ -332,7 +332,7 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 
 	// Walk through peer's headers (oldest to newest) to find the highest common ancestor
 	commonAncestorIndex := -1
-	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders))
+	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor (current UTXO height: %d)", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders), currentHeight)
 
 	for i, header := range peerHeaders {
 		exists, err := u.blockchainClient.GetBlockExists(ctx, header.Hash())
@@ -341,8 +341,21 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		}
 
 		if exists {
+			// Get the block's height to ensure it's not ahead of our UTXO store
+			_, meta, err := u.blockchainClient.GetBlockHeader(ctx, header.Hash())
+			if err != nil {
+				return errors.NewProcessingError("[catchup][%s] failed to get metadata for block %s: %v", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+			}
+
+			// Only consider blocks at or below our current UTXO height as potential common ancestors
+			// Blocks ahead of our UTXO height exist in blockchain store but aren't fully processed yet
+			if meta.Height > currentHeight {
+				u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of current UTXO height %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
+				break
+			}
+
 			commonAncestorIndex = i // Keep updating to find the LAST match
-			u.logger.Debugf("[catchup][%s] Block %s exists in our chain (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), i)
+			u.logger.Debugf("[catchup][%s] Block %s exists in our chain at height %d (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, i)
 		} else {
 			u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
 			break // Once we find a header we don't have, stop
@@ -1005,6 +1018,13 @@ func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockU
 	// Check whether the common ancestor is more than X blocks behind our current chain.
 	// This indicates potential secret mining.
 	currentHeight := u.utxoStore.GetBlockHeight()
+
+	// Common ancestor should always be at or below current height due to findCommonAncestor validation
+	// If not, this indicates a bug in the ancestor finding logic
+	if commonAncestorMeta.Height > currentHeight {
+		return errors.NewProcessingError("[catchup][%s] common ancestor height %d is ahead of current height %d - this should not happen", blockUpTo.Hash().String(), commonAncestorMeta.Height, currentHeight)
+	}
+
 	blocksBehind := currentHeight - commonAncestorMeta.Height
 
 	// If we're not far enough in the chain, or the ancestor is not too far behind, it's not secret mining

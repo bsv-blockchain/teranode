@@ -1072,6 +1072,46 @@ func TestCatchup(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "secretly mined chain")
 	})
+
+	t.Run("Common Ancestor Ahead of UTXO Height - Should Error", func(t *testing.T) {
+		ctx := context.Background()
+
+		// Setup scenario that would have caused integer underflow:
+		// - Common ancestor is at height 398
+		// - Current UTXO height is 397
+		// - This should never happen with proper ancestor finding logic
+		// - checkSecretMiningFromCommonAncestor should return an error
+
+		currentHeight := uint32(397)
+		commonAncestorHeight := uint32(398)
+
+		// Mock GetBlockHeight to return our current height
+		mockUTXOStore.On("GetBlockHeight").Return(currentHeight)
+
+		// Create test blocks
+		blocks := testhelpers.CreateTestBlockChain(t, 2)
+		blockUpTo := blocks[1]
+
+		// Create common ancestor hash and meta
+		commonAncestorHash := blocks[0].Header.Hash()
+		commonAncestorMeta := &model.BlockHeaderMeta{
+			Height: commonAncestorHeight,
+		}
+
+		// Call the secret mining check function directly
+		err := server.checkSecretMiningFromCommonAncestor(
+			ctx,
+			blockUpTo,
+			"http://test-peer",
+			"",
+			commonAncestorHash,
+			commonAncestorMeta,
+		)
+
+		// Should return an error because common ancestor is ahead of current height
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "ahead of current height")
+	})
 }
 
 // testServer embeds Server and adds test helpers
