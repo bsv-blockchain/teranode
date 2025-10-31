@@ -1120,6 +1120,7 @@
   /* Catchup status card styles */
   .catchup-status-wrapper {
     margin-bottom: 20px;
+    width: 100%;
   }
 
   .catchup-status-wrapper :global(.card) {
@@ -1355,14 +1356,18 @@
     font-family: 'JetBrains Mono', monospace;
     word-wrap: break-word;
     overflow-wrap: break-word;
+    word-break: break-all;
     white-space: pre-wrap;
     max-height: 120px;
+    max-width: 100%;
+    overflow-x: auto;
     overflow-y: auto;
     cursor: help;
   }
 
   .error-message-box::-webkit-scrollbar {
     width: 6px;
+    height: 6px;
   }
 
   .error-message-box::-webkit-scrollbar-track {
