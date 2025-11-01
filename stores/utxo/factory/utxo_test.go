@@ -49,6 +49,13 @@ func (m *MockUTXOStore) GetMedianBlockTime() uint32 {
 	return args.Get(0).(uint32)
 }
 
+func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     m.GetBlockHeight(),
+		MedianTime: m.GetMedianBlockTime(),
+	}
+}
+
 // Implement remaining interface methods as no-ops for testing
 func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	return nil, nil

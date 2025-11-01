@@ -1081,6 +1081,13 @@ func (m *MockUTXOStore) GetBlockHeight() uint32                 { return 0 }
 func (m *MockUTXOStore) SetMedianBlockTime(height uint32) error { return nil }
 func (m *MockUTXOStore) GetMedianBlockTime() uint32             { return 0 }
 
+func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     m.GetBlockHeight(),
+		MedianTime: m.GetMedianBlockTime(),
+	}
+}
+
 // Comprehensive tests for getNextBlockToProcess method
 
 // TestGetNextBlockToProcess_NormalFlow tests successful block retrieval

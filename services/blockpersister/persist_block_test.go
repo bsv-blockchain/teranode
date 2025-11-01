@@ -156,6 +156,13 @@ func (m *MockStore) GetMedianBlockTime() uint32 {
 	return 0
 }
 
+func (m *MockStore) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     m.GetBlockHeight(),
+		MedianTime: m.GetMedianBlockTime(),
+	}
+}
+
 func (m *MockStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	return nil
 }

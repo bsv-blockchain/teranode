@@ -157,6 +157,13 @@ func (s *Store) GetMedianBlockTime() uint32 {
 	return s.medianBlockTime.Load()
 }
 
+func (s *Store) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     s.blockHeight.Load(),
+		MedianTime: s.medianBlockTime.Load(),
+	}
+}
+
 // Health checks the database connection and returns status information.
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	details := fmt.Sprintf("SQL Engine is %s", s.engine)

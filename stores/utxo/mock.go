@@ -203,6 +203,13 @@ func (m *MockUtxostore) GetMedianBlockTime() uint32 {
 	return args.Get(0).(uint32)
 }
 
+// GetBlockState mocks the retrieval of an atomic snapshot of both block height and median block time.
+// Returns the configured mock response for block state queries.
+func (m *MockUtxostore) GetBlockState() BlockState {
+	args := m.Called()
+	return args.Get(0).(BlockState)
+}
+
 // QueryOldUnminedTransactions mocks the querying of old unmined transactions before a cutoff height.
 // Returns the configured mock response for old unmined transaction queries.
 func (m *MockUtxostore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {

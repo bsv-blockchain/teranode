@@ -61,6 +61,13 @@ func (m *NullStore) GetMedianBlockTime() uint32 {
 	return m.medianBlockTime
 }
 
+func (m *NullStore) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     m.blockHeight,
+		MedianTime: m.medianBlockTime,
+	}
+}
+
 func (m *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "NullStore Store available", nil
 }

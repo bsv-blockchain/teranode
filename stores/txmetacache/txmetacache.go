@@ -998,6 +998,10 @@ func (t *TxMetaCache) GetMedianBlockTime() uint32 {
 	return t.utxoStore.GetMedianBlockTime()
 }
 
+func (t *TxMetaCache) GetBlockState() utxo.BlockState {
+	return t.utxoStore.GetBlockState()
+}
+
 // QueryOldUnminedTransactions forwards the query request to the underlying UTXO store.
 // The cache doesn't directly manage unmined transactions, so this is a pass-through operation.
 func (t *TxMetaCache) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
