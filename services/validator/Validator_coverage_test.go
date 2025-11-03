@@ -712,10 +712,10 @@ func TestValidator_ValidateInternal_UTXOError_ConflictingTxCreation(t *testing.T
 		transactions.WithChangeOutput(),
 	)
 
-	// Mock parent tx extension - empty BlockHeights to trigger GetBlockHeight() call
+	// Mock parent tx extension
 	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
 	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
-	mockStore.On("GetBlockHeight").Return(uint32(100))
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock spendUtxos to return UTXO error with conflicting spend
 	spends := []*utxo.Spend{{TxID: &chainhash.Hash{}, Vout: 0, Err: errors.ErrSpent}}
@@ -756,10 +756,10 @@ func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
 		transactions.WithChangeOutput(),
 	)
 
-	// Mock parent tx extension - empty BlockHeights to trigger GetBlockHeight() call
+	// Mock parent tx extension
 	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
 	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
-	mockStore.On("GetBlockHeight").Return(uint32(100))
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock spendUtxos to return TxNotFound error
 	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
@@ -798,10 +798,10 @@ func TestValidator_ValidateInternal_GeneralSpendError(t *testing.T) {
 		transactions.WithChangeOutput(),
 	)
 
-	// Mock parent tx extension - empty BlockHeights to trigger GetBlockHeight() call
+	// Mock parent tx extension
 	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
 	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
-	mockStore.On("GetBlockHeight").Return(uint32(100))
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock spendUtxos to return a general error
 	generalErr := errors.NewProcessingError("general spending error")
