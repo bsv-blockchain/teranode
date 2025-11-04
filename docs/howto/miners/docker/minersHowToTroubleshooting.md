@@ -31,7 +31,7 @@ This guide provides troubleshooting steps for common issues encountered while ru
 
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 This command lists all services defined in your docker-compose.yml file, along with their current status (Up, Exit, etc.) and health state if health checks are configured.
 
@@ -75,9 +75,9 @@ docker inspect --format='{{json .State.Health}}' asset
 
 
 ```bash
-docker-compose logs
-docker-compose logs -f  # Follow logs in real-time
-docker-compose logs --tail=100  # View only the most recent logs
+docker compose logs
+docker compose logs -f  # Follow logs in real-time
+docker compose logs --tail=100  # View only the most recent logs
 ```
 
 
@@ -90,7 +90,7 @@ docker-compose logs --tail=100  # View only the most recent logs
 
 
 ```bash
-docker-compose logs [service_name]
+docker compose logs [service_name]
 ```
 
 
@@ -103,15 +103,15 @@ docker-compose logs [service_name]
 
 * Show timestamps:
   ```bash
-  docker-compose logs -t
+  docker compose logs -t
   ```
 * Limit output:
   ```bash
-  docker-compose logs --tail=50 [service_name]
+  docker compose logs --tail=50 [service_name]
   ```
 * Since time:
   ```bash
-  docker-compose logs --since 2023-07-01T00:00:00 [service_name]
+  docker compose logs --since 2023-07-01T00:00:00 [service_name]
   ```
 
 
@@ -120,7 +120,7 @@ docker-compose logs [service_name]
 ##### Checking Logs for Specific Teranode Microservices
 
 ```bash
-docker-compose logs [service_name]
+docker compose logs [service_name]
 ```
 
 For Docker Compose, replace `[service_name]` with the appropriate service or pod name:
@@ -145,8 +145,8 @@ For Docker Compose, replace `[service_name]` with the appropriate service or pod
 
 
 ```bash
-docker-compose logs > teranode_logs.txt
-docker-compose logs [service_name] > [service_name]_logs.txt
+docker compose logs > teranode_logs.txt
+docker compose logs [service_name] > [service_name]_logs.txt
 ```
 
 

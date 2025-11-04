@@ -27,7 +27,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1445,7 +1444,8 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		Return(&currentState, nil).Maybe()
 
 	// Create orphanage to avoid nil pointer dereference
-	orphanage := expiringmap.New[chainhash.Hash, *bt.Tx](time.Minute * 10)
+	orphanage, err := NewOrphanage(time.Minute*10, 100, logger)
+	require.NoError(t, err)
 
 	server := &Server{
 		logger:           logger,

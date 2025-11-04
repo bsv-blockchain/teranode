@@ -694,7 +694,9 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return((*model.Block)(nil), errors.NewNotFoundError("not found"))
 	mockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
-	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	// Return a buffered channel for Subscribe so BlockValidation.start() doesn't block
+	subscriptionCh := make(chan *blockchain_api.Notification, 10)
+	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(subscriptionCh, nil)
 	mockBlockchain.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{1}, nil)
@@ -713,6 +715,7 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	// Create context first so BlockValidation can use it
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	defer close(subscriptionCh)
 
 	blockFoundCh := make(chan processBlockFound, 1)
 	catchupCh := make(chan processBlockCatchup, 1)
@@ -879,7 +882,10 @@ func TestProcessBlockFoundChannelCatchup(t *testing.T) {
 	// Create mock blockchain client
 	mockBlockchainClient := &blockchain.Mock{}
 	mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
-	mockBlockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return((chan *blockchain_api.Notification)(nil), nil)
+	// Return a buffered channel for Subscribe so BlockValidation.start() doesn't block
+	subscriptionCh2 := make(chan *blockchain_api.Notification, 10)
+	defer close(subscriptionCh2)
+	mockBlockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subscriptionCh2, nil)
 	mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchainClient.On("GetBlocksSubtreesNotSet", mock.Anything).Return([]*model.Block{}, nil)
 	mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{blocks[0].Header}, []*model.BlockHeaderMeta{&model.BlockHeaderMeta{Height: 100}}, nil)

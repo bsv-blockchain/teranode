@@ -392,7 +392,7 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.NoError(t, err)
 
 	// Now let's spend the outputs
-	_, err = store.Spend(context.Background(), spendTx)
+	_, err = store.Spend(context.Background(), spendTx, 1)
 	require.NoError(t, err)
 
 	// check that the tx is stored externally

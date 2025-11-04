@@ -14,6 +14,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -40,9 +41,16 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeight")
 	defer deferFn()
 
-	_, meta := s.blocksCache.GetBlockHeader(*blockHash)
-	if meta != nil {
-		return meta.Height, nil
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to avoid conflicts with other cached data
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeight-%s", blockHash.String())))
+
+	cached := s.responseCache.Get(cacheID)
+	if cached != nil {
+		// Check if it's a cached height value
+		if height, ok := cached.Value().(uint32); ok {
+			return height, nil
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -66,6 +74,9 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 
 		return 0, errors.NewStorageError("error in GetBlockHeight", err)
 	}
+
+	// Cache the height result
+	s.responseCache.Set(cacheID, height, s.cacheTTL)
 
 	return height, nil
 }

@@ -2081,7 +2081,7 @@ func TestServerStartFull(t *testing.T) {
 			HashPrevBlock:  &hashPrev,
 			HashMerkleRoot: &hashMerkle,
 			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+			Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 			Nonce:          0,
 		},
 		&model.BlockHeaderMeta{Height: 0},
@@ -2649,7 +2649,7 @@ func TestHandleBlockNotificationSuccess(t *testing.T) {
 		HashPrevBlock:  testHash,
 		HashMerkleRoot: testHash,
 		Timestamp:      1234567890,
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          1234,
 	}
 	meta := &model.BlockHeaderMeta{Height: 150}

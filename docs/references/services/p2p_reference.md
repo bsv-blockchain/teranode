@@ -30,7 +30,7 @@ type Server struct {
     blocksKafkaProducerClient         kafka.KafkaAsyncProducerI // Kafka producer for blocks
     banList                           BanListI                  // List of banned peers
     banChan                           chan BanEvent             // Channel for ban events
-    banManager                        PeerBanManagerI           // Manager for peer banning (interface)
+    banManager                        PeerBanManagerI           // Manager for peer banning
     gCtx                              context.Context
     blockTopicName                    string
     subtreeTopicName                  string
@@ -49,9 +49,9 @@ type Server struct {
     syncConnectionTimes               sync.Map           // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
     // Cleanup configuration
-    peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
-    peerMapMaxSize       int           // Maximum number of entries in peer maps
-    peerMapTTL           time.Duration // Time-to-live for peer map entries
+    peerMapCleanupTicker              *time.Ticker       // Ticker for periodic cleanup of peer maps
+    peerMapMaxSize                    int                // Maximum number of entries in peer maps
+    peerMapTTL                        time.Duration      // Time-to-live for peer map entries
 }
 ```
 
@@ -230,14 +230,41 @@ const (
 
 Peer scores automatically decay over time to allow for recovery from temporary issues.
 
+### Public API Methods
+
+```go
+func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeersResponse, error)
+```
+
+Returns a list of connected peers with their connection information and status.
+
+```go
+func (s *Server) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error)
+```
+
+Bans a peer by their peer ID, preventing future connections from that peer.
+
+```go
+func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error)
+```
+
+Removes a ban on a specific peer, allowing them to reconnect.
+
+```go
+func (s *Server) IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error)
+```
+
+Checks if a specific peer ID is currently banned.
+
 ### Message Handlers
 
-- `handleHandshakeTopic`: Handles incoming handshake messages including version and verack exchanges.
-- `handleBlockTopic`: Handles incoming block messages.
-- `handleSubtreeTopic`: Handles incoming subtree messages.
-- `handleMiningOnTopic`: Handles incoming mining-on messages.
+- `handleBlockTopic`: Handles incoming block messages and validates block announcements.
+- `handleSubtreeTopic`: Handles incoming subtree messages and processes subtree data.
+- `handleRejectedTxTopic`: Handles rejected transaction notifications from peers.
 - `handleNodeStatusTopic`: Handles incoming node status update messages.
-- `handleBanEvent`: Handles banning and unbanning events.
+- `invalidBlockHandler`: Processes notifications about invalid blocks from Kafka.
+- `invalidSubtreeHandler`: Processes notifications about invalid subtrees from Kafka.
+- `rejectedTxHandler`: Processes rejected transaction notifications from Kafka.
 
 ### Message Structures
 

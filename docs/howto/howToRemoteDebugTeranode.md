@@ -44,11 +44,33 @@ sudo kubefwd svc -n mainnet-1
 ```
 This maps ports with service names (e.g., asset:4040, legacy:4040, blockchain:4040).
 
-4. **Configure VS Code**:
+4. **Connect Your IDE/Debugger**:
 
-    - Set up VS Code to connect to the remote debugger now running locally on your computer.
-    - Avoid using the "cursor" feature, as it may cause connection issues.
-    - If using kubefwd, ensure your debugger IP points to the correct service (e.g., use `asset:4040` for the asset service).
+Teranode uses Delve (dlv) as its debugger. You can connect using any IDE or tool that supports Delve:
+
+**VS Code:**
+
+- Install the [Go extension](https://marketplace.visualstudio.com/items?itemName=golang.go)
+- Configure a remote attach configuration in your `launch.json`
+- See the [VS Code Go debugging guide](https://github.com/golang/vscode-go/wiki/debugging) for detailed setup
+
+**GoLand:**
+
+- Use "Go Remote" run configuration
+- See the [GoLand remote debugging guide](https://www.jetbrains.com/help/go/attach-to-running-go-processes-with-debugger.html)
+
+**Delve CLI:**
+
+- Connect directly using the command line:
+
+```bash
+dlv connect localhost:4040
+```
+
+**Important Notes:**
+
+- If using Cursor IDE (VS Code fork), be aware it may cause connection issues with the debugger
+- If using kubefwd, ensure your debugger IP points to the correct service (e.g., use `asset:4040` for the asset service)
 
 5. **Start Debugging**:
 

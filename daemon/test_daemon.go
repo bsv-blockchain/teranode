@@ -257,8 +257,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	path := filepath.Join("data", appSettings.ClientName)
 	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
-		// a bit hacky. Ideally, all stores sit under data/${ClientName}
-		path = "data"
+		// Create a unique data directory per test to avoid SQLite locking issues
+		// Use test name and timestamp to ensure uniqueness across sequential test runs
+		testName := strings.ReplaceAll(t.Name(), "/", "_")
+		path = filepath.Join("data", fmt.Sprintf("test_%s_%d", testName, time.Now().UnixNano()))
 	}
 
 	if !opts.SkipRemoveDataDir {
@@ -279,6 +281,12 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	chainParams.CoinbaseMaturity = 1
 	appSettings.ChainCfgParams = &chainParams
 
+	// Override DataFolder BEFORE creating any directories
+	// This ensures all store paths (blockstore, quorum, etc.) use the test-specific path
+	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
+		appSettings.DataFolder = path
+	}
+
 	absPath, err := filepath.Abs(path)
 	require.NoError(t, err)
 	t.Logf("Creating data directory: %s", absPath)
@@ -291,8 +299,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	err = os.MkdirAll(quorumPath, 0755)
 	require.NoError(t, err)
-
-	// Override with test settings...
 	appSettings.Asset.CentrifugeDisable = true
 	appSettings.UtxoStore.DBTimeout = 500 * time.Second
 	appSettings.LocalTestStartFromState = "RUNNING"
@@ -484,6 +490,12 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 
 	// Cancel context first to trigger HTTP server shutdowns
 	td.ctxCancel()
+
+	// Shutdown the logger to prevent race conditions on testing.T access
+	// Background goroutines may still be running and trying to log errors
+	if errorTestLogger, ok := td.Logger.(*ulogger.ErrorTestLogger); ok {
+		errorTestLogger.Shutdown()
+	}
 
 	// Cleanup daemon stores to reset singletons
 	td.d.daemonStores.Cleanup()
@@ -1895,4 +1907,37 @@ func (td *TestDaemon) DisconnectFromPeer(t *testing.T, peer *TestDaemon) {
 
 func peerAddress(peer *TestDaemon) string {
 	return fmt.Sprintf("/dns/127.0.0.1/tcp/%d/p2p/%s", peer.Settings.P2P.Port, peer.Settings.P2P.PeerID)
+}
+
+// WaitForBlockAssemblyToProcessTx waits for block assembly to process a transaction by polling GetTransactionHashes.
+// It checks if the transaction with the given hash string appears in the block assembly transaction list.
+// The function uses a context-based timeout (default 2 seconds) and polls every 100ms.
+func (td *TestDaemon) WaitForBlockAssemblyToProcessTx(t *testing.T, txHashStr string) {
+	timeout := 2 * time.Second
+	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Timeout - fail the test
+			t.Fatalf("tx %s not found in block assembly after %v timeout", txHashStr, timeout)
+			return
+
+		case <-ticker.C:
+			txs, err := td.BlockAssemblyClient.GetTransactionHashes(ctx)
+			if err != nil {
+				// Continue retrying on error
+				continue
+			}
+
+			// Check if our transaction is in the list
+			if slices.Contains(txs, txHashStr) {
+				return
+			}
+		}
+	}
 }

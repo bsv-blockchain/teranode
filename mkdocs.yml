@@ -54,14 +54,18 @@ nav:
           - Troubleshooting:
               - Docker: howto/miners/docker/minersHowToTroubleshooting.md
               - Kubernetes: howto/miners/kubernetes/minersHowToTroubleshooting.md
+          - Reset Teranode:
+              - Docker: howto/miners/docker/minersHowToResetTeranode.md
+              - Kubernetes: howto/miners/kubernetes/minersHowToResetTeranode.md
+          - Sync the Node:
+              - Docker: howto/miners/docker/minersHowToSyncTheNode.md
+              - Kubernetes: howto/miners/kubernetes/minersHowToSyncTheNode.md
           - Additional:
+              - Backup Teranode: howto/miners/minersHowToBackup.md
               - CPU Mining Setup: howto/miners/minersHowToCPUMiner.md
-              - Reset Teranode: howto/miners/minersHowToResetTeranode.md
-              - Sync the Node: howto/miners/minersHowToSyncTheNode.md
               - Teranode CLI: howto/miners/minersHowToTeranodeCLI.md
               - Managing Disk Space: howto/miners/minersManagingDiskSpace.md
               - Using Listen Mode: howto/miners/minersHowToUseListenMode.md
-              - Backup (Kubernetes): howto/miners/kubernetes/minersHowToBackup.md
   - Key Topics:
       - Teranode Introduction: topics/teranodeIntro.md
       - Architecture Overview: topics/architecture/teranode-overall-system-design.md
