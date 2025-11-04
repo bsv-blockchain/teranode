@@ -772,7 +772,17 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 			}
 
 			if len(conflictingNodes) > 0 {
-				losingTxHashesMap, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, conflictingNodes, processedConflictingHashesMap)
+				if block.Height == 0 {
+					// get the block height from the blockchain client
+					_, blockHeaderMeta, err := stp.blockchainClient.GetBlockHeader(ctx, block.Hash())
+					if err != nil {
+						return errors.NewProcessingError("[moveForwardBlock][%s] error getting block header meta", block.String(), err)
+					}
+
+					block.Height = blockHeaderMeta.Height
+				}
+
+				losingTxHashesMap, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, conflictingNodes, processedConflictingHashesMap)
 				if err != nil {
 					return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
 				}
@@ -2378,7 +2388,17 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 			return nil, errors.NewProcessingError("[moveForwardBlock][%s] error waiting for block to be mined", block.String(), err)
 		}
 
-		if losingTxHashesMap, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, conflictingNodes, processedConflictingHashesMap); err != nil {
+		if block.Height == 0 {
+			// get the block height from the blockchain client
+			_, blockHeaderMeta, err := stp.blockchainClient.GetBlockHeader(ctx, block.Header.Hash())
+			if err != nil {
+				return nil, errors.NewProcessingError("[moveForwardBlock][%s] error getting block header for genesis block", block.String(), err)
+			}
+
+			block.Height = blockHeaderMeta.Height
+		}
+
+		if losingTxHashesMap, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, conflictingNodes, processedConflictingHashesMap); err != nil {
 			return nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
 		}
 

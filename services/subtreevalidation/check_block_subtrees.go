@@ -614,8 +614,11 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 						isRunning, runningErr := u.blockchainClient.IsFSMCurrentState(gCtx, blockchain.FSMStateRUNNING)
 						if runningErr == nil && isRunning {
 							u.logger.Debugf("[processTransactionsInLevels] Transaction %s missing parent, adding to orphanage", tx.TxIDChainHash().String())
-							u.orphanage.Set(*tx.TxIDChainHash(), tx)
-							addedToOrphanage.Add(1)
+							if u.orphanage.Set(*tx.TxIDChainHash(), tx) {
+								addedToOrphanage.Add(1)
+							} else {
+								u.logger.Warnf("[processTransactionsInLevels] Failed to add transaction %s to orphanage - orphanage is full", tx.TxIDChainHash().String())
+							}
 						}
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Log truly invalid transactions

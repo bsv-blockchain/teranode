@@ -20,6 +20,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -71,9 +72,19 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 	)
 	defer deferFn()
 
-	headers, metas := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
-	if headers != nil {
-		return headers, metas, nil
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to avoid conflicts with other cached data
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaders-%s-%d", blockHashFrom.String(), numberOfHeaders)))
+
+	cached := s.responseCache.Get(cacheID)
+	if cached != nil {
+		if result, ok := cached.Value().([2]interface{}); ok {
+			if h, ok := result[0].([]*model.BlockHeader); ok {
+				if m, ok := result[1].([]*model.BlockHeaderMeta); ok {
+					return h, m, nil
+				}
+			}
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -131,7 +142,15 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 
 	defer rows.Close()
 
-	return s.processBlockHeadersRows(rows, numberOfHeaders, false)
+	h, m, err := s.processBlockHeadersRows(rows, numberOfHeaders, false)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Cache the result in response cache
+	s.responseCache.Set(cacheID, [2]interface{}{h, m}, s.cacheTTL)
+
+	return h, m, nil
 }
 
 func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64, hasCoinbaseColumn bool) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {

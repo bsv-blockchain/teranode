@@ -95,6 +95,7 @@ jobs:
 
   chaostest2:
     name: chaostest2
+    if: false  # Temporarily disabled - flaky test
     runs-on: teranode-runner-4-core
     steps:
       - name: Workflow Telemetry

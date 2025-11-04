@@ -143,7 +143,7 @@ func runReorgScenario(t *testing.T, storeType, scenario string, expectedBefore, 
 	testTxBytes := hex.EncodeToString(testTx.ExtendedBytes())
 	_, err = td.CallRPC(ctx, "sendrawtransaction", []any{testTxBytes})
 	require.NoError(t, err)
-	waitForBlockAssemblyToProcessTx(t, td, testTxHash.String())
+	td.WaitForBlockAssemblyToProcessTx(t, testTxHash.String())
 
 	// Test Side→Main scenario
 	testSideToMain(t, td, ctx, testTx, testTxHash, forkPointBlock, forkPointHeight, testCoinbaseMaturity)
@@ -177,7 +177,7 @@ func testSideToMain(t *testing.T, td *daemon.TestDaemon, ctx context.Context, te
 
 	// Mine blocks on SIDE chain WITH test tx
 	t.Logf("Mining %d blocks on SIDE chain (first contains test tx)...", testCoinbaseMaturity+2)
-	waitForBlockAssemblyToProcessTx(t, td, testTxHash.String())
+	td.WaitForBlockAssemblyToProcessTx(t, testTxHash.String())
 
 	_, sideBlock1 := createTestBlockWithCorrectSubsidy(t, td, forkPointBlock, uint32(20000), []*bt.Tx{testTx})
 	require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock1, sideBlock1.Height, "legacy", ""))
@@ -246,7 +246,7 @@ func testMainToSideAfterSideToMain(t *testing.T, td *daemon.TestDaemon, ctx cont
 	testTx2Bytes := hex.EncodeToString(testTx2.ExtendedBytes())
 	_, err = td.CallRPC(ctx, "sendrawtransaction", []any{testTx2Bytes})
 	require.NoError(t, err)
-	waitForBlockAssemblyToProcessTx(t, td, testTx2Hash.String())
+	td.WaitForBlockAssemblyToProcessTx(t, testTx2Hash.String())
 
 	// Mine block with testTx2 on main chain
 	mainBlock := td.MineAndWait(t, 1)

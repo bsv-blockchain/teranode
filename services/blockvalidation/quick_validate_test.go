@@ -115,7 +115,7 @@ func TestQuickValidateBlock(t *testing.T) {
 		suite.MockUTXOStore.On("Create", mock.Anything, mock.Anything, uint32(100), mock.Anything).Return(&meta.Data{}, nil)
 
 		// Setup UTXO store expectations for spending transactions (context, tx, ignoreFlags)
-		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
+		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
 
 		// Setup SetLocked expectation for unlocking UTXOs after AddBlock
 		suite.MockUTXOStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil)
@@ -243,7 +243,7 @@ func TestValidateAllTransactions(t *testing.T) {
 			// The validator may call Create during validation
 			suite.MockUTXOStore.On("Create", mock.Anything, tx, mock.Anything, mock.Anything).Return(&meta.Data{}, nil).Maybe()
 			// Setup UTXO store expectations for spending transactions
-			suite.MockUTXOStore.On("Spend", mock.Anything, tx, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
+			suite.MockUTXOStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
 			txWrappers[idx] = txWrapper{tx: tx, subtreeIdx: 0}
 		}
 
@@ -268,7 +268,7 @@ func TestValidateAllTransactions(t *testing.T) {
 			// The validator may call Create during validation
 			suite.MockUTXOStore.On("Create", mock.Anything, tx, mock.Anything, mock.Anything).Return(&meta.Data{}, nil).Maybe()
 			// Setup UTXO store expectations for spending transactions
-			suite.MockUTXOStore.On("Spend", mock.Anything, tx, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
+			suite.MockUTXOStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
 			txWrappers[idx] = txWrapper{tx: tx, subtreeIdx: 0}
 		}
 

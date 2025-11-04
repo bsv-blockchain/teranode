@@ -613,7 +613,7 @@ func (t *TeranodeTestEnv) GetMappedPort(nodeName string, port nat.Port) (nat.Por
 
 // StopDockerNodes stops the Docker Compose services and removes volumes.
 func (t *TeranodeTestEnv) StopDockerNodes() error {
-	if t.Compose != nil {
+	if t != nil && t.Compose != nil {
 		if err := t.Compose.Down(t.Context); err != nil {
 			return err
 		}
