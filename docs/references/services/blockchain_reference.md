@@ -105,20 +105,24 @@ Processes a request to add a new block to the blockchain. This method handles th
 
 The method supports functional options through the request's option fields:
 
-- `optionMinedSet`: Marks the block as mined when set to true
-- `optionSubtreesSet`: Marks the block's subtrees as processed when set to true
-- `optionInvalid`: Marks the block as invalid when set to true (useful for tracking invalid blocks during catchup)
-- `optionID`: Allows specifying a custom block ID (useful for quick validation with pre-allocated IDs)
+- `OptionMinedSet`: Marks the block as mined when set to true
+- `OptionSubtreesSet`: Marks the block's subtrees as processed when set to true
+- `OptionInvalid`: Marks the block as invalid when set to true (useful for tracking invalid blocks during catchup)
+- `OptionID`: Allows specifying a custom block ID (useful for quick validation with pre-allocated IDs)
 
 Example usage with options:
 
 ```go
 // Adding a block with pre-allocated ID and marked as mined
 request := &blockchain_api.AddBlockRequest{
-    Block:           blockData,
-    BaseURL:         sourceURL,
-    OptionMinedSet:  &wrapperspb.BoolValue{Value: true},
-    OptionID:        &wrapperspb.UInt64Value{Value: preAllocatedID},
+    Header:           blockHeader,
+    CoinbaseTx:       coinbaseTxBytes,
+    SubtreeHashes:    subtreeHashBytes,
+    TransactionCount: txCount,
+    SizeInBytes:      blockSize,
+    PeerId:           peerID,
+    OptionMinedSet:   true,
+    OptionID:         preAllocatedID,
 }
 ```
 
@@ -260,6 +264,22 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 
 Retrieves block headers starting from a specific height, allowing clients to efficiently fetch headers based on block height rather than hash.
 
+### GetBlocksByHeight
+
+```go
+func (b *Blockchain) GetBlocksByHeight(ctx context.Context, req *blockchain_api.GetBlocksByHeightRequest) (*blockchain_api.GetBlocksByHeightResponse, error)
+```
+
+Retrieves full blocks within a specified height range. This method implements the gRPC service endpoint for fetching complete blocks between two heights in a single efficient operation. It delegates to the blockchain store's GetBlocksByHeight method and serializes the results for gRPC transmission.
+
+### FindBlocksContainingSubtree
+
+```go
+func (b *Blockchain) FindBlocksContainingSubtree(ctx context.Context, req *blockchain_api.FindBlocksContainingSubtreeRequest) (*blockchain_api.FindBlocksContainingSubtreeResponse, error)
+```
+
+Finds blocks that contain a specific subtree hash. This method searches through the blockchain to locate all blocks that include the specified subtree hash in their merkle tree structure.
+
 ### GetBlockHeadersByHeight
 
 ```go
@@ -398,14 +418,6 @@ Restores a previously invalidated block.
 
 ## Additional Block Functions
 
-### GetNextBlockID
-
-```go
-func (b *Blockchain) GetNextBlockID(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetNextBlockIDResponse, error)
-```
-
-Retrieves the next available block ID.
-
 ### GetChainTips
 
 ```go
@@ -421,6 +433,22 @@ func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Con
 ```
 
 Retrieves the latest block header from a block locator request.
+
+### ReportPeerFailure
+
+```go
+func (b *Blockchain) ReportPeerFailure(ctx context.Context, req *blockchain_api.ReportPeerFailureRequest) (*emptypb.Empty, error)
+```
+
+Handles reports of peer download failures and broadcasts to subscribers. This method logs peer failures and sends notifications to all subscribers about the failed peer.
+
+### SetBlockProcessedAt
+
+```go
+func (b *Blockchain) SetBlockProcessedAt(ctx context.Context, req *blockchain_api.SetBlockProcessedAtRequest) (*emptypb.Empty, error)
+```
+
+Sets or clears the processed_at timestamp for a block. This method updates the timestamp indicating when a block was processed by the system.
 
 ### GetBlockHeadersFromOldestRequest
 
@@ -439,6 +467,38 @@ func (b *Blockchain) GetBlockHeadersFromCommonAncestor(ctx context.Context, requ
 Retrieves block headers from a common ancestor.
 
 ## Finite State Machine (FSM) Related Functions
+
+### GetStoreFSMState
+
+```go
+func (b *Blockchain) GetStoreFSMState(ctx context.Context) (string, error)
+```
+
+Retrieves the current FSM state from the store. This method provides access to the persisted FSM state directly from the underlying storage, which may differ from the in-memory state of the service's FSM. This is useful for diagnostics and recovery scenarios.
+
+### ResetFSMS
+
+```go
+func (b *Blockchain) ResetFSMS()
+```
+
+Resets the finite state machine to nil (used for testing). This method is primarily intended for testing purposes to force a clean state. **Note: This method should only be called in test environments.**
+
+### SetSubscriptionManagerReadyForTesting
+
+```go
+func (b *Blockchain) SetSubscriptionManagerReadyForTesting(ready bool)
+```
+
+Sets the subscription manager ready flag for testing purposes. This method should only be used in tests to simulate subscription manager readiness. **Note: This is a testing-only method.**
+
+### IsFullyReady
+
+```go
+func (b *Blockchain) IsFullyReady(ctx context.Context) (bool, error)
+```
+
+Checks if the blockchain service is fully operational. This includes both FSM being in a non-IDLE state and subscription infrastructure being ready. Services should use this method to determine if they can safely proceed with blockchain operations.
 
 ### GetFSMCurrentState
 

@@ -14,6 +14,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -56,6 +57,21 @@ import (
 func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeadersByHeight")
 	defer deferFn()
+
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to be consistent with other operations
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeadersByHeight-%d-%d", startHeight, endHeight)))
+
+	cached := s.responseCache.Get(cacheID)
+	if cached != nil {
+		if result, ok := cached.Value().([2]interface{}); ok {
+			if headers, ok := result[0].([]*model.BlockHeader); ok {
+				if metas, ok := result[1].([]*model.BlockHeaderMeta); ok {
+					return headers, metas, nil
+				}
+			}
+		}
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -169,6 +185,9 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 		blockHeaders = append(blockHeaders, blockHeader)
 		blockMetas = append(blockMetas, blockHeaderMeta)
 	}
+
+	// Cache the result in response cache
+	s.responseCache.Set(cacheID, [2]interface{}{blockHeaders, blockMetas}, s.cacheTTL)
 
 	return blockHeaders, blockMetas, nil
 }

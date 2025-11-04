@@ -16,6 +16,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strconv"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -71,18 +72,19 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 	)
 	defer deferFn()
 
-	_, metas := s.blocksCache.GetBlockHeaders(blockHashFrom, numberOfHeaders)
-	if metas != nil {
-		blockIds := make([]uint32, 0, len(metas))
-		for _, meta := range metas {
-			blockIds = append(blockIds, meta.ID)
-		}
-
-		return blockIds, nil
-	}
-
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to avoid conflicts with other cached data
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeaderIDs-%s-%d", blockHashFrom.String(), numberOfHeaders)))
+
+	cached := s.responseCache.Get(cacheID)
+	if cached != nil {
+		if cacheData, ok := cached.Value().([]uint32); ok {
+			return cacheData, nil
+		}
+	}
 
 	// Pre-allocate slice capacity with a reasonable cap to balance performance and safety.
 	//
@@ -148,6 +150,9 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 
 		ids = append(ids, id)
 	}
+
+	// Cache the result in response cache
+	s.responseCache.Set(cacheID, ids, s.cacheTTL)
 
 	return ids, nil
 }

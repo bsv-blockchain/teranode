@@ -78,7 +78,7 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
     // Set up Docker Compose environment with provided settings
     // Create test directory for test-specific data
     // Configure environment settings including TEST_ID
-    // Set up shared storage client for local docker-compose
+    // Set up shared storage client for local docker compose
     // Initialize teranode and legacy node configurations
 }
 ```
@@ -410,6 +410,7 @@ const (
 ```text
 test/
 ├── aerospike/           # Aerospike database tests
+├── chaos/              # Chaos engineering tests
 ├── config/             # Test configuration files
 ├── consensus/          # Consensus mechanism tests
 ├── e2e/               # End-to-end integration tests

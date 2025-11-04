@@ -15,9 +15,11 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 3. `getblockbyheight`: Retrieves a block by its height
 4. `getblockhash`: Returns the hash of a block at specified height
 5. `getblockheader`: Returns information about a block's header
-6. `getblockchaininfo`: Returns information about the blockchain
+6. `getblockchaininfo`: Returns information about the blockchain (available via RPC only, see example below)
 7. `invalidateblock`: Marks a block as invalid
 8. `reconsiderblock`: Removes invalidity status of a block
+
+> **Note:** The `getblockchaininfo` RPC method is accessed via JSON-RPC, not via `teranode-cli`. For a visual view of blockchain state, use the blockchain viewer at <http://localhost:8090/viewer>
 
 ### Mining-related Methods
 

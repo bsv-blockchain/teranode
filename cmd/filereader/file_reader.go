@@ -164,10 +164,10 @@ func readFile(ctx context.Context, filename string, ext fileformat.FileType, log
 
 	switch ext {
 	case fileformat.FileTypeUtxoSet:
-		return handleUtxoSet(ctx, br)
+		return handleUtxoSet(ctx, br, settings)
 
 	case fileformat.FileTypeUtxoAdditions:
-		return handleUtxoAdditions(ctx, br)
+		return handleUtxoAdditions(ctx, br, settings)
 
 	case fileformat.FileTypeUtxoHeaders:
 		return handleUtxoHeaders(br)
@@ -333,7 +333,7 @@ func handleBlock(br *bufio.Reader, logger ulogger.Logger, settings *settings.Set
 }
 
 // handleUtxoSet processes FileTypeUtxoSet files.
-func handleUtxoSet(ctx context.Context, br *bufio.Reader) error {
+func handleUtxoSet(ctx context.Context, br *bufio.Reader, settings *settings.Settings) error {
 	// Read the previous block hash
 	b := make([]byte, 32)
 
@@ -375,7 +375,8 @@ func handleUtxoSet(ctx context.Context, br *bufio.Reader) error {
 		for {
 			var ud *utxopersister.UTXOWrapper
 
-			ud, err = utxopersister.NewUTXOWrapperFromReader(ctx, br)
+			maxScriptSize := utxopersister.CalculateMaxScriptSize(settings.Policy.MaxScriptSizePolicy)
+			ud, err = utxopersister.NewUTXOWrapperFromReader(ctx, br, maxScriptSize)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break
@@ -396,7 +397,7 @@ func handleUtxoSet(ctx context.Context, br *bufio.Reader) error {
 }
 
 // handleUtxoAdditions processes FileTypeUtxoAdditions files.
-func handleUtxoAdditions(ctx context.Context, br *bufio.Reader) error {
+func handleUtxoAdditions(ctx context.Context, br *bufio.Reader, settings *settings.Settings) error {
 	b := make([]byte, 32)
 	if _, err := io.ReadFull(br, b); err != nil {
 		return errors.NewProcessingError("error reading block hash", err)
@@ -422,7 +423,8 @@ func handleUtxoAdditions(ctx context.Context, br *bufio.Reader) error {
 		for {
 			var ud *utxopersister.UTXOWrapper
 
-			ud, err = utxopersister.NewUTXOWrapperFromReader(ctx, br)
+			maxScriptSize := utxopersister.CalculateMaxScriptSize(settings.Policy.MaxScriptSizePolicy)
+			ud, err = utxopersister.NewUTXOWrapperFromReader(ctx, br, maxScriptSize)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break

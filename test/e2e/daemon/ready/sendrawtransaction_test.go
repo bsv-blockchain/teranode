@@ -68,7 +68,7 @@ func TestSendRawTransaction(t *testing.T) {
 	t.Logf("Successfully sent transaction: %s", sendRawTxResp.Result)
 
 	// Wait for block assembly to process the transaction
-	waitForBlockAssemblyToProcessTx(t, td, expectedTxID)
+	td.WaitForBlockAssemblyToProcessTx(t, expectedTxID)
 
 	// Verify we can retrieve the transaction via getrawtransaction
 	getRawResp, err := td.CallRPC(td.Ctx, "getrawtransaction", []any{expectedTxID, 0})
@@ -158,7 +158,7 @@ func TestSendRawTransactionDoubleSpend(t *testing.T) {
 	t.Logf("First transaction sent: %s", sendRawTxResp.Result)
 
 	// Wait for transaction to be processed
-	waitForBlockAssemblyToProcessTx(t, td, tx1.TxID())
+	td.WaitForBlockAssemblyToProcessTx(t, tx1.TxID())
 
 	// Create second transaction that spends the same UTXO (double spend)
 	tx2 := td.CreateTransactionWithOptions(t,

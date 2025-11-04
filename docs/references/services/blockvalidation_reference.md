@@ -31,7 +31,7 @@ type Server struct {
 
     kafkaConsumerClient       kafka.KafkaConsumerGroupI              // Kafka message consumption client
     processBlockNotify        *ttlcache.Cache[chainhash.Hash, bool]   // Cache for block processing state
-    catchupAlternatives       *ttlcache.Cache[chainhash.Hash, []processBlockCatchup] // Alternative peer sources for catchup
+    catchupAlternatives       *ttlcache.Cache[chainhash.Hash, []processBlockCatchup] // Alternative peer sources for catchup blocks
     stats                     *gocore.Stat                            // Operational metrics tracking
     peerCircuitBreakers       *catchup.PeerCircuitBreakers            // Circuit breakers for peer management
     peerMetrics               *catchup.CatchupMetrics                 // Peer performance metrics
@@ -217,7 +217,7 @@ Performs a gRPC health check on the service, including:
 #### Start
 
 ```go
-func (u *Server) Start(ctx context.Context) error
+func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
 Starts all service components:
@@ -270,6 +270,64 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 ```
 
 Validates a block directly from the block bytes without needing to fetch it from the network or database. This method is typically used for testing or when the block is already available in memory, and no internal updates or database operations are needed.
+
+#### ValidateBlock
+
+```go
+func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api.ValidateBlockRequest) (*blockvalidation_api.ValidateBlockResponse, error)
+```
+
+Validates a block and returns validation results without adding it to the blockchain. This method performs comprehensive block validation including structure checks, transaction validation, and consensus rule verification.
+
+### Internal Methods
+
+#### processBlockFound
+
+```go
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, peerID string, useBlock ...*model.Block) error
+```
+
+Internal method that processes a newly discovered block. Handles block retrieval, validation, and integration with the blockchain state.
+
+#### checkParentProcessingComplete
+
+```go
+func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model.Block, baseURL string)
+```
+
+Verifies that a block's parent has completed processing before proceeding with validation. Ensures proper block ordering and chain consistency.
+
+#### startBlockProcessingSystem
+
+```go
+func (u *Server) startBlockProcessingSystem(ctx context.Context)
+```
+
+Initializes the priority-based block processing system with support for parallel fork processing. Sets up worker goroutines and processing queues.
+
+#### blockProcessingWorker
+
+```go
+func (u *Server) blockProcessingWorker(ctx context.Context, workerID int)
+```
+
+Worker goroutine that processes blocks from the priority queue. Handles block classification, validation, and error recovery.
+
+#### addBlockToPriorityQueue
+
+```go
+func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound processBlockFound)
+```
+
+Adds a block to the priority queue with appropriate classification based on its relationship to the current chain tip.
+
+#### processBlockWithPriority
+
+```go
+func (u *Server) processBlockWithPriority(ctx context.Context, blockFound processBlockFound) error
+```
+
+Processes a block based on its assigned priority, handling both normal processing and retry scenarios with alternative peer sources.
 
 ### BlockValidation
 

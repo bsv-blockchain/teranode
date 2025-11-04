@@ -121,6 +121,8 @@ type BlockAssembler struct {
 	bestBlock atomic.Pointer[BestBlockInfo]
 
 	// stateChangeCh notifies listeners of state changes
+	// Protected by stateChangeMu to prevent race conditions
+	stateChangeMu sync.RWMutex
 	stateChangeCh chan BestBlockInfo
 
 	// lastPersistedHeight tracks the last block height processed by block persister
@@ -699,11 +701,24 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 		Height: height,
 	})
 
-	if b.stateChangeCh != nil {
-		b.stateChangeCh <- BestBlockInfo{
-			Header: bestBlockchainBlockHeader,
-			Height: height,
-		}
+	// Send state change notification if a listener is registered
+	b.stateChangeMu.RLock()
+	stateChangeCh := b.stateChangeCh
+	b.stateChangeMu.RUnlock()
+
+	if stateChangeCh != nil {
+		// Protect against send on closed channel
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					b.logger.Debugf("[BlockAssembler] stateChangeCh closed; skipping state change notification")
+				}
+			}()
+			stateChangeCh <- BestBlockInfo{
+				Header: bestBlockchainBlockHeader,
+				Height: height,
+			}
+		}()
 	}
 
 	// Invalidate cache when block height changes
@@ -713,14 +728,21 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 	// The cleanup queue worker processes operations sequentially (parent preserve → DAH cleanup)
 	// Capture channel reference to avoid TOCTOU race between nil check and send
 	ch := b.cleanupQueueCh
-	if b.utxoStore != nil && b.cleanupServiceLoaded.Load() && b.cleanupService != nil && height > 0 && ch != nil {
+	if b.utxoStore != nil && b.cleanupServiceLoaded.Load() && b.cleanupService != nil && height > 0 && ch != nil && b.cleanupQueueWorkerStarted.Load() {
 		// Non-blocking send - drop if queue is full (shouldn't happen with 100 buffer, but safety check)
-		select {
-		case ch <- height:
-			// Successfully queued
-		default:
-			b.logger.Warnf("[BlockAssembler] cleanup queue full, dropping cleanup for height %d", height)
-		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					b.logger.Debugf("[BlockAssembler] cleanup queue closed; skipping cleanup for height %d", height)
+				}
+			}()
+			select {
+			case ch <- height:
+				// Successfully queued
+			default:
+				b.logger.Warnf("[BlockAssembler] cleanup queue full, dropping cleanup for height %d", height)
+			}
+		}()
 	}
 }
 
@@ -1038,6 +1060,8 @@ func (b *BlockAssembler) SetState(ctx context.Context) error {
 }
 
 func (b *BlockAssembler) SetStateChangeCh(ch chan BestBlockInfo) {
+	b.stateChangeMu.Lock()
+	defer b.stateChangeMu.Unlock()
 	b.stateChangeCh = ch
 }
 

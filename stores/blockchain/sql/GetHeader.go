@@ -12,6 +12,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -25,9 +26,9 @@ import (
 //
 // The implementation follows the same tiered retrieval strategy as GetBlockHeader:
 //
-// 1. Cache Layer: First checks the in-memory blocksCache for the requested header
-//   - Takes advantage of the same cache used by GetBlockHeader for consistency
-//   - Returns only the header portion, discarding any metadata
+// 1. Cache Layer: First checks the response cache for the requested header
+//   - Provides immediate response for recently accessed headers
+//   - Cache entries are automatically invalidated when new blocks are added or after TTL expires
 //
 // 2. Database Layer: If not found in cache, executes a streamlined SQL query
 //   - Retrieves only the six essential header fields (version, timestamp, nonce,
@@ -38,6 +39,8 @@ import (
 // 3. Reconstruction Phase: Converts raw database values to appropriate types
 //   - Handles the same binary-to-structured data conversions as GetBlockHeader
 //   - Does not extract or process any coinbase transaction data
+//
+// 4. Cache Update: Stores the reconstructed header in the response cache for future queries
 //
 // This method is particularly useful for performance-critical operations where:
 //   - Only the cryptographic chain verification is needed
@@ -60,9 +63,15 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetHeader")
 	defer deferFn()
 
-	header, _ := s.blocksCache.GetBlockHeader(*blockHash)
-	if header != nil {
-		return header, nil
+	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetHeader-%s", blockHash.String())))
+
+	cached := s.responseCache.Get(cacheID)
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().(*model.BlockHeader); ok && cacheData != nil {
+			s.logger.Debugf("GetHeader cache hit")
+			return cacheData, nil
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -118,6 +127,9 @@ func (s *SQL) GetHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.
 
 	bits, _ := model.NewNBitFromSlice(nBits)
 	blockHeader.Bits = *bits
+
+	// Cache the result in response cache
+	s.responseCache.Set(cacheID, blockHeader, s.cacheTTL)
 
 	return blockHeader, nil
 }

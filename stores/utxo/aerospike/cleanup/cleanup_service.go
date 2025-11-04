@@ -109,6 +109,10 @@ type Service struct {
 	// getPersistedHeight returns the last block height processed by block persister
 	// Used to coordinate cleanup with block persister progress (can be nil)
 	getPersistedHeight func() uint32
+
+	// maxConcurrentOperations limits concurrent operations during cleanup processing
+	// Auto-detected from Aerospike client connection queue size
+	maxConcurrentOperations int
 }
 
 // batchParentUpdate represents a parent record update operation in a batch
@@ -174,19 +178,32 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
 	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
+	// Determine max concurrent operations:
+	// - Use connection queue size as the upper bound (to prevent connection exhaustion)
+	// - If setting is configured (non-zero), use the minimum of setting and connection queue size
+	// - If setting is 0 or unset, use connection queue size
+	connectionQueueSize := opts.Client.GetConnectionQueueSize()
+	maxConcurrentOps := connectionQueueSize
+	if tSettings.UtxoStore.CleanupMaxConcurrentOperations > 0 {
+		if tSettings.UtxoStore.CleanupMaxConcurrentOperations < maxConcurrentOps {
+			maxConcurrentOps = tSettings.UtxoStore.CleanupMaxConcurrentOperations
+		}
+	}
+
 	service := &Service{
-		logger:             opts.Logger,
-		settings:           tSettings,
-		client:             opts.Client,
-		external:           opts.ExternalStore,
-		namespace:          opts.Namespace,
-		set:                opts.Set,
-		ctx:                opts.Ctx,
-		indexWaiter:        opts.IndexWaiter,
-		queryPolicy:        queryPolicy,
-		writePolicy:        writePolicy,
-		batchWritePolicy:   batchWritePolicy,
-		getPersistedHeight: opts.GetPersistedHeight,
+		logger:                  opts.Logger,
+		settings:                tSettings,
+		client:                  opts.Client,
+		external:                opts.ExternalStore,
+		namespace:               opts.Namespace,
+		set:                     opts.Set,
+		ctx:                     opts.Ctx,
+		indexWaiter:             opts.IndexWaiter,
+		queryPolicy:             queryPolicy,
+		writePolicy:             writePolicy,
+		batchWritePolicy:        batchWritePolicy,
+		getPersistedHeight:      opts.GetPersistedHeight,
+		maxConcurrentOperations: maxConcurrentOps,
 	}
 
 	// Create the job processor function
@@ -363,7 +380,7 @@ func (s *Service) processCleanupJob(job *cleanup.Job, workerID int) {
 	recordCount := atomic.Int64{}
 
 	g := &errgroup.Group{}
-	util.SafeSetLimit(g, s.settings.UtxoStore.CleanupMaxConcurrentOperations)
+	util.SafeSetLimit(g, s.maxConcurrentOperations)
 
 	for {
 		rec, ok := <-result

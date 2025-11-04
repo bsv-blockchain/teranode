@@ -462,8 +462,8 @@ func TestDeleteAtHeightHappyPath2(t *testing.T) {
 	_, err = td.CallRPC(td.Ctx, "sendrawtransaction", []any{childTxBytes})
 	require.NoError(t, err)
 
-	waitForBlockAssemblyToProcessTx(t, td, parentTx.TxIDChainHash().String())
-	waitForBlockAssemblyToProcessTx(t, td, childTx.TxIDChainHash().String())
+	td.WaitForBlockAssemblyToProcessTx(t, parentTx.TxIDChainHash().String())
+	td.WaitForBlockAssemblyToProcessTx(t, childTx.TxIDChainHash().String())
 
 	td.MineAndWait(t, 1)
 

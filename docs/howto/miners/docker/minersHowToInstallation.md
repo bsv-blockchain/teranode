@@ -1,6 +1,6 @@
 # How to Install Teranode with Docker Compose
 
-Last modified: 28-Jul-2025
+Last modified: 29-Oct-2025
 
 ## Index
 
@@ -48,7 +48,6 @@ This guide does not cover:
 
 - Docker Engine 17.03+
 - Docker Compose
-- AWS CLI
 - 100GB+ available disk space
 - Stable internet connection
 - Root or sudo access
@@ -111,7 +110,7 @@ Teranode requires an initial block synchronization to function properly. There a
 
 #### Initial Data Set Installation
 
-To speed up the initial synchronization process, you have the option to seed Teranode from pre-existing data. To know more about this approach, please refer to the [How to Sync the Node](../minersHowToSyncTheNode.md) guide.
+To speed up the initial synchronization process, you have the option to seed Teranode from pre-existing data. To know more about this approach, please refer to the [How to Sync the Node](minersHowToSyncTheNode.md) guide.
 
 Pros:
 
@@ -217,12 +216,6 @@ While not required (your docker compose file will be preconfigured), the followi
 SETTINGS_CONTEXT_1=docker.m
 ```
 
-##### Authenticate with AWS ECR
-
-Authenticate with AWS ECR (please check with your Teranode team for the latest credentials).
-
-This step is not mandatory, but useful if you want to create settings variants for specific contexts.
-
 #### Step 3: Prepare Local Settings
 
 ##### Review Settings File
@@ -254,28 +247,30 @@ cd $YOUR_WORKING_DIR/teranode/deploy/docker/mainnet
 Pull the required Docker images:
 
 ```bash
-docker-compose pull
+docker compose pull
 ```
 
 #### Step 5: Start the Teranode Stack
 
-1. When running on a box without a public IP, you should enable `legacy_config_Upnp` (in your settings file), so you don't get banned by the SV Nodes.
+Launch the entire Teranode stack using Docker Compose:
 
-2. Launch the entire Teranode stack using Docker Compose:
-
-   ```bash
-   docker-compose up -d
-   ```
+```bash
+docker compose up -d
+```
 
 Force the node to transition to Run mode:
 
+**Option 1: Using Admin Dashboard (Easiest)**
+
+Access the dashboard at <http://localhost:8090/admin> and use the FSM State controls to transition to **RUNNING** or **LEGACYSYNCING**.
+
+**Option 2: Using teranode-cli**
+
 ```bash
+# Transition to Run mode
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate running
-```
 
-or LegacySync mode:
-
-```bash
+# Or transition to LegacySync mode
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate legacysyncing
 ```
 
@@ -285,6 +280,8 @@ You can verify the current state with:
 docker exec -it blockchain teranode-cli getfsmstate
 ```
 
+Or view it in the Admin Dashboard at <http://localhost:8090/admin>
+
 #### Step 6: Verify Services
 
 ##### Check Service Status
@@ -292,7 +289,7 @@ docker exec -it blockchain teranode-cli getfsmstate
 Check if all services are running correctly:
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 Example output:
@@ -345,7 +342,7 @@ Note: You must set the setting `dashboard_enabled` as true in order to see the v
     - **P2P service**: Ports 9905, 9906
     - **RPC service**: 9292
 
-Notice that those ports might be mapped to random ports on your host machine. You can check the mapping by running `docker-compose ps`.
+Notice that those ports might be mapped to random ports on your host machine. You can check the mapping by running `docker compose ps`.
 
 #### Step 9: Logging and Troubleshooting
 
@@ -354,7 +351,7 @@ Notice that those ports might be mapped to random ports on your host machine. Yo
 View logs for all services:
 
 ```bash
-docker-compose logs
+docker compose logs
 ```
 
 ##### View Specific Service Logs
@@ -362,9 +359,9 @@ docker-compose logs
 View logs for a specific service (e.g., teranode-blockchain):
 
 ```bash
-docker-compose logs -f legacy
-docker-compose logs -f blockchain
-docker-compose logs -f asset
+docker compose logs -f legacy
+docker compose logs -f blockchain
+docker compose logs -f asset
 ```
 
 #### Step 10: Docker Log Rotation
@@ -385,7 +382,7 @@ services:
 1. To stop all services:
 
    ```bash
-   docker-compose down
+   docker compose down
    ```
 
 Additional Notes:
@@ -396,7 +393,7 @@ Additional Notes:
 
 ## Optimizations
 
-If you have local access to SV Nodes, you can use them to speed up the initial block synchronization too. You can set `legacy_connect_peers: "172.x.x.x:8333|10.x.x.x:8333"` in your `docker-compose.yml` to force the legacy service to only connect to those peers.
+If you have local access to SV Nodes, you can use them to speed up the initial block synchronization. You can set specific peer connections in your docker-compose.yml by adding `legacy_config_ConnectPeers=172.x.x.x:8333|10.x.x.x:8333` to force the legacy service to only connect to those peers.
 
 ## Aerospike Operations and Configuration
 
@@ -462,25 +459,40 @@ services:
 
 Teranode offers two network connectivity options:
 
-### SVNode P2P Network
+### SVNode P2P Network (Default for Docker Compose)
 
 - **Description**: All data transmitted over P2P connections (via `legacy` service)
 - **Use Case**: Traditional Bitcoin SV network connectivity
 - **Characteristics**: Compatible with existing SV Node infrastructure
+- **Status**: Enabled by default in Docker Compose for initial blockchain synchronization
 
-### Teranode P2P Network
+### Teranode P2P Network (Advanced)
 
 - **Description**: Only small messages over P2P, with bulk data downloaded via HTTP(S) (via `peer` and `asset` services)
-- **Use Case**: Enhanced performance and stability
+- **Use Case**: Enhanced performance and stability when connecting to other Teranode nodes
 - **Characteristics**: Significant performance advantages over traditional SV Node network
+- **Status**: **Disabled by default** in Docker Compose testnet/mainnet configurations
+
+> **Note**: The `peer` service is commented out in the default Docker Compose configuration. It is only needed when connecting to a private Teranode network with other Teranode nodes. For initial setup and blockchain synchronization from the traditional BSV network, the `legacy` service is sufficient.
+
+### Enabling the Peer Service
+
+The peer service should only be enabled if you:
+
+1. Are connecting to an existing **private Teranode network** with other Teranode nodes
+2. Have confirmed network connectivity with Teranode bootstrap nodes
+3. Need to participate in Teranode-to-Teranode block and subtree propagation
+
+To enable the peer service, uncomment the `peer` section in your `docker-compose.yml` file and ensure proper network configuration.
 
 ### Teranode Network Requirements
 
-To connect to the Teranode network, you'll need:
+If you choose to enable and connect to the Teranode P2P network, you'll need:
 
 1. **Public-facing `peer` service** exposed via TCP (defaults to port 9905, P2P_PORT setting)
 2. **Public-facing `asset` service** exposed via HTTP(S) (selective endpoint exposure recommended)
 3. **Valid SSL certificates** if using HTTPS for the asset service
+4. **Bootstrap node addresses** or other Teranode peers to connect to
 
 ## Asset Service Setup
 
@@ -566,81 +578,39 @@ docker exec -it blockchain teranode-cli getfsmstate
 **Set FSM State to Legacy Syncing**:
 
 ```bash
+# Via teranode-cli
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate LEGACYSYNCING
+
+# Or via Admin Dashboard at http://localhost:8090/admin
 ```
 
 **Set FSM State to Running**:
 
 ```bash
+# Via teranode-cli
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate RUNNING
+
+# Or via Admin Dashboard at http://localhost:8090/admin
 ```
 
 ## Teranode Reset Procedures
 
-If you require to sync a Teranode from scratch, you will need to clean-up data from Aerospike, Postgres, and your filesystem.
+For complete reset instructions including granular per-service cleanup options, see the [How to Reset Teranode](minersHowToResetTeranode.md) guide.
 
-### 1. Aerospike Clean-up
-
-See the [Aerospike documentation](https://aerospike.com/docs/server/operations/manage/sets#truncating-a-set-in-a-namespace) for more information.
+**Quick reference for Docker Compose:**
 
 ```bash
-# Access Aerospike container
-docker exec -it aerospike /bin/bash
+# Stop all services
+docker compose down
 
-# Truncate the UTXO set
-asadm --enable -e "manage truncate ns utxo-store set utxo"
+# Delete all data (simplest method - includes Aerospike, Postgres, Kafka, and filesystem data)
+sudo rm -rf ./data/*
 
-# Verify the total records count, should slowly decrease to 0
-asadm -e "info"
+# Restart services
+docker compose up -d
 ```
 
-### 2. Postgres Clean-up
-
-```bash
-# Access Postgres container
-docker exec -it postgres psql -U postgres
-
-# Connect to the database used by Teranode
-postgres=> \c <db_name>
-
-# Sanity count check
-teranode_mainnet=> SELECT COUNT(*) FROM blocks;
- count
---------
- 123123
-(1 row)
-
-# Truncate the blocks and state tables
-TRUNCATE TABLE blocks RESTART IDENTITY CASCADE;
-TRUNCATE TABLE state RESTART IDENTITY CASCADE;
-TRUNCATE TABLE bans RESTART IDENTITY CASCADE;
-TRUNCATE TABLE alert_system_alert_messages RESTART IDENTITY CASCADE;
-TRUNCATE TABLE alert_system_public_keys RESTART IDENTITY CASCADE;
-
-# Verify the table was truncated
-SELECT COUNT(*) FROM blocks;
- count
--------
-     0
-(1 row)
-
-# Dropping these indexes will significantly speed up seeding
-# The blockchain service will re-create them
-DROP INDEX idx_chain_work_id;
-DROP INDEX idx_chain_work_peer_id;
-```
-
-### 3. Filesystem Clean-up
-
-```bash
-# Define your data mount point
-DATA_MOUNT_POINT=/mnt/teranode
-sudo rm -rf $DATA_MOUNT_POINT/*
-
-# Or for Docker Compose setup
-sudo rm -rf ~/teranode-public/docker/testnet/data/*
-sudo rm -rf ~/teranode-public/docker/mainnet/data/*
-```
+For detailed procedures, troubleshooting, or selective cleanup, consult the [reset guide](minersHowToResetTeranode.md).
 
 ## Teranode Seeding
 
@@ -689,7 +659,7 @@ sudo rm -rf ~/teranode-public/docker/testnet/data/*
 
 # Bring up the dependent services
 # Blockchain service will insert the correct genesis block for your selected network
-docker compose up -d aerospike postgres kafka-shared blockchain
+docker compose up -d aerospike postgres kafka-shared
 
 # Wait to make sure genesis block gets inserted
 # You will see it in the blockchain logs as `genesis block inserted`
@@ -705,7 +675,10 @@ docker compose down blockchain
 docker compose up -d
 
 # Transition Teranode to LEGACYSYNCING
+# Option 1: Via teranode-cli
 docker exec -it blockchain teranode-cli setfsmstate --fsmstate LEGACYSYNCING
+
+# Option 2: Via Admin Dashboard at http://localhost:8090/admin
 ```
 
 ## CPU Mining
@@ -719,14 +692,6 @@ This guide covers the BSV CPU miner configuration, parameters, troubleshooting, 
 > **Note**: The example address used here is a testnet address, linked to the [BSV Faucet](https://bsvfaucet.org/). For mainnet mining, use a valid mainnet address.
 
 ## Advanced Configuration Examples
-
-### Private Network Configuration
-
-When running on a box without a public IP, you should enable `legacy_config_Upnp` in your settings file to avoid getting banned by the SV Nodes:
-
-```conf
-legacy_config_Upnp = true
-```
 
 ### Peer Connection Optimization
 
@@ -747,7 +712,6 @@ x-teranode-settings: &teranode-settings
   SETTINGS_CONTEXT: docker.m
   # Override specific settings
   logLevel: DEBUG
-  legacy_config_Upnp: "true"
   asset_httpPublicAddress: "https://your-domain.com/api/v1"
 ```
 
@@ -813,3 +777,13 @@ docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ## Settings Reference
 
 You can find the pre-configured [settings file](https://github.com/bsv-blockchain/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+
+The Docker deployment includes an empty `settings_local.conf` file by default. To help you configure your node, a comprehensive template is available at [`deploy/docker/base/settings_local.conf.template`](https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/settings_local.conf.template) that documents all commonly customized settings for Docker deployments, including:
+
+- Network participation mode (listen_only vs full)
+- Public endpoints for asset service and P2P
+- RPC authentication credentials
+- Mining configuration (coinbase text/tags)
+- Node identification
+
+Refer to the template file for detailed explanations and examples of each setting.
