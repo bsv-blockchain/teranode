@@ -524,11 +524,16 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		return nil
 	}
 
-	// Ignore peers that aren't running Bitcoin
-	if strings.Contains(msg.UserAgent, "ABC") || strings.Contains(msg.UserAgent, "Cash") || strings.Contains(msg.UserAgent, "Unlimited") {
-		sp.server.logger.Debugf("Rejecting peer %s for not running compatible Bitcoin", sp.Peer)
+	// Only allow connections from peers running Bitcoin SV
+	// This prevents connections from BCH/BTC/BTG and other incompatible forks
+	userAgent := msg.UserAgent
+	if !strings.Contains(userAgent, "Bitcoin SV") && !strings.Contains(userAgent, "BSV") {
+		sp.server.logger.Warnf("Rejecting and banning peer %s with non-Bitcoin SV user agent: %s", sp.Peer, userAgent)
 
-		reason := "Sorry, you are not running Bitcoin"
+		// Ban the peer to prevent repeated connection attempts from incompatible clients
+		sp.server.BanPeer(sp)
+
+		reason := "Only Bitcoin SV clients are supported"
 
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}
@@ -1153,7 +1158,7 @@ func (sp *serverPeer) OnReject(p *peer.Peer, msg *wire.MsgReject) {
 		tracing.WithHistogram(peerServerMetrics["OnReject"]),
 	)
 
-	sp.server.logger.Warnf("Received reject message from peer %s, code: %s, reason: %s", p, msg.Code.String(), msg.Reason)
+	sp.server.logger.Warnf("Received reject message from peer %s, cmd: %s, code: %s, reason: %s, hash: %s", p, msg.Cmd, msg.Code.String(), msg.Reason, msg.Hash.String())
 }
 
 // OnNotFound logs all not found messages received from the remote peer.
