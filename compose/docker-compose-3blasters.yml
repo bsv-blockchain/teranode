@@ -339,6 +339,7 @@ services:
         "--host",
         "teranode1",
         "--stopHeight",
+        "1000",
         "--generate",
         "1000",
         "--initialBlocks",
