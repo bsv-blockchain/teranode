@@ -341,7 +341,6 @@ services:
         "--stopHeight",
         "1000",
         "--generate",
-        "1000",
         "--initialBlocks",
         "100",
       ]
