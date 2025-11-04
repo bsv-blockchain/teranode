@@ -190,6 +190,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UtxoStore:                             getURL("txmeta_store", "", alternativeContext...),
 			FileStoreReadConcurrency:              getInt("filestore_read_concurrency", 768, alternativeContext...),
 			FileStoreWriteConcurrency:             getInt("filestore_write_concurrency", 256, alternativeContext...),
+			FileStoreUseSystemLimits:              getBool("filestore_use_system_limits", true, alternativeContext...),
 		},
 		BlockAssembly: BlockAssemblySettings{
 			Disabled:                            getBool("blockassembly_disabled", false, alternativeContext...),
