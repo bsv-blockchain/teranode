@@ -96,6 +96,10 @@ type Data struct {
 //
 // Note: This function assumes the byte slice is valid and contains enough data.
 func NewMetaDataFromBytes(dataBytes []byte, d *Data) (err error) {
+	if len(dataBytes) < 17 {
+		return errors.NewProcessingError("dataBytes too short, expected at least 17 bytes, got %d", len(dataBytes))
+	}
+
 	// read the numbers
 	d.Fee = binary.LittleEndian.Uint64(dataBytes[:8])
 	d.SizeInBytes = binary.LittleEndian.Uint64(dataBytes[8:16])
