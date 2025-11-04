@@ -285,6 +285,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	// This ensures all store paths (blockstore, quorum, etc.) use the test-specific path
 	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
 		appSettings.DataFolder = path
+		// Override QuorumPath to ensure it uses the test-specific directory
+		// This prevents tests from sharing the same quorum directory
+		appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
 	}
 
 	absPath, err := filepath.Abs(path)
@@ -295,7 +298,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	require.NoError(t, err)
 
 	quorumPath := appSettings.SubtreeValidation.QuorumPath
-	require.NotNil(t, quorumPath, "No subtree_quorum_path specified")
+	require.NotEmpty(t, quorumPath, "No subtree_quorum_path specified")
 
 	err = os.MkdirAll(quorumPath, 0755)
 	require.NoError(t, err)
