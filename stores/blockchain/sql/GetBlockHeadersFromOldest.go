@@ -20,6 +20,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -71,6 +72,21 @@ func (s *SQL) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targe
 		tracing.WithLogMessage(s.logger, "[GetBlockHeaders][%s] called for %d headers", targetHash.String(), numberOfHeaders),
 	)
 	defer deferFn()
+
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to be consistent with other operations
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeadersFromOldest-%s-%s-%d", chainTipHash.String(), targetHash.String(), numberOfHeaders)))
+
+	cached := s.responseCache.Get(cacheID)
+	if cached != nil {
+		if result, ok := cached.Value().([2]interface{}); ok {
+			if headers, ok := result[0].([]*model.BlockHeader); ok {
+				if metas, ok := result[1].([]*model.BlockHeaderMeta); ok {
+					return headers, metas, nil
+				}
+			}
+		}
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -129,5 +145,13 @@ func (s *SQL) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targe
 
 	defer rows.Close()
 
-	return s.processBlockHeadersRows(rows, numberOfHeaders, true)
+	blockHeaders, blockMetas, err := s.processBlockHeadersRows(rows, numberOfHeaders, true)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Cache the result in response cache
+	s.responseCache.Set(cacheID, [2]interface{}{blockHeaders, blockMetas}, s.cacheTTL)
+
+	return blockHeaders, blockMetas, nil
 }

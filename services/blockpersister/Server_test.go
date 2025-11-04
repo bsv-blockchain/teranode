@@ -1029,7 +1029,7 @@ func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.
 func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil
 }
 func (m *MockUTXOStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
@@ -1080,6 +1080,13 @@ func (m *MockUTXOStore) SetBlockHeight(height uint32) error     { return nil }
 func (m *MockUTXOStore) GetBlockHeight() uint32                 { return 0 }
 func (m *MockUTXOStore) SetMedianBlockTime(height uint32) error { return nil }
 func (m *MockUTXOStore) GetMedianBlockTime() uint32             { return 0 }
+
+func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     m.GetBlockHeight(),
+		MedianTime: m.GetMedianBlockTime(),
+	}
+}
 
 // Comprehensive tests for getNextBlockToProcess method
 

@@ -10,20 +10,20 @@
 // of times per second during peak processing.
 //
 // The implementation uses a multi-tier optimization strategy:
-//  1. First checks a dedicated existence cache that stores only block hash to existence mappings
+//  1. First checks the response cache using a derived cache key for boolean existence results
 //  2. If not found in cache, executes a minimal SQL query that only checks existence without
 //     retrieving full block data
-//  3. Updates the cache with the result to optimize future queries for the same block
+//  3. Caches the boolean existence result to optimize future queries for the same block
 //
 // This approach significantly reduces database load and improves response times for this
-// frequently called operation. The existence cache is carefully managed to ensure consistency
-// with the database state, being invalidated whenever blocks are added or removed from the
-// blockchain.
+// frequently called operation. The response cache is automatically invalidated whenever blocks
+// are added or the blockchain state changes, ensuring consistency with the database state.
 package sql
 
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -40,10 +40,11 @@ import (
 // architecture, this method is optimized for maximum performance.
 //
 // The implementation follows a tiered approach to minimize database load:
-//  1. First checks the dedicated existence cache using the block hash as key
+//  1. First checks the response cache using a derived cache key (operation-prefixed)
+//     - If a boolean result was previously cached, return it immediately
 //  2. If not found in cache (cache miss), executes an optimized SQL query
 //     that only checks for existence without retrieving block data
-//  3. Updates the existence cache with the result to benefit future queries
+//  3. Caches the boolean result (true or false) to optimize future queries for the same block
 //
 // The SQL query is carefully designed to be as lightweight as possible, only checking
 // for the presence of a block hash in the blocks table without retrieving any columns.
@@ -63,11 +64,16 @@ func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bo
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockExists")
 	defer deferFn()
 
-	// Check if the existence information is already in cache
-	// The cache entry resets whenever a new block is added to maintain consistency
-	exists, ok := s.blocksCache.GetExists(*blockHash)
-	if ok {
-		return exists, nil
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to avoid conflicts with other cached data
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockExists-%s", blockHash.String())))
+
+	cached := s.responseCache.Get(cacheID)
+	if cached != nil {
+		// Check if it's a cached boolean result from previous GetBlockExists call
+		if exists, ok := cached.Value().(bool); ok {
+			return exists, nil
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -85,18 +91,15 @@ func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bo
 		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// Block doesn't exist - cache this result to avoid future database lookups
-			// The cache entry resets whenever a new block is added to maintain consistency
-			s.blocksCache.SetExists(*blockHash, false)
+			// Cache the non-existence result
+			s.responseCache.Set(cacheID, false, s.cacheTTL)
 			return false, nil
 		}
 
 		return false, err
 	}
 
-	// Block exists - cache this result to avoid future database lookups
-	// The cache entry resets whenever a new block is added to maintain consistency
-	s.blocksCache.SetExists(*blockHash, true)
-
+	// Cache the existence result
+	s.responseCache.Set(cacheID, true, s.cacheTTL)
 	return true, nil
 }

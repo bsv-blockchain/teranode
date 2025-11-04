@@ -12,16 +12,13 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/lib/pq"
 	"modernc.org/sqlite"
@@ -105,56 +102,12 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		opt(&storeBlockOptions)
 	}
 
-	// Extract miner before storing block
-	var miner string
-	if block.CoinbaseTx != nil && block.CoinbaseTx.OutputCount() != 0 {
-		var err error
-		miner, err = util.ExtractCoinbaseMiner(block.CoinbaseTx)
-		if err != nil {
-			s.logger.Errorf("error extracting miner from coinbase tx: %v", err)
-		}
-	}
-
-	newBlockID, height, chainWork, invalid, err := s.storeBlock(ctx, block, peerID, storeBlockOptions)
+	newBlockID, height, _, _, err := s.storeBlock(ctx, block, peerID, storeBlockOptions)
 	if err != nil {
 		return 0, height, err
 	}
 
-	newBlockIDUint32, err := safeconversion.Uint64ToUint32(newBlockID)
-	if err != nil {
-		return 0, height, errors.NewProcessingError("failed to convert newBlockID", err)
-	}
-
-	timeUint32, err := safeconversion.Int64ToUint32(time.Now().Unix())
-	if err != nil {
-		return 0, height, errors.NewProcessingError("failed to convert time", err)
-	}
-
-	meta := &model.BlockHeaderMeta{
-		ID:          newBlockIDUint32,
-		Height:      height,
-		TxCount:     block.TransactionCount,
-		SizeInBytes: block.SizeInBytes,
-		Miner:       miner,
-		PeerID:      peerID,
-		ChainWork:   chainWork,
-		BlockTime:   block.Header.Timestamp,
-		Timestamp:   timeUint32,
-		MinedSet:    storeBlockOptions.MinedSet,
-		SubtreesSet: storeBlockOptions.SubtreesSet,
-		Invalid:     invalid,
-	}
-
-	// do not add invalid blocks to the cache
-	if !invalid {
-		ok := s.blocksCache.AddBlockHeader(block.Header, meta)
-		if !ok {
-			if err := s.ResetBlocksCache(ctx); err != nil {
-				s.logger.Errorf("error clearing caches: %v", err)
-			}
-		}
-	}
-
+	// Reset response cache to invalidate cached block headers and best block
 	s.ResetResponseCache()
 
 	return newBlockID, height, nil
@@ -175,18 +128,7 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 //   - invalid: Whether the previous block is marked as invalid
 //   - err: Any error encountered during retrieval
 func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.Hash) (id uint64, chainWork []byte, height uint32, invalid bool, err error) {
-	// Try to get previous block info from cache first
-	prevHeader, prevMeta := s.blocksCache.GetBlockHeader(prevBlockHash)
-	if prevHeader != nil && prevMeta != nil {
-		id = uint64(prevMeta.ID)
-		chainWork = prevMeta.ChainWork
-		height = prevMeta.Height
-		invalid = prevMeta.Invalid
-
-		return id, chainWork, height, invalid, nil
-	}
-
-	// Fallback to DB if not in cache
+	// Query database for previous block info
 	q := `
 		SELECT
 		 b.id

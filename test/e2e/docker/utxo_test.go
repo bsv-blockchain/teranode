@@ -98,7 +98,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
 	node1 := framework.Nodes[0]
-	txDistributor := &node1.PropagationClient
+	txDistributor := node1.PropagationClient
 
 	// Generate private keys and addresses
 	privateKey0, err := bec.NewPrivateKey()
@@ -193,7 +193,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSpendAllUtxosWithAerospikeFailure() {
 	go func() {
 		logger.Infof("Sending second transaction %s %s", tx2.TxIDChainHash(), tx2.TxID())
 
-	err = txDistributor.ProcessTransaction(ctx, tx2)
+		err = txDistributor.ProcessTransaction(ctx, tx2)
 		if err != nil {
 			errChan <- errors.NewProcessingError("failed to send second transaction", err)
 			return
@@ -276,7 +276,7 @@ func (suite *UtxoTestSuite) TestDeleteParentTx() {
 	rpcEndpoint := "http://" + framework.Nodes[0].RPCURL
 
 	node1 := framework.Nodes[0]
-	txDistributor := &node1.PropagationClient
+	txDistributor := node1.PropagationClient
 
 	// Generate private keys and addresses
 	privateKey, err := bec.NewPrivateKey()
@@ -363,7 +363,7 @@ func (suite *UtxoTestSuite) TestShouldAllowSaveUTXOsIfExtStoreHasTXs() {
 	framework.StopNode("teranode2")
 
 	node1 := framework.Nodes[0]
-	txDistributor := &node1.PropagationClient
+	txDistributor := node1.PropagationClient
 
 	// Generate private key and address
 	privateKey0, err := bec.NewPrivateKey()
@@ -440,7 +440,7 @@ func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
 	framework := suite.TeranodeTestEnv
 	logger := framework.Logger
 	ctx := framework.Context
-	txDistributor := &framework.Nodes[0].PropagationClient
+	txDistributor := framework.Nodes[0].PropagationClient
 	coinbaseClient := framework.Nodes[0].CoinbaseClient
 
 	// Generate keys and address
@@ -529,7 +529,7 @@ func (suite *UtxoTestSuite) TestConnectionPoolLimiting() {
 	for i := 0; i < numTx; i++ {
 		go func(tx *bt.Tx, idx int) {
 			txStart := time.Now()
-	err = txDistributor.ProcessTransaction(ctx, tx)
+			err = txDistributor.ProcessTransaction(ctx, tx)
 			timingChan <- time.Since(txStart)
 			errChan <- err
 

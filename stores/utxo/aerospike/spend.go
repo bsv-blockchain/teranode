@@ -93,6 +93,7 @@ import (
 // batchSpend represents a single UTXO spend request in a batch
 type batchSpend struct {
 	spend             *utxo.Spend // UTXO to spend
+	blockHeight       uint32      // Current block height
 	errCh             chan error  // Channel for completion notification
 	ignoreConflicting bool
 	ignoreLocked      bool
@@ -284,13 +285,17 @@ type batchDAH struct {
 //	}
 //
 //	err := store.Spend(ctx, tx)
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
 			s.logger.Errorf("ERROR panic in aerospike Spend: %v\n", recoverErr)
 		}
 	}()
+
+	if blockHeight == 0 {
+		return nil, errors.NewProcessingError("blockHeight must be greater than zero")
+	}
 
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
@@ -321,6 +326,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 			errCh := make(chan error)
 			s.spendBatcher.Put(&batchSpend{
 				spend:             spend,
+				blockHeight:       blockHeight,
 				errCh:             errCh,
 				ignoreConflicting: useIgnoreConflicting,
 				ignoreLocked:      useIgnoreLocked,
@@ -406,6 +412,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 
 type keyIgnoreLocked struct {
 	key               *aerospike.Key
+	blockHeight       uint32
 	ignoreConflicting bool
 	ignoreLocked      bool
 }
@@ -479,6 +486,7 @@ func (s *Store) prepareSpendBatches(batch []*batchSpend, batchID uint64) (map[ke
 		mapValue := s.createSpendMapValue(idx, bItem)
 		useKey := keyIgnoreLocked{
 			key:               key,
+			blockHeight:       bItem.blockHeight,
 			ignoreConflicting: bItem.ignoreConflicting,
 			ignoreLocked:      bItem.ignoreLocked,
 		}
@@ -531,14 +539,13 @@ func (s *Store) createBatchRecords(batchesByKey map[keyIgnoreLocked][]aerospike.
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batchesByKey))
 	batchRecordKeys := make([]keyIgnoreLocked, 0, len(batchesByKey))
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
-	thisBlockHeight := s.blockHeight.Load() + 1
 
 	for batchKey, batchItems := range batchesByKey {
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, LuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
 			aerospike.NewValue(batchKey.ignoreConflicting),
 			aerospike.NewValue(batchKey.ignoreLocked),
-			aerospike.NewValue(thisBlockHeight),
+			aerospike.NewValue(batchKey.blockHeight),
 			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
 		))
 		batchRecordKeys = append(batchRecordKeys, batchKey)
@@ -562,17 +569,16 @@ func (s *Store) executeSpendBatch(batchRecords []aerospike.BatchRecordIfc, batch
 
 // processSpendBatchResults processes the results of the batch operation
 func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batchRecordKeys []keyIgnoreLocked, batchesByKey map[keyIgnoreLocked][]aerospike.MapValue, batch []*batchSpend, batchID uint64) {
-	thisBlockHeight := s.blockHeight.Load() + 1
-
 	for batchIdx, batchRecord := range batchRecords {
-		batchByKey, ok := batchesByKey[batchRecordKeys[batchIdx]]
+		key := batchRecordKeys[batchIdx]
+		batchByKey, ok := batchesByKey[key]
 		if !ok {
 			s.logger.Errorf("[SPEND_BATCH_LUA] could not find batch key for batchIdx %d", batchIdx)
 			continue
 		}
 
 		txID := batch[batchByKey[0]["idx"].(int)].spend.TxID
-		s.processSingleBatchResult(ctx, batchRecord, batchByKey, batch, txID, thisBlockHeight, batchID)
+		s.processSingleBatchResult(ctx, batchRecord, batchByKey, batch, txID, key.blockHeight, batchID)
 	}
 
 	if s.settings.UtxoStore.VerboseDebug {

@@ -15,6 +15,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -50,6 +51,17 @@ import (
 func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*model.SuitableBlock, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetSuitableBlock")
 	defer deferFn()
+
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to be consistent with other operations
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetSuitableBlock-%s", hash.String())))
+
+	cached := s.responseCache.Get(cacheID)
+	if cached != nil {
+		if suitableBlock, ok := cached.Value().(*model.SuitableBlock); ok {
+			return suitableBlock, nil
+		}
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -141,6 +153,9 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to get median block", err)
 	}
+
+	// Cache the result in response cache
+	s.responseCache.Set(cacheID, b, s.cacheTTL)
 
 	return b, nil
 }

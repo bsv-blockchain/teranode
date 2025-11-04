@@ -39,15 +39,15 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, err)
 
 		// spend the tx
-		_, err = store.Spend(ctx, spendTx)
+		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		// spend again, should not return an error
-		_, err = store.Spend(ctx, spendTx)
+		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		// try to spend the tx with a different tx, check the spending tx ID
-		spends, err := store.Spend(ctx, spendTx2)
+		spends, err := store.Spend(ctx, spendTx2, store.GetBlockHeight()+1)
 		require.Error(t, err)
 
 		var tErr *errors.Error
@@ -139,7 +139,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, err)
 
 		// spend 1,2,3,4
-		_, err = store.Spend(ctx, spendTxRemaining)
+		_, err = store.Spend(ctx, spendTxRemaining, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		// give the db time to update the main record
@@ -155,7 +155,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
 		// spend 0
-		_, err = store.Spend(ctx, spendTx)
+		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, mainRecordKey)
@@ -345,7 +345,7 @@ func TestStore_Unspend(t *testing.T) {
 		require.NoError(t, err)
 
 		// Spend the tx
-		spends, err := store.Spend(ctx, spendTx)
+		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 
@@ -354,7 +354,7 @@ func TestStore_Unspend(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify we can now spend it again with a different tx
-		spends, err = store.Spend(ctx, spendTx2)
+		spends, err = store.Spend(ctx, spendTx2, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 	})
@@ -388,7 +388,7 @@ func TestStore_Unspend(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify we can still spend it
-		spends, err := store.Spend(ctx, spendTx)
+		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 	})

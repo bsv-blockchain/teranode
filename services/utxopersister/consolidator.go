@@ -279,7 +279,8 @@ func (c *consolidator) processAdditionsFromReader(ctx context.Context, r io.Read
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			wrapper, err := NewUTXOWrapperFromReader(ctx, r)
+			maxScriptSize := CalculateMaxScriptSize(c.settings.Policy.MaxScriptSizePolicy)
+			wrapper, err := NewUTXOWrapperFromReader(ctx, r, maxScriptSize)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					return nil
