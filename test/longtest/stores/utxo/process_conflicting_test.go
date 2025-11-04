@@ -85,7 +85,7 @@ func TestGetCounterConflictingTxHashes(t *testing.T) {
 	require.NoError(t, err)
 
 	// spend the counter conflicting transaction
-	spends, err := utxoStore.Spend(t.Context(), txCounterConflicting)
+	spends, err := utxoStore.Spend(t.Context(), txCounterConflicting, utxoStore.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	_ = spends

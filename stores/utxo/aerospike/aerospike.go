@@ -349,6 +349,13 @@ func (s *Store) GetMedianBlockTime() uint32 {
 	return s.medianBlockTime.Load()
 }
 
+func (s *Store) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     s.blockHeight.Load(),
+		MedianTime: s.medianBlockTime.Load(),
+	}
+}
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	/* As written by one of the Aerospike developers, Go contexts are not supported:
 

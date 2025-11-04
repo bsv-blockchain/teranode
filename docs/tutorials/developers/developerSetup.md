@@ -2,7 +2,6 @@
 
 This guide assists you in setting up the Teranode project on your machine. The below assumes you are running a recent version of Mac OS.
 
-
 ## Index
 
 1. [Install Go](#1-install-go)
@@ -12,45 +11,37 @@ This guide assists you in setting up the Teranode project on your machine. The b
     - [3.2 (Recommended) Use a Python Virtual Environment to install PyYAML](#32-recommended-use-a-python-virtual-environment-to-install-pyyaml)
     - [3.3 Install Dependencies Within the Virtual Environment](#33-install-dependencies-within-the-virtual-environment)
     - [3.4 Verify Installation](#34-verify-installation)
-    - [Alternative: Use `pipx` (for CLI tools)](#alternative-use-pipx-for-cli-tools-not-recommended-for-teranode-development)
+    - [Alternative: Use pipx for CLI tools - NOT recommended for Teranode Development](#alternative-use-pipx-for-cli-tools---not-recommended-for-teranode-development)
 4. [Clone the Project and Install Dependencies](#4-clone-the-project-and-install-dependencies)
 5. [Configure Settings](#5-configure-settings)
     - [5.1 Introducing developer-specific settings in `settings_local.conf`](#51-introducing-developer-specific-settings-in-settings_localconf)
-
     - [5.3 Verify](#53-verify)
-
-
 6. [Prerequisites for Running the Node](#6-prerequisites-for-running-the-node)
-    - [6.1 Install Docker for Mac](#61-install-docker-for-mac)
+    - [6.1 Install OrbStack](#61-install-orbstack)
     - [6.2 Start Kafka and PostgreSQL](#62-start-kafka-and-postgresql)
 7. [Run the Node](#7-run-the-node)
+    - [7.2 Debugging Teranode](#72-debugging-teranode)
 8. [Troubleshooting](#8-troubleshooting)
     - [8.1. Dependency errors and conflicts](#81-dependency-errors-and-conflicts)
     - [Next Steps](#next-steps)
 
-
 ## 1. Install Go
-
----
 
 Download and install the latest version of Go. As of October 2025, it's `1.25.2`.
 
 [Go Installation Guide](https://go.dev/doc/install)
 
 **Test Installation**:
+
 Open a new terminal and execute:
+
 ```bash
 go version
 ```
+
 It should display `go1.25.2` or above.
 
-
-
-
 ## 2. Set Go Environment Variables
-
----
-
 
 Add these lines to `.zprofile` or `.bash_profile`, depending on which one your development machine uses:
 
@@ -61,17 +52,15 @@ export GOBIN="$(go env GOPATH)/bin"
 ```
 
 **Test Configuration**:
+
 Open a new terminal and execute:
+
 ```bash
 echo $GOPATH
 echo $GOBIN
 ```
 
 Both should display paths related to Go.
-
-
-
----
 
 ## 3. Python and Dependencies
 
@@ -98,6 +87,7 @@ Because of [PEP 668](https://peps.python.org/pep-0668/) and Homebrew’s “exte
 python3 -m venv ~/my_python_env     # choose any path you like
 source ~/my_python_env/bin/activate
 ```
+
 After activating, your shell should show something like `(my_python_env)` as a prefix.
 
 ### 3.3 Install Dependencies Within the Virtual Environment
@@ -114,21 +104,21 @@ pip install PyYAML
 ```bash
 python -c "import yaml; print(yaml.__version__)"
 ```
+
 This should print out the installed PyYAML version (e.g., `6.0.2` or similar).
 
 #### Alternative: Use `pipx` (for CLI tools) - NOT recommended for Teranode Development
 
 If you need PyYAML as part of a **standalone command-line tool**, you could use [pipx](https://pypa.github.io/pipx/) instead:
+
 ```bash
 brew install pipx
 pipx install PyYAML
 ```
+
 However, most Teranode workflows will need PyYAML as a library for scripts, so a virtual environment is usually best.
 
-
 ## 4. Clone the Project and Install Dependencies
-
----
 
 Clone the project:
 
@@ -137,7 +127,9 @@ git clone git@github.com:bsv-blockchain/teranode.git
 ```
 
 **Install all dependencies**:
+
 Execute:
+
 ```bash
 cd teranode
 
@@ -145,14 +137,12 @@ cd teranode
 make install
 ```
 
-
 > Note:
-> If you receive an error `ModuleNotFoundError: No module named ‘yaml’` error, refer to this [issue](https://github.com/yaml/pyyaml/issues/291) for a potential fix. Example:
+> If you receive an error `ModuleNotFoundError: No module named 'yaml'` error, refer to this [issue](https://github.com/yaml/pyyaml/issues/291) for a potential fix. Example:
+>
 > ```bash
 > PYTHONPATH=$HOME/Library/Python/3.9/lib/python/site-packages make install  #Make sure the path is correct for your own python version
 > ```
-
----
 
 ## 5. Configure Settings
 
@@ -174,49 +164,62 @@ In order for your node to read **your** custom lines, you set `SETTINGS_CONTEXT`
 In **zsh**, open `~/.zprofile` (or `~/.zshrc`). In **bash**, open `~/.bash_profile` (or `~/.bashrc`).
 
 Add:
+
 ```bash
 export SETTINGS_CONTEXT=dev
 ```
+
 (If you have used a richer prefix, such as `dev.john`, you would set `SETTINGS_CONTEXT=dev.john`)
 
 After editing, **reload** your shell config:
+
 ```bash
 source ~/.zprofile
 ```
+
 (or the equivalent for your shell).
 
 ### 5.3 Verify
 
-1. **Echo** the environment variable to ensure it’s set correctly:
+1. **Echo** the environment variable to ensure it's set correctly:
+
    ```bash
    echo $SETTINGS_CONTEXT
    ```
+
    Should print `dev`.
 
-2. **Run** or **restart** your node. Check logs or console output to confirm it’s picking up the lines with `dev`.
-
-----
+2. **Run** or **restart** your node. Check logs or console output to confirm it's picking up the lines with `dev`.
 
 ## 6. Prerequisites for Running the Node
 
-### 6.1 Install Docker for Mac
+### 6.1 Install OrbStack
 
-Kafka runs in Docker containers, so you'll need to install Docker for Mac:
+Teranode uses Docker containers for running dependencies like Kafka and PostgreSQL. For Mac developers, we recommend using [OrbStack](https://orbstack.dev/) - a fast, lightweight Docker Desktop alternative optimized for macOS.
 
-1. Download Docker Desktop for Mac from [Docker Hub](https://www.docker.com/products/docker-desktop/)
-2. Double-click the downloaded `.dmg` file and drag the Docker app to your Applications folder
-3. Launch Docker Desktop from your Applications folder
-4. When prompted, authorize Docker with your system password
-5. Wait for Docker to start (the whale icon in the status bar will stop animating when Docker is ready)
+**Why OrbStack?**
 
-**Verify Docker installation**:
+- **Faster**: 2-3x faster than Docker Desktop for container startup and file operations
+- **Lighter**: Uses significantly less CPU and memory
+- **Native**: Built specifically for macOS with better integration
+- **Compatible**: Drop-in replacement for Docker Desktop - all Docker commands work the same
+
+**Installation**:
+
+1. Download OrbStack from [orbstack.dev](https://orbstack.dev/)
+2. Open the downloaded file and drag OrbStack to your Applications folder
+3. Launch OrbStack from your Applications folder
+4. Follow the brief setup wizard
+
+**Verify installation**:
+
 ```bash
 docker --version
 ```
 
 ### 6.2 Start Kafka and PostgreSQL
 
-Once Docker is installed and running, start Kafka and PostgreSQL with:
+Once OrbStack is installed and running, start Kafka and PostgreSQL with:
 
 ```bash
 # Start Kafka in Docker
@@ -229,11 +232,11 @@ Once Docker is installed and running, start Kafka and PostgreSQL with:
 These scripts will set up Docker containers with the required services configured correctly for Teranode.
 
 > **Note:** If you configure your settings to use Aerospike for UTXO storage, you'll also need to run the Aerospike script:
+>
 > ```bash
 > # Start Aerospike in Docker
 > ./scripts/aerospike.sh
 > ```
-
 
 ## 7. Run the Node
 
@@ -321,6 +324,34 @@ After executing these commands, your log should show a successful transition:
 [Blockchain Client] FSM successfully transitioned from IDLE to state:RUNNING
 ```
 
+### 7.2. Debugging Teranode
+
+Teranode supports debugging using Delve, the Go debugger. You can use any IDE that supports Delve, including VS Code, GoLand, or the Delve CLI directly.
+
+#### Local Development Debugging
+
+To debug Teranode during local development:
+
+1. **Build with debug symbols**:
+
+   ```bash
+   DEBUG=true make build
+   ```
+
+   This enables debug flags (`-N -l`) that disable optimizations and inlining, making debugging easier.
+
+2. **Attach your debugger** to the running Teranode process using your preferred IDE or tool.
+
+#### Remote Debugging (Kubernetes Deployments)
+
+For debugging Teranode running in Kubernetes environments:
+
+- See the [Remote Debug Guide](../../howto/howToRemoteDebugTeranode.md) for detailed instructions on:
+
+    - Configuring the Kubernetes cluster for remote debugging
+    - Port forwarding the debugger
+    - Connecting with VS Code, GoLand, or Delve CLI
+    - Debugging multiple services simultaneously
 
 ---
 

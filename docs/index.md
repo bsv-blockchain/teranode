@@ -60,8 +60,10 @@
 2. [Starting and Stopping Teranode](./howto/miners/docker/minersHowToStopStartDockerTeranode.md)
 3. [Configuration Guide](./howto/miners/docker/minersHowToConfigureTheNode.md)
 4. [Update Procedures](./howto/miners/docker/minersUpdatingTeranode.md)
-5. [Troubleshooting Guide](./howto/miners/docker/minersHowToTroubleshooting.md)
-6. [Security Best Practices](./howto/miners/docker/minersSecurityBestPractices.md)
+5. [Reset Teranode](./howto/miners/docker/minersHowToResetTeranode.md)
+6. [Blockchain Synchronization](./howto/miners/docker/minersHowToSyncTheNode.md)
+7. [Troubleshooting Guide](./howto/miners/docker/minersHowToTroubleshooting.md)
+8. [Security Best Practices](./howto/miners/docker/minersSecurityBestPractices.md)
 
 #### Kubernetes Deployment
 
@@ -69,9 +71,11 @@
 2. [Starting and Stopping Teranode](./howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode.md)
 3. [Configuration Guide](./howto/miners/kubernetes/minersHowToConfigureTheNode.md)
 4. [Update Procedures](./howto/miners/kubernetes/minersUpdatingTeranode.md)
-5. [Backup Procedures](./howto/miners/kubernetes/minersHowToBackup.md)
-6. [Troubleshooting Guide](./howto/miners/kubernetes/minersHowToTroubleshooting.md)
-7. [Security Best Practices](./howto/miners/kubernetes/minersSecurityBestPractices.md)
+5. [Reset Teranode](./howto/miners/kubernetes/minersHowToResetTeranode.md)
+6. [Blockchain Synchronization](./howto/miners/kubernetes/minersHowToSyncTheNode.md)
+7. [Backup Procedures](./howto/miners/minersHowToBackup.md)
+8. [Troubleshooting Guide](./howto/miners/kubernetes/minersHowToTroubleshooting.md)
+9. [Security Best Practices](./howto/miners/kubernetes/minersSecurityBestPractices.md)
 
 #### Common Tasks
 
@@ -82,9 +86,7 @@
 5. [Interacting with the Teranode CLI](./howto/miners/minersHowToTeranodeCLI.md)
 6. [Managing Disk Space](./howto/miners/minersManagingDiskSpace.md)
 7. [Aerospike Configuration Considerations](./howto/miners/minersHowToAerospikeTuning.md)
-8. [How To Reset Teranode](./howto/miners/minersHowToResetTeranode.md)
-9. [Blockchain Synchronization](./howto/miners/minersHowToSyncTheNode.md)
-10. [Using Listen Mode](./howto/miners/minersHowToUseListenMode.md)
+8. [Using Listen Mode](./howto/miners/minersHowToUseListenMode.md)
 
 -----
 

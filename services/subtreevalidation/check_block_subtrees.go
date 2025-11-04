@@ -25,10 +25,11 @@ import (
 )
 
 // bufioReaderPool reduces GC pressure by reusing bufio.Reader instances.
-// With 14,496 subtrees per block, this eliminates ~58MB of allocations per block.
+// With 14,496 subtrees per block, using 32KB buffers provides excellent I/O performance
+// while dramatically reducing memory pressure and GC overhead (16x reduction from previous 512KB).
 var bufioReaderPool = sync.Pool{
 	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 512*1024) // 512KB buffer matching quick_validate.go
+		return bufio.NewReaderSize(nil, 32*1024) // 32KB buffer - optimized for sequential I/O
 	},
 }
 
@@ -613,8 +614,11 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 						isRunning, runningErr := u.blockchainClient.IsFSMCurrentState(gCtx, blockchain.FSMStateRUNNING)
 						if runningErr == nil && isRunning {
 							u.logger.Debugf("[processTransactionsInLevels] Transaction %s missing parent, adding to orphanage", tx.TxIDChainHash().String())
-							u.orphanage.Set(*tx.TxIDChainHash(), tx)
-							addedToOrphanage.Add(1)
+							if u.orphanage.Set(*tx.TxIDChainHash(), tx) {
+								addedToOrphanage.Add(1)
+							} else {
+								u.logger.Warnf("[processTransactionsInLevels] Failed to add transaction %s to orphanage - orphanage is full", tx.TxIDChainHash().String())
+							}
 						}
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Log truly invalid transactions

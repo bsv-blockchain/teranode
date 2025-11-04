@@ -178,8 +178,6 @@ type BlockSettings struct {
 	GetAndValidateSubtreesConcurrency     int
 	KafkaWorkers                          int
 	ValidOrderAndBlessedConcurrency       int
-	StoreCacheEnabled                     bool
-	StoreCacheSize                        int
 	MaxSize                               int
 	BlockStore                            *url.URL
 	FailFastValidation                    bool
@@ -198,6 +196,7 @@ type BlockSettings struct {
 	UtxoStore                             *url.URL
 	FileStoreReadConcurrency              int
 	FileStoreWriteConcurrency             int
+	FileStoreUseSystemLimits              bool
 }
 
 type BlockChainSettings struct {
@@ -371,7 +370,7 @@ type UtxoStoreSettings struct {
 	CleanupParentUpdateBatcherDurationMillis int // Batch duration for parent record updates during cleanup (ms)
 	CleanupDeleteBatcherSize                 int // Batch size for record deletions during cleanup
 	CleanupDeleteBatcherDurationMillis       int // Batch duration for record deletions during cleanup (ms)
-	CleanupMaxConcurrentOperations           int // Maximum concurrent operations during cleanup processing
+	CleanupMaxConcurrentOperations           int // Maximum concurrent operations during cleanup (0 = use connection queue size)
 }
 
 type P2PSettings struct {
@@ -473,6 +472,7 @@ type SubtreeValidationSettings struct {
 	BlacklistedBaseURLs            map[string]struct{}
 	BlockHeightRetentionAdjustment int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
 	OrphanageTimeout               time.Duration
+	OrphanageMaxSize               int // Maximum number of transactions that can be stored in the orphanage
 	// Concurrency limits
 	CheckBlockSubtreesConcurrency int           // Concurrency limit for CheckBlockSubtrees operations (default: 32)
 	PauseTimeout                  time.Duration // Maximum duration for subtree processing pauses during block validation (default: 5 minutes)

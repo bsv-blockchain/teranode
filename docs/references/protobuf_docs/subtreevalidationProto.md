@@ -112,7 +112,7 @@ swagger:model HealthResponse
 | ----- | ---- | ----- | ----------- |
 | ok | [bool](#bool) |  | Indicates if the service is operating normally |
 | details | [string](#string) |  | Provides additional context about the service health status |
-| timestamp | [google.protobuf.Timestamp](#google.protobuf.Timestamp) |  | Records when the health check was performed |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Records when the health check was performed |
 
 
 

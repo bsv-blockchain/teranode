@@ -106,8 +106,8 @@ type longtermStore interface {
 const (
 	defaultReadLimit  = 768 // 75% of original 1024 total
 	defaultWriteLimit = 256 // 25% of original 1024 total
-	minSemaphoreLimit = 1
-	maxSemaphoreLimit = 10000
+	MinSemaphoreLimit = 1
+	MaxSemaphoreLimit = 256_000
 )
 
 // GLOBAL SEMAPHORE DESIGN - ULIMIT PROTECTION AND RACE CONDITION MITIGATION:
@@ -241,16 +241,16 @@ func InitSemaphores(readLimit, writeLimit int) error {
 
 	semaphoreInitOnce.Do(func() {
 		// Validate read limit
-		if readLimit < minSemaphoreLimit || readLimit > maxSemaphoreLimit {
+		if readLimit < MinSemaphoreLimit || readLimit > MaxSemaphoreLimit {
 			initErr = errors.NewConfigurationError("invalid read limit %d: must be between %d and %d",
-				readLimit, minSemaphoreLimit, maxSemaphoreLimit)
+				readLimit, MinSemaphoreLimit, MaxSemaphoreLimit)
 			return
 		}
 
 		// Validate write limit
-		if writeLimit < minSemaphoreLimit || writeLimit > maxSemaphoreLimit {
+		if writeLimit < MinSemaphoreLimit || writeLimit > MaxSemaphoreLimit {
 			initErr = errors.NewConfigurationError("invalid write limit %d: must be between %d and %d",
-				writeLimit, minSemaphoreLimit, maxSemaphoreLimit)
+				writeLimit, MinSemaphoreLimit, MaxSemaphoreLimit)
 			return
 		}
 

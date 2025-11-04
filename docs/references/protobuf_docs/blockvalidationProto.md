@@ -52,7 +52,7 @@ swagger:model HealthResponse
 | ----- | ---- | ----- | ----------- |
 | ok | [bool](#bool) |  | Indicates if the service is healthy |
 | details | [string](#string) |  | Additional health status details |
-| timestamp | google.protobuf.Timestamp |  | Timestamp when the health check was performed |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Timestamp when the health check was performed |
 
 <a name="ProcessBlockRequest"></a>
 

@@ -172,8 +172,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GetAndValidateSubtreesConcurrency:     getInt("block_getAndValidateSubtreesConcurrency", -1, alternativeContext...),
 			KafkaWorkers:                          getInt("block_kafkaWorkers", 0, alternativeContext...),
 			ValidOrderAndBlessedConcurrency:       getInt("block_validOrderAndBlessedConcurrency", -1, alternativeContext...),
-			StoreCacheEnabled:                     getBool("blockchain_store_cache_enabled", true, alternativeContext...),
-			StoreCacheSize:                        getInt("blockchain_store_cache_size", 200, alternativeContext...),
 			MaxSize:                               getInt("blockmaxsize", 4294967296, alternativeContext...),
 			BlockStore:                            getURL("blockstore", "file://./data/blockstore", alternativeContext...),
 			FailFastValidation:                    getBool("blockvalidation_fail_fast_validation", true, alternativeContext...),
@@ -192,6 +190,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UtxoStore:                             getURL("txmeta_store", "", alternativeContext...),
 			FileStoreReadConcurrency:              getInt("filestore_read_concurrency", 768, alternativeContext...),
 			FileStoreWriteConcurrency:             getInt("filestore_write_concurrency", 256, alternativeContext...),
+			FileStoreUseSystemLimits:              getBool("filestore_use_system_limits", true, alternativeContext...),
 		},
 		BlockAssembly: BlockAssemblySettings{
 			Disabled:                            getBool("blockassembly_disabled", false, alternativeContext...),
@@ -356,7 +355,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			CleanupParentUpdateBatcherDurationMillis: getInt("utxostore_cleanupParentUpdateBatcherDurationMillis", 10, alternativeContext...),
 			CleanupDeleteBatcherSize:                 getInt("utxostore_cleanupDeleteBatcherSize", 256, alternativeContext...),
 			CleanupDeleteBatcherDurationMillis:       getInt("utxostore_cleanupDeleteBatcherDurationMillis", 10, alternativeContext...),
-			CleanupMaxConcurrentOperations:           getInt("utxostore_cleanupMaxConcurrentOperations", 128, alternativeContext...),
+			CleanupMaxConcurrentOperations:           getInt("utxostore_cleanupMaxConcurrentOperations", 0, alternativeContext...),
 		},
 		P2P: P2PSettings{
 			BlockTopic:         getString("p2p_block_topic", "", alternativeContext...),
@@ -433,6 +432,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlacklistedBaseURLs:                       blacklistMap,
 			BlockHeightRetentionAdjustment:            getInt32("subtreevalidation_blockHeightRetentionAdjustment", 0, alternativeContext...),
 			OrphanageTimeout:                          getDuration("subtreevalidation_orphanageTimeout", 15*time.Minute, alternativeContext...),
+			OrphanageMaxSize:                          getInt("subtreevalidation_orphanageMaxSize", 100_000, alternativeContext...),
 			CheckBlockSubtreesConcurrency:             getInt("subtreevalidation_check_block_subtrees_concurrency", 32, alternativeContext...),
 			PauseTimeout:                              getDuration("subtreevalidation_pauseTimeout", 5*time.Minute, alternativeContext...),
 		},

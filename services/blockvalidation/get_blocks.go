@@ -270,7 +270,7 @@ func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan result
 					case validateBlocksChan <- orderedResult.block:
 						delete(results, nextIndex)
 						nextIndex++
-						size.Add(-1)
+						// Note: size counter is decremented by validateBlocksOnChannel after processing
 					case <-ctx.Done():
 						return ctx.Err()
 					}

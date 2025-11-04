@@ -21,7 +21,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	"github.com/bsv-blockchain/go-subtree"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -2219,7 +2219,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 						continue
 					}
 
-					subtree, err := subtree.NewSubtreeFromReader(subtreeReader)
+					subtree, err := subtreepkg.NewSubtreeFromReader(subtreeReader)
 					_ = subtreeReader.Close()
 					if err != nil {
 						sm.logger.Errorf("[Legacy Manager] failed to create subtree from bytes: %v", err)
@@ -2229,6 +2229,10 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 					// announce all the transactions in the subtree
 					// the batcher should de-duplicate the transactions that have already been sent in the last minute
 					for _, subtreeNode := range subtree.Nodes {
+						if subtreeNode.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+							continue
+						}
+
 						sm.txAnnounceBatcher.Put(&TxHashAndFee{
 							TxHash: subtreeNode.Hash,
 							Fee:    subtreeNode.Fee,

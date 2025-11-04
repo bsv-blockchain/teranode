@@ -32,13 +32,13 @@ cd $YOUR_WORKING_DIR/teranode/deploy/docker/mainnet
 ### Step 2: Pull Latest Images (optional, but recommended before each start)
 
 ```bash
-docker-compose pull
+docker compose pull
 ```
 
 ### Step 3: Start the Teranode Stack
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 This command starts all services defined in the `docker-compose.yml` file in detached mode.
@@ -46,7 +46,7 @@ This command starts all services defined in the `docker-compose.yml` file in det
 ### Step 4: Verify Service Startup
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 Ensure all services show a status of "Up" or "Healthy".
@@ -54,7 +54,7 @@ Ensure all services show a status of "Up" or "Healthy".
 ### Step 5: Monitor Startup Logs
 
 ```bash
-docker-compose logs -f
+docker compose logs -f
 ```
 
 This allows you to watch the startup process in real-time.
@@ -64,9 +64,9 @@ This allows you to watch the startup process in real-time.
 If a specific service isn't starting correctly, check its logs. Example:
 
 ```bash
-docker-compose logs -f legacy
-docker-compose logs -f blockchain
-docker-compose logs -f asset
+docker compose logs -f legacy
+docker compose logs -f blockchain
+docker compose logs -f asset
 ```
 
 ### Step 7: Verify Network Connections
@@ -89,7 +89,14 @@ curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", 
 
 ### Step 8: Check Synchronization Status
 
-Monitor the blockchain synchronization process:
+Monitor the blockchain synchronization process using the blockchain viewer:
+
+```bash
+# Open the blockchain viewer in your browser to view current blockchain state
+# http://localhost:8090/viewer
+```
+
+Alternatively, query the RPC endpoint for programmatic access:
 
 ```bash
 curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getblockchaininfo", "params": []}' -H 'content-type: text/plain;' http://127.0.0.1:9292/
@@ -110,7 +117,7 @@ curl --user bitcoin:bitcoin --data-binary '{"jsonrpc": "1.0", "id": "curltest", 
 
 Remember, the initial startup may take some time, especially if this is the first time starting the node or if there's a lot of blockchain data to sync. Be patient and monitor the logs for any issues.
 
-For subsequent starts after the initial setup, you typically only need to run the `docker-compose up -d` command, unless you've made configuration changes or updates to the system.
+For subsequent starts after the initial setup, you typically only need to run the `docker compose up -d` command, unless you've made configuration changes or updates to the system.
 
 
 ## Stopping the Node
@@ -136,7 +143,7 @@ cd $YOUR_WORKING_DIR/teranode/deploy/docker/mainnet
 To stop all services defined in your `docker-compose.yml` file:
 
 ```bash
-docker-compose down
+docker compose down
 ```
 
 This command stops and removes all containers, but preserves your data volumes.
@@ -146,7 +153,7 @@ This command stops and removes all containers, but preserves your data volumes.
 Ensure all services have stopped:
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 This should show no running containers related to your Teranode setup.
@@ -164,7 +171,7 @@ Verify that no Teranode-related containers are still running.
 If you need to stop only specific services:
 
 ```bash
-docker-compose stop [service-name]
+docker compose stop [service-name]
 ```
 
 Replace [service-name] with the specific service you want to stop, e.g., teranode-blockchain.
@@ -174,7 +181,7 @@ Replace [service-name] with the specific service you want to stop, e.g., teranod
 If services aren't responding to the normal shutdown command:
 
 ```bash
-docker-compose down --timeout 30
+docker compose down --timeout 30
 ```
 
 This forces a shutdown after 30 seconds. Adjust the timeout as needed.
@@ -191,7 +198,7 @@ Be **cautious** with this command as it removes all stopped containers, not just
 
 ### Step 8: Data Preservation
 
-The `docker-compose down` command doesn't remove volumes by default. Your data should be preserved in the ./data directory.
+The `docker compose down` command doesn't remove volumes by default. Your data should be preserved in the ./data directory.
 
 ### Step 9: Backup Consideration
 
@@ -202,7 +209,7 @@ Consider creating a backup of your data before shutting down, especially if you 
 Watch the logs during shutdown to ensure services are stopping cleanly:
 
 ```bash
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ### Step 11: Restart Preparation
@@ -210,4 +217,4 @@ docker-compose logs -f
 If you plan to restart soon, no further action is needed. Your data and configurations will be preserved for the next startup.
 
 !!! warning "Important: Always Use Graceful Shutdown"
-    Remember, **always** use the **graceful shutdown** method (`docker-compose down`) unless absolutely necessary to force a shutdown. This ensures that all services have time to properly close their connections, flush data to disk, and perform any necessary cleanup operations.
+    Remember, **always** use the **graceful shutdown** method (`docker compose down`) unless absolutely necessary to force a shutdown. This ensures that all services have time to properly close their connections, flush data to disk, and perform any necessary cleanup operations.

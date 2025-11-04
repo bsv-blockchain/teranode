@@ -82,7 +82,7 @@ func TestUTXOValidation(t *testing.T) {
 	err = anotherTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: pk})
 	require.NoError(t, err)
 
-	_, err = td.UtxoStore.Spend(ctx, tx)
+	_, err = td.UtxoStore.Spend(ctx, tx, 1)
 	require.NoError(t, err)
 
 	err = td.PropagationClient.ProcessTransaction(ctx, anotherTx)

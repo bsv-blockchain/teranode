@@ -271,9 +271,8 @@ func TestGetPreviousBlockInfo_FromDatabase(t *testing.T) {
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
 	require.NoError(t, err)
 
-	// Clear cache to force database lookup
-	err = s.ResetBlocksCache(context.Background())
-	require.NoError(t, err)
+	// Clear response cache to force database lookup
+	s.ResetResponseCache()
 
 	// Get previous block info - should come from database
 	id, chainWork, height, invalid, err := s.getPreviousBlockInfo(context.Background(), *block1.Hash())
@@ -310,9 +309,8 @@ func TestGetPreviousBlockInfo_ContextCancellation(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 
-	// Clear cache to force database lookup
-	err = s.ResetBlocksCache(context.Background())
-	require.NoError(t, err)
+	// Clear response cache to force database lookup
+	s.ResetResponseCache()
 
 	// Create cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -557,12 +555,13 @@ func TestStoreBlock_CacheManagement(t *testing.T) {
 	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer")
 	require.NoError(t, err)
 
-	// Verify block was cached
-	cachedHeader, cachedMeta := s.blocksCache.GetBlockHeader(*block1.Hash())
-	assert.NotNil(t, cachedHeader)
-	assert.NotNil(t, cachedMeta)
-	assert.Equal(t, uint64(blockID), uint64(cachedMeta.ID))
-	assert.Equal(t, height, cachedMeta.Height)
+	// Verify block was stored in database
+	storedHeader, storedMeta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	assert.NotNil(t, storedHeader)
+	assert.NotNil(t, storedMeta)
+	assert.Equal(t, uint64(blockID), uint64(storedMeta.ID))
+	assert.Equal(t, height, storedMeta.Height)
 }
 
 func TestStoreBlock_MinerExtraction(t *testing.T) {
@@ -578,11 +577,12 @@ func TestStoreBlock_MinerExtraction(t *testing.T) {
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
 	require.NoError(t, err)
 
-	// Verify miner information was processed (stored in cache)
-	_, cachedMeta := s.blocksCache.GetBlockHeader(*block1.Hash())
-	require.NotNil(t, cachedMeta)
+	// Verify miner information was processed and stored in database
+	_, storedMeta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	require.NotNil(t, storedMeta)
 	// Miner extraction may or may not succeed depending on coinbase format
-	t.Logf("Extracted miner: %s", cachedMeta.Miner)
+	t.Logf("Extracted miner: %s", storedMeta.Miner)
 }
 
 func TestStoreBlock_SequenceOfBlocks(t *testing.T) {
@@ -663,12 +663,6 @@ func TestStoreBlock_InheritInvalidFromParent(t *testing.T) {
 	_, _, err = s.StoreBlock(context.Background(), block2, "test-peer")
 	require.NoError(t, err)
 
-	// Verify both blocks are not in the cache
-	_, meta1 := s.blocksCache.GetBlockHeader(*block1.Hash())
-	_, meta2 := s.blocksCache.GetBlockHeader(*block2.Hash())
-	assert.Nil(t, meta1)
-	assert.Nil(t, meta2)
-
 	// Verify both blocks are marked invalid in the database
 	_, meta, err := s.GetBlockHeader(t.Context(), block1.Hash())
 	require.NoError(t, err)
@@ -688,9 +682,8 @@ func TestStoreBlock_ContextCancellationDuringPrevBlockLookup(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 
-	// Clear cache to force database lookup
-	err = s.ResetBlocksCache(context.Background())
-	require.NoError(t, err)
+	// Clear response cache to force database lookup
+	s.ResetResponseCache()
 
 	// Create context that will be cancelled
 	ctx, cancel := context.WithCancel(context.Background())
@@ -711,9 +704,8 @@ func TestGetPreviousBlockData_ContextCancellation(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 
-	// Clear cache to force database lookup
-	err = s.ResetBlocksCache(context.Background())
-	require.NoError(t, err)
+	// Clear response cache to force database lookup
+	s.ResetResponseCache()
 
 	// Create orphan block that requires previous block lookup
 	nonExistentPrevHash, _ := chainhash.NewHashFromStr("3333333333333333333333333333333333333333333333333333333333333333")
@@ -786,9 +778,10 @@ func TestStoreBlock_SubtreeProcessing(t *testing.T) {
 	assert.Greater(t, blockID, uint64(0))
 	assert.Equal(t, uint32(1), height)
 
-	// Verify subtrees were processed
-	_, cachedMeta := s.blocksCache.GetBlockHeader(*block1.Hash())
-	assert.True(t, cachedMeta.SubtreesSet)
+	// Verify subtrees were processed by querying database
+	_, storedMeta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	assert.True(t, storedMeta.SubtreesSet)
 }
 
 func TestStoreBlock_TimeConversionHandling(t *testing.T) {
@@ -804,12 +797,13 @@ func TestStoreBlock_TimeConversionHandling(t *testing.T) {
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
 	require.NoError(t, err)
 
-	// Verify timestamp was set in metadata
-	_, cachedMeta := s.blocksCache.GetBlockHeader(*block1.Hash())
-	assert.Greater(t, cachedMeta.Timestamp, uint32(0))
+	// Verify timestamp was set in metadata by retrieving from database
+	_, storedMeta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	assert.Greater(t, storedMeta.Timestamp, uint32(0))
 }
 
-func TestStoreBlock_CacheFailureRecovery(t *testing.T) {
+func TestStoreBlock_ResponseCacheInvalidation(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
@@ -818,12 +812,14 @@ func TestStoreBlock_CacheFailureRecovery(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 
-	// Store blocks normally - cache failure recovery is internal
+	// Store a block - should invalidate response cache
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
 	require.NoError(t, err)
 
-	// The cache failure recovery logic is tested by the presence of ResetBlocksCache
-	// calls in the StoreBlock implementation, which are covered by the cache tests
+	// Verify block can be retrieved (cache invalidation succeeded)
+	_, meta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	require.NotNil(t, meta)
 }
 
 func TestParseSQLError_NilError(t *testing.T) {

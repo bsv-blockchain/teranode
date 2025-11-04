@@ -961,8 +961,8 @@ message KafkaRejectedTxTopicMessage {
 #### peer_id
 
 - Type: string
-- Description: Peer identifier indicating the source of rejection. Empty string indicates internal rejection, non-empty indicates rejection from external peer
-- Required: Yes
+- Description: Peer identifier indicating the source of the rejection. Empty string indicates internal rejection, non-empty indicates rejection from an external peer
+- Required: No (can be empty)
 
 ### Example
 

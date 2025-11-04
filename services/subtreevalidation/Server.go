@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -117,11 +116,8 @@ type Server struct {
 	// invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages
 	invalidSubtreeDeDuplicateMap *expiringmap.ExpiringMap[string, struct{}]
 
-	// orphanage is used to store transactions that are missing parents that can be validated later
-	orphanage *expiringmap.ExpiringMap[chainhash.Hash, *bt.Tx]
-
-	// orphanageLock is used to make sure we only process the orphanage once at a time
-	orphanageLock sync.Mutex
+	// orphanage manages orphaned transactions that are missing their parent transactions
+	orphanage *Orphanage
 
 	// pauseSubtreeProcessing is used to pause subtree processing while a block is being processed
 	pauseSubtreeProcessing atomic.Bool
@@ -195,16 +191,15 @@ func New(
 		subtreeConsumerClient:             subtreeConsumerClient,
 		txmetaConsumerClient:              txmetaConsumerClient,
 		invalidSubtreeDeDuplicateMap:      expiringmap.New[string, struct{}](time.Minute * 1),
-		orphanage:                         expiringmap.New[chainhash.Hash, *bt.Tx](tSettings.SubtreeValidation.OrphanageTimeout),
 	}
 
 	var err error
 
-	u.orphanage.WithEvictionFunction(func(hash chainhash.Hash, tx *bt.Tx) bool {
-		u.logger.Debugf("[SubtreeValidation] Orphanage eviction for tx %s", hash.String())
-
-		return false
-	})
+	// Initialize orphanage
+	u.orphanage, err = NewOrphanage(tSettings.SubtreeValidation.OrphanageTimeout, tSettings.SubtreeValidation.OrphanageMaxSize, logger)
+	if err != nil {
+		return nil, errors.NewConfigurationError("Failed to create orphanage: %v", err)
+	}
 
 	once.Do(func() {
 		quorumPath := tSettings.SubtreeValidation.QuorumPath
@@ -818,9 +813,6 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 }
 
 func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, blockHeight uint32, blockIds map[uint32]bool) {
-	u.orphanageLock.Lock()
-	defer u.orphanageLock.Unlock()
-
 	initialLength := u.orphanage.Len()
 
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processOrphans",

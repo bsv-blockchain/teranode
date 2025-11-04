@@ -216,14 +216,14 @@ func TestSpend(t *testing.T) {
 	_, err := utxoStore.Create(ctx, tx, 0)
 	require.NoError(t, err)
 
-	_, err = utxoStore.Spend(ctx, spendTx)
+	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	// Spend again with the same spendingTxID
-	_, err = utxoStore.Spend(ctx, spendTx)
+	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1)
 	require.NoError(t, err)
 
-	_, err = utxoStore.Spend(ctx, spendTx2)
+	_, err = utxoStore.Spend(ctx, spendTx2, utxoStore.GetBlockHeight()+1)
 	require.Error(t, err)
 }
 
@@ -251,7 +251,7 @@ func TestUnspend(t *testing.T) {
 		SpendingData: spendingData1,
 	}
 
-	_, err = utxoStore.Spend(ctx, spendTx)
+	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	// Unspend the utxo
@@ -263,7 +263,7 @@ func TestUnspend(t *testing.T) {
 	spendingData2 := spendpkg.NewSpendingData(&test2Hash, 2)
 	spend.SpendingData = spendingData2
 
-	_, err = utxoStore.Spend(ctx, spendTx)
+	_, err = utxoStore.Spend(ctx, spendTx, utxoStore.GetBlockHeight()+1)
 	require.NoError(t, err)
 }
 
@@ -512,7 +512,7 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	spendTx01 := utxo2.GetSpendingTx(tx, 0, 1)
 
 	// Spend the transaction
-	_, err = utxoStore.Spend(ctx, spendTx01)
+	_, err = utxoStore.Spend(ctx, spendTx01, utxoStore.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	doneCh := make(chan string, 1)
@@ -557,7 +557,7 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	}
 
 	// Spend the transaction
-	_, err = utxoStore.Spend(ctx, spendTx01)
+	_, err = utxoStore.Spend(ctx, spendTx01, utxoStore.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	// Unspend output 0
@@ -1360,14 +1360,14 @@ func TestSpendWithRetryErrorPaths(t *testing.T) {
 	spendTx := utxo2.GetSpendingTx(tx, 0)
 
 	// Test normal spend
-	_, err = store.Spend(ctx, spendTx)
+	_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	// Test double spend with different transaction
 	conflictingSpendTx := utxo2.GetSpendingTx(tx, 0)
 	conflictingSpendTx.Version = 999 // Make it different
 
-	_, err = store.Spend(ctx, conflictingSpendTx)
+	_, err = store.Spend(ctx, conflictingSpendTx, store.GetBlockHeight()+1)
 	require.Error(t, err, "Should fail on conflicting spend")
 }
 
@@ -1507,7 +1507,7 @@ func TestSpendAndUnspendEdgeCases(t *testing.T) {
 	spendTx := utxo2.GetSpendingTx(tx, 0)
 
 	// Test normal spend
-	_, err = store.Spend(ctx, spendTx)
+	_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	// Create spend record for unspend test
@@ -1547,7 +1547,7 @@ func TestSpendAndUnspendEdgeCases(t *testing.T) {
 	// Test spending multiple outputs if transaction has them
 	if len(tx.Outputs) > 1 {
 		spendTx2 := utxo2.GetSpendingTx(tx, 1)
-		_, err = store.Spend(ctx, spendTx2)
+		_, err = store.Spend(ctx, spendTx2, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 	}
 }
@@ -1563,7 +1563,7 @@ func TestGetSpendEdgeCases(t *testing.T) {
 	require.NoError(t, err)
 
 	spendTx := utxo2.GetSpendingTx(tx, 0)
-	_, err = store.Spend(ctx, spendTx)
+	_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	// Test GetSpend with various scenarios
@@ -1886,7 +1886,7 @@ func TestSpendSimple(t *testing.T) {
 
 	// Test normal spend
 	spendTx := utxo2.GetSpendingTx(tx, 0)
-	_, err = store.Spend(ctx, spendTx)
+	_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 	require.NoError(t, err)
 }
 
@@ -1928,7 +1928,7 @@ func TestUnspendSimple(t *testing.T) {
 	require.NoError(t, err)
 
 	spendTx := utxo2.GetSpendingTx(tx, 0)
-	_, err = store.Spend(ctx, spendTx)
+	_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	// Test unspend

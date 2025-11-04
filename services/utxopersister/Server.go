@@ -426,7 +426,14 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	}
 
 	// Calculate the maximum height that can be processed.  This is the best block height minus 100 confirmations
-	maxHeight := bestBlockMeta.Height - 100
+	// Handle underflow when chain height < 100 (early chain bootstrapping, test networks)
+	var maxHeight uint32
+	if bestBlockMeta.Height < 100 {
+		// For early chains, allow processing up to current height (no safety window yet)
+		maxHeight = bestBlockMeta.Height
+	} else {
+		maxHeight = bestBlockMeta.Height - 100
+	}
 
 	if s.lastHeight >= maxHeight {
 		s.logger.Infof("Waiting for 100 confirmations (height to process: %d, best block height: %d)", s.lastHeight, bestBlockMeta.Height)
