@@ -138,7 +138,7 @@ URL /rpc
     Params
       []
     Result
-      "Teranode server stopping" // A message indicating the node is stopping
+      "bsvd stopping." // A message indicating the node is stopping
 
   Method version // Returns version information about the server.
     Params
@@ -300,7 +300,8 @@ URL /rpc
         "currentblocktx": 100, // The last block transaction
         "difficulty": 21865558044610.55, // The current difficulty
         "networkhashps": 185700706053323, // The network hashes per second
-        "pooledtx": 10 // The size of the mempool
+        "errors": "", // Current errors
+        "chain": "main" // Current network name (main, test, regtest)
       }
 
   Method getminingcandidate // Returns data needed to construct a block to work on.
