@@ -146,6 +146,8 @@ nav:
       - Configuration:
           - Settings Overview: references/settings.md
           - Settings Reference: references/settings_reference.md
+          - Global Settings: references/settings/global_settings.md
+          - Policy Settings: references/settings/policy_settings.md
           - Kafka Settings: references/settings/kafka_settings.md
           - Service Settings:
               - Alert: references/settings/services/alert_settings.md
@@ -162,6 +164,7 @@ nav:
               - UTXO Persister: references/settings/services/utxopersister_settings.md
               - Validator: references/settings/services/validator_settings.md
           - Store Settings:
+              - Aerospike Store: references/settings/stores/aerospike_settings.md
               - Blob Store: references/settings/stores/blob_settings.md
               - UTXO Store: references/settings/stores/utxo_settings.md
       - Miscellaneous:
