@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#subtree-validation-settings" class="md-skip">
+        <a href="#subtree-validation-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4523,28 +4523,55 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#configuration-categories" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Categories
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#quorum-coordination-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Quorum &amp; Coordination Settings
+      Configuration Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Quorum &amp; Coordination Settings">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#quorum-interactions-and-dependencies" class="md-nav__link">
+  <a href="#cache-processing" class="md-nav__link">
     <span class="md-ellipsis">
-      Quorum Interactions and Dependencies
+      Cache Processing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#missing-transaction-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Missing Transaction Handling
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#concurrency-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      Concurrency Control
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grpc-server-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      gRPC Server Management
     </span>
   </a>
   
@@ -4556,19 +4583,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#transaction-processing-settings" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Transaction Processing Settings
+      Service Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Transaction Processing Settings">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#transaction-processing-interactions-and-dependencies" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Transaction Processing Interactions and Dependencies
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Tuning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cache Configuration
     </span>
   </a>
   
@@ -4576,81 +4639,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#performance-scaling-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance &amp; Scaling Settings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Performance &amp; Scaling Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#performance-scaling-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance &amp; Scaling Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#caching-memory-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Caching &amp; Memory Settings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Caching &amp; Memory Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#caching-memory-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Caching &amp; Memory Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#storage-data-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Storage &amp; Data Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#kafka-integration-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Kafka Integration Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#network-communication-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Network &amp; Communication Settings
-    </span>
-  </a>
   
 </li>
       
@@ -5075,28 +5063,55 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#configuration-categories" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Categories
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#quorum-coordination-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Quorum &amp; Coordination Settings
+      Configuration Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Quorum &amp; Coordination Settings">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#quorum-interactions-and-dependencies" class="md-nav__link">
+  <a href="#cache-processing" class="md-nav__link">
     <span class="md-ellipsis">
-      Quorum Interactions and Dependencies
+      Cache Processing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#missing-transaction-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Missing Transaction Handling
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#concurrency-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      Concurrency Control
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#grpc-server-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      gRPC Server Management
     </span>
   </a>
   
@@ -5108,19 +5123,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#transaction-processing-settings" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Transaction Processing Settings
+      Service Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Transaction Processing Settings">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#transaction-processing-interactions-and-dependencies" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Transaction Processing Interactions and Dependencies
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Tuning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cache Configuration
     </span>
   </a>
   
@@ -5128,81 +5179,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#performance-scaling-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance &amp; Scaling Settings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Performance &amp; Scaling Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#performance-scaling-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance &amp; Scaling Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#caching-memory-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Caching &amp; Memory Settings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Caching &amp; Memory Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#caching-memory-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Caching &amp; Memory Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#storage-data-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Storage &amp; Data Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#kafka-integration-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Kafka Integration Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#network-communication-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Network &amp; Communication Settings
-    </span>
-  </a>
   
 </li>
       
@@ -5222,407 +5198,283 @@
 
 
 
-<h1 id="subtree-validation-settings">Subtree Validation Settings</h1>
+<h1 id="subtree-validation-service-settings">Subtree Validation Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/subtreeValidation/">Subtree Validation Service</a></p>
-<p>The Subtree Validation service relies on a set of configuration settings that control its behavior, performance, and resource usage. This section provides a comprehensive overview of these settings, organized by functional category, along with their impacts, dependencies, and recommended configurations for different deployment scenarios.</p>
-<h2 id="configuration-categories">Configuration Categories</h2>
-<p>Subtree Validation service settings can be organized into the following functional categories:</p>
-<ol>
-<li><strong>Quorum &amp; Coordination</strong>: Settings that control how subtree validation is coordinated across the system</li>
-<li><strong>Transaction Processing</strong>: Settings that manage transaction retrieval and validation</li>
-<li><strong>Performance &amp; Scaling</strong>: Settings that control concurrency, batch sizes, and resource usage</li>
-<li><strong>Caching &amp; Memory</strong>: Settings that manage the transaction metadata cache</li>
-<li><strong>Network &amp; Communication</strong>: Settings for network binding and service communication</li>
-</ol>
-<h2 id="quorum-coordination-settings">Quorum &amp; Coordination Settings</h2>
-<p>These settings control how subtree validation is coordinated to prevent duplicate work and ensure consistency.</p>
+<h2 id="configuration-settings">Configuration Settings</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
 <th>Type</th>
 <th>Default</th>
-<th>Description</th>
-<th>Impact</th>
+<th>Environment Variable</th>
+<th>Usage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>subtree_quorum_path</code></td>
+<td>QuorumPath</td>
 <td>string</td>
-<td><code>""</code> (empty)</td>
-<td><strong>REQUIRED</strong> - Directory path where quorum data is stored for subtree validation</td>
-<td>Critical - service will not initialize without this path configured</td>
+<td>""</td>
+<td>subtree_quorum_path</td>
+<td>Quorum coordination directory</td>
 </tr>
 <tr>
-<td><code>subtree_quorum_absolute_timeout</code></td>
+<td>QuorumAbsoluteTimeout</td>
 <td>time.Duration</td>
-<td><code>30s</code></td>
-<td>Maximum time to wait for quorum operations to complete</td>
-<td>Controls deadlock prevention and failure recovery during validation</td>
+<td>30s</td>
+<td>subtree_quorum_absolute_timeout</td>
+<td>Quorum operation timeout</td>
 </tr>
 <tr>
-<td><code>subtreevalidation_subtree_validation_abandon_threshold</code></td>
+<td>SubtreeStore</td>
+<td>*url.URL</td>
+<td>""</td>
+<td>subtreestore</td>
+<td><strong>CRITICAL</strong> - Subtree data storage</td>
+</tr>
+<tr>
+<td>GetMissingTransactions</td>
 <td>int</td>
-<td><code>1</code></td>
-<td>Number of sequential validation failures before abandoning validation attempts</td>
-<td>Controls resilience and retry behavior for validation errors</td>
+<td>max(4, CPU/2)</td>
+<td>subtreevalidation_getMissingTransactions</td>
+<td><strong>CRITICAL</strong> - Missing transaction retrieval concurrency</td>
 </tr>
 <tr>
-<td><code>subtreevalidation_failfast_validation</code></td>
-<td>bool</td>
-<td><code>true</code></td>
-<td>Controls whether validation stops at the first error or continues</td>
-<td>Affects validation performance and error reporting behavior</td>
+<td>GRPCAddress</td>
+<td>string</td>
+<td>"localhost:8089"</td>
+<td>subtreevalidation_grpcAddress</td>
+<td>gRPC client connections</td>
 </tr>
 <tr>
-<td><code>subtreevalidation_orphanageTimeout</code></td>
-<td>time.Duration</td>
-<td><code>15m</code></td>
-<td>Timeout for orphaned transactions in the orphanage cache</td>
-<td>Controls memory usage and cleanup of orphaned transaction data</td>
+<td>GRPCListenAddress</td>
+<td>string</td>
+<td>":8089"</td>
+<td>subtreevalidation_grpcListenAddress</td>
+<td><strong>CRITICAL</strong> - gRPC server binding, health checks only run if not empty</td>
 </tr>
 <tr>
-<td><code>subtreevalidation_subtreeBlockHeightRetention</code></td>
+<td>ProcessTxMetaUsingCacheBatchSize</td>
+<td>int</td>
+<td>1024</td>
+<td>subtreevalidation_processTxMetaUsingCache_BatchSize</td>
+<td><strong>CRITICAL</strong> - Cache processing batch size</td>
+</tr>
+<tr>
+<td>ProcessTxMetaUsingCacheConcurrency</td>
+<td>int</td>
+<td>32</td>
+<td>subtreevalidation_processTxMetaUsingCache_Concurrency</td>
+<td><strong>CRITICAL</strong> - Cache processing concurrency</td>
+</tr>
+<tr>
+<td>ProcessTxMetaUsingCacheMissingTxThreshold</td>
+<td>int</td>
+<td>1</td>
+<td>subtreevalidation_processTxMetaUsingCache_MissingTxThreshold</td>
+<td>Cache miss threshold</td>
+</tr>
+<tr>
+<td>SubtreeBlockHeightRetention</td>
 <td>uint32</td>
-<td><code>globalBlockHeightRetention</code></td>
-<td>Block height retention for subtree data</td>
-<td>Controls how long subtree data is retained based on block height</td>
+<td>globalBlockHeightRetention</td>
+<td>subtreevalidation_subtreeBlockHeightRetention</td>
+<td>Block height retention</td>
 </tr>
 <tr>
-<td><code>subtreevalidation_blockHeightRetentionAdjustment</code></td>
-<td>int32</td>
-<td><code>0</code></td>
-<td>Adjustment to global block height retention (can be positive or negative)</td>
-<td>Fine-tunes retention period for subtree-specific requirements</td>
-</tr>
-</tbody>
-</table>
-<h3 id="quorum-interactions-and-dependencies">Quorum Interactions and Dependencies</h3>
-<p>The quorum mechanism ensures that subtree validation is coordinated across the system, preventing duplicate validation work:</p>
-<ul>
-<li>The quorum path specifies where lock files are stored to coordinate validation work</li>
-<li>The absolute timeout prevents deadlocks if a lock holder crashes or network issues occur</li>
-<li>Quorum locks are acquired per subtree hash to ensure only one validator processes each subtree</li>
-</ul>
-<p>When a subtree fails validation multiple times (reaching the abandon threshold), it is marked as permanently invalid to prevent wasting resources on unrecoverable subtrees.</p>
-<h2 id="transaction-processing-settings">Transaction Processing Settings</h2>
-<p>These settings control how transactions are retrieved, validated, and processed during subtree validation.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>subtreevalidation_failfast_validation</code></td>
-<td>bool</td>
-<td><code>true</code></td>
-<td>Controls whether validation stops at the first error or continues</td>
-<td>Affects validation performance and error reporting behavior</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_validation_max_retries</code></td>
+<td>SubtreeDAHConcurrency</td>
 <td>int</td>
-<td><code>30</code></td>
-<td>Maximum number of retry attempts for validation operations</td>
-<td>Controls resilience and error handling during validation</td>
+<td>8</td>
+<td>subtreevalidation_subtreeDAHConcurrency</td>
+<td>DAH processing concurrency</td>
 </tr>
 <tr>
-<td><code>subtreevalidation_validation_retry_sleep</code></td>
-<td>string</td>
-<td><code>"5s"</code></td>
-<td>Time to wait between validation retry attempts</td>
-<td>Controls backoff behavior during validation errors</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_batch_missing_transactions</code></td>
+<td>TxMetaCacheEnabled</td>
 <td>bool</td>
-<td><code>true</code></td>
-<td>Controls whether missing transaction retrieval is batched</td>
-<td>Affects network efficiency and transaction retrieval performance</td>
+<td>true</td>
+<td>subtreevalidation_txMetaCacheEnabled</td>
+<td><strong>CRITICAL</strong> - Transaction metadata cache</td>
 </tr>
 <tr>
-<td><code>subtreevalidation_missingTransactionsBatchSize</code></td>
+<td>TxMetaCacheMaxMB</td>
 <td>int</td>
-<td><code>16384</code></td>
-<td>Maximum number of transactions to retrieve in a single batch</td>
-<td>Controls network efficiency and memory usage during retrieval</td>
+<td>256</td>
+<td>txMetaCacheMaxMB</td>
+<td>Cache memory limit</td>
 </tr>
 <tr>
-<td><code>subtreevalidation_percentageMissingGetFullData</code></td>
+<td>TxChanBufferSize</td>
+<td>int</td>
+<td>0</td>
+<td>subtreevalidation_txChanBufferSize</td>
+<td>Transaction channel buffer size</td>
+</tr>
+<tr>
+<td>BatchMissingTransactions</td>
+<td>bool</td>
+<td>true</td>
+<td>subtreevalidation_batch_missing_transactions</td>
+<td><strong>CRITICAL</strong> - Missing transaction batching</td>
+</tr>
+<tr>
+<td>SpendBatcherSize</td>
+<td>int</td>
+<td>1024</td>
+<td>subtreevalidation_spendBatcherSize</td>
+<td><strong>CRITICAL</strong> - Spend operation batch size and concurrency control</td>
+</tr>
+<tr>
+<td>MissingTransactionsBatchSize</td>
+<td>int</td>
+<td>16384</td>
+<td>subtreevalidation_missingTransactionsBatchSize</td>
+<td><strong>CRITICAL</strong> - Missing transaction batch size</td>
+</tr>
+<tr>
+<td>PercentageMissingGetFullData</td>
 <td>float64</td>
-<td><code>20.0</code></td>
-<td>Percentage threshold for switching to full data retrieval</td>
-<td>Controls when the service retrieves full transaction data based on missing rate</td>
+<td>20</td>
+<td>subtreevalidation_percentageMissingGetFullData</td>
+<td><strong>CRITICAL</strong> - Full subtree vs individual transaction threshold</td>
 </tr>
 <tr>
-<td><code>subtreevalidation_blacklisted_baseurls</code></td>
+<td>BlacklistedBaseURLs</td>
 <td>map[string]struct{}</td>
-<td><code>{}</code> (empty)</td>
-<td>Set of blacklisted base URLs for subtree validation</td>
-<td>Prevents validation attempts from known problematic sources</td>
+<td>{}</td>
+<td>subtreevalidation_blacklisted_baseurls</td>
+<td>URL blacklisting</td>
+</tr>
+<tr>
+<td>BlockHeightRetentionAdjustment</td>
+<td>int32</td>
+<td>0</td>
+<td>subtreevalidation_blockHeightRetentionAdjustment</td>
+<td>Retention adjustment</td>
+</tr>
+<tr>
+<td>OrphanageTimeout</td>
+<td>time.Duration</td>
+<td>15m</td>
+<td>subtreevalidation_orphanageTimeout</td>
+<td>Orphaned transaction cleanup</td>
+</tr>
+<tr>
+<td>CheckBlockSubtreesConcurrency</td>
+<td>int</td>
+<td>32</td>
+<td>subtreevalidation_check_block_subtrees_concurrency</td>
+<td><strong>CRITICAL</strong> - Block subtree checking concurrency</td>
+</tr>
+<tr>
+<td>PauseTimeout</td>
+<td>time.Duration</td>
+<td>5m</td>
+<td>subtreevalidation_pauseTimeout</td>
+<td><strong>CRITICAL</strong> - Maximum pause duration</td>
 </tr>
 </tbody>
 </table>
-<h3 id="transaction-processing-interactions-and-dependencies">Transaction Processing Interactions and Dependencies</h3>
-<p>The transaction processing settings work together to balance performance, reliability, and resource usage:</p>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="cache-processing">Cache Processing</h3>
 <ul>
-<li>When a subtree contains transactions not available locally, the service retrieves them from remote sources</li>
-<li>Batch processing (<code>batch_missing_transactions</code>) improves network efficiency by grouping requests</li>
-<li>The retry mechanism (<code>validation_max_retries</code> and <code>validation_retry_sleep</code>) handles transient failures</li>
-<li>The percentage threshold (<code>percentageMissingGetFullData</code>) optimizes retrieval strategies based on the proportion of missing transactions</li>
+<li><code>ProcessTxMetaUsingCacheBatchSize</code>, <code>ProcessTxMetaUsingCacheConcurrency</code>, and <code>ProcessTxMetaUsingCacheMissingTxThreshold</code> work together</li>
+<li>Controls cache-based transaction metadata processing performance</li>
 </ul>
-<h2 id="performance-scaling-settings">Performance &amp; Scaling Settings</h2>
-<p>These settings control concurrency, parallelism, and batch sizes to optimize performance and resource usage.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>subtreevalidation_getMissingTransactions</code></td>
-<td>int</td>
-<td>max(4, numCPU/2)</td>
-<td>Number of concurrent workers for fetching missing transactions</td>
-<td>Controls parallelism for transaction retrieval operations</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_subtreeDAHConcurrency</code></td>
-<td>int</td>
-<td><code>8</code></td>
-<td>Number of concurrent workers for processing Direct Acyclic Hash operations</td>
-<td>Controls parallelism for DAH computations during validation</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_processTxMetaUsingStoreConcurrency</code></td>
-<td>int</td>
-<td><code>32</code></td>
-<td>Number of concurrent workers for store-based metadata processing</td>
-<td>Controls parallelism and I/O load during validation</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_processTxMetaUsingCacheConcurrency</code></td>
-<td>int</td>
-<td><code>32</code></td>
-<td>Number of concurrent workers for cached metadata processing</td>
-<td>Controls parallelism and CPU utilization during validation</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_spendBatcherSize</code></td>
-<td>int</td>
-<td><code>1024</code></td>
-<td>Batch size for processing spend operations</td>
-<td>Controls I/O patterns and throughput for UTXO spend operations</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_processTxMetaUsingStoreBatchSize</code></td>
-<td>int</td>
-<td><code>1024</code></td>
-<td>Batch size for processing transaction metadata from store</td>
-<td>Affects I/O patterns and throughput for store-based metadata processing</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_processTxMetaUsingCacheBatchSize</code></td>
-<td>int</td>
-<td><code>1024</code></td>
-<td>Batch size for processing transaction metadata using cache</td>
-<td>Affects memory usage and throughput for cached metadata processing</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_check_block_subtrees_concurrency</code></td>
-<td>int</td>
-<td><code>32</code></td>
-<td>Number of concurrent workers for processing block subtrees</td>
-<td>Controls parallelism for block subtree validation operations</td>
-</tr>
-</tbody>
-</table>
-<h3 id="performance-scaling-interactions-and-dependencies">Performance &amp; Scaling Interactions and Dependencies</h3>
-<p>These settings work together to optimize resource usage and throughput:</p>
+<h3 id="missing-transaction-handling">Missing Transaction Handling</h3>
 <ul>
-<li>Concurrency settings control how many operations can run in parallel, balancing CPU utilization against context switching overhead</li>
-<li>Batch size settings control memory usage and I/O efficiency by grouping related operations</li>
-<li>Different operations (retrieval, processing, validation) have separate concurrency controls to optimize each phase</li>
-<li>Default values are selected to balance performance against resource consumption, but may need tuning based on specific hardware and workloads</li>
+<li>When <code>BatchMissingTransactions = true</code>, uses <code>MissingTransactionsBatchSize</code> and <code>GetMissingTransactions</code></li>
+<li><code>PercentageMissingGetFullData</code> determines full subtree vs individual transaction fetching</li>
 </ul>
-<h2 id="caching-memory-settings">Caching &amp; Memory Settings</h2>
-<p>These settings control the transaction metadata cache, which significantly impacts performance and memory usage.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>subtreevalidation_txMetaCacheEnabled</code></td>
-<td>bool</td>
-<td><code>true</code></td>
-<td>Controls whether transaction metadata caching is enabled</td>
-<td>Significantly affects performance and memory usage patterns</td>
-</tr>
-<tr>
-<td><code>txMetaCacheMaxMB</code></td>
-<td>int</td>
-<td><code>256</code></td>
-<td>Maximum memory (in MB) to use for transaction metadata cache</td>
-<td>Controls memory footprint and cache hit rates</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_processTxMetaUsingCacheMissingTxThreshold</code></td>
-<td>int</td>
-<td><code>1</code></td>
-<td>Threshold for switching to full transaction data retrieval when using cache</td>
-<td>Controls when the service fetches full transaction data vs. metadata</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_processTxMetaUsingStoreMissingTxThreshold</code></td>
-<td>int</td>
-<td><code>1</code></td>
-<td>Threshold for switching to full transaction data retrieval when using store</td>
-<td>Controls when the service fetches full transaction data vs. metadata</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_txChanBufferSize</code></td>
-<td>int</td>
-<td><code>0</code></td>
-<td>Buffer size for transaction processing channels</td>
-<td>Controls buffering behavior for transaction processing queues</td>
-</tr>
-</tbody>
-</table>
-<h3 id="caching-memory-interactions-and-dependencies">Caching &amp; Memory Interactions and Dependencies</h3>
-<p>The caching system is critical for high-performance validation:</p>
+<h3 id="concurrency-control">Concurrency Control</h3>
 <ul>
-<li>When caching is enabled (<code>txMetaCacheEnabled=true</code>), a memory-based cache layer is created over the UTXO store</li>
-<li>The cache size (<code>txMetaCacheMaxMB</code>) directly impacts memory usage and performance - larger caches improve hit rates but consume more memory</li>
-<li>The missing transaction thresholds control when the service switches from metadata validation to full transaction validation, which is more resource-intensive but necessary in some cases</li>
-<li>Separate thresholds for cache and store operations allow optimizing each path independently</li>
+<li><code>CheckBlockSubtreesConcurrency</code> controls block subtree checking operations</li>
+<li><code>SpendBatcherSize</code> controls spend operation batch processing and concurrency limits</li>
+<li><code>GetMissingTransactions</code> controls missing transaction retrieval concurrency</li>
 </ul>
-<h2 id="storage-data-settings">Storage &amp; Data Settings</h2>
-<p>These settings control data storage and retention for subtree validation.</p>
+<h3 id="grpc-server-management">gRPC Server Management</h3>
+<ul>
+<li>When <code>GRPCListenAddress</code> is not empty, gRPC server starts and health checks are enabled</li>
+</ul>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SubtreeStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Subtree data storage and retrieval</td>
+</tr>
+<tr>
+<td>TxStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Transaction data access</td>
+</tr>
+<tr>
+<td>UTXOStore</td>
+<td>utxo.Store</td>
+<td><strong>CRITICAL</strong> - UTXO operations and validation</td>
+</tr>
+<tr>
+<td>ValidatorClient</td>
+<td>validator.Interface</td>
+<td><strong>CRITICAL</strong> - Transaction validation operations</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
+<th>Validation</th>
 <th>Impact</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>subtreestore</code></td>
-<td>string</td>
-<td><code>""</code> (empty)</td>
-<td><strong>REQUIRED</strong> - URL for subtree blob storage backend</td>
-<td>Determines where subtrees are stored and retrieved</td>
+<td>GRPCListenAddress</td>
+<td>Health checks only if not empty</td>
+<td>Service monitoring</td>
 </tr>
 <tr>
-<td><code>utxostore</code></td>
-<td>string</td>
-<td><code>""</code> (empty)</td>
-<td><strong>REQUIRED</strong> - UTXO store URL for validation operations</td>
-<td>Critical for transaction validation and UTXO state access</td>
+<td>SubtreeStore</td>
+<td>Must be valid URL format</td>
+<td>Storage access</td>
+</tr>
+<tr>
+<td>TxMetaCacheEnabled</td>
+<td>Controls cache usage</td>
+<td>Performance</td>
+</tr>
+<tr>
+<td>PauseTimeout</td>
+<td>Controls maximum pause duration</td>
+<td>Processing control</td>
 </tr>
 </tbody>
 </table>
-<h2 id="kafka-integration-settings">Kafka Integration Settings</h2>
-<p>These settings control Kafka message queue integration for system-wide communication.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>kafka_invalidSubtrees</code></td>
-<td>string</td>
-<td><code>"invalid-subtrees"</code></td>
-<td>Kafka topic name for publishing invalid subtree notifications</td>
-<td>Enables system-wide error notification and monitoring</td>
-</tr>
-<tr>
-<td><code>kafka_invalidSubtreesConfig</code></td>
-<td>string</td>
-<td><code>""</code> (empty)</td>
-<td>Kafka URL configuration for invalid subtrees topic</td>
-<td>Overrides default Kafka configuration for invalid subtrees</td>
-</tr>
-<tr>
-<td><code>kafka_invalidBlocksConfig</code></td>
-<td>string</td>
-<td><code>""</code> (empty)</td>
-<td>Kafka URL configuration for invalid blocks notifications</td>
-<td>Enables integration with block validation error handling</td>
-</tr>
-</tbody>
-</table>
-<h2 id="network-communication-settings">Network &amp; Communication Settings</h2>
-<p>These settings control how the service communicates with other components in the system.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>subtreevalidation_grpcAddress</code></td>
-<td>string</td>
-<td><code>"localhost:8089"</code></td>
-<td><strong>REQUIRED</strong> - Address for connecting to the subtree validation service</td>
-<td>Affects how other services connect to this service</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_grpcListenAddress</code></td>
-<td>string</td>
-<td><code>:8089</code></td>
-<td>Address where the service listens for gRPC connections</td>
-<td>Controls network binding for service communication</td>
-</tr>
-<tr>
-<td><code>subtreevalidation_subtreeValidationTimeout</code></td>
-<td>int</td>
-<td><code>1000</code></td>
-<td>Timeout (ms) for subtree validation operations</td>
-<td>Controls error recovery and prevents hanging validation processes</td>
-</tr>
-<tr>
-<td><code>validator.useLocalValidator</code></td>
-<td>bool</td>
-<td><code>false</code></td>
-<td>Controls whether to use a local or remote validator</td>
-<td>Affects system architecture and validation performance</td>
-</tr>
-</tbody>
-</table>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>subtreevalidation_grpcListenAddress = &quot;:8089&quot;
+subtreestore = &quot;memory:///&quot;
+</code></pre></div>
+<h3 id="performance-tuning">Performance Tuning</h3>
+<div class="highlight"><pre><span></span><code>subtreevalidation_check_block_subtrees_concurrency = 64
+subtreevalidation_getMissingTransactions = 16
+subtreevalidation_spendBatcherSize = 2048
+</code></pre></div>
+<h3 id="cache-configuration">Cache Configuration</h3>
+<div class="highlight"><pre><span></span><code>subtreevalidation_txMetaCacheEnabled = true
+txMetaCacheMaxMB = 512
+subtreevalidation_processTxMetaUsingCache_BatchSize = 2048
+</code></pre></div>
 
 
 

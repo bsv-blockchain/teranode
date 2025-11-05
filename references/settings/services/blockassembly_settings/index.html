@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#block-assembly-settings" class="md-skip">
+        <a href="#block-assembly-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4298,6 +4298,19 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Block Assembly
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -4309,6 +4322,154 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Settings
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Dependencies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Dependencies">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#service-disable" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Disable
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#channel-buffer-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Channel Buffer Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mining-solution-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mining Solution Processing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reorganization-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reorganization Handling
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dynamic-subtree-sizing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dynamic Subtree Sizing
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Tuning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mining-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mining Configuration
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -4904,6 +5065,143 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Settings
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Dependencies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Dependencies">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#service-disable" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Disable
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#channel-buffer-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Channel Buffer Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mining-solution-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mining Solution Processing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reorganization-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      Reorganization Handling
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dynamic-subtree-sizing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Dynamic Subtree Sizing
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Tuning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mining-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Mining Configuration
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -4918,10 +5216,310 @@
 
 
 
-<h1 id="block-assembly-settings">Block Assembly Settings</h1>
-<p><strong>Related Topic</strong>: <a href="../../../../topics/services/blockAssembly/">Block Assembly</a></p>
-<p>Configuration settings for the Block Assembly service.</p>
-<p><strong>Note</strong>: Settings content is being extracted from the topic document. See section 6-9 of the topic document for current settings information.</p>
+<h1 id="block-assembly-service-settings">Block Assembly Service Settings</h1>
+<p><strong>Related Topic</strong>: <a href="../../../../topics/services/blockAssembly/">Block Assembly Service</a></p>
+<h2 id="configuration-settings">Configuration Settings</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Disabled</td>
+<td>bool</td>
+<td>false</td>
+<td>blockassembly_disabled</td>
+<td><strong>CRITICAL</strong> - Disables all block assembly operations</td>
+</tr>
+<tr>
+<td>GRPCAddress</td>
+<td>string</td>
+<td>"localhost:8085"</td>
+<td>blockassembly_grpcAddress</td>
+<td>Client connection address</td>
+</tr>
+<tr>
+<td>GRPCListenAddress</td>
+<td>string</td>
+<td>":8085"</td>
+<td>blockassembly_grpcListenAddress</td>
+<td><strong>CRITICAL</strong> - gRPC server binding</td>
+</tr>
+<tr>
+<td>GRPCMaxRetries</td>
+<td>int</td>
+<td>3</td>
+<td>blockassembly_grpcMaxRetries</td>
+<td>gRPC client retry attempts</td>
+</tr>
+<tr>
+<td>GRPCRetryBackoff</td>
+<td>time.Duration</td>
+<td>2s</td>
+<td>blockassembly_grpcRetryBackoff</td>
+<td>Retry delay timing</td>
+</tr>
+<tr>
+<td>LocalDAHCache</td>
+<td>string</td>
+<td>""</td>
+<td>blockassembly_localDAHCache</td>
+<td>Configuration placeholder</td>
+</tr>
+<tr>
+<td>MaxBlockReorgCatchup</td>
+<td>int</td>
+<td>100</td>
+<td>blockassembly_maxBlockReorgCatchup</td>
+<td>Reorganization processing limit</td>
+</tr>
+<tr>
+<td>MaxBlockReorgRollback</td>
+<td>int</td>
+<td>100</td>
+<td>blockassembly_maxBlockReorgRollback</td>
+<td>Reorganization rollback limit</td>
+</tr>
+<tr>
+<td>MoveBackBlockConcurrency</td>
+<td>int</td>
+<td>375</td>
+<td>blockassembly_moveBackBlockConcurrency</td>
+<td>Block rollback parallelism</td>
+</tr>
+<tr>
+<td>ProcessRemainderTxHashesConcurrency</td>
+<td>int</td>
+<td>375</td>
+<td>blockassembly_processRemainderTxHashesConcurrency</td>
+<td>Transaction hash processing parallelism</td>
+</tr>
+<tr>
+<td>SendBatchSize</td>
+<td>int</td>
+<td>100</td>
+<td>blockassembly_sendBatchSize</td>
+<td>Batch operation size</td>
+</tr>
+<tr>
+<td>SendBatchTimeout</td>
+<td>int</td>
+<td>2</td>
+<td>blockassembly_sendBatchTimeout</td>
+<td>Batch operation timeout</td>
+</tr>
+<tr>
+<td>SubtreeProcessorBatcherSize</td>
+<td>int</td>
+<td>1000</td>
+<td>blockassembly_subtreeProcessorBatcherSize</td>
+<td>Subtree processing batch size</td>
+</tr>
+<tr>
+<td>SubtreeProcessorConcurrentReads</td>
+<td>int</td>
+<td>375</td>
+<td>blockassembly_subtreeProcessorConcurrentReads</td>
+<td><strong>CRITICAL</strong> - Subtree read parallelism</td>
+</tr>
+<tr>
+<td>NewSubtreeChanBuffer</td>
+<td>int</td>
+<td>1000</td>
+<td>blockassembly_newSubtreeChanBuffer</td>
+<td><strong>CRITICAL</strong> - New subtree channel buffer</td>
+</tr>
+<tr>
+<td>SubtreeRetryChanBuffer</td>
+<td>int</td>
+<td>1000</td>
+<td>blockassembly_subtreeRetryChanBuffer</td>
+<td><strong>CRITICAL</strong> - Retry channel buffer</td>
+</tr>
+<tr>
+<td>SubmitMiningSolutionWaitForResponse</td>
+<td>bool</td>
+<td>true</td>
+<td>blockassembly_SubmitMiningSolution_waitForResponse</td>
+<td><strong>CRITICAL</strong> - Synchronous mining solution processing</td>
+</tr>
+<tr>
+<td>InitialMerkleItemsPerSubtree</td>
+<td>int</td>
+<td>1048576</td>
+<td>initial_merkle_items_per_subtree</td>
+<td>Initial subtree size</td>
+</tr>
+<tr>
+<td>MinimumMerkleItemsPerSubtree</td>
+<td>int</td>
+<td>1024</td>
+<td>minimum_merkle_items_per_subtree</td>
+<td>Minimum subtree size</td>
+</tr>
+<tr>
+<td>MaximumMerkleItemsPerSubtree</td>
+<td>int</td>
+<td>1048576</td>
+<td>maximum_merkle_items_per_subtree</td>
+<td>Maximum subtree size</td>
+</tr>
+<tr>
+<td>DoubleSpendWindow</td>
+<td>time.Duration</td>
+<td>Calculated</td>
+<td>N/A</td>
+<td>Double-spend detection window</td>
+</tr>
+<tr>
+<td>MaxGetReorgHashes</td>
+<td>int</td>
+<td>10000</td>
+<td>blockassembly_maxGetReorgHashes</td>
+<td><strong>CRITICAL</strong> - Reorganization hash limit</td>
+</tr>
+<tr>
+<td>MinerWalletPrivateKeys</td>
+<td>[]string</td>
+<td>[]</td>
+<td>miner_wallet_private_keys</td>
+<td>Mining wallet keys</td>
+</tr>
+<tr>
+<td>DifficultyCache</td>
+<td>bool</td>
+<td>true</td>
+<td>blockassembly_difficultyCache</td>
+<td>Difficulty calculation caching</td>
+</tr>
+<tr>
+<td>UseDynamicSubtreeSize</td>
+<td>bool</td>
+<td>false</td>
+<td>blockassembly_useDynamicSubtreeSize</td>
+<td>Dynamic subtree sizing</td>
+</tr>
+<tr>
+<td>MiningCandidateCacheTimeout</td>
+<td>time.Duration</td>
+<td>5s</td>
+<td>blockassembly_miningCandidateCacheTimeout</td>
+<td><strong>CRITICAL</strong> - Mining candidate cache validity</td>
+</tr>
+<tr>
+<td>BlockchainSubscriptionTimeout</td>
+<td>time.Duration</td>
+<td>5m</td>
+<td>blockassembly_blockchainSubscriptionTimeout</td>
+<td>Blockchain subscription timeout</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="service-disable">Service Disable</h3>
+<ul>
+<li>When <code>Disabled = true</code>, all block assembly operations return early</li>
+<li>All other settings become irrelevant when service is disabled</li>
+</ul>
+<h3 id="channel-buffer-management">Channel Buffer Management</h3>
+<ul>
+<li><code>NewSubtreeChanBuffer</code> and <code>SubtreeRetryChanBuffer</code> must accommodate concurrent processing loads</li>
+<li>Buffer sizes affect pipeline performance and memory usage</li>
+</ul>
+<h3 id="mining-solution-processing">Mining Solution Processing</h3>
+<ul>
+<li><code>SubmitMiningSolutionWaitForResponse</code> controls synchronous vs asynchronous processing</li>
+<li>Affects <code>MiningCandidateCacheTimeout</code> behavior and response handling</li>
+</ul>
+<h3 id="reorganization-handling">Reorganization Handling</h3>
+<ul>
+<li><code>MaxGetReorgHashes</code> prevents excessive memory usage during large reorganizations</li>
+<li>Works with <code>MaxBlockReorgCatchup</code>, <code>MaxBlockReorgRollback</code>, <code>MoveBackBlockConcurrency</code></li>
+</ul>
+<h3 id="dynamic-subtree-sizing">Dynamic Subtree Sizing</h3>
+<ul>
+<li>When <code>UseDynamicSubtreeSize = true</code>, uses <code>InitialMerkleItemsPerSubtree</code>, <code>MinimumMerkleItemsPerSubtree</code>, <code>MaximumMerkleItemsPerSubtree</code></li>
+</ul>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TxStore</td>
+<td>blob.Store</td>
+<td>Transaction data access</td>
+</tr>
+<tr>
+<td>UTXOStore</td>
+<td>utxostore.Store</td>
+<td><strong>CRITICAL</strong> - UTXO operations and validation</td>
+</tr>
+<tr>
+<td>SubtreeStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Subtree storage and retrieval</td>
+</tr>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td><strong>CRITICAL</strong> - Blockchain operations, block submission</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Validation</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GRPCListenAddress</td>
+<td>Health checks only run if not empty</td>
+<td>Service monitoring</td>
+</tr>
+<tr>
+<td>MaxGetReorgHashes</td>
+<td>Limits reorganization processing</td>
+<td>Memory protection</td>
+</tr>
+<tr>
+<td>Channel Buffers</td>
+<td>Must accommodate processing loads</td>
+<td>Pipeline performance</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>blockassembly_grpcListenAddress = &quot;:8085&quot;
+blockassembly_disabled = false
+</code></pre></div>
+<h3 id="performance-tuning">Performance Tuning</h3>
+<div class="highlight"><pre><span></span><code>blockassembly_subtreeProcessorConcurrentReads = 500
+blockassembly_newSubtreeChanBuffer = 2000
+blockassembly_subtreeRetryChanBuffer = 2000
+</code></pre></div>
+<h3 id="mining-configuration">Mining Configuration</h3>
+<div class="highlight"><pre><span></span><code>blockassembly_SubmitMiningSolution_waitForResponse = true
+blockassembly_miningCandidateCacheTimeout = 10s
+miner_wallet_private_keys = &quot;key1|key2&quot;
+</code></pre></div>
 
 
 

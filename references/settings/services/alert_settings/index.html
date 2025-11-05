@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -4293,69 +4293,45 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#core-alert-service-configuration" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Core Alert Service Configuration
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#data-storage-configuration" class="md-nav__link">
+  <a href="#network-specific-behavior" class="md-nav__link">
     <span class="md-ellipsis">
-      Data Storage Configuration
+      Network-Specific Behavior
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Data Storage Configuration">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#sqlite" class="md-nav__link">
-    <span class="md-ellipsis">
-      SQLite
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#in-memory-sqlite" class="md-nav__link">
-    <span class="md-ellipsis">
-      In-Memory SQLite
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#postgresql" class="md-nav__link">
-    <span class="md-ellipsis">
-      PostgreSQL
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#mysql" class="md-nav__link">
-    <span class="md-ellipsis">
-      MySQL
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#internal-settings-and-behaviors" class="md-nav__link">
+  <a href="#auto-generation-behavior" class="md-nav__link">
     <span class="md-ellipsis">
-      Internal Settings and Behaviors
+      Auto-Generation Behavior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#database-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database Configuration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#internal-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Internal Configuration
     </span>
   </a>
   
@@ -4368,95 +4344,14 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Service Dependencies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Required Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#configuration-interdependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Interdependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables" class="md-nav__link">
+  <a href="#validation-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Environment Variables
+      Validation Rules
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Environment Variables">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#standard-environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      Standard Environment Variables
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#special-environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      Special Environment Variables
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#security-considerations" class="md-nav__link">
-    <span class="md-ellipsis">
-      Security Considerations
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Security Considerations">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#genesis-keys-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      Genesis Keys Management
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#database-security" class="md-nav__link">
-    <span class="md-ellipsis">
-      Database Security
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -4471,42 +4366,18 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#complete-configuration-example" class="md-nav__link">
+  <a href="#production-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Complete Configuration Example
+      Production Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#development-configuration-example" class="md-nav__link">
+  <a href="#development-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Development Configuration Example
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#error-handling-and-troubleshooting" class="md-nav__link">
-    <span class="md-ellipsis">
-      Error Handling and Troubleshooting
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Error Handling and Troubleshooting">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#common-configuration-errors" class="md-nav__link">
-    <span class="md-ellipsis">
-      Common Configuration Errors
+      Development Configuration
     </span>
   </a>
   
@@ -5168,69 +5039,45 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#core-alert-service-configuration" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Core Alert Service Configuration
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#data-storage-configuration" class="md-nav__link">
+  <a href="#network-specific-behavior" class="md-nav__link">
     <span class="md-ellipsis">
-      Data Storage Configuration
+      Network-Specific Behavior
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Data Storage Configuration">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#sqlite" class="md-nav__link">
-    <span class="md-ellipsis">
-      SQLite
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#in-memory-sqlite" class="md-nav__link">
-    <span class="md-ellipsis">
-      In-Memory SQLite
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#postgresql" class="md-nav__link">
-    <span class="md-ellipsis">
-      PostgreSQL
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#mysql" class="md-nav__link">
-    <span class="md-ellipsis">
-      MySQL
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#internal-settings-and-behaviors" class="md-nav__link">
+  <a href="#auto-generation-behavior" class="md-nav__link">
     <span class="md-ellipsis">
-      Internal Settings and Behaviors
+      Auto-Generation Behavior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#database-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database Configuration
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#internal-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Internal Configuration
     </span>
   </a>
   
@@ -5243,95 +5090,14 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Service Dependencies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#required-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Required Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#configuration-interdependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Interdependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables" class="md-nav__link">
+  <a href="#validation-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Environment Variables
+      Validation Rules
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Environment Variables">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#standard-environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      Standard Environment Variables
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#special-environment-variables" class="md-nav__link">
-    <span class="md-ellipsis">
-      Special Environment Variables
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#security-considerations" class="md-nav__link">
-    <span class="md-ellipsis">
-      Security Considerations
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Security Considerations">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#genesis-keys-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      Genesis Keys Management
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#database-security" class="md-nav__link">
-    <span class="md-ellipsis">
-      Database Security
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -5346,42 +5112,18 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#complete-configuration-example" class="md-nav__link">
+  <a href="#production-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Complete Configuration Example
+      Production Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#development-configuration-example" class="md-nav__link">
+  <a href="#development-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Development Configuration Example
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#error-handling-and-troubleshooting" class="md-nav__link">
-    <span class="md-ellipsis">
-      Error Handling and Troubleshooting
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Error Handling and Troubleshooting">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#common-configuration-errors" class="md-nav__link">
-    <span class="md-ellipsis">
-      Common Configuration Errors
+      Development Configuration
     </span>
   </a>
   
@@ -5410,270 +5152,219 @@
 
 <h1 id="alert-service-settings">Alert Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/alert/">Alert Service</a></p>
-<p>The Alert Service can be configured using various settings that control its behavior, storage options, and network connectivity. This section provides a comprehensive reference for all configuration options.</p>
-<h2 id="core-alert-service-configuration">Core Alert Service Configuration</h2>
-<ul>
-<li><strong>Alert Store URL (<code>alert_store</code>)</strong>: The URL for connecting to the alert system's data store.</li>
-<li>Type: <code>string</code> (converted to <code>*url.URL</code> internally)</li>
-<li>Impact: Determines the database backend and connection parameters</li>
-<li>
-<p>Example: <code>alert_store = sqlite:///alert</code> or <code>alert_store = postgres://user:pass@host:5432/database?sslmode=disable</code></p>
-</li>
-<li>
-<p><strong>Genesis Keys (<code>alert_genesis_keys</code>)</strong>: A pipe-separated list of public keys used for genesis alerts.</p>
-</li>
-<li>Type: <code>[]string</code></li>
-<li>Impact: <strong>Critical</strong> - The service will not start without valid genesis keys</li>
-<li>Purpose: These keys determine which alerts are valid; only alerts signed by these keys will be processed</li>
-<li>
-<p>Example: <code>alert_genesis_keys = "02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433"</code></p>
-</li>
-<li>
-<p><strong>P2P Private Key (<code>alert_p2p_private_key</code>)</strong>: Private key for P2P communication.</p>
-</li>
-<li><strong>Type</strong>: string</li>
-<li><strong>Default</strong>: "" (empty - triggers auto-generation)</li>
-<li><strong>Environment Variable</strong>: <code>TERANODE_alert_p2p_private_key</code></li>
-<li><strong>Impact</strong>: Establishes node identity in the P2P network</li>
-<li><strong>Auto-Generation</strong>: If not provided, creates private key file at <code>$HOME/.alert-system/private_key.pem</code></li>
-<li><strong>Directory Creation</strong>: Automatically creates <code>~/.alert-system/</code> directory with 0750 permissions</li>
-<li>
-<p><strong>Example</strong>: <code>alert_p2p_private_key = "08c7fec91e75046d0ac6a2b4edb2daaae34b1e4c3c25a48b1ebdffe5955e33bc"</code></p>
-</li>
-<li>
-<p><strong>Protocol ID (<code>alert_protocol_id</code>)</strong>: Protocol identifier for the P2P alert network.</p>
-</li>
-<li>Type: <code>string</code></li>
-<li>Default: "/bitcoin/alert-system/1.0.0"</li>
-<li>Impact: Determines which P2P protocol group the service will join</li>
-<li>
-<p>Example: <code>alert_protocol_id = "/bsv/alert/1.0.0"</code></p>
-</li>
-<li>
-<p><strong>Topic Name (<code>alert_topic_name</code>)</strong>: P2P topic name for alert propagation.</p>
-</li>
-<li><strong>Type</strong>: string</li>
-<li><strong>Default</strong>: "bitcoin_alert_system"</li>
-<li><strong>Environment Variable</strong>: <code>TERANODE_alert_topic_name</code></li>
-<li><strong>Network Dependency</strong>: Automatically prefixed with network name if not on mainnet</li>
-<li>
-<p><strong>Network-Specific Behavior</strong>:</p>
-<ul>
-<li><strong>Mainnet</strong>: Uses configured topic name as-is</li>
-<li><strong>Testnet</strong>: Prefixed as "bitcoin_alert_system_testnet"</li>
-<li><strong>Regtest</strong>: Prefixed as "bitcoin_alert_system_regtest"</li>
-<li><strong>Example</strong>: <code>alert_topic_name = "bitcoin_alert_system"</code></li>
-</ul>
-</li>
-<li>
-<p><strong>P2P Port (<code>alert_p2p_port</code>)</strong>: Port number for P2P communication.</p>
-</li>
-<li>Type: <code>int</code></li>
-<li>Default: 9908</li>
-<li>Impact: <strong>Required</strong> - Service will not start without a valid port</li>
-<li>Example: <code>alert_p2p_port = 4001</code></li>
-</ul>
-<h2 id="data-storage-configuration">Data Storage Configuration</h2>
-<p>The Alert Service supports multiple database backends through the <code>alert_store</code> URL:</p>
-<h3 id="sqlite">SQLite</h3>
-<div class="highlight"><pre><span></span><code>sqlite:///database_name
-</code></pre></div>
-<p>The SQLite database will be stored in the <code>DataFolder</code> directory specified in the main Teranode configuration.</p>
-<ul>
-<li><strong>Parameters</strong>: None</li>
-<li>
-<p><strong>Connection Pool Settings (hardcoded)</strong>:</p>
-</li>
-<li>
-<p>Max Idle Connections: 1</p>
-</li>
-<li>Max Open Connections: 1</li>
-<li><strong>Table Prefix</strong>: Uses the database name as prefix</li>
-</ul>
-<h3 id="in-memory-sqlite">In-Memory SQLite</h3>
-<div class="highlight"><pre><span></span><code>sqlitememory:///database_name
-</code></pre></div>
-<ul>
-<li><strong>Parameters</strong>: None</li>
-<li>
-<p><strong>Connection Pool Settings (hardcoded)</strong>:</p>
-</li>
-<li>
-<p>Max Idle Connections: 1</p>
-</li>
-<li>Max Open Connections: 1</li>
-<li><strong>Storage</strong>: In-memory only</li>
-<li><strong>Table Prefix</strong>: Uses the database name as prefix</li>
-</ul>
-<h3 id="postgresql">PostgreSQL</h3>
-<div class="highlight"><pre><span></span><code>postgres://username:password@host:port/database?param1=value1&amp;param2=value2
-</code></pre></div>
-<ul>
-<li>
-<p><strong>Parameters</strong>:</p>
-</li>
-<li>
-<p><code>sslmode</code>: SSL mode for the connection (default: <code>disable</code>)</p>
-</li>
-<li>
-<p><strong>Connection Pool Settings (hardcoded)</strong>:</p>
-</li>
-<li>
-<p>Max Idle Connections: 2</p>
-</li>
-<li>Max Open Connections: 5</li>
-<li>Max Connection Idle Time: 20 seconds</li>
-<li>Max Connection Time: 20 seconds</li>
-<li>Transaction Timeout: 20 seconds</li>
-<li><strong>Table Prefix</strong>: "alert_system"</li>
-</ul>
-<h3 id="mysql">MySQL</h3>
-<div class="highlight"><pre><span></span><code>mysql://username:password@host:port/database?param1=value1&amp;param2=value2
-</code></pre></div>
-<ul>
-<li>
-<p><strong>Parameters</strong>:</p>
-</li>
-<li>
-<p><code>sslmode</code>: SSL mode for the connection (default: <code>disable</code>)</p>
-</li>
-<li><strong>Connection Pool Settings (hardcoded)</strong>: Same as PostgreSQL</li>
-<li><strong>Table Prefix</strong>: "alert_system"</li>
-</ul>
-<h2 id="internal-settings-and-behaviors">Internal Settings and Behaviors</h2>
-<p>The following settings are hardcoded in the service and cannot be configured externally:</p>
-<p><strong>Core Processing Settings:</strong></p>
-<ul>
-<li><strong>Alert Processing Interval</strong>: 5 minutes</li>
-<li>Controls how frequently alerts are processed</li>
-<li><strong>Request Logging</strong>: Enabled (true)</li>
-<li>Controls HTTP request logging</li>
-<li><strong>Auto Migrate</strong>: Enabled (true)</li>
-<li>Automatically migrates the database schema on startup</li>
-<li><strong>Database Table Prefix</strong>: "alert_system" for PostgreSQL/MySQL, database name for SQLite</li>
-<li>Prefix used for database tables</li>
-<li><strong>DHT Mode</strong>: "client"</li>
-<li>Sets the node as a DHT client for peer discovery</li>
-<li><strong>Peer Discovery Interval</strong>: Uses system default</li>
-<li>Controls how frequently peers are discovered</li>
-</ul>
-<h2 id="service-dependencies">Service Dependencies</h2>
-<p>The Alert Service depends on several other Teranode services:</p>
-<h3 id="required-dependencies">Required Dependencies</h3>
+<h2 id="configuration-settings">Configuration Settings</h2>
 <table>
 <thead>
 <tr>
-<th>Dependency</th>
-<th>Purpose</th>
-<th>Configuration Impact</th>
-<th>Failure Impact</th>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>Blockchain Client</strong></td>
-<td>Block invalidation, chain state queries</td>
-<td>Requires blockchain service to be properly configured and running</td>
-<td><code>InvalidateBlock</code> functionality unavailable</td>
+<td>GenesisKeys</td>
+<td>[]string</td>
+<td>[]</td>
+<td>alert_genesis_keys</td>
+<td><strong>CRITICAL</strong> - Service fails without valid keys</td>
 </tr>
 <tr>
-<td><strong>UTXO Store</strong></td>
-<td>UTXO freezing, unfreezing, reassignment operations</td>
-<td>Requires UTXO store to be initialized and accessible</td>
-<td>Core alert functionality (fund management) unavailable</td>
+<td>P2PPrivateKey</td>
+<td>string</td>
+<td>""</td>
+<td>alert_p2p_private_key</td>
+<td>Auto-generates if empty</td>
 </tr>
 <tr>
-<td><strong>Block Assembly Client</strong></td>
-<td>Mining coordination when alerts affect blocks</td>
-<td>Requires block assembly service configuration</td>
-<td>Mining-related alert functions unavailable</td>
+<td>ProtocolID</td>
+<td>string</td>
+<td>"/bitcoin/alert-system/1.0.0"</td>
+<td>alert_protocol_id</td>
+<td>P2P protocol identification</td>
 </tr>
 <tr>
-<td><strong>Peer Client (Legacy)</strong></td>
-<td>Legacy peer management (ban/unban operations)</td>
-<td>Requires legacy peer service configuration</td>
-<td>Legacy peer banning functionality unavailable</td>
+<td>StoreURL</td>
+<td>*url.URL</td>
+<td>"sqlite:///alert"</td>
+<td>alert_store</td>
+<td>Database connection</td>
 </tr>
 <tr>
-<td><strong>P2P Client</strong></td>
-<td>Modern P2P alert distribution and peer management</td>
-<td>Requires P2P service configuration</td>
-<td>Alert distribution and modern peer management unavailable</td>
+<td>TopicName</td>
+<td>string</td>
+<td>"bitcoin_alert_system"</td>
+<td>alert_topic_name</td>
+<td>P2P topic (network-prefixed)</td>
+</tr>
+<tr>
+<td>P2PPort</td>
+<td>int</td>
+<td>9908</td>
+<td>ALERT_P2P_PORT</td>
+<td>P2P listening port</td>
 </tr>
 </tbody>
 </table>
-<h3 id="configuration-interdependencies">Configuration Interdependencies</h3>
-<ol>
-<li><strong>Network Configuration</strong>: The Alert service inherits network configuration from global Teranode settings, affecting topic naming and protocol selection</li>
-<li><strong>Logging Integration</strong>: Uses the global Teranode logging configuration for consistent log formatting and output</li>
-<li><strong>Metrics Integration</strong>: Integrates with Teranode's Prometheus metrics system using global metrics configuration</li>
-</ol>
-<h2 id="environment-variables">Environment Variables</h2>
-<p>All settings can also be configured through environment variables using the following pattern:</p>
-<div class="highlight"><pre><span></span><code>TERANODE_ALERT_&lt;SETTING_NAME&gt;
-</code></pre></div>
-<h3 id="standard-environment-variables">Standard Environment Variables</h3>
-<p>The following environment variables are used to configure the Alert Service:</p>
-<ul>
-<li><code>TERANODE_ALERT_GENESIS_KEYS</code>: A pipe-separated list of genesis keys</li>
-<li><code>TERANODE_ALERT_P2P_PRIVATE_KEY</code>: The P2P private key</li>
-<li><code>TERANODE_ALERT_PROTOCOL_ID</code>: The P2P protocol identifier</li>
-<li><code>TERANODE_ALERT_STORE</code>: The database connection URL</li>
-<li><code>TERANODE_ALERT_TOPIC_NAME</code>: The P2P topic name</li>
-</ul>
-<h3 id="special-environment-variables">Special Environment Variables</h3>
-<p>The following environment variable is used to configure the P2P port:</p>
-<ul>
-<li><code>ALERT_P2P_PORT</code>: The P2P port (note: different naming pattern)</li>
-</ul>
-<h2 id="security-considerations">Security Considerations</h2>
-<h3 id="genesis-keys-management">Genesis Keys Management</h3>
-<p>The genesis keys are critical for the security of the alert system. They should be carefully managed:</p>
-<ul>
-<li>Store private keys securely and offline</li>
-<li>Use multiple keys with a threshold signature scheme for increased security</li>
-<li>Rotate keys periodically according to your security policy</li>
-</ul>
-<h3 id="database-security">Database Security</h3>
-<p>When using PostgreSQL or MySQL:</p>
-<ul>
-<li>Use strong passwords</li>
-<li>Enable SSL for database connections (<code>sslmode=require</code> or stronger)</li>
-<li>Restrict database access to authorized users only</li>
-<li>Consider using a dedicated database user with limited permissions</li>
-</ul>
+<h2 id="network-specific-behavior">Network-Specific Behavior</h2>
+<p><strong>Topic Name Prefixing:</strong>
+- Mainnet: Uses configured name as-is
+- Testnet: Prefixed as <code>bitcoin_alert_system_testnet</code>
+- Regtest: Prefixed as <code>bitcoin_alert_system_regtest</code></p>
+<h2 id="auto-generation-behavior">Auto-Generation Behavior</h2>
+<p><strong>P2P Private Key:</strong>
+- If empty, creates <code>$HOME/.alert-system/private_key.pem</code>
+- Creates directory with 0750 permissions
+- Sets <code>PrivateKeyPath</code> in internal config</p>
+<h2 id="database-configuration">Database Configuration</h2>
+<table>
+<thead>
+<tr>
+<th>Scheme</th>
+<th>URL Format</th>
+<th>Pool Settings</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SQLite</td>
+<td><code>sqlite:///database_name</code></td>
+<td>Max Idle: 1, Max Open: 1</td>
+</tr>
+<tr>
+<td>SQLite Memory</td>
+<td><code>sqlitememory:///database_name</code></td>
+<td>Max Idle: 1, Max Open: 1</td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td><code>postgres://user:pass@host:port/db</code></td>
+<td>Max Idle: 2, Max Open: 5</td>
+</tr>
+<tr>
+<td>MySQL</td>
+<td><code>mysql://user:pass@host:port/db</code></td>
+<td>Max Idle: 2, Max Open: 5</td>
+</tr>
+</tbody>
+</table>
+<h2 id="internal-configuration">Internal Configuration</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Value</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AlertProcessingInterval</td>
+<td>5 minutes</td>
+<td>Alert processing frequency</td>
+</tr>
+<tr>
+<td>RequestLogging</td>
+<td>true</td>
+<td>HTTP request logging</td>
+</tr>
+<tr>
+<td>AutoMigrate</td>
+<td>true</td>
+<td>Database schema migration</td>
+</tr>
+<tr>
+<td>DHTMode</td>
+<td>"client"</td>
+<td>DHT client mode</td>
+</tr>
+<tr>
+<td>P2P.IP</td>
+<td>"0.0.0.0"</td>
+<td>P2P listening address</td>
+</tr>
+</tbody>
+</table>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td>Block operations, RPC verification</td>
+</tr>
+<tr>
+<td>UTXOStore</td>
+<td>utxo.Store</td>
+<td>UTXO freezing/unfreezing</td>
+</tr>
+<tr>
+<td>BlockAssemblyClient</td>
+<td>*blockassembly.Client</td>
+<td>Block assembly operations</td>
+</tr>
+<tr>
+<td>PeerClient</td>
+<td>peer.ClientI</td>
+<td>Legacy peer banning</td>
+</tr>
+<tr>
+<td>P2PClient</td>
+<td>p2pservice.ClientI</td>
+<td>P2P peer operations</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Validation</th>
+<th>Error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GenesisKeys</td>
+<td>Must not be empty</td>
+<td><code>config.ErrNoGenesisKeys</code></td>
+</tr>
+<tr>
+<td>P2P.IP</td>
+<td>Length &gt;= 5 characters</td>
+<td><code>config.ErrNoP2PIP</code></td>
+</tr>
+<tr>
+<td>P2P.Port</td>
+<td>Length &gt;= 2 characters</td>
+<td><code>config.ErrNoP2PPort</code></td>
+</tr>
+<tr>
+<td>StoreURL</td>
+<td>Supported scheme</td>
+<td><code>ErrDatastoreUnsupported</code></td>
+</tr>
+</tbody>
+</table>
 <h2 id="configuration-examples">Configuration Examples</h2>
-<h3 id="complete-configuration-example">Complete Configuration Example</h3>
-<div class="highlight"><pre><span></span><code># Alert Service Core Configuration
-alert_store = postgres://alert_user:secure_password@db-server:5432/alert_db?sslmode=require
-alert_genesis_keys = &quot;02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768 | 03aec1d40f02ac7f6df701ef8f629515812f1bcd949b6aa6c7a8dd778b748b2433&quot;
-alert_p2p_private_key = &quot;08c7fec91e75046d0ac6a2b4edb2daaae34b1e4c3c25a48b1ebdffe5955e33bc&quot;
-alert_protocol_id = &quot;/bsv/alert/1.0.0&quot;
-alert_topic_name = &quot;bitcoin_alert_system&quot;
+<h3 id="production-configuration">Production Configuration</h3>
+<div class="highlight"><pre><span></span><code>alert_store = postgres://user:pass@host:5432/alert_db
+alert_genesis_keys = &quot;key1|key2&quot;
 alert_p2p_port = 4001
 </code></pre></div>
-<h3 id="development-configuration-example">Development Configuration Example</h3>
+<h3 id="development-configuration">Development Configuration</h3>
 <div class="highlight"><pre><span></span><code>alert_store = sqlite:///alert
-alert_genesis_keys = &quot;02a1589f2c8e1a4e7cbf28d4d6b676aa2f30811277883211027950e82a83eb2768&quot;
-alert_p2p_port = 4001
-</code></pre></div>
-<h2 id="error-handling-and-troubleshooting">Error Handling and Troubleshooting</h2>
-<h3 id="common-configuration-errors">Common Configuration Errors</h3>
-<p><strong>Genesis Keys Errors:</strong></p>
-<div class="highlight"><pre><span></span><code>Error: ErrNoGenesisKeys
-Cause: No genesis keys provided in configuration
-</code></pre></div>
-<p><strong>P2P Configuration Errors:</strong></p>
-<div class="highlight"><pre><span></span><code>Error: ErrNoP2PIP
-Cause: P2P IP address validation failed (less than 5 characters)
-
-Error: ErrNoP2PPort
-Cause: P2P port validation failed (less than 2 characters when converted to string)
-</code></pre></div>
-<p><strong>Database Connection Errors:</strong></p>
-<div class="highlight"><pre><span></span><code>Error: ErrDatastoreUnsupported
-Cause: Unsupported database scheme in alert_store URL
-Supported schemes: sqlite://, sqlitememory://, postgres://, mysql://
+alert_genesis_keys = &quot;key1&quot;
 </code></pre></div>
 
 

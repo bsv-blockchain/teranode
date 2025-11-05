@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#propagation-settings" class="md-skip">
+        <a href="#propagation-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4477,73 +4477,115 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#network-and-communication-settings" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Network and Communication Settings
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#performance-and-throttling-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance and Throttling Settings
+      Configuration Dependencies
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#transport-and-behavior-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Transport and Behavior Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#dependency-injected-settings-from-other-services" class="md-nav__link">
-    <span class="md-ellipsis">
-      Dependency-Injected Settings (from other services)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Interactions and Dependencies
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Interactions and Dependencies">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#transaction-ingestion-paths" class="md-nav__link">
+  <a href="#http-server-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Transaction Ingestion Paths
+      HTTP Server Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#transaction-validation-architecture" class="md-nav__link">
+  <a href="#grpc-server-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Transaction Validation Architecture
+      gRPC Server Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#client-side-batch-processing-optimization" class="md-nav__link">
+  <a href="#transport-selection" class="md-nav__link">
     <span class="md-ellipsis">
-      Client-Side Batch Processing Optimization
+      Transport Selection
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ipv6-multicast" class="md-nav__link">
+    <span class="md-ellipsis">
+      IPv6 Multicast
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#http-rate-limiting" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP Rate Limiting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ipv6-multicast_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      IPv6 Multicast
     </span>
   </a>
   
@@ -5021,73 +5063,115 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#network-and-communication-settings" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Network and Communication Settings
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#performance-and-throttling-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance and Throttling Settings
+      Configuration Dependencies
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#transport-and-behavior-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Transport and Behavior Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#dependency-injected-settings-from-other-services" class="md-nav__link">
-    <span class="md-ellipsis">
-      Dependency-Injected Settings (from other services)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Interactions and Dependencies
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Interactions and Dependencies">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#transaction-ingestion-paths" class="md-nav__link">
+  <a href="#http-server-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Transaction Ingestion Paths
+      HTTP Server Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#transaction-validation-architecture" class="md-nav__link">
+  <a href="#grpc-server-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Transaction Validation Architecture
+      gRPC Server Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#client-side-batch-processing-optimization" class="md-nav__link">
+  <a href="#transport-selection" class="md-nav__link">
     <span class="md-ellipsis">
-      Client-Side Batch Processing Optimization
+      Transport Selection
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ipv6-multicast" class="md-nav__link">
+    <span class="md-ellipsis">
+      IPv6 Multicast
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#http-rate-limiting" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP Rate Limiting
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ipv6-multicast_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      IPv6 Multicast
     </span>
   </a>
   
@@ -5114,212 +5198,193 @@
 
 
 
-<h1 id="propagation-settings">Propagation Settings</h1>
+<h1 id="propagation-service-settings">Propagation Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/propagation/">Propagation Service</a></p>
-<p>The Propagation service serves as the transaction intake and distribution system for the Teranode network, critical for handling transaction flow between clients and the internal services. This section provides a comprehensive overview of all configuration options, organized by functional category.</p>
-<h2 id="network-and-communication-settings">Network and Communication Settings</h2>
+<h2 id="configuration-settings">Configuration Settings</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
 <th>Type</th>
 <th>Default</th>
-<th>Description</th>
-<th>Impact</th>
+<th>Environment Variable</th>
+<th>Usage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>propagation_grpcListenAddress</code></td>
+<td>IPv6Addresses</td>
 <td>string</td>
 <td>""</td>
-<td>Address for gRPC server to listen on</td>
-<td>Controls the endpoint where the gRPC API is exposed</td>
+<td>ipv6_addresses</td>
+<td>IPv6 multicast addresses for transaction reception</td>
 </tr>
 <tr>
-<td><code>propagation_grpcAddresses</code></td>
-<td>[]string</td>
-<td>[]</td>
-<td>List of gRPC addresses for other services to connect to</td>
-<td>Affects how other services discover and communicate with this service</td>
-</tr>
-<tr>
-<td><code>propagation_httpListenAddress</code></td>
+<td>IPv6Interface</td>
 <td>string</td>
 <td>""</td>
-<td>Address for HTTP server to listen on</td>
-<td>Controls if and where the HTTP transaction API is exposed</td>
+<td>ipv6_interface</td>
+<td>Network interface for IPv6 multicast (defaults to "en0")</td>
 </tr>
 <tr>
-<td><code>propagation_httpAddresses</code></td>
-<td>[]string</td>
-<td>[]</td>
-<td>List of HTTP addresses for other services to connect to</td>
-<td>Affects how other services discover this service's HTTP API</td>
-</tr>
-<tr>
-<td><code>ipv6_addresses</code></td>
-<td>string</td>
-<td>""</td>
-<td>Comma-separated list of IPv6 multicast addresses</td>
-<td>Controls which IPv6 multicast addresses are used for transaction reception</td>
-</tr>
-<tr>
-<td><code>ipv6_interface</code></td>
-<td>string</td>
-<td>""</td>
-<td>Network interface name for IPv6 multicast</td>
-<td>Determines which network interface is used for multicast communication</td>
-</tr>
-</tbody>
-</table>
-<h2 id="performance-and-throttling-settings">Performance and Throttling Settings</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>propagation_grpcMaxConnectionAge</code></td>
-<td>duration</td>
+<td>GRPCMaxConnectionAge</td>
+<td>time.Duration</td>
 <td>90s</td>
-<td>Maximum duration for gRPC connections before forced renewal</td>
-<td>Controls connection lifecycle and helps with load balancing</td>
+<td>propagation_grpcMaxConnectionAge</td>
+<td><strong>CRITICAL</strong> - gRPC connection lifecycle management</td>
 </tr>
 <tr>
-<td><code>propagation_httpRateLimit</code></td>
+<td>HTTPListenAddress</td>
+<td>string</td>
+<td>""</td>
+<td>propagation_httpListenAddress</td>
+<td><strong>CRITICAL</strong> - HTTP server binding, health checks only run if not empty</td>
+</tr>
+<tr>
+<td>HTTPAddresses</td>
+<td>[]string</td>
+<td>[]</td>
+<td>propagation_httpAddresses</td>
+<td>HTTP client connections</td>
+</tr>
+<tr>
+<td>AlwaysUseHTTP</td>
+<td>bool</td>
+<td>false</td>
+<td>propagation_alwaysUseHTTP</td>
+<td><strong>CRITICAL</strong> - Forces HTTP transport over gRPC</td>
+</tr>
+<tr>
+<td>HTTPRateLimit</td>
 <td>int</td>
 <td>1024</td>
-<td>Rate limit for HTTP API requests (per second)</td>
-<td>Controls how many requests per second the HTTP API can handle</td>
+<td>propagation_httpRateLimit</td>
+<td><strong>CRITICAL</strong> - HTTP API rate limiting (requests/second)</td>
 </tr>
 <tr>
-<td><code>propagation_sendBatchSize</code></td>
+<td>SendBatchSize</td>
 <td>int</td>
 <td>100</td>
-<td>Maximum number of transactions to send in a batch</td>
-<td>Affects efficiency and throughput of transaction processing</td>
+<td>propagation_sendBatchSize</td>
+<td>Batch processing configuration</td>
 </tr>
 <tr>
-<td><code>propagation_sendBatchTimeout</code></td>
+<td>SendBatchTimeout</td>
 <td>int</td>
 <td>5</td>
-<td>Timeout in milliseconds for batch sending operations</td>
-<td>Controls how long the service waits to collect a full batch before processing</td>
+<td>propagation_sendBatchTimeout</td>
+<td>Batch timeout configuration (milliseconds)</td>
+</tr>
+<tr>
+<td>GRPCAddresses</td>
+<td>[]string</td>
+<td>[]</td>
+<td>propagation_grpcAddresses</td>
+<td>gRPC client connections</td>
+</tr>
+<tr>
+<td>GRPCListenAddress</td>
+<td>string</td>
+<td>""</td>
+<td>propagation_grpcListenAddress</td>
+<td><strong>CRITICAL</strong> - gRPC server binding, health checks only run if not empty</td>
 </tr>
 </tbody>
 </table>
-<h2 id="transport-and-behavior-settings">Transport and Behavior Settings</h2>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="http-server-management">HTTP Server Management</h3>
+<ul>
+<li>When <code>HTTPListenAddress</code> is not empty, HTTP server starts</li>
+<li><code>HTTPRateLimit</code> controls request rate limiting when HTTP server is active</li>
+</ul>
+<h3 id="grpc-server-management">gRPC Server Management</h3>
+<ul>
+<li>When <code>GRPCListenAddress</code> is not empty, gRPC server starts with connection age management</li>
+<li>Health checks only run if address is configured</li>
+<li><code>GRPCMaxConnectionAge</code> controls connection lifecycle</li>
+</ul>
+<h3 id="transport-selection">Transport Selection</h3>
+<ul>
+<li><code>AlwaysUseHTTP</code> forces HTTP transport over gRPC for transaction operations</li>
+<li>Affects client-side transport selection in transaction processing</li>
+</ul>
+<h3 id="ipv6-multicast">IPv6 Multicast</h3>
+<ul>
+<li>When <code>IPv6Addresses</code> is not empty, starts UDP6 listeners</li>
+<li>Uses <code>IPv6Interface</code> for network interface selection (defaults to "en0")</li>
+</ul>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TxStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Transaction storage and retrieval</td>
+</tr>
+<tr>
+<td>ValidatorClient</td>
+<td>validator.ClientI</td>
+<td><strong>CRITICAL</strong> - Transaction validation operations</td>
+</tr>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td><strong>CRITICAL</strong> - Blockchain state verification</td>
+</tr>
+<tr>
+<td>ValidatorKafkaProducer</td>
+<td>kafka.KafkaAsyncProducerI</td>
+<td><strong>CRITICAL</strong> - Validator messaging</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
+<th>Validation</th>
 <th>Impact</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>propagation_alwaysUseHTTP</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Forces using HTTP instead of gRPC for transaction validation</td>
-<td>Affects performance and reliability of transaction validation</td>
+<td>GRPCListenAddress</td>
+<td>Health checks only if not empty</td>
+<td>Service monitoring</td>
+</tr>
+<tr>
+<td>HTTPListenAddress</td>
+<td>Health checks only if not empty</td>
+<td>Service monitoring</td>
+</tr>
+<tr>
+<td>IPv6Interface</td>
+<td>Defaults to "en0" if empty</td>
+<td>Network interface selection</td>
 </tr>
 </tbody>
 </table>
-<h2 id="dependency-injected-settings-from-other-services">Dependency-Injected Settings (from other services)</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>validator_httpAddress</code></td>
-<td>url</td>
-<td>null</td>
-<td>URL for validator HTTP API</td>
-<td>Used as fallback for large transactions exceeding Kafka limits</td>
-</tr>
-<tr>
-<td><code>validator_kafkaMaxMessageBytes</code></td>
-<td>int</td>
-<td>varies</td>
-<td>Maximum size for Kafka messages in bytes</td>
-<td>Determines when HTTP fallback is used for large transactions</td>
-</tr>
-<tr>
-<td><code>useLocalValidator</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Daemon-level setting for validator deployment mode</td>
-<td>Controls whether validator runs in-process or as separate service</td>
-</tr>
-</tbody>
-</table>
-<h2 id="configuration-interactions-and-dependencies">Configuration Interactions and Dependencies</h2>
-<h3 id="transaction-ingestion-paths">Transaction Ingestion Paths</h3>
-<p>The Propagation service supports multiple methods for receiving transactions, controlled by several related settings:</p>
-<ul>
-<li>HTTP API (<code>propagation_httpListenAddress</code>): REST-based transaction submission, rate-limited by <code>propagation_httpRateLimit</code></li>
-<li>gRPC API (<code>propagation_grpcListenAddress</code>): High-performance RPC interface for transaction submission</li>
-<li>IPv6 Multicast (<code>ipv6_addresses</code> on the specified <code>ipv6_interface</code>): Efficient multicast reception of transactions</li>
-</ul>
-<p>At least one ingestion path must be configured for the service to be functional. For production deployments, all three methods should be configured for maximum compatibility and performance.</p>
-<h3 id="transaction-validation-architecture">Transaction Validation Architecture</h3>
-<p>The Propagation service interacts with the Validator service using one of two architectural patterns:</p>
-<ul>
-<li>
-<p><strong>Local Validator Mode</strong> (<code>useLocalValidator=true</code>):</p>
-</li>
-<li>
-<p>Validator runs in-process with the Propagation service</p>
-</li>
-<li>Eliminates network overhead for validation operations</li>
-<li>
-<p>Recommended for production deployments to minimize latency</p>
-</li>
-<li>
-<p><strong>Remote Validator Mode</strong> (<code>useLocalValidator=false</code>):</p>
-</li>
-<li>
-<p>Propagation service communicates with a separate Validator service</p>
-</li>
-<li>
-<p><strong>Transaction Size-Based Routing</strong>: Transactions are automatically routed based on size:</p>
-<ul>
-<li>Normal transactions (≤ <code>validator_kafka_maxMessageBytes</code>): Sent via Kafka for async validation</li>
-<li>Large transactions (&gt; <code>validator_kafka_maxMessageBytes</code>): Automatically sent via HTTP to <code>validator_httpAddress</code></li>
-<li><strong>Transport Override</strong>: <code>propagation_alwaysUseHTTP=true</code> forces all transactions to use HTTP regardless of size</li>
-<li><strong>Automatic Fallback</strong>: HTTP fallback ensures reliability for transactions of any size</li>
-</ul>
-</li>
-</ul>
-<h3 id="client-side-batch-processing-optimization">Client-Side Batch Processing Optimization</h3>
-<p>The propagation client uses batching to optimize throughput, controlled by:</p>
-<ul>
-<li><code>propagation_sendBatchSize</code>: Determines maximum batch size for client transaction processing (default: 100)</li>
-<li><code>propagation_sendBatchTimeout</code>: Controls how long to wait in milliseconds for a batch to fill before processing (default: 5ms)</li>
-</ul>
-<p>These settings should be tuned together based on expected transaction volume and size characteristics:</p>
-<ul>
-<li><strong>Higher batch sizes</strong> improve throughput but increase latency</li>
-<li><strong>Shorter timeouts</strong> decrease latency but may result in smaller, less efficient batches</li>
-</ul>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>propagation_grpcListenAddress = &quot;:9905&quot;
+propagation_httpListenAddress = &quot;:8080&quot;
+</code></pre></div>
+<h3 id="http-rate-limiting">HTTP Rate Limiting</h3>
+<div class="highlight"><pre><span></span><code>propagation_httpRateLimit = 2048
+propagation_alwaysUseHTTP = false
+</code></pre></div>
+<h3 id="ipv6-multicast_1">IPv6 Multicast</h3>
+<div class="highlight"><pre><span></span><code>ipv6_addresses = &quot;ff02::1&quot;
+ipv6_interface = &quot;eth0&quot;
+</code></pre></div>
 
 
 

@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#block-validation-settings" class="md-skip">
+        <a href="#block-validation-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4408,83 +4408,122 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#network-and-communication-settings" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Network and Communication Settings
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#kafka-and-concurrency-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Kafka and Concurrency Settings
+      Configuration Dependencies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Dependencies">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Catchup Mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transaction-metadata-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Transaction Metadata Processing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#secret-mining-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Secret Mining Detection
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#channel-buffer-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Channel Buffer Management
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#performance-and-optimization" class="md-nav__link">
+  <a href="#validation-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance and Optimization
+      Validation Rules
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#transaction-processing" class="md-nav__link">
+  <a href="#configuration-examples" class="md-nav__link">
     <span class="md-ellipsis">
-      Transaction Processing
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#bloom-filter-management" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#high-performance-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Bloom Filter Management
+      High Performance Configuration
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#advanced-settings" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-mode-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Advanced Settings
+      Catchup Mode Configuration
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#storage-and-state-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      Storage and State Management
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validator-integration-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Validator Integration Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#policy-and-chain-configuration-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Policy and Chain Configuration Dependencies
-    </span>
-  </a>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -5024,83 +5063,122 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#network-and-communication-settings" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Network and Communication Settings
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#kafka-and-concurrency-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Kafka and Concurrency Settings
+      Configuration Dependencies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Dependencies">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Catchup Mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transaction-metadata-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Transaction Metadata Processing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#secret-mining-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Secret Mining Detection
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#channel-buffer-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Channel Buffer Management
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#performance-and-optimization" class="md-nav__link">
+  <a href="#validation-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance and Optimization
+      Validation Rules
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#transaction-processing" class="md-nav__link">
+  <a href="#configuration-examples" class="md-nav__link">
     <span class="md-ellipsis">
-      Transaction Processing
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#bloom-filter-management" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#high-performance-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Bloom Filter Management
+      High Performance Configuration
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#advanced-settings" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-mode-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Advanced Settings
+      Catchup Mode Configuration
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#storage-and-state-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      Storage and State Management
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validator-integration-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Validator Integration Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#policy-and-chain-configuration-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Policy and Chain Configuration Dependencies
-    </span>
-  </a>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -5120,487 +5198,427 @@
 
 
 
-<h1 id="block-validation-settings">Block Validation Settings</h1>
+<h1 id="block-validation-service-settings">Block Validation Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/blockValidation/">Block Validation Service</a></p>
-<p>The Block Validation service configuration can be adjusted through environment variables or command-line flags. This section provides a comprehensive overview of all available configuration options organized by functional category.</p>
-<h2 id="network-and-communication-settings">Network and Communication Settings</h2>
+<h2 id="configuration-settings">Configuration Settings</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
 <th>Type</th>
 <th>Default</th>
-<th>Description</th>
-<th>Impact</th>
+<th>Environment Variable</th>
+<th>Usage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>blockvalidation_grpcAddress</code></td>
+<td>MaxRetries</td>
+<td>int</td>
+<td>3</td>
+<td>blockValidationMaxRetries</td>
+<td>General retry behavior</td>
+</tr>
+<tr>
+<td>RetrySleep</td>
+<td>time.Duration</td>
+<td>1s</td>
+<td>blockValidationRetrySleep</td>
+<td>Retry delay timing</td>
+</tr>
+<tr>
+<td>GRPCAddress</td>
 <td>string</td>
 <td>"localhost:8088"</td>
-<td>Address that other services use to connect to this service</td>
-<td>Affects how other services discover and communicate with the Block Validation service</td>
+<td>blockvalidation_grpcAddress</td>
+<td>Client connection address</td>
 </tr>
 <tr>
-<td><code>blockvalidation_grpcListenAddress</code></td>
+<td>GRPCListenAddress</td>
 <td>string</td>
 <td>":8088"</td>
-<td>Network interface and port the service listens on for gRPC connections</td>
-<td>Controls network binding and accessibility of the service</td>
-</tr>
-</tbody>
-</table>
-<h2 id="kafka-and-concurrency-settings">Kafka and Concurrency Settings</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>kafka_blocksConfig</code></td>
-<td>string</td>
-<td>(none)</td>
-<td>Kafka configuration for block messages</td>
-<td>Required for consuming blocks from Kafka</td>
+<td>blockvalidation_grpcListenAddress</td>
+<td><strong>CRITICAL</strong> - gRPC server binding, health checks only run if not empty</td>
 </tr>
 <tr>
-<td><code>blockvalidation_kafkaWorkers</code></td>
-<td>int</td>
-<td>0 (auto)</td>
-<td>Number of Kafka consumer workers</td>
-<td>Controls parallelism for Kafka-based block validation</td>
-</tr>
-</tbody>
-</table>
-<h2 id="performance-and-optimization">Performance and Optimization</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>blockvalidation_batch_missing_transactions</code></td>
-<td>bool</td>
-<td>false</td>
-<td>When enabled, missing transactions are fetched in batches</td>
-<td>Improves network efficiency at the cost of slightly increased latency</td>
-</tr>
-<tr>
-<td><code>blockvalidation_quickValidationEnabled</code></td>
-<td>bool</td>
-<td>true</td>
-<td>Enable quick validation for checkpointed blocks</td>
-<td>Dramatically improves sync speed for historical blocks</td>
-</tr>
-<tr>
-<td><code>blockvalidation_quickValidationCheckpointHeight</code></td>
-<td>int</td>
-<td>varies</td>
-<td>Height below which quick validation applies</td>
-<td>Controls which blocks use optimized validation</td>
-</tr>
-<tr>
-<td><code>blockvalidation_concurrency_createAllUTXOs</code></td>
-<td>int</td>
-<td>CPU/2 (min 4)</td>
-<td>Parallelism for UTXO creation during quick validation</td>
-<td>Higher values improve performance but increase resource usage</td>
-</tr>
-<tr>
-<td><code>blockvalidation_concurrency_spendAllTransactions</code></td>
-<td>int</td>
-<td>CPU/2 (min 4)</td>
-<td>Parallelism for spending transactions during quick validation</td>
-<td>Controls parallel processing during validation</td>
-</tr>
-<tr>
-<td><code>blockvalidation_processTxMetaUsingCache_BatchSize</code></td>
-<td>int</td>
-<td>1024</td>
-<td>Batch size for processing transaction metadata using cache</td>
-<td>Affects performance and memory usage during cache operations</td>
-</tr>
-<tr>
-<td><code>blockvalidation_processTxMetaUsingCache_Concurrency</code></td>
-<td>int</td>
-<td>32</td>
-<td>Concurrency level for processing transaction metadata using cache</td>
-<td>Controls parallel cache operations</td>
-</tr>
-<tr>
-<td><code>blockvalidation_processTxMetaUsingCache_MissingTxThreshold</code></td>
-<td>int</td>
-<td>1</td>
-<td>Threshold for switching to store-based processing when missing transactions</td>
-<td>Controls fallback behavior when cache misses occur</td>
-</tr>
-<tr>
-<td><code>blockvalidation_processTxMetaUsingStore_BatchSize</code></td>
-<td>int</td>
-<td>CPU/2 (min 4)</td>
-<td>Batch size for processing transaction metadata using store</td>
-<td>Affects performance during store operations</td>
-</tr>
-<tr>
-<td><code>blockvalidation_processTxMetaUsingStore_Concurrency</code></td>
-<td>int</td>
-<td>32</td>
-<td>Concurrency level for processing transaction metadata using store</td>
-<td>Controls parallel store operations</td>
-</tr>
-<tr>
-<td><code>blockvalidation_processTxMetaUsingStore_MissingTxThreshold</code></td>
-<td>int</td>
-<td>1</td>
-<td>Threshold for store-based processing when missing transactions</td>
-<td>Controls fallback behavior for store operations</td>
-</tr>
-<tr>
-<td><code>blockvalidation_skipCheckParentMined</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Skips checking if parent block is mined during validation</td>
-<td>Performance optimization that may reduce validation accuracy</td>
-</tr>
-<tr>
-<td><code>blockvalidation_subtreeFoundChConcurrency</code></td>
-<td>int</td>
-<td>1</td>
-<td>Concurrency level for subtree found channel processing</td>
-<td>Controls parallel subtree processing</td>
-</tr>
-<tr>
-<td><code>blockvalidation_subtree_validation_abandon_threshold</code></td>
-<td>int</td>
-<td>1</td>
-<td>Threshold for abandoning subtree validation</td>
-<td>Controls when to give up on problematic subtrees</td>
-</tr>
-<tr>
-<td><code>blockvalidation_validateBlockSubtreesConcurrency</code></td>
-<td>int</td>
-<td>CPU/2 (min 4)</td>
-<td>Concurrency level for validating block subtrees</td>
-<td>Higher values improve performance but increase resource usage</td>
-</tr>
-<tr>
-<td><code>blockvalidation_validation_max_retries</code></td>
-<td>int</td>
-<td>3</td>
-<td>Maximum number of retries for validation operations</td>
-<td>Controls resilience to transient failures</td>
-</tr>
-<tr>
-<td><code>blockvalidation_validation_retry_sleep</code></td>
-<td>duration</td>
-<td>5s</td>
-<td>Sleep duration between validation retries</td>
-<td>Controls backoff timing for retry operations</td>
-</tr>
-<tr>
-<td><code>blockvalidation_isParentMined_retry_max_retry</code></td>
-<td>int</td>
-<td>20</td>
-<td>Maximum retries for checking if parent block is mined</td>
-<td>Controls persistence when checking parent block status</td>
-</tr>
-<tr>
-<td><code>blockvalidation_isParentMined_retry_backoff_multiplier</code></td>
-<td>int</td>
-<td>30</td>
-<td>Backoff multiplier for parent mined check retries</td>
-<td>Controls exponential backoff timing</td>
-</tr>
-<tr>
-<td><code>blockvalidation_subtreeGroupConcurrency</code></td>
-<td>int</td>
-<td>1</td>
-<td>Concurrency level for subtree group processing</td>
-<td>Controls parallel processing of subtree groups</td>
-</tr>
-<tr>
-<td><code>blockvalidation_blockFoundCh_buffer_size</code></td>
-<td>int</td>
-<td>1000</td>
-<td>Buffer size for block found channel</td>
-<td>Controls memory usage and throughput for block notifications</td>
-</tr>
-<tr>
-<td><code>blockvalidation_catchupCh_buffer_size</code></td>
-<td>int</td>
-<td>10</td>
-<td>Buffer size for catchup channel</td>
-<td>Controls memory usage for catchup operations</td>
-</tr>
-<tr>
-<td><code>blockvalidation_useCatchupWhenBehind</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Enables catchup mechanism when node is behind</td>
-<td>Improves sync performance but increases complexity</td>
-</tr>
-<tr>
-<td><code>blockvalidation_catchupConcurrency</code></td>
-<td>int</td>
-<td>CPU/2 (min 4)</td>
-<td>Concurrency level for catchup operations</td>
-<td>Controls parallel processing during catchup</td>
-</tr>
-<tr>
-<td><code>blockvalidation_check_subtree_from_block_timeout</code></td>
-<td>duration</td>
-<td>5m</td>
-<td>Timeout for checking subtree from block</td>
-<td>Controls maximum wait time for subtree operations</td>
-</tr>
-<tr>
-<td><code>blockvalidation_check_subtree_from_block_retries</code></td>
-<td>int</td>
-<td>5</td>
-<td>Maximum retries for subtree from block checks</td>
-<td>Controls resilience for subtree operations</td>
-</tr>
-<tr>
-<td><code>blockvalidation_check_subtree_from_block_retry_backoff_duration</code></td>
-<td>duration</td>
-<td>30s</td>
-<td>Backoff duration for subtree check retries</td>
-<td>Controls timing between retry attempts</td>
-</tr>
-<tr>
-<td><code>blockvalidation_secret_mining_threshold</code></td>
-<td>uint32</td>
-<td>10</td>
-<td>Threshold for detecting secret mining attacks</td>
-<td>Security parameter for chain reorganization detection</td>
-</tr>
-<tr>
-<td><code>blockvalidation_previous_block_header_count</code></td>
-<td>uint64</td>
-<td>100</td>
-<td>Number of previous block headers to maintain</td>
-<td>Controls memory usage and validation depth</td>
-</tr>
-<tr>
-<td><code>blockvalidation_maxPreviousBlockHeadersToCheck</code></td>
-<td>uint64</td>
-<td>100</td>
-<td>Maximum previous block headers to check during validation</td>
-<td>Limits validation scope for performance</td>
-</tr>
-<tr>
-<td><code>blockvalidation_fail_fast_validation</code></td>
-<td>bool</td>
-<td>true</td>
-<td>Enables fail-fast validation mode</td>
-<td>Improves performance by stopping validation early on errors</td>
-</tr>
-<tr>
-<td><code>blockvalidation_finalizeBlockValidationConcurrency</code></td>
-<td>int</td>
-<td>8</td>
-<td>Concurrency level for finalizing block validation</td>
-<td>Controls parallel finalization operations</td>
-</tr>
-<tr>
-<td><code>blockvalidation_getMissingTransactions</code></td>
-<td>int</td>
-<td>32</td>
-<td>Concurrency level for retrieving missing transactions</td>
-<td>Controls parallel transaction retrieval</td>
-</tr>
-</tbody>
-</table>
-<h2 id="transaction-processing">Transaction Processing</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>blockvalidation_localSetTxMinedConcurrency</code></td>
-<td>int</td>
-<td>8</td>
-<td>Concurrency level for marking transactions as mined</td>
-<td>Higher values improve performance but increase memory usage</td>
-</tr>
-<tr>
-<td><code>blockvalidation_missingTransactionsBatchSize</code></td>
-<td>int</td>
-<td>5000</td>
-<td>Batch size for retrieving missing transactions</td>
-<td>Larger batches improve throughput but increase memory usage</td>
-</tr>
-</tbody>
-</table>
-<h2 id="bloom-filter-management">Bloom Filter Management</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>blockvalidation_bloom_filter_retention_size</code></td>
-<td>uint32</td>
-<td>GlobalBlockHeightRetention + 2</td>
-<td>Number of recent blocks to maintain bloom filters for</td>
-<td>Affects memory usage and duplicate transaction detection efficiency. Automatically set based on global retention settings</td>
-</tr>
-</tbody>
-</table>
-<h2 id="advanced-settings">Advanced Settings</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>blockvalidation_optimistic_mining</code></td>
-<td>bool</td>
-<td>true</td>
-<td>When enabled, blocks are conditionally accepted before full validation</td>
-<td>Dramatically improves throughput at the cost of temporary chain inconsistency if validation fails</td>
-</tr>
-<tr>
-<td><code>blockvalidation_invalidBlockTracking</code></td>
-<td>bool</td>
-<td>true</td>
-<td>Track invalid blocks during validation</td>
-<td>Prevents reprocessing of known invalid blocks</td>
-</tr>
-<tr>
-<td><code>blockvalidation_validation_warmup_count</code></td>
-<td>int</td>
-<td>128</td>
-<td>Number of validation operations during warmup</td>
-<td>Helps prime caches and establish performance baselines</td>
-</tr>
-<tr>
-<td><code>excessiveblocksize</code></td>
-<td>int</td>
-<td>4GB</td>
-<td>Maximum allowed block size</td>
-<td>Limits resource consumption for extremely large blocks</td>
-</tr>
-</tbody>
-</table>
-<h2 id="storage-and-state-management">Storage and State Management</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>blockValidationMaxRetries</code></td>
-<td>int</td>
-<td>3</td>
-<td>Maximum retry attempts for block validation operations</td>
-<td>Controls resilience and retry behavior for failed validation operations</td>
-</tr>
-<tr>
-<td><code>blockValidationRetrySleep</code></td>
-<td>duration</td>
-<td>1s</td>
-<td>Sleep duration between retry attempts</td>
-<td>Controls retry timing and system load during failures</td>
-</tr>
-<tr>
-<td><code>utxostore</code></td>
-<td>URL</td>
-<td>(none)</td>
-<td>URL for the UTXO store</td>
-<td>Required for UTXO validation and updates</td>
-</tr>
-<tr>
-<td><code>fsm_state_restore</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Enables FSM state restoration</td>
-<td>Affects recovery behavior after service restart</td>
-</tr>
-<tr>
-<td><code>blockvalidation_subtreeBlockHeightRetention</code></td>
-<td>uint32</td>
-<td>(global setting)</td>
-<td>How long to keep subtrees (in terms of block height)</td>
-<td>Affects storage utilization and historical data availability</td>
-</tr>
-</tbody>
-</table>
-<h2 id="validator-integration-settings">Validator Integration Settings</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>blockValidationDelay</code></td>
+<td>KafkaWorkers</td>
 <td>int</td>
 <td>0</td>
-<td>Delay for block validation operations in validator</td>
-<td>Controls timing of validation operations within the validator component</td>
+<td>blockvalidation_kafkaWorkers</td>
+<td>Kafka consumer parallelism</td>
 </tr>
 <tr>
-<td><code>blockValidationMaxRetries</code></td>
+<td>LocalSetTxMinedConcurrency</td>
+<td>int</td>
+<td>8</td>
+<td>blockvalidation_localSetTxMinedConcurrency</td>
+<td>Transaction mining concurrency</td>
+</tr>
+<tr>
+<td>MaxPreviousBlockHeadersToCheck</td>
+<td>uint64</td>
+<td>100</td>
+<td>blockvalidation_maxPreviousBlockHeadersToCheck</td>
+<td>Block header validation depth</td>
+</tr>
+<tr>
+<td>MissingTransactionsBatchSize</td>
+<td>int</td>
+<td>5000</td>
+<td>blockvalidation_missingTransactionsBatchSize</td>
+<td>Missing transaction batch size</td>
+</tr>
+<tr>
+<td>ProcessTxMetaUsingCacheBatchSize</td>
+<td>int</td>
+<td>1024</td>
+<td>blockvalidation_processTxMetaUsingCache_BatchSize</td>
+<td>Cache processing batch size</td>
+</tr>
+<tr>
+<td>ProcessTxMetaUsingCacheConcurrency</td>
+<td>int</td>
+<td>32</td>
+<td>blockvalidation_processTxMetaUsingCache_Concurrency</td>
+<td>Cache processing concurrency</td>
+</tr>
+<tr>
+<td>ProcessTxMetaUsingCacheMissingTxThreshold</td>
+<td>int</td>
+<td>1</td>
+<td>blockvalidation_processTxMetaUsingCache_MissingTxThreshold</td>
+<td>Cache miss threshold</td>
+</tr>
+<tr>
+<td>ProcessTxMetaUsingStoreBatchSize</td>
+<td>int</td>
+<td>max(4, CPU/2)</td>
+<td>blockvalidation_processTxMetaUsingStore_BatchSize</td>
+<td>Store processing batch size</td>
+</tr>
+<tr>
+<td>ProcessTxMetaUsingStoreConcurrency</td>
+<td>int</td>
+<td>32</td>
+<td>blockvalidation_processTxMetaUsingStore_Concurrency</td>
+<td>Store processing concurrency</td>
+</tr>
+<tr>
+<td>ProcessTxMetaUsingStoreMissingTxThreshold</td>
+<td>int</td>
+<td>1</td>
+<td>blockvalidation_processTxMetaUsingStore_MissingTxThreshold</td>
+<td>Store miss threshold</td>
+</tr>
+<tr>
+<td>SkipCheckParentMined</td>
+<td>bool</td>
+<td>false</td>
+<td>blockvalidation_skipCheckParentMined</td>
+<td>Parent block mining validation</td>
+</tr>
+<tr>
+<td>SubtreeFoundChConcurrency</td>
+<td>int</td>
+<td>1</td>
+<td>blockvalidation_subtreeFoundChConcurrency</td>
+<td>Subtree processing concurrency</td>
+</tr>
+<tr>
+<td>SubtreeValidationAbandonThreshold</td>
+<td>int</td>
+<td>1</td>
+<td>blockvalidation_subtree_validation_abandon_threshold</td>
+<td>Subtree validation abandonment</td>
+</tr>
+<tr>
+<td>ValidateBlockSubtreesConcurrency</td>
+<td>int</td>
+<td>max(4, CPU/2)</td>
+<td>blockvalidation_validateBlockSubtreesConcurrency</td>
+<td>Block subtree validation concurrency</td>
+</tr>
+<tr>
+<td>ValidationMaxRetries</td>
 <td>int</td>
 <td>3</td>
-<td>Maximum retries for validator block validation operations</td>
-<td>Controls validator-specific retry behavior for block validation</td>
+<td>blockvalidation_validation_max_retries</td>
+<td>Validation retry attempts</td>
 </tr>
 <tr>
-<td><code>blockValidationRetrySleep</code></td>
-<td>string</td>
-<td>"1s"</td>
-<td>Sleep duration between validator retry attempts</td>
-<td>Controls validator retry timing and backoff behavior</td>
+<td>ValidationRetrySleep</td>
+<td>time.Duration</td>
+<td>5s</td>
+<td>blockvalidation_validation_retry_sleep</td>
+<td>Validation retry delay</td>
+</tr>
+<tr>
+<td>OptimisticMining</td>
+<td>bool</td>
+<td>true</td>
+<td>blockvalidation_optimistic_mining</td>
+<td>Optimistic mining behavior</td>
+</tr>
+<tr>
+<td>IsParentMinedRetryMaxRetry</td>
+<td>int</td>
+<td>20</td>
+<td>blockvalidation_isParentMined_retry_max_retry</td>
+<td>Parent mining check retries</td>
+</tr>
+<tr>
+<td>IsParentMinedRetryBackoffMultiplier</td>
+<td>int</td>
+<td>30</td>
+<td>blockvalidation_isParentMined_retry_backoff_multiplier</td>
+<td>Parent mining retry backoff</td>
+</tr>
+<tr>
+<td>SubtreeGroupConcurrency</td>
+<td>int</td>
+<td>1</td>
+<td>blockvalidation_subtreeGroupConcurrency</td>
+<td>Subtree group processing concurrency</td>
+</tr>
+<tr>
+<td>BlockFoundChBufferSize</td>
+<td>int</td>
+<td>1000</td>
+<td>blockvalidation_blockFoundCh_buffer_size</td>
+<td>Block discovery pipeline buffer</td>
+</tr>
+<tr>
+<td>CatchupChBufferSize</td>
+<td>int</td>
+<td>10</td>
+<td>blockvalidation_catchupCh_buffer_size</td>
+<td>Catchup processing pipeline buffer</td>
+</tr>
+<tr>
+<td>UseCatchupWhenBehind</td>
+<td>bool</td>
+<td>false</td>
+<td>blockvalidation_useCatchupWhenBehind</td>
+<td><strong>CRITICAL</strong> - Catchup mode enablement</td>
+</tr>
+<tr>
+<td>CatchupConcurrency</td>
+<td>int</td>
+<td>max(4, CPU/2)</td>
+<td>blockvalidation_catchupConcurrency</td>
+<td>Catchup processing concurrency</td>
+</tr>
+<tr>
+<td>ValidationWarmupCount</td>
+<td>int</td>
+<td>128</td>
+<td>blockvalidation_validation_warmup_count</td>
+<td>Validation warmup behavior</td>
+</tr>
+<tr>
+<td>BatchMissingTransactions</td>
+<td>bool</td>
+<td>false</td>
+<td>blockvalidation_batch_missing_transactions</td>
+<td>Missing transaction batching</td>
+</tr>
+<tr>
+<td>CheckSubtreeFromBlockTimeout</td>
+<td>time.Duration</td>
+<td>5m</td>
+<td>blockvalidation_check_subtree_from_block_timeout</td>
+<td>Subtree validation timeout</td>
+</tr>
+<tr>
+<td>CheckSubtreeFromBlockRetries</td>
+<td>int</td>
+<td>5</td>
+<td>blockvalidation_check_subtree_from_block_retries</td>
+<td>Subtree validation retries</td>
+</tr>
+<tr>
+<td>CheckSubtreeFromBlockRetryBackoffDuration</td>
+<td>time.Duration</td>
+<td>30s</td>
+<td>blockvalidation_check_subtree_from_block_retry_backoff_duration</td>
+<td>Subtree retry backoff</td>
+</tr>
+<tr>
+<td>SecretMiningThreshold</td>
+<td>uint32</td>
+<td>99</td>
+<td>blockvalidation_secret_mining_threshold</td>
+<td><strong>CRITICAL</strong> - Secret mining detection</td>
+</tr>
+<tr>
+<td>PreviousBlockHeaderCount</td>
+<td>uint64</td>
+<td>100</td>
+<td>blockvalidation_previous_block_header_count</td>
+<td><strong>CRITICAL</strong> - Header chain cache size</td>
+</tr>
+<tr>
+<td>CatchupMaxRetries</td>
+<td>int</td>
+<td>3</td>
+<td>blockvalidation_catchup_max_retries</td>
+<td>Catchup operation retries</td>
+</tr>
+<tr>
+<td>CatchupIterationTimeout</td>
+<td>int</td>
+<td>30</td>
+<td>blockvalidation_catchup_iteration_timeout</td>
+<td><strong>CRITICAL</strong> - Catchup iteration timeout</td>
+</tr>
+<tr>
+<td>CatchupOperationTimeout</td>
+<td>int</td>
+<td>300</td>
+<td>blockvalidation_catchup_operation_timeout</td>
+<td><strong>CRITICAL</strong> - Catchup operation timeout</td>
+</tr>
+<tr>
+<td>CatchupMaxAccumulatedHeaders</td>
+<td>int</td>
+<td>100000</td>
+<td>blockvalidation_max_accumulated_headers</td>
+<td><strong>CRITICAL</strong> - Memory protection during catchup</td>
+</tr>
+<tr>
+<td>CircuitBreakerFailureThreshold</td>
+<td>int</td>
+<td>5</td>
+<td>blockvalidation_circuit_breaker_failure_threshold</td>
+<td>Circuit breaker failure detection</td>
+</tr>
+<tr>
+<td>CircuitBreakerSuccessThreshold</td>
+<td>int</td>
+<td>2</td>
+<td>blockvalidation_circuit_breaker_success_threshold</td>
+<td>Circuit breaker recovery</td>
+</tr>
+<tr>
+<td>CircuitBreakerTimeoutSeconds</td>
+<td>int</td>
+<td>30</td>
+<td>blockvalidation_circuit_breaker_timeout_seconds</td>
+<td>Circuit breaker timeout</td>
 </tr>
 </tbody>
 </table>
-<h2 id="policy-and-chain-configuration-dependencies">Policy and Chain Configuration Dependencies</h2>
-<p>The Block Validation service depends on several chain configuration parameters that must be properly configured for difficulty calculations and block validation.</p>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="catchup-mode">Catchup Mode</h3>
+<ul>
+<li>When <code>UseCatchupWhenBehind = true</code>, all catchup settings control behavior</li>
+<li><code>CatchupMaxAccumulatedHeaders</code> prevents memory exhaustion</li>
+<li>Timeout settings control iteration and operation limits</li>
+</ul>
+<h3 id="transaction-metadata-processing">Transaction Metadata Processing</h3>
+<ul>
+<li>Cache and store processing work together with threshold-based fallback</li>
+<li>Batch sizes and concurrency settings control performance</li>
+</ul>
+<h3 id="secret-mining-detection">Secret Mining Detection</h3>
+<ul>
+<li><code>SecretMiningThreshold</code> uses <code>PreviousBlockHeaderCount</code> for analysis</li>
+<li>Detection triggers when block difference exceeds threshold</li>
+</ul>
+<h3 id="channel-buffer-management">Channel Buffer Management</h3>
+<ul>
+<li><code>BlockFoundChBufferSize</code> and <code>CatchupChBufferSize</code> must accommodate processing loads</li>
+</ul>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UTXOStore</td>
+<td>utxo.Store</td>
+<td><strong>CRITICAL</strong> - UTXO operations and validation</td>
+</tr>
+<tr>
+<td>TxStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Transaction data access</td>
+</tr>
+<tr>
+<td>SubtreeStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Subtree validation</td>
+</tr>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td><strong>CRITICAL</strong> - Blockchain operations and header retrieval</td>
+</tr>
+<tr>
+<td>SubtreeValidationClient</td>
+<td>subtreevalidation.ClientI</td>
+<td><strong>CRITICAL</strong> - Subtree validation operations</td>
+</tr>
+<tr>
+<td>ValidatorClient</td>
+<td>validator.ClientI</td>
+<td><strong>CRITICAL</strong> - Block validation operations</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Validation</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GRPCListenAddress</td>
+<td>Health checks only if not empty</td>
+<td>Service monitoring</td>
+</tr>
+<tr>
+<td>UseCatchupWhenBehind</td>
+<td>Controls catchup mode activation</td>
+<td>Chain synchronization</td>
+</tr>
+<tr>
+<td>CatchupMaxAccumulatedHeaders</td>
+<td>Limits memory usage</td>
+<td>Memory protection</td>
+</tr>
+<tr>
+<td>SecretMiningThreshold</td>
+<td>Enables attack detection</td>
+<td>Security</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>blockvalidation_grpcListenAddress = &quot;:8088&quot;
+blockvalidation_useCatchupWhenBehind = false
+</code></pre></div>
+<h3 id="high-performance-configuration">High Performance Configuration</h3>
+<div class="highlight"><pre><span></span><code>blockvalidation_validateBlockSubtreesConcurrency = 16
+blockvalidation_processTxMetaUsingStoreBatchSize = 2048
+blockvalidation_catchupConcurrency = 8
+</code></pre></div>
+<h3 id="catchup-mode-configuration">Catchup Mode Configuration</h3>
+<div class="highlight"><pre><span></span><code>blockvalidation_useCatchupWhenBehind = true
+blockvalidation_catchup_max_retries = 5
+blockvalidation_catchup_iteration_timeout = 60
+blockvalidation_max_accumulated_headers = 50000
+</code></pre></div>
 
 
 

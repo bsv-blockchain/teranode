@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#p2p-settings" class="md-skip">
+        <a href="#p2p-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4454,145 +4454,55 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#network-and-discovery-settings" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Network and Discovery Settings
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#service-endpoints" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Service Endpoints
+      Configuration Dependencies
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#peer-to-peer-topics" class="md-nav__link">
-    <span class="md-ellipsis">
-      Peer-to-Peer Topics
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#authentication-and-security" class="md-nav__link">
-    <span class="md-ellipsis">
-      Authentication and Security
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#nat-traversal-essential-for-production" class="md-nav__link">
-    <span class="md-ellipsis">
-      NAT Traversal (Essential for Production)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#connection-limits-prevents-resource-exhaustion" class="md-nav__link">
-    <span class="md-ellipsis">
-      Connection Limits (Prevents Resource Exhaustion)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#ban-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      Ban Management
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#operation-mode-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Operation Mode Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#external-service-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      External Service Dependencies
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#grpc-client-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      GRPC Client Configuration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#kafka-integration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Kafka Integration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#subtree-validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Subtree Validation
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#blockchain-store-integration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Blockchain Store Integration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-validation-rules" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Validation Rules
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Validation Rules">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#required-configuration" class="md-nav__link">
+  <a href="#peer-health-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Required Configuration
+      Peer Health Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#key-management" class="md-nav__link">
+  <a href="#forced-sync-peer-selection" class="md-nav__link">
     <span class="md-ellipsis">
-      Key Management
+      Forced Sync Peer Selection
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network-address-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Network Address Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-connection-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Peer Connection Management
     </span>
   </a>
   
@@ -4604,52 +4514,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-interactions-and-dependencies" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Interactions and Dependencies
+      Service Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Interactions and Dependencies">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#network-binding-and-discovery" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Network Binding and Discovery
+      Basic Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer-discovery-and-connection" class="md-nav__link">
+  <a href="#peer-health-monitoring" class="md-nav__link">
     <span class="md-ellipsis">
-      Peer Discovery and Connection
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Peer Discovery and Connection">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#bootstrap-vs-static-peers" class="md-nav__link">
-    <span class="md-ellipsis">
-      Bootstrap vs Static Peers
+      Peer Health Monitoring
     </span>
   </a>
   
 </li>
         
-      </ul>
-    </nav>
-  
-</li>
-        
           <li class="md-nav__item">
-  <a href="#security-and-authentication" class="md-nav__link">
+  <a href="#forced-sync-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Security and Authentication
+      Forced Sync Configuration
     </span>
   </a>
   
@@ -5150,145 +5063,55 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#network-and-discovery-settings" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Network and Discovery Settings
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#service-endpoints" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Service Endpoints
+      Configuration Dependencies
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#peer-to-peer-topics" class="md-nav__link">
-    <span class="md-ellipsis">
-      Peer-to-Peer Topics
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#authentication-and-security" class="md-nav__link">
-    <span class="md-ellipsis">
-      Authentication and Security
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#nat-traversal-essential-for-production" class="md-nav__link">
-    <span class="md-ellipsis">
-      NAT Traversal (Essential for Production)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#connection-limits-prevents-resource-exhaustion" class="md-nav__link">
-    <span class="md-ellipsis">
-      Connection Limits (Prevents Resource Exhaustion)
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#ban-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      Ban Management
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#operation-mode-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Operation Mode Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#external-service-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      External Service Dependencies
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#grpc-client-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      GRPC Client Configuration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#kafka-integration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Kafka Integration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#subtree-validation" class="md-nav__link">
-    <span class="md-ellipsis">
-      Subtree Validation
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#blockchain-store-integration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Blockchain Store Integration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-validation-rules" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Validation Rules
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Validation Rules">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#required-configuration" class="md-nav__link">
+  <a href="#peer-health-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Required Configuration
+      Peer Health Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#key-management" class="md-nav__link">
+  <a href="#forced-sync-peer-selection" class="md-nav__link">
     <span class="md-ellipsis">
-      Key Management
+      Forced Sync Peer Selection
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network-address-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Network Address Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-connection-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Peer Connection Management
     </span>
   </a>
   
@@ -5300,52 +5123,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-interactions-and-dependencies" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Interactions and Dependencies
+      Service Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Interactions and Dependencies">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#network-binding-and-discovery" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Network Binding and Discovery
+      Basic Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#peer-discovery-and-connection" class="md-nav__link">
+  <a href="#peer-health-monitoring" class="md-nav__link">
     <span class="md-ellipsis">
-      Peer Discovery and Connection
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Peer Discovery and Connection">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#bootstrap-vs-static-peers" class="md-nav__link">
-    <span class="md-ellipsis">
-      Bootstrap vs Static Peers
+      Peer Health Monitoring
     </span>
   </a>
   
 </li>
         
-      </ul>
-    </nav>
-  
-</li>
-        
           <li class="md-nav__item">
-  <a href="#security-and-authentication" class="md-nav__link">
+  <a href="#forced-sync-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Security and Authentication
+      Forced Sync Configuration
     </span>
   </a>
   
@@ -5372,643 +5198,312 @@
 
 
 
-<h1 id="p2p-settings">P2P Settings</h1>
+<h1 id="p2p-service-settings">P2P Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/p2p/">P2P Service</a></p>
-<p>The P2P service serves as the communication backbone of the Teranode network, enabling nodes to discover, connect, and exchange data with each other. This section provides a comprehensive overview of all configuration options, organized by functional category.</p>
-<h2 id="network-and-discovery-settings">Network and Discovery Settings</h2>
+<h2 id="configuration-settings">Configuration Settings</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
 <th>Type</th>
 <th>Default</th>
-<th>Description</th>
-<th>Impact</th>
+<th>Environment Variable</th>
+<th>Usage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>p2p_listen_addresses</code></td>
+<td>BootstrapAddresses</td>
 <td>[]string</td>
 <td>[]</td>
-<td>Network addresses for the P2P service to listen on</td>
-<td>Controls which interfaces and ports the service binds to for accepting connections</td>
+<td>p2p_bootstrapAddresses</td>
+<td>DHT bootstrapping entry points</td>
 </tr>
 <tr>
-<td><code>p2p_advertise_addresses</code></td>
-<td>[]string</td>
-<td>[]</td>
-<td>Addresses to advertise to other peers</td>
-<td>Affects how other peers discover and connect to this node. Supports both IP addresses and domain names with optional port specification (e.g., <code>192.168.1.1</code>, <code>example.com:9906</code>). When port is omitted, the <code>p2p_port</code> value is used.</td>
-</tr>
-<tr>
-<td><code>p2p_port</code></td>
-<td>int</td>
-<td>9906</td>
-<td>Default port for P2P communication</td>
-<td>Used as the fallback port when addresses don't specify a port</td>
-</tr>
-<tr>
-<td><code>p2p_share_private_addresses</code></td>
-<td>bool</td>
-<td>true</td>
-<td>Advertise private/local IP addresses to peers</td>
-<td>Controls whether private addresses are shared for local/test environments vs production privacy</td>
-</tr>
-<tr>
-<td><code>p2p_bootstrapAddresses</code></td>
-<td>[]string</td>
-<td>[]</td>
-<td>Initial peer addresses for bootstrapping the DHT</td>
-<td>Helps new nodes join the network by providing entry points</td>
-</tr>
-<tr>
-<td><code>p2p_bootstrap_persistent</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Add bootstrap addresses to static peers</td>
-<td>When enabled, bootstrap addresses are automatically added to the static peers list for persistent connections</td>
-</tr>
-<tr>
-<td><code>p2p_static_peers</code></td>
-<td>[]string</td>
-<td>[]</td>
-<td>Peer addresses to connect to on startup</td>
-<td>Ensures connections to specific peers regardless of discovery</td>
-</tr>
-<tr>
-<td><code>p2p_dht_protocol_id</code></td>
+<td>GRPCAddress</td>
 <td>string</td>
 <td>""</td>
-<td>Protocol identifier for DHT communications</td>
-<td>Affects how nodes discover each other in the network</td>
+<td>p2p_grpcAddress</td>
+<td>gRPC client connections</td>
 </tr>
 <tr>
-<td><code>p2p_dht_use_private</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Use private DHT mode</td>
-<td>Restricts DHT communication to trusted peers when enabled</td>
-</tr>
-<tr>
-<td><code>p2p_optimise_retries</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Optimize retry behavior for peer connections</td>
-<td>Improves efficiency of connection attempts in certain network conditions</td>
-</tr>
-<tr>
-<td><code>listen_mode</code></td>
-<td>string</td>
-<td>"full"</td>
-<td>Node operation mode</td>
-<td>Controls node behavior: "full" for normal operation, "listen_only" for passive mode</td>
-</tr>
-</tbody>
-</table>
-<h2 id="service-endpoints">Service Endpoints</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>p2p_grpcAddress</code></td>
-<td>string</td>
-<td>""</td>
-<td>Address for other services to connect to this service</td>
-<td>Enables service-to-service communication</td>
-</tr>
-<tr>
-<td><code>p2p_grpcListenAddress</code></td>
+<td>GRPCListenAddress</td>
 <td>string</td>
 <td>":9906"</td>
-<td>Interface and port to listen on for gRPC connections</td>
-<td>Controls network binding for the gRPC server</td>
+<td>p2p_grpcListenAddress</td>
+<td><strong>CRITICAL</strong> - gRPC server binding</td>
 </tr>
 <tr>
-<td><code>p2p_httpAddress</code></td>
+<td>HTTPAddress</td>
 <td>string</td>
 <td>"localhost:9906"</td>
-<td>Address other services use to connect to HTTP API</td>
-<td>Affects how other services discover the P2P HTTP API</td>
+<td>p2p_httpAddress</td>
+<td>HTTP client connections</td>
 </tr>
 <tr>
-<td><code>p2p_httpListenAddress</code></td>
+<td>HTTPListenAddress</td>
 <td>string</td>
 <td>""</td>
-<td>Interface and port to listen on for HTTP connections</td>
-<td>Controls network binding for the HTTP server</td>
+<td>p2p_httpListenAddress</td>
+<td>HTTP server binding</td>
 </tr>
 <tr>
-<td><code>securityLevelHTTP</code></td>
-<td>int</td>
-<td>0</td>
-<td>HTTP security level (0=HTTP, 1=HTTPS)</td>
-<td>Determines whether HTTP or HTTPS is used for web connections</td>
-</tr>
-<tr>
-<td><code>server_certFile</code></td>
-<td>string</td>
-<td>""</td>
-<td>Path to SSL certificate file</td>
-<td>Required for HTTPS when security level is 1</td>
-</tr>
-<tr>
-<td><code>server_keyFile</code></td>
-<td>string</td>
-<td>""</td>
-<td>Path to SSL key file</td>
-<td>Required for HTTPS when security level is 1</td>
-</tr>
-</tbody>
-</table>
-<h2 id="peer-to-peer-topics">Peer-to-Peer Topics</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>p2p_bestblock_topic</code></td>
-<td>string</td>
-<td>""</td>
-<td>Topic name for best block announcements</td>
-<td>Controls subscription and publication to the best block channel</td>
-</tr>
-<tr>
-<td><code>p2p_block_topic</code></td>
-<td>string</td>
-<td>""</td>
-<td>Topic name for block announcements</td>
-<td>Controls subscription and publication to the block channel</td>
-</tr>
-<tr>
-<td><code>p2p_subtree_topic</code></td>
-<td>string</td>
-<td>""</td>
-<td>Topic name for subtree announcements</td>
-<td>Controls subscription and publication to the subtree channel</td>
-</tr>
-<tr>
-<td><code>p2p_mining_on_topic</code></td>
-<td>string</td>
-<td>""</td>
-<td>Topic name for mining status announcements</td>
-<td>Controls subscription and publication to the mining status channel</td>
-</tr>
-<tr>
-<td><code>p2p_rejected_tx_topic</code></td>
-<td>string</td>
-<td>""</td>
-<td>Topic name for rejected transaction announcements</td>
-<td>Controls subscription to rejected transaction notifications</td>
-</tr>
-<tr>
-<td><code>p2p_handshake_topic</code></td>
-<td>string</td>
-<td>""</td>
-<td><strong>REQUIRED</strong> - Topic name for peer handshake messages</td>
-<td>Used for version and verack exchanges between peers. During handshake, peers exchange their user agent (format: <code>teranode/bitcoin/{version}</code>), best block height, topic prefix for chain validation, and other connection metadata. Service will fail to start if not configured.</td>
-</tr>
-<tr>
-<td><code>p2p_handshake_topic_size</code></td>
-<td>int</td>
-<td>1</td>
-<td>Minimum topic size for handshake publishing</td>
-<td>Controls reliability of handshake message delivery</td>
-</tr>
-<tr>
-<td><code>p2p_handshake_topic_timeout</code></td>
-<td>duration</td>
-<td>5s</td>
-<td>Timeout for handshake topic operations</td>
-<td>Maximum wait time for handshake topic readiness</td>
-</tr>
-<tr>
-<td><code>p2p_node_status_topic</code></td>
-<td>string</td>
-<td>""</td>
-<td>Topic name for node status messages</td>
-<td>Controls subscription and publication to the node status channel</td>
-</tr>
-</tbody>
-</table>
-<h2 id="authentication-and-security">Authentication and Security</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>p2p_peer_id</code></td>
-<td>string</td>
-<td>""</td>
-<td>Unique identifier for the P2P node</td>
-<td>Used to identify this node in the P2P network</td>
-</tr>
-<tr>
-<td><code>p2p_private_key</code></td>
-<td>string</td>
-<td>""</td>
-<td>Private key for P2P authentication</td>
-<td>Provides cryptographic identity for the node; if not provided, will be auto-generated and stored</td>
-</tr>
-<tr>
-<td><code>p2p_shared_key</code></td>
-<td>string</td>
-<td>""</td>
-<td>Shared key for private network communication</td>
-<td>When provided, ensures only nodes with the same shared key can communicate</td>
-</tr>
-<tr>
-<td><code>grpcAdminAPIKey</code></td>
-<td>string</td>
-<td>""</td>
-<td>API key for gRPC admin operations</td>
-<td>Required for administrative gRPC calls to the P2P service</td>
-</tr>
-</tbody>
-</table>
-<h2 id="nat-traversal-essential-for-production">NAT Traversal (Essential for Production)</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>p2p_enable_nat_service</code></td>
-<td>bool</td>
-<td>true</td>
-<td>Enable AutoNAT service for address discovery</td>
-<td><strong>Essential for nodes behind NAT</strong> - Helps detect public addresses and connectivity status</td>
-</tr>
-<tr>
-<td><code>p2p_enable_hole_punching</code></td>
-<td>bool</td>
-<td>true</td>
-<td>Enable NAT hole punching (DCUtR)</td>
-<td><strong>Critical for peer-to-peer connectivity</strong> - Allows direct connections through NATs</td>
-</tr>
-<tr>
-<td><code>p2p_enable_relay</code></td>
-<td>bool</td>
-<td>true</td>
-<td>Enable relay service (Circuit Relay v2)</td>
-<td><strong>Fallback for difficult NAT scenarios</strong> - Allows nodes to relay traffic when direct connection fails</td>
-</tr>
-<tr>
-<td><code>p2p_enable_nat_port_map</code></td>
-<td>bool</td>
-<td>true</td>
-<td>Enable NAT port mapping (UPnP/NAT-PMP)</td>
-<td><strong>Automatic port forwarding</strong> - Configures router port forwarding when supported</td>
-</tr>
-</tbody>
-</table>
-<h2 id="connection-limits-prevents-resource-exhaustion">Connection Limits (Prevents Resource Exhaustion)</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>p2p_enable_conn_manager</code></td>
-<td>bool</td>
-<td>true</td>
-<td>Enable connection manager with limits</td>
-<td><strong>Prevents resource exhaustion</strong> - Controls connection limits and pruning</td>
-</tr>
-<tr>
-<td><code>p2p_conn_low_water</code></td>
-<td>int</td>
-<td>200</td>
-<td>Minimum connections to maintain</td>
-<td>Lower bound for connection manager</td>
-</tr>
-<tr>
-<td><code>p2p_conn_high_water</code></td>
-<td>int</td>
-<td>400</td>
-<td>Maximum connections before pruning</td>
-<td>Upper bound before connection manager starts pruning</td>
-</tr>
-</tbody>
-</table>
-<h2 id="ban-management">Ban Management</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>p2p_ban_threshold</code></td>
-<td>int</td>
-<td>100</td>
-<td>Score threshold at which peers are banned</td>
-<td>Controls how aggressively misbehaving peers are banned</td>
-</tr>
-<tr>
-<td><code>p2p_ban_duration</code></td>
-<td>duration</td>
-<td>24h</td>
-<td>Duration for which peers remain banned</td>
-<td>Controls how long banned peers are excluded from the network</td>
-</tr>
-</tbody>
-</table>
-<h2 id="operation-mode-settings">Operation Mode Settings</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>listen_mode</code></td>
-<td>string</td>
-<td>full</td>
-<td>Operation mode for the P2P service (<code>full</code> or <code>listen_only</code>)</td>
-<td>Controls whether the node participates fully in the network or only receives data without propagating. <code>listen_only</code> mode is useful for monitoring nodes that need to stay synchronized without contributing to network traffic. See <a href="../../../../howto/miners/minersHowToUseListenMode/">Using Listen Mode</a> for detailed usage.</td>
-</tr>
-</tbody>
-</table>
-<h2 id="external-service-dependencies">External Service Dependencies</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>chainCfgParams_topicPrefix</code></td>
-<td>string</td>
-<td>"mainnet"</td>
-<td>Chain identifier prefix for all topic names</td>
-<td><strong>REQUIRED</strong> - Provides network isolation by prefixing all pubsub topics (e.g., "mainnet-blocks", "testnet-blocks")</td>
-</tr>
-<tr>
-<td><code>asset_httpPublicAddress</code></td>
-<td>string</td>
-<td>""</td>
-<td>Public HTTP address of Asset service</td>
-<td>Used for constructing data hub URLs in peer messages</td>
-</tr>
-<tr>
-<td><code>asset_httpAddress</code></td>
-<td>string</td>
-<td>""</td>
-<td>Internal HTTP address of Asset service</td>
-<td>Fallback for data hub URL construction</td>
-</tr>
-<tr>
-<td><code>version</code></td>
-<td>string</td>
-<td>""</td>
-<td>Service version</td>
-<td>Included in node status messages for network compatibility</td>
-</tr>
-<tr>
-<td><code>commit</code></td>
-<td>string</td>
-<td>""</td>
-<td>Git commit hash</td>
-<td>Included in node status messages for version tracking</td>
-</tr>
-<tr>
-<td><code>coinbase_arbitraryText</code></td>
-<td>string</td>
-<td>""</td>
-<td>Miner name from coinbase configuration</td>
-<td>Used as miner identifier in node status messages</td>
-</tr>
-</tbody>
-</table>
-<h2 id="grpc-client-configuration">GRPC Client Configuration</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>grpcMaxRetries</code></td>
-<td>int</td>
-<td>3</td>
-<td>Maximum retry attempts for gRPC operations</td>
-<td>Controls resilience of service-to-service communication</td>
-</tr>
-<tr>
-<td><code>grpcRetryBackoff</code></td>
-<td>duration</td>
-<td>1s</td>
-<td>Backoff duration between gRPC retries</td>
-<td>Controls retry timing for failed gRPC calls</td>
-</tr>
-</tbody>
-</table>
-<h2 id="kafka-integration">Kafka Integration</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>kafka_invalidBlocksConfig</code></td>
-<td>URL</td>
-<td>nil</td>
-<td>Kafka URL for invalid blocks consumer</td>
-<td>When set, enables consumption of invalid block notifications</td>
-</tr>
-<tr>
-<td><code>kafka_hosts</code></td>
+<td>ListenAddresses</td>
 <td>[]string</td>
 <td>[]</td>
-<td>Kafka broker hosts</td>
-<td>Required for Kafka connectivity when invalid blocks consumer is enabled</td>
+<td>p2p_listen_addresses</td>
+<td>P2P network interfaces</td>
 </tr>
 <tr>
-<td><code>kafka_port</code></td>
-<td>int</td>
-<td>9092</td>
-<td>Kafka broker port</td>
-<td>Default port for Kafka broker connections</td>
+<td>AdvertiseAddresses</td>
+<td>[]string</td>
+<td>[]</td>
+<td>p2p_advertise_addresses</td>
+<td>Address advertisement to peers</td>
 </tr>
 <tr>
-<td><code>kafka_invalidBlocks</code></td>
+<td>ListenMode</td>
+<td>string</td>
+<td>"full"</td>
+<td>listen_mode</td>
+<td>Node operation mode</td>
+</tr>
+<tr>
+<td>PeerID</td>
 <td>string</td>
 <td>""</td>
-<td>Kafka topic name for invalid blocks</td>
-<td>Topic to consume invalid block notifications from</td>
+<td>p2p_peer_id</td>
+<td>Peer network identifier</td>
 </tr>
 <tr>
-<td><code>kafka_partitions</code></td>
+<td>Port</td>
 <td>int</td>
-<td>1</td>
-<td>Number of Kafka partitions</td>
-<td>Controls parallelism for Kafka message processing</td>
+<td>9906</td>
+<td>p2p_port</td>
+<td>Default P2P communication port</td>
 </tr>
-</tbody>
-</table>
-<h2 id="subtree-validation">Subtree Validation</h2>
-<table>
-<thead>
 <tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>subtreeValidation_blacklistedBaseURLs</code></td>
-<td>map[string]struct{}</td>
-<td>{}</td>
-<td>Map of blacklisted base URLs</td>
-<td>Prevents processing of subtrees from blacklisted sources</td>
-</tr>
-</tbody>
-</table>
-<h2 id="blockchain-store-integration">Blockchain Store Integration</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>blockchain_storeURL</code></td>
-<td>URL</td>
+<td>PrivateKey</td>
+<td>string</td>
 <td>""</td>
-<td>Blockchain store URL</td>
-<td>Required for ban list persistence and private key storage</td>
+<td>p2p_private_key</td>
+<td><strong>CRITICAL</strong> - Cryptographic peer identity</td>
+</tr>
+<tr>
+<td>BlockTopic</td>
+<td>string</td>
+<td>""</td>
+<td>p2p_block_topic</td>
+<td>Block propagation topic</td>
+</tr>
+<tr>
+<td>NodeStatusTopic</td>
+<td>string</td>
+<td>""</td>
+<td>p2p_node_status_topic</td>
+<td>Node status communication topic</td>
+</tr>
+<tr>
+<td>RejectedTxTopic</td>
+<td>string</td>
+<td>""</td>
+<td>p2p_rejected_tx_topic</td>
+<td>Rejected transaction topic</td>
+</tr>
+<tr>
+<td>SubtreeTopic</td>
+<td>string</td>
+<td>""</td>
+<td>p2p_subtree_topic</td>
+<td>Subtree propagation topic</td>
+</tr>
+<tr>
+<td>StaticPeers</td>
+<td>[]string</td>
+<td>[]</td>
+<td>p2p_static_peers</td>
+<td>Forced peer connections</td>
+</tr>
+<tr>
+<td>RelayPeers</td>
+<td>[]string</td>
+<td>[]</td>
+<td>p2p_relay_peers</td>
+<td>NAT traversal relay peers</td>
+</tr>
+<tr>
+<td>PeerCacheDir</td>
+<td>string</td>
+<td>""</td>
+<td>p2p_peer_cache_dir</td>
+<td>Peer cache directory</td>
+</tr>
+<tr>
+<td>BanThreshold</td>
+<td>int</td>
+<td>100</td>
+<td>p2p_ban_threshold</td>
+<td>Peer banning threshold</td>
+</tr>
+<tr>
+<td>BanDuration</td>
+<td>time.Duration</td>
+<td>24h</td>
+<td>p2p_ban_duration</td>
+<td>Ban duration</td>
+</tr>
+<tr>
+<td>ForceSyncPeer</td>
+<td>string</td>
+<td>""</td>
+<td>p2p_force_sync_peer</td>
+<td><strong>CRITICAL</strong> - Forced sync peer override</td>
+</tr>
+<tr>
+<td>SharePrivateAddresses</td>
+<td>bool</td>
+<td>true</td>
+<td>p2p_share_private_addresses</td>
+<td>Private address advertisement</td>
+</tr>
+<tr>
+<td>PeerHealthCheckInterval</td>
+<td>time.Duration</td>
+<td>30s</td>
+<td>p2p_health_check_interval</td>
+<td><strong>CRITICAL</strong> - Health check timing</td>
+</tr>
+<tr>
+<td>PeerHealthHTTPTimeout</td>
+<td>time.Duration</td>
+<td>5s</td>
+<td>p2p_health_http_timeout</td>
+<td><strong>CRITICAL</strong> - Health check HTTP timeout</td>
+</tr>
+<tr>
+<td>PeerHealthRemoveAfterFailures</td>
+<td>int</td>
+<td>3</td>
+<td>p2p_health_remove_after_failures</td>
+<td><strong>CRITICAL</strong> - Failure threshold for peer removal</td>
+</tr>
+<tr>
+<td>AllowPrunedNodeFallback</td>
+<td>bool</td>
+<td>true</td>
+<td>p2p_allow_pruned_node_fallback</td>
+<td><strong>CRITICAL</strong> - Pruned node fallback behavior</td>
 </tr>
 </tbody>
 </table>
-<h2 id="configuration-validation-rules">Configuration Validation Rules</h2>
-<p>The P2P service enforces several validation rules during startup:</p>
-<h3 id="required-configuration">Required Configuration</h3>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="peer-health-management">Peer Health Management</h3>
 <ul>
-<li><code>p2p_listen_addresses</code> - Must be non-empty array or service will fail with "p2p_listen_addresses not set in config"</li>
-<li><code>p2p_port</code> - Must be &gt; 0 or service will fail with "p2p_port not set in config"</li>
-<li><code>p2p_shared_key</code> - Must be set or service will fail with "error getting p2p_shared_key"</li>
-<li><code>p2p_block_topic</code> - Must be set or service will fail with "p2p_block_topic not set in config"</li>
-<li><code>p2p_subtree_topic</code> - Must be set or service will fail with "p2p_subtree_topic not set in config"</li>
-<li><code>p2p_handshake_topic</code> - Must be set or service will fail with "p2p_handshake_topic not set in config"</li>
-<li><code>p2p_mining_on_topic</code> - Must be set or service will fail with "p2p_mining_on_topic not set in config"</li>
-<li><code>p2p_rejected_tx_topic</code> - Must be set or service will fail with "p2p_rejected_tx_topic not set in config"</li>
-<li><code>ChainCfgParams.TopicPrefix</code> - Must be set or service will fail with "missing config ChainCfgParams.TopicPrefix"</li>
-<li>This chain identifier ensures network isolation between different chains (mainnet, testnet, etc.)</li>
-<li>Peers validate topic prefix during handshake and reject connections from different chains</li>
+<li><code>PeerHealthCheckInterval</code>, <code>PeerHealthHTTPTimeout</code>, and <code>PeerHealthRemoveAfterFailures</code> work together</li>
+<li>Controls peer health monitoring and removal behavior</li>
 </ul>
-<h3 id="key-management">Key Management</h3>
+<h3 id="forced-sync-peer-selection">Forced Sync Peer Selection</h3>
 <ul>
-<li>If <code>p2p_private_key</code> is not provided, a new Ed25519 key is automatically generated and stored in <code>p2p.key</code> file</li>
-<li>The key file is created in the same directory as the peer cache (<code>p2p_peer_cache_dir</code> or binary directory)</li>
-<li><strong>Listen Mode Validation</strong>: <code>listen_mode</code> must be either "full" or "listen_only" or service will fail with validation error</li>
+<li><code>ForceSyncPeer</code> overrides automatic peer selection</li>
+<li><code>AllowPrunedNodeFallback</code> affects fallback behavior when forced peer unavailable</li>
 </ul>
-<h2 id="configuration-interactions-and-dependencies">Configuration Interactions and Dependencies</h2>
-<h3 id="network-binding-and-discovery">Network Binding and Discovery</h3>
-<p>The P2P service's network presence is controlled by several interrelated settings:</p>
+<h3 id="network-address-management">Network Address Management</h3>
 <ul>
-<li><code>p2p_listen_addresses</code> determines which interfaces/ports the service listens on</li>
-<li><code>p2p_advertise_addresses</code> controls what addresses are advertised to peers</li>
-<li>Each address can be specified with or without a port (e.g., <code>192.168.1.1</code> or <code>example.com:9906</code>)</li>
-<li>For addresses without a port, the system automatically uses the value from <code>p2p_port</code></li>
-<li>Both IP addresses and domain names are supported with proper multiaddress formatting</li>
-<li><code>p2p_port</code> provides a default when addresses don't specify ports</li>
-<li>If no <code>p2p_listen_addresses</code> are specified, the service may not be reachable</li>
-<li>The gRPC and HTTP listen addresses control how other services can interact with the P2P service</li>
+<li><code>ListenAddresses</code> and <code>AdvertiseAddresses</code> control network presence</li>
+<li><code>Port</code> used as fallback when addresses don't specify port</li>
+<li><code>SharePrivateAddresses</code> controls address advertisement behavior</li>
 </ul>
-<p>These settings should be configured together based on your network architecture and security requirements.</p>
-<h3 id="peer-discovery-and-connection">Peer Discovery and Connection</h3>
-<p>Peer discovery in the P2P service uses a multi-layered approach:</p>
+<h3 id="peer-connection-management">Peer Connection Management</h3>
 <ul>
-<li><code>p2p_bootstrapAddresses</code> provides initial entry points to the network</li>
-<li><code>p2p_bootstrap_persistent</code> controls whether bootstrap addresses are automatically added to static peers</li>
-<li><code>p2p_static_peers</code> ensures connections to specific peers regardless of DHT discovery</li>
-<li><code>p2p_dht_protocol_id</code> and <code>p2p_dht_use_private</code> affect the DHT-based peer discovery mechanism</li>
-<li><code>p2p_optimise_retries</code> impacts connection retry behavior when peers are unreachable</li>
-<li><code>listen_mode</code> determines whether the node operates in "full" or "listen_only" mode</li>
+<li><code>StaticPeers</code> ensures persistent connections</li>
+<li><code>BootstrapAddresses</code> for initial network discovery</li>
+<li><code>RelayPeers</code> for NAT traversal</li>
+<li><code>PeerCacheDir</code> for peer persistence</li>
 </ul>
-<p>In private network deployments, you should configure static peers and bootstrap addresses carefully to ensure nodes can find each other.</p>
-<h4 id="bootstrap-vs-static-peers">Bootstrap vs Static Peers</h4>
-<p>By default, bootstrap addresses are used only for initial network discovery and DHT bootstrapping. If you need bootstrap servers to maintain persistent connections that automatically reconnect after disconnection, enable <code>p2p_bootstrap_persistent=true</code>. This will treat bootstrap addresses as static peers for connection purposes while still using them for DHT bootstrapping.</p>
-<h3 id="security-and-authentication">Security and Authentication</h3>
-<p>The P2P service uses several security mechanisms:</p>
-<ul>
-<li><code>p2p_private_key</code> establishes the node's identity, which is reflected in its <code>p2p_peer_id</code></li>
-<li><code>p2p_shared_key</code> enables private network functionality, restricting communication to nodes with the same shared key</li>
-<li>If no private key is provided, it will be auto-generated and stored in the blockchain store via <code>blockchain_storeURL</code></li>
-<li>The ban system uses <code>p2p_ban_threshold</code> and <code>p2p_ban_duration</code> for score-based peer management</li>
-<li><code>grpcAdminAPIKey</code> protects administrative gRPC operations</li>
-<li>HTTPS support via <code>securityLevelHTTP</code>, <code>server_certFile</code>, and <code>server_keyFile</code></li>
-</ul>
-<p>These settings enable secure and authenticated communication between nodes in the network.</p>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td><strong>CRITICAL</strong> - Blockchain operations and block retrieval</td>
+</tr>
+<tr>
+<td>BlockValidationClient</td>
+<td>blockvalidation.Interface</td>
+<td><strong>CRITICAL</strong> - Block validation operations</td>
+</tr>
+<tr>
+<td>BlockAssemblyClient</td>
+<td>blockassembly.ClientI</td>
+<td><strong>CRITICAL</strong> - Block assembly operations</td>
+</tr>
+<tr>
+<td>RejectedTxKafkaProducer</td>
+<td>kafka.KafkaAsyncProducerI</td>
+<td><strong>CRITICAL</strong> - Rejected transaction messaging</td>
+</tr>
+<tr>
+<td>BlocksKafkaProducer</td>
+<td>kafka.KafkaAsyncProducerI</td>
+<td><strong>CRITICAL</strong> - Block messaging</td>
+</tr>
+<tr>
+<td>SubtreeKafkaProducer</td>
+<td>kafka.KafkaAsyncProducerI</td>
+<td><strong>CRITICAL</strong> - Subtree messaging</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Validation</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GRPCListenAddress</td>
+<td>Used for gRPC server binding</td>
+<td>Service communication</td>
+</tr>
+<tr>
+<td>ForceSyncPeer</td>
+<td>Overrides automatic peer selection</td>
+<td>Sync behavior</td>
+</tr>
+<tr>
+<td>PeerHealthCheckInterval</td>
+<td>Must be positive for health checks</td>
+<td>Peer monitoring</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>p2p_grpcListenAddress = &quot;:9906&quot;
+p2p_port = 9906
+listen_mode = &quot;full&quot;
+</code></pre></div>
+<h3 id="peer-health-monitoring">Peer Health Monitoring</h3>
+<div class="highlight"><pre><span></span><code>p2p_health_check_interval = 30s
+p2p_health_http_timeout = 5s
+p2p_health_remove_after_failures = 3
+</code></pre></div>
+<h3 id="forced-sync-configuration">Forced Sync Configuration</h3>
+<div class="highlight"><pre><span></span><code>p2p_force_sync_peer = &quot;peer-id-12345&quot;
+p2p_allow_pruned_node_fallback = true
+</code></pre></div>
 
 
 

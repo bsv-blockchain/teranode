@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#utxo-persister-settings" class="md-skip">
+        <a href="#utxo-persister-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4546,28 +4546,37 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#configuration-categories" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Categories
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#performance-tuning-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance Tuning Settings
+      Configuration Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Performance Tuning Settings">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#performance-tuning-interactions-and-dependencies" class="md-nav__link">
+  <a href="#buffer-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance Tuning Interactions and Dependencies
+      Buffer Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#io-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      I/O Operations
     </span>
   </a>
   
@@ -4579,19 +4588,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#storage-management-settings" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Storage Management Settings
+      Service Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Storage Management Settings">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#storage-management-interactions-and-dependencies" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Storage Management Interactions and Dependencies
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Tuning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-constrained" class="md-nav__link">
+    <span class="md-ellipsis">
+      Memory Constrained
     </span>
   </a>
   
@@ -4599,63 +4644,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#deployment-architecture-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deployment Architecture Settings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deployment Architecture Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deployment-architecture-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deployment Architecture Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#operational-controls-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Operational Controls Settings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Operational Controls Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#operational-controls-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Operational Controls Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-best-practices" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Best Practices
-    </span>
-  </a>
   
 </li>
       
@@ -5057,28 +5045,37 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#configuration-categories" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Categories
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#performance-tuning-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance Tuning Settings
+      Configuration Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Performance Tuning Settings">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#performance-tuning-interactions-and-dependencies" class="md-nav__link">
+  <a href="#buffer-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance Tuning Interactions and Dependencies
+      Buffer Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#io-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      I/O Operations
     </span>
   </a>
   
@@ -5090,19 +5087,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#storage-management-settings" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Storage Management Settings
+      Service Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Storage Management Settings">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#storage-management-interactions-and-dependencies" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Storage Management Interactions and Dependencies
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Tuning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#memory-constrained" class="md-nav__link">
+    <span class="md-ellipsis">
+      Memory Constrained
     </span>
   </a>
   
@@ -5110,63 +5143,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#deployment-architecture-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deployment Architecture Settings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deployment Architecture Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#deployment-architecture-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Deployment Architecture Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#operational-controls-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Operational Controls Settings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Operational Controls Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#operational-controls-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Operational Controls Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-best-practices" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Best Practices
-    </span>
-  </a>
   
 </li>
       
@@ -5186,180 +5162,105 @@
 
 
 
-<h1 id="utxo-persister-settings">UTXO Persister Settings</h1>
+<h1 id="utxo-persister-service-settings">UTXO Persister Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/utxoPersister/">UTXO Persister Service</a></p>
-<p>The UTXO Persister service relies on a set of configuration settings that control its behavior, performance, and resource usage. This section provides a comprehensive overview of these settings, organized by functional category, along with their impacts, dependencies, and recommended configurations for different deployment scenarios.</p>
-<h2 id="configuration-categories">Configuration Categories</h2>
-<p>UTXO Persister service settings can be organized into the following functional categories:</p>
-<ol>
-<li><strong>Performance Tuning</strong>: Settings that control I/O performance and memory usage</li>
-<li><strong>Storage Management</strong>: Settings that manage file storage and retention policies</li>
-<li><strong>Deployment Architecture</strong>: Settings that determine how the service interacts with other components</li>
-<li><strong>Operational Controls</strong>: Settings that affect general service behavior</li>
-</ol>
-<h2 id="performance-tuning-settings">Performance Tuning Settings</h2>
-<p>These settings control the I/O performance and memory usage patterns of the UTXO Persister service.</p>
+<h2 id="configuration-settings">Configuration Settings</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
 <th>Type</th>
 <th>Default</th>
-<th>Description</th>
-<th>Impact</th>
+<th>Environment Variable</th>
+<th>Usage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>utxoPersister_buffer_size</code></td>
+<td>UTXOPersisterBufferSize</td>
 <td>string</td>
-<td><code>"4KB"</code></td>
-<td>Controls the buffer size for reading from and writing to UTXO files</td>
-<td>Affects I/O performance and memory usage when processing UTXO data</td>
+<td>"4KB"</td>
+<td>utxoPersister_buffer_size</td>
+<td><strong>CRITICAL</strong> - Buffer size for UTXO file I/O operations</td>
 </tr>
-</tbody>
-</table>
-<h3 id="performance-tuning-interactions-and-dependencies">Performance Tuning Interactions and Dependencies</h3>
-<p>The buffer size setting directly affects how efficiently the service reads and writes UTXO data:</p>
-<ul>
-<li>Larger buffer sizes (e.g., 64KB to 1MB) can significantly improve I/O throughput by reducing the number of system calls needed for file operations</li>
-<li>Smaller buffer sizes reduce memory usage but may increase CPU overhead due to more frequent I/O operations</li>
-<li>The optimal buffer size depends on the hardware characteristics, particularly disk I/O capabilities, available memory, and the size of typical UTXO files</li>
-</ul>
-<p>For high-throughput environments with fast storage systems (like SSDs), larger buffer sizes provide better performance. For memory-constrained environments, smaller buffers may be necessary despite the performance impact.</p>
-<h2 id="storage-management-settings">Storage Management Settings</h2>
-<p>These settings control how UTXO data is stored and retained.</p>
-<table>
-<thead>
 <tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>blockpersister_skipUTXODelete</code></td>
+<td>UTXOPersisterDirect</td>
 <td>bool</td>
-<td><code>false</code></td>
-<td>When true, previous block's UTXO sets aren't deleted after processing</td>
-<td>Controls storage usage and retention policy for historical UTXO sets</td>
-</tr>
-<tr>
-<td><code>blockstore</code></td>
-<td>*url.URL</td>
-<td><code>"file://./data/blockstore"</code></td>
-<td>Specifies the URL for the block storage backend</td>
-<td>Determines where block data, including UTXO sets, are stored</td>
-</tr>
-<tr>
-<td><code>txstore</code></td>
-<td>*url.URL</td>
-<td><code>""</code></td>
-<td>Specifies the URL for the transaction storage backend</td>
-<td>Determines where transaction data is stored for block processing</td>
-</tr>
-<tr>
-<td><code>txmeta_store</code></td>
-<td>*url.URL</td>
-<td><code>""</code></td>
-<td>Specifies the URL for the UTXO metadata storage backend</td>
-<td>Determines where UTXO metadata is stored for efficient lookups</td>
+<td>true</td>
+<td>direct</td>
+<td>Direct I/O operations control</td>
 </tr>
 </tbody>
 </table>
-<h3 id="storage-management-interactions-and-dependencies">Storage Management Interactions and Dependencies</h3>
-<p>These settings determine the storage footprint and data persistence behavior of the service:</p>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="buffer-management">Buffer Management</h3>
 <ul>
-<li>When <code>blockpersister_skipUTXODelete</code> is <code>false</code> (default), the service maintains minimal storage by only keeping the UTXO set for the most recent processed block</li>
-<li>When set to <code>true</code>, the service preserves all historical UTXO sets, which increases storage requirements but enables historical analysis and validation</li>
-<li>The <code>blockstore</code> setting defines where all block-related data is stored, affecting both read and write performance based on the underlying storage system</li>
-<li>The <code>txstore</code> and <code>txmeta_store</code> settings determine where transaction data and UTXO metadata are stored, respectively, which impacts performance and data availability</li>
+<li><code>UTXOPersisterBufferSize</code> is parsed using bytesize.Parse()</li>
+<li>Falls back to 4KB (4096 bytes) if parsing fails</li>
+<li>Used for buffered I/O operations when reading/writing UTXO files</li>
 </ul>
-<p>Storage requirements grow significantly when keeping historical UTXO sets, as each set contains the complete state of all unspent outputs at a given block height.</p>
-<h2 id="deployment-architecture-settings">Deployment Architecture Settings</h2>
-<p>These settings control how the UTXO Persister interacts with other components in the system.</p>
+<h3 id="io-operations">I/O Operations</h3>
+<ul>
+<li><code>UTXOPersisterDirect</code> controls direct I/O behavior</li>
+<li>Affects how buffer operations are performed</li>
+</ul>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BlockStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - UTXO set storage and retrieval</td>
+</tr>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td><strong>CRITICAL</strong> - Blockchain operations and block notifications</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
+<th>Validation</th>
 <th>Impact</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>direct</code></td>
-<td>bool</td>
-<td><code>true</code></td>
-<td>Controls whether the service connects directly to the blockchain store or uses the client interface</td>
-<td>Affects performance and deployment architecture</td>
+<td>UTXOPersisterBufferSize</td>
+<td>Must be valid byte size format</td>
+<td>I/O performance</td>
+</tr>
+<tr>
+<td>UTXOPersisterDirect</td>
+<td>Controls I/O operation mode</td>
+<td>Performance behavior</td>
 </tr>
 </tbody>
 </table>
-<h3 id="deployment-architecture-interactions-and-dependencies">Deployment Architecture Interactions and Dependencies</h3>
-<p>The deployment architecture settings determine how the service integrates with the broader system:</p>
-<ul>
-<li>When <code>direct</code> is <code>true</code>, the service bypasses the blockchain client interface and connects directly to the blockchain store, which improves performance but requires the service to be deployed in the same process</li>
-<li>When <code>direct</code> is <code>false</code>, the service uses the blockchain client interface, allowing for distributed deployment at the cost of additional network overhead</li>
-</ul>
-<p>This setting has significant implications for system design and deployment flexibility. Direct access provides better performance but limits deployment options, while client-based access enables more flexible deployment topologies but may impact performance.</p>
-<h2 id="operational-controls-settings">Operational Controls Settings</h2>
-<p>These settings control general operational aspects of the service.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>network</code></td>
-<td>string</td>
-<td><code>"mainnet"</code></td>
-<td>Specifies the blockchain network (mainnet, testnet, regtest)</td>
-<td>Determines genesis hash and chain parameters used for validation</td>
-</tr>
-</tbody>
-</table>
-<h3 id="operational-controls-interactions-and-dependencies">Operational Controls Interactions and Dependencies</h3>
-<ul>
-<li>The <code>network</code> setting determines the genesis hash and chain parameters via chaincfg.GetChainParams(), which is critical for genesis block detection and UTXO set validation</li>
-<li>Genesis hash validation is used throughout the service to determine when to skip certain operations like UTXO deletion</li>
-</ul>
-<p>This setting is fundamental to the service's operation and must match the target blockchain network.</p>
-<h2 id="configuration-best-practices">Configuration Best Practices</h2>
-<ol>
-<li>
-<p><strong>Performance Monitoring</strong>: Regularly monitor I/O performance metrics when adjusting buffer sizes. Balance memory usage against throughput based on your specific hardware capabilities.</p>
-</li>
-<li>
-<p><strong>Storage Planning</strong>: When using <code>blockpersister_skipUTXODelete=true</code>, implement a storage monitoring and management strategy. UTXO sets grow significantly over time and may require substantial storage capacity.</p>
-</li>
-<li>
-<p><strong>Deployment Architecture</strong>: Choose direct access (<code>direct=true</code>) whenever possible for best performance, unless your system architecture specifically requires distributed deployment.</p>
-</li>
-<li>
-<p><strong>Network Configuration</strong>: Ensure the <code>network</code> setting matches your target blockchain environment. Incorrect network configuration can lead to validation failures and data corruption.</p>
-</li>
-<li>
-<p><strong>Storage Location</strong>: Use persistent, reliable storage locations for the <code>blockstore</code> setting in production environments, ideally on dedicated, high-performance storage systems.</p>
-</li>
-<li>
-<p><strong>Backup Strategy</strong>: Implement regular backups of your UTXO data, especially the most recent UTXO set, to enable rapid recovery in case of data corruption or storage failures.</p>
-</li>
-<li>
-<p><strong>Service Coordination</strong>: Ensure that blockchain services and UTXO Persister services are properly coordinated in terms of startup sequence and operational dependencies, particularly when using direct access mode.</p>
-</li>
-</ol>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>utxoPersister_buffer_size = &quot;4KB&quot;
+direct = true
+</code></pre></div>
+<h3 id="performance-tuning">Performance Tuning</h3>
+<div class="highlight"><pre><span></span><code>utxoPersister_buffer_size = &quot;64KB&quot;
+direct = true
+</code></pre></div>
+<h3 id="memory-constrained">Memory Constrained</h3>
+<div class="highlight"><pre><span></span><code>utxoPersister_buffer_size = &quot;1KB&quot;
+direct = false
+</code></pre></div>
 
 
 

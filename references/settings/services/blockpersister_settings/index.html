@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#block-persister-settings" class="md-skip">
+        <a href="#block-persister-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4385,28 +4385,55 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#storage-configuration" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Storage Configuration
+      Configuration Settings
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Storage Configuration">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Dependencies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#state-management" class="md-nav__link">
+  <a href="#http-server" class="md-nav__link">
     <span class="md-ellipsis">
-      State Management
+      HTTP Server
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#block-storage" class="md-nav__link">
+  <a href="#concurrency-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Block Storage
+      Concurrency Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-processing-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Block Processing Strategy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transaction-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Transaction Processing
     </span>
   </a>
   
@@ -4418,88 +4445,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#processing-configuration" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Processing Configuration
+      Service Dependencies
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Processing Configuration">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#block-selection-and-timing" class="md-nav__link">
-    <span class="md-ellipsis">
-      Block Selection and Timing
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#performance-tuning" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance Tuning
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxo-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      UTXO Management
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-interactions-and-dependencies" class="md-nav__link">
+  <a href="#validation-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Interactions and Dependencies
+      Validation Rules
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Interactions and Dependencies">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#storage-backend-selection" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Storage Backend Selection
+      Basic Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#performance-vs-accuracy-trade-offs" class="md-nav__link">
+  <a href="#high-performance-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance vs. Accuracy Trade-offs
+      High Performance Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#state-management-and-recovery" class="md-nav__link">
+  <a href="#http-server-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      State Management and Recovery
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#timing-and-synchronization" class="md-nav__link">
-    <span class="md-ellipsis">
-      Timing and Synchronization
+      HTTP Server Configuration
     </span>
   </a>
   
@@ -5069,28 +5063,55 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#storage-configuration" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Storage Configuration
+      Configuration Settings
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Storage Configuration">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Dependencies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#state-management" class="md-nav__link">
+  <a href="#http-server" class="md-nav__link">
     <span class="md-ellipsis">
-      State Management
+      HTTP Server
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#block-storage" class="md-nav__link">
+  <a href="#concurrency-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Block Storage
+      Concurrency Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-processing-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Block Processing Strategy
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transaction-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Transaction Processing
     </span>
   </a>
   
@@ -5102,88 +5123,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#processing-configuration" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Processing Configuration
+      Service Dependencies
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Processing Configuration">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#block-selection-and-timing" class="md-nav__link">
-    <span class="md-ellipsis">
-      Block Selection and Timing
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#performance-tuning" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance Tuning
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxo-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      UTXO Management
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-interactions-and-dependencies" class="md-nav__link">
+  <a href="#validation-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Interactions and Dependencies
+      Validation Rules
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Interactions and Dependencies">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#storage-backend-selection" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Storage Backend Selection
+      Basic Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#performance-vs-accuracy-trade-offs" class="md-nav__link">
+  <a href="#high-performance-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance vs. Accuracy Trade-offs
+      High Performance Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#state-management-and-recovery" class="md-nav__link">
+  <a href="#http-server-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      State Management and Recovery
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#timing-and-synchronization" class="md-nav__link">
-    <span class="md-ellipsis">
-      Timing and Synchronization
+      HTTP Server Configuration
     </span>
   </a>
   
@@ -5210,184 +5198,186 @@
 
 
 
-<h1 id="block-persister-settings">Block Persister Settings</h1>
+<h1 id="block-persister-service-settings">Block Persister Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/blockPersister/">Block Persister Service</a></p>
-<p>The Block Persister service configuration is organized into several categories that control different aspects of the service's behavior. All settings can be provided via environment variables or configuration files.</p>
-<h2 id="storage-configuration">Storage Configuration</h2>
-<h3 id="state-management">State Management</h3>
+<h2 id="configuration-settings">Configuration Settings</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PersisterStore</td>
+<td>*url.URL</td>
+<td>"file://./data/blockstore"</td>
+<td>blockPersisterStore</td>
+<td><strong>CRITICAL</strong> - Block data storage location</td>
+</tr>
+<tr>
+<td>StateFile</td>
+<td>string</td>
+<td>"file://./data/blockpersister_state.txt"</td>
+<td>blockPersister_stateFile</td>
+<td><strong>CRITICAL</strong> - Tracks last persisted block for recovery</td>
+</tr>
+<tr>
+<td>PersisterHTTPListenAddress</td>
+<td>string</td>
+<td>":8083"</td>
+<td>blockPersister_httpListenAddress</td>
+<td>HTTP server for blob store access</td>
+</tr>
+<tr>
+<td>BlockPersisterConcurrency</td>
+<td>int</td>
+<td>8</td>
+<td>blockpersister_concurrency</td>
+<td><strong>CRITICAL</strong> - Parallel processing, reduced by half in all-in-one mode</td>
+</tr>
+<tr>
+<td>BatchMissingTransactions</td>
+<td>bool</td>
+<td>true</td>
+<td>blockpersister_batchMissingTransactions</td>
+<td>Transaction processing batching</td>
+</tr>
+<tr>
+<td>ProcessTxMetaUsingStoreBatchSize</td>
+<td>int</td>
+<td>1024</td>
+<td>blockvalidation_processTxMetaUsingStore_BatchSize</td>
+<td>Transaction metadata batch size</td>
+</tr>
+<tr>
+<td>SkipUTXODelete</td>
+<td>bool</td>
+<td>false</td>
+<td>blockpersister_skipUTXODelete</td>
+<td>UTXO deletion behavior</td>
+</tr>
+<tr>
+<td>BlockPersisterPersistAge</td>
+<td>uint32</td>
+<td>2</td>
+<td>blockpersister_persistAge</td>
+<td><strong>CRITICAL</strong> - Blocks behind tip to avoid reorgs</td>
+</tr>
+<tr>
+<td>BlockPersisterPersistSleep</td>
+<td>time.Duration</td>
+<td>1m</td>
+<td>blockPersister_persistSleep</td>
+<td>Sleep when no blocks available</td>
+</tr>
+<tr>
+<td>BlockStore</td>
+<td>*url.URL</td>
+<td>""</td>
+<td>blockstore</td>
+<td>Required when HTTP server enabled</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="http-server">HTTP Server</h3>
 <ul>
-<li><strong>State File (<code>blockpersister_stateFile</code>)</strong></li>
-<li>Type: <code>string</code></li>
-<li>Default Value: <code>"file://./data/blockpersister_state.txt"</code><ul>
-<li>Purpose: Maintains the persister's processing state (last persisted block height and hash)</li>
+<li>When <code>PersisterHTTPListenAddress</code> is not empty, HTTP server starts</li>
+<li>Requires valid <code>BlockStore</code> URL or returns configuration error</li>
 </ul>
-</li>
-<li>Format: Supports both local file paths (<code>file://./path</code>) and remote storage URLs<ul>
-<li>Impact: Critical for recovery after service restart and maintaining processing continuity</li>
-</ul>
-</li>
-<li>Recovery Implications: If this file is lost, the service will need to reprocess blocks from the beginning</li>
-</ul>
-<h3 id="block-storage">Block Storage</h3>
+<h3 id="concurrency-management">Concurrency Management</h3>
 <ul>
-<li><strong>Block Store URL (<code>blockPersisterStore</code>)</strong></li>
-<li>Type: <code>*url.URL</code></li>
-<li>Default Value: <code>"file://./data/blockstore"</code><ul>
-<li>Purpose: Defines where block data files are stored</li>
+<li><code>BlockPersisterConcurrency</code> reduced by half when <code>IsAllInOneMode</code> is true</li>
+<li>Minimum concurrency of 1 enforced</li>
 </ul>
-</li>
-<li>
-<p>Supported Formats:</p>
+<h3 id="block-processing-strategy">Block Processing Strategy</h3>
 <ul>
-<li>S3: <code>s3://bucket-name/prefix</code></li>
-<li>Local filesystem: <code>file://./path/to/dir</code></li>
-<li>Impact: Determines the persistence mechanism and reliability characteristics</li>
+<li><code>BlockPersisterPersistAge</code> determines safety margin from chain tip</li>
+<li><code>BlockPersisterPersistSleep</code> controls polling frequency when idle</li>
 </ul>
-</li>
-<li>
-<p><strong>HTTP Listen Address (<code>blockPersister_httpListenAddress</code>)</strong></p>
-</li>
-<li>Type: <code>string</code></li>
-<li>Default Value: <code>":8083"</code><ul>
-<li>Purpose: Controls the network interface and port for the HTTP server that serves block data</li>
-<li>Usage: If empty, no HTTP server is started; when configured, enables external access to blob store</li>
-</ul>
-</li>
-<li>Security Consideration: In production environments, should be configured based on network security requirements</li>
-</ul>
-<h2 id="processing-configuration">Processing Configuration</h2>
-<h3 id="block-selection-and-timing">Block Selection and Timing</h3>
+<h3 id="transaction-processing">Transaction Processing</h3>
 <ul>
-<li><strong>Persist Age (<code>BlockPersisterPersistAge</code>)</strong></li>
-<li>Type: <code>uint32</code></li>
-<li>Default Value: Not specified in settings (varies by configuration)<ul>
-<li>Purpose: Determines how many blocks behind the tip the persister stays</li>
-<li>Impact: Critical for avoiding reorgs by ensuring blocks are sufficiently confirmed</li>
-<li>Example: If set to 100, only blocks that are at least 100 blocks deep are processed</li>
+<li>When <code>BatchMissingTransactions</code> is true, uses <code>ProcessTxMetaUsingStoreBatchSize</code></li>
 </ul>
-</li>
-<li>
-<p>Tuning Advice:</p>
-<ul>
-<li>Lower values: More immediate processing but higher risk of reprocessing due to reorgs</li>
-<li>Higher values: More conservative approach with minimal reorg risk</li>
-</ul>
-</li>
-<li>
-<p><strong>Persist Sleep (<code>BlockPersisterPersistSleep</code>)</strong></p>
-</li>
-<li>Type: <code>time.Duration</code></li>
-<li>Default Value: Not specified in settings (varies by configuration)<ul>
-<li>Purpose: Sleep duration between polling attempts when no blocks are available to process</li>
-<li>Impact: Controls polling frequency and system load during idle periods</li>
-</ul>
-</li>
-<li>
-<p>Tuning Advice:</p>
-<ul>
-<li>Shorter durations: More responsive but higher CPU usage</li>
-<li>Longer durations: More resource-efficient but less responsive</li>
-</ul>
-</li>
-</ul>
-<h3 id="performance-tuning">Performance Tuning</h3>
-<ul>
-<li><strong>Processing Concurrency (<code>blockpersister_concurrency</code>)</strong></li>
-<li>Type: <code>int</code></li>
-<li>Default Value: <code>8</code><ul>
-<li>Purpose: Controls the number of concurrent goroutines for processing subtrees</li>
-<li>Impact: Directly affects CPU utilization, memory usage, and throughput</li>
-</ul>
-</li>
-<li>
-<p>Tuning Advice:</p>
-<ul>
-<li>Optimal value typically depends on available CPU cores</li>
-<li>For systems with 8+ cores, the default value is usually appropriate</li>
-<li>For high-performance systems, consider increasing to match available cores</li>
-</ul>
-</li>
-<li>
-<p><strong>Batch Missing Transactions (<code>blockpersister_batchMissingTransactions</code>)</strong></p>
-</li>
-<li>Type: <code>bool</code></li>
-<li>Default Value: <code>true</code><ul>
-<li>Purpose: Controls whether transactions are fetched in batches from the store</li>
-<li>Impact: Can significantly improve performance by reducing the number of individual queries</li>
-</ul>
-</li>
-<li>
-<p>Tuning Advice: Generally should be kept enabled unless encountering specific issues</p>
-</li>
-<li>
-<p><strong>Process TxMeta Using Store Batch Size (<code>blockvalidation_processTxMetaUsingStore_BatchSize</code>)</strong></p>
-</li>
-<li>Type: <code>int</code></li>
-<li>Default Value: <code>1024</code><ul>
-<li>Purpose: Controls the batch size when processing transaction metadata from the store</li>
-<li>Impact: Affects performance and memory usage when fetching transaction data</li>
-</ul>
-</li>
-<li>Tuning Advice: Higher values improve throughput at the cost of increased memory usage</li>
-</ul>
-<h3 id="utxo-management">UTXO Management</h3>
-<ul>
-<li><strong>Skip UTXO Delete (<code>SkipUTXODelete</code>)</strong></li>
-<li>Type: <code>bool</code></li>
-<li>Default Value: <code>false</code><ul>
-<li>Purpose: Controls whether UTXO deletions are skipped during processing</li>
-<li>Impact: When enabled, improves performance but affects UTXO set completeness</li>
-</ul>
-</li>
-<li>
-<p>Usage Scenarios:</p>
-<ul>
-<li>Enable during initial sync or recovery to improve performance</li>
-<li>Disable for normal operation to maintain complete UTXO tracking</li>
-</ul>
-</li>
-</ul>
-<h2 id="configuration-interactions-and-dependencies">Configuration Interactions and Dependencies</h2>
-<h3 id="storage-backend-selection">Storage Backend Selection</h3>
-<p>The Block Persister supports multiple storage backends through the <code>blockPersisterStore</code> URL:</p>
-<p><strong>Local Filesystem:</strong></p>
-<div class="highlight"><pre><span></span><code>file://./path/to/directory
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BlockStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Block data storage</td>
+</tr>
+<tr>
+<td>SubtreeStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Subtree data storage</td>
+</tr>
+<tr>
+<td>UTXOStore</td>
+<td>utxo.Store</td>
+<td><strong>CRITICAL</strong> - UTXO operations</td>
+</tr>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td><strong>CRITICAL</strong> - Block retrieval and operations</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Validation</th>
+<th>Error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BlockStore</td>
+<td>Required when HTTP server enabled</td>
+<td>"blockstore setting error"</td>
+</tr>
+<tr>
+<td>StateFile</td>
+<td>Must be valid file path</td>
+<td>State initialization failure</td>
+</tr>
+<tr>
+<td>PersisterStore</td>
+<td>Must be valid URL format</td>
+<td>Store creation failure</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>blockPersisterStore = &quot;file://./data/blockstore&quot;
+blockPersister_stateFile = &quot;file://./data/blockpersister_state.txt&quot;
+blockpersister_persistAge = 2
 </code></pre></div>
-<ul>
-<li>Best for: Development, testing, single-node deployments</li>
-<li>Advantages: Simple setup, fast access, no external dependencies</li>
-<li>Limitations: Not suitable for distributed deployments</li>
-</ul>
-<p><strong>S3-Compatible Storage:</strong></p>
-<div class="highlight"><pre><span></span><code>s3://bucket-name/prefix
+<h3 id="high-performance-configuration">High Performance Configuration</h3>
+<div class="highlight"><pre><span></span><code>blockpersister_concurrency = 16
+blockpersister_batchMissingTransactions = true
+blockvalidation_processTxMetaUsingStore_BatchSize = 2048
 </code></pre></div>
-<ul>
-<li>Best for: Production deployments, distributed systems, cloud environments</li>
-<li>Advantages: Highly durable, scalable, supports distributed access</li>
-<li>Considerations: Requires proper S3 credentials and network connectivity</li>
-</ul>
-<h3 id="performance-vs-accuracy-trade-offs">Performance vs. Accuracy Trade-offs</h3>
-<p>Several settings involve trade-offs between performance and data completeness:</p>
-<ol>
-<li><strong><code>blockpersister_concurrency</code></strong>: Higher values improve throughput but increase resource usage</li>
-<li><strong><code>SkipUTXODelete</code></strong>: When enabled, improves performance during sync but affects UTXO tracking completeness</li>
-<li><strong><code>blockpersister_batchMissingTransactions</code></strong>: Batching improves efficiency but may increase latency for individual operations</li>
-</ol>
-<h3 id="state-management-and-recovery">State Management and Recovery</h3>
-<p>The <code>blockpersister_stateFile</code> is critical for service continuity:</p>
-<ul>
-<li>The state file tracks the last successfully persisted block</li>
-<li>On restart, the service resumes from this point</li>
-<li>If the state file is corrupted or lost, manual intervention may be required</li>
-<li>Consider implementing regular backups of the state file for production systems</li>
-</ul>
-<h3 id="timing-and-synchronization">Timing and Synchronization</h3>
-<p>The interaction between <code>BlockPersisterPersistAge</code> and <code>BlockPersisterPersistSleep</code> controls the service's responsiveness:</p>
-<ul>
-<li><code>BlockPersisterPersistAge</code> ensures blocks are sufficiently confirmed before persistence</li>
-<li><code>BlockPersisterPersistSleep</code> controls how frequently the service checks for new blocks to process</li>
-<li>Together, these settings balance responsiveness against system load and reorg risk</li>
-</ul>
+<h3 id="http-server-configuration">HTTP Server Configuration</h3>
+<div class="highlight"><pre><span></span><code>blockPersister_httpListenAddress = &quot;:8083&quot;
+blockstore = &quot;file://./data/blockstore&quot;
+</code></pre></div>
 
 
 

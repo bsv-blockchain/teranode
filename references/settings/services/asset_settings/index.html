@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#asset-server-settings" class="md-skip">
+        <a href="#asset-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4275,6 +4275,19 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Asset Server
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -4286,6 +4299,145 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Settings
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#global-security-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Security Settings
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Dependencies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Dependencies">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#centrifuge-websocket-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      Centrifuge WebSocket Server
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#http-response-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP Response Signing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#https-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTPS Support
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#http-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#https-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTPS Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#centrifuge-websocket" class="md-nav__link">
+    <span class="md-ellipsis">
+      Centrifuge WebSocket
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -4904,6 +5056,134 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Settings
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#global-security-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Security Settings
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Dependencies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Dependencies">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#centrifuge-websocket-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      Centrifuge WebSocket Server
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#http-response-signing" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP Response Signing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#https-support" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTPS Support
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#http-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTP Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#https-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      HTTPS Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#centrifuge-websocket" class="md-nav__link">
+    <span class="md-ellipsis">
+      Centrifuge WebSocket
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -4918,10 +5198,221 @@
 
 
 
-<h1 id="asset-server-settings">Asset Server Settings</h1>
-<p><strong>Related Topic</strong>: <a href="../../../../topics/services/assetServer/">Asset Server</a></p>
-<p>Configuration settings for the Asset Server service.</p>
-<p><strong>Note</strong>: Settings content is being extracted from the topic document. See section 6-9 of the topic document for current settings information.</p>
+<h1 id="asset-service-settings">Asset Service Settings</h1>
+<p><strong>Related Topic</strong>: <a href="../../../../topics/services/assetServer/">Asset Service</a></p>
+<h2 id="configuration-settings">Configuration Settings</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>APIPrefix</td>
+<td>string</td>
+<td>"/api/v1"</td>
+<td>asset_apiPrefix</td>
+<td>API route grouping</td>
+</tr>
+<tr>
+<td>CentrifugeListenAddress</td>
+<td>string</td>
+<td>":8892"</td>
+<td>asset_centrifugeListenAddress</td>
+<td>WebSocket server address</td>
+</tr>
+<tr>
+<td>CentrifugeDisable</td>
+<td>bool</td>
+<td>false</td>
+<td>asset_centrifuge_disable</td>
+<td><strong>CRITICAL</strong> - Disables WebSocket functionality</td>
+</tr>
+<tr>
+<td>HTTPAddress</td>
+<td>string</td>
+<td>"http://localhost:8090/api/v1"</td>
+<td>asset_httpAddress</td>
+<td><strong>CRITICAL for Centrifuge</strong> - Base URL</td>
+</tr>
+<tr>
+<td>HTTPPublicAddress</td>
+<td>string</td>
+<td>""</td>
+<td>asset_httpPublicAddress</td>
+<td>Configuration placeholder</td>
+</tr>
+<tr>
+<td>HTTPListenAddress</td>
+<td>string</td>
+<td>":8090"</td>
+<td>asset_httpListenAddress</td>
+<td><strong>CRITICAL</strong> - HTTP server binding</td>
+</tr>
+<tr>
+<td>HTTPPort</td>
+<td>int</td>
+<td>8090</td>
+<td>ASSET_HTTP_PORT</td>
+<td>Configuration placeholder</td>
+</tr>
+<tr>
+<td>SignHTTPResponses</td>
+<td>bool</td>
+<td>false</td>
+<td>asset_sign_http_responses</td>
+<td>HTTP response signing</td>
+</tr>
+<tr>
+<td>EchoDebug</td>
+<td>bool</td>
+<td>false</td>
+<td>ECHO_DEBUG</td>
+<td>Echo framework debug mode</td>
+</tr>
+</tbody>
+</table>
+<h2 id="global-security-settings">Global Security Settings</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SecurityLevelHTTP</td>
+<td>int</td>
+<td>0</td>
+<td>securityLevelHTTP</td>
+<td>HTTP (0) vs HTTPS (non-zero)</td>
+</tr>
+<tr>
+<td>ServerCertFile</td>
+<td>string</td>
+<td>""</td>
+<td>server_certFile</td>
+<td><strong>Required for HTTPS</strong></td>
+</tr>
+<tr>
+<td>ServerKeyFile</td>
+<td>string</td>
+<td>""</td>
+<td>server_keyFile</td>
+<td><strong>Required for HTTPS</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="centrifuge-websocket-server">Centrifuge WebSocket Server</h3>
+<ul>
+<li>Requires <code>CentrifugeDisable = false</code></li>
+<li>Requires valid <code>CentrifugeListenAddress</code></li>
+<li>Requires valid <code>HTTPAddress</code> for base URL</li>
+</ul>
+<h3 id="http-response-signing">HTTP Response Signing</h3>
+<ul>
+<li>Requires <code>SignHTTPResponses = true</code></li>
+<li>Requires valid <code>P2P.PrivateKey</code> (Ed25519 format)</li>
+</ul>
+<h3 id="https-support">HTTPS Support</h3>
+<ul>
+<li>Requires <code>SecurityLevelHTTP != 0</code></li>
+<li>Requires valid <code>ServerCertFile</code> and <code>ServerKeyFile</code></li>
+</ul>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UTXOStore</td>
+<td>utxo.Store</td>
+<td>UTXO-related API endpoints</td>
+</tr>
+<tr>
+<td>TxStore</td>
+<td>blob.Store</td>
+<td>Transaction data access</td>
+</tr>
+<tr>
+<td>SubtreeStore</td>
+<td>blob.Store</td>
+<td>Subtree data access</td>
+</tr>
+<tr>
+<td>BlockPersisterStore</td>
+<td>blob.Store</td>
+<td>Block data access</td>
+</tr>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td>Blockchain operations, FSM state</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Validation</th>
+<th>Error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HTTPListenAddress</td>
+<td>Must not be empty</td>
+<td>"no asset_httpListenAddress setting found"</td>
+</tr>
+<tr>
+<td>HTTPAddress</td>
+<td>Required when Centrifuge enabled</td>
+<td>"asset_httpAddress not found in config"</td>
+</tr>
+<tr>
+<td>ServerCertFile</td>
+<td>Required when HTTPS enabled</td>
+<td>"server_certFile is required for HTTPS"</td>
+</tr>
+<tr>
+<td>ServerKeyFile</td>
+<td>Required when HTTPS enabled</td>
+<td>"server_keyFile is required for HTTPS"</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="http-configuration">HTTP Configuration</h3>
+<div class="highlight"><pre><span></span><code>asset_httpListenAddress = &quot;:8090&quot;
+asset_apiPrefix = &quot;/api/v1&quot;
+</code></pre></div>
+<h3 id="https-configuration">HTTPS Configuration</h3>
+<div class="highlight"><pre><span></span><code>securityLevelHTTP = 1
+server_certFile = &quot;/path/to/cert.pem&quot;
+server_keyFile = &quot;/path/to/key.pem&quot;
+</code></pre></div>
+<h3 id="centrifuge-websocket">Centrifuge WebSocket</h3>
+<div class="highlight"><pre><span></span><code>asset_centrifuge_disable = false
+asset_centrifugeListenAddress = &quot;:8892&quot;
+asset_httpAddress = &quot;http://localhost:8090/api/v1&quot;
+</code></pre></div>
 
 
 

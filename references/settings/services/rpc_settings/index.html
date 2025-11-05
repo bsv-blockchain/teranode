@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#rpc-settings" class="md-skip">
+        <a href="#rpc-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4500,28 +4500,55 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#configuration-categories" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Categories
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#authentication-security-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Authentication &amp; Security Settings
+      Configuration Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Authentication &amp; Security Settings">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#authentication-interactions-and-dependencies" class="md-nav__link">
+  <a href="#authentication-system" class="md-nav__link">
     <span class="md-ellipsis">
-      Authentication Interactions and Dependencies
+      Authentication System
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#response-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      Response Caching
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#timeout-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Timeout Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network-binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      Network Binding
     </span>
   </a>
   
@@ -4533,151 +4560,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#network-configuration-settings" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Network Configuration Settings
+      Service Dependencies
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Network Configuration Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#network-configuration-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Network Configuration Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#performance-scaling-settings" class="md-nav__link">
+  <a href="#validation-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance &amp; Scaling Settings
+      Validation Rules
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Performance &amp; Scaling Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#performance-scaling-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance Scaling Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#timeout-configuration-guidelines" class="md-nav__link">
-    <span class="md-ellipsis">
-      Timeout Configuration Guidelines
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#compatibility-settings" class="md-nav__link">
+  <a href="#configuration-examples" class="md-nav__link">
     <span class="md-ellipsis">
-      Compatibility Settings
+      Configuration Examples
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Compatibility Settings">
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#compatibility-interactions-and-dependencies" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Compatibility Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#dependency-injected-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Dependency-Injected Settings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Dependency-Injected Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#dependency-configuration-interactions" class="md-nav__link">
-    <span class="md-ellipsis">
-      Dependency Configuration Interactions
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-relationships-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Relationships and Dependencies
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Relationships and Dependencies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#authentication-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      Authentication Flow
+      Basic Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#performance-optimization" class="md-nav__link">
+  <a href="#authentication-setup" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance Optimization
+      Authentication Setup
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#service-integration" class="md-nav__link">
+  <a href="#performance-tuning" class="md-nav__link">
     <span class="md-ellipsis">
-      Service Integration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#compatibility-and-behavior" class="md-nav__link">
-    <span class="md-ellipsis">
-      Compatibility and Behavior
+      Performance Tuning
     </span>
   </a>
   
@@ -5132,28 +5063,55 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#configuration-categories" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Categories
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#authentication-security-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Authentication &amp; Security Settings
+      Configuration Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Authentication &amp; Security Settings">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#authentication-interactions-and-dependencies" class="md-nav__link">
+  <a href="#authentication-system" class="md-nav__link">
     <span class="md-ellipsis">
-      Authentication Interactions and Dependencies
+      Authentication System
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#response-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      Response Caching
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#timeout-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      Timeout Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#network-binding" class="md-nav__link">
+    <span class="md-ellipsis">
+      Network Binding
     </span>
   </a>
   
@@ -5165,151 +5123,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#network-configuration-settings" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Network Configuration Settings
+      Service Dependencies
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Network Configuration Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#network-configuration-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Network Configuration Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#performance-scaling-settings" class="md-nav__link">
+  <a href="#validation-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance &amp; Scaling Settings
+      Validation Rules
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Performance &amp; Scaling Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#performance-scaling-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance Scaling Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#timeout-configuration-guidelines" class="md-nav__link">
-    <span class="md-ellipsis">
-      Timeout Configuration Guidelines
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#compatibility-settings" class="md-nav__link">
+  <a href="#configuration-examples" class="md-nav__link">
     <span class="md-ellipsis">
-      Compatibility Settings
+      Configuration Examples
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Compatibility Settings">
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#compatibility-interactions-and-dependencies" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Compatibility Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#dependency-injected-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Dependency-Injected Settings
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Dependency-Injected Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#dependency-configuration-interactions" class="md-nav__link">
-    <span class="md-ellipsis">
-      Dependency Configuration Interactions
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-relationships-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Relationships and Dependencies
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Relationships and Dependencies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#authentication-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      Authentication Flow
+      Basic Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#performance-optimization" class="md-nav__link">
+  <a href="#authentication-setup" class="md-nav__link">
     <span class="md-ellipsis">
-      Performance Optimization
+      Authentication Setup
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#service-integration" class="md-nav__link">
+  <a href="#performance-tuning" class="md-nav__link">
     <span class="md-ellipsis">
-      Service Integration
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#compatibility-and-behavior" class="md-nav__link">
-    <span class="md-ellipsis">
-      Compatibility and Behavior
+      Performance Tuning
     </span>
   </a>
   
@@ -5336,257 +5198,215 @@
 
 
 
-<h1 id="rpc-settings">RPC Settings</h1>
+<h1 id="rpc-service-settings">RPC Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/rpc/">RPC Service</a></p>
-<p>The RPC service relies on a set of configuration settings that control its behavior, security, and performance. This section provides a comprehensive overview of these settings, organized by functional category, along with their impacts, dependencies, and recommended configurations for different deployment scenarios.</p>
-<h2 id="configuration-categories">Configuration Categories</h2>
-<p>RPC service settings can be organized into the following functional categories:</p>
-<ol>
-<li><strong>Authentication &amp; Security</strong>: Settings that control user access and authentication mechanisms</li>
-<li><strong>Network Configuration</strong>: Settings that determine how the service binds to network interfaces</li>
-<li><strong>Performance &amp; Scaling</strong>: Settings that manage resource usage and connection handling</li>
-<li><strong>Compatibility</strong>: Settings that control backward compatibility with legacy clients</li>
-</ol>
-<h2 id="authentication-security-settings">Authentication &amp; Security Settings</h2>
-<p>These settings control access to the RPC service, implementing a two-tier authentication system with full and limited access.</p>
+<h2 id="configuration-settings">Configuration Settings</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
 <th>Type</th>
 <th>Default</th>
-<th>Description</th>
-<th>Impact</th>
+<th>Environment Variable</th>
+<th>Usage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>rpc_user</code></td>
+<td>RPCUser</td>
 <td>string</td>
-<td><code>""</code> (empty string)</td>
-<td>Username for RPC authentication with full access</td>
-<td>Controls who can access the RPC service with full permissions; required for secure deployments</td>
+<td>""</td>
+<td>rpc_user</td>
+<td>Full access authentication username</td>
 </tr>
 <tr>
-<td><code>rpc_pass</code></td>
+<td>RPCPass</td>
 <td>string</td>
-<td><code>""</code> (empty string)</td>
-<td>Password for RPC authentication with full access</td>
-<td>Controls authentication for full access; required for secure deployments</td>
+<td>""</td>
+<td>rpc_pass</td>
+<td>Full access authentication password</td>
 </tr>
 <tr>
-<td><code>rpc_limit_user</code></td>
+<td>RPCLimitUser</td>
 <td>string</td>
-<td><code>""</code> (empty string)</td>
-<td>Username for RPC authentication with limited access</td>
-<td>Controls who can access the RPC service with limited permissions; optional but recommended</td>
+<td>""</td>
+<td>rpc_limit_user</td>
+<td>Limited access authentication username</td>
 </tr>
 <tr>
-<td><code>rpc_limit_pass</code></td>
+<td>RPCLimitPass</td>
 <td>string</td>
-<td><code>""</code> (empty string)</td>
-<td>Password for RPC authentication with limited access</td>
-<td>Controls authentication for limited access; optional but recommended</td>
+<td>""</td>
+<td>rpc_limit_pass</td>
+<td>Limited access authentication password</td>
 </tr>
-</tbody>
-</table>
-<h3 id="authentication-interactions-and-dependencies">Authentication Interactions and Dependencies</h3>
-<p>The RPC service implements a two-tier authentication system:</p>
-<ul>
-<li><strong>Full Access</strong>: Authenticated using <code>rpc_user</code> and <code>rpc_pass</code>, grants access to all RPC commands including sensitive operations like <code>stop</code> and administrative functions</li>
-<li><strong>Limited Access</strong>: Authenticated using <code>rpc_limit_user</code> and <code>rpc_limit_pass</code>, grants access to a subset of commands, restricting sensitive operations</li>
-</ul>
-<p>For security, credentials should be set explicitly as they default to empty strings.</p>
-<h2 id="network-configuration-settings">Network Configuration Settings</h2>
-<p>These settings control how the RPC service binds to network interfaces and accepts connections.</p>
-<table>
-<thead>
 <tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>rpc_listener_url</code></td>
-<td>*url.URL</td>
-<td><code>nil</code></td>
-<td>URL where the RPC service listens for connections, in format "<a href="http://hostname:port">http://hostname:port</a>"</td>
-<td>Controls which network interface and port the service binds to; critical for accessibility and security</td>
-</tr>
-</tbody>
-</table>
-<h3 id="network-configuration-interactions-and-dependencies">Network Configuration Interactions and Dependencies</h3>
-<p>The <code>rpc_listener_url</code> setting determines both the binding interface and port. For example:</p>
-<ul>
-<li><code>http://localhost:8332</code> binds to the local interface only, allowing connections only from the same machine</li>
-<li><code>http://0.0.0.0:8332</code> binds to all interfaces, allowing remote connections if the machine is network-accessible</li>
-</ul>
-<p>This setting has significant security implications. In production environments, the RPC service should typically only bind to local interfaces unless remote RPC access is explicitly required.</p>
-<h2 id="performance-scaling-settings">Performance &amp; Scaling Settings</h2>
-<p>These settings control resource usage, caching behavior, and the service's ability to handle multiple simultaneous clients.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>rpc_max_clients</code></td>
+<td>RPCMaxClients</td>
 <td>int</td>
-<td><code>1</code></td>
-<td>Maximum number of concurrent RPC client connections allowed</td>
-<td>Limits resource usage; prevents overload from too many simultaneous connections</td>
+<td>1</td>
+<td>rpc_max_clients</td>
+<td>Maximum concurrent RPC connections</td>
 </tr>
 <tr>
-<td><code>rpc_cache_enabled</code></td>
+<td>RPCQuirks</td>
 <td>bool</td>
-<td><code>true</code></td>
-<td>Enable response caching for frequently accessed data</td>
-<td>Improves performance by caching responses for commands like getblock, getblockheader, and getrawtransaction</td>
+<td>true</td>
+<td>rpc_quirks</td>
+<td>Legacy client compatibility behavior</td>
 </tr>
 <tr>
-<td><code>rpc_timeout</code></td>
-<td>time.Duration</td>
-<td><code>30s</code></td>
-<td>Timeout for RPC request processing</td>
-<td>Controls maximum time allowed for processing individual RPC requests; prevents hung requests</td>
+<td>RPCListenerURL</td>
+<td>*url.URL</td>
+<td>""</td>
+<td>rpc_listener_url</td>
+<td><strong>CRITICAL</strong> - RPC server network binding</td>
 </tr>
 <tr>
-<td><code>rpc_client_call_timeout</code></td>
+<td>CacheEnabled</td>
+<td>bool</td>
+<td>true</td>
+<td>rpc_cache_enabled</td>
+<td><strong>CRITICAL</strong> - Response caching for performance</td>
+</tr>
+<tr>
+<td>RPCTimeout</td>
 <td>time.Duration</td>
-<td><code>5s</code></td>
-<td>Timeout for calls to dependent services (P2P, Peer services)</td>
-<td>Controls timeout when RPC service calls other Teranode services for data</td>
+<td>30s</td>
+<td>rpc_timeout</td>
+<td><strong>CRITICAL</strong> - RPC call execution timeout</td>
+</tr>
+<tr>
+<td>ClientCallTimeout</td>
+<td>time.Duration</td>
+<td>5s</td>
+<td>rpc_client_call_timeout</td>
+<td><strong>CRITICAL</strong> - Service client call timeout</td>
 </tr>
 </tbody>
 </table>
-<h3 id="performance-scaling-interactions-and-dependencies">Performance Scaling Interactions and Dependencies</h3>
-<p>The performance settings work together to optimize RPC service behavior:</p>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="authentication-system">Authentication System</h3>
 <ul>
-<li><strong>Connection Management</strong>: <code>rpc_max_clients</code> directly impacts server resource usage. When the limit is reached, new connections are rejected with a 503 Service Unavailable response</li>
-<li><strong>Response Caching</strong>: <code>rpc_cache_enabled</code> significantly improves performance for read-heavy workloads by caching responses for blockchain data queries</li>
-<li><strong>Timeout Control</strong>: <code>rpc_timeout</code> and <code>rpc_client_call_timeout</code> prevent resource exhaustion from hung requests and service calls</li>
+<li><code>RPCUser</code> and <code>RPCPass</code> provide full access to all RPC commands</li>
+<li><code>RPCLimitUser</code> and <code>RPCLimitPass</code> provide limited access to subset of commands</li>
+<li>Two-tier authentication system with different access levels</li>
 </ul>
-<p>These settings should be adjusted based on:</p>
+<h3 id="response-caching">Response Caching</h3>
 <ul>
-<li>Available server resources (CPU, memory, network capacity)</li>
-<li>Expected client load patterns and caching benefits</li>
-<li>Network latency to dependent services</li>
-<li>Complexity of RPC requests (some operations are more resource-intensive)</li>
+<li>When <code>CacheEnabled = true</code>, caches responses for getbestblockhash, getpeerinfo, getblockchaininfo, getinfo, and getchaintips</li>
+<li>Improves performance for frequently accessed data</li>
 </ul>
-<p>The default values are conservative to prevent resource exhaustion in default configurations.</p>
-<h3 id="timeout-configuration-guidelines">Timeout Configuration Guidelines</h3>
-<p>The timeout settings interact with service dependencies and operation complexity:</p>
+<h3 id="timeout-management">Timeout Management</h3>
 <ul>
-<li>
-<p><strong><code>rpc_timeout</code></strong> should be set higher than the longest expected operation:</p>
-</li>
-<li>
-<p>Mining operations: 30-60s recommended</p>
-</li>
-<li>Large block retrievals: 20-30s recommended</li>
-<li>
-<p>Simple queries: 10-15s sufficient</p>
-</li>
-<li>
-<p><strong><code>rpc_client_call_timeout</code></strong> should be short enough to fail fast:</p>
-</li>
-<li>
-<p>Network operations: 5-10s recommended</p>
-</li>
-<li>Local service calls: 3-5s recommended</li>
-<li>Critical paths: Keep as low as practical</li>
+<li><code>RPCTimeout</code> controls overall RPC call duration with context timeout</li>
+<li><code>ClientCallTimeout</code> controls calls to P2P and Legacy services</li>
+<li>Prevents hung requests and service calls</li>
 </ul>
-<p>Monitor timeout errors (code -30) to identify operations requiring adjustment.</p>
-<h2 id="compatibility-settings">Compatibility Settings</h2>
-<p>These settings control the service's behavior when dealing with legacy Bitcoin clients.</p>
+<h3 id="network-binding">Network Binding</h3>
+<ul>
+<li><code>RPCListenerURL</code> determines server binding interface and port</li>
+<li><code>RPCMaxClients</code> limits concurrent connections</li>
+</ul>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UTXOStore</td>
+<td>utxo.Store</td>
+<td><strong>CRITICAL</strong> - UTXO operations and transaction validation</td>
+</tr>
+<tr>
+<td>TxStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Transaction data access</td>
+</tr>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td><strong>CRITICAL</strong> - Blockchain operations and data retrieval</td>
+</tr>
+<tr>
+<td>BlockValidationClient</td>
+<td>blockvalidation.Interface</td>
+<td><strong>CRITICAL</strong> - Block validation operations</td>
+</tr>
+<tr>
+<td>BlockAssemblyClient</td>
+<td>blockassembly.ClientI</td>
+<td><strong>CRITICAL</strong> - Mining operations and block templates</td>
+</tr>
+<tr>
+<td>P2PClient</td>
+<td>p2p.ClientI</td>
+<td><strong>CRITICAL</strong> - Peer information and network operations</td>
+</tr>
+<tr>
+<td>LegacyPeerClient</td>
+<td>peer.ClientI</td>
+<td><strong>CRITICAL</strong> - Legacy peer information</td>
+</tr>
+<tr>
+<td>ValidatorClient</td>
+<td>validator.ClientI</td>
+<td><strong>CRITICAL</strong> - Transaction validation</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
+<th>Validation</th>
 <th>Impact</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>rpc_quirks</code></td>
-<td>bool</td>
-<td><code>true</code></td>
-<td>Enables backward compatibility quirks for legacy Bitcoin RPC clients</td>
-<td>Affects how responses are formatted; enables legacy behavior for older clients</td>
+<td>RPCListenerURL</td>
+<td>Must be valid URL format</td>
+<td>Server binding</td>
+</tr>
+<tr>
+<td>CacheEnabled</td>
+<td>Controls response caching behavior</td>
+<td>Performance</td>
+</tr>
+<tr>
+<td>RPCTimeout</td>
+<td>Must be positive duration</td>
+<td>Request handling</td>
+</tr>
+<tr>
+<td>ClientCallTimeout</td>
+<td>Must be positive duration</td>
+<td>Service calls</td>
 </tr>
 </tbody>
 </table>
-<h3 id="compatibility-interactions-and-dependencies">Compatibility Interactions and Dependencies</h3>
-<p>The <code>rpc_quirks</code> setting primarily affects response formatting and error handling behavior:</p>
-<ul>
-<li>When enabled, responses may include additional fields or formatting to maintain compatibility with older clients</li>
-<li>When disabled, responses strictly follow current Bitcoin RPC standards</li>
-</ul>
-<p>This setting should be left enabled unless all clients are confirmed to support modern Bitcoin RPC conventions.</p>
-<h2 id="dependency-injected-settings">Dependency-Injected Settings</h2>
-<p>These settings are not directly part of the RPC configuration but are required dependencies that the RPC service uses from other services.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>asset_httpAddress</code></td>
-<td>string</td>
-<td><code>""</code> (required)</td>
-<td>HTTP address of the Asset service for transaction hex retrieval</td>
-<td><strong>Required</strong>: RPC service fails to start if not configured; used for getrawtransaction hex responses</td>
-</tr>
-</tbody>
-</table>
-<h3 id="dependency-configuration-interactions">Dependency Configuration Interactions</h3>
-<p>The RPC service acts as an API gateway and requires several service dependencies:</p>
-<ul>
-<li><strong>Asset Service Integration</strong>: <code>asset_httpAddress</code> is mandatory for transaction data retrieval functionality. The RPC service constructs URLs like <code>{asset_httpAddress}/api/v1/tx/{txid}/hex</code> for transaction hex responses</li>
-<li><strong>Service Context</strong>: The <code>Context</code> setting is used for HTTP listener setup and management</li>
-<li><strong>Client Dependencies</strong>: The service requires active connections to Blockchain, UTXO Store, Block Assembly, Peer, and P2P services</li>
-</ul>
-<h2 id="configuration-relationships-and-dependencies">Configuration Relationships and Dependencies</h2>
-<p>The RPC service configuration settings have several important relationships:</p>
-<h3 id="authentication-flow">Authentication Flow</h3>
-<ul>
-<li><code>rpc_user</code> + <code>rpc_pass</code> → Full admin access (all RPC commands)</li>
-<li><code>rpc_limit_user</code> + <code>rpc_limit_pass</code> → Limited access (read-only commands)</li>
-<li>Both credential pairs are SHA256 hashed for secure validation</li>
-</ul>
-<h3 id="performance-optimization">Performance Optimization</h3>
-<ul>
-<li><code>rpc_cache_enabled</code> + <code>rpc_timeout</code> → Balanced performance vs responsiveness</li>
-<li><code>rpc_max_clients</code> + <code>rpc_client_call_timeout</code> → Resource management</li>
-</ul>
-<h3 id="service-integration">Service Integration</h3>
-<ul>
-<li><code>asset_httpAddress</code> → Required for transaction hex retrieval</li>
-<li><code>rpc_listener_url</code> → Required for HTTP server binding</li>
-</ul>
-<h3 id="compatibility-and-behavior">Compatibility and Behavior</h3>
-<ul>
-<li><code>rpc_quirks</code> → Affects response formatting for legacy client compatibility</li>
-</ul>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>rpc_listener_url = &quot;http://localhost:8332&quot;
+rpc_max_clients = 10
+</code></pre></div>
+<h3 id="authentication-setup">Authentication Setup</h3>
+<div class="highlight"><pre><span></span><code>rpc_user = &quot;admin&quot;
+rpc_pass = &quot;secure_password&quot;
+rpc_limit_user = &quot;readonly&quot;
+rpc_limit_pass = &quot;readonly_password&quot;
+</code></pre></div>
+<h3 id="performance-tuning">Performance Tuning</h3>
+<div class="highlight"><pre><span></span><code>rpc_cache_enabled = true
+rpc_timeout = 60s
+rpc_client_call_timeout = 10s
+</code></pre></div>
 
 
 

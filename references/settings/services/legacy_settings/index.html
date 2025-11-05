@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#legacy-settings" class="md-skip">
+        <a href="#legacy-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4431,82 +4431,115 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#network-and-communication-settings" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Network and Communication Settings
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#memory-and-storage-management" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Memory and Storage Management
+      Configuration Dependencies
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#concurrency-and-performance" class="md-nav__link">
-    <span class="md-ellipsis">
-      Concurrency and Performance
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#peer-management-and-timeouts" class="md-nav__link">
-    <span class="md-ellipsis">
-      Peer Management and Timeouts
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#feature-flags" class="md-nav__link">
-    <span class="md-ellipsis">
-      Feature Flags
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Interactions and Dependencies
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Interactions and Dependencies">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#peer-discovery-and-connection-management" class="md-nav__link">
+  <a href="#peer-connection-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Peer Discovery and Connection Management
+      Peer Connection Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#memory-management-considerations" class="md-nav__link">
+  <a href="#batch-processing-performance" class="md-nav__link">
     <span class="md-ellipsis">
-      Memory Management Considerations
+      Batch Processing Performance
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#disk-based-block-queueing-legacy_writemsgblockstodisk" class="md-nav__link">
+  <a href="#peer-timeout-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Disk-Based Block Queueing (legacy_writeMsgBlocksToDisk)
+      Peer Timeout Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-candidate-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sync Candidate Selection
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#forced-peer-connections" class="md-nav__link">
+    <span class="md-ellipsis">
+      Forced Peer Connections
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Tuning
     </span>
   </a>
   
@@ -5030,82 +5063,115 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#network-and-communication-settings" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Network and Communication Settings
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#memory-and-storage-management" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Memory and Storage Management
+      Configuration Dependencies
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#concurrency-and-performance" class="md-nav__link">
-    <span class="md-ellipsis">
-      Concurrency and Performance
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#peer-management-and-timeouts" class="md-nav__link">
-    <span class="md-ellipsis">
-      Peer Management and Timeouts
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#feature-flags" class="md-nav__link">
-    <span class="md-ellipsis">
-      Feature Flags
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Interactions and Dependencies
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Configuration Interactions and Dependencies">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#peer-discovery-and-connection-management" class="md-nav__link">
+  <a href="#peer-connection-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Peer Discovery and Connection Management
+      Peer Connection Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#memory-management-considerations" class="md-nav__link">
+  <a href="#batch-processing-performance" class="md-nav__link">
     <span class="md-ellipsis">
-      Memory Management Considerations
+      Batch Processing Performance
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#disk-based-block-queueing-legacy_writemsgblockstodisk" class="md-nav__link">
+  <a href="#peer-timeout-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Disk-Based Block Queueing (legacy_writeMsgBlocksToDisk)
+      Peer Timeout Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sync-candidate-selection" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sync Candidate Selection
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#forced-peer-connections" class="md-nav__link">
+    <span class="md-ellipsis">
+      Forced Peer Connections
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Tuning
     </span>
   </a>
   
@@ -5132,270 +5198,270 @@
 
 
 
-<h1 id="legacy-settings">Legacy Settings</h1>
+<h1 id="legacy-service-settings">Legacy Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/legacy/">Legacy Service</a></p>
-<p>The Legacy service bridges traditional Bitcoin nodes with the Teranode architecture, making its configuration particularly important for network integration. This section provides a comprehensive overview of all configuration options, organized by functional category.</p>
-<h2 id="network-and-communication-settings">Network and Communication Settings</h2>
+<h2 id="configuration-settings">Configuration Settings</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
 <th>Type</th>
 <th>Default</th>
-<th>Description</th>
-<th>Impact</th>
+<th>Environment Variable</th>
+<th>Usage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>legacy_listen_addresses</code></td>
-<td>[]string</td>
-<td>[] (falls back to external IP:8333)</td>
-<td>Network addresses for the service to listen on for peer connections</td>
-<td>Controls which interfaces and ports accept connections from other nodes</td>
-</tr>
-<tr>
-<td><code>legacy_connect_peers</code></td>
-<td>[]string</td>
-<td>[]</td>
-<td>Peer addresses to connect to on startup</td>
-<td>Forces connections to specific peers rather than using automatic peer discovery</td>
-</tr>
-<tr>
-<td><code>legacy_grpcAddress</code></td>
-<td>string</td>
-<td>""</td>
-<td>Address for other services to connect to the Legacy service</td>
-<td>Enables service-to-service communication</td>
-</tr>
-<tr>
-<td><code>legacy_grpcListenAddress</code></td>
-<td>string</td>
-<td>""</td>
-<td>Interface and port to listen on for gRPC connections</td>
-<td>Controls network binding for the gRPC server</td>
-</tr>
-<tr>
-<td><code>network</code></td>
-<td>string</td>
-<td>"mainnet"</td>
-<td>Specifies which blockchain network to connect to</td>
-<td>Determines network rules, consensus parameters, and compatibility</td>
-</tr>
-</tbody>
-</table>
-<h2 id="memory-and-storage-management">Memory and Storage Management</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>legacy_orphanEvictionDuration</code></td>
-<td>duration</td>
-<td>10m</td>
-<td>How long orphan transactions are kept before eviction</td>
-<td>Affects memory usage and ability to process delayed transactions</td>
-</tr>
-<tr>
-<td><code>legacy_writeMsgBlocksToDisk</code></td>
-<td>bool</td>
-<td>false</td>
-<td><strong>Enable disk-based block queueing during synchronization</strong></td>
-<td><strong>Significantly reduces memory usage</strong> by writing incoming blocks to temporary disk storage with 4MB buffered I/O and automatic 10-minute cleanup. Essential for resource-constrained environments and high-volume sync operations</td>
-</tr>
-<tr>
-<td><code>legacy_storeBatcherSize</code></td>
-<td>int</td>
-<td>1024</td>
-<td>Batch size for store operations</td>
-<td>Affects efficiency of storage operations and memory usage</td>
-</tr>
-<tr>
-<td><code>legacy_spendBatcherSize</code></td>
-<td>int</td>
-<td>1024</td>
-<td>Batch size for spend operations</td>
-<td>Affects efficiency of spend operations and memory usage</td>
-</tr>
-<tr>
-<td><code>legacy_outpointBatcherSize</code></td>
-<td>int</td>
-<td>1024</td>
-<td>Batch size for outpoint operations</td>
-<td>Affects efficiency of outpoint processing</td>
-</tr>
-<tr>
-<td><code>legacy_workingDir</code></td>
+<td>WorkingDir</td>
 <td>string</td>
 <td>"../../data"</td>
-<td>Directory where service stores data files</td>
-<td>Controls where peer information and other data is stored</td>
+<td>legacy_workingDir</td>
+<td>Data storage directory</td>
 </tr>
 <tr>
-<td><code>temp_store</code></td>
+<td>ListenAddresses</td>
+<td>[]string</td>
+<td>[]</td>
+<td>legacy_listen_addresses</td>
+<td><strong>CRITICAL</strong> - Network interfaces for peer connections</td>
+</tr>
+<tr>
+<td>ConnectPeers</td>
+<td>[]string</td>
+<td>[]</td>
+<td>legacy_connect_peers</td>
+<td>Forced peer connections</td>
+</tr>
+<tr>
+<td>OrphanEvictionDuration</td>
+<td>time.Duration</td>
+<td>10m</td>
+<td>legacy_orphanEvictionDuration</td>
+<td>Orphan transaction retention</td>
+</tr>
+<tr>
+<td>StoreBatcherSize</td>
+<td>int</td>
+<td>1024</td>
+<td>legacy_storeBatcherSize</td>
+<td><strong>CRITICAL</strong> - Store operation batch size</td>
+</tr>
+<tr>
+<td>StoreBatcherConcurrency</td>
+<td>int</td>
+<td>32</td>
+<td>legacy_storeBatcherConcurrency</td>
+<td><strong>CRITICAL</strong> - Store operation parallelism</td>
+</tr>
+<tr>
+<td>SpendBatcherSize</td>
+<td>int</td>
+<td>1024</td>
+<td>legacy_spendBatcherSize</td>
+<td><strong>CRITICAL</strong> - Spend operation batch size</td>
+</tr>
+<tr>
+<td>SpendBatcherConcurrency</td>
+<td>int</td>
+<td>32</td>
+<td>legacy_spendBatcherConcurrency</td>
+<td><strong>CRITICAL</strong> - Spend operation parallelism</td>
+</tr>
+<tr>
+<td>OutpointBatcherSize</td>
+<td>int</td>
+<td>1024</td>
+<td>legacy_outpointBatcherSize</td>
+<td><strong>CRITICAL</strong> - Outpoint operation batch size</td>
+</tr>
+<tr>
+<td>OutpointBatcherConcurrency</td>
+<td>int</td>
+<td>32</td>
+<td>legacy_outpointBatcherConcurrency</td>
+<td>Outpoint operation parallelism</td>
+</tr>
+<tr>
+<td>PrintInvMessages</td>
+<td>bool</td>
+<td>false</td>
+<td>legacy_printInvMessages</td>
+<td>Debug logging for inventory messages</td>
+</tr>
+<tr>
+<td>GRPCAddress</td>
 <td>string</td>
+<td>""</td>
+<td>legacy_grpcAddress</td>
+<td>gRPC client connections</td>
+</tr>
+<tr>
+<td>AllowBlockPriority</td>
+<td>bool</td>
+<td>false</td>
+<td>legacy_allowBlockPriority</td>
+<td>Block priority handling</td>
+</tr>
+<tr>
+<td>GRPCListenAddress</td>
+<td>string</td>
+<td>""</td>
+<td>legacy_grpcListenAddress</td>
+<td>gRPC server binding</td>
+</tr>
+<tr>
+<td>SavePeers</td>
+<td>bool</td>
+<td>false</td>
+<td>legacy_savePeers</td>
+<td>Peer information persistence</td>
+</tr>
+<tr>
+<td>AllowSyncCandidateFromLocalPeers</td>
+<td>bool</td>
+<td>false</td>
+<td>legacy_allowSyncCandidateFromLocalPeers</td>
+<td><strong>CRITICAL</strong> - Local peer sync candidate selection</td>
+</tr>
+<tr>
+<td>TempStore</td>
+<td>*url.URL</td>
 <td>"file://./data/tempstore"</td>
-<td>Temporary storage URL for Legacy Service operations</td>
-<td>Controls temporary file storage location for block processing and peer data</td>
-</tr>
-</tbody>
-</table>
-<h2 id="concurrency-and-performance">Concurrency and Performance</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>legacy_storeBatcherConcurrency</code></td>
-<td>int</td>
-<td>32</td>
-<td>Number of concurrent store operations</td>
-<td>Controls parallelism for storage operations</td>
+<td>temp_store</td>
+<td><strong>CRITICAL</strong> - Temporary storage location</td>
 </tr>
 <tr>
-<td><code>legacy_spendBatcherConcurrency</code></td>
-<td>int</td>
-<td>32</td>
-<td>Number of concurrent spend operations</td>
-<td>Controls parallelism for spend operations</td>
-</tr>
-<tr>
-<td><code>legacy_outpointBatcherConcurrency</code></td>
-<td>int</td>
-<td>32</td>
-<td>Number of concurrent outpoint operations</td>
-<td>Controls parallelism for outpoint operations</td>
-</tr>
-</tbody>
-</table>
-<h2 id="peer-management-and-timeouts">Peer Management and Timeouts</h2>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>legacy_savePeers</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Save peer information to disk for reuse on restart</td>
-<td>Enables persistent peer connections across service restarts</td>
-</tr>
-<tr>
-<td><code>legacy_allowSyncCandidateFromLocalPeers</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Allow local peers as sync candidates</td>
-<td>Affects peer selection for blockchain synchronization</td>
-</tr>
-<tr>
-<td><code>legacy_printInvMessages</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Print inventory messages to logs</td>
-<td>Increases log verbosity for debugging</td>
-</tr>
-<tr>
-<td><code>legacy_peerIdleTimeout</code></td>
-<td>duration</td>
+<td>PeerIdleTimeout</td>
+<td>time.Duration</td>
 <td>125s</td>
-<td>Timeout for idle peer connections</td>
-<td>Controls when peers are disconnected due to inactivity. Set to 125s to accommodate 2-minute ping/pong intervals</td>
+<td>legacy_peerIdleTimeout</td>
+<td><strong>CRITICAL</strong> - Peer inactivity timeout</td>
 </tr>
 <tr>
-<td><code>legacy_peerProcessingTimeout</code></td>
-<td>duration</td>
+<td>PeerProcessingTimeout</td>
+<td>time.Duration</td>
 <td>3m</td>
-<td>Timeout for peer message processing</td>
-<td>Maximum time allowed for processing messages from peers. Block processing is typically the largest operation</td>
+<td>legacy_peerProcessingTimeout</td>
+<td><strong>CRITICAL</strong> - Message processing timeout</td>
 </tr>
 </tbody>
 </table>
-<h2 id="feature-flags">Feature Flags</h2>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="peer-connection-management">Peer Connection Management</h3>
+<ul>
+<li><code>ListenAddresses</code> controls incoming connections (falls back to external IP:8333 if empty)</li>
+<li><code>ConnectPeers</code> forces outgoing connections to specific peers</li>
+<li><code>SavePeers</code> controls peer information persistence</li>
+</ul>
+<h3 id="batch-processing-performance">Batch Processing Performance</h3>
+<ul>
+<li>Batch sizes and concurrency settings work together for memory and performance control</li>
+<li><code>StoreBatcherSize</code> * <code>StoreBatcherConcurrency</code> limits concurrent requests</li>
+</ul>
+<h3 id="peer-timeout-management">Peer Timeout Management</h3>
+<ul>
+<li><code>PeerIdleTimeout</code> set to 125s to accommodate 2-minute ping/pong intervals</li>
+<li><code>PeerProcessingTimeout</code> set to 3m for block processing (largest operations)</li>
+</ul>
+<h3 id="sync-candidate-selection">Sync Candidate Selection</h3>
+<ul>
+<li>When <code>AllowSyncCandidateFromLocalPeers = false</code>, only non-local peers can be sync candidates</li>
+</ul>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SubtreeStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Merkle subtree storage and verification</td>
+</tr>
+<tr>
+<td>TempStore</td>
+<td>blob.Store</td>
+<td><strong>CRITICAL</strong> - Temporary data storage during processing</td>
+</tr>
+<tr>
+<td>UTXOStore</td>
+<td>utxo.Store</td>
+<td><strong>CRITICAL</strong> - UTXO operations</td>
+</tr>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td><strong>CRITICAL</strong> - Blockchain operations and state queries</td>
+</tr>
+<tr>
+<td>ValidatorClient</td>
+<td>validator.Interface</td>
+<td><strong>CRITICAL</strong> - Transaction validation</td>
+</tr>
+<tr>
+<td>SubtreeValidationClient</td>
+<td>subtreevalidation.ClientI</td>
+<td><strong>CRITICAL</strong> - Subtree validation</td>
+</tr>
+<tr>
+<td>BlockValidationClient</td>
+<td>blockvalidation.ClientI</td>
+<td><strong>CRITICAL</strong> - Block validation</td>
+</tr>
+<tr>
+<td>BlockAssemblyClient</td>
+<td>blockassembly.ClientI</td>
+<td><strong>CRITICAL</strong> - Block assembly operations</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
+<th>Validation</th>
 <th>Impact</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>legacy_allowBlockPriority</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Prioritize transactions based on block priority</td>
-<td>Affects transaction selection for block creation</td>
+<td>ListenAddresses</td>
+<td>Falls back to external IP:8333 if empty</td>
+<td>Network connectivity</td>
+</tr>
+<tr>
+<td>PeerIdleTimeout</td>
+<td>Must accommodate ping/pong intervals</td>
+<td>Peer stability</td>
+</tr>
+<tr>
+<td>PeerProcessingTimeout</td>
+<td>Must allow for block processing time</td>
+<td>Message handling</td>
 </tr>
 </tbody>
 </table>
-<h2 id="configuration-interactions-and-dependencies">Configuration Interactions and Dependencies</h2>
-<h3 id="peer-discovery-and-connection-management">Peer Discovery and Connection Management</h3>
-<p>The Legacy service's peer connection behavior is controlled by several interrelated settings:</p>
-<ul>
-<li><code>legacy_listen_addresses</code> determines where the service listens for incoming connections</li>
-<li><code>legacy_connect_peers</code> forces outbound connections to specific peers</li>
-<li><code>legacy_savePeers</code> enables storing peer information across restarts</li>
-<li>If no <code>legacy_listen_addresses</code> are specified, the service detects the external IP and uses port 8333</li>
-</ul>
-<p>These settings should be configured together based on your network architecture and security requirements.</p>
-<h3 id="memory-management-considerations">Memory Management Considerations</h3>
-<p>Several settings affect the memory usage patterns of the Legacy service:</p>
-<ul>
-<li><code>legacy_writeMsgBlocksToDisk</code> significantly reduces memory usage during blockchain synchronization by writing blocks to disk rather than keeping them in memory</li>
-<li><code>legacy_orphanEvictionDuration</code> controls how aggressively orphan transactions are removed from memory</li>
-<li>The various batcher size settings control memory usage during batch operations</li>
-</ul>
-<p>For resource-constrained environments, enable <code>legacy_writeMsgBlocksToDisk</code> and use smaller batch sizes.</p>
-<h3 id="disk-based-block-queueing-legacy_writemsgblockstodisk">Disk-Based Block Queueing (<code>legacy_writeMsgBlocksToDisk</code>)</h3>
-<p>The <code>legacy_writeMsgBlocksToDisk</code> setting enables a sophisticated disk-based queueing mechanism that fundamentally changes how the Legacy service handles incoming blocks during synchronization.</p>
-<p><strong>How It Works:</strong></p>
-<ul>
-<li>It creates a streaming pipeline that writes blocks directly to disk, employing 4MB buffered readers for optimal disk performance</li>
-<li>Blocks are stored with a 10-minute TTL to prevent disk accumulation</li>
-</ul>
-<p><strong>Technical Implementation:</strong></p>
-<div class="highlight"><pre><span></span><code>Incoming Block → io.Pipe() → 4MB Buffer → Temporary Disk Storage → Validation Queue
-                     ↓
-              Background Goroutine
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>legacy_listen_addresses = &quot;0.0.0.0:8333&quot;
+legacy_savePeers = false
 </code></pre></div>
-<p><strong>Benefits:</strong></p>
-<ul>
-<li><strong>Memory Efficiency</strong>: Prevents memory exhaustion during large-scale synchronization</li>
-<li><strong>Scalability</strong>: Handles high-volume block arrivals without resource constraints</li>
-<li><strong>Reliability</strong>: Reduces risk of out-of-memory errors during initial sync</li>
-<li><strong>Performance</strong>: Maintains processing throughput while using minimal memory</li>
-</ul>
-<p><strong>When to Enable:</strong></p>
-<ul>
-<li>✅ <strong>Initial blockchain synchronization</strong> - Essential for syncing from genesis</li>
-<li>✅ <strong>Resource-constrained environments</strong> - Limited RAM availability</li>
-<li>✅ <strong>High-volume block processing</strong> - During catch-up operations</li>
-<li>❌ <strong>Normal operation</strong> - Not typically needed when fully synchronized</li>
-</ul>
+<h3 id="forced-peer-connections">Forced Peer Connections</h3>
+<div class="highlight"><pre><span></span><code>legacy_connect_peers = &quot;peer1.example.com:8333|peer2.example.com:8333&quot;
+legacy_allowSyncCandidateFromLocalPeers = false
+</code></pre></div>
+<h3 id="performance-tuning">Performance Tuning</h3>
+<div class="highlight"><pre><span></span><code>legacy_storeBatcherSize = 2048
+legacy_storeBatcherConcurrency = 64
+legacy_spendBatcherSize = 2048
+legacy_spendBatcherConcurrency = 64
+</code></pre></div>
 
 
 

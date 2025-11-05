@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#validator-settings" class="md-skip">
+        <a href="#validator-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4569,118 +4569,124 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#configuration-categories" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Categories
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#deployment-architecture-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Deployment Architecture Settings
+      Configuration Dependencies
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#network-communication-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Network &amp; Communication Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#performance-throughput-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance &amp; Throughput Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#kafka-integration-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Kafka Integration Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validation-rules-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Validation Rules Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#monitoring-debugging-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Monitoring &amp; Debugging Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-settings-affecting-validator-behavior" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Settings Affecting Validator Behavior
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#rejected-transaction-handling" class="md-nav__link">
-    <span class="md-ellipsis">
-      Rejected Transaction Handling
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#two-phase-transaction-commit-process" class="md-nav__link">
-    <span class="md-ellipsis">
-      Two-Phase Transaction Commit Process
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Two-Phase Transaction Commit Process">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#phase-1-transaction-creation-with-locked-flag" class="md-nav__link">
+  <a href="#grpc-server-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Phase 1 - Transaction Creation with Locked Flag
+      gRPC Server Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#phase-2-unsetting-the-locked-flag" class="md-nav__link">
+  <a href="#http-server-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Phase 2 - Unsetting the Locked Flag
+      HTTP Server Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#ignoring-locked-flag-for-block-transactions" class="md-nav__link">
+  <a href="#debug-logging" class="md-nav__link">
     <span class="md-ellipsis">
-      Ignoring Locked Flag for Block Transactions
+      Debug Logging
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch Processing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-validation-retry-logic" class="md-nav__link">
+    <span class="md-ellipsis">
+      Block Validation Retry Logic
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Tuning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debug-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Debug Configuration
     </span>
   </a>
   
@@ -5066,118 +5072,124 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#configuration-categories" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Categories
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#deployment-architecture-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Deployment Architecture Settings
+      Configuration Dependencies
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#network-communication-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Network &amp; Communication Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#performance-throughput-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Performance &amp; Throughput Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#kafka-integration-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Kafka Integration Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#validation-rules-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Validation Rules Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#monitoring-debugging-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Monitoring &amp; Debugging Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-settings-affecting-validator-behavior" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Settings Affecting Validator Behavior
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#rejected-transaction-handling" class="md-nav__link">
-    <span class="md-ellipsis">
-      Rejected Transaction Handling
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#two-phase-transaction-commit-process" class="md-nav__link">
-    <span class="md-ellipsis">
-      Two-Phase Transaction Commit Process
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Two-Phase Transaction Commit Process">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#phase-1-transaction-creation-with-locked-flag" class="md-nav__link">
+  <a href="#grpc-server-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Phase 1 - Transaction Creation with Locked Flag
+      gRPC Server Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#phase-2-unsetting-the-locked-flag" class="md-nav__link">
+  <a href="#http-server-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Phase 2 - Unsetting the Locked Flag
+      HTTP Server Management
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#ignoring-locked-flag-for-block-transactions" class="md-nav__link">
+  <a href="#debug-logging" class="md-nav__link">
     <span class="md-ellipsis">
-      Ignoring Locked Flag for Block Transactions
+      Debug Logging
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batch-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batch Processing
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-validation-retry-logic" class="md-nav__link">
+    <span class="md-ellipsis">
+      Block Validation Retry Logic
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Service Dependencies
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic Configuration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      Performance Tuning
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debug-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Debug Configuration
     </span>
   </a>
   
@@ -5204,307 +5216,232 @@
 
 
 
-<h1 id="validator-settings">Validator Settings</h1>
+<h1 id="validator-service-settings">Validator Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/validator/">Validator Service</a></p>
-<p>The TX Validator service relies on a set of configuration settings that control its behavior, performance, and integration with other services. This section provides a comprehensive overview of these settings, organized by functional category, along with their impacts, dependencies, and recommended configurations for different deployment scenarios.</p>
-<h2 id="configuration-categories">Configuration Categories</h2>
-<p>TX Validator service settings can be organized into the following functional categories:</p>
-<ol>
-<li><strong>Deployment Architecture</strong>: Settings that determine how the validator is deployed and integrated</li>
-<li><strong>Network &amp; Communication</strong>: Settings that control network binding and API endpoints</li>
-<li><strong>Performance &amp; Throughput</strong>: Settings that affect transaction processing performance</li>
-<li><strong>Kafka Integration</strong>: Settings for message-based communication</li>
-<li><strong>Validation Rules</strong>: Settings that control transaction validation policies</li>
-<li><strong>Monitoring &amp; Debugging</strong>: Settings for observability and troubleshooting</li>
-</ol>
-<h2 id="deployment-architecture-settings">Deployment Architecture Settings</h2>
-<p>These settings fundamentally change how the validator operates within the system architecture.</p>
+<h2 id="configuration-settings">Configuration Settings</h2>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
 <th>Type</th>
 <th>Default</th>
-<th>Description</th>
-<th>Impact</th>
+<th>Environment Variable</th>
+<th>Usage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>useLocalValidator</code></td>
+<td>GRPCAddress</td>
+<td>string</td>
+<td>"localhost:8081"</td>
+<td>validator_grpcAddress</td>
+<td>gRPC client connections</td>
+</tr>
+<tr>
+<td>GRPCListenAddress</td>
+<td>string</td>
+<td>":8081"</td>
+<td>validator_grpcListenAddress</td>
+<td><strong>CRITICAL</strong> - gRPC server binding, service only starts if not empty</td>
+</tr>
+<tr>
+<td>KafkaWorkers</td>
+<td>int</td>
+<td>0</td>
+<td>validator_kafkaWorkers</td>
+<td>Kafka worker thread configuration</td>
+</tr>
+<tr>
+<td>SendBatchSize</td>
+<td>int</td>
+<td>100</td>
+<td>validator_sendBatchSize</td>
+<td>Batch processing size</td>
+</tr>
+<tr>
+<td>SendBatchTimeout</td>
+<td>int</td>
+<td>2</td>
+<td>validator_sendBatchTimeout</td>
+<td>Batch processing timeout</td>
+</tr>
+<tr>
+<td>SendBatchWorkers</td>
+<td>int</td>
+<td>10</td>
+<td>validator_sendBatchWorkers</td>
+<td>Batch worker thread count</td>
+</tr>
+<tr>
+<td>BlockValidationDelay</td>
+<td>int</td>
+<td>0</td>
+<td>validator_blockvalidation_delay</td>
+<td>Block validation delay</td>
+</tr>
+<tr>
+<td>BlockValidationMaxRetries</td>
+<td>int</td>
+<td>5</td>
+<td>validator_blockvalidation_maxRetries</td>
+<td>Block validation retry limit</td>
+</tr>
+<tr>
+<td>BlockValidationRetrySleep</td>
+<td>string</td>
+<td>"2s"</td>
+<td>validator_blockvalidation_retrySleep</td>
+<td>Block validation retry delay</td>
+</tr>
+<tr>
+<td>VerboseDebug</td>
 <td>bool</td>
-<td><code>false</code></td>
-<td>Controls whether validation is performed locally or via remote service</td>
-<td>Significantly affects system architecture, latency, and deployment model</td>
+<td>false</td>
+<td>validator_verbose_debug</td>
+<td><strong>CRITICAL</strong> - Debug logging control for validation operations</td>
 </tr>
 <tr>
-<td><code>blockassembly_disabled</code></td>
-<td>bool</td>
-<td><code>false</code></td>
-<td>Controls whether validator integrates with block assembly service</td>
-<td>Critical for mining operations - when disabled, validated transactions are not sent to block assembly</td>
-</tr>
-</tbody>
-</table>
-<h2 id="network-communication-settings">Network &amp; Communication Settings</h2>
-<p>These settings control how the validator communicates over the network.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>validator_grpcAddress</code></td>
+<td>HTTPListenAddress</td>
 <td>string</td>
-<td><code>"localhost:8081"</code></td>
-<td>Address for connecting to the validator gRPC service</td>
-<td>Determines how other services connect to the validator</td>
+<td>""</td>
+<td>validator_httpListenAddress</td>
+<td><strong>CRITICAL</strong> - HTTP server binding, health checks only run if not empty</td>
 </tr>
 <tr>
-<td><code>validator_grpcListenAddress</code></td>
-<td>string</td>
-<td><code>":8081"</code></td>
-<td>Address on which the validator gRPC server listens</td>
-<td>Controls network binding for incoming validation requests</td>
-</tr>
-<tr>
-<td><code>validator_httpListenAddress</code></td>
-<td>string</td>
-<td><code>""</code></td>
-<td>Address on which the HTTP API server listens</td>
-<td>Enables HTTP-based validation requests when set</td>
-</tr>
-<tr>
-<td><code>validator_httpAddress</code></td>
+<td>HTTPAddress</td>
 <td>*url.URL</td>
-<td><code>nil</code></td>
-<td>URL for connecting to the validator HTTP API</td>
-<td>Determines how other services connect to the HTTP interface</td>
+<td>""</td>
+<td>validator_httpAddress</td>
+<td>HTTP client connections</td>
 </tr>
 <tr>
-<td><code>validator_httpRateLimit</code></td>
+<td>HTTPRateLimit</td>
 <td>int</td>
-<td><code>1024</code></td>
-<td>Maximum number of HTTP requests per second</td>
-<td>Prevents resource exhaustion from excessive requests</td>
+<td>1024</td>
+<td>validator_httpRateLimit</td>
+<td><strong>CRITICAL</strong> - HTTP request rate limiting</td>
 </tr>
-</tbody>
-</table>
-<h2 id="performance-throughput-settings">Performance &amp; Throughput Settings</h2>
-<p>These settings control how efficiently transactions are processed.</p>
-<table>
-<thead>
 <tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>validator_sendBatchSize</code></td>
+<td>KafkaMaxMessageBytes</td>
 <td>int</td>
-<td><code>100</code></td>
-<td>Number of transactions to accumulate before batch processing</td>
-<td>Balances throughput against latency for transaction processing</td>
+<td>1048576</td>
+<td>validator_kafka_maxMessageBytes</td>
+<td>Kafka message size limits</td>
 </tr>
 <tr>
-<td><code>validator_sendBatchTimeout</code></td>
-<td>int</td>
-<td><code>2</code></td>
-<td>Maximum time (milliseconds) to wait before processing a partial batch</td>
-<td>Ensures timely processing of transactions even when volume is low</td>
-</tr>
-<tr>
-<td><code>validator_sendBatchWorkers</code></td>
-<td>int</td>
-<td><code>10</code></td>
-<td>Number of worker goroutines for batch send operations</td>
-<td>Controls parallelism for outbound transaction processing</td>
-</tr>
-<tr>
-<td><code>validator_blockvalidation_delay</code></td>
-<td>int</td>
-<td><code>0</code></td>
-<td>Artificial delay (milliseconds) introduced before block validation</td>
-<td>Can be used for testing or throttling validation operations</td>
-</tr>
-<tr>
-<td><code>validator_blockvalidation_maxRetries</code></td>
-<td>int</td>
-<td><code>5</code></td>
-<td>Maximum number of retries for failed block validations</td>
-<td>Affects resilience against transient failures</td>
-</tr>
-<tr>
-<td><code>validator_blockvalidation_retrySleep</code></td>
-<td>string</td>
-<td><code>"2s"</code></td>
-<td>Time to wait between block validation retry attempts</td>
-<td>Controls backoff strategy for failed validations</td>
-</tr>
-</tbody>
-</table>
-<h2 id="kafka-integration-settings">Kafka Integration Settings</h2>
-<p>These settings control message-based communication via Kafka.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>validator_kafkaWorkers</code></td>
-<td>int</td>
-<td><code>0</code></td>
-<td>Number of worker goroutines for Kafka message processing</td>
-<td>Affects concurrency and throughput for Kafka-based transaction handling</td>
-</tr>
-<tr>
-<td><code>kafka_txmetaConfig</code></td>
-<td>URL</td>
-<td><code>""</code></td>
-<td>URL for the Kafka configuration for transaction metadata</td>
-<td>Configures how transaction metadata is published to Kafka for subtree validation</td>
-</tr>
-<tr>
-<td><code>kafka_rejectedTxConfig</code></td>
-<td>URL</td>
-<td><code>""</code></td>
-<td>URL for the Kafka configuration for rejected transactions</td>
-<td>Configures how rejected transaction information is published to P2P notification</td>
-</tr>
-<tr>
-<td><code>validator_kafka_maxMessageBytes</code></td>
-<td>int</td>
-<td><code>1048576</code></td>
-<td>Maximum size of Kafka messages in bytes</td>
-<td>Limits the size of transactions that can be processed via Kafka</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Critical Configuration Requirements:</strong></p>
-<ul>
-<li><code>kafka_txmetaConfig</code> must be configured for the validator service to function - without it, transaction metadata cannot be published to the Subtree Validation service</li>
-<li><code>validator_kafka_maxMessageBytes</code> must be coordinated with Kafka broker's <code>message.max.bytes</code> setting to prevent message rejection</li>
-</ul>
-<h2 id="validation-rules-settings">Validation Rules Settings</h2>
-<p>These settings control the rules and policies applied during transaction validation.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>maxtxsizepolicy</code></td>
-<td>int</td>
-<td>Varies</td>
-<td>Maximum allowed transaction size in bytes</td>
-<td>Restricts oversized transactions from entering the mempool</td>
-</tr>
-<tr>
-<td><code>minminingtxfee</code></td>
-<td>float64</td>
-<td>Varies</td>
-<td>Minimum fee required for transaction acceptance</td>
-<td>Sets economic barrier for transaction inclusion</td>
-</tr>
-</tbody>
-</table>
-<h2 id="monitoring-debugging-settings">Monitoring &amp; Debugging Settings</h2>
-<p>These settings control observability and diagnostics.</p>
-<table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>validator_verbose_debug</code></td>
+<td>UseLocalValidator</td>
 <td>bool</td>
-<td><code>false</code></td>
-<td>Enables detailed debug logging for validator operations</td>
-<td>Provides additional diagnostic information at the cost of log verbosity</td>
-</tr>
-<tr>
-<td><code>fsm_state_restore</code></td>
-<td>bool</td>
-<td><code>false</code></td>
-<td>Controls whether the service restores from a previously saved state</td>
-<td>Affects recovery behavior after restarts or failures</td>
+<td>false</td>
+<td>useLocalValidator</td>
+<td><strong>CRITICAL</strong> - Local vs remote validator deployment mode</td>
 </tr>
 </tbody>
 </table>
-<h2 id="configuration-settings-affecting-validator-behavior">Configuration Settings Affecting Validator Behavior</h2>
-<p>The Validator service behavior is controlled by several key configuration parameters:</p>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="grpc-server-management">gRPC Server Management</h3>
 <ul>
-<li><strong><code>KafkaMaxMessageBytes</code></strong> (default: 1MB): Controls size-based routing - large transactions that exceed this threshold are routed via HTTP instead of Kafka to avoid message size limitations.</li>
-<li><strong><code>UseLocalValidator</code></strong> (default: false): Determines whether to use a local validator instance or connect to a remote validator service via gRPC.</li>
-<li><strong><code>KafkaWorkers</code></strong> (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.</li>
-<li><strong><code>HTTPRateLimit</code></strong> (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.</li>
-<li><strong><code>VerboseDebug</code></strong> (default: false): Enables detailed validation logging for troubleshooting.</li>
+<li>Service only starts if <code>GRPCListenAddress</code> is not empty</li>
+<li>Health checks are conditional on gRPC server configuration</li>
 </ul>
-<h2 id="rejected-transaction-handling">Rejected Transaction Handling</h2>
-<p>When the Transaction Validator Service identifies an invalid transaction, it employs a Kafka-based notification system to inform other components of the system:</p>
-<ol>
-<li><strong>Transaction Validation</strong>: The Validator receives a transaction for validation via a gRPC call to the <code>ValidateTransaction</code> method</li>
-<li><strong>Identification of Invalid Transactions</strong>: If the transaction fails any of the validation checks, it is deemed invalid (rejected)</li>
-<li><strong>Notification of Rejected Transactions</strong>: When a transaction is rejected, the Validator publishes information about the rejected transaction to a dedicated Kafka topic (<code>rejectedTx</code>)</li>
-<li>
-<p><strong>Kafka Message Content</strong>: The Kafka message for a rejected transaction typically includes:</p>
+<h3 id="http-server-management">HTTP Server Management</h3>
 <ul>
-<li>The transaction ID (hash)</li>
-<li>The reason for rejection (error message)</li>
-<li><strong>Consumption of Rejected Transaction Notifications</strong>: Other services in the system, such as the P2P Service, can subscribe to this Kafka topic</li>
+<li>HTTP server only starts if <code>HTTPListenAddress</code> is not empty</li>
+<li>Rate limiting applied when HTTP server is enabled</li>
+<li>Uses <code>HTTPRateLimit</code> for middleware configuration</li>
 </ul>
-</li>
-</ol>
-<h2 id="two-phase-transaction-commit-process">Two-Phase Transaction Commit Process</h2>
-<p>The Validator implements a two-phase commit process for transaction creation and addition to block assembly:</p>
-<h3 id="phase-1-transaction-creation-with-locked-flag">Phase 1 - Transaction Creation with Locked Flag</h3>
-<p>When a transaction is created, it is initially stored in the UTXO store with an "locked" flag set to <code>true</code>. This flag prevents the transaction outputs from being spent while it's in the process of being validated and added to block assembly, protecting against potential double-spend attempts.</p>
-<h3 id="phase-2-unsetting-the-locked-flag">Phase 2 - Unsetting the Locked Flag</h3>
-<p>The locked flag is unset in two key scenarios:</p>
-<p><strong>a. After Successful Addition to Block Assembly:</strong></p>
+<h3 id="debug-logging">Debug Logging</h3>
 <ul>
-<li>When a transaction is successfully validated and added to the block assembly, the Validator service immediately unsets the "locked" flag (sets it to <code>false</code>)</li>
-<li>This makes the transaction outputs available for spending in subsequent transactions, even before the transaction is mined in a block</li>
+<li>When <code>VerboseDebug = true</code>, provides detailed logging for validation operations</li>
+<li>Controls logging in block assembly interactions</li>
 </ul>
-<p><strong>b. When Mined in a Block (Fallback Mechanism):</strong></p>
+<h3 id="batch-processing">Batch Processing</h3>
 <ul>
-<li>As a fallback mechanism, if the flag hasn't been unset already, it will be unset when the transaction is mined in a block</li>
-<li>When the transaction is mined in a block and that block is processed by the Block Validation service, the "locked" flag is unset (set to <code>false</code>) during the <code>SetMinedMulti</code> operation</li>
+<li><code>SendBatchSize</code>, <code>SendBatchTimeout</code>, and <code>SendBatchWorkers</code> work together</li>
+<li>Controls transaction batch processing performance</li>
 </ul>
-<h3 id="ignoring-locked-flag-for-block-transactions">Ignoring Locked Flag for Block Transactions</h3>
-<p>When processing transactions that are part of a block (as opposed to new transactions to include in an upcoming block), the validator can be configured to ignore the locked flag. This is necessary because transactions in a block have already been validated by miners and must be accepted regardless of their locked status. The validator uses the <code>WithIgnoreLocked</code> option to control this behavior during transaction validation.</p>
-<p>This two-phase commit approach ensures that transactions are only made spendable after they've been successfully added to block assembly, reducing the risk of race conditions and double-spend attempts during the transaction processing lifecycle.</p>
-<blockquote>
-<p><strong>For a comprehensive explanation of the two-phase commit process across the entire system, see the <a href="../../../../topics/features/two_phase_commit/">Two-Phase Transaction Commit Process</a> documentation.</strong></p>
-</blockquote>
+<h3 id="block-validation-retry-logic">Block Validation Retry Logic</h3>
+<ul>
+<li><code>BlockValidationMaxRetries</code>, <code>BlockValidationRetrySleep</code>, and <code>BlockValidationDelay</code> control resilience</li>
+<li>Manages block validation failure recovery</li>
+</ul>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UTXOStore</td>
+<td>utxo.Store</td>
+<td><strong>CRITICAL</strong> - Transaction input validation and double-spend prevention</td>
+</tr>
+<tr>
+<td>BlockchainClient</td>
+<td>blockchain.ClientI</td>
+<td><strong>CRITICAL</strong> - Blockchain operations and block data</td>
+</tr>
+<tr>
+<td>BlockAssemblyClient</td>
+<td>blockassembly.ClientI</td>
+<td><strong>CRITICAL</strong> - Sending validated transactions to mining</td>
+</tr>
+<tr>
+<td>ValidatorTxsConfig</td>
+<td>*url.URL</td>
+<td><strong>CRITICAL</strong> - Kafka-based transaction validation messaging</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Validation</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GRPCListenAddress</td>
+<td>Service startup conditional</td>
+<td>Service availability</td>
+</tr>
+<tr>
+<td>HTTPListenAddress</td>
+<td>HTTP server startup conditional</td>
+<td>API availability</td>
+</tr>
+<tr>
+<td>VerboseDebug</td>
+<td>Controls logging verbosity</td>
+<td>Performance and diagnostics</td>
+</tr>
+<tr>
+<td>HTTPRateLimit</td>
+<td>Rate limiting enforcement</td>
+<td>Resource protection</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>validator_grpcListenAddress = &quot;:8081&quot;
+validator_httpListenAddress = &quot;:8080&quot;
+</code></pre></div>
+<h3 id="performance-tuning">Performance Tuning</h3>
+<div class="highlight"><pre><span></span><code>validator_sendBatchSize = 200
+validator_sendBatchWorkers = 20
+validator_httpRateLimit = 2048
+</code></pre></div>
+<h3 id="debug-configuration">Debug Configuration</h3>
+<div class="highlight"><pre><span></span><code>validator_verbose_debug = true
+validator_blockvalidation_maxRetries = 10
+</code></pre></div>
 
 
 

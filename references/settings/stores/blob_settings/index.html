@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -4645,55 +4645,64 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#url-format" class="md-nav__link">
+  <a href="#url-configuration-parameters" class="md-nav__link">
     <span class="md-ellipsis">
-      URL Format
+      URL Configuration Parameters
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#store-url-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Store URL Settings
+      Configuration Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Store URL Settings">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#common-url-parameters" class="md-nav__link">
+  <a href="#batch-processing" class="md-nav__link">
     <span class="md-ellipsis">
-      Common URL Parameters
+      Batch Processing
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#file-backend-parameters" class="md-nav__link">
+  <a href="#delete-at-height-dah" class="md-nav__link">
     <span class="md-ellipsis">
-      File Backend Parameters
+      Delete-At-Height (DAH)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#s3-backend-parameters" class="md-nav__link">
+  <a href="#hash-based-directory-organization" class="md-nav__link">
     <span class="md-ellipsis">
-      S3 Backend Parameters
+      Hash-based Directory Organization
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#http-backend-parameters" class="md-nav__link">
+  <a href="#data-integrity" class="md-nav__link">
     <span class="md-ellipsis">
-      HTTP Backend Parameters
+      Data Integrity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debug-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      Debug Logging
     </span>
   </a>
   
@@ -4705,20 +4714,62 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#store-options-optionsoptions" class="md-nav__link">
+  <a href="#backend-support" class="md-nav__link">
     <span class="md-ellipsis">
-      Store Options (options.Options)
+      Backend Support
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#file-operation-options-functional-options" class="md-nav__link">
+  <a href="#validation-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      File Operation Options (Functional Options)
+      Validation Rules
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-file-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic File Store
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batched-store-with-dah" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batched Store with DAH
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hash-organized-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hash-organized Store
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -5021,55 +5072,64 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#url-format" class="md-nav__link">
+  <a href="#url-configuration-parameters" class="md-nav__link">
     <span class="md-ellipsis">
-      URL Format
+      URL Configuration Parameters
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#store-url-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Store URL Settings
+      Configuration Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Store URL Settings">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#common-url-parameters" class="md-nav__link">
+  <a href="#batch-processing" class="md-nav__link">
     <span class="md-ellipsis">
-      Common URL Parameters
+      Batch Processing
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#file-backend-parameters" class="md-nav__link">
+  <a href="#delete-at-height-dah" class="md-nav__link">
     <span class="md-ellipsis">
-      File Backend Parameters
+      Delete-At-Height (DAH)
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#s3-backend-parameters" class="md-nav__link">
+  <a href="#hash-based-directory-organization" class="md-nav__link">
     <span class="md-ellipsis">
-      S3 Backend Parameters
+      Hash-based Directory Organization
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#http-backend-parameters" class="md-nav__link">
+  <a href="#data-integrity" class="md-nav__link">
     <span class="md-ellipsis">
-      HTTP Backend Parameters
+      Data Integrity
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debug-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      Debug Logging
     </span>
   </a>
   
@@ -5081,20 +5141,62 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#store-options-optionsoptions" class="md-nav__link">
+  <a href="#backend-support" class="md-nav__link">
     <span class="md-ellipsis">
-      Store Options (options.Options)
+      Backend Support
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#file-operation-options-functional-options" class="md-nav__link">
+  <a href="#validation-rules" class="md-nav__link">
     <span class="md-ellipsis">
-      File Operation Options (Functional Options)
+      Validation Rules
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#basic-file-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      Basic File Store
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#batched-store-with-dah" class="md-nav__link">
+    <span class="md-ellipsis">
+      Batched Store with DAH
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hash-organized-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hash-organized Store
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -5116,382 +5218,210 @@
 
 <h1 id="blob-store-settings">Blob Store Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/stores/blob/">Blob Store</a></p>
-<p>The Blob Server can be configured through URL-based settings and option parameters. This section provides a comprehensive reference for all configuration options.</p>
-<h2 id="url-format">URL Format</h2>
-<p>Blob store configurations use URLs that follow this general structure:</p>
-<div class="highlight"><pre><span></span><code>&lt;scheme&gt;://&lt;path&gt;[?&lt;parameter1&gt;=&lt;value1&gt;&amp;&lt;parameter2&gt;=&lt;value2&gt;...]
-</code></pre></div>
-<p>Components:</p>
-<ul>
-<li><strong>Scheme</strong>: Determines the storage backend type (file, memory, s3, http, null)</li>
-<li><strong>Path</strong>: Specifies the storage location or identifier</li>
-<li><strong>Parameters</strong>: Optional query parameters that modify behavior</li>
-</ul>
-<h2 id="store-url-settings">Store URL Settings</h2>
-<h3 id="common-url-parameters">Common URL Parameters</h3>
+<h2 id="url-configuration-parameters">URL Configuration Parameters</h2>
 <table>
 <thead>
 <tr>
 <th>Parameter</th>
 <th>Type</th>
 <th>Default</th>
-<th>Description</th>
+<th>Usage</th>
 <th>Impact</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>hashPrefix</code></td>
-<td>Integer</td>
-<td>2</td>
-<td>Number of characters from start of hash for directory organization</td>
-<td>Improves file organization and lookup performance</td>
-</tr>
-<tr>
-<td><code>hashSuffix</code></td>
-<td>Integer</td>
-<td>-</td>
-<td>Number of characters from end of hash for directory organization</td>
-<td>Alternative to hashPrefix; uses end of hash</td>
-</tr>
-<tr>
-<td><code>batch</code></td>
-<td>Boolean</td>
+<td>batch</td>
+<td>bool</td>
 <td>false</td>
-<td>Enables batch wrapper for improved performance</td>
-<td>Aggregates operations into larger batches</td>
+<td><code>storeURL.Query().Get("batch") == "true"</code></td>
+<td><strong>CRITICAL</strong> - Enables batch wrapper for performance</td>
 </tr>
 <tr>
-<td><code>sizeInBytes</code></td>
-<td>Integer</td>
+<td>sizeInBytes</td>
+<td>int64</td>
 <td>4194304</td>
-<td>Maximum batch size in bytes when batching enabled</td>
-<td>Controls memory usage and batch efficiency</td>
+<td><code>storeURL.Query().Get("sizeInBytes")</code></td>
+<td><strong>CRITICAL</strong> - Controls batch memory usage</td>
 </tr>
 <tr>
-<td><code>writeKeys</code></td>
-<td>Boolean</td>
+<td>writeKeys</td>
+<td>bool</td>
 <td>false</td>
-<td>Store key index alongside batch data</td>
+<td><code>storeURL.Query().Get("writeKeys") == "true"</code></td>
 <td>Enables key-based retrieval from batches</td>
 </tr>
 <tr>
-<td><code>localDAHStore</code></td>
-<td>String</td>
+<td>localDAHStore</td>
+<td>string</td>
 <td>""</td>
-<td>Enable Delete-At-Height functionality</td>
-<td>Requires value like "memory://" to enable DAH</td>
+<td><code>storeURL.Query().Get("localDAHStore") != ""</code></td>
+<td><strong>CRITICAL</strong> - Enables Delete-At-Height functionality</td>
 </tr>
 <tr>
-<td><code>localDAHStorePath</code></td>
-<td>String</td>
+<td>localDAHStorePath</td>
+<td>string</td>
 <td>"/tmp/localDAH"</td>
-<td>Path for DAH metadata storage</td>
-<td>Directory for blockchain height tracking</td>
+<td><code>storeURL.Query().Get("localDAHStorePath")</code></td>
+<td>DAH metadata storage directory</td>
 </tr>
 <tr>
-<td><code>logger</code></td>
-<td>Boolean</td>
+<td>logger</td>
+<td>bool</td>
 <td>false</td>
-<td>Enable debug logging wrapper</td>
-<td>Adds detailed operation logging</td>
+<td><code>storeURL.Query().Get("logger") == "true"</code></td>
+<td><strong>CRITICAL</strong> - Enables debug logging wrapper</td>
+</tr>
+<tr>
+<td>hashPrefix</td>
+<td>int</td>
+<td>0</td>
+<td><code>storeURL.Query().Get("hashPrefix")</code></td>
+<td><strong>CRITICAL</strong> - Hash-based directory structure (first N chars)</td>
+</tr>
+<tr>
+<td>hashSuffix</td>
+<td>int</td>
+<td>0</td>
+<td><code>storeURL.Query().Get("hashSuffix")</code></td>
+<td><strong>CRITICAL</strong> - Hash-based directory structure (last N chars)</td>
+</tr>
+<tr>
+<td>checksum</td>
+<td>bool</td>
+<td>false</td>
+<td>File backend parameter</td>
+<td><strong>CRITICAL</strong> - SHA256 checksumming for data integrity</td>
+</tr>
+<tr>
+<td>header</td>
+<td>string</td>
+<td>""</td>
+<td>File backend parameter</td>
+<td>Custom header prepended to blobs</td>
 </tr>
 </tbody>
 </table>
-<h3 id="file-backend-parameters">File Backend Parameters</h3>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="batch-processing">Batch Processing</h3>
+<ul>
+<li>When <code>batch = true</code>, uses <code>sizeInBytes</code> for memory control</li>
+<li><code>writeKeys</code> enables key indexing when batching enabled</li>
+<li>Creates batcher wrapper with configured size and key options</li>
+</ul>
+<h3 id="delete-at-height-dah">Delete-At-Height (DAH)</h3>
+<ul>
+<li>When <code>localDAHStore</code> is set, enables DAH functionality</li>
+<li>Uses <code>localDAHStorePath</code> for metadata storage location</li>
+<li>Creates DAH wrapper with file-based cache store</li>
+</ul>
+<h3 id="hash-based-directory-organization">Hash-based Directory Organization</h3>
+<ul>
+<li><code>hashPrefix</code> uses first N characters of hash for directories</li>
+<li><code>hashSuffix</code> uses last N characters of hash for directories</li>
+<li>Negative hashPrefix value uses suffix behavior</li>
+</ul>
+<h3 id="data-integrity">Data Integrity</h3>
+<ul>
+<li>When <code>checksum = true</code>, creates .sha256 files alongside blobs</li>
+<li>Validates checksums during read operations</li>
+<li>Removes checksum files during deletion</li>
+</ul>
+<h3 id="debug-logging">Debug Logging</h3>
+<ul>
+<li>When <code>logger = true</code>, wraps store with logging functionality</li>
+<li>Logs all store operations at DEBUG level</li>
+<li>Enables detailed operation debugging</li>
+</ul>
+<h2 id="backend-support">Backend Support</h2>
 <table>
 <thead>
 <tr>
-<th>Parameter</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
+<th>Backend</th>
+<th>Scheme</th>
+<th>Parameters Supported</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Path component</td>
-<td>String</td>
-<td>None (required)</td>
-<td>Base directory for file storage</td>
+<td>null</td>
+<td>null://</td>
+<td>logger (localDAHStore blocked)</td>
 </tr>
 <tr>
-<td><code>checksum</code></td>
-<td>Boolean</td>
-<td>false</td>
-<td>Enable SHA256 checksumming of stored blobs</td>
+<td>memory</td>
+<td>memory://</td>
+<td>All common parameters</td>
 </tr>
 <tr>
-<td><code>header</code></td>
-<td>String</td>
-<td><code>(empty)</code></td>
-<td>Custom header prepended to stored blobs (hex or plain text)</td>
+<td>file</td>
+<td>file://</td>
+<td>All parameters including checksum, header</td>
 </tr>
 <tr>
-<td><code>eofmarker</code></td>
-<td>String</td>
-<td><code>(empty)</code></td>
-<td>Custom footer appended to stored blobs (hex or plain text)</td>
+<td>http</td>
+<td>http://</td>
+<td>All common parameters</td>
+</tr>
+<tr>
+<td>s3</td>
+<td>s3://</td>
+<td>All common parameters</td>
 </tr>
 </tbody>
 </table>
-<h3 id="s3-backend-parameters">S3 Backend Parameters</h3>
+<h2 id="validation-rules">Validation Rules</h2>
 <table>
 <thead>
 <tr>
 <th>Parameter</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Path component</td>
-<td>String</td>
-<td>None (required)</td>
-<td>S3 bucket name</td>
-</tr>
-<tr>
-<td><code>region</code></td>
-<td>String</td>
-<td>None (required)</td>
-<td>AWS region for S3 bucket</td>
-</tr>
-<tr>
-<td><code>endpoint</code></td>
-<td>String</td>
-<td>AWS S3 endpoint</td>
-<td>Custom endpoint for S3-compatible storage</td>
-</tr>
-<tr>
-<td><code>forcePathStyle</code></td>
-<td>Boolean</td>
-<td>false</td>
-<td>Force path-style addressing</td>
-</tr>
-<tr>
-<td><code>subDirectory</code></td>
-<td>String</td>
-<td><code>(none)</code></td>
-<td>S3 object key prefix for organization</td>
-</tr>
-<tr>
-<td><code>MaxIdleConns</code></td>
-<td>Integer</td>
-<td>100</td>
-<td>Maximum number of idle HTTP connections</td>
-</tr>
-<tr>
-<td><code>MaxIdleConnsPerHost</code></td>
-<td>Integer</td>
-<td>100</td>
-<td>Maximum idle connections per host</td>
-</tr>
-<tr>
-<td><code>IdleConnTimeoutSeconds</code></td>
-<td>Integer</td>
-<td>100</td>
-<td>Idle connection timeout in seconds</td>
-</tr>
-<tr>
-<td><code>TimeoutSeconds</code></td>
-<td>Integer</td>
-<td>30</td>
-<td>Request timeout for S3 operations</td>
-</tr>
-<tr>
-<td><code>KeepAliveSeconds</code></td>
-<td>Integer</td>
-<td>300</td>
-<td>Connection keep-alive duration</td>
-</tr>
-</tbody>
-</table>
-<h3 id="http-backend-parameters">HTTP Backend Parameters</h3>
-<table>
-<thead>
-<tr>
-<th>Parameter</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Host+Path</td>
-<td>String</td>
-<td>None (required)</td>
-<td>Remote HTTP blob server endpoint</td>
-</tr>
-<tr>
-<td>Timeout</td>
-<td>Duration</td>
-<td>30s</td>
-<td>HTTP client timeout (hardcoded, not configurable via URL)</td>
-</tr>
-</tbody>
-</table>
-<h2 id="store-options-optionsoptions">Store Options (options.Options)</h2>
-<p>Additional configuration is provided through Store Options when creating a store:</p>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Type</th>
-<th>Default</th>
-<th>Description</th>
+<th>Validation</th>
 <th>Impact</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>BlockHeightRetention</code></td>
-<td>uint32</td>
-<td>0</td>
-<td>Default block height retention for all files</td>
-<td>Controls automatic deletion after specified blockchain height</td>
+<td>batch</td>
+<td>Boolean string check</td>
+<td>Batch wrapper creation</td>
 </tr>
 <tr>
-<td><code>DAH</code></td>
-<td>uint32</td>
-<td>0</td>
-<td>Default Delete-At-Height value for individual files</td>
-<td>Sets blockchain height for automatic file deletion</td>
+<td>sizeInBytes</td>
+<td>ParseInt validation</td>
+<td>Batch memory allocation</td>
 </tr>
 <tr>
-<td><code>Filename</code></td>
-<td>string</td>
-<td><code>(hash-based)</code></td>
-<td>Custom filename override</td>
-<td>Overrides default hash-based file naming</td>
+<td>writeKeys</td>
+<td>Boolean string check</td>
+<td>Key indexing behavior</td>
 </tr>
 <tr>
-<td><code>SubDirectory</code></td>
-<td>string</td>
-<td><code>(none)</code></td>
-<td>Subdirectory within main path</td>
-<td>Organizes data in storage hierarchy</td>
+<td>localDAHStore</td>
+<td>Non-empty string check</td>
+<td>DAH functionality</td>
 </tr>
 <tr>
-<td><code>HashPrefix</code></td>
-<td>int</td>
-<td>2</td>
-<td>Number of hash characters for directory organization</td>
-<td>Improves file organization and lookup performance</td>
+<td>hashPrefix</td>
+<td>ParseInt validation</td>
+<td>Directory structure</td>
 </tr>
 <tr>
-<td><code>AllowOverwrite</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Allow overwriting existing files</td>
-<td>Controls file replacement behavior</td>
-</tr>
-<tr>
-<td><code>SkipHeader</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Skip file headers for CLI readability</td>
-<td>Enables CLI-friendly file formats</td>
-</tr>
-<tr>
-<td><code>PersistSubDir</code></td>
-<td>string</td>
-<td><code>(none)</code></td>
-<td>Subdirectory for persistent storage</td>
-<td>Directory for persistent data organization</td>
-</tr>
-<tr>
-<td><code>LongtermStoreURL</code></td>
-<td>*url.URL</td>
-<td>nil</td>
-<td>URL for longterm storage backend</td>
-<td>Enables three-tier storage (memory, local, longterm)</td>
-</tr>
-<tr>
-<td><code>BlockHeightCh</code></td>
-<td>chan uint32</td>
-<td>nil</td>
-<td>Block height tracking channel for DAH functionality</td>
-<td><strong>Required for DAH-enabled stores</strong></td>
+<td>hashSuffix</td>
+<td>ParseInt validation</td>
+<td>Directory structure</td>
 </tr>
 </tbody>
 </table>
-<h2 id="file-operation-options-functional-options">File Operation Options (Functional Options)</h2>
-<p>These options can be specified per operation using functional option pattern:</p>
-<table>
-<thead>
-<tr>
-<th>Option</th>
-<th>Type</th>
-<th>Description</th>
-<th>Impact</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>WithBlockHeightRetention(uint32)</code></td>
-<td>uint32</td>
-<td>Sets block height retention for this file</td>
-<td>Controls per-file automatic deletion</td>
-</tr>
-<tr>
-<td><code>WithDAH(uint32)</code></td>
-<td>uint32</td>
-<td>Sets Delete-At-Height value for this file</td>
-<td>Controls per-file data retention based on blockchain height</td>
-</tr>
-<tr>
-<td><code>WithFilename(string)</code></td>
-<td>string</td>
-<td>Sets specific filename</td>
-<td>Overrides default hash-based naming</td>
-</tr>
-<tr>
-<td><code>WithSubDirectory(string)</code></td>
-<td>string</td>
-<td>Sets subdirectory for this file</td>
-<td>Organizes individual files in storage hierarchy</td>
-</tr>
-<tr>
-<td><code>WithHashPrefix(int)</code></td>
-<td>int</td>
-<td>Sets hash prefix for this file</td>
-<td>Controls directory organization for this file</td>
-</tr>
-<tr>
-<td><code>WithAllowOverwrite(bool)</code></td>
-<td>bool</td>
-<td>Controls overwriting of existing files</td>
-<td>Prevents accidental data loss when false</td>
-</tr>
-<tr>
-<td><code>WithSkipHeader(bool)</code></td>
-<td>bool</td>
-<td>Skip file headers for this operation</td>
-<td>Enables CLI-friendly file formats</td>
-</tr>
-<tr>
-<td><code>WithPersistSubDir(string)</code></td>
-<td>string</td>
-<td>Sets persistent subdirectory</td>
-<td>Directory for persistent storage of this file</td>
-</tr>
-<tr>
-<td><code>WithLongtermStoreURL(*url.URL)</code></td>
-<td>*url.URL</td>
-<td>Sets longterm storage URL for this file</td>
-<td>Enables per-file longterm storage configuration</td>
-</tr>
-<tr>
-<td><code>WithBlockHeightCh(chan uint32)</code></td>
-<td>chan uint32</td>
-<td>Sets block height channel for DAH</td>
-<td><strong>Required for DAH functionality</strong></td>
-</tr>
-</tbody>
-</table>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-file-store">Basic File Store</h3>
+<div class="highlight"><pre><span></span><code>file:///data/store
+</code></pre></div>
+<h3 id="batched-store-with-dah">Batched Store with DAH</h3>
+<div class="highlight"><pre><span></span><code>file:///data/store?batch=true&amp;sizeInBytes=8388608&amp;localDAHStore=memory://
+</code></pre></div>
+<h3 id="hash-organized-store">Hash-organized Store</h3>
+<div class="highlight"><pre><span></span><code>file:///data/store?hashPrefix=2&amp;checksum=true&amp;logger=true
+</code></pre></div>
 
 
 

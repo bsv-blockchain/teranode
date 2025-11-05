@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -4668,46 +4668,73 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#connection-url-format" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Connection URL Format
+      Configuration Settings
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Connection URL Format">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#url-query-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      URL Query Parameters
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Dependencies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#aerospike" class="md-nav__link">
+  <a href="#block-height-retention" class="md-nav__link">
     <span class="md-ellipsis">
-      Aerospike
+      Block Height Retention
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#sql-postgresqlsqlite" class="md-nav__link">
+  <a href="#database-operations" class="md-nav__link">
     <span class="md-ellipsis">
-      SQL (PostgreSQL/SQLite)
+      Database Operations
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#memory" class="md-nav__link">
+  <a href="#batch-processing" class="md-nav__link">
     <span class="md-ellipsis">
-      Memory
+      Batch Processing
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#nullstore" class="md-nav__link">
+  <a href="#dah-functionality" class="md-nav__link">
     <span class="md-ellipsis">
-      Nullstore
+      DAH Functionality
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debug-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      Debug Logging
     </span>
   </a>
   
@@ -4719,37 +4746,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-parameters" class="md-nav__link">
+  <a href="#backend-support" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Parameters
+      Backend Support
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Parameters">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#general-settings" class="md-nav__link">
+  <a href="#postgresql-store" class="md-nav__link">
     <span class="md-ellipsis">
-      General Settings
+      PostgreSQL Store
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#sql-specific-settings" class="md-nav__link">
+  <a href="#aerospike-store" class="md-nav__link">
     <span class="md-ellipsis">
-      SQL-specific Settings
+      Aerospike Store
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#batch-processing-settings" class="md-nav__link">
+  <a href="#sqlite-store" class="md-nav__link">
     <span class="md-ellipsis">
-      Batch Processing Settings
+      SQLite Store
     </span>
   </a>
   
@@ -4757,15 +4802,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#important-notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Important Notes
-    </span>
-  </a>
   
 </li>
       
@@ -5045,46 +5081,73 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#connection-url-format" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Connection URL Format
+      Configuration Settings
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Connection URL Format">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#url-query-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      URL Query Parameters
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-dependencies" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Dependencies
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#aerospike" class="md-nav__link">
+  <a href="#block-height-retention" class="md-nav__link">
     <span class="md-ellipsis">
-      Aerospike
+      Block Height Retention
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#sql-postgresqlsqlite" class="md-nav__link">
+  <a href="#database-operations" class="md-nav__link">
     <span class="md-ellipsis">
-      SQL (PostgreSQL/SQLite)
+      Database Operations
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#memory" class="md-nav__link">
+  <a href="#batch-processing" class="md-nav__link">
     <span class="md-ellipsis">
-      Memory
+      Batch Processing
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#nullstore" class="md-nav__link">
+  <a href="#dah-functionality" class="md-nav__link">
     <span class="md-ellipsis">
-      Nullstore
+      DAH Functionality
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#debug-logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      Debug Logging
     </span>
   </a>
   
@@ -5096,37 +5159,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration-parameters" class="md-nav__link">
+  <a href="#backend-support" class="md-nav__link">
     <span class="md-ellipsis">
-      Configuration Parameters
+      Backend Support
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Configuration Parameters">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#general-settings" class="md-nav__link">
+  <a href="#postgresql-store" class="md-nav__link">
     <span class="md-ellipsis">
-      General Settings
+      PostgreSQL Store
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#sql-specific-settings" class="md-nav__link">
+  <a href="#aerospike-store" class="md-nav__link">
     <span class="md-ellipsis">
-      SQL-specific Settings
+      Aerospike Store
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#batch-processing-settings" class="md-nav__link">
+  <a href="#sqlite-store" class="md-nav__link">
     <span class="md-ellipsis">
-      Batch Processing Settings
+      SQLite Store
     </span>
   </a>
   
@@ -5134,15 +5215,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#important-notes" class="md-nav__link">
-    <span class="md-ellipsis">
-      Important Notes
-    </span>
-  </a>
   
 </li>
       
@@ -5164,289 +5236,320 @@
 
 <h1 id="utxo-store-settings">UTXO Store Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/stores/utxo/">UTXO Store</a></p>
-<p>The UTXO Store can be configured using various connection URLs and configuration parameters. This section provides a comprehensive reference of all available configuration options.</p>
-<h2 id="connection-url-format">Connection URL Format</h2>
-<p>The <code>utxostore</code> setting determines which datastore implementation to use. The connection URL format varies depending on the selected backend:</p>
-<h3 id="aerospike">Aerospike</h3>
-<div class="highlight"><pre><span></span><code>aerospike://host:port/namespace?param1=value1&amp;param2=value2
-</code></pre></div>
-<p>Example:</p>
-<div class="highlight"><pre><span></span><code>utxostore=aerospike://aerospikeserver.teranode.dev:3000/teranode-store?set=txmeta&amp;externalStore=blob://blobserver:8080/utxo
-</code></pre></div>
-<p><strong>URL Parameters:</strong></p>
-<ul>
-<li><code>set</code>: Aerospike set name (default: "txmeta")</li>
-<li><code>externalStore</code>: URL for storing large transactions (required)</li>
-<li><code>ConnectionQueueSize</code>: Connection queue size for Aerospike client</li>
-<li><code>LimitConnectionsToQueueSize</code>: Whether to limit connections to queue size</li>
-</ul>
-<h3 id="sql-postgresqlsqlite">SQL (PostgreSQL/SQLite)</h3>
-<p><strong>PostgreSQL:</strong></p>
-<div class="highlight"><pre><span></span><code>postgres://username:password@host:port/dbname?param1=value1&amp;param2=value2
-</code></pre></div>
-<p>Example:</p>
-<div class="highlight"><pre><span></span><code>utxostore=postgres://miner1:miner1@postgresserver.teranode.dev:5432/teranode-store?expiration=24h
-</code></pre></div>
-<p><strong>SQLite:</strong></p>
-<div class="highlight"><pre><span></span><code>sqlite:///path/to/file.sqlite?param1=value1&amp;param2=value2
-</code></pre></div>
-<p>Example:</p>
-<div class="highlight"><pre><span></span><code>utxostore=sqlite:///data/utxo.sqlite?expiration=24h
-</code></pre></div>
-<p><strong>In-memory SQLite:</strong></p>
-<div class="highlight"><pre><span></span><code>sqlitememory:///name?param1=value1&amp;param2=value2
-</code></pre></div>
-<p>Example:</p>
-<div class="highlight"><pre><span></span><code>utxostore=sqlitememory:///utxo?expiration=24h
-</code></pre></div>
-<p><strong>URL Parameters:</strong></p>
-<ul>
-<li><code>expiration</code>: Duration after which spent UTXOs are cleaned up (e.g., "24h", "7d")</li>
-<li><code>logging</code>: Enable SQL query logging (true/false)</li>
-</ul>
-<h3 id="memory">Memory</h3>
-<div class="highlight"><pre><span></span><code>memory://host:port/mode
-</code></pre></div>
-<p>Example:</p>
-<div class="highlight"><pre><span></span><code>utxostore=memory://localhost:${UTXO_STORE_GRPC_PORT}/splitbyhash
-</code></pre></div>
-<p><strong>Modes:</strong></p>
-<ul>
-<li><code>splitbyhash</code>: Distributes UTXOs based on hash</li>
-<li><code>all</code>: Stores all UTXOs in memory</li>
-</ul>
-<h3 id="nullstore">Nullstore</h3>
-<div class="highlight"><pre><span></span><code>null:///
-</code></pre></div>
-<p>Example:</p>
-<div class="highlight"><pre><span></span><code>utxostore=null:///
-</code></pre></div>
-<h2 id="configuration-parameters">Configuration Parameters</h2>
-<p>The UTXO Store can be configured through the <code>UtxoStoreSettings</code> struct which contains various parameters to control the behavior of the store.</p>
-<h3 id="general-settings">General Settings</h3>
+<h2 id="configuration-settings">Configuration Settings</h2>
 <table>
 <thead>
 <tr>
-<th>Parameter</th>
+<th>Setting</th>
 <th>Type</th>
-<th>Description</th>
 <th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>UtxoStore</code></td>
+<td>UtxoStore</td>
 <td>*url.URL</td>
-<td>Connection URL for the UTXO store</td>
-<td>"" (must be configured)</td>
+<td>""</td>
+<td>utxostore</td>
+<td><strong>CRITICAL</strong> - UTXO store backend URL</td>
 </tr>
 <tr>
-<td><code>BlockHeightRetention</code></td>
+<td>BlockHeightRetention</td>
 <td>uint32</td>
-<td>Number of blocks to retain data for</td>
 <td>globalBlockHeightRetention</td>
+<td>utxostore_blockHeightRetention</td>
+<td>Block height retention period</td>
 </tr>
 <tr>
-<td><code>BlockHeightRetentionAdjustment</code></td>
-<td>int32</td>
-<td>Adjustment to global block height retention (can be positive or negative)</td>
-<td>0</td>
-</tr>
-<tr>
-<td><code>UnminedTxRetention</code></td>
+<td>UnminedTxRetention</td>
 <td>uint32</td>
-<td>Retention period for unmined transactions in blocks</td>
-<td>1008 blocks (~7 days)</td>
+<td>globalBlockHeightRetention/2</td>
+<td>utxostore_unminedTxRetention</td>
+<td>Unmined transaction retention</td>
 </tr>
 <tr>
-<td><code>ParentPreservationBlocks</code></td>
+<td>ParentPreservationBlocks</td>
 <td>uint32</td>
-<td>Parent transaction preservation period in blocks</td>
-<td>1440 blocks (~10 days)</td>
+<td>blocksInADayOnAverage*10</td>
+<td>utxostore_parentPreservationBlocks</td>
+<td>Parent preservation period</td>
 </tr>
 <tr>
-<td><code>UtxoBatchSize</code></td>
+<td>OutpointBatcherSize</td>
 <td>int</td>
-<td>Batch size for UTXOs (critical - do not change after initial setup)</td>
-<td>128</td>
+<td>100</td>
+<td>utxostore_outpointBatcherSize</td>
+<td>Outpoint operation batch size</td>
 </tr>
 <tr>
-<td><code>DBTimeout</code></td>
+<td>OutpointBatcherDurationMillis</td>
+<td>int</td>
+<td>10</td>
+<td>utxostore_outpointBatcherDurationMillis</td>
+<td>Outpoint batch duration</td>
+</tr>
+<tr>
+<td>SpendBatcherDurationMillis</td>
+<td>int</td>
+<td>100</td>
+<td>utxostore_spendBatcherDurationMillis</td>
+<td>Spend batch duration</td>
+</tr>
+<tr>
+<td>SpendBatcherSize</td>
+<td>int</td>
+<td>100</td>
+<td>utxostore_spendBatcherSize</td>
+<td>Spend operation batch size</td>
+</tr>
+<tr>
+<td>SpendBatcherConcurrency</td>
+<td>int</td>
+<td>32</td>
+<td>utxostore_spendBatcherConcurrency</td>
+<td>Spend batch concurrency</td>
+</tr>
+<tr>
+<td>StoreBatcherDurationMillis</td>
+<td>int</td>
+<td>100</td>
+<td>utxostore_storeBatcherDurationMillis</td>
+<td>Store batch duration</td>
+</tr>
+<tr>
+<td>StoreBatcherSize</td>
+<td>int</td>
+<td>100</td>
+<td>utxostore_storeBatcherSize</td>
+<td>Store operation batch size</td>
+</tr>
+<tr>
+<td>UtxoBatchSize</td>
+<td>int</td>
+<td>128</td>
+<td>utxostore_utxoBatchSize</td>
+<td>UTXO operation batch size</td>
+</tr>
+<tr>
+<td>DBTimeout</td>
 <td>time.Duration</td>
-<td>Timeout for database operations</td>
-<td>5s</td>
+<td>30s</td>
+<td>utxostore_dbTimeout</td>
+<td><strong>CRITICAL</strong> - Database operation timeout</td>
 </tr>
 <tr>
-<td><code>UseExternalTxCache</code></td>
+<td>UseExternalTxCache</td>
 <td>bool</td>
-<td>Whether to use external transaction cache</td>
+<td>false</td>
+<td>utxostore_useExternalTxCache</td>
+<td>External transaction cache usage</td>
+</tr>
+<tr>
+<td>ExternalizeAllTransactions</td>
+<td>bool</td>
+<td>false</td>
+<td>utxostore_externalizeAllTransactions</td>
+<td>Transaction externalization control</td>
+</tr>
+<tr>
+<td>PostgresMaxIdleConns</td>
+<td>int</td>
+<td>10</td>
+<td>utxostore_postgresMaxIdleConns</td>
+<td>PostgreSQL idle connection pool</td>
+</tr>
+<tr>
+<td>PostgresMaxOpenConns</td>
+<td>int</td>
+<td>100</td>
+<td>utxostore_postgresMaxOpenConns</td>
+<td>PostgreSQL max open connections</td>
+</tr>
+<tr>
+<td>VerboseDebug</td>
+<td>bool</td>
+<td>false</td>
+<td>utxostore_verboseDebug</td>
+<td>Verbose debug logging</td>
+</tr>
+<tr>
+<td>UpdateTxMinedStatus</td>
+<td>bool</td>
 <td>true</td>
+<td>utxostore_updateTxMinedStatus</td>
+<td>Transaction mined status updates</td>
 </tr>
 <tr>
-<td><code>ExternalizeAllTransactions</code></td>
+<td>MaxMinedRoutines</td>
+<td>int</td>
+<td>10</td>
+<td>utxostore_maxMinedRoutines</td>
+<td>Max mined transaction routines</td>
+</tr>
+<tr>
+<td>MaxMinedBatchSize</td>
+<td>int</td>
+<td>1000</td>
+<td>utxostore_maxMinedBatchSize</td>
+<td>Max mined transaction batch size</td>
+</tr>
+<tr>
+<td>BlockHeightRetentionAdjustment</td>
+<td>int32</td>
+<td>0</td>
+<td>utxostore_blockHeightRetentionAdjustment</td>
+<td><strong>CRITICAL</strong> - Retention adjustment</td>
+</tr>
+<tr>
+<td>DisableDAHCleaner</td>
 <td>bool</td>
-<td>Whether to externalize all transactions</td>
 <td>false</td>
-</tr>
-<tr>
-<td><code>VerboseDebug</code></td>
-<td>bool</td>
-<td>Enable verbose debugging</td>
-<td>false</td>
-</tr>
-<tr>
-<td><code>UpdateTxMinedStatus</code></td>
-<td>bool</td>
-<td>Whether to update transaction mined status</td>
-<td>true</td>
-</tr>
-<tr>
-<td><code>DisableDAHCleaner</code></td>
-<td>bool</td>
-<td>Disable Delete-At-Height cleaner process</td>
-<td>false</td>
+<td>utxostore_disableDAHCleaner</td>
+<td><strong>CRITICAL</strong> - DAH cleaner process control</td>
 </tr>
 </tbody>
 </table>
-<h3 id="sql-specific-settings">SQL-specific Settings</h3>
+<h2 id="url-query-parameters">URL Query Parameters</h2>
 <table>
 <thead>
 <tr>
 <th>Parameter</th>
 <th>Type</th>
-<th>Description</th>
 <th>Default</th>
+<th>Usage</th>
+<th>Impact</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>PostgresMaxIdleConns</code></td>
-<td>int</td>
-<td>Maximum number of idle connections to the PostgreSQL database</td>
-<td>10</td>
-</tr>
-<tr>
-<td><code>PostgresMaxOpenConns</code></td>
-<td>int</td>
-<td>Maximum number of open connections to the PostgreSQL database</td>
-<td>80</td>
+<td>logging</td>
+<td>bool</td>
+<td>false</td>
+<td><code>storeURL.Query().Get("logging") == "true"</code></td>
+<td><strong>CRITICAL</strong> - Enables operation logging wrapper</td>
 </tr>
 </tbody>
 </table>
-<h3 id="batch-processing-settings">Batch Processing Settings</h3>
-<p>The UTXO Store uses batch processing to improve performance. The following settings control the behavior of various batchers:</p>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="block-height-retention">Block Height Retention</h3>
+<ul>
+<li>Effective retention = <code>GlobalBlockHeightRetention + BlockHeightRetentionAdjustment</code></li>
+<li>Used in <code>sql/sql.go</code> for DAH calculations and cleanup operations</li>
+<li>Bounds checking prevents negative results</li>
+</ul>
+<h3 id="database-operations">Database Operations</h3>
+<ul>
+<li><code>DBTimeout</code> controls all SQL operation timeouts in <code>sql/sql.go</code></li>
+<li>PostgreSQL connection settings control connection pooling</li>
+<li>Used across Create, Get, Spend, Delete, and batch operations</li>
+</ul>
+<h3 id="batch-processing">Batch Processing</h3>
+<ul>
+<li>Size and duration settings work together for different operation types</li>
+<li>Controls memory usage and performance for bulk operations</li>
+<li>Separate batchers for outpoint, spend, store, increment, DAH, and locked operations</li>
+</ul>
+<h3 id="dah-functionality">DAH Functionality</h3>
+<ul>
+<li>When <code>DisableDAHCleaner = false</code>, uses retention settings for cleanup</li>
+<li>DAH calculations use block height retention values</li>
+<li>Cleanup operations respect retention adjustment settings</li>
+</ul>
+<h3 id="debug-logging">Debug Logging</h3>
+<ul>
+<li>URL <code>logging</code> parameter enables operation wrapper in <code>factory/utxo.go</code></li>
+<li><code>VerboseDebug</code> controls detailed logging output</li>
+<li>Logs all store operations with parameters and duration</li>
+</ul>
+<h2 id="backend-support">Backend Support</h2>
 <table>
 <thead>
 <tr>
-<th>Parameter</th>
-<th>Type</th>
-<th>Description</th>
-<th>Default</th>
+<th>Backend</th>
+<th>Scheme</th>
+<th>Parameters Supported</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>StoreBatcherSize</code></td>
-<td>int</td>
-<td>Batch size for store operations</td>
-<td>100</td>
+<td>aerospike</td>
+<td>aerospike://</td>
+<td>All settings, logging parameter</td>
 </tr>
 <tr>
-<td><code>StoreBatcherDurationMillis</code></td>
-<td>int</td>
-<td>Maximum duration in milliseconds for store batching</td>
-<td>100</td>
+<td>postgres</td>
+<td>postgres://</td>
+<td>All settings, logging parameter</td>
 </tr>
 <tr>
-<td><code>SpendBatcherSize</code></td>
-<td>int</td>
-<td>Batch size for spend operations</td>
-<td>100</td>
+<td>sqlite</td>
+<td>sqlite://</td>
+<td>All settings, logging parameter</td>
 </tr>
 <tr>
-<td><code>SpendBatcherDurationMillis</code></td>
-<td>int</td>
-<td>Maximum duration in milliseconds for spend batching</td>
-<td>100</td>
+<td>sqlitememory</td>
+<td>sqlitememory://</td>
+<td>All settings, logging parameter</td>
 </tr>
 <tr>
-<td><code>OutpointBatcherSize</code></td>
-<td>int</td>
-<td>Batch size for outpoint operations</td>
-<td>100</td>
+<td>memory</td>
+<td>memory://</td>
+<td>All settings, logging parameter</td>
 </tr>
 <tr>
-<td><code>OutpointBatcherDurationMillis</code></td>
-<td>int</td>
-<td>Maximum duration in milliseconds for outpoint batching</td>
-<td>10</td>
-</tr>
-<tr>
-<td><code>IncrementBatcherSize</code></td>
-<td>int</td>
-<td>Batch size for increment operations</td>
-<td>256</td>
-</tr>
-<tr>
-<td><code>IncrementBatcherDurationMillis</code></td>
-<td>int</td>
-<td>Maximum duration in milliseconds for increment batching</td>
-<td>10</td>
-</tr>
-<tr>
-<td><code>SetDAHBatcherSize</code></td>
-<td>int</td>
-<td>Batch size for Delete-At-Height operations</td>
-<td>256</td>
-</tr>
-<tr>
-<td><code>SetDAHBatcherDurationMillis</code></td>
-<td>int</td>
-<td>Maximum duration in milliseconds for DAH batching</td>
-<td>10</td>
-</tr>
-<tr>
-<td><code>LockedBatcherSize</code></td>
-<td>int</td>
-<td>Batch size for locked operations</td>
-<td>256</td>
-</tr>
-<tr>
-<td><code>LockedBatcherDurationMillis</code></td>
-<td>int</td>
-<td>Maximum duration in milliseconds for locked batching</td>
-<td>10</td>
-</tr>
-<tr>
-<td><code>GetBatcherSize</code></td>
-<td>int</td>
-<td>Batch size for get operations</td>
-<td>1</td>
-</tr>
-<tr>
-<td><code>GetBatcherDurationMillis</code></td>
-<td>int</td>
-<td>Maximum duration in milliseconds for get batching</td>
-<td>10</td>
-</tr>
-<tr>
-<td><code>MaxMinedRoutines</code></td>
-<td>int</td>
-<td>Maximum number of concurrent goroutines for processing mined transactions</td>
-<td>128</td>
-</tr>
-<tr>
-<td><code>MaxMinedBatchSize</code></td>
-<td>int</td>
-<td>Maximum number of mined transactions processed in a batch</td>
-<td>1024</td>
+<td>null</td>
+<td>null://</td>
+<td>All settings, logging parameter</td>
 </tr>
 </tbody>
 </table>
-<h2 id="important-notes">Important Notes</h2>
-<p><strong>Critical Setting Warning:</strong> The <code>UtxoBatchSize</code> setting must not be changed after the UTXO store has been running with Aerospike backend. It determines record organization and changing it would break store integrity.</p>
-<p><strong>Block Height Retention:</strong> The effective retention is calculated as <code>GlobalBlockHeightRetention + BlockHeightRetentionAdjustment</code>. The global value varies by deployment, and the adjustment can be positive or negative to fine-tune retention per store.</p>
-<p><strong>URL Query Parameters:</strong> The UTXO store URL supports a <code>logging=true</code> query parameter to enable detailed operation logging for debugging purposes.</p>
+<h2 id="validation-rules">Validation Rules</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Validation</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UtxoStore</td>
+<td>Must be valid URL</td>
+<td>Store initialization</td>
+</tr>
+<tr>
+<td>DBTimeout</td>
+<td>Used for context timeout</td>
+<td>Operation reliability</td>
+</tr>
+<tr>
+<td>BlockHeightRetentionAdjustment</td>
+<td>Bounds checking applied</td>
+<td>Retention calculation</td>
+</tr>
+<tr>
+<td>logging</td>
+<td>Boolean string check</td>
+<td>Logging wrapper creation</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="postgresql-store">PostgreSQL Store</h3>
+<div class="highlight"><pre><span></span><code>utxostore = &quot;postgres://user:pass@host:5432/db?logging=true&quot;
+utxostore_dbTimeout = &quot;60s&quot;
+</code></pre></div>
+<h3 id="aerospike-store">Aerospike Store</h3>
+<div class="highlight"><pre><span></span><code>utxostore = &quot;aerospike://host:3000/namespace&quot;
+utxostore_spendBatcherSize = 200
+</code></pre></div>
+<h3 id="sqlite-store">SQLite Store</h3>
+<div class="highlight"><pre><span></span><code>utxostore = &quot;sqlite:///data/utxo.db?logging=true&quot;
+utxostore_blockHeightRetentionAdjustment = 100
+</code></pre></div>
 
 
 

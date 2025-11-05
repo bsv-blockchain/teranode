@@ -16,7 +16,7 @@
       
       
       <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.22">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.23">
     
     
       
@@ -64,7 +64,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#blockchain-settings" class="md-skip">
+        <a href="#blockchain-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -4362,100 +4362,55 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#network-configuration" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Network Configuration
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#data-storage-configuration" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Data Storage Configuration
+      Configuration Dependencies
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#state-machine-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      State Machine Configuration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#operational-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Operational Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#mining-and-difficulty-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Mining and Difficulty Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#critical-configuration-requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      Critical Configuration Requirements
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#kafka-integration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Kafka Integration
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Kafka Integration">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#message-formats" class="md-nav__link">
+  <a href="#grpc-server-health-checks" class="md-nav__link">
     <span class="md-ellipsis">
-      Message Formats
+      gRPC Server Health Checks
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
+  <a href="#http-api-server" class="md-nav__link">
     <span class="md-ellipsis">
-      Topics
+      HTTP API Server
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#error-handling" class="md-nav__link">
+  <a href="#fsm-state-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Error Handling
+      FSM State Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#database-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database Configuration
     </span>
   </a>
   
@@ -4467,46 +4422,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#error-handling-strategies" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Error Handling Strategies
+      Service Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Error Handling Strategies">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#network-and-communication-errors" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Network and Communication Errors
+      Basic Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#validation-errors" class="md-nav__link">
+  <a href="#postgresql-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Validation Errors
+      PostgreSQL Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#chain-reorganization" class="md-nav__link">
+  <a href="#testing-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Chain Reorganization
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#storage-errors" class="md-nav__link">
-    <span class="md-ellipsis">
-      Storage Errors
+      Testing Configuration
     </span>
   </a>
   
@@ -5099,100 +5063,55 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#network-configuration" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
-      Network Configuration
+      Configuration Settings
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#data-storage-configuration" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Data Storage Configuration
+      Configuration Dependencies
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#state-machine-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      State Machine Configuration
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#operational-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Operational Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#mining-and-difficulty-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      Mining and Difficulty Settings
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#configuration-interactions-and-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      Configuration Interactions and Dependencies
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#critical-configuration-requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      Critical Configuration Requirements
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#kafka-integration" class="md-nav__link">
-    <span class="md-ellipsis">
-      Kafka Integration
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Kafka Integration">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#message-formats" class="md-nav__link">
+  <a href="#grpc-server-health-checks" class="md-nav__link">
     <span class="md-ellipsis">
-      Message Formats
+      gRPC Server Health Checks
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#topics" class="md-nav__link">
+  <a href="#http-api-server" class="md-nav__link">
     <span class="md-ellipsis">
-      Topics
+      HTTP API Server
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#error-handling" class="md-nav__link">
+  <a href="#fsm-state-management" class="md-nav__link">
     <span class="md-ellipsis">
-      Error Handling
+      FSM State Management
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#database-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Database Configuration
     </span>
   </a>
   
@@ -5204,46 +5123,55 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#error-handling-strategies" class="md-nav__link">
+  <a href="#service-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
-      Error Handling Strategies
+      Service Dependencies
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Error Handling Strategies">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validation Rules
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Examples">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#network-and-communication-errors" class="md-nav__link">
+  <a href="#basic-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Network and Communication Errors
+      Basic Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#validation-errors" class="md-nav__link">
+  <a href="#postgresql-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Validation Errors
+      PostgreSQL Configuration
     </span>
   </a>
   
 </li>
         
           <li class="md-nav__item">
-  <a href="#chain-reorganization" class="md-nav__link">
+  <a href="#testing-configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Chain Reorganization
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#storage-errors" class="md-nav__link">
-    <span class="md-ellipsis">
-      Storage Errors
+      Testing Configuration
     </span>
   </a>
   
@@ -5270,200 +5198,177 @@
 
 
 
-<h1 id="blockchain-settings">Blockchain Settings</h1>
+<h1 id="blockchain-service-settings">Blockchain Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/blockchain/">Blockchain Service</a></p>
-<p>The Blockchain service configuration is organized into several categories to manage different aspects of the service's operation. All settings can be provided via environment variables or configuration files.</p>
-<h2 id="network-configuration">Network Configuration</h2>
+<h2 id="configuration-settings">Configuration Settings</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GRPCAddress</td>
+<td>string</td>
+<td>"localhost:8087"</td>
+<td>blockchain_grpcAddress</td>
+<td>Client connection address</td>
+</tr>
+<tr>
+<td>GRPCListenAddress</td>
+<td>string</td>
+<td>":8087"</td>
+<td>blockchain_grpcListenAddress</td>
+<td><strong>CRITICAL</strong> - gRPC server binding, health checks only run if not empty</td>
+</tr>
+<tr>
+<td>HTTPListenAddress</td>
+<td>string</td>
+<td>":8082"</td>
+<td>blockchain_httpListenAddress</td>
+<td><strong>CRITICAL</strong> - HTTP server binding, service fails if empty</td>
+</tr>
+<tr>
+<td>MaxRetries</td>
+<td>int</td>
+<td>3</td>
+<td>blockchain_maxRetries</td>
+<td>Retry attempts for operations</td>
+</tr>
+<tr>
+<td>RetrySleep</td>
+<td>int</td>
+<td>1000</td>
+<td>blockchain_retrySleep</td>
+<td>Retry delay timing (milliseconds)</td>
+</tr>
+<tr>
+<td>StoreURL</td>
+<td>*url.URL</td>
+<td>"sqlite:///blockchain"</td>
+<td>blockchain_store</td>
+<td><strong>CRITICAL</strong> - Database connection</td>
+</tr>
+<tr>
+<td>FSMStateRestore</td>
+<td>bool</td>
+<td>false</td>
+<td>fsm_state_restore</td>
+<td>FSM restore mode trigger</td>
+</tr>
+<tr>
+<td>FSMStateChangeDelay</td>
+<td>time.Duration</td>
+<td>0</td>
+<td>fsm_state_change_delay</td>
+<td><strong>TESTING ONLY</strong> - FSM state transition delay</td>
+</tr>
+<tr>
+<td>StoreDBTimeoutMillis</td>
+<td>int</td>
+<td>5000</td>
+<td>blockchain_store_dbTimeoutMillis</td>
+<td>Configuration placeholder</td>
+</tr>
+<tr>
+<td>InitializeNodeInState</td>
+<td>string</td>
+<td>""</td>
+<td>blockchain_initializeNodeInState</td>
+<td>Initial FSM state for testing</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="grpc-server-health-checks">gRPC Server Health Checks</h3>
 <ul>
-<li><strong>GRPC Address (<code>blockchain_grpcAddress</code>)</strong>: Specifies the address for other services to connect to the Blockchain service's gRPC API. This is how other services will address the blockchain service.</li>
-<li>Type: string</li>
-<li>
-<p>Default Value: <code>localhost:8087</code></p>
+<li>Health checks only run if <code>GRPCListenAddress</code> is not empty</li>
+<li><code>GRPCAddress</code> used for client connections</li>
+</ul>
+<h3 id="http-api-server">HTTP API Server</h3>
 <ul>
-<li>Impact: Critical for service discovery and inter-service communication</li>
-<li>Security Impact: In production environments, should be configured securely based on network architecture</li>
+<li>Service fails to start if <code>HTTPListenAddress</code> is empty</li>
+<li>Required for block invalidation/revalidation endpoints</li>
 </ul>
-</li>
-<li>
-<p><strong>GRPC Listen Address (<code>blockchain_grpcListenAddress</code>)</strong>: Specifies the network interface and port the Blockchain service's gRPC server binds to for accepting connections.</p>
-</li>
-<li>Type: string</li>
-<li>
-<p>Default Value: <code>:8087</code></p>
+<h3 id="fsm-state-management">FSM State Management</h3>
 <ul>
-<li>Impact: Controls network interface binding for accepting gRPC connections</li>
-<li>Security Impact: Binding to <code>0.0.0.0</code> or empty address (<code>:8087</code>) exposes the port on all network interfaces</li>
+<li><code>FSMStateRestore</code> triggers restore mode in RPC service</li>
+<li><code>FSMStateChangeDelay</code> used for test timing control</li>
+<li><code>InitializeNodeInState</code> sets initial test state</li>
 </ul>
-</li>
-<li>
-<p><strong>HTTP Listen Address (<code>blockchain_httpListenAddress</code>)</strong>: Specifies the network interface and port for the HTTP server that exposes REST endpoints (primarily for block invalidation/revalidation).</p>
-</li>
-<li>Type: string</li>
-<li>Default Value: <code>:8082</code><ul>
-<li>Impact: Controls network interface binding for HTTP API access</li>
-<li>Security Impact: Should be configured based on who needs access to these endpoints</li>
-</ul>
-</li>
-</ul>
-<h2 id="data-storage-configuration">Data Storage Configuration</h2>
+<h3 id="database-configuration">Database Configuration</h3>
 <ul>
-<li><strong>Store URL (<code>blockchain_store</code>)</strong>: URL connection string for the blockchain database that stores block data and service state.</li>
-<li>Type: URL</li>
-<li>Default Value: <code>sqlite:///blockchain</code></li>
-<li>
-<p>Supported Formats:</p>
-<ul>
-<li>SQLite: <code>sqlite:///path/to/db</code></li>
-<li>PostgreSQL: <code>postgres://user:password@host:port/dbname</code></li>
-<li>Impact: Stores block data and service state</li>
-<li>Performance Impact: Choice of database affects scalability and performance</li>
+<li><code>StoreURL</code> determines database backend</li>
+<li><code>StoreDBTimeoutMillis</code> is placeholder (not implemented)</li>
 </ul>
-</li>
-<li>
-<p><strong>DB Timeout (<code>blockchain_store_dbTimeoutMillis</code>)</strong>: The timeout in milliseconds for database operations.</p>
-</li>
-<li>Type: integer</li>
-<li>Default Value: <code>5000</code> (5 seconds)<ul>
-<li>Impact: Not currently implemented</li>
-</ul>
-</li>
-</ul>
-<h2 id="state-machine-configuration">State Machine Configuration</h2>
-<ul>
-<li><strong>Initialize Node In State (<code>blockchain_initializeNodeInState</code>)</strong>: Specifies the initial state for the blockchain service's finite state machine (FSM).</li>
-<li>Type: string</li>
-<li>Default Value: <code>""</code> (empty, uses default FSM state)</li>
-<li>
-<p>Possible Values:</p>
-<ul>
-<li><code>"IDLE"</code>: Initial inactive state</li>
-<li><code>"RUNNING"</code>: Normal operating state</li>
-<li><code>"LEGACY_SYNC"</code>: Legacy synchronization mode</li>
-<li><code>"CATCHUP_BLOCKS"</code>: Block catch-up mode</li>
-<li>Impact: Not currently implemented</li>
-</ul>
-</li>
-<li>
-<p><strong>FSM State Restore (<code>fsm_state_restore</code>)</strong>: Controls whether the service restores its previous FSM state from storage on startup.</p>
-</li>
-<li>Type: boolean</li>
-<li>
-<p>Default Value: <code>false</code></p>
-<ul>
-<li>Impact: Not currently implemented</li>
-</ul>
-</li>
-<li>
-<p><strong>FSM State Change Delay (<code>fsm_state_change_delay</code>)</strong>: FOR TESTING ONLY - introduces an artificial delay when changing FSM states.</p>
-</li>
-<li>Type: integer (milliseconds)</li>
-<li>Default Value: <code>0</code><ul>
-<li>Impact: Used only in tests for state transition synchronization</li>
-</ul>
-</li>
-<li>Warning: Should not be used in production environments</li>
-</ul>
-<h2 id="operational-settings">Operational Settings</h2>
-<ul>
-<li><strong>Maximum Retries (<code>blockchain_maxRetries</code>)</strong>: Maximum number of retry attempts for blockchain operations that encounter transient errors.</li>
-<li>Type: integer</li>
-<li>
-<p>Default Value: <code>3</code></p>
-<ul>
-<li>Impact: Not currently implemented</li>
-</ul>
-</li>
-<li>
-<p><strong>Retry Sleep Duration (<code>blockchain_retrySleep</code>)</strong>: The wait time in milliseconds between retry attempts, implementing a back-off mechanism.</p>
-</li>
-<li>Type: integer</li>
-<li>Default Value: <code>1000</code> (1 second)<ul>
-<li>Impact: Not currently implemented</li>
-</ul>
-</li>
-<li>Tuning Advice: Adjust based on the nature of expected failures (shorter for quick-recovery scenarios)</li>
-</ul>
-<h2 id="mining-and-difficulty-settings">Mining and Difficulty Settings</h2>
-<ul>
-<li><strong>Difficulty Cache (<code>blockassembly_difficultyCache</code>)</strong>: Enables difficulty calculation caching for performance optimization.</li>
-<li>Type: boolean</li>
-<li>Default Value: <code>true</code><ul>
-<li>Impact: Improves performance when enabled</li>
-</ul>
-</li>
-</ul>
-<h2 id="configuration-interactions-and-dependencies">Configuration Interactions and Dependencies</h2>
-<p>Some configuration settings work together or depend on other settings:</p>
-<ol>
-<li>
-<p><strong>gRPC Server Management</strong>: <code>blockchain_grpcListenAddress</code> controls server startup and health checks; <code>blockchain_grpcAddress</code> required for client connections</p>
-</li>
-<li>
-<p><strong>HTTP Administrative Interface</strong>: <code>blockchain_httpListenAddress</code> must be configured for service startup; empty causes failure</p>
-</li>
-<li>
-<p><strong>Difficulty Calculation</strong>: <code>blockassembly_difficultyCache</code> improves performance; Chain parameters control difficulty algorithm behavior</p>
-</li>
-<li>
-<p><strong>FSM State Management</strong>: <code>fsm_state_restore</code> and <code>blockchain_initializeNodeInState</code> control service startup behavior and state persistence</p>
-</li>
-<li>
-<p><strong>Database Operations</strong>: <code>blockchain_store</code> determines persistence backend; <code>blockchain_store_dbTimeoutMillis</code> controls operation limits</p>
-</li>
-</ol>
-<h2 id="critical-configuration-requirements">Critical Configuration Requirements</h2>
-<ol>
-<li><strong><code>blockchain_httpListenAddress</code></strong> must be configured (empty causes service startup failure)</li>
-<li><strong><code>blockchain_grpcAddress</code></strong> must be configured for client functionality</li>
-<li><strong><code>blockchain_grpcListenAddress</code></strong> can be empty (disables gRPC server)</li>
-<li><strong><code>blockchain_store</code></strong> must be valid URL format for blockchain persistence</li>
-<li><strong><code>Chain configuration parameters</code></strong> must be properly configured for difficulty calculations</li>
-</ol>
-<h2 id="kafka-integration">Kafka Integration</h2>
-<p>The Blockchain Service integrates with Kafka for block notifications and event streaming.</p>
-<h3 id="message-formats">Message Formats</h3>
-<p>Block notifications are serialized using Protocol Buffers and contain:</p>
-<ul>
-<li>Block header</li>
-<li>Block height</li>
-<li>Hash</li>
-<li>Transaction count</li>
-<li>Size in bytes</li>
-<li>Timestamp</li>
-</ul>
-<h3 id="topics">Topics</h3>
-<ul>
-<li><strong>Blocks-Final</strong>: Used for finalized block notifications, consumed by the Block Persister service</li>
-</ul>
-<h3 id="error-handling">Error Handling</h3>
-<ul>
-<li>The service implements exponential backoff retry for Kafka publishing failures</li>
-<li>Failed messages are logged and retried based on the <code>blockchain_maxRetries</code> and <code>blockchain_retrySleep</code> settings</li>
-<li>Persistent failures, after the retries are exhausted, are reported through the health monitoring endpoints (<code>/health</code> HTTP endpoint and the <code>HealthGRPC</code> gRPC method)</li>
-</ul>
-<h2 id="error-handling-strategies">Error Handling Strategies</h2>
-<p>The Blockchain Service employs several strategies to handle errors and maintain resilience:</p>
-<h3 id="network-and-communication-errors">Network and Communication Errors</h3>
-<ul>
-<li>Uses timeouts and context cancellation to handle hanging network operations</li>
-<li>Implements retry mechanisms for transient failures with configured backoff periods</li>
-</ul>
-<h3 id="validation-errors">Validation Errors</h3>
-<ul>
-<li>Blocks with invalid headers, merkle roots, or proofs are rejected with appropriate error codes</li>
-<li>Invalid blocks can be explicitly marked using the InvalidateBlock method</li>
-</ul>
-<h3 id="chain-reorganization">Chain Reorganization</h3>
-<ul>
-<li>Detects chain splits and reorganizations automatically</li>
-<li>Uses rollback and catch-up operations to handle chain reorganizations</li>
-<li>Limits reorganization depth for security (configurable)</li>
-</ul>
-<h3 id="storage-errors">Storage Errors</h3>
-<ul>
-<li>Implements transaction-based operations with the store to maintain consistency</li>
-<li>Reports persistent storage errors through health endpoints</li>
-</ul>
+<h2 id="service-dependencies">Service Dependencies</h2>
+<table>
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Interface</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BlockchainStore</td>
+<td>blockchain_store.Store</td>
+<td><strong>CRITICAL</strong> - Blockchain data persistence</td>
+</tr>
+<tr>
+<td>KafkaProducer</td>
+<td>kafka.KafkaAsyncProducerI</td>
+<td><strong>CRITICAL</strong> - Block publishing to downstream services</td>
+</tr>
+</tbody>
+</table>
+<h2 id="validation-rules">Validation Rules</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Validation</th>
+<th>Error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HTTPListenAddress</td>
+<td>Must not be empty</td>
+<td>"No blockchain_httpListenAddress specified"</td>
+</tr>
+<tr>
+<td>GRPCListenAddress</td>
+<td>Health checks only if not empty</td>
+<td>Service monitoring disabled</td>
+</tr>
+<tr>
+<td>StoreURL</td>
+<td>Must be valid URL format</td>
+<td>Database connection failure</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-examples">Configuration Examples</h2>
+<h3 id="basic-configuration">Basic Configuration</h3>
+<div class="highlight"><pre><span></span><code>blockchain_grpcListenAddress = &quot;:8087&quot;
+blockchain_httpListenAddress = &quot;:8082&quot;
+blockchain_store = &quot;sqlite:///blockchain&quot;
+</code></pre></div>
+<h3 id="postgresql-configuration">PostgreSQL Configuration</h3>
+<div class="highlight"><pre><span></span><code>blockchain_store = &quot;postgres://user:pass@host:5432/blockchain&quot;
+</code></pre></div>
+<h3 id="testing-configuration">Testing Configuration</h3>
+<div class="highlight"><pre><span></span><code>fsm_state_restore = true
+fsm_state_change_delay = 1000
+blockchain_initializeNodeInState = &quot;IDLE&quot;
+</code></pre></div>
 
 
 
