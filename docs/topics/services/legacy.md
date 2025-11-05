@@ -147,6 +147,22 @@ In the context of the Legacy Service, the reception of inv messages is a crucial
 
 ![legacy_p2p_bsv_to_teranode_inv_message.svg](img/plantuml/legacyp2p/legacy_p2p_bsv_to_teranode_inv_message.svg)
 
+##### INV Message Queueing and FSM State Management
+
+To prevent message loss during blockchain state transitions, the Legacy Service implements Kafka-based queueing for INV messages. This mechanism ensures reliable message delivery across FSM (Finite State Machine) state changes:
+
+- **FSM-Aware Processing**: The service monitors the blockchain FSM state (polled every 2 seconds) and only processes INV messages when the node is in RUNNING state
+- **Automatic Queueing**: When the FSM is not in RUNNING state (e.g., during initialization, synchronization, or reorganization), incoming INV messages are queued in Kafka rather than being processed immediately
+- **Seamless Resumption**: Once the FSM transitions to RUNNING state, the Kafka listener starts and processes queued messages in order, ensuring no inventory notifications are lost
+- **State Transition Safety**: This prevents race conditions where messages arrive during critical state changes, maintaining data consistency and network synchronization
+
+This queueing mechanism is particularly important during:
+
+- Node startup and initial blockchain synchronization
+- Block reorganizations
+- Network catchup operations
+- FSM state transitions that temporarily suspend normal processing
+
 1. **Connection Establishment:** The Legacy Overlay Service establishes a connection with the MainNet, setting the stage for data exchange.
 
 2. **Block and Transaction Advertisement:**
