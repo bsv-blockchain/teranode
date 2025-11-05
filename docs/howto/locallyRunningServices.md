@@ -25,7 +25,7 @@ Before running Teranode, ensure the required infrastructure services are started
 
 ### Start Teranode
 
-Execute all services in a single terminal window with the command below. Replace `[YOUR_USERNAME]` with your specific username.
+Execute all services in a single terminal window with the command below. Replace `[YOUR_CONTEXT]` with your specific development context identifier.
 
 ```shell
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
@@ -52,20 +52,20 @@ Teranode supports multiple database backends for UTXO storage, configured via se
    ./scripts/postgres.sh
 
    # Your settings_local.conf should have a PostgreSQL connection string
-   utxostore.dev.[YOUR_USERNAME] = postgres://teranode:teranode@localhost:5432/teranode?blockHeightRetention=5
+   utxostore.dev.[YOUR_CONTEXT] = postgres://teranode:teranode@localhost:5432/teranode?blockHeightRetention=5
 
    # Run with the PostgreSQL backend
-   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
    ```
 
 2. **SQLite** (Lightweight option):
 
    ```shell
    # Your settings_local.conf should have an SQLite connection string
-   utxostore.dev.[YOUR_USERNAME] = sqlite:///utxostore?blockHeightRetention=5
+   utxostore.dev.[YOUR_CONTEXT] = sqlite:///utxostore?blockHeightRetention=5
 
    # Run with SQLite backend
-   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
    ```
 
 3. **Aerospike** (High-performance option):
@@ -99,7 +99,7 @@ To use Aerospike as the UTXO storage backend:
 2. Run Teranode with the aerospike tag:
 
    ```shell
-   rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike .
+   rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
    ```
 
 ### Transaction Metadata Cache Configurations
@@ -109,19 +109,19 @@ Teranode supports different transaction metadata cache sizes through build tags:
 - **Large Cache (Default)**: Used when no specific tx metadata cache tag is specified
 
   ```shell
-  SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike .
+  SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
   ```
 
 - **Small Cache**: Reduces memory usage with a smaller transaction metadata cache
 
   ```shell
-  SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike,smalltxmetacache .
+  SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike,smalltxmetacache .
   ```
 
 - **Test Cache**: Configured specifically for testing scenarios
 
   ```shell
-  SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike,testtxmetacache .
+  SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike,testtxmetacache .
   ```
 
 ### Multiple Tags
@@ -129,7 +129,7 @@ Teranode supports different transaction metadata cache sizes through build tags:
 You can combine multiple tags by separating them with commas:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike,smalltxmetacache .
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike,smalltxmetacache .
 ```
 
 ### Network Configuration
@@ -138,13 +138,13 @@ Teranode supports different Bitcoin networks (mainnet, testnet, etc.). This is p
 
 ```shell
 # Run on testnet
-network=testnet SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+network=testnet SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
 
 # Run on testnet with Aerospike
-network=testnet SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike .
+network=testnet SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
 ```
 
-> **Note:** The network setting defaults to what's specified in your settings_local.conf under `network.dev.[YOUR_USERNAME]`. The environment variable overrides this setting.
+> **Note:** The network setting defaults to what's specified in your settings_local.conf under `network.dev.[YOUR_CONTEXT]`. The environment variable overrides this setting.
 
 ### Testing Tags
 
@@ -195,7 +195,7 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 To start the node with only validation and UTXO storage:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -validator=1 -utxopersister=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike . -validator=1 -utxopersister=1
 ```
 
 ### Wait For PostgreSQL
@@ -203,7 +203,7 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -validator=1 -utxo
 If you want Teranode to wait for PostgreSQL to be available before starting:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run . -wait_for_postgres=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -wait_for_postgres=1
 ```
 
 This is useful in containerized environments or when PostgreSQL might not be immediately ready.
@@ -220,7 +220,7 @@ Teranode exposes health check endpoints on port 8000 (configurable in settings):
 Teranode respects the `NO_COLOR` environment variable to disable colored output in logs.
 
 ```shell
-NO_COLOR=1 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+NO_COLOR=1 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
 ```
 
 #### Component Selection Examples
@@ -230,7 +230,7 @@ NO_COLOR=1 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
 To initiate the node with only specific components, such as `Validator`:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -validator=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike . -validator=1
 ```
 
 **Disabling all services by default and enabling only specific ones:**
@@ -238,7 +238,7 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -validator=1
 This is particularly useful for development:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -all=0 -validator=1 -rpc=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike . -all=0 -validator=1 -rpc=1
 ```
 
 ## 🔧 Running Individual Services
