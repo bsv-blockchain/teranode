@@ -388,6 +388,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PeerHealthRemoveAfterFailures: getInt("p2p_health_remove_after_failures", 3, alternativeContext...),
 			// Full/pruned node selection configuration
 			AllowPrunedNodeFallback: getBool("p2p_allow_pruned_node_fallback", true, alternativeContext...),
+			DisableNAT:              getBool("p2p_disable_nat", false, alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                    getString("coinbaseDB", "", alternativeContext...),
