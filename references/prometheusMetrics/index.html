@@ -5369,6 +5369,11 @@
 <td>CounterVec</td>
 <td>Number of Get UTXO ops</td>
 </tr>
+<tr>
+<td><code>teranode_asset_http_get_merkle_proof</code></td>
+<td>CounterVec</td>
+<td>Number of Get merkle proof ops</td>
+</tr>
 </tbody>
 </table>
 <h2 id="block-assembly-service-metrics">Block Assembly Service Metrics</h2>
@@ -5425,6 +5430,16 @@
 <td><code>teranode_blockassembly_subtree_created</code></td>
 <td>Counter</td>
 <td>Number of subtrees created in the block assembler</td>
+</tr>
+<tr>
+<td><code>teranode_blockassembly_cache_hits</code></td>
+<td>Counter</td>
+<td>Number of cache hits for mining candidates</td>
+</tr>
+<tr>
+<td><code>teranode_blockassembly_cache_misses</code></td>
+<td>Counter</td>
+<td>Number of cache misses for mining candidates</td>
 </tr>
 <tr>
 <td><code>teranode_blockassembly_transactions</code></td>
@@ -5803,21 +5818,6 @@
 <td>Number of subtrees in the subtree exists cache</td>
 </tr>
 <tr>
-<td><code>teranode_blockvalidation_catchup_peer_id</code></td>
-<td>CounterVec</td>
-<td>Number of catchup operations by peer ID</td>
-</tr>
-<tr>
-<td><code>teranode_blockvalidation_catchup_success</code></td>
-<td>CounterVec</td>
-<td>Number of successful catchup operations</td>
-</tr>
-<tr>
-<td><code>teranode_blockvalidation_catchup_error_type</code></td>
-<td>CounterVec</td>
-<td>Number of catchup operations by error type</td>
-</tr>
-<tr>
 <td><code>teranode_blockvalidation_catchup_duration</code></td>
 <td>Histogram</td>
 <td>Duration of catchup operations</td>
@@ -6157,6 +6157,11 @@
 <td>Histogram of calls to handleGetpeerinfo in the rpc service</td>
 </tr>
 <tr>
+<td><code>teranode_rpc_get_rawmempool</code></td>
+<td>Histogram</td>
+<td>Histogram of calls to handleGetRawmempool in the rpc service</td>
+</tr>
+<tr>
 <td><code>teranode_rpc_get_blockchain_info</code></td>
 <td>Histogram</td>
 <td>Histogram of calls to handleGetblockchaininfo in the rpc service</td>
@@ -6293,6 +6298,11 @@
 <td>Counter</td>
 <td>Number of errors setting tx meta cache from kafka</td>
 </tr>
+<tr>
+<td><code>teranode_subtreevalidation_pause_duration</code></td>
+<td>Histogram</td>
+<td>Duration of subtree processing pauses</td>
+</tr>
 </tbody>
 </table>
 <h2 id="validator-service-metrics">Validator Service Metrics</h2>
@@ -6311,49 +6321,59 @@
 <td>Number of calls to the health endpoint</td>
 </tr>
 <tr>
-<td><code>teranode_validator_transaction</code></td>
-<td>Histogram</td>
-<td>Histogram of transaction validation by the validator service</td>
+<td><code>teranode_validator_invalid_transactions</code></td>
+<td>Counter</td>
+<td>Number of transactions found invalid by the validator service</td>
 </tr>
 <tr>
-<td><code>teranode_validator_transactions</code></td>
+<td><code>teranode_validator_transactions_validate_total</code></td>
 <td>Histogram</td>
-<td>Histogram of batch transaction validation by the validator service</td>
+<td>Histogram of total transaction validation</td>
 </tr>
 <tr>
-<td><code>teranode_validator_transactions_deadline</code></td>
+<td><code>teranode_validator_transactions_validate</code></td>
 <td>Histogram</td>
-<td>Histogram of batch transaction validation by deadline</td>
+<td>Histogram of transaction validation</td>
 </tr>
 <tr>
-<td><code>teranode_validator_nblocks</code></td>
-<td>Gauge</td>
-<td>Number of blocks processed by the validator service</td>
-</tr>
-<tr>
-<td><code>teranode_validator_transactions_size</code></td>
+<td><code>teranode_validator_transactions_extend</code></td>
 <td>Histogram</td>
-<td>Size of transactions being validated by the validator service</td>
-</tr>
-<tr>
-<td><code>teranode_validator_transactions_extended</code></td>
-<td>Histogram</td>
-<td>The number of transactions extended per call to the validator service</td>
+<td>Histogram of transaction extension operations</td>
 </tr>
 <tr>
 <td><code>teranode_validator_transactions_validate_scripts</code></td>
 <td>Histogram</td>
-<td>Time taken to validate scripts in transactions</td>
+<td>Histogram of transaction script validation</td>
+</tr>
+<tr>
+<td><code>teranode_validator_transactions_validate_batch</code></td>
+<td>Histogram</td>
+<td>Histogram of transaction batch validation</td>
+</tr>
+<tr>
+<td><code>teranode_validator_transactions_spend_utxos</code></td>
+<td>Histogram</td>
+<td>Histogram of transaction spending utxos</td>
 </tr>
 <tr>
 <td><code>teranode_validator_transactions_input_block_heights</code></td>
 <td>Histogram</td>
-<td>Distribution of input block heights in transactions</td>
+<td>Histogram of transaction input block heights</td>
 </tr>
 <tr>
 <td><code>teranode_validator_transactions_2phase_commit</code></td>
 <td>Histogram</td>
-<td>Time taken for two-phase commit of transactions</td>
+<td>Histogram of 2-phase commit operations</td>
+</tr>
+<tr>
+<td><code>teranode_validator_transactions</code></td>
+<td>Histogram</td>
+<td>Histogram of transaction processing by the validator service</td>
+</tr>
+<tr>
+<td><code>teranode_validator_transactions_size</code></td>
+<td>Histogram</td>
+<td>Size of transactions processed by the validator service</td>
 </tr>
 <tr>
 <td><code>teranode_validator_send_to_block_assembly</code></td>
