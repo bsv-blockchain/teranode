@@ -139,6 +139,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | Metric Name                                | Type      | Description                           |
 |--------------------------------------------|-----------|---------------------------------------|
 | `teranode_legacy_peer_server_OnVersion`    | Histogram | The time taken to handle OnVersion    |
+| `teranode_legacy_peer_server_OnProtoconf`  | Histogram | The time taken to handle OnProtoconf  |
+| `teranode_legacy_peer_server_OnMemPool`    | Histogram | The time taken to handle OnMemPool    |
 | `teranode_legacy_peer_server_OnTx`         | Histogram | The time taken to handle OnTx         |
 | `teranode_legacy_peer_server_OnBlock`      | Histogram | The time taken to handle OnBlock      |
 | `teranode_legacy_peer_server_OnInv`        | Histogram | The time taken to handle OnInv        |
@@ -146,6 +148,9 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_legacy_peer_server_OnGetData`    | Histogram | The time taken to handle OnGetData    |
 | `teranode_legacy_peer_server_OnGetBlocks`  | Histogram | The time taken to handle OnGetBlocks  |
 | `teranode_legacy_peer_server_OnGetHeaders` | Histogram | The time taken to handle OnGetHeaders |
+| `teranode_legacy_peer_server_OnFeeFilter`  | Histogram | The time taken to handle OnFeeFilter  |
+| `teranode_legacy_peer_server_OnGetAddr`    | Histogram | The time taken to handle OnGetAddr    |
+| `teranode_legacy_peer_server_OnAddr`       | Histogram | The time taken to handle OnAddr       |
 | `teranode_legacy_peer_server_OnReject`     | Histogram | The time taken to handle OnReject     |
 | `teranode_legacy_peer_server_OnNotFound`   | Histogram | The time taken to handle OnNotFound   |
 | `teranode_legacy_peer_server_OnRead`       | Histogram | The time taken to handle OnRead       |
