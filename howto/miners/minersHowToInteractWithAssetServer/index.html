@@ -1150,6 +1150,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#merkle-proof-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Merkle Proof Endpoints
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#subtree-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       Subtree Endpoints
@@ -5148,6 +5157,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#merkle-proof-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      Merkle Proof Endpoints
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#subtree-endpoints" class="md-nav__link">
     <span class="md-ellipsis">
       Subtree Endpoints
@@ -5854,6 +5872,54 @@
 </li>
 <li>
 <p>Returns: Array of UTXO data in JSON format</p>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="merkle-proof-endpoints">Merkle Proof Endpoints</h3>
+<ul>
+<li>
+<p>GET <code>/api/v1/merkle_proof/:hash</code></p>
+<ul>
+<li>Description: Retrieves merkle proof for a transaction in binary format</li>
+<li>
+<p>Parameters:</p>
+<ul>
+<li><code>hash</code>: Transaction hash (hex string)</li>
+</ul>
+</li>
+<li>
+<p>Returns: Merkle proof data in binary format</p>
+</li>
+</ul>
+</li>
+<li>
+<p>GET <code>/api/v1/merkle_proof/:hash/hex</code></p>
+<ul>
+<li>Description: Retrieves merkle proof for a transaction in hexadecimal format</li>
+<li>
+<p>Parameters:</p>
+<ul>
+<li><code>hash</code>: Transaction hash (hex string)</li>
+</ul>
+</li>
+<li>
+<p>Returns: Merkle proof data as hex string</p>
+</li>
+</ul>
+</li>
+<li>
+<p>GET <code>/api/v1/merkle_proof/:hash/json</code></p>
+<ul>
+<li>Description: Retrieves merkle proof for a transaction in JSON format</li>
+<li>
+<p>Parameters:</p>
+<ul>
+<li><code>hash</code>: Transaction hash (hex string)</li>
+</ul>
+</li>
+<li>
+<p>Returns: Merkle proof data in BSV Unified Merkle Path (BUMP) format as structured JSON</p>
 </li>
 </ul>
 </li>

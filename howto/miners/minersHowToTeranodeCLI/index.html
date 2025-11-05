@@ -2008,9 +2008,18 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#utxo-validator" class="md-nav__link">
+  <a href="#reset-block-assembly" class="md-nav__link">
     <span class="md-ellipsis">
-      UTXO Validator
+      Reset Block Assembly
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validate-utxo-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validate UTXO Set
     </span>
   </a>
   
@@ -5289,9 +5298,18 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#utxo-validator" class="md-nav__link">
+  <a href="#reset-block-assembly" class="md-nav__link">
     <span class="md-ellipsis">
-      UTXO Validator
+      Reset Block Assembly
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validate-utxo-set" class="md-nav__link">
+    <span class="md-ellipsis">
+      Validate UTXO Set
     </span>
   </a>
   
@@ -5346,7 +5364,6 @@
 
 
 <h1 id="teranode-cli-documentation">Teranode CLI Documentation</h1>
-<p>Last Modified: 4-May-2025</p>
 <h2 id="overview">Overview</h2>
 <p>The teranode-cli is a command-line interface tool for interacting with Teranode services. It provides various commands for maintenance, debugging, and operational tasks.</p>
 <h2 id="basic-usage">Basic Usage</h2>
@@ -5359,18 +5376,19 @@ Usage:<span class="w"> </span>teranode-cli<span class="w"> </span>&lt;command&gt
 <span class="w">    </span>Available<span class="w"> </span>Commands:
 <span class="w">    </span>aerospikereader<span class="w">      </span>Aerospike<span class="w"> </span>Reader
 <span class="w">    </span>bitcointoutxoset<span class="w">     </span>Bitcoin<span class="w"> </span>to<span class="w"> </span>Utxoset
-<span class="w">    </span>checkblock<span class="w">           </span>Validate<span class="w"> </span>an<span class="w"> </span>existing<span class="w"> </span>block
+<span class="w">    </span>checkblock<span class="w">           </span>Check<span class="w"> </span>block<span class="w"> </span>-<span class="w"> </span>fetches<span class="w"> </span>a<span class="w"> </span>block<span class="w"> </span>and<span class="w"> </span>validates<span class="w"> </span>it<span class="w"> </span>using<span class="w"> </span>the<span class="w"> </span>block<span class="w"> </span>validation<span class="w"> </span>service
 <span class="w">    </span>checkblocktemplate<span class="w">   </span>Check<span class="w"> </span>block<span class="w"> </span>template
 <span class="w">    </span>export-blocks<span class="w">        </span>Export<span class="w"> </span>blockchain<span class="w"> </span>to<span class="w"> </span>CSV
 <span class="w">    </span>filereader<span class="w">           </span>File<span class="w"> </span>Reader
 <span class="w">    </span>fix-chainwork<span class="w">        </span>Fix<span class="w"> </span>incorrect<span class="w"> </span>chainwork<span class="w"> </span>values<span class="w"> </span><span class="k">in</span><span class="w"> </span>blockchain<span class="w"> </span>database
 <span class="w">    </span>getfsmstate<span class="w">          </span>Get<span class="w"> </span>the<span class="w"> </span>current<span class="w"> </span>FSM<span class="w"> </span>State
 <span class="w">    </span>import-blocks<span class="w">        </span>Import<span class="w"> </span>blockchain<span class="w"> </span>from<span class="w"> </span>CSV
+<span class="w">    </span>resetblockassembly<span class="w">   </span>Reset<span class="w"> </span>block<span class="w"> </span>assembly<span class="w"> </span>state
 <span class="w">    </span>seeder<span class="w">               </span>Seeder
 <span class="w">    </span>setfsmstate<span class="w">          </span>Set<span class="w"> </span>the<span class="w"> </span>FSM<span class="w"> </span>State
 <span class="w">    </span>settings<span class="w">             </span>Settings
 <span class="w">    </span>utxopersister<span class="w">        </span>Utxo<span class="w"> </span>Persister
-<span class="w">    </span>utxovalidator<span class="w">        </span>Validate<span class="w"> </span>UTXO<span class="w"> </span>sets
+<span class="w">    </span>validate-utxo-set<span class="w">    </span>Validate<span class="w"> </span>UTXO<span class="w"> </span><span class="nb">set</span><span class="w"> </span>file
 
 <span class="w">    </span>Use<span class="w"> </span><span class="s1">&#39;teranode-cli &lt;command&gt; --help&#39;</span><span class="w"> </span><span class="k">for</span><span class="w"> </span>more<span class="w"> </span>information<span class="w"> </span>about<span class="w"> </span>a<span class="w"> </span><span class="nb">command</span>
 </code></pre></div>
@@ -5520,19 +5538,9 @@ Usage:<span class="w"> </span>teranode-cli<span class="w"> </span>&lt;command&gt
 <td><code>--useStore</code> - Use store</td>
 </tr>
 <tr>
-<td><code>utxovalidator</code></td>
-<td>Validate UTXO sets</td>
-<td><code>--inputDir</code> - Input directory containing UTXO data</td>
-</tr>
-<tr>
-<td></td>
-<td></td>
-<td><code>--blockHash</code> - Block hash to validate against</td>
-</tr>
-<tr>
-<td></td>
-<td></td>
-<td><code>--verbose</code> - Enable verbose output</td>
+<td><code>validate-utxo-set</code></td>
+<td>Validate UTXO set file</td>
+<td><code>--verbose</code> - Enable verbose output showing individual UTXOs</td>
 </tr>
 <tr>
 <td><code>getfsmstate</code></td>
@@ -5548,6 +5556,11 @@ Usage:<span class="w"> </span>teranode-cli<span class="w"> </span>&lt;command&gt
 <td></td>
 <td></td>
 <td>&nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing</td>
+</tr>
+<tr>
+<td><code>resetblockassembly</code></td>
+<td>Reset block assembly state</td>
+<td><code>--full-reset</code> - Perform full reset including clearing mempool</td>
 </tr>
 </tbody>
 </table>
@@ -5672,19 +5685,24 @@ Usage:<span class="w"> </span>teranode-cli<span class="w"> </span>&lt;command&gt
 <li><code>--skipHeaders</code>: Skip processing headers</li>
 <li><code>--skipUTXOs</code>: Skip processing UTXOs</li>
 </ul>
-<h3 id="utxo-validator">UTXO Validator</h3>
-<div class="highlight"><pre><span></span><code>teranode-cli<span class="w"> </span>utxovalidator<span class="w"> </span>--inputDir<span class="o">=</span>&lt;input-dir&gt;<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<h3 id="reset-block-assembly">Reset Block Assembly</h3>
+<div class="highlight"><pre><span></span><code>teranode-cli<span class="w"> </span>resetblockassembly<span class="w"> </span><span class="o">[</span>--full-reset<span class="o">]</span>
 </code></pre></div>
-<p>Validates UTXO sets by reading and verifying UTXO data from specified directories. This tool is useful for ensuring UTXO set integrity and detecting any inconsistencies.</p>
+<p>Resets the block assembly state. Useful for clearing stuck transactions or resetting mining state.</p>
 <p>Options:</p>
 <ul>
-<li><code>--inputDir</code>: Input directory containing UTXO data (required)</li>
-<li><code>--blockHash</code>: Specific block hash to validate against</li>
-<li><code>--verbose</code>: Enable verbose output for detailed validation information</li>
-<li><code>--batchSize</code>: Number of UTXOs to process in each batch (default: 10000)</li>
+<li><code>--full-reset</code>: Perform a comprehensive reset including clearing mempool and unmined transactions</li>
+</ul>
+<h3 id="validate-utxo-set">Validate UTXO Set</h3>
+<div class="highlight"><pre><span></span><code>teranode-cli<span class="w"> </span>validate-utxo-set<span class="w"> </span><span class="o">[</span>--verbose<span class="o">]</span><span class="w"> </span>&lt;utxo-set-file-path&gt;
+</code></pre></div>
+<p>Validates a UTXO set file for integrity and correctness. This tool is useful for ensuring UTXO set integrity and detecting any inconsistencies.</p>
+<p>Options:</p>
+<ul>
+<li><code>--verbose</code>: Enable verbose output showing individual UTXOs</li>
 </ul>
 <p><strong>Example:</strong></p>
-<div class="highlight"><pre><span></span><code>teranode-cli<span class="w"> </span>utxovalidator<span class="w"> </span>--inputDir<span class="o">=</span>/data/utxos<span class="w"> </span>--verbose
+<div class="highlight"><pre><span></span><code>teranode-cli<span class="w"> </span>validate-utxo-set<span class="w"> </span>--verbose<span class="w"> </span>/data/utxos/utxo-set.dat
 </code></pre></div>
 <h3 id="fix-chainwork">Fix Chainwork</h3>
 <div class="highlight"><pre><span></span><code>teranode-cli<span class="w"> </span>fix-chainwork<span class="w"> </span>--db-url<span class="o">=</span>&lt;database-url&gt;<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>

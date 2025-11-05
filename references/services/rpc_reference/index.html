@@ -4423,6 +4423,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#getrawmempool" class="md-nav__link">
+    <span class="md-ellipsis">
+      getrawmempool
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#getrawtransaction" class="md-nav__link">
     <span class="md-ellipsis">
       getrawtransaction
@@ -4432,7 +4441,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#getrawmempool" class="md-nav__link">
+  <a href="#getrawmempool_1" class="md-nav__link">
     <span class="md-ellipsis">
       getrawmempool
     </span>
@@ -5952,6 +5961,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#getrawmempool" class="md-nav__link">
+    <span class="md-ellipsis">
+      getrawmempool
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#getrawtransaction" class="md-nav__link">
     <span class="md-ellipsis">
       getrawtransaction
@@ -5961,7 +5979,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#getrawmempool" class="md-nav__link">
+  <a href="#getrawmempool_1" class="md-nav__link">
     <span class="md-ellipsis">
       getrawmempool
     </span>
@@ -6119,6 +6137,7 @@
 <li><a href="#getinfo">getinfo</a> - Returns general information about the node</li>
 <li><a href="#getmininginfo">getmininginfo</a> - Returns mining-related information</li>
 <li><a href="#getpeerinfo">getpeerinfo</a> - Returns data about each connected network node</li>
+<li><a href="#getrawmempool">getrawmempool</a> - Returns transaction IDs being processed for block assembly</li>
 <li><a href="#getrawtransaction">getrawtransaction</a> - Returns raw transaction data</li>
 <li><a href="#help">help</a> - Returns help text for RPC commands</li>
 <li><a href="#getminingcandidate">getminingcandidate</a> - Returns mining candidate information for generating a new block</li>
@@ -7201,7 +7220,7 @@
 </code></pre></div>
 <p><strong>Example Response:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Bitcoin server stopping&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;bsvd stopping.&quot;</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;curltest&quot;</span>
 <span class="p">}</span>
@@ -7404,6 +7423,36 @@
 <span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;curltest&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
+<h3 id="getrawmempool">getrawmempool</h3>
+<p>Returns transaction IDs currently being processed for block assembly in Teranode's subtree-based architecture.</p>
+<p><strong>Note</strong>: Unlike traditional Bitcoin nodes, Teranode doesn't use a mempool. This command returns transactions from the subtree-based block assembly system that are being prepared for inclusion in the next block. The method name is kept for Bitcoin Core compatibility.</p>
+<p><strong>Parameters:</strong></p>
+<ol>
+<li><code>verbose</code> (boolean, optional, default=false) - If true, returns detailed information about pending transactions</li>
+</ol>
+<p><strong>Returns:</strong></p>
+<ul>
+<li>If verbose=false: <code>array</code> - Array of transaction IDs being processed for block assembly</li>
+<li>If verbose=true: <code>object</code> - Detailed information about transactions in the block assembly process</li>
+</ul>
+<p><strong>Example Request:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;jsonrpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;curltest&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;getrawmempool&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="kc">false</span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Example Response:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="s2">&quot;a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s2">&quot;b19f7805dbcd4e809887ecfd6e93f482c875fe849c6766f83f574679ef2bbef1&quot;</span>
+<span class="w">    </span><span class="p">],</span>
+<span class="w">    </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;curltest&quot;</span>
+<span class="p">}</span>
+</code></pre></div>
 <h3 id="getrawtransaction">getrawtransaction</h3>
 <p>Returns raw transaction data for a specific transaction.</p>
 <p><strong>Parameters:</strong></p>
@@ -7471,7 +7520,7 @@
 <span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;curltest&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
-<h3 id="getrawmempool">getrawmempool</h3>
+<h3 id="getrawmempool_1">getrawmempool</h3>
 <p>Returns all transaction IDs currently available for block assembly. Note that Teranode uses a subtree-based architecture instead of a traditional mempool, but this command provides compatibility with standard Bitcoin RPC interfaces by returning transaction IDs from the block assembly service.</p>
 <p><strong>Parameters:</strong> none</p>
 <p><strong>Returns:</strong></p>
@@ -7637,7 +7686,6 @@
 <li><code>getgenerate</code> - Returns if the node is generating blocks</li>
 <li><code>gethashespersec</code> - Returns mining hashrate</li>
 <li><code>getheaders</code> - Returns block headers</li>
-<li><code>getmempoolinfo</code> - Returns mempool information</li>
 <li><code>getnettotals</code> - Returns network traffic statistics</li>
 <li><code>getnetworkhashps</code> - Returns estimated network hashrate</li>
 <li><code>gettxout</code> - Returns transaction output information</li>

@@ -5197,7 +5197,7 @@
 <li><code>getblockheader</code>: Returns information about a block's header</li>
 <li><code>getblockchaininfo</code>: Returns information about the blockchain (available via RPC only, see example below)</li>
 <li><code>invalidateblock</code>: Marks a block as invalid</li>
-<li><code>reconsiderblock</code>: Removes invalidity status of a block</li>
+<li><code>reconsiderblock</code>: Removes invalidity status of a block (performs full block validation)</li>
 </ol>
 <blockquote>
 <p><strong>Note:</strong> The <code>getblockchaininfo</code> RPC method is accessed via JSON-RPC, not via <code>teranode-cli</code>. For a visual view of blockchain state, use the blockchain viewer at <a href="http://localhost:8090/viewer">http://localhost:8090/viewer</a></p>
@@ -5224,7 +5224,7 @@
     None</p>
 </li>
 <li>
-<p>Returns: Object containing block height, current block size and weight, current difficulty, and estimated network hashrate</p>
+<p>Returns: Object containing block height, current block size, current block transaction count, current difficulty, estimated network hashrate, error messages, and chain name</p>
 </li>
 </ul>
 </li>
@@ -5477,6 +5477,29 @@
 <li>Note: The UTXO must be frozen before it can be reassigned</li>
 </ul>
 </li>
+<li>
+<p><code>getrawmempool</code>: Returns transaction IDs being processed for block assembly</p>
+<ul>
+<li>
+<p>Parameters:</p>
+<ul>
+<li>
+<p><code>verbose</code> (boolean, optional): If true, returns detailed information about pending transactions</p>
+<ul>
+<li>Returns: </li>
+</ul>
+</li>
+<li>
+<p>If verbose=false: Array of transaction IDs being prepared for the next block</p>
+</li>
+<li>If verbose=true: Object with detailed information about transactions in the block assembly process<ul>
+<li>Note: In Teranode's architecture, this returns transactions from the subtree-based block assembly system, not a traditional mempool. The method name is kept for Bitcoin Core compatibility.</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
 </ol>
 <h3 id="network-related-methods">Network-related Methods</h3>
 <ol>
@@ -5623,7 +5646,7 @@
     None</p>
 </li>
 <li>
-<p>Returns: String 'Teranode server stopping' when successful</p>
+<p>Returns: String 'bsvd stopping.' when successful</p>
 </li>
 </ul>
 </li>
