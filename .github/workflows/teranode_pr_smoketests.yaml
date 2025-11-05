@@ -2,6 +2,8 @@ name: Teranode PR smoke tests
 
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
 
 permissions:
   contents: read

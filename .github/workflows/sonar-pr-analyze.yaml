@@ -13,7 +13,7 @@ name: SonarQube Analysis for PRs
 
 on:
   workflow_run:
-    workflows: ["Teranode PR tests"]
+    workflows: ["Teranode PR init"]
     types:
       - completed
 
