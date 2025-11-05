@@ -365,8 +365,9 @@ The UTXO Store supports advanced UTXO management features, which can be utilized
 3. **Reassigning UTXOs**: UTXOs can be reassigned to a new transaction output, but only if they are frozen first.
     - Verifies the UTXO exists and is frozen
     - Updates the UTXO hash to the new value
-    - Sets spendable block height to current + ReAssignedUtxoSpendableAfterBlocks
+    - Sets spendable block height to current + 1,000 blocks (defined by `ReAssignedUtxoSpendableAfterBlocks` constant)
     - Logs the reassignment for audit purposes
+    - **Important**: Reassigned UTXOs cannot be spent until 1,000 blocks have passed after the reassignment to ensure network consensus and prevent disputes
 
 ### 4.9. Unmined Transaction Management
 
