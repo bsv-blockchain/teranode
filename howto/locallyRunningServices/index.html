@@ -5399,7 +5399,7 @@
 </code></pre></div>
 </blockquote>
 <h3 id="start-teranode">Start Teranode</h3>
-<p>Execute all services in a single terminal window with the command below. Replace <code>[YOUR_USERNAME]</code> with your specific username.</p>
+<p>Execute all services in a single terminal window with the command below. Replace <code>[YOUR_CONTEXT]</code> with your specific development context identifier.</p>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 </code></pre></div>
 <blockquote>
@@ -5418,19 +5418,19 @@
 ./scripts/postgres.sh
 
 <span class="c1"># Your settings_local.conf should have a PostgreSQL connection string</span>
-utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>postgres://teranode:teranode@localhost:5432/teranode?blockHeightRetention<span class="o">=</span><span class="m">5</span>
+utxostore.dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>postgres://teranode:teranode@localhost:5432/teranode?blockHeightRetention<span class="o">=</span><span class="m">5</span>
 
 <span class="c1"># Run with the PostgreSQL backend</span>
-<span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
+<span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 </code></pre></div>
 <ol>
 <li><strong>SQLite</strong> (Lightweight option):</li>
 </ol>
 <div class="highlight"><pre><span></span><code><span class="c1"># Your settings_local.conf should have an SQLite connection string</span>
-utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>sqlite:///utxostore?blockHeightRetention<span class="o">=</span><span class="m">5</span>
+utxostore.dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>sqlite:///utxostore?blockHeightRetention<span class="o">=</span><span class="m">5</span>
 
 <span class="c1"># Run with SQLite backend</span>
-<span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
+<span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 </code></pre></div>
 <ol>
 <li><strong>Aerospike</strong> (High-performance option):</li>
@@ -5461,39 +5461,39 @@ utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span
 <ol>
 <li>Run Teranode with the aerospike tag:</li>
 </ol>
-<div class="highlight"><pre><span></span><code>rm<span class="w"> </span>-rf<span class="w"> </span>data<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code>rm<span class="w"> </span>-rf<span class="w"> </span>data<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.
 </code></pre></div>
 <h3 id="transaction-metadata-cache-configurations">Transaction Metadata Cache Configurations</h3>
 <p>Teranode supports different transaction metadata cache sizes through build tags:</p>
 <ul>
 <li><strong>Large Cache (Default)</strong>: Used when no specific tx metadata cache tag is specified</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.
 </code></pre></div>
 <ul>
 <li><strong>Small Cache</strong>: Reduces memory usage with a smaller transaction metadata cache</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike,smalltxmetacache<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike,smalltxmetacache<span class="w"> </span>.
 </code></pre></div>
 <ul>
 <li><strong>Test Cache</strong>: Configured specifically for testing scenarios</li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike,testtxmetacache<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike,testtxmetacache<span class="w"> </span>.
 </code></pre></div>
 <h3 id="multiple-tags">Multiple Tags</h3>
 <p>You can combine multiple tags by separating them with commas:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike,smalltxmetacache<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike,smalltxmetacache<span class="w"> </span>.
 </code></pre></div>
 <h3 id="network-configuration">Network Configuration</h3>
 <p>Teranode supports different Bitcoin networks (mainnet, testnet, etc.). This is primarily controlled through settings but can be overridden using the <code>network</code> environment variable:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Run on testnet</span>
-<span class="nv">network</span><span class="o">=</span>testnet<span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
+<span class="nv">network</span><span class="o">=</span>testnet<span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 
 <span class="c1"># Run on testnet with Aerospike</span>
-<span class="nv">network</span><span class="o">=</span>testnet<span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.
+<span class="nv">network</span><span class="o">=</span>testnet<span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.
 </code></pre></div>
 <blockquote>
-<p><strong>Note:</strong> The network setting defaults to what's specified in your settings_local.conf under <code>network.dev.[YOUR_USERNAME]</code>. The environment variable overrides this setting.</p>
+<p><strong>Note:</strong> The network setting defaults to what's specified in your settings_local.conf under <code>network.dev.[YOUR_CONTEXT]</code>. The environment variable overrides this setting.</p>
 </blockquote>
 <h3 id="testing-tags">Testing Tags</h3>
 <p>For running various test suites (not typically needed for development):</p>
@@ -5613,11 +5613,11 @@ utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span
 </table>
 <h4 id="examples">Examples</h4>
 <p>To start the node with only validation and UTXO storage:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>-utxopersister<span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>-utxopersister<span class="o">=</span><span class="m">1</span>
 </code></pre></div>
 <h3 id="wait-for-postgresql">Wait For PostgreSQL</h3>
 <p>If you want Teranode to wait for PostgreSQL to be available before starting:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-wait_for_postgres<span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-wait_for_postgres<span class="o">=</span><span class="m">1</span>
 </code></pre></div>
 <p>This is useful in containerized environments or when PostgreSQL might not be immediately ready.</p>
 <h3 id="health-checks">Health Checks</h3>
@@ -5628,16 +5628,16 @@ utxostore.dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span
 </ul>
 <h3 id="logging-configuration">Logging Configuration</h3>
 <p>Teranode respects the <code>NO_COLOR</code> environment variable to disable colored output in logs.</p>
-<div class="highlight"><pre><span></span><code><span class="nv">NO_COLOR</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
+<div class="highlight"><pre><span></span><code><span class="nv">NO_COLOR</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 </code></pre></div>
 <h4 id="component-selection-examples">Component Selection Examples</h4>
 <p><strong>Running specific components only:</strong></p>
 <p>To initiate the node with only specific components, such as <code>Validator</code>:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span>
 </code></pre></div>
 <p><strong>Disabling all services by default and enabling only specific ones:</strong></p>
 <p>This is particularly useful for development:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_USERNAME<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-all<span class="o">=</span><span class="m">0</span><span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>-rpc<span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.<span class="w"> </span>-all<span class="o">=</span><span class="m">0</span><span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>-rpc<span class="o">=</span><span class="m">1</span>
 </code></pre></div>
 <h2 id="running-individual-services">🔧 Running Individual Services</h2>
 <p>You can also run each service on its own:</p>
