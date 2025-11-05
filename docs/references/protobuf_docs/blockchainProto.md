@@ -29,7 +29,6 @@
     - [GetBlockHeadersRequest](#GetBlockHeadersRequest)
     - [GetBlockHeadersResponse](#GetBlockHeadersResponse)
     - [GetBlockHeadersToCommonAncestorRequest](#GetBlockHeadersToCommonAncestorRequest)
-    - [GetBlockHeadersFromCommonAncestorRequest](#GetBlockHeadersFromCommonAncestorRequest)
     - [GetBlockInChainByHeightHashRequest](#GetBlockInChainByHeightHashRequest)
     - [GetBlockIsMinedRequest](#GetBlockIsMinedRequest)
     - [GetBlockIsMinedResponse](#GetBlockIsMinedResponse)

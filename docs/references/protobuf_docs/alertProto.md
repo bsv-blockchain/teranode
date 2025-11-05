@@ -17,8 +17,6 @@
 
 ## alert_api.proto
 
-#this is for testing the commit message only
-
 > Package alert_api defines the gRPC service interface for the Bitcoin SV Alert System.
 
 <a name="HealthResponse"></a>
