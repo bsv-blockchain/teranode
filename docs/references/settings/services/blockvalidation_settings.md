@@ -1,101 +1,114 @@
-# Block Validation Settings
+# Block Validation Service Settings
 
 **Related Topic**: [Block Validation Service](../../../topics/services/blockValidation.md)
 
-The Block Validation service configuration can be adjusted through environment variables or command-line flags. This section provides a comprehensive overview of all available configuration options organized by functional category.
+## Configuration Settings
 
-## Network and Communication Settings
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| MaxRetries | int | 3 | blockValidationMaxRetries | General retry behavior |
+| RetrySleep | time.Duration | 1s | blockValidationRetrySleep | Retry delay timing |
+| GRPCAddress | string | "localhost:8088" | blockvalidation_grpcAddress | Client connection address |
+| GRPCListenAddress | string | ":8088" | blockvalidation_grpcListenAddress | **CRITICAL** - gRPC server binding, health checks only run if not empty |
+| KafkaWorkers | int | 0 | blockvalidation_kafkaWorkers | Kafka consumer parallelism |
+| LocalSetTxMinedConcurrency | int | 8 | blockvalidation_localSetTxMinedConcurrency | Transaction mining concurrency |
+| MaxPreviousBlockHeadersToCheck | uint64 | 100 | blockvalidation_maxPreviousBlockHeadersToCheck | Block header validation depth |
+| MissingTransactionsBatchSize | int | 5000 | blockvalidation_missingTransactionsBatchSize | Missing transaction batch size |
+| ProcessTxMetaUsingCacheBatchSize | int | 1024 | blockvalidation_processTxMetaUsingCache_BatchSize | Cache processing batch size |
+| ProcessTxMetaUsingCacheConcurrency | int | 32 | blockvalidation_processTxMetaUsingCache_Concurrency | Cache processing concurrency |
+| ProcessTxMetaUsingCacheMissingTxThreshold | int | 1 | blockvalidation_processTxMetaUsingCache_MissingTxThreshold | Cache miss threshold |
+| ProcessTxMetaUsingStoreBatchSize | int | max(4, CPU/2) | blockvalidation_processTxMetaUsingStore_BatchSize | Store processing batch size |
+| ProcessTxMetaUsingStoreConcurrency | int | 32 | blockvalidation_processTxMetaUsingStore_Concurrency | Store processing concurrency |
+| ProcessTxMetaUsingStoreMissingTxThreshold | int | 1 | blockvalidation_processTxMetaUsingStore_MissingTxThreshold | Store miss threshold |
+| SkipCheckParentMined | bool | false | blockvalidation_skipCheckParentMined | Parent block mining validation |
+| SubtreeFoundChConcurrency | int | 1 | blockvalidation_subtreeFoundChConcurrency | Subtree processing concurrency |
+| SubtreeValidationAbandonThreshold | int | 1 | blockvalidation_subtree_validation_abandon_threshold | Subtree validation abandonment |
+| ValidateBlockSubtreesConcurrency | int | max(4, CPU/2) | blockvalidation_validateBlockSubtreesConcurrency | Block subtree validation concurrency |
+| ValidationMaxRetries | int | 3 | blockvalidation_validation_max_retries | Validation retry attempts |
+| ValidationRetrySleep | time.Duration | 5s | blockvalidation_validation_retry_sleep | Validation retry delay |
+| OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior |
+| IsParentMinedRetryMaxRetry | int | 20 | blockvalidation_isParentMined_retry_max_retry | Parent mining check retries |
+| IsParentMinedRetryBackoffMultiplier | int | 30 | blockvalidation_isParentMined_retry_backoff_multiplier | Parent mining retry backoff |
+| SubtreeGroupConcurrency | int | 1 | blockvalidation_subtreeGroupConcurrency | Subtree group processing concurrency |
+| BlockFoundChBufferSize | int | 1000 | blockvalidation_blockFoundCh_buffer_size | Block discovery pipeline buffer |
+| CatchupChBufferSize | int | 10 | blockvalidation_catchupCh_buffer_size | Catchup processing pipeline buffer |
+| UseCatchupWhenBehind | bool | false | blockvalidation_useCatchupWhenBehind | **CRITICAL** - Catchup mode enablement |
+| CatchupConcurrency | int | max(4, CPU/2) | blockvalidation_catchupConcurrency | Catchup processing concurrency |
+| ValidationWarmupCount | int | 128 | blockvalidation_validation_warmup_count | Validation warmup behavior |
+| BatchMissingTransactions | bool | false | blockvalidation_batch_missing_transactions | Missing transaction batching |
+| CheckSubtreeFromBlockTimeout | time.Duration | 5m | blockvalidation_check_subtree_from_block_timeout | Subtree validation timeout |
+| CheckSubtreeFromBlockRetries | int | 5 | blockvalidation_check_subtree_from_block_retries | Subtree validation retries |
+| CheckSubtreeFromBlockRetryBackoffDuration | time.Duration | 30s | blockvalidation_check_subtree_from_block_retry_backoff_duration | Subtree retry backoff |
+| SecretMiningThreshold | uint32 | 99 | blockvalidation_secret_mining_threshold | **CRITICAL** - Secret mining detection |
+| PreviousBlockHeaderCount | uint64 | 100 | blockvalidation_previous_block_header_count | **CRITICAL** - Header chain cache size |
+| CatchupMaxRetries | int | 3 | blockvalidation_catchup_max_retries | Catchup operation retries |
+| CatchupIterationTimeout | int | 30 | blockvalidation_catchup_iteration_timeout | **CRITICAL** - Catchup iteration timeout |
+| CatchupOperationTimeout | int | 300 | blockvalidation_catchup_operation_timeout | **CRITICAL** - Catchup operation timeout |
+| CatchupMaxAccumulatedHeaders | int | 100000 | blockvalidation_max_accumulated_headers | **CRITICAL** - Memory protection during catchup |
+| CircuitBreakerFailureThreshold | int | 5 | blockvalidation_circuit_breaker_failure_threshold | Circuit breaker failure detection |
+| CircuitBreakerSuccessThreshold | int | 2 | blockvalidation_circuit_breaker_success_threshold | Circuit breaker recovery |
+| CircuitBreakerTimeoutSeconds | int | 30 | blockvalidation_circuit_breaker_timeout_seconds | Circuit breaker timeout |
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `blockvalidation_grpcAddress` | string | "localhost:8088" | Address that other services use to connect to this service | Affects how other services discover and communicate with the Block Validation service |
-| `blockvalidation_grpcListenAddress` | string | ":8088" | Network interface and port the service listens on for gRPC connections | Controls network binding and accessibility of the service |
+## Configuration Dependencies
 
-## Kafka and Concurrency Settings
+### Catchup Mode
+- When `UseCatchupWhenBehind = true`, all catchup settings control behavior
+- `CatchupMaxAccumulatedHeaders` prevents memory exhaustion
+- Timeout settings control iteration and operation limits
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `kafka_blocksConfig` | string | (none) | Kafka configuration for block messages | Required for consuming blocks from Kafka |
-| `blockvalidation_kafkaWorkers` | int | 0 (auto) | Number of Kafka consumer workers | Controls parallelism for Kafka-based block validation |
+### Transaction Metadata Processing
+- Cache and store processing work together with threshold-based fallback
+- Batch sizes and concurrency settings control performance
 
-## Performance and Optimization
+### Secret Mining Detection
+- `SecretMiningThreshold` uses `PreviousBlockHeaderCount` for analysis
+- Detection triggers when block difference exceeds threshold
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `blockvalidation_batch_missing_transactions` | bool | false | When enabled, missing transactions are fetched in batches | Improves network efficiency at the cost of slightly increased latency |
-| `blockvalidation_quickValidationEnabled` | bool | true | Enable quick validation for checkpointed blocks | Dramatically improves sync speed for historical blocks |
-| `blockvalidation_quickValidationCheckpointHeight` | int | varies | Height below which quick validation applies | Controls which blocks use optimized validation |
-| `blockvalidation_concurrency_createAllUTXOs` | int | CPU/2 (min 4) | Parallelism for UTXO creation during quick validation | Higher values improve performance but increase resource usage |
-| `blockvalidation_concurrency_spendAllTransactions` | int | CPU/2 (min 4) | Parallelism for spending transactions during quick validation | Controls parallel processing during validation |
-| `blockvalidation_processTxMetaUsingCache_BatchSize` | int | 1024 | Batch size for processing transaction metadata using cache | Affects performance and memory usage during cache operations |
-| `blockvalidation_processTxMetaUsingCache_Concurrency` | int | 32 | Concurrency level for processing transaction metadata using cache | Controls parallel cache operations |
-| `blockvalidation_processTxMetaUsingCache_MissingTxThreshold` | int | 1 | Threshold for switching to store-based processing when missing transactions | Controls fallback behavior when cache misses occur |
-| `blockvalidation_processTxMetaUsingStore_BatchSize` | int | CPU/2 (min 4) | Batch size for processing transaction metadata using store | Affects performance during store operations |
-| `blockvalidation_processTxMetaUsingStore_Concurrency` | int | 32 | Concurrency level for processing transaction metadata using store | Controls parallel store operations |
-| `blockvalidation_processTxMetaUsingStore_MissingTxThreshold` | int | 1 | Threshold for store-based processing when missing transactions | Controls fallback behavior for store operations |
-| `blockvalidation_skipCheckParentMined` | bool | false | Skips checking if parent block is mined during validation | Performance optimization that may reduce validation accuracy |
-| `blockvalidation_subtreeFoundChConcurrency` | int | 1 | Concurrency level for subtree found channel processing | Controls parallel subtree processing |
-| `blockvalidation_subtree_validation_abandon_threshold` | int | 1 | Threshold for abandoning subtree validation | Controls when to give up on problematic subtrees |
-| `blockvalidation_validateBlockSubtreesConcurrency` | int | CPU/2 (min 4) | Concurrency level for validating block subtrees | Higher values improve performance but increase resource usage |
-| `blockvalidation_validation_max_retries` | int | 3 | Maximum number of retries for validation operations | Controls resilience to transient failures |
-| `blockvalidation_validation_retry_sleep` | duration | 5s | Sleep duration between validation retries | Controls backoff timing for retry operations |
-| `blockvalidation_isParentMined_retry_max_retry` | int | 20 | Maximum retries for checking if parent block is mined | Controls persistence when checking parent block status |
-| `blockvalidation_isParentMined_retry_backoff_multiplier` | int | 30 | Backoff multiplier for parent mined check retries | Controls exponential backoff timing |
-| `blockvalidation_subtreeGroupConcurrency` | int | 1 | Concurrency level for subtree group processing | Controls parallel processing of subtree groups |
-| `blockvalidation_blockFoundCh_buffer_size` | int | 1000 | Buffer size for block found channel | Controls memory usage and throughput for block notifications |
-| `blockvalidation_catchupCh_buffer_size` | int | 10 | Buffer size for catchup channel | Controls memory usage for catchup operations |
-| `blockvalidation_useCatchupWhenBehind` | bool | false | Enables catchup mechanism when node is behind | Improves sync performance but increases complexity |
-| `blockvalidation_catchupConcurrency` | int | CPU/2 (min 4) | Concurrency level for catchup operations | Controls parallel processing during catchup |
-| `blockvalidation_check_subtree_from_block_timeout` | duration | 5m | Timeout for checking subtree from block | Controls maximum wait time for subtree operations |
-| `blockvalidation_check_subtree_from_block_retries` | int | 5 | Maximum retries for subtree from block checks | Controls resilience for subtree operations |
-| `blockvalidation_check_subtree_from_block_retry_backoff_duration` | duration | 30s | Backoff duration for subtree check retries | Controls timing between retry attempts |
-| `blockvalidation_secret_mining_threshold` | uint32 | 10 | Threshold for detecting secret mining attacks | Security parameter for chain reorganization detection |
-| `blockvalidation_previous_block_header_count` | uint64 | 100 | Number of previous block headers to maintain | Controls memory usage and validation depth |
-| `blockvalidation_maxPreviousBlockHeadersToCheck` | uint64 | 100 | Maximum previous block headers to check during validation | Limits validation scope for performance |
-| `blockvalidation_fail_fast_validation` | bool | true | Enables fail-fast validation mode | Improves performance by stopping validation early on errors |
-| `blockvalidation_finalizeBlockValidationConcurrency` | int | 8 | Concurrency level for finalizing block validation | Controls parallel finalization operations |
-| `blockvalidation_getMissingTransactions` | int | 32 | Concurrency level for retrieving missing transactions | Controls parallel transaction retrieval |
+### Channel Buffer Management
+- `BlockFoundChBufferSize` and `CatchupChBufferSize` must accommodate processing loads
 
-## Transaction Processing
+## Service Dependencies
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `blockvalidation_localSetTxMinedConcurrency` | int | 8 | Concurrency level for marking transactions as mined | Higher values improve performance but increase memory usage |
-| `blockvalidation_missingTransactionsBatchSize` | int | 5000 | Batch size for retrieving missing transactions | Larger batches improve throughput but increase memory usage |
+| Dependency | Interface | Usage |
+|------------|-----------|-------|
+| UTXOStore | utxo.Store | **CRITICAL** - UTXO operations and validation |
+| TxStore | blob.Store | **CRITICAL** - Transaction data access |
+| SubtreeStore | blob.Store | **CRITICAL** - Subtree validation |
+| BlockchainClient | blockchain.ClientI | **CRITICAL** - Blockchain operations and header retrieval |
+| SubtreeValidationClient | subtreevalidation.ClientI | **CRITICAL** - Subtree validation operations |
+| ValidatorClient | validator.ClientI | **CRITICAL** - Block validation operations |
 
-## Bloom Filter Management
+## Validation Rules
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `blockvalidation_bloom_filter_retention_size` | uint32 | GlobalBlockHeightRetention + 2 | Number of recent blocks to maintain bloom filters for | Affects memory usage and duplicate transaction detection efficiency. Automatically set based on global retention settings |
+| Setting | Validation | Impact |
+|---------|------------|--------|
+| GRPCListenAddress | Health checks only if not empty | Service monitoring |
+| UseCatchupWhenBehind | Controls catchup mode activation | Chain synchronization |
+| CatchupMaxAccumulatedHeaders | Limits memory usage | Memory protection |
+| SecretMiningThreshold | Enables attack detection | Security |
 
-## Advanced Settings
+## Configuration Examples
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `blockvalidation_optimistic_mining` | bool | true | When enabled, blocks are conditionally accepted before full validation | Dramatically improves throughput at the cost of temporary chain inconsistency if validation fails |
-| `blockvalidation_invalidBlockTracking` | bool | true | Track invalid blocks during validation | Prevents reprocessing of known invalid blocks |
-| `blockvalidation_validation_warmup_count` | int | 128 | Number of validation operations during warmup | Helps prime caches and establish performance baselines |
-| `excessiveblocksize` | int | 4GB | Maximum allowed block size | Limits resource consumption for extremely large blocks |
+### Basic Configuration
 
-## Storage and State Management
+```text
+blockvalidation_grpcListenAddress = ":8088"
+blockvalidation_useCatchupWhenBehind = false
+```
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `blockValidationMaxRetries` | int | 3 | Maximum retry attempts for block validation operations | Controls resilience and retry behavior for failed validation operations |
-| `blockValidationRetrySleep` | duration | 1s | Sleep duration between retry attempts | Controls retry timing and system load during failures |
-| `utxostore` | URL | (none) | URL for the UTXO store | Required for UTXO validation and updates |
-| `fsm_state_restore` | bool | false | Enables FSM state restoration | Affects recovery behavior after service restart |
-| `blockvalidation_subtreeBlockHeightRetention` | uint32 | (global setting) | How long to keep subtrees (in terms of block height) | Affects storage utilization and historical data availability |
+### High Performance Configuration
 
-## Validator Integration Settings
+```text
+blockvalidation_validateBlockSubtreesConcurrency = 16
+blockvalidation_processTxMetaUsingStoreBatchSize = 2048
+blockvalidation_catchupConcurrency = 8
+```
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `blockValidationDelay` | int | 0 | Delay for block validation operations in validator | Controls timing of validation operations within the validator component |
-| `blockValidationMaxRetries` | int | 3 | Maximum retries for validator block validation operations | Controls validator-specific retry behavior for block validation |
-| `blockValidationRetrySleep` | string | "1s" | Sleep duration between validator retry attempts | Controls validator retry timing and backoff behavior |
+### Catchup Mode Configuration
 
-## Policy and Chain Configuration Dependencies
-
-The Block Validation service depends on several chain configuration parameters that must be properly configured for difficulty calculations and block validation.
+```text
+blockvalidation_useCatchupWhenBehind = true
+blockvalidation_catchup_max_retries = 5
+blockvalidation_catchup_iteration_timeout = 60
+blockvalidation_max_accumulated_headers = 50000
+```

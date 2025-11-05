@@ -339,7 +339,7 @@ services:
         "--host",
         "teranode1",
         "--stopHeight",
-        "120",
+        "1000",
         "--generate",
         "--initialBlocks",
         "100",
@@ -362,7 +362,7 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
       profilerAddr: "localhost:17092"
-      COINBASE_RPC_URL: "http://teranode1:9292"
+      coinbase_rpc_url: "http://teranode1:9292"
       COINBASE_RPC_USER: "bitcoin"
       COINBASE_RPC_PASS: "bitcoin"
       COINBASE_DB_URL: "postgres://coinbase1:coinbase1@postgres:5432/coinbase1"
@@ -397,7 +397,7 @@ services:
         "--host",
         "teranode2",
         "--stopHeight",
-        "120",
+        "1000",
         "--generate",
         "--initialBlocks",
         "100",
@@ -405,8 +405,8 @@ services:
     restart: no
 
   coinbase2:
-    profiles:
-      - skip
+    # profiles:
+    #   - skip
     <<: *teranode-coinbase-base
     container_name: coinbase2
     depends_on:
@@ -450,7 +450,7 @@ services:
         "--host",
         "teranode3",
         "--stopHeight",
-        "120",
+        "1000",
         "--generate",
         "--initialBlocks",
         "100",
@@ -459,8 +459,8 @@ services:
 
   coinbase3:
     <<: *teranode-coinbase-base
-    profiles:
-      - skip
+    # profiles:
+    #   - skip
     container_name: coinbase3
     depends_on:
       - teranode3
@@ -519,8 +519,8 @@ services:
 
   tx-blaster-2:
     <<: *teranode-coinbase-base
-    profiles:
-      - skip
+    # profiles:
+    #   - skip
     container_name: tx-blaster-2
     depends_on:
       - coinbase2
@@ -546,8 +546,8 @@ services:
       - ../data/txblaster2:/app/data
 
   tx-blaster-3:
-    profiles:
-      - skip
+    # profiles:
+    #   - skip
     <<: *teranode-coinbase-base
     container_name: tx-blaster-3
     depends_on:

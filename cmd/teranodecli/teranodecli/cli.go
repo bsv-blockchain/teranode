@@ -32,7 +32,9 @@ var commandHelp = map[string]string{
 	"filereader":              "File Reader",
 	"aerospikereader":         "Aerospike Reader",
 	"aerospikekafkaconnector": "Read Aerospike CDC from Kafka and filter by txID bin",
+	"bitcointoutxoset":        "Bitcoin to Utxoset",
 	"seeder":                  "Seeder",
+	"utxopersister":           "Utxo Persister",
 	"getfsmstate":             "Get the current FSM State",
 	"setfsmstate":             "Set the FSM State",
 	"settings":                "Settings",
@@ -40,6 +42,7 @@ var commandHelp = map[string]string{
 	"import-blocks":           "Import blockchain from CSV",
 	"checkblocktemplate":      "Check block template",
 	"checkblock":              "Check block - fetches a block and validates it using the block validation service",
+	"resetblockassembly":      "Reset block assembly state",
 	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
 	"validate-utxo-set":       "Validate UTXO set file",
 }

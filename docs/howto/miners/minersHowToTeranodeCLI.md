@@ -1,7 +1,5 @@
 # Teranode CLI Documentation
 
-Last Modified: 4-May-2025
-
 ## Overview
 
 The teranode-cli is a command-line interface tool for interacting with Teranode services. It provides various commands for maintenance, debugging, and operational tasks.
@@ -19,18 +17,19 @@ Usage: teranode-cli <command> [options]
     Available Commands:
     aerospikereader      Aerospike Reader
     bitcointoutxoset     Bitcoin to Utxoset
-    checkblock           Validate an existing block
+    checkblock           Check block - fetches a block and validates it using the block validation service
     checkblocktemplate   Check block template
     export-blocks        Export blockchain to CSV
     filereader           File Reader
     fix-chainwork        Fix incorrect chainwork values in blockchain database
     getfsmstate          Get the current FSM State
     import-blocks        Import blockchain from CSV
+    resetblockassembly   Reset block assembly state
     seeder               Seeder
     setfsmstate          Set the FSM State
     settings             Settings
     utxopersister        Utxo Persister
-    utxovalidator        Validate UTXO sets
+    validate-utxo-set    Validate UTXO set file
 
     Use 'teranode-cli <command> --help' for more information about a command
 
@@ -74,12 +73,11 @@ Usage: teranode-cli <command> [options]
 | `filereader`         | Read and process files        | `--verbose` - Enable verbose output                              |
 |                      |                               | `--checkHeights` - Check heights in UTXO headers                 |
 |                      |                               | `--useStore` - Use store                                         |
-| `utxovalidator`      | Validate UTXO sets            | `--inputDir` - Input directory containing UTXO data              |
-|                      |                               | `--blockHash` - Block hash to validate against                   |
-|                      |                               | `--verbose` - Enable verbose output                              |
+| `validate-utxo-set`  | Validate UTXO set file        | `--verbose` - Enable verbose output showing individual UTXOs     |
 | `getfsmstate`        | Get the current FSM state     | None                                                             |
 | `setfsmstate`        | Set the FSM state             | `--fsmstate` - Target FSM state                                  |
 |                      |                               | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
+| `resetblockassembly` | Reset block assembly state    | `--full-reset` - Perform full reset including clearing mempool  |
 
 ### Database Maintenance
 
@@ -211,25 +209,34 @@ Options:
 - `--skipHeaders`: Skip processing headers
 - `--skipUTXOs`: Skip processing UTXOs
 
-### UTXO Validator
+### Reset Block Assembly
 
 ```bash
-teranode-cli utxovalidator --inputDir=<input-dir> [options]
+teranode-cli resetblockassembly [--full-reset]
 ```
 
-Validates UTXO sets by reading and verifying UTXO data from specified directories. This tool is useful for ensuring UTXO set integrity and detecting any inconsistencies.
+Resets the block assembly state. Useful for clearing stuck transactions or resetting mining state.
 
 Options:
 
-- `--inputDir`: Input directory containing UTXO data (required)
-- `--blockHash`: Specific block hash to validate against
-- `--verbose`: Enable verbose output for detailed validation information
-- `--batchSize`: Number of UTXOs to process in each batch (default: 10000)
+- `--full-reset`: Perform a comprehensive reset including clearing mempool and unmined transactions
+
+### Validate UTXO Set
+
+```bash
+teranode-cli validate-utxo-set [--verbose] <utxo-set-file-path>
+```
+
+Validates a UTXO set file for integrity and correctness. This tool is useful for ensuring UTXO set integrity and detecting any inconsistencies.
+
+Options:
+
+- `--verbose`: Enable verbose output showing individual UTXOs
 
 **Example:**
 
 ```bash
-teranode-cli utxovalidator --inputDir=/data/utxos --verbose
+teranode-cli validate-utxo-set --verbose /data/utxos/utxo-set.dat
 ```
 
 ### Fix Chainwork
