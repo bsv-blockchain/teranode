@@ -343,7 +343,17 @@ If a transaction is too large to fit in a single Aerospike record (indicated by 
 
 In such cases, the full transaction data is stored externally, while metadata and UTXOs are still stored in Aerospike, potentially across multiple records. The Aerospike record will have an `external` flag set to true, indicating that the full transaction data is stored externally.
 
-When the UTXO data is needed, the system will first check the Aerospike record. If the `external flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.
+When the UTXO data is needed, the system will first check the Aerospike record. If the `external` flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.
+
+#### External Transaction Cache
+
+To optimize performance when reading externally stored transactions, the UTXO store implements an optional external transaction cache (configured via `utxostore_useExternalTxCache`, enabled by default). This short-lived cache (10-second expiration) is particularly beneficial for:
+
+- Transactions with many outputs being spent concurrently
+- Scenarios where multiple inputs reference the same large transaction
+- Reducing redundant external storage reads during high-throughput validation
+
+The cache handles concurrent reads efficiently, preventing multiple simultaneous fetches of the same external transaction data.
 
 ### 4.8. Alert System and UTXO Management
 
