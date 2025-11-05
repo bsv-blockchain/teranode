@@ -30,7 +30,7 @@ Usage: teranode-cli <command> [options]
     setfsmstate          Set the FSM State
     settings             Settings
     utxopersister        Utxo Persister
-    utxovalidator        Validate UTXO sets
+    validate-utxo-set    Validate UTXO sets
 
     Use 'teranode-cli <command> --help' for more information about a command
 
@@ -74,8 +74,7 @@ Usage: teranode-cli <command> [options]
 | `filereader`         | Read and process files        | `--verbose` - Enable verbose output                              |
 |                      |                               | `--checkHeights` - Check heights in UTXO headers                 |
 |                      |                               | `--useStore` - Use store                                         |
-| `utxovalidator`      | Validate UTXO sets            | `--inputDir` - Input directory containing UTXO data              |
-|                      |                               | `--blockHash` - Block hash to validate against                   |
+| `validate-utxo-set`  | Validate UTXO sets            | `<utxo-set-file-path>` - Path to UTXO set file (required)        |
 |                      |                               | `--verbose` - Enable verbose output                              |
 | `getfsmstate`        | Get the current FSM state     | None                                                             |
 | `setfsmstate`        | Set the FSM state             | `--fsmstate` - Target FSM state                                  |
@@ -214,22 +213,23 @@ Options:
 ### UTXO Validator
 
 ```bash
-teranode-cli utxovalidator --inputDir=<input-dir> [options]
+teranode-cli validate-utxo-set [--verbose] <utxo-set-file-path>
 ```
 
-Validates UTXO sets by reading and verifying UTXO data from specified directories. This tool is useful for ensuring UTXO set integrity and detecting any inconsistencies.
+Validates UTXO sets by reading and verifying UTXO data from a specified file. This tool is useful for ensuring UTXO set integrity and detecting any inconsistencies.
+
+Arguments:
+
+- `<utxo-set-file-path>`: Path to the UTXO set file to validate (required)
 
 Options:
 
-- `--inputDir`: Input directory containing UTXO data (required)
-- `--blockHash`: Specific block hash to validate against
 - `--verbose`: Enable verbose output for detailed validation information
-- `--batchSize`: Number of UTXOs to process in each batch (default: 10000)
 
 **Example:**
 
 ```bash
-teranode-cli utxovalidator --inputDir=/data/utxos --verbose
+teranode-cli validate-utxo-set --verbose /data/utxos/utxo-set-800000
 ```
 
 ### Fix Chainwork

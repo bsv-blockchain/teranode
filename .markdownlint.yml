@@ -29,6 +29,10 @@ MD032: true   # Lists should be surrounded by blank lines
 MD003:
   style: "atx"  # Use # for headers
 
+# Allow duplicate headings in different sections
+MD024:
+  siblings_only: true  # Only flag duplicate headings that are siblings
+
 # Trailing whitespace
 MD009: true
 

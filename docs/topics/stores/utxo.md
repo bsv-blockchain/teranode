@@ -104,6 +104,8 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interfac
 
 The following diagram provides a deeper level of detail into the UTXO Store's internal components and their interactions:
 
+> **Note**: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Cleanup Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.
+
 ![utxo_store_detailed_component.svg](../services/img/plantuml/utxo/utxo_store_detailed_component.svg)
 
 The following datastores are supported (either in development / experimental or production mode):
