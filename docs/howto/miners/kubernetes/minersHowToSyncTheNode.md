@@ -171,7 +171,7 @@ bitcoin-cli stop
 ```bash
 # Create export directory
 sudo mkdir -p /mnt/teranode/seed/export
-sudo chown $USER:$USER /mnt/teranode/seed/export
+sudo chown $USER:$(id -gn $USER) /mnt/teranode/seed/export
 ```
 
 #### Step 3: Export UTXO Data
