@@ -1346,7 +1346,8 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 	} else {
 		bufferedReader := bufio.NewReader(bytes.NewReader(txBytes))
 
-		uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, bufferedReader)
+		maxScriptSize := utxopersister.CalculateMaxScriptSize(s.settings.Policy.MaxScriptSizePolicy)
+		uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, bufferedReader, maxScriptSize)
 		if err != nil {
 			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read outputs from reader", previousTxHash.String(), err)
 		}

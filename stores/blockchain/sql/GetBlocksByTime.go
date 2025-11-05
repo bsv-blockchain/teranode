@@ -16,6 +16,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // GetBlocksByTime retrieves block hashes for blocks inserted within a specific time range.
@@ -49,13 +51,25 @@ import (
 //     the specified time range
 //   - error: Any error encountered during the database operation
 func (s *SQL) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error) {
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to be consistent with other operations
+	fromTimeString := fromTime.Format("2006-01-02 15:04:05 +0000")
+	toTimeString := toTime.Format("2006-01-02 15:04:05 +0000")
+
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlocksByTime-%s-%s", fromTimeString, toTimeString)))
+
+	cached := s.responseCache.Get(cacheID)
+	if cached != nil {
+		if hashes, ok := cached.Value().([][]byte); ok {
+			return hashes, nil
+		}
+	}
+
 	q := `
     SELECT hash FROM blocks
 	WHERE inserted_at >='%s' AND inserted_at <= '%s'
     `
 	// var Hash []byte
-	fromTimeString := fromTime.Format("2006-01-02 15:04:05 +0000")
-	toTimeString := toTime.Format("2006-01-02 15:04:05 +0000")
 
 	formattedQuery := fmt.Sprintf(q, fromTimeString, toTimeString)
 
@@ -87,6 +101,9 @@ func (s *SQL) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) (
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	// Cache the result in response cache
+	s.responseCache.Set(cacheID, hashes, s.cacheTTL)
 
 	return hashes, nil
 }

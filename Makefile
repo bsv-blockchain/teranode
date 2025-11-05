@@ -1,6 +1,6 @@
 SHELL=/bin/bash
 # Temp disabled for now until all tests are green
-#.SHELLFLAGS=-o pipefail -c
+.SHELLFLAGS=-o pipefail -c
 
 DEBUG_FLAGS=
 TXMETA_TAG=
@@ -151,8 +151,7 @@ install-tools:
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	# this set pipefail can be removed once all others like smoketest are fully green after which we can enable pipefail for entire shell, see Makefile:3
-	set -o pipefail && SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 
 # run tests in the test/longtest directory
 .PHONY: longtest
@@ -163,7 +162,7 @@ longtest:
 .PHONY: sequentialtest
 sequentialtest:
 	@mkdir -p /tmp/teranode-test-results
-	set -o pipefail && logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
+	logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
 
 # run sequential tests for specific database backends
 .PHONY: sequentialtest-sqlite

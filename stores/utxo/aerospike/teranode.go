@@ -70,7 +70,7 @@ import (
 //go:embed teranode.lua
 var teranodeLUA []byte
 
-var LuaPackage = "teranode_v48" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v49" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = subtree.FrozenBytes[:]

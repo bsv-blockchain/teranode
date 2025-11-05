@@ -30,7 +30,7 @@ func createTestSettings() *settings.Settings {
 			CleanupParentUpdateBatcherDurationMillis: 10,
 			CleanupDeleteBatcherSize:                 256,
 			CleanupDeleteBatcherDurationMillis:       10,
-			CleanupMaxConcurrentOperations:           128,
+			CleanupMaxConcurrentOperations:           0,   //  0 = auto-detect from connection queue size
 			UtxoBatchSize:                            128, // Add missing UtxoBatchSize
 		},
 	}

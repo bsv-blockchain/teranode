@@ -15,6 +15,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -49,6 +50,17 @@ import (
 func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetHashOfAncestorBlock")
 	defer deferFn()
+
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to be consistent with other operations
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetHashOfAncestorBlock-%s-%d", hash.String(), depth)))
+
+	cached := s.responseCache.Get(cacheID)
+	if cached != nil {
+		if ancestorHash, ok := cached.Value().(*chainhash.Hash); ok {
+			return ancestorHash, nil
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
@@ -104,6 +116,9 @@ func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, 
 	if err != nil {
 		return nil, errors.NewProcessingError("failed to convert pastHash", err)
 	}
+
+	// Cache the result in response cache
+	s.responseCache.Set(cacheID, ph, s.cacheTTL)
 
 	return ph, nil
 }

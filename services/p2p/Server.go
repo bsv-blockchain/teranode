@@ -326,6 +326,7 @@ func NewServer(
 		BootstrapPeers:  staticPeers,
 		RelayPeers:      tSettings.P2P.RelayPeers,
 		ProtocolVersion: bitcoinProtocolVersion,
+		DisableNAT:      tSettings.P2P.DisableNAT,
 	}
 
 	if len(advertiseAddresses) > 0 {

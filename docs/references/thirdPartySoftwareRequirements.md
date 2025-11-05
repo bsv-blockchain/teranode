@@ -17,6 +17,10 @@
     - [What is Grafana?](#what-is-grafana)
     - [What is Prometheus?](#what-is-prometheus)
     - [Grafana and Prometheus in Teranode](#grafana-and-prometheus-in-teranode)
+- [Jaeger](#jaeger)
+    - [What is Jaeger?](#what-is-jaeger)
+    - [Jaeger in Teranode](#jaeger-in-teranode)
+- [Additional Components](#additional-components)
 
 ## Introduction
 
@@ -44,7 +48,14 @@ To know more, please refer to the Kafka official site: https://kafka.apache.org/
 
 ### Kafka in BSV Teranode
 
-In BSV Teranode, Kafka is used to manage and process large volumes of transaction data efficiently. Kafka serves as a data pipeline, ingesting high volumes of transaction data from multiple sources in real-time. Kafka’s distributed architecture ensures data consistency and fault tolerance across the network.
+Kafka serves as the central messaging system for inter-service communication:
+
+- **Transaction Processing**: `txmeta`, `validatortxs`, `rejectedtx` topics
+- **Block Processing**: `blocks`, `blocks-final`, `invalid-blocks` topics  
+- **Subtree Management**: `subtrees`, `invalid-subtrees` topics
+- **Legacy Support**: `legacy-inv` topic for Bitcoin protocol compatibility
+
+**Configuration**: See `settings/settings.go` for Kafka settings and `deploy/docker/base/docker-services.yml` for deployment configuration.
 
 
 
@@ -73,7 +84,16 @@ To know more, please refer to the PostgreSQL official site: https://www.postgres
 
 ### PostgreSQL in Teranode
 
-In Teranode, PostgreSQL is used for **Blockchain Storage**. Postgres stores the blockchain data, providing a reliable and efficient database solution for handling large volumes of block data.
+PostgreSQL serves as the primary **Blockchain Storage** backend for:
+
+- **Block Storage**: Complete block data, headers, and metadata
+- **Chain State Management**: Current blockchain state and chain tips
+- **Block Validation**: Validation results and chain reorganizations
+- **Transaction Indexing**: Efficient transaction data access
+
+**Note**: Also supports SQLite backend through the same SQL store interface.
+
+**Configuration**: See `stores/blockchain/sql/` for implementation details.
 
 
 
@@ -94,34 +114,37 @@ Aerospike is an open-source, high-performance, NoSQL database designed for real-
 
 ### How Aerospike is Used in Teranode
 
-In the context of Teranode, Aerospike is utilized for **UTXO (Unspent Transaction Output) storage**, which requires of a robust high performance and reliable solution.
+Aerospike serves as the high-performance **UTXO (Unspent Transaction Output) store** for:
+
+- **UTXO Management**: Fast storage and retrieval of unspent transaction outputs
+- **Transaction Validation**: Quick lookups for input validation
+- **Conflict Detection**: Double-spend detection and management
+- **Chain Reorganization**: UTXO rollback support during reorgs
+- **Batch Operations**: Bulk UTXO operations for block processing
+
+**Additional Features**: Custom Lua scripts, cleanup services, Prometheus metrics, and Aerospike-Kafka connector for CDC.
+
+**Configuration**: See `stores/utxo/aerospike/` and `deploy/docker/base/docker-services.yml`.
 
 
 
 ## Shared Storage
 
+Teranode uses a flexible blob storage system for **Subtree** and **Transaction** data shared across microservices.
 
+**Supported Backends:**
 
-Teranode requires a robust and scalable shared storage solution to efficiently manage its critical **Subtree** and **Transaction** data. This shared storage is accessed and modified by various microservices within the Teranode ecosystem.
+- **File System**: Local or shared filesystem (`file://` URLs)
+- **S3-Compatible**: AWS S3 or compatible object storage
+- **HTTP**: RESTful blob storage services
 
+**Production Options:**
+- AWS FSx for Lustre, NFS, or S3 object storage
 
+**Development:**
+- Docker volumes or local filesystem
 
-In a full production deployment, Teranode is designed to use Lustre (or a similar high-performance shared filesystem) for optimal performance and scalability. Lustre is a clustered, high-availability, low-latency shared filesystem provided by AWS FSx for Lustre service.
-
-
-
-Benefits of Using Lustre with Teranode:
-
-
-
-- **High Availability:** Ensures continuous access to shared data.
-- **Low Latency:** Provides sub-millisecond latency for consistent filesystem state.
-- **Automatic Data Archiving:** Facilitates seamless data transfer to S3 for long-term storage.
-- **Scalability:** Supports scalable data sharing between various services.
-
-
-
-Note - if using Docker Compose, the shared Docker storage, which is automatically managed by `docker compose`, is used instead. This approach provides a more accessible testing environment while still allowing for essential functionality and performance evaluation.
+**Configuration**: See `stores/blob/` for backend implementations and URL-based configuration.
 
 
 ## Grafana and Prometheus
@@ -148,4 +171,64 @@ Users can create dashboards in Grafana to visualize the metrics collected by Pro
 
 ### Grafana and Prometheus in Teranode
 
-In the context of Teranode, Grafana and Prometheus are used to provide comprehensive monitoring and visualization of the blockchain node’s performance, health, and various metrics.
+Comprehensive monitoring and observability for Teranode:
+
+**Prometheus Metrics:**
+
+- Service metrics from each Teranode component
+- System metrics (CPU, memory, disk, network)
+- Database metrics (PostgreSQL, Aerospike)
+- Kafka metrics (throughput, lag, broker health)
+- Business metrics (transaction rates, block validation times)
+
+**Grafana Features:**
+
+- Pre-configured dashboards for key components
+- Real-time blockchain operations monitoring
+- Configurable alerting
+- Multi-node deployment support
+
+**Configuration**: See `deploy/docker/base/docker-services.yml` for setup and `deploy/docker/base/grafana_dashboards/` for dashboard definitions.
+
+
+## Jaeger
+
+### What is Jaeger?
+
+**Jaeger** is an open-source, distributed tracing system originally developed by Uber. It is used for monitoring and troubleshooting microservices-based distributed systems. Jaeger helps track requests as they flow through multiple services, providing insights into performance bottlenecks and system behavior.
+
+Key features include:
+
+- **Distributed Context Propagation**: Tracks requests across service boundaries
+- **Performance Monitoring**: Identifies slow operations and bottlenecks
+- **Root Cause Analysis**: Helps diagnose issues in complex distributed systems
+- **Service Dependency Analysis**: Visualizes service interactions and dependencies
+
+### Jaeger in Teranode
+
+Distributed tracing across Teranode's microservices architecture:
+
+**Tracing Capabilities:**
+
+- Service-to-service communication
+- Database operations (PostgreSQL, Aerospike)
+- Kafka message processing
+- Block processing pipeline
+- UTXO operations and transaction validation
+
+**Features**: OpenTelemetry integration, configurable sampling, web UI for trace analysis.
+
+**Configuration**: See `util/tracing/` for implementation and Docker compose files for deployment setup.
+
+
+## Additional Components
+
+**RedPanda Console**: Web-based Kafka management interface for topic management and message inspection.
+
+**Nginx Asset Cache**: HTTP caching layer for asset service responses with reverse proxy capabilities.
+
+**OpenTelemetry**: Observability framework used with Jaeger for comprehensive tracing.
+
+**Container Orchestration**: Docker Compose for development, Kubernetes for production deployments.
+
+**Configuration**: See respective Docker compose files and Kubernetes manifests in `deploy/` directory.

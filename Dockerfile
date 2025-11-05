@@ -58,6 +58,11 @@ RUN chmod +x ./wait.sh
 ENV LD_LIBRARY_PATH=/app:${LD_LIBRARY_PATH}
 ENV PATH=/app:$PATH
 
+# Set GOGC=200 to reduce GC aggressiveness (default is 100)
+# Higher values trade memory for less frequent GC pauses
+# Can be overridden at deployment time via docker-compose or Kubernetes
+ENV GOGC=200
+
 # Set the entrypoint to the library
 ENTRYPOINT ["./teranode.run"]
 #ENTRYPOINT ["./dlv", "--listen=:4040", "--continue", "--accept-multiclient", "--headless=true", "--api-version=2", "exec", "./teranode.run", "--"]

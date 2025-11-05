@@ -17,7 +17,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 5. `getblockheader`: Returns information about a block's header
 6. `getblockchaininfo`: Returns information about the blockchain (available via RPC only, see example below)
 7. `invalidateblock`: Marks a block as invalid
-8. `reconsiderblock`: Removes invalidity status of a block
+8. `reconsiderblock`: Removes invalidity status of a block (performs full block validation)
 
 > **Note:** The `getblockchaininfo` RPC method is accessed via JSON-RPC, not via `teranode-cli`. For a visual view of blockchain state, use the blockchain viewer at <http://localhost:8090/viewer>
 
@@ -33,7 +33,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Parameters:
         None
 
-    - Returns: Object containing block height, current block size and weight, current difficulty, and estimated network hashrate
+    - Returns: Object containing block height, current block size, current block transaction count, current difficulty, estimated network hashrate, error messages, and chain name
 
 3. `getminingcandidate`: Obtain a mining candidate
     - Parameters:
@@ -208,6 +208,16 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Returns: Boolean `true` if successful
     - Note: The UTXO must be frozen before it can be reassigned
 
+7. `getrawmempool`: Returns transaction IDs being processed for block assembly
+    - Parameters:
+
+        - `verbose` (boolean, optional): If true, returns detailed information about pending transactions
+    - Returns: 
+
+        - If verbose=false: Array of transaction IDs being prepared for the next block
+        - If verbose=true: Object with detailed information about transactions in the block assembly process
+    - Note: In Teranode's architecture, this returns transactions from the subtree-based block assembly system, not a traditional mempool. The method name is kept for Bitcoin Core compatibility.
+
 ### Network-related Methods
 
 1. `getinfo`: Returns information about the node
@@ -300,7 +310,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Parameters:
         None
 
-    - Returns: String 'Teranode server stopping' when successful
+    - Returns: String 'bsvd stopping.' when successful
 
 2. `version`: Returns version information about the node
     - Parameters:

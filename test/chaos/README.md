@@ -41,6 +41,12 @@ go test -v ./test/chaos/...
 
 # Scenario 2: Kafka Broker Failure
 ./test/chaos/run_scenario_02.sh
+
+# Scenario 3: Network Partition
+./test/chaos/run_scenario_03.sh
+
+# Scenario 4: Intermittent Connection Drops
+./test/chaos/run_scenario_04.sh
 ```
 
 The helper scripts will:
@@ -61,6 +67,9 @@ go test -v ./test/chaos -run TestScenario02_KafkaBrokerFailure
 
 # Scenario 3: Network Partition
 go test -v ./test/chaos -run TestScenario03_NetworkPartition
+
+# Scenario 4: Intermittent Connection Drops
+go test -v ./test/chaos -run TestScenario04_IntermittentDrops
 ```
 
 ### Run in Verbose Mode
@@ -177,6 +186,116 @@ go test -v ./test/chaos -run TestScenario03_NetworkPartition
 - ✅ Services automatically recover when partition heals
 - ✅ No data loss or corruption in either service
 - ✅ Both PostgreSQL and Kafka fully operational after recovery
+
+### Scenario 4: Intermittent Connection Drops (3 variants)
+**File:** `scenario_04_intermittent_drops_test.go`
+
+This scenario has three test variants that explore different aspects of intermittent network failures:
+
+#### Variant A: Basic Intermittent Drops
+**Test:** `TestScenario04_IntermittentDrops`
+
+**What it tests:**
+- System behavior under unstable network conditions with random connection drops
+- Probabilistic failure handling (30% and 60% drop rates)
+- Application retry logic effectiveness under intermittent failures
+- Data consistency despite random connection failures
+- Both PostgreSQL and Kafka resilience to intermittent drops
+
+**How to run:**
+```bash
+# Using helper script (recommended)
+./test/chaos/run_scenario_04.sh
+
+# Using go test directly
+go test -v ./test/chaos -run TestScenario04_IntermittentDrops
+```
+
+**Test phases:**
+1. Establish baseline connectivity to both services
+2. Inject 30% intermittent drops (low toxicity)
+3. Test PostgreSQL operations with low drop rate
+4. Test Kafka operations with low drop rate
+5. Increase to 60% intermittent drops (high toxicity)
+6. Validate retry logic under high drop rate
+7. Remove drops and verify full recovery
+8. Confirm data consistency after intermittent failures
+
+**Expected results:**
+- ✅ Some operations fail randomly, others succeed (probabilistic)
+- ✅ Success rate correlates with drop rate (70% success at 30% drops)
+- ✅ Retry logic improves eventual success rate significantly
+- ✅ At least 40% eventual success even with 60% drop rate and retries
+- ✅ 100% success rate after drops removed (full recovery)
+- ✅ No data corruption despite intermittent failures
+- ✅ Both services handle unstable networks gracefully
+
+**Test duration:** ~8 minutes
+
+#### Variant B: Cascading Effects
+**Test:** `TestScenario04_CascadingEffects`
+
+**What it tests:**
+- How PostgreSQL failures cascade through the microservices mesh
+- Impact on critical services (blockchain, block assembly, validator, RPC, asset server)
+- Graceful failure handling without cascading crashes
+- Circuit breaker and timeout behavior
+- Recovery coordination across multiple services
+
+**How to run:**
+```bash
+go test -v ./test/chaos -run TestScenario04_CascadingEffects
+```
+
+**Test phases:**
+1. Establish baseline with 5 concurrent services
+2. Inject complete PostgreSQL failure (disable proxy)
+3. Test cascading failures across all services
+4. Verify failure detection timing (fast fail)
+5. Restore database and test recovery order
+6. Verify data consistency after cascade
+
+**Expected results:**
+- ✅ All services fail gracefully when database unavailable
+- ✅ No crashes or indefinite hangs
+- ✅ Fast failure detection (< 10 seconds)
+- ✅ All services recover after database restoration
+- ✅ No data corruption after cascading failures
+
+**Test duration:** ~2 seconds
+
+#### Variant C: Load Under Failures
+**Test:** `TestScenario04_LoadUnderFailures`
+
+**What it tests:**
+- System throughput under network instability with high concurrent load
+- Transaction processing success rate with intermittent failures
+- Latency distribution under load + failures
+- Recovery time under sustained load
+- Performance degradation patterns
+
+**How to run:**
+```bash
+go test -v ./test/chaos -run TestScenario04_LoadUnderFailures
+```
+
+**Test phases:**
+1. Establish baseline throughput (5 workers × 5 ops)
+2. Inject 30% connection drops to both services
+3. Measure performance degradation under baseline load
+4. Increase load (10 workers) while maintaining failures
+5. Remove failures and measure recovery speed
+6. Compare performance metrics (throughput, latency, success rate)
+
+**Expected results:**
+- ✅ Baseline: 100% success rate, ~7ms avg latency
+- ✅ Under 30% failures: 60-65% success rate, ~1.3s avg latency (187x slower)
+- ✅ High load + failures: 60-65% success rate maintained
+- ✅ Recovery: Returns to 100% success, ~9ms avg latency
+- ✅ System maintains partial operation under failures
+- ✅ Latency increases but remains bounded (~5s p95)
+
+**Test duration:** ~28 seconds
 
 ## Test Structure
 
@@ -345,7 +464,10 @@ Chaos tests take longer than unit tests:
 - Scenario 1 (Database Latency): ~30-45 seconds
 - Scenario 2 (Kafka Broker Failure): ~40-60 seconds
 - Scenario 3 (Network Partition): ~35-50 seconds
-- Full suite: ~2-3 minutes (grows with more scenarios)
+- Scenario 4A (Intermittent Drops): ~8 minutes (includes retry logic with delays)
+- Scenario 4B (Cascading Effects): ~2 seconds (fast failure detection test)
+- Scenario 4C (Load Under Failures): ~28 seconds (load testing under failures)
+- Full suite: ~12-15 minutes (with all Scenario 4 variants)
 
 ## Troubleshooting
 
@@ -414,8 +536,9 @@ curl -X POST http://localhost:8474/reset
 
 - [x] Scenario 2: Kafka Broker Failure ✅ **Implemented**
 - [x] Scenario 3: Network Partition ✅ **Implemented**
-- [ ] Scenario 4: Intermittent Connection Drops
+- [x] Scenario 4A: Intermittent Connection Drops ✅ **Implemented**
+- [x] Scenario 4B: Cascading Effects ✅ **Implemented**
+- [x] Scenario 4C: Load Under Failures ✅ **Implemented**
 - [ ] Scenario 5: Bandwidth Constraints
-- [ ] Scenario 6: Slow Close Connections
-- [ ] Scenario 7: Combined Failures (DB + Kafka)
-- [ ] Scenario 8: Cascading Failures
+- [ ] Scenario 6: Slow Close Connections (Slicer toxic)
+- [ ] Scenario 7: Combined Failures (DB + Kafka simultaneously)

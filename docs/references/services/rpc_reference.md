@@ -32,6 +32,7 @@
     - [getinfo](#getinfo) - Returns general information about the node
     - [getmininginfo](#getmininginfo) - Returns mining-related information
     - [getpeerinfo](#getpeerinfo) - Returns data about each connected network node
+    - [getrawmempool](#getrawmempool) - Returns transaction IDs being processed for block assembly
     - [getrawtransaction](#getrawtransaction) - Returns raw transaction data
     - [help](#help) - Returns help text for RPC commands
     - [getminingcandidate](#getminingcandidate) - Returns mining candidate information for generating a new block
@@ -1339,7 +1340,7 @@ Safely shuts down the node.
 
 ```json
 {
-    "result": "Bitcoin server stopping",
+    "result": "bsvd stopping.",
     "error": null,
     "id": "curltest"
 }
@@ -1605,6 +1606,45 @@ Returns help text for RPC commands.
 }
 ```
 
+### getrawmempool
+
+Returns transaction IDs currently being processed for block assembly in Teranode's subtree-based architecture.
+
+**Note**: Unlike traditional Bitcoin nodes, Teranode doesn't use a mempool. This command returns transactions from the subtree-based block assembly system that are being prepared for inclusion in the next block. The method name is kept for Bitcoin Core compatibility.
+
+**Parameters:**
+
+1. `verbose` (boolean, optional, default=false) - If true, returns detailed information about pending transactions
+
+**Returns:**
+
+- If verbose=false: `array` - Array of transaction IDs being processed for block assembly
+- If verbose=true: `object` - Detailed information about transactions in the block assembly process
+
+**Example Request:**
+
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getrawmempool",
+    "params": [false]
+}
+```
+
+**Example Response:**
+
+```json
+{
+    "result": [
+        "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
+        "b19f7805dbcd4e809887ecfd6e93f482c875fe849c6766f83f574679ef2bbef1"
+    ],
+    "error": null,
+    "id": "curltest"
+}
+```
+
 ### getrawtransaction
 
 Returns raw transaction data for a specific transaction.
@@ -1859,7 +1899,6 @@ Additionally, the following node-related commands are recognized but return ErrR
 - `getgenerate` - Returns if the node is generating blocks
 - `gethashespersec` - Returns mining hashrate
 - `getheaders` - Returns block headers
-- `getmempoolinfo` - Returns mempool information
 - `getnettotals` - Returns network traffic statistics
 - `getnetworkhashps` - Returns estimated network hashrate
 - `gettxout` - Returns transaction output information
