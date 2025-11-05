@@ -467,7 +467,7 @@ stores/blockchain
 To run the Blockchain Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Blockchain=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -Blockchain=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Blockchain Service locally.
