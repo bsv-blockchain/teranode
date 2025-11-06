@@ -17,6 +17,8 @@ Last modified: 29-October-2025
 
 This guide covers the different methods available for synchronizing a Teranode instance with the Bitcoin SV blockchain using Docker Compose. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.
 
+> **📋 Network Scope:** This guide applies to **both mainnet and testnet** deployments. All command examples use mainnet paths and settings for illustration - adjust the `network` parameter and data paths according to your target network (e.g., replace `mainnet` with `testnet` in paths and environment variables).
+
 ---
 
 ## Synchronization Methods Comparison
@@ -167,7 +169,7 @@ bitcoin-cli stop
 ```bash
 # Create export directory
 sudo mkdir -p /mnt/teranode/seed/export
-sudo chown $USER:$USER /mnt/teranode/seed/export
+sudo chown $USER:$(id -gn $USER) /mnt/teranode/seed/export
 ```
 
 #### Step 3: Export UTXO Data
@@ -240,6 +242,11 @@ If you encounter issues during export or need to retry the process:
     - **Check development configurations** - Some setups may be set to "regtest" mode
     - **Verify network settings** in Teranode configuration before proceeding with Step 1
 
+    **Configuration Examples:**
+
+    - **Mainnet:** Use `network=mainnet` and `docker/mainnet/data/teranode` path
+    - **Testnet:** Use `network=testnet` and `docker/testnet/data/teranode` path
+
     **Mismatched networks will cause seeding failure or data corruption.**
 
 #### Step 1: Prepare Teranode Environment
@@ -282,6 +289,7 @@ ls -la /mnt/teranode/seed/export/
 ```bash
 # Run the seeder (replace the hash with your actual block hash from Step 2)
 # Make sure to add any environment variables you have defined in your docker-compose.yml
+# NOTE: This example uses mainnet - for testnet, change 'network=testnet' and 'docker/testnet/data/teranode'
 docker run -it \
     -e SETTINGS_CONTEXT=docker.m \
     -e network=mainnet \
@@ -378,8 +386,9 @@ docker compose up -d aerospike aerospike-2 postgres kafka-shared
 docker compose stop blockchain asset blockvalidation
 
 # Run seeder
-# Instead of latest, you could use a specific version of teranode. 
+# Instead of latest, you could use a specific version of teranode.
 # Check for tagged versions here ghcr.io/bsv-blockchain/teranode
+# NOTE: This example uses mainnet - for testnet, change to 'docker/testnet/data/teranode'
 docker run -it \
     -e SETTINGS_CONTEXT=docker.m \
     -v ${PWD}/docker/mainnet/data/teranode:/app/data \
