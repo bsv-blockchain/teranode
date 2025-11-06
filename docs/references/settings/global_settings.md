@@ -1,6 +1,6 @@
 # Global Settings
 
-**Related Topics**: [System Architecture](../../topics/architecture/teranode-microservices-overview.md), [Monitoring](../../howto/monitoring.md)
+**Related Topics**: [System Architecture](../../topics/architecture/teranode-microservices-overview.md), [Prometheus Metrics](../prometheusMetrics.md)
 
 Global settings control system-wide behavior across all Teranode services. These settings affect tracing, logging, security, health checks, and profiling for the entire node.
 
