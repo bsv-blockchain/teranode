@@ -6344,6 +6344,9 @@
 </ul>
 <h2 id="overview">Overview</h2>
 <p>This guide covers the different methods available for synchronizing a Teranode instance with the Bitcoin SV blockchain using Docker Compose. Whether you're setting up a fresh node or recovering from downtime, this document will help you choose the most appropriate synchronization method for your situation.</p>
+<blockquote>
+<p><strong>📋 Network Scope:</strong> This guide applies to <strong>both mainnet and testnet</strong> deployments. All command examples use mainnet paths and settings for illustration - adjust the <code>network</code> parameter and data paths according to your target network (e.g., replace <code>mainnet</code> with <code>testnet</code> in paths and environment variables).</p>
+</blockquote>
 <hr />
 <h2 id="synchronization-methods-comparison">Synchronization Methods Comparison</h2>
 <p>Choose the synchronization method that best fits your situation:</p>
@@ -6595,6 +6598,11 @@ ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
 <li><strong>Check development configurations</strong> - Some setups may be set to "regtest" mode</li>
 <li><strong>Verify network settings</strong> in Teranode configuration before proceeding with Step 1</li>
 </ul>
+<p><strong>Configuration Examples:</strong></p>
+<ul>
+<li><strong>Mainnet:</strong> Use <code>network=mainnet</code> and <code>docker/mainnet/data/teranode</code> path</li>
+<li><strong>Testnet:</strong> Use <code>network=testnet</code> and <code>docker/testnet/data/teranode</code> path</li>
+</ul>
 <p><strong>Mismatched networks will cause seeding failure or data corruption.</strong></p>
 </div>
 <h4 id="step-1-prepare-teranode-environment">Step 1: Prepare Teranode Environment</h4>
@@ -6629,6 +6637,7 @@ ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
 <h4 id="step-3-run-seeder">Step 3: Run Seeder</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Run the seeder (replace the hash with your actual block hash from Step 2)</span>
 <span class="c1"># Make sure to add any environment variables you have defined in your docker-compose.yml</span>
+<span class="c1"># NOTE: This example uses mainnet - for testnet, change &#39;network=testnet&#39; and &#39;docker/testnet/data/teranode&#39;</span>
 docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-e<span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>docker.m<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-e<span class="w"> </span><span class="nv">network</span><span class="o">=</span>mainnet<span class="w"> </span><span class="se">\</span>
@@ -6726,8 +6735,9 @@ docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> 
 docker<span class="w"> </span>compose<span class="w"> </span>stop<span class="w"> </span>blockchain<span class="w"> </span>asset<span class="w"> </span>blockvalidation
 
 <span class="c1"># Run seeder</span>
-<span class="c1"># Instead of latest, you could use a specific version of teranode. </span>
+<span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
 <span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
+<span class="c1"># NOTE: This example uses mainnet - for testnet, change to &#39;docker/testnet/data/teranode&#39;</span>
 docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-e<span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>docker.m<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-v<span class="w"> </span><span class="si">${</span><span class="nv">PWD</span><span class="si">}</span>/docker/mainnet/data/teranode:/app/data<span class="w"> </span><span class="se">\</span>
