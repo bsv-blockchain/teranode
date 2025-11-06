@@ -117,25 +117,25 @@ Each group contains related configuration values specific to that component of t
 
 1. Always pass the Settings object as a dependency to services that need configuration:
 
-```go
-func NewService(logger ulogger.Logger, settings *settings.Settings) *Service {
-    return &Service{
-        logger: logger,
-        settings: settings,
-        // ...
+    ```go
+    func NewService(logger ulogger.Logger, settings *settings.Settings) *Service {
+        return &Service{
+            logger: logger,
+            settings: settings,
+            // ...
+        }
     }
-}
-```
+    ```
 
 2. Access settings through the appropriate group rather than using direct key access:
 
-```go
-// Good
-maxRetries := settings.BlockChain.MaxRetries
+    ```go
+    // Good
+    maxRetries := settings.BlockChain.MaxRetries
 
-// Avoid (historical style, now deprecated)
-maxRetries, _ := gocore.Config().GetInt("blockchain_maxRetries")
-```
+    // Avoid (historical style, now deprecated)
+    maxRetries, _ := gocore.Config().GetInt("blockchain_maxRetries")
+    ```
 
 3. Use the type system to your advantage - settings are strongly typed within their respective groups.
 
@@ -148,7 +148,7 @@ For comprehensive documentation of all available settings, see the following ref
 ### Global Settings
 
 - [Global Settings](settings/global_settings.md) - System-wide settings (tracing, logging, security, gRPC, monitoring)
-- [Policy Settings](settings/policy_settings.md) - Bitcoin SV consensus rules and transaction validation policies
+- [Policy Settings](settings/policy_settings.md) - BSV Blockchain consensus rules and transaction validation policies
 
 ### Services
 

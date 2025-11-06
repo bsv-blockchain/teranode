@@ -1,8 +1,8 @@
 # Policy Settings
 
-**Related Topics**: [Bitcoin SV Consensus Rules](../../topics/architecture/consensus.md), [Transaction Validation](../../topics/services/validator.md)
+**Related Topics**: [Network Consensus Rules](../networkConsensusRules.md), [Transaction Validation](../../topics/services/validator.md)
 
-Policy settings control Bitcoin SV consensus rules and transaction validation behavior in Teranode. These settings determine what transactions and blocks are considered valid according to the Bitcoin SV protocol.
+Policy settings control BSV Blockchain consensus rules and transaction validation behavior in Teranode. These settings determine what transactions and blocks are considered valid on the BSV Blockchain according to the Bitcoin Protocol.
 
 ## Configuration Settings
 
@@ -106,7 +106,7 @@ Bitcoin SV restores the original Bitcoin protocol, which is reflected in these p
 Teranode distinguishes between policy and consensus rules:
 
 - **Policy Rules**: Local node preferences (can be more restrictive)
-- **Consensus Rules**: Network-wide agreement (must match BSV protocol)
+- **Consensus Rules**: Network-wide agreement (must match the BSV Blockchain protocol)
 
 The settings allow operators to configure policy rules while maintaining consensus compatibility.
 
