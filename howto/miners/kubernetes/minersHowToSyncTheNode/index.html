@@ -6578,7 +6578,7 @@ bitcoin-cli<span class="w"> </span>stop
 <h4 id="step-2-prepare-export-directory">Step 2: Prepare Export Directory</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Create export directory</span>
 sudo<span class="w"> </span>mkdir<span class="w"> </span>-p<span class="w"> </span>/mnt/teranode/seed/export
-sudo<span class="w"> </span>chown<span class="w"> </span><span class="nv">$USER</span>:<span class="nv">$USER</span><span class="w"> </span>/mnt/teranode/seed/export
+sudo<span class="w"> </span>chown<span class="w"> </span><span class="nv">$USER</span>:<span class="k">$(</span>id<span class="w"> </span>-gn<span class="w"> </span><span class="nv">$USER</span><span class="k">)</span><span class="w"> </span>/mnt/teranode/seed/export
 </code></pre></div>
 <h4 id="step-3-export-utxo-data">Step 3: Export UTXO Data</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Export UTXO set from Bitcoin SV node</span>
