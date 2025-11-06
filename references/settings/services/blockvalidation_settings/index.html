@@ -5362,16 +5362,23 @@
 <tr>
 <td>IsParentMinedRetryMaxRetry</td>
 <td>int</td>
-<td>20</td>
+<td>45</td>
 <td>blockvalidation_isParentMined_retry_max_retry</td>
 <td>Parent mining check retries</td>
 </tr>
 <tr>
 <td>IsParentMinedRetryBackoffMultiplier</td>
 <td>int</td>
-<td>30</td>
+<td>4</td>
 <td>blockvalidation_isParentMined_retry_backoff_multiplier</td>
-<td>Parent mining retry backoff</td>
+<td>Parent mining retry backoff multiplier</td>
+</tr>
+<tr>
+<td>IsParentMinedRetryBackoffDuration</td>
+<td>time.Duration</td>
+<td>20ms</td>
+<td>blockvalidation_isParentMined_retry_backoff_duration</td>
+<td>Parent mining retry backoff base duration</td>
 </tr>
 <tr>
 <td>SubtreeGroupConcurrency</td>
