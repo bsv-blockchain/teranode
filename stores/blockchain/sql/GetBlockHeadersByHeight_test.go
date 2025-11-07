@@ -12,7 +12,6 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/usql"
-	"github.com/jellydator/ttlcache/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +31,7 @@ func createMockSQL() (*SQL, sqlmock.Sqlmock, error) {
 	s := &SQL{
 		db:            udb,
 		logger:        ulogger.TestLogger{},
-		responseCache: ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](2 * time.Minute)),
+		responseCache: NewGenerationalCache(),
 		cacheTTL:      2 * time.Minute,
 		chainParams:   tSettings.ChainCfgParams,
 	}

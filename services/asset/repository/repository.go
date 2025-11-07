@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -62,13 +63,14 @@ type Interface interface {
 
 // Repository implements blockchain data access across multiple storage backends.
 type Repository struct {
-	logger              ulogger.Logger
-	settings            *settings.Settings
-	UtxoStore           utxo.Store
-	TxStore             blob.Store
-	SubtreeStore        blob.Store
-	BlockPersisterStore blob.Store
-	BlockchainClient    blockchain.ClientI
+	logger                ulogger.Logger
+	settings              *settings.Settings
+	UtxoStore             utxo.Store
+	TxStore               blob.Store
+	SubtreeStore          blob.Store
+	BlockPersisterStore   blob.Store
+	BlockchainClient      blockchain.ClientI
+	BlockvalidationClient blockvalidation.Interface
 }
 
 // NewRepository creates a new Repository instance with the provided dependencies.
@@ -87,16 +89,17 @@ type Repository struct {
 //   - *Repository: Newly created repository instance
 //   - error: Any error encountered during creation
 func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
-	blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error) {
+	blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error) {
 
 	return &Repository{
-		logger:              logger,
-		settings:            tSettings,
-		BlockchainClient:    blockchainClient,
-		UtxoStore:           utxoStore,
-		TxStore:             txStore,
-		SubtreeStore:        subtreeStore,
-		BlockPersisterStore: blockPersisterStore,
+		logger:                logger,
+		settings:              tSettings,
+		BlockchainClient:      blockchainClient,
+		BlockvalidationClient: blockvalidationClient,
+		UtxoStore:             utxoStore,
+		TxStore:               txStore,
+		SubtreeStore:          subtreeStore,
+		BlockPersisterStore:   blockPersisterStore,
 	}, nil
 }
 

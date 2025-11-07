@@ -29,7 +29,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -38,7 +37,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/usql"
-	"github.com/jellydator/ttlcache/v3"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
@@ -55,7 +53,8 @@ type SQL struct {
 	// logger provides structured logging capabilities
 	logger ulogger.Logger
 	// responseCache provides a time-based cache for frequently accessed query results
-	responseCache *ttlcache.Cache[chainhash.Hash, any]
+	// with automatic generation tracking to prevent stale results from being cached
+	responseCache *GenerationalCache
 	// cacheTTL defines the time-to-live duration for cached items
 	cacheTTL time.Duration
 	// chainParams contains the blockchain network parameters (mainnet, testnet, etc.)
@@ -144,7 +143,7 @@ func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings)
 		db:            db,
 		engine:        util.SQLEngine(storeURL.Scheme),
 		logger:        logger,
-		responseCache: ttlcache.New[chainhash.Hash, any](ttlcache.WithTTL[chainhash.Hash, any](2 * time.Minute)),
+		responseCache: NewGenerationalCache(),
 		cacheTTL:      2 * time.Minute,
 		chainParams:   tSettings.ChainCfgParams,
 	}
@@ -470,10 +469,14 @@ func (s *SQL) insertGenesisTransaction(logger ulogger.Logger) error {
 // for ensuring accurate blockchain state across all components. This method provides a
 // simple but effective mechanism for cache invalidation when the underlying data changes.
 //
-// The implementation uses the ttlcache's DeleteAll method to efficiently remove all
-// cached entries in a single operation. This is more efficient than selectively
-// invalidating entries, especially during major state changes where most cached data
-// would need to be refreshed anyway.
+// The implementation uses the GenerationalCache's DeleteAll method to efficiently remove all
+// cached entries in a single operation and increment the generation counter atomically.
+//
+// The generation counter increment prevents stale query results from being cached after
+// invalidation. When a goroutine starts a query and captures the generation via GetWithToken,
+// if the cache is reset during the query, the generation will have changed and Set() will
+// skip caching the now-stale result. This solves race conditions where concurrent queries
+// could overwrite fresh cache entries with stale data.
 func (s *SQL) ResetResponseCache() {
 	s.responseCache.DeleteAll()
 }

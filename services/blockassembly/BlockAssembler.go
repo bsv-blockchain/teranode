@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +24,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/cleanup"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -1712,6 +1715,251 @@ func (b *BlockAssembler) getNextNbits(nextBlockTime int64) (*model.NBit, error) 
 	return nbit, nil
 }
 
+// filterTransactionsWithValidParents filters unmined transactions to ensure their parent transactions
+// are either on the best chain or also unmined (to be processed together).
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - unminedTxs: List of unmined transactions to filter
+//   - bestBlockHeaderIDsMap: Map of block IDs on the best chain
+//
+// Returns:
+//   - []*utxo.UnminedTransaction: Filtered list of transactions with valid parents
+//   - error: Context cancellation error if cancelled, nil otherwise
+func (b *BlockAssembler) filterTransactionsWithValidParents(
+	ctx context.Context,
+	unminedTxs []*utxo.UnminedTransaction,
+	bestBlockHeaderIDsMap map[uint32]bool,
+) ([]*utxo.UnminedTransaction, error) {
+
+	if len(unminedTxs) == 0 {
+		return unminedTxs, nil
+	}
+
+	b.logger.Infof("[BlockAssembler][filterTransactionsWithValidParents] Starting parent chain validation for %d unmined transactions", len(unminedTxs))
+
+	// OPTIMIZATION: Two-pass approach to minimize memory usage
+	// Pass 1: Collect only the parent hashes that are actually referenced
+	// This is MUCH smaller than indexing all transactions
+	referencedParents := make(map[chainhash.Hash]bool)
+	for _, tx := range unminedTxs {
+		parentHashes := tx.TxInpoints.GetParentTxHashes()
+		for _, parentHash := range parentHashes {
+			referencedParents[parentHash] = true
+		}
+	}
+	b.logger.Debugf("[BlockAssembler][filterTransactionsWithValidParents] Found %d unique parent references out of %d transactions",
+		len(referencedParents), len(unminedTxs))
+
+	// Pass 2: Build index ONLY for transactions that are referenced as parents
+	// This dramatically reduces memory usage from O(all_txs) to O(referenced_parents)
+	parentIndexMap := make(map[chainhash.Hash]int, len(referencedParents))
+	for idx, tx := range unminedTxs {
+		if tx.Hash != nil && referencedParents[*tx.Hash] {
+			parentIndexMap[*tx.Hash] = idx
+		}
+	}
+
+	validTxs := make([]*utxo.UnminedTransaction, 0, len(unminedTxs))
+	skippedCount := 0
+	batchSize := b.settings.BlockAssembly.ParentValidationBatchSize
+
+	// Process transactions in batches for performance
+	for i := 0; i < len(unminedTxs); i += batchSize {
+		// Check for context cancellation at start of each batch
+		select {
+		case <-ctx.Done():
+			b.logger.Infof("[BlockAssembler][filterTransactionsWithValidParents] Parent validation cancelled during batch processing at index %d", i)
+			return nil, ctx.Err()
+		default:
+		}
+		end := i + batchSize
+		if end > len(unminedTxs) {
+			end = len(unminedTxs)
+		}
+		batch := unminedTxs[i:end]
+
+		// Collect all unique parent transaction IDs in this batch
+		parentTxIDs := make([]chainhash.Hash, 0, len(batch)*2) // Assume average 2 inputs per tx
+		parentTxIDMap := make(map[chainhash.Hash]bool)
+
+		for _, tx := range batch {
+			parentHashes := tx.TxInpoints.GetParentTxHashes()
+			for _, parentTxID := range parentHashes {
+				if !parentTxIDMap[parentTxID] {
+					parentTxIDs = append(parentTxIDs, parentTxID)
+					parentTxIDMap[parentTxID] = true
+				}
+			}
+		}
+
+		// Batch query parent transaction metadata from UTXO store
+		var parentMetadata map[chainhash.Hash]*meta.Data
+		if len(parentTxIDs) > 0 {
+			// Use BatchDecorate for efficient batch fetching of parent metadata
+			parentMetadata = make(map[chainhash.Hash]*meta.Data)
+
+			// Create UnresolvedMetaData slice for batch operation
+			unresolvedParents := make([]*utxo.UnresolvedMetaData, 0, len(parentTxIDs))
+			for i, parentTxID := range parentTxIDs {
+				unresolvedParents = append(unresolvedParents, &utxo.UnresolvedMetaData{
+					Hash: parentTxID,
+					Idx:  i,
+				})
+			}
+
+			// Batch fetch all parent metadata at once
+			// Request only the fields we need for validation
+			err := b.utxoStore.BatchDecorate(ctx, unresolvedParents,
+				fields.BlockIDs, fields.UnminedSince, fields.Locked)
+			if err != nil {
+				// Log the batch error but continue - individual errors are in UnresolvedMetaData
+				b.logger.Warnf("[BlockAssembler][filterTransactionsWithValidParents] BatchDecorate error (will check individual results): %v", err)
+			}
+
+			// Process results - check each parent's fetch result
+			for _, unresolved := range unresolvedParents {
+				if unresolved.Err != nil {
+					// Parent doesn't exist or error retrieving it
+					b.logger.Debugf("[BlockAssembler][filterTransactionsWithValidParents] Failed to get parent tx %s metadata: %v",
+						unresolved.Hash.String(), unresolved.Err)
+					continue
+				}
+
+				if unresolved.Data != nil {
+					parentMetadata[unresolved.Hash] = unresolved.Data
+				}
+			}
+		}
+
+		// Validate each transaction in the batch
+		for batchIdx, tx := range batch {
+			// First check: Is this transaction already on the best chain?
+			// If yes, we filter it out (it shouldn't be in unmined list, but be defensive)
+			if len(tx.BlockIDs) > 0 {
+				onBestChain := false
+				for _, blockID := range tx.BlockIDs {
+					if bestBlockHeaderIDsMap[blockID] {
+						onBestChain = true
+						break
+					}
+				}
+				if onBestChain {
+					// Transaction is already on the best chain - skip it
+					// (though it shouldn't be in unmined list - this is a data inconsistency)
+					b.logger.Warnf("[BlockAssembler][filterTransactionsWithValidParents] Transaction %s is already on best chain but marked as unmined - skipping it", tx.Hash.String())
+					skippedCount++
+					continue
+				}
+				// Transaction has BlockIDs but not on best chain - it's on an orphaned chain
+				// Continue to validate its parents to decide if it can be re-included
+			}
+
+			allParentsValid := true
+			invalidReason := ""
+
+			// Check each parent transaction
+			parentHashes := tx.TxInpoints.GetParentTxHashes()
+			unminedParents := make([]chainhash.Hash, 0) // Track which parents are unmined
+
+			for _, parentTxID := range parentHashes {
+				// Check if parent exists in UTXO store
+				parentMeta, exists := parentMetadata[parentTxID]
+				if !exists {
+					// Parent not found in UTXO store at all
+					// This means BatchDecorate couldn't find it - it doesn't exist
+					allParentsValid = false
+					invalidReason = fmt.Sprintf("parent tx %s not found in UTXO store", parentTxID.String())
+					break
+				}
+
+				// Parent exists in UTXO store - check if it's on the best chain
+				if len(parentMeta.BlockIDs) > 0 {
+					onBestChain := false
+					for _, blockID := range parentMeta.BlockIDs {
+						if bestBlockHeaderIDsMap[blockID] {
+							onBestChain = true
+							break
+						}
+					}
+					if !onBestChain {
+						allParentsValid = false
+						invalidReason = fmt.Sprintf("parent tx %s is on wrong chain (blocks: %v)",
+							parentTxID.String(), parentMeta.BlockIDs)
+						break
+					}
+				} else {
+					// Parent exists but has no BlockIDs - it's unmined
+					// Check if it's in our unmined list by seeing if it has an index
+					if _, isInUnminedList := parentIndexMap[parentTxID]; isInUnminedList {
+						// It's in our list - track it for ordering validation
+						unminedParents = append(unminedParents, parentTxID)
+					} else {
+						// Unmined but not in our list - this is a problem
+						allParentsValid = false
+						invalidReason = fmt.Sprintf("parent tx %s is unmined but not in processing list", parentTxID.String())
+						break
+					}
+				}
+			}
+
+			// Handle transactions with unmined parents that ARE in our list
+			// Check if unmined parents appear BEFORE this transaction in the sorted list
+			if len(unminedParents) > 0 {
+				// Calculate the global index of this transaction directly using batchIdx
+				currentIdx := i + batchIdx
+
+				// Check if all unmined parents come BEFORE this transaction
+				hasInvalidOrdering := false
+				for _, parentTxID := range unminedParents {
+					parentIdx, parentExists := parentIndexMap[parentTxID]
+					if !parentExists {
+						// Parent not in index map - this means it's not in the unmined list
+						// This shouldn't happen as we just checked it was referenced
+						b.logger.Errorf("[BlockAssembler][filterTransactionsWithValidParents] Parent tx %s not found in index map", parentTxID.String())
+						hasInvalidOrdering = true
+						break
+					}
+
+					// Parent must come BEFORE child (lower index)
+					if parentIdx >= currentIdx {
+						// Parent comes after or at same position as child - invalid ordering
+						hasInvalidOrdering = true
+						invalidReason = fmt.Sprintf("parent tx %s (index %d) comes after child tx %s (index %d)",
+							parentTxID.String(), parentIdx, tx.Hash.String(), currentIdx)
+						b.logger.Debugf("[BlockAssembler][filterTransactionsWithValidParents] Skipping tx %s: %s", tx.Hash.String(), invalidReason)
+						break
+					}
+				}
+
+				if hasInvalidOrdering {
+					skippedCount++
+					continue
+				}
+
+				// All unmined parents come before this transaction - this is valid
+				// The parent transactions will be processed first due to the sorted order
+			}
+
+			if allParentsValid {
+				validTxs = append(validTxs, tx)
+			} else {
+				skippedCount++
+				b.logger.Debugf("[BlockAssembler][filterTransactionsWithValidParents] Skipping tx %s: %s", tx.Hash.String(), invalidReason)
+			}
+		}
+	}
+
+	if skippedCount > 0 {
+		b.logger.Warnf("[BlockAssembler][filterTransactionsWithValidParents] Skipped %d transactions due to invalid/missing parent chains", skippedCount)
+	}
+
+	b.logger.Infof("[BlockAssembler][filterTransactionsWithValidParents] Parent chain validation complete: %d valid, %d skipped",
+		len(validTxs), skippedCount)
+
+	return validTxs, nil
+}
+
 // loadUnminedTransactions loads transactions from the UTXO store into block assembly.
 //
 // Primary responsibility: Load unmined transactions
@@ -1881,6 +2129,16 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 		// sort by createdAt, oldest first
 		return unminedTransactions[i].CreatedAt < unminedTransactions[j].CreatedAt
 	})
+
+	// Apply parent chain validation if enabled
+	if b.settings.BlockAssembly.ValidateParentChainOnRestart {
+		var err error
+		unminedTransactions, err = b.filterTransactionsWithValidParents(ctx, unminedTransactions, bestBlockHeaderIDsMap)
+		if err != nil {
+			// Context was cancelled during parent validation
+			return err
+		}
+	}
 
 	for _, unminedTransaction := range unminedTransactions {
 		subtreeNode := subtree.SubtreeNode{

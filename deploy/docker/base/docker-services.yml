@@ -87,7 +87,7 @@ services:
       - ../../../services/propagation/propagation_api/propagation_api.proto:/etc/protos/propagation_api.proto:ro
       - ../base/kafka-console-config.yml:/etc/console/config.yml:ro
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8082:8080"
     depends_on:
       - kafka-shared
 

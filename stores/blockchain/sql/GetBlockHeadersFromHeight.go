@@ -78,8 +78,9 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 	// Try to get from response cache using derived cache key
 	// Use operation-prefixed key to be consistent with other operations
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeadersFromHeight-%d-%d", height, limit)))
+	cacheOp := s.responseCache.Begin(cacheID)
 
-	cached := s.responseCache.Get(cacheID)
+	cached := cacheOp.Get()
 	if cached != nil {
 		if result, ok := cached.Value().([2]interface{}); ok {
 			if headers, ok := result[0].([]*model.BlockHeader); ok {
@@ -175,7 +176,7 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 	}
 
 	// Cache the result in response cache
-	s.responseCache.Set(cacheID, [2]interface{}{blockHeaders, blockMetas}, s.cacheTTL)
+	cacheOp.Set([2]interface{}{blockHeaders, blockMetas}, s.cacheTTL)
 
 	return blockHeaders, blockMetas, nil
 }

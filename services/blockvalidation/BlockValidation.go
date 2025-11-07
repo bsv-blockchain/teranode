@@ -17,6 +17,7 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -849,7 +850,9 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		}
 	}
 
-	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2)); err != nil || len(ids) == 0 {
+	// get all ancestor block ids without depth limit to ensure duplicate transaction detection
+	// use math.MaxInt32 (2.1 billion blocks) which is effectively unlimited for blockchain purposes
+	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, math.MaxInt32); err != nil || len(ids) == 0 {
 		if err != nil {
 			return errors.NewServiceError("[setTxMined][%s] failed to get block header ids", blockHash.String(), err)
 		}
@@ -864,7 +867,7 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		u.utxoStore,
 		block,
 		ids[0],
-		ids[0:], // all the block IDs are needed to check the transactions have not already been mined on our chain
+		ids[0:], // all ancestor block IDs on this chain - used to detect if transactions were already mined on this fork
 		onLongestChain,
 		unsetMined...,
 	); err != nil {
@@ -1611,9 +1614,9 @@ func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context
 		ctx,
 		u.logger,
 		checkParentBlock,
-		retry.WithBackoffDurationType(100*time.Millisecond),
-		retry.WithBackoffMultiplier(u.settings.BlockValidation.ArePreviousBlocksProcessedRetryBackoffMultiplier),
-		retry.WithRetryCount(u.settings.BlockValidation.ArePreviousBlocksProcessedMaxRetry),
+		retry.WithBackoffDurationType(u.settings.BlockValidation.IsParentMinedRetryBackoffDuration),
+		retry.WithBackoffMultiplier(u.settings.BlockValidation.IsParentMinedRetryBackoffMultiplier),
+		retry.WithRetryCount(u.settings.BlockValidation.IsParentMinedRetryMaxRetry),
 	)
 
 	return err

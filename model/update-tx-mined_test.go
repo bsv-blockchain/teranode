@@ -335,6 +335,34 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 
 		mockStore.AssertExpectations(t)
 	})
+
+	t.Run("should detect transaction mined outside retention window", func(t *testing.T) {
+		mockStore = &utxo.MockUtxostore{} // Reset mock
+
+		// Simulate a transaction that was mined in block 1000 (very old)
+		// but the chainBlockIDs includes all ancestors, not just retention*2
+		expectedBlockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx1.TxIDChainHash(): {1000}, // Mined in very old block 1000
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(expectedBlockIDsMap, nil).Once()
+
+		// Chain includes many blocks including the old block 1000
+		// This simulates unlimited depth fetch (the security fix)
+		chainBlockIDs := []uint32{1000, 1100, 1200, 1300, 1400, 1500, 1600}
+
+		// Trying to mine block 1600 which contains a transaction already in block 1000
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 1600, chainBlockIDs, true)
+
+		// Should get BlockInvalidError because transaction was already mined in block 1000 (on same chain)
+		// even though it's way outside the old retention*2 window (which would have been ~576 blocks)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
+		assert.Contains(t, err.Error(), "1000") // Should mention the conflicting block ID
+
+		mockStore.AssertExpectations(t)
+	})
 }
 
 // TestUpdateTxMinedStatus_ContextCancellation tests context cancellation scenarios

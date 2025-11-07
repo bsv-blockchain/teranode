@@ -45,7 +45,8 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 	// Use operation-prefixed key to avoid conflicts with other cached data
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeight-%s", blockHash.String())))
 
-	cached := s.responseCache.Get(cacheID)
+	cacheOp := s.responseCache.Begin(cacheID)
+	cached := cacheOp.Get()
 	if cached != nil {
 		// Check if it's a cached height value
 		if height, ok := cached.Value().(uint32); ok {
@@ -76,7 +77,7 @@ func (s *SQL) GetBlockHeight(ctx context.Context, blockHash *chainhash.Hash) (ui
 	}
 
 	// Cache the height result
-	s.responseCache.Set(cacheID, height, s.cacheTTL)
+	cacheOp.Set(height, s.cacheTTL)
 
 	return height, nil
 }

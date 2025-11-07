@@ -320,7 +320,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	})
 
 	// Create and register block handler for block operations
-	blockHandler := NewBlockHandler(repo.BlockchainClient, logger)
+	blockHandler := NewBlockHandler(repo.BlockchainClient, repo.BlockvalidationClient, logger)
 
 	// Register block invalidation/revalidation endpoints
 	apiGroup.POST("/block/invalidate", blockHandler.InvalidateBlock)
