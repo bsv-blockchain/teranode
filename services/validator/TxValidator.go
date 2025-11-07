@@ -318,9 +318,13 @@ func isStandardInputScript(script *bscript.Script, blockHeight uint32, uahfHeigh
 // checkOutputs validates transaction outputs according to consensus and policy rules.
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	total := uint64(0)
-	isGenesisActivated := blockHeight >= tv.settings.ChainCfgParams.GenesisActivationHeight
+
+	// Note: We use > instead of >= to exclude the Genesis activation block itself
+	// because transactions in block 620538 were created before Genesis rules existed
+	isGenesisActivated := blockHeight > tv.settings.ChainCfgParams.GenesisActivationHeight
 
 	for index, output := range tx.Outputs {
+		// Check P2SH output after genesis activation
 		if !validationOptions.SkipPolicyChecks && isGenesisActivated && output.LockingScript.IsP2SH() {
 			// See https://github.com/bitcoin-sv/teranode/issues/4333
 			return errors.NewTxInvalidError("transaction output %d is p2sh after genesis activation", index)
@@ -331,10 +335,8 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOpt
 		}
 
 		// Check dust limit after genesis activation
-		// Note: We use > instead of >= to exclude the Genesis activation block itself
-		// because transactions in block 620538 were created before Genesis rules existed
 		// Dust checks are policy rules, not consensus rules - they only apply to mempool/relay
-		if !validationOptions.SkipPolicyChecks && blockHeight > tv.settings.ChainCfgParams.GenesisActivationHeight {
+		if !validationOptions.SkipPolicyChecks && isGenesisActivated {
 			// Only enforce dust limit for spendable outputs when RequireStandard is true
 			if tv.settings.ChainCfgParams.RequireStandard && output.Satoshis < DustLimit && !isUnspendableOutput(output.LockingScript) {
 				return errors.NewTxInvalidError("zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix")
