@@ -22,6 +22,11 @@ type GetBlockHeaderVerboseResult struct {
 	Difficulty    float64 `json:"difficulty"`
 	PreviousHash  string  `json:"previousblockhash,omitempty"`
 	NextHash      string  `json:"nextblockhash,omitempty"`
+	Size          int32   `json:"size"`
+	NumTx         int     `json:"num_tx"`
+	MedianTime    int64   `json:"mediantime"`
+	ChainWork     string  `json:"chainwork"`
+	Status        string  `json:"status"`
 }
 
 // GetBlockBaseVerboseResult models the common data from the getblock command when
@@ -41,20 +46,23 @@ type GetBlockBaseVerboseResult struct {
 	Difficulty    float64 `json:"difficulty"`
 	PreviousHash  string  `json:"previousblockhash"`
 	NextHash      string  `json:"nextblockhash,omitempty"`
+	NumTx         int     `json:"num_tx"`
+	MedianTime    int64   `json:"mediantime"`
+	ChainWork     string  `json:"chainwork"`
 }
 
 // GetBlockVerboseResult models the data from the getblock command when the
 // verbose flag is set to 1 (default).
+// Note: Transaction data is not included to avoid performance issues with large blocks.
 type GetBlockVerboseResult struct {
 	*GetBlockBaseVerboseResult
-	Tx []string `json:"tx,omitempty"`
 }
 
 // GetBlockVerboseTxResult models the data from the getblock command when the
 // verbose flag is set to 2.
+// Note: Transaction data is not included to avoid performance issues with large blocks.
 type GetBlockVerboseTxResult struct {
 	*GetBlockBaseVerboseResult
-	Tx []TxRawResult `json:"tx,omitempty"`
 }
 
 // AddMultisigAddressResult models the data returned from the addmultisigaddress

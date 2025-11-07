@@ -555,8 +555,8 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		// Should return a *GetBlockVerboseTxResult
-		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
+		// Should return a GetBlockVerboseResult (both verbosity levels now return the same type)
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseResult)
 		assert.True(t, ok)
 
 		// Verify basic fields
@@ -568,7 +568,7 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		assert.Equal(t, nextBlock.Hash().String(), blockResult.NextHash)
 	})
 
-	t.Run("verbosity 2 returns nil (current implementation)", func(t *testing.T) {
+	t.Run("verbosity 2 returns same as verbosity 1 (updated implementation)", func(t *testing.T) {
 		mockBlock := createMockBlock(t, 200)
 
 		mockBlockchainClient := &mockBlockchainClient{
@@ -591,8 +591,10 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		result, err := s.blockToJSON(context.Background(), mockBlock, 2)
 		require.NoError(t, err)
 
-		// Current implementation only handles verbosity 1, returns nil for verbosity 2
-		assert.Nil(t, result)
+		// Updated implementation returns GetBlockVerboseResult for all verbosity levels >= 1
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseResult)
+		assert.True(t, ok)
+		assert.NotNil(t, blockResult)
 	})
 
 	t.Run("block with large size returns size info", func(t *testing.T) {
@@ -619,8 +621,8 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		// Should return a *GetBlockVerboseTxResult
-		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
+		// Should return a GetBlockVerboseResult
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseResult)
 		assert.True(t, ok)
 
 		// Verify the size field is populated
@@ -1556,12 +1558,35 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 		}
 
 		blockHeaderMeta := &model.BlockHeaderMeta{
-			Height: 100000,
+			Height:    100000,
+			ChainWork: []byte{0x01, 0x02, 0x03, 0x04},
 		}
 
 		mockClient := &mockBlockchainClient{
 			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return blockHeader, blockHeaderMeta, nil
+			},
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, &model.BlockHeaderMeta{Height: 100100}, nil
+			},
+			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
+				if height == 100001 {
+					// Return a next block
+					return &model.Block{
+						Header:           blockHeader,
+						Height:           height,
+						TransactionCount: 5,
+					}, nil
+				}
+				if height == 100000 {
+					// Return current block for num_tx calculation
+					return &model.Block{
+						Header:           blockHeader,
+						Height:           height,
+						TransactionCount: 10,
+					}, nil
+				}
+				return nil, errors.ErrBlockNotFound
 			},
 		}
 
@@ -4002,6 +4027,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
 					CacheEnabled:      true,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
 				},
 			},
 		}
