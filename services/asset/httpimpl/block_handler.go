@@ -6,8 +6,11 @@ import (
 	"net/http"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 )
 
@@ -21,6 +24,8 @@ import (
 type BlockHandler struct {
 	// blockchainClient provides access to the blockchain service for executing operations
 	blockchainClient blockchain.ClientI
+	// blockvalidationClient provides access to the block validation service for revalidating blocks
+	blockvalidationClient blockvalidation.Interface
 	// logger enables structured logging of handler operations and errors
 	logger ulogger.Logger
 }
@@ -51,10 +56,12 @@ type blockRequest struct {
 //
 // Returns:
 //   - *BlockHandler: Fully initialized handler ready to process block operations
-func NewBlockHandler(blockchainClient blockchain.ClientI, logger ulogger.Logger) *BlockHandler {
+func NewBlockHandler(blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface,
+	logger ulogger.Logger) *BlockHandler {
 	return &BlockHandler{
-		blockchainClient: blockchainClient,
-		logger:           logger,
+		blockchainClient:      blockchainClient,
+		blockvalidationClient: blockvalidationClient,
+		logger:                logger,
 	}
 }
 
@@ -94,9 +101,12 @@ func (h *BlockHandler) handleBlockOperation(c echo.Context, operationName string
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid block hash format: "+err.Error())
 	}
 
-	ctx := c.Request().Context()
+	ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "BlockHandler."+operationName,
+		tracing.WithParentStat(AssetStat),
+		tracing.WithLogMessage(h.logger, "[Asset_http] %s block: %s", operationName, blockHash),
+	)
 
-	h.logger.Infof("%s block: %s", operationName, blockHash)
+	defer deferFn()
 
 	// First check if the block exists
 	exists, err := h.blockchainClient.GetBlockExists(ctx, blockHash)
@@ -111,12 +121,10 @@ func (h *BlockHandler) handleBlockOperation(c echo.Context, operationName string
 	}
 
 	// Call the blockchain service to perform the operation
-	if err := operation(c, blockHash); err != nil {
-		h.logger.Errorf("Failed to %s block %s: %v", operationName, blockHash, err)
+	if err = operation(c, blockHash); err != nil {
+		h.logger.Errorf("[Asset_http] %s block operation failed: %s", operationName, err.Error())
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to %s block: %s", operationName, err.Error()))
 	}
-
-	h.logger.Infof("Block %s successfully: %s", operationName, blockHash)
 
 	// Return success response
 	return c.JSON(http.StatusOK, map[string]interface{}{
@@ -147,14 +155,13 @@ func (h *BlockHandler) handleBlockOperation(c echo.Context, operationName string
 //   - error: Any error encountered during block invalidation
 func (h *BlockHandler) InvalidateBlock(c echo.Context) error {
 	return h.handleBlockOperation(c, "invalidate", func(ctx echo.Context, blockHash *chainhash.Hash) error {
-		h.logger.Infof("[InvalidateBlock] HTTP request to invalidate block %s", blockHash.String())
-
 		invalidatedHashes, err := h.blockchainClient.InvalidateBlock(ctx.Request().Context(), blockHash)
 		if err != nil {
 			return err
 		}
 
-		h.logger.Infof("[InvalidateBlock] Invalidated %d blocks", len(invalidatedHashes))
+		h.logger.Infof("[Asset_http][InvalidateBlock] Invalidated %d blocks", len(invalidatedHashes))
+
 		return nil
 	})
 }
@@ -182,7 +189,16 @@ func (h *BlockHandler) InvalidateBlock(c echo.Context) error {
 //   - error: Any error encountered during block revalidation
 func (h *BlockHandler) RevalidateBlock(c echo.Context) error {
 	return h.handleBlockOperation(c, "revalidate", func(ctx echo.Context, blockHash *chainhash.Hash) error {
-		return h.blockchainClient.RevalidateBlock(ctx.Request().Context(), blockHash)
+		block, err := h.blockchainClient.GetBlock(ctx.Request().Context(), blockHash)
+		if err != nil {
+			return errors.NewProcessingError("error getting block", err)
+		}
+
+		options := &blockvalidation.ValidateBlockOptions{
+			IsRevalidation: true,
+		}
+
+		return h.blockvalidationClient.ValidateBlock(ctx.Request().Context(), block, options)
 	})
 }
 
@@ -218,26 +234,21 @@ func (h *BlockHandler) GetLastNInvalidBlocks(c echo.Context) error {
 
 	_, err := fmt.Sscanf(countStr, "%d", &count)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid count parameter: "+err.Error())
+		return errors.NewInvalidArgumentError("Invalid count parameter: " + err.Error())
 	}
 
 	// Validate count is positive
 	if count <= 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "Count must be a positive number")
+		return errors.NewInvalidArgumentError("Count must be a positive number")
 	}
 
 	ctx := c.Request().Context()
 
-	h.logger.Infof("Retrieving last %d invalid blocks", count)
-
 	// Call the blockchain service to get the invalid blocks
 	blocks, err := h.blockchainClient.GetLastNInvalidBlocks(ctx, count)
 	if err != nil {
-		h.logger.Errorf("Failed to retrieve invalid blocks: %v", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve invalid blocks: "+err.Error())
+		return errors.NewProcessingError("Failed to retrieve invalid blocks: " + err.Error())
 	}
-
-	h.logger.Infof("Successfully retrieved %d invalid blocks", len(blocks))
 
 	// Return the blocks
 	return c.JSON(http.StatusOK, map[string]interface{}{

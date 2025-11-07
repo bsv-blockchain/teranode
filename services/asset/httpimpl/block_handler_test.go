@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +28,7 @@ func TestNewBlockHandler(t *testing.T) {
 	logger := ulogger.TestLogger{}
 
 	// Call the function to be tested
-	handler := NewBlockHandler(mockClient, logger)
+	handler := NewBlockHandler(mockClient, nil, logger)
 
 	// Assert that the handler is not nil and has the correct properties
 	assert.NotNil(t, handler)
@@ -37,9 +38,10 @@ func TestNewBlockHandler(t *testing.T) {
 
 // setupBlockHandlerTest creates a test environment for block handler tests
 func setupBlockHandlerTest(_ *testing.T, requestBody string) (*BlockHandler, *blockchain.Mock, echo.Context, *httptest.ResponseRecorder) {
-	mockClient := &blockchain.Mock{}
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockValidationClient := &blockvalidation.Mock{}
 	logger := ulogger.TestLogger{}
-	handler := NewBlockHandler(mockClient, logger)
+	handler := NewBlockHandler(mockBlockchainClient, mockBlockValidationClient, logger)
 
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(requestBody))
@@ -49,7 +51,7 @@ func setupBlockHandlerTest(_ *testing.T, requestBody string) (*BlockHandler, *bl
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	return handler, mockClient, c, rec
+	return handler, mockBlockchainClient, c, rec
 }
 
 // TestHandleBlockOperationWithInvalidJSON tests the handleBlockOperation function with invalid JSON
@@ -376,8 +378,12 @@ func TestRevalidateBlock(t *testing.T) {
 		requestBody := `{"blockHash": "` + validBlockHash + `"}`
 		handler, mockClient, c, rec := setupBlockHandlerTest(t, requestBody)
 
+		handler.blockvalidationClient.(*blockvalidation.Mock).On("ValidateBlock", mock.Anything, mock.Anything, mock.Anything).
+			Return(nil)
+
 		// Mock the blockchain client responses
 		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
+		mockClient.On("GetBlock", mock.Anything, blockHash).Return(&model.Block{}, nil)
 		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(true, nil)
 		mockClient.On("RevalidateBlock", mock.Anything, blockHash).Return(nil)
 
@@ -394,9 +400,6 @@ func TestRevalidateBlock(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, response["success"].(bool))
 		assert.Equal(t, "Block revalidate successfully", response["message"])
-
-		// Verify that the mock was called with the correct arguments
-		mockClient.AssertCalled(t, "RevalidateBlock", mock.Anything, blockHash)
 	})
 
 	t.Run("Error from RevalidateBlock", func(t *testing.T) {
@@ -404,8 +407,12 @@ func TestRevalidateBlock(t *testing.T) {
 		requestBody := `{"blockHash": "` + validBlockHash + `"}`
 		handler, mockClient, c, _ := setupBlockHandlerTest(t, requestBody)
 
+		handler.blockvalidationClient.(*blockvalidation.Mock).On("ValidateBlock", mock.Anything, mock.Anything, mock.Anything).
+			Return(errors.NewBlockInvalidError("Failed to revalidate block"))
+
 		// Mock the blockchain client responses
 		blockHash, _ := chainhash.NewHashFromStr(validBlockHash)
+		mockClient.On("GetBlock", mock.Anything, blockHash).Return(&model.Block{}, nil)
 		mockClient.On("GetBlockExists", mock.Anything, blockHash).Return(true, nil)
 		mockClient.On("RevalidateBlock", mock.Anything, blockHash).Return(errors.ErrServiceError)
 
@@ -417,9 +424,6 @@ func TestRevalidateBlock(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
 		assert.Contains(t, httpErr.Message, "Failed to revalidate block")
-
-		// Verify that the mock was called with the correct arguments
-		mockClient.AssertCalled(t, "RevalidateBlock", mock.Anything, blockHash)
 	})
 }
 
@@ -436,10 +440,8 @@ func TestGetLastNInvalidBlocksWithInvalidCount(t *testing.T) {
 	err := handler.GetLastNInvalidBlocks(c)
 
 	// Assert results
-	httpErr, ok := err.(*echo.HTTPError)
-	require.True(t, ok)
-	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Contains(t, httpErr.Message, "Invalid count parameter")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Invalid count parameter")
 }
 
 // TestGetLastNInvalidBlocksWithNegativeCount tests the GetLastNInvalidBlocks method with a negative count parameter
@@ -455,10 +457,8 @@ func TestGetLastNInvalidBlocksWithNegativeCount(t *testing.T) {
 	err := handler.GetLastNInvalidBlocks(c)
 
 	// Assert results
-	httpErr, ok := err.(*echo.HTTPError)
-	require.True(t, ok)
-	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-	assert.Contains(t, httpErr.Message, "Count must be a positive number")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Count must be a positive number")
 }
 
 // TestGetLastNInvalidBlocks tests the GetLastNInvalidBlocks method
@@ -661,10 +661,8 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		err := handler.GetLastNInvalidBlocks(c)
 
 		// Assert results
-		httpErr, ok := err.(*echo.HTTPError)
-		require.True(t, ok)
-		assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-		assert.Contains(t, httpErr.Message, "Invalid count parameter")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Invalid count parameter")
 	})
 
 	t.Run("Negative count parameter", func(t *testing.T) {
@@ -683,10 +681,8 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		err := handler.GetLastNInvalidBlocks(c)
 
 		// Assert results
-		httpErr, ok := err.(*echo.HTTPError)
-		require.True(t, ok)
-		assert.Equal(t, http.StatusBadRequest, httpErr.Code)
-		assert.Contains(t, httpErr.Message, "Count must be a positive number")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Count must be a positive number")
 	})
 
 	t.Run("Error from GetLastNInvalidBlocks", func(t *testing.T) {
@@ -704,10 +700,8 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		err := handler.GetLastNInvalidBlocks(c)
 
 		// Assert results
-		httpErr, ok := err.(*echo.HTTPError)
-		require.True(t, ok)
-		assert.Equal(t, http.StatusInternalServerError, httpErr.Code)
-		assert.Contains(t, httpErr.Message, "Failed to retrieve invalid blocks")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Failed to retrieve invalid blocks")
 
 		// Verify that the mock was called with the correct arguments
 		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(10))

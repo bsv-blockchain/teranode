@@ -46,8 +46,8 @@ func (m *Mock) ProcessBlock(ctx context.Context, block *model.Block, blockHeight
 }
 
 // ValidateBlock performs a mock block validation.
-func (m *Mock) ValidateBlock(ctx context.Context, block *model.Block) error {
-	args := m.Called(ctx, block)
+func (m *Mock) ValidateBlock(ctx context.Context, block *model.Block, options *ValidateBlockOptions) error {
+	args := m.Called(ctx, block, options)
 	return args.Error(0)
 }
 

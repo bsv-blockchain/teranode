@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/asset/httpimpl"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -43,17 +44,18 @@ import (
 // - centrifugeServer: Manages real-time data subscriptions via the Centrifuge protocol
 // - blockchainClient: Interface for interacting with the blockchain service
 type Server struct {
-	logger              ulogger.Logger
-	settings            *settings.Settings
-	utxoStore           utxo.Store
-	txStore             blob.Store
-	subtreeStore        blob.Store
-	blockPersisterStore blob.Store
-	httpAddr            string
-	httpServer          *httpimpl.HTTP
-	centrifugeAddr      string
-	centrifugeServer    *centrifuge_impl.Centrifuge
-	blockchainClient    blockchain.ClientI
+	logger                ulogger.Logger
+	settings              *settings.Settings
+	utxoStore             utxo.Store
+	txStore               blob.Store
+	subtreeStore          blob.Store
+	blockPersisterStore   blob.Store
+	httpAddr              string
+	httpServer            *httpimpl.HTTP
+	centrifugeAddr        string
+	centrifugeServer      *centrifuge_impl.Centrifuge
+	blockchainClient      blockchain.ClientI
+	blockvalidationClient blockvalidation.Interface
 }
 
 // NewServer creates a new Server instance with the provided dependencies.
@@ -75,15 +77,17 @@ type Server struct {
 //
 // Returns:
 //   - *Server: A fully initialized Server instance ready for use
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
+	subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface) *Server {
 	s := &Server{
-		logger:              logger,
-		settings:            tSettings,
-		utxoStore:           utxoStore,
-		txStore:             txStore,
-		subtreeStore:        subtreeStore,
-		blockPersisterStore: blockPersisterStore,
-		blockchainClient:    blockchainClient,
+		logger:                logger,
+		settings:              tSettings,
+		utxoStore:             utxoStore,
+		txStore:               txStore,
+		subtreeStore:          subtreeStore,
+		blockPersisterStore:   blockPersisterStore,
+		blockchainClient:      blockchainClient,
+		blockvalidationClient: blockvalidationClient,
 	}
 
 	return s
@@ -181,7 +185,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("no asset_httpListenAddress setting found")
 	}
 
-	repo, err := repository.NewRepository(v.logger, v.settings, v.utxoStore, v.txStore, v.blockchainClient, v.subtreeStore, v.blockPersisterStore)
+	repo, err := repository.NewRepository(v.logger, v.settings, v.utxoStore, v.txStore, v.blockchainClient, v.blockvalidationClient, v.subtreeStore, v.blockPersisterStore)
 	if err != nil {
 		return errors.NewServiceError("error creating repository", err)
 	}

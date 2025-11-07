@@ -55,8 +55,9 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 	// Try to get from response cache using derived cache key
 	// Use operation-prefixed key to be consistent with other operations
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetSuitableBlock-%s", hash.String())))
+	cacheOp := s.responseCache.Begin(cacheID)
 
-	cached := s.responseCache.Get(cacheID)
+	cached := cacheOp.Get()
 	if cached != nil {
 		if suitableBlock, ok := cached.Value().(*model.SuitableBlock); ok {
 			return suitableBlock, nil
@@ -155,7 +156,7 @@ func (s *SQL) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*mode
 	}
 
 	// Cache the result in response cache
-	s.responseCache.Set(cacheID, b, s.cacheTTL)
+	cacheOp.Set(b, s.cacheTTL)
 
 	return b, nil
 }

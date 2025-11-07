@@ -106,6 +106,18 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		}
 	}
 
+	// Skip pause lock if we're catching up
+	if shouldPauseProcessing {
+		currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			u.logger.Warnf("[CheckBlockSubtrees] Failed to get FSM state: %v - will pause for safety", err)
+		} else if currentState != nil &&
+			(*currentState == blockchain.FSMStateCATCHINGBLOCKS || *currentState == blockchain.FSMStateLEGACYSYNCING) {
+			u.logger.Infof("[CheckBlockSubtrees] Skipping pause lock - FSM state is %s (catching up)", currentState.String())
+			shouldPauseProcessing = false
+		}
+	}
+
 	// Acquire and manage pause lock with immediate defer for guaranteed cleanup
 	if shouldPauseProcessing {
 		u.logger.Infof("[CheckBlockSubtrees] Block %s is on our chain or extending it - acquiring pause lock across all pods", block.Hash().String())

@@ -27,8 +27,9 @@
 | ValidationMaxRetries | int | 3 | blockvalidation_validation_max_retries | Validation retry attempts |
 | ValidationRetrySleep | time.Duration | 5s | blockvalidation_validation_retry_sleep | Validation retry delay |
 | OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior |
-| IsParentMinedRetryMaxRetry | int | 20 | blockvalidation_isParentMined_retry_max_retry | Parent mining check retries |
-| IsParentMinedRetryBackoffMultiplier | int | 30 | blockvalidation_isParentMined_retry_backoff_multiplier | Parent mining retry backoff |
+| IsParentMinedRetryMaxRetry | int | 45 | blockvalidation_isParentMined_retry_max_retry | Parent mining check retries |
+| IsParentMinedRetryBackoffMultiplier | int | 4 | blockvalidation_isParentMined_retry_backoff_multiplier | Parent mining retry backoff multiplier |
+| IsParentMinedRetryBackoffDuration | time.Duration | 20ms | blockvalidation_isParentMined_retry_backoff_duration | Parent mining retry backoff base duration |
 | SubtreeGroupConcurrency | int | 1 | blockvalidation_subtreeGroupConcurrency | Subtree group processing concurrency |
 | BlockFoundChBufferSize | int | 1000 | blockvalidation_blockFoundCh_buffer_size | Block discovery pipeline buffer |
 | CatchupChBufferSize | int | 10 | blockvalidation_catchupCh_buffer_size | Catchup processing pipeline buffer |

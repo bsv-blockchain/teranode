@@ -1503,6 +1503,8 @@ func TestCheckBlockSubtrees_DifferentFork(t *testing.T) {
 					nil,
 				)
 				mockClient.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{123}).Return(true, nil)
+				runningState := blockchain.FSMStateRUNNING
+				mockClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 			},
 		},
 		{
