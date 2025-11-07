@@ -318,8 +318,14 @@ func isStandardInputScript(script *bscript.Script, blockHeight uint32, uahfHeigh
 // checkOutputs validates transaction outputs according to consensus and policy rules.
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	total := uint64(0)
+	isGenesisActivated := blockHeight >= tv.settings.ChainCfgParams.GenesisActivationHeight
 
 	for index, output := range tx.Outputs {
+		if !validationOptions.SkipPolicyChecks && isGenesisActivated && output.LockingScript.IsP2SH() {
+			// See https://github.com/bitcoin-sv/teranode/issues/4333
+			return errors.NewTxInvalidError("transaction output %d is p2sh after genesis activation", index)
+		}
+
 		if output.Satoshis > MaxSatoshis {
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
 		}
