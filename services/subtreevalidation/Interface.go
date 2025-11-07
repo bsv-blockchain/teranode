@@ -125,6 +125,6 @@ func (mv *MockSubtreeValidation) CheckSubtreeFromBlock(ctx context.Context, hash
 }
 
 func (mv *MockSubtreeValidation) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string) error {
-	args := mv.Called(ctx, block, baseURL, peerID)
+	args := mv.Called(ctx, block, peerID, baseURL)
 	return args.Error(0)
 }

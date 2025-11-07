@@ -190,7 +190,7 @@ func (v *Server) Init(ctx context.Context) (err error) {
 	}
 
 	repo, err := repository.NewRepository(v.logger, v.settings, v.utxoStore, v.txStore, v.blockchainClient,
-		v.blockvalidationClient, v.subtreeStore, v.blockPersisterStore)
+		v.blockvalidationClient, v.subtreeStore, v.blockPersisterStore, v.p2pClient)
 	if err != nil {
 		return errors.NewServiceError("error creating repository", err)
 	}

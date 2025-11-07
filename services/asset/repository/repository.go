@@ -94,7 +94,8 @@ type Repository struct {
 //   - *Repository: Newly created repository instance
 //   - error: Any error encountered during creation
 func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
-	blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error) {
+	blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store,
+	blockPersisterStore blob.Store, p2pClient p2p.ClientI) (*Repository, error) {
 
 	return &Repository{
 		logger:                logger,
@@ -105,6 +106,7 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 		TxStore:               txStore,
 		SubtreeStore:          subtreeStore,
 		BlockPersisterStore:   blockPersisterStore,
+		P2PClient:             p2pClient,
 	}, nil
 }
 
