@@ -76,8 +76,9 @@ func (s *SQL) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targe
 	// Try to get from response cache using derived cache key
 	// Use operation-prefixed key to be consistent with other operations
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeadersFromOldest-%s-%s-%d", chainTipHash.String(), targetHash.String(), numberOfHeaders)))
+	cacheOp := s.responseCache.Begin(cacheID)
 
-	cached := s.responseCache.Get(cacheID)
+	cached := cacheOp.Get()
 	if cached != nil {
 		if result, ok := cached.Value().([2]interface{}); ok {
 			if headers, ok := result[0].([]*model.BlockHeader); ok {
@@ -151,7 +152,7 @@ func (s *SQL) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targe
 	}
 
 	// Cache the result in response cache
-	s.responseCache.Set(cacheID, [2]interface{}{blockHeaders, blockMetas}, s.cacheTTL)
+	cacheOp.Set([2]interface{}{blockHeaders, blockMetas}, s.cacheTTL)
 
 	return blockHeaders, blockMetas, nil
 }

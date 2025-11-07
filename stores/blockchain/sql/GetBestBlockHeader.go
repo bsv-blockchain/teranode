@@ -91,11 +91,11 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBestBlockHeader")
 	defer deferFn()
 
-	// Try to get from response cache using derived cache key
-	// Use operation-prefixed key to be consistent with other operations
+	// Begin cache-safe query - captures generation to prevent stale writes
 	cacheID := chainhash.HashH([]byte("GetBestBlockHeader"))
+	cacheOp := s.responseCache.Begin(cacheID)
 
-	cached := s.responseCache.Get(cacheID)
+	cached := cacheOp.Get()
 	if cached != nil {
 		if result, ok := cached.Value().([2]interface{}); ok {
 			if header, ok := result[0].(*model.BlockHeader); ok {
@@ -207,8 +207,10 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 	// Set the block time to the timestamp in the meta
 	blockHeaderMeta.BlockTime = blockHeader.Timestamp
-	// Cache the result in response cache
-	s.responseCache.Set(cacheID, [2]interface{}{blockHeader, blockHeaderMeta}, s.cacheTTL)
+
+	// Cache result - CacheQuery.Set() checks if cache was invalidated during query
+	result := [2]interface{}{blockHeader, blockHeaderMeta}
+	cacheOp.Set(result, s.cacheTTL)
 
 	return blockHeader, blockHeaderMeta, nil
 }

@@ -240,6 +240,8 @@ type BlockAssemblySettings struct {
 	UseDynamicSubtreeSize               bool
 	MiningCandidateCacheTimeout         time.Duration
 	BlockchainSubscriptionTimeout       time.Duration
+	ValidateParentChainOnRestart        bool
+	ParentValidationBatchSize           int
 }
 
 type BlockValidationSettings struct {

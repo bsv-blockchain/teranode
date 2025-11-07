@@ -220,6 +220,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UseDynamicSubtreeSize:               getBool("blockassembly_useDynamicSubtreeSize", false, alternativeContext...),
 			MiningCandidateCacheTimeout:         getDuration("blockassembly_miningCandidateCacheTimeout", 5*time.Second),
 			BlockchainSubscriptionTimeout:       getDuration("blockassembly_blockchainSubscriptionTimeout", 5*time.Minute, alternativeContext...),
+			ValidateParentChainOnRestart:        getBool("blockassembly_validateParentChainOnRestart", true, alternativeContext...),
+			ParentValidationBatchSize:           getInt("blockassembly_parentValidationBatchSize", 1000, alternativeContext...),
 		},
 		BlockChain: BlockChainSettings{
 			GRPCAddress:           getString("blockchain_grpcAddress", "localhost:8087", alternativeContext...),
