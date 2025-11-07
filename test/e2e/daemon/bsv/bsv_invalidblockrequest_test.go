@@ -182,7 +182,7 @@ func testInvalidCoinbaseAmount(t *testing.T, nodes []*daemon.TestDaemon) {
 	_, validBlock := node0.CreateTestBlock(t, previousBlock, 12345) // Empty block with just coinbase
 
 	// Try to process the valid block first to ensure our setup works
-	err = node0.BlockValidationClient.ProcessBlock(ctx, validBlock, validBlock.Height, "legacy", "")
+	err = node0.BlockValidationClient.ProcessBlock(ctx, validBlock, validBlock.Height, "", "legacy")
 	require.NoError(t, err, "Valid block should be accepted")
 
 	t.Log("✅ Valid block was accepted, now testing invalid scenarios...")
@@ -238,7 +238,7 @@ func testInvalidBlockProcessing(t *testing.T, nodes []*daemon.TestDaemon) {
 	_, testBlock := node0.CreateTestBlock(t, bestBlock, 54321, parentTx, childTx)
 
 	// Try to process the block - this should work if transactions are valid
-	err = node0.BlockValidationClient.ProcessBlock(ctx, testBlock, testBlock.Height, "legacy", "")
+	err = node0.BlockValidationClient.ProcessBlock(ctx, testBlock, testBlock.Height, "", "legacy")
 	if err != nil {
 		t.Logf("Block validation failed as expected: %v", err)
 		t.Log("✅ Block validation correctly rejected invalid block")

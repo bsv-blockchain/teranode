@@ -22,13 +22,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,8 +35,6 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
-	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -53,8 +47,6 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
-	ma "github.com/multiformats/go-multiaddr"
-	madns "github.com/multiformats/go-multiaddr-dns"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -90,12 +82,11 @@ type peerMapEntry struct {
 // - Ban management is thread-safe across connections
 type Server struct {
 	p2p_api.UnimplementedPeerServiceServer
-	P2PClient                         p2pMessageBus.P2PClient // The P2P network client
-	logger                            ulogger.Logger          // Logger instance for the server
-	settings                          *settings.Settings      // Configuration settings
-	bitcoinProtocolVersion            string                  // Bitcoin protocol identifier
-	blockchainClient                  blockchain.ClientI      // Client for blockchain interactions
-	blockValidationClient             blockvalidation.Interface
+	P2PClient                         p2pMessageBus.P2PClient   // The P2P network client
+	logger                            ulogger.Logger            // Logger instance for the server
+	settings                          *settings.Settings        // Configuration settings
+	bitcoinProtocolVersion            string                    // Bitcoin protocol identifier
+	blockchainClient                  blockchain.ClientI        // Client for blockchain interactions
 	blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
 	AssetHTTPAddressURL               string                    // HTTP address URL for assets
 	e                                 *echo.Echo                // Echo server instance
@@ -452,10 +443,6 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 		checks = append(checks, health.Check{Name: "FSM", Check: blockchain.CheckFSM(s.blockchainClient)})
 	}
 
-	if s.blockValidationClient != nil {
-		checks = append(checks, health.Check{Name: "BlockValidationClient", Check: s.blockValidationClient.Health})
-	}
-
 	return health.CheckAll(ctx, checkLiveness, checks)
 }
 
@@ -552,11 +539,6 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	s.subtreeKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
 	s.blocksKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10))
-
-	s.blockValidationClient, err = blockvalidation.NewClient(ctx, s.logger, s.settings, "p2p")
-	if err != nil {
-		return errors.NewServiceError("could not create block validation client [%w]", err)
-	}
 
 	s.e = s.setupHTTPServer()
 
@@ -707,16 +689,14 @@ func (s *Server) invalidSubtreeHandler(ctx context.Context) func(msg *kafka.Kafk
 			return err
 		}
 
-		s.logger.Infof("[invalidSubtreeHandler] Received invalid subtree notification via Kafka: hash=%s, peerUrl=%s, reason=%s",
-			m.SubtreeHash, m.PeerUrl, m.Reason)
+		s.logger.Infof("[invalidSubtreeHandler] Received invalid subtree notification via Kafka: hash=%s, peerUrl=%s, reason=%s", m.SubtreeHash, m.PeerUrl, m.Reason)
 
 		// Use the existing ReportInvalidSubtree method to handle the invalid subtree
-		// TODO: Uncomment when ReportInvalidSubtree is implemented
-		/*err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.PeerUrl, m.Reason)
+		err = s.ReportInvalidSubtree(ctx, m.SubtreeHash, m.PeerUrl, m.Reason)
 		if err != nil {
 			// Don't return error here, as we want to continue processing messages
 			s.logger.Errorf("[invalidSubtreeHandler] Failed to report invalid subtree from Kafka: %v", err)
-		}*/
+		}
 
 		return nil
 	}
@@ -1654,312 +1634,6 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
-	var (
-		blockMessage BlockMessage
-		hash         *chainhash.Hash
-		err          error
-	)
-
-	// decode request
-	blockMessage = BlockMessage{}
-
-	err = json.Unmarshal(m, &blockMessage)
-	if err != nil {
-		s.logger.Errorf("[handleBlockTopic] json unmarshal error: %v", err)
-		return
-	}
-
-	if from == blockMessage.PeerID {
-		s.logger.Infof("[handleBlockTopic] DIRECT block %s from %s", blockMessage.Hash, blockMessage.PeerID)
-	} else {
-		s.logger.Infof("[handleBlockTopic] RELAY  block %s (originator: %s, via: %s)", blockMessage.Hash, blockMessage.PeerID, from)
-	}
-
-	select {
-	case s.notificationCh <- &notificationMsg{
-		Timestamp:  time.Now().UTC().Format(isoFormat),
-		Type:       "block",
-		Hash:       blockMessage.Hash,
-		Height:     blockMessage.Height,
-		BaseURL:    blockMessage.DataHubURL,
-		PeerID:     blockMessage.PeerID,
-		ClientName: blockMessage.ClientName,
-	}:
-	default:
-		s.logger.Warnf("[handleBlockTopic] notification channel full, dropped block notification for %s", blockMessage.Hash)
-	}
-
-	// Ignore our own messages
-	if s.isOwnMessage(from, blockMessage.PeerID) {
-		s.logger.Debugf("[handleBlockTopic] ignoring own block message for %s", blockMessage.Hash)
-		return
-	}
-
-	// Update last message time for the sender and originator with client name
-	s.updatePeerLastMessageTime(from, blockMessage.PeerID, blockMessage.ClientName)
-
-	// Track bytes received from this message
-	s.updateBytesReceived(from, blockMessage.PeerID, uint64(len(m)))
-
-	// Skip notifications from banned peers
-	if s.shouldSkipBannedPeer(blockMessage.PeerID, "handleBlockTopic") {
-		return
-	}
-
-	// Skip notifications from unhealthy peers
-	if s.shouldSkipUnhealthyPeer(blockMessage.PeerID, "handleBlockTopic") {
-		return
-	}
-
-	now := time.Now().UTC()
-
-	hash, err = s.parseHash(blockMessage.Hash, "handleBlockTopic")
-	if err != nil {
-		return
-	}
-
-	// Store the peer ID that sent this block
-	s.storePeerMapEntry(&s.blockPeerMap, blockMessage.Hash, from, now)
-	s.logger.Debugf("[handleBlockTopic] storing peer %s for block %s", from, blockMessage.Hash)
-
-	// Store the peer's latest block hash from block announcement
-	if blockMessage.Hash != "" {
-		// Store using the originator's peer ID
-		if peerID, err := peer.Decode(blockMessage.PeerID); err == nil {
-			s.updateBlockHash(peerID, blockMessage.Hash)
-			s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for peer %s", blockMessage.Hash, peerID)
-		}
-		// Also store using the immediate sender for redundancy
-		if peerID, err := peer.Decode(from); err == nil {
-			s.updateBlockHash(peerID, blockMessage.Hash)
-			s.logger.Debugf("[handleBlockTopic] Stored latest block hash %s for sender %s", blockMessage.Hash, from)
-		}
-	}
-
-	// Update peer height if provided
-	if blockMessage.Height > 0 {
-		// Update peer height in registry
-		if peerID, err := peer.Decode(blockMessage.PeerID); err == nil {
-			s.updatePeerHeight(peerID, int32(blockMessage.Height))
-		}
-	}
-
-	// Always send block to kafka - let block validation service decide what to do based on sync state
-	// send block to kafka, if configured
-	if s.blocksKafkaProducerClient != nil {
-		msg := &kafkamessage.KafkaBlockTopicMessage{
-			Hash:   hash.String(),
-			URL:    blockMessage.DataHubURL,
-			PeerId: blockMessage.PeerID,
-		}
-
-		s.logger.Debugf("[handleBlockTopic] Sending block %s to Kafka", hash.String())
-
-		value, err := proto.Marshal(msg)
-		if err != nil {
-			s.logger.Errorf("[handleBlockTopic] error marshaling KafkaBlockTopicMessage: %v", err)
-			return
-		}
-
-		s.blocksKafkaProducerClient.Publish(&kafka.Message{
-			Key:   hash.CloneBytes(),
-			Value: value,
-		})
-	}
-}
-
-func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, from string) {
-	var (
-		subtreeMessage SubtreeMessage
-		hash           *chainhash.Hash
-		err            error
-	)
-
-	// decode request
-	subtreeMessage = SubtreeMessage{}
-
-	err = json.Unmarshal(m, &subtreeMessage)
-	if err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] json unmarshal error: %v", err)
-		return
-	}
-
-	if from == subtreeMessage.PeerID {
-		s.logger.Debugf("[handleSubtreeTopic] DIRECT subtree %s from %s", subtreeMessage.Hash, subtreeMessage.PeerID)
-	} else {
-		s.logger.Debugf("[handleSubtreeTopic] RELAY  subtree %s (originator: %s, via: %s)", subtreeMessage.Hash, subtreeMessage.PeerID, from)
-	}
-
-	if s.isBlacklistedBaseURL(subtreeMessage.DataHubURL) {
-		s.logger.Errorf("[handleSubtreeTopic] Blocked subtree notification from blacklisted baseURL: %s", subtreeMessage.DataHubURL)
-		return
-	}
-
-	now := time.Now().UTC()
-
-	select {
-	case s.notificationCh <- &notificationMsg{
-		Timestamp:  now.Format(isoFormat),
-		Type:       "subtree",
-		Hash:       subtreeMessage.Hash,
-		BaseURL:    subtreeMessage.DataHubURL,
-		PeerID:     subtreeMessage.PeerID,
-		ClientName: subtreeMessage.ClientName,
-	}:
-	default:
-		s.logger.Warnf("[handleSubtreeTopic] notification channel full, dropped subtree notification for %s", subtreeMessage.Hash)
-	}
-
-	// Ignore our own messages
-	if s.isOwnMessage(from, subtreeMessage.PeerID) {
-		s.logger.Debugf("[handleSubtreeTopic] ignoring own subtree message for %s", subtreeMessage.Hash)
-		return
-	}
-
-	// Update last message time for the sender and originator with client name
-	s.updatePeerLastMessageTime(from, subtreeMessage.PeerID, subtreeMessage.ClientName)
-
-	// Track bytes received from this message
-	s.updateBytesReceived(from, subtreeMessage.PeerID, uint64(len(m)))
-
-	// Skip notifications from banned peers
-	if s.shouldSkipBannedPeer(from, "handleSubtreeTopic") {
-		s.logger.Debugf("[handleSubtreeTopic] skipping banned peer %s", from)
-		return
-	}
-
-	// Skip notifications from unhealthy peers
-	if s.shouldSkipUnhealthyPeer(from, "handleSubtreeTopic") {
-		return
-	}
-
-	hash, err = s.parseHash(subtreeMessage.Hash, "handleSubtreeTopic")
-	if err != nil {
-		s.logger.Errorf("[handleSubtreeTopic] error parsing hash: %v", err)
-		return
-	}
-
-	// Store the peer ID that sent this subtree
-	s.storePeerMapEntry(&s.subtreePeerMap, subtreeMessage.Hash, from, now)
-	s.logger.Debugf("[handleSubtreeTopic] storing peer %s for subtree %s", from, subtreeMessage.Hash)
-
-	if s.subtreeKafkaProducerClient != nil { // tests may not set this
-		msg := &kafkamessage.KafkaSubtreeTopicMessage{
-			Hash:   hash.String(),
-			URL:    subtreeMessage.DataHubURL,
-			PeerId: subtreeMessage.PeerID,
-		}
-
-		value, err := proto.Marshal(msg)
-		if err != nil {
-			s.logger.Errorf("[handleSubtreeTopic] error marshaling KafkaSubtreeTopicMessage: %v", err)
-			return
-		}
-
-		s.subtreeKafkaProducerClient.Publish(&kafka.Message{
-			Key:   hash.CloneBytes(),
-			Value: value,
-		})
-	}
-}
-
-// isBlacklistedBaseURL checks if the given baseURL matches any entry in the blacklist.
-func (s *Server) isBlacklistedBaseURL(baseURL string) bool {
-	inputHost := s.extractHost(baseURL)
-	if inputHost == "" {
-		// Fall back to exact string matching for invalid URLs
-		for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
-			if baseURL == blocked {
-				return true
-			}
-		}
-
-		return false
-	}
-
-	// Check each blacklisted URL
-	for blocked := range s.settings.SubtreeValidation.BlacklistedBaseURLs {
-		blockedHost := s.extractHost(blocked)
-		if blockedHost == "" {
-			// Fall back to exact string matching for invalid blacklisted URLs
-			if baseURL == blocked {
-				return true
-			}
-
-			continue
-		}
-
-		if inputHost == blockedHost {
-			return true
-		}
-	}
-
-	return false
-}
-
-// extractHost extracts and normalizes the host component from a URL
-func (s *Server) extractHost(urlStr string) string {
-	parsedURL, err := url.Parse(urlStr)
-	if err != nil {
-		return ""
-	}
-
-	host := parsedURL.Hostname()
-	if host == "" {
-		return ""
-	}
-
-	return strings.ToLower(host)
-}
-
-func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, from string) {
-	var (
-		rejectedTxMessage RejectedTxMessage
-		err               error
-	)
-
-	rejectedTxMessage = RejectedTxMessage{}
-
-	err = json.Unmarshal(m, &rejectedTxMessage)
-	if err != nil {
-		s.logger.Errorf("[handleRejectedTxTopic] json unmarshal error: %v", err)
-		return
-	}
-
-	if from == rejectedTxMessage.PeerID {
-		s.logger.Debugf("[handleRejectedTxTopic] DIRECT rejected tx %s from %s (reason: %s)",
-			rejectedTxMessage.TxID, rejectedTxMessage.PeerID, rejectedTxMessage.Reason)
-	} else {
-		s.logger.Debugf("[handleRejectedTxTopic] RELAY  rejected tx %s (originator: %s, via: %s, reason: %s)",
-			rejectedTxMessage.TxID, rejectedTxMessage.PeerID, from, rejectedTxMessage.Reason)
-	}
-
-	if s.isOwnMessage(from, rejectedTxMessage.PeerID) {
-		s.logger.Debugf("[handleRejectedTxTopic] ignoring own rejected tx message for %s", rejectedTxMessage.TxID)
-		return
-	}
-
-	// Update last message time with client name
-	s.updatePeerLastMessageTime(from, rejectedTxMessage.PeerID, rejectedTxMessage.ClientName)
-
-	// Track bytes received from this message
-	s.updateBytesReceived(from, rejectedTxMessage.PeerID, uint64(len(m)))
-
-	if s.shouldSkipBannedPeer(from, "handleRejectedTxTopic") {
-		return
-	}
-
-	// Skip notifications from unhealthy peers
-	if s.shouldSkipUnhealthyPeer(from, "handleRejectedTxTopic") {
-		return
-	}
-
-	// Rejected TX messages from other peers are informational only.
-	// They help us understand network state but don't trigger re-broadcasting.
-	// If we wanted to take action (e.g., remove from our mempool), we would do it here.
-}
-
 // GetPeers returns a list of connected peers with full registry data.
 func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeersResponse, error) {
 	s.logger.Debugf("GetPeers called")
@@ -2105,115 +1779,6 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 	return &p2p_api.AddBanScoreResponse{Ok: true}, nil
 }
 
-func (s *Server) listenForBanEvents(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event := <-s.banChan:
-			s.handleBanEvent(ctx, event)
-		}
-	}
-}
-
-func (s *Server) handleBanEvent(ctx context.Context, event BanEvent) {
-	if event.Action != banActionAdd {
-		return // we only care about new bans
-	}
-
-	// Only handle PeerID-based banning
-	if event.PeerID == "" {
-		s.logger.Warnf("[handleBanEvent] Ban event received without PeerID, ignoring (PeerID-only banning enabled)")
-		return
-	}
-
-	s.logger.Infof("[handleBanEvent] Received ban event for PeerID: %s (reason: %s)", event.PeerID, event.Reason)
-
-	// Parse the PeerID
-	peerID, err := peer.Decode(event.PeerID)
-	if err != nil {
-		s.logger.Errorf("[handleBanEvent] Invalid PeerID in ban event: %s, error: %v", event.PeerID, err)
-		return
-	}
-
-	// Disconnect by PeerID
-	s.disconnectBannedPeerByID(ctx, peerID, event.Reason)
-}
-
-// disconnectBannedPeerByID disconnects a specific peer by their PeerID
-func (s *Server) disconnectBannedPeerByID(ctx context.Context, peerID peer.ID, reason string) {
-	// Check if we're connected to this peer
-	peers := s.P2PClient.GetPeers()
-
-	for _, peer := range peers {
-		if peer.ID == peerID.String() {
-			s.logger.Infof("[disconnectBannedPeerByID] Disconnecting banned peer: %s (reason: %s)", peerID, reason)
-
-			// Remove peer from SyncCoordinator before disconnecting
-			// Remove peer from registry
-			s.removePeer(peerID)
-
-			return
-		}
-	}
-
-	s.logger.Debugf("[disconnectBannedPeerByID] Peer %s not found in connected peers", peerID)
-}
-
-func (s *Server) getIPFromMultiaddr(ctx context.Context, maddr ma.Multiaddr) (net.IP, error) {
-	// try to get the IP address component
-	if ip, err := maddr.ValueForProtocol(ma.P_IP4); err == nil {
-		return net.ParseIP(ip), nil
-	}
-
-	if ip, err := maddr.ValueForProtocol(ma.P_IP6); err == nil {
-		return net.ParseIP(ip), nil
-	}
-
-	// if it's a DNS multiaddr, resolve it
-	if _, err := maddr.ValueForProtocol(ma.P_DNS4); err == nil {
-		return s.resolveDNS(ctx, maddr)
-	}
-
-	if _, err := maddr.ValueForProtocol(ma.P_DNS6); err == nil {
-		return s.resolveDNS(ctx, maddr)
-	}
-
-	return nil, nil // not an IP or resolvable DNS address
-}
-
-// ReportValidBlock records a successful block reception from a peer
-// This should be called when a block is successfully validated and accepted
-/*func (s *Server) reportValidBlockInternal(ctx context.Context, blockHash string) error {
-	// Look up the peer ID that sent this block
-	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
-	if err != nil {
-		// If we can't find the peer, just log and continue
-		s.logger.Debugf("[ReportValidBlock] Could not find peer for block %s: %v", blockHash, err)
-		return nil // Don't error, as this is not critical
-	}
-
-	// Record successful block reception
-	startTime := time.Now()
-	if entry, ok := s.blockPeerMap.Load(blockHash); ok {
-		if peerEntry, ok := entry.(peerMapEntry); ok {
-			duration := time.Since(peerEntry.timestamp)
-			s.peerRegistry.RecordBlockReceived(peer.ID(peerID), duration)
-			s.logger.Debugf("[ReportValidBlock] Recorded successful block %s from peer %s (latency: %v)",
-				blockHash, peerID, duration)
-		}
-	} else {
-		// If we don't have timing info, just record the success without duration
-		s.peerRegistry.RecordBlockReceived(peer.ID(peerID), time.Since(startTime))
-		s.logger.Debugf("[ReportValidBlock] Recorded successful block %s from peer %s", blockHash, peerID)
-	}
-
-	// Remove the block from the map to avoid memory leaks
-	s.blockPeerMap.Delete(blockHash)
-
-	return nil
-}*/
-
 // ReportInvalidBlock adds ban score to the peer that sent an invalid block.
 // This method is called by the block validation service when a block is found to be invalid.
 // Parameters:
@@ -2253,53 +1818,6 @@ func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reaso
 
 	return nil
 }
-
-// getPeerIDFromDataHubURL finds the peer ID that has the given DataHub URL
-func (s *Server) getPeerIDFromDataHubURL(dataHubURL string) string {
-	if s.peerRegistry == nil {
-		return ""
-	}
-
-	peers := s.peerRegistry.GetAllPeers()
-	for _, peerInfo := range peers {
-		if peerInfo.DataHubURL == dataHubURL {
-			return peerInfo.ID.String()
-		}
-	}
-	return ""
-}
-
-// ReportValidSubtree records a successful subtree reception from a peer
-// This should be called when a subtree is successfully validated and accepted
-/*func (s *Server) reportValidSubtreeInternal(ctx context.Context, subtreeHash string) error {
-	// Look up the peer ID that sent this subtree
-	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, subtreeHash, "subtree")
-	if err != nil {
-		// If we can't find the peer, just log and continue
-		s.logger.Debugf("[ReportValidSubtree] Could not find peer for subtree %s: %v", subtreeHash, err)
-		return nil // Don't error, as this is not critical
-	}
-
-	// Record successful subtree reception
-	startTime := time.Now()
-	if entry, ok := s.subtreePeerMap.Load(subtreeHash); ok {
-		if peerEntry, ok := entry.(peerMapEntry); ok {
-			duration := time.Since(peerEntry.timestamp)
-			s.peerRegistry.RecordSubtreeReceived(peer.ID(peerID), duration)
-			s.logger.Debugf("[ReportValidSubtree] Recorded successful subtree %s from peer %s (latency: %v)",
-				subtreeHash, peerID, duration)
-		}
-	} else {
-		// If we don't have timing info, just record the success without duration
-		s.peerRegistry.RecordSubtreeReceived(peer.ID(peerID), time.Since(startTime))
-		s.logger.Debugf("[ReportValidSubtree] Recorded successful subtree %s from peer %s", subtreeHash, peerID)
-	}
-
-	// Remove the subtree from the map to avoid memory leaks
-	s.subtreePeerMap.Delete(subtreeHash)
-
-	return nil
-}*/
 
 // ReportInvalidSubtree handles invalid subtree reports with explicit peer URL
 func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, reason string) error {
@@ -2351,33 +1869,12 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 	return nil
 }
 
-func (s *Server) resolveDNS(ctx context.Context, dnsAddr ma.Multiaddr) (net.IP, error) {
-	resolver := madns.DefaultResolver
-
-	addrs, err := resolver.Resolve(ctx, dnsAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(addrs) == 0 {
-		return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("[resolveDNS] no addresses found for %s", dnsAddr))
-	}
-	// get the IP from the first resolved address
-	for _, proto := range []int{ma.P_IP4, ma.P_IP6} {
-		if ipStr, err := addrs[0].ValueForProtocol(proto); err == nil {
-			return net.ParseIP(ipStr), nil
-		}
-	}
-
-	return nil, errors.New(errors.ERR_ERROR, fmt.Sprintf("[resolveDNS] no IP address found in resolved multiaddr %s", dnsAddr))
-}
-
 // myBanEventHandler implements BanEventHandler for the Server.
 type myBanEventHandler struct {
 	server *Server
 }
 
-// Ensure Server implements BanEventHandler
+// OnPeerBanned is called when a peer is banned.
 func (h *myBanEventHandler) OnPeerBanned(peerID string, until time.Time, reason string) {
 	h.server.logger.Infof("Peer %s banned until %s for reason: %s", peerID, until.Format(time.RFC3339), reason)
 	// get the ip for the peer id
@@ -2411,595 +1908,64 @@ func (h *myBanEventHandler) OnPeerBanned(peerID string, until time.Time, reason 
 	h.server.removePeer(pid)
 }
 
-// contains checks if a slice of strings contains a specific string.
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		bootstrapAddr, err := ma.NewMultiaddr(s)
-		if err != nil {
-			continue
-		}
+// GetPeerRegistry returns comprehensive peer registry data with all metadata
+func (s *Server) GetPeerRegistry(_ context.Context, _ *emptypb.Empty) (*p2p_api.GetPeerRegistryResponse, error) {
+	s.logger.Debugf("[GetPeerRegistry] called")
 
-		peerInfo, err := peer.AddrInfoFromP2pAddr(bootstrapAddr)
-		if err != nil {
-			continue
-		}
-
-		if peerInfo.ID.String() == item {
-			return true
-		}
-	}
-
-	return false
-}
-
-// startInvalidBlockConsumer initializes and starts the Kafka consumer for invalid blocks
-func (s *Server) startInvalidBlockConsumer(ctx context.Context) error {
-	var kafkaURL *url.URL
-
-	var brokerURLs []string
-
-	// Use InvalidBlocksConfig URL if available, otherwise construct one
-	if s.settings.Kafka.InvalidBlocksConfig != nil {
-		s.logger.Infof("Using InvalidBlocksConfig URL: %s", s.settings.Kafka.InvalidBlocksConfig.String())
-		kafkaURL = s.settings.Kafka.InvalidBlocksConfig
-
-		// For non-memory schemes, we need to extract broker URLs from the host
-		if kafkaURL.Scheme != "memory" {
-			brokerURLs = strings.Split(kafkaURL.Host, ",")
-		}
-	} else {
-		// Fall back to the old way of constructing the URL
-		host := s.settings.Kafka.Hosts
-
-		s.logger.Infof("Starting invalid block consumer on topic: %s", s.settings.Kafka.InvalidBlocks)
-		s.logger.Infof("Raw Kafka host from settings: %s", host)
-
-		// Split the host string in case it contains multiple hosts
-		hosts := strings.Split(host, ",")
-		brokerURLs = make([]string, 0, len(hosts))
-
-		// Process each host to ensure it has a port
-		for _, h := range hosts {
-			// Trim any whitespace
-			h = strings.TrimSpace(h)
-
-			// Skip empty hosts
-			if h == "" {
-				continue
-			}
-
-			// Check if the host string contains a port
-			if !strings.Contains(h, ":") {
-				// If no port is specified, use the default Kafka port from settings
-				h = h + ":" + strconv.Itoa(s.settings.Kafka.Port)
-				s.logger.Infof("Added default port to Kafka host: %s", h)
-			}
-
-			brokerURLs = append(brokerURLs, h)
-		}
-
-		if len(brokerURLs) == 0 {
-			return errors.NewConfigurationError("no valid Kafka hosts found")
-		}
-
-		s.logger.Infof("Using Kafka brokers: %v", brokerURLs)
-
-		// Create a valid URL for the Kafka consumer
-		kafkaURLString := fmt.Sprintf("kafka://%s/%s?partitions=%d",
-			brokerURLs[0], // Use the first broker for the URL
-			s.settings.Kafka.InvalidBlocks,
-			s.settings.Kafka.Partitions)
-
-		s.logger.Infof("Kafka URL: %s", kafkaURLString)
-
-		var err error
-
-		kafkaURL, err = url.Parse(kafkaURLString)
-		if err != nil {
-			return errors.NewConfigurationError("invalid Kafka URL: %w", err)
-		}
-	}
-
-	// Create the Kafka consumer config
-	cfg := kafka.KafkaConsumerConfig{
-		Logger:            s.logger,
-		URL:               kafkaURL,
-		BrokersURL:        brokerURLs,
-		Topic:             s.settings.Kafka.InvalidBlocks,
-		Partitions:        s.settings.Kafka.Partitions,
-		ConsumerGroupID:   s.settings.Kafka.InvalidBlocks + "-consumer",
-		AutoCommitEnabled: true,
-		Replay:            false,
-		// TLS/Auth configuration
-		EnableTLS:          s.settings.Kafka.EnableTLS,
-		TLSSkipVerify:      s.settings.Kafka.TLSSkipVerify,
-		TLSCAFile:          s.settings.Kafka.TLSCAFile,
-		TLSCertFile:        s.settings.Kafka.TLSCertFile,
-		TLSKeyFile:         s.settings.Kafka.TLSKeyFile,
-		EnableDebugLogging: s.settings.Kafka.EnableDebugLogging,
-	}
-
-	// Create the Kafka consumer group - this will handle the memory scheme correctly
-	consumer, err := kafka.NewKafkaConsumerGroup(cfg)
-	if err != nil {
-		return errors.NewServiceError("failed to create Kafka consumer", err)
-	}
-
-	// Store the consumer for cleanup
-	s.invalidBlocksKafkaConsumerClient = consumer
-
-	// Start the consumer
-	consumer.Start(ctx, s.processInvalidBlockMessage)
-
-	return nil
-}
-
-// getLocalHeight returns the current local blockchain height.
-func (s *Server) getLocalHeight() uint32 {
-	if s.blockchainClient == nil {
-		return 0
-	}
-
-	_, bhMeta, err := s.blockchainClient.GetBestBlockHeader(s.gCtx)
-	if err != nil || bhMeta == nil {
-		return 0
-	}
-
-	return bhMeta.Height
-}
-
-// sendSyncTriggerToKafka sends a sync trigger message to Kafka for the given peer and block hash.
-
-// Compatibility methods to ease migration from old architecture
-
-func (s *Server) updatePeerHeight(peerID peer.ID, height int32) {
-	// Update in registry and coordinator
-	if s.peerRegistry != nil {
-		// Ensure peer exists in registry
-		s.addPeer(peerID, "")
-
-		// Get the existing block hash from registry
-		blockHash := ""
-		if peerInfo, exists := s.getPeer(peerID); exists {
-			blockHash = peerInfo.BlockHash
-		}
-		s.peerRegistry.UpdateHeight(peerID, height, blockHash)
-
-		// Also update sync coordinator if it exists
-		if s.syncCoordinator != nil {
-			dataHubURL := ""
-			if peerInfo, exists := s.getPeer(peerID); exists {
-				dataHubURL = peerInfo.DataHubURL
-			}
-			s.syncCoordinator.UpdatePeerInfo(peerID, height, blockHash, dataHubURL)
-		}
-	}
-}
-
-func (s *Server) addPeer(peerID peer.ID, clientName string) {
-	if s.peerRegistry != nil {
-		s.peerRegistry.AddPeer(peerID, clientName)
-	}
-}
-
-// addConnectedPeer adds a peer and marks it as directly connected
-func (s *Server) addConnectedPeer(peerID peer.ID, clientName string) {
-	if s.peerRegistry != nil {
-		s.peerRegistry.AddPeer(peerID, clientName)
-		s.peerRegistry.UpdateConnectionState(peerID, true)
-	}
-}
-
-func (s *Server) removePeer(peerID peer.ID) {
-	if s.peerRegistry != nil {
-		// Mark as disconnected before removing
-		s.peerRegistry.UpdateConnectionState(peerID, false)
-		s.peerRegistry.RemovePeer(peerID)
-	}
-	if s.syncCoordinator != nil {
-		s.syncCoordinator.HandlePeerDisconnected(peerID)
-	}
-}
-
-func (s *Server) updateBlockHash(peerID peer.ID, blockHash string) {
-	if s.peerRegistry != nil && blockHash != "" {
-		s.peerRegistry.UpdateBlockHash(peerID, blockHash)
-	}
-}
-
-// getPeer gets peer information from the registry
-func (s *Server) getPeer(peerID peer.ID) (*PeerInfo, bool) {
-	if s.peerRegistry != nil {
-		return s.peerRegistry.GetPeer(peerID)
-	}
-	return nil, false
-}
-
-func (s *Server) getSyncPeer() peer.ID {
-	if s.syncCoordinator != nil {
-		return s.syncCoordinator.GetCurrentSyncPeer()
-	}
-	return ""
-}
-
-// updateDataHubURL updates peer DataHub URL in the registry
-func (s *Server) updateDataHubURL(peerID peer.ID, url string) {
-	if s.peerRegistry != nil && url != "" {
-		s.peerRegistry.UpdateDataHubURL(peerID, url)
-	}
-}
-
-// updateStorage updates peer storage mode in the registry
-func (s *Server) updateStorage(peerID peer.ID, mode string) {
-	if s.peerRegistry != nil && mode != "" {
-		s.peerRegistry.UpdateStorage(peerID, mode)
-	}
-}
-
-func (s *Server) processInvalidBlockMessage(message *kafka.KafkaMessage) error {
-	ctx := context.Background()
-
-	var invalidBlockMsg kafkamessage.KafkaInvalidBlockTopicMessage
-	if err := proto.Unmarshal(message.Value, &invalidBlockMsg); err != nil {
-		s.logger.Errorf("failed to unmarshal invalid block message: %v", err)
-		return err
-	}
-
-	blockHash := invalidBlockMsg.GetBlockHash()
-	reason := invalidBlockMsg.GetReason()
-
-	s.logger.Infof("[handleInvalidBlockMessage] processing invalid block %s: %s", blockHash, reason)
-
-	// Look up the peer ID that sent this block
-	peerID, err := s.getPeerFromMap(&s.blockPeerMap, blockHash, "block")
-	if err != nil {
-		s.logger.Warnf("[handleInvalidBlockMessage] %v", err)
-		return nil // Not an error, just no peer to ban
-	}
-
-	// Add ban score to the peer
-	s.logger.Infof("[handleInvalidBlockMessage] adding ban score to peer %s for invalid block %s: %s",
-		peerID, blockHash, reason)
-
-	req := &p2p_api.AddBanScoreRequest{
-		PeerId: peerID,
-		Reason: "invalid_block",
-	}
-
-	if _, err := s.AddBanScore(ctx, req); err != nil {
-		s.logger.Errorf("[handleInvalidBlockMessage] error adding ban score to peer %s: %v", peerID, err)
-		return err
-	}
-
-	// Remove the block from the map to avoid memory leaks
-	s.blockPeerMap.Delete(blockHash)
-
-	return nil
-}
-
-func (s *Server) isBlockchainSyncingOrCatchingUp(ctx context.Context) (bool, error) {
-	if s.blockchainClient == nil {
-		return false, nil
-	}
-	var (
-		state *blockchain.FSMStateType
-		err   error
-	)
-
-	// Retry for up to 15 seconds if we get an error getting FSM state
-	// This handles the case where blockchain service isn't ready yet
-	retryCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-
-	retryCount := 0
-	for {
-		state, err = s.blockchainClient.GetFSMCurrentState(retryCtx)
-		if err == nil {
-			// Successfully got state
-			if retryCount > 0 {
-				s.logger.Infof("[isBlockchainSyncingOrCatchingUp] successfully got FSM state after %d retries", retryCount)
-			}
-			break
-		}
-
-		retryCount++
-
-		// Check if context is done (timeout or cancellation)
-		select {
-		case <-retryCtx.Done():
-			s.logger.Errorf("[isBlockchainSyncingOrCatchingUp] timeout after 15s getting blockchain FSM state (tried %d times): %v", retryCount, err)
-			// On timeout, allow sync to proceed rather than blocking
-			return false, nil
-		case <-time.After(1 * time.Second):
-			// Retry after short delay
-			if retryCount == 1 || retryCount%10 == 0 {
-				s.logger.Infof("[isBlockchainSyncingOrCatchingUp] retrying FSM state check (attempt %d) after error: %v", retryCount, err)
-			}
-		}
-	}
-
-	if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS || *state == blockchain_api.FSMStateType_LEGACYSYNCING {
-		// ignore notifications while syncing or catching up
-		return true, nil
-	}
-
-	return false, nil
-}
-
-// cleanupPeerMaps performs periodic cleanup of blockPeerMap and subtreePeerMap
-// It removes entries older than TTL and enforces size limits using LRU eviction
-func (s *Server) cleanupPeerMaps() {
-	now := time.Now()
-
-	// Collect entries to delete
-	var blockKeysToDelete []string
-	var subtreeKeysToDelete []string
-	blockCount := 0
-	subtreeCount := 0
-
-	// First pass: count entries and collect expired ones
-	s.blockPeerMap.Range(func(key, value interface{}) bool {
-		blockCount++
-		if entry, ok := value.(peerMapEntry); ok {
-			if now.Sub(entry.timestamp) > s.peerMapTTL {
-				blockKeysToDelete = append(blockKeysToDelete, key.(string))
-			}
-		}
-		return true
-	})
-
-	s.subtreePeerMap.Range(func(key, value interface{}) bool {
-		subtreeCount++
-		if entry, ok := value.(peerMapEntry); ok {
-			if now.Sub(entry.timestamp) > s.peerMapTTL {
-				subtreeKeysToDelete = append(subtreeKeysToDelete, key.(string))
-			}
-		}
-		return true
-	})
-
-	// Delete expired entries
-	for _, key := range blockKeysToDelete {
-		s.blockPeerMap.Delete(key)
-	}
-	for _, key := range subtreeKeysToDelete {
-		s.subtreePeerMap.Delete(key)
-	}
-
-	// Log cleanup stats
-	if len(blockKeysToDelete) > 0 || len(subtreeKeysToDelete) > 0 {
-		s.logger.Infof("[cleanupPeerMaps] removed %d expired block entries and %d expired subtree entries",
-			len(blockKeysToDelete), len(subtreeKeysToDelete))
-	}
-
-	// Second pass: enforce size limits if needed
-	remainingBlockCount := blockCount - len(blockKeysToDelete)
-	remainingSubtreeCount := subtreeCount - len(subtreeKeysToDelete)
-
-	if remainingBlockCount > s.peerMapMaxSize {
-		s.enforceMapSizeLimit(&s.blockPeerMap, s.peerMapMaxSize, "block")
-	}
-
-	if remainingSubtreeCount > s.peerMapMaxSize {
-		s.enforceMapSizeLimit(&s.subtreePeerMap, s.peerMapMaxSize, "subtree")
-	}
-
-	// Log current sizes
-	s.logger.Infof("[cleanupPeerMaps] current map sizes - blocks: %d, subtrees: %d",
-		remainingBlockCount, remainingSubtreeCount)
-}
-
-// enforceMapSizeLimit removes oldest entries from a map to enforce size limit
-func (s *Server) enforceMapSizeLimit(m *sync.Map, maxSize int, mapType string) {
-	type entryWithKey struct {
-		key       string
-		timestamp time.Time
-	}
-
-	var entries []entryWithKey
-
-	// Collect all entries with their timestamps
-	m.Range(func(key, value interface{}) bool {
-		if entry, ok := value.(peerMapEntry); ok {
-			entries = append(entries, entryWithKey{
-				key:       key.(string),
-				timestamp: entry.timestamp,
-			})
-		}
-		return true
-	})
-
-	// Sort by timestamp (oldest first)
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].timestamp.Before(entries[j].timestamp)
-	})
-
-	// Remove oldest entries to get under the limit
-	toRemove := len(entries) - maxSize
-	if toRemove > 0 {
-		for i := 0; i < toRemove; i++ {
-			m.Delete(entries[i].key)
-		}
-		s.logger.Warnf("[enforceMapSizeLimit] removed %d oldest %s entries to enforce size limit of %d",
-			toRemove, mapType, maxSize)
-	}
-}
-
-// startPeerMapCleanup starts the periodic cleanup goroutine
-// Helper methods to reduce redundancy
-
-// isOwnMessage checks if a message is from this node
-func (s *Server) isOwnMessage(from string, peerID string) bool {
-	return from == s.P2PClient.GetID() || peerID == s.P2PClient.GetID()
-}
-
-// shouldSkipBannedPeer checks if we should skip a message from a banned peer
-func (s *Server) shouldSkipBannedPeer(from string, messageType string) bool {
-	if s.banManager.IsBanned(from) {
-		s.logger.Debugf("[%s] ignoring notification from banned peer %s", messageType, from)
-		return true
-	}
-	return false
-}
-
-// shouldSkipUnhealthyPeer checks if we should skip a message from an unhealthy peer
-// Only checks health for directly connected peers (not gossiped peers)
-func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
-	// If no peer registry, allow all messages
 	if s.peerRegistry == nil {
-		return false
+		return &p2p_api.GetPeerRegistryResponse{
+			Peers: []*p2p_api.PeerRegistryInfo{},
+		}, nil
 	}
 
-	peerID, err := peer.Decode(from)
-	if err != nil {
-		// If we can't decode the peer ID (e.g., from is a hostname/identifier in gossiped messages),
-		// we can't check health status, so allow the message through.
-		// This is normal for gossiped messages where 'from' is the relay peer's identifier, not a valid peer ID.
-		return false
-	}
+	// Get all peers from the registry
+	allPeers := s.peerRegistry.GetAllPeers()
 
-	peerInfo, exists := s.peerRegistry.GetPeer(peerID)
-	if !exists {
-		// Peer not in registry - allow message (peer might be new)
-		return false
-	}
-
-	// Filter peers with very low reputation scores
-	if peerInfo.ReputationScore < 20.0 {
-		s.logger.Debugf("[%s] ignoring notification from low reputation peer %s (score: %.2f)", messageType, from, peerInfo.ReputationScore)
-		return true
-	}
-
-	return false
-}
-
-// storePeerMapEntry stores a peer entry in the specified map
-func (s *Server) storePeerMapEntry(peerMap *sync.Map, hash string, from string, timestamp time.Time) {
-	entry := peerMapEntry{
-		peerID:    from,
-		timestamp: timestamp,
-	}
-	peerMap.Store(hash, entry)
-}
-
-// getPeerFromMap retrieves and validates a peer entry from a map
-func (s *Server) getPeerFromMap(peerMap *sync.Map, hash string, mapType string) (string, error) {
-	peerIDVal, ok := peerMap.Load(hash)
-	if !ok {
-		s.logger.Warnf("[getPeerFromMap] no peer found for %s %s", mapType, hash)
-		return "", errors.NewNotFoundError("no peer found for %s %s", mapType, hash)
-	}
-
-	entry, ok := peerIDVal.(peerMapEntry)
-	if !ok {
-		s.logger.Errorf("[getPeerFromMap] peer entry for %s %s is not a peerMapEntry: %v", mapType, hash, peerIDVal)
-		return "", errors.NewInvalidArgumentError("peer entry for %s %s is not a peerMapEntry", mapType, hash)
-	}
-	return entry.peerID, nil
-}
-
-// parseHash converts a string hash to chainhash
-func (s *Server) parseHash(hashStr string, context string) (*chainhash.Hash, error) {
-	hash, err := chainhash.NewHashFromStr(hashStr)
-	if err != nil {
-		s.logger.Errorf("[%s] error getting chainhash from string %s: %v", context, hashStr, err)
-		return nil, err
-	}
-	return hash, nil
-}
-
-// shouldSkipDuringSync checks if we should skip processing during sync
-func (s *Server) shouldSkipDuringSync(from string, originatorPeerID string, messageHeight uint32, messageType string) bool {
-	syncPeer := s.getSyncPeer()
-	if syncPeer == "" {
-		return false
-	}
-
-	syncing, err := s.isBlockchainSyncingOrCatchingUp(s.gCtx)
-	if err != nil || !syncing {
-		return false
-	}
-
-	// Get sync peer's height from registry
-	syncPeerHeight := int32(0)
-	if peerInfo, exists := s.getPeer(syncPeer); exists {
-		syncPeerHeight = peerInfo.Height
-	}
-
-	// Discard announcements from peers that are behind our sync peer
-	if messageHeight < uint32(syncPeerHeight) {
-		s.logger.Debugf("[%s] Discarding announcement at height %d from %s (below sync peer height %d)",
-			messageType, messageHeight, from, syncPeerHeight)
-		return true
-	}
-
-	// Skip if it's not from our sync peer
-	peerID, err := peer.Decode(originatorPeerID)
-	if err != nil || peerID != syncPeer {
-		s.logger.Debugf("[%s] Skipping announcement during sync (not from sync peer)", messageType)
-		return true
-	}
-
-	return false
-}
-
-func (s *Server) startPeerMapCleanup(ctx context.Context) {
-	// Use configured interval or default
-	cleanupInterval := defaultPeerMapCleanupInterval
-	if s.settings.P2P.PeerMapCleanupInterval > 0 {
-		cleanupInterval = s.settings.P2P.PeerMapCleanupInterval
-	}
-
-	s.peerMapCleanupTicker = time.NewTicker(cleanupInterval)
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				s.logger.Infof("[startPeerMapCleanup] stopping peer map cleanup")
-				return
-			case <-s.peerMapCleanupTicker.C:
-				s.cleanupPeerMaps()
-			}
+	// Helper function to convert time to Unix timestamp, returning 0 for zero times
+	timeToUnix := func(t time.Time) int64 {
+		if t.IsZero() {
+			return 0
 		}
-	}()
 
-	s.logger.Infof("[startPeerMapCleanup] started peer map cleanup with interval %v", cleanupInterval)
-}
+		return t.Unix()
+	}
 
-// startPeerRegistryCacheSave starts periodic saving of peer registry cache
-func (s *Server) startPeerRegistryCacheSave(ctx context.Context) {
-	// Save every 5 minutes
-	saveInterval := 5 * time.Minute
+	// Convert to protobuf format
+	peers := make([]*p2p_api.PeerRegistryInfo, 0, len(allPeers))
+	for _, p := range allPeers {
+		peers = append(peers, &p2p_api.PeerRegistryInfo{
+			Id:              p.ID.String(),
+			Height:          p.Height,
+			BlockHash:       p.BlockHash,
+			DataHubUrl:      p.DataHubURL,
+			BanScore:        int32(p.BanScore),
+			IsBanned:        p.IsBanned,
+			IsConnected:     p.IsConnected,
+			ConnectedAt:     timeToUnix(p.ConnectedAt),
+			BytesReceived:   p.BytesReceived,
+			LastBlockTime:   timeToUnix(p.LastBlockTime),
+			LastMessageTime: timeToUnix(p.LastMessageTime),
+			UrlResponsive:   p.URLResponsive,
+			LastUrlCheck:    timeToUnix(p.LastURLCheck),
 
-	s.registryCacheSaveTicker = time.NewTicker(saveInterval)
+			// Interaction/catchup metrics
+			InteractionAttempts:    p.InteractionAttempts,
+			InteractionSuccesses:   p.InteractionSuccesses,
+			InteractionFailures:    p.InteractionFailures,
+			LastInteractionAttempt: timeToUnix(p.LastInteractionAttempt),
+			LastInteractionSuccess: timeToUnix(p.LastInteractionSuccess),
+			LastInteractionFailure: timeToUnix(p.LastInteractionFailure),
+			ReputationScore:        p.ReputationScore,
+			MaliciousCount:         p.MaliciousCount,
+			AvgResponseTimeMs:      p.AvgResponseTime.Milliseconds(),
+			Storage:                p.Storage,
+			ClientName:             p.ClientName,
+			LastCatchupError:       p.LastCatchupError,
+			LastCatchupErrorTime:   timeToUnix(p.LastCatchupErrorTime),
+		})
+	}
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				// Save one final time before shutdown
-				if s.peerRegistry != nil {
-					if err := s.peerRegistry.SavePeerRegistryCache(s.settings.P2P.PeerCacheDir); err != nil {
-						s.logger.Errorf("[startPeerRegistryCacheSave] failed to save peer registry cache on shutdown: %v", err)
-					} else {
-						s.logger.Infof("[startPeerRegistryCacheSave] saved peer registry cache on shutdown")
-					}
-				}
-				s.logger.Infof("[startPeerRegistryCacheSave] stopping peer registry cache save")
-				return
-			case <-s.registryCacheSaveTicker.C:
-				if s.peerRegistry != nil {
-					if err := s.peerRegistry.SavePeerRegistryCache(s.settings.P2P.PeerCacheDir); err != nil {
-						s.logger.Errorf("[startPeerRegistryCacheSave] failed to save peer registry cache: %v", err)
-					} else {
-						peerCount := s.peerRegistry.PeerCount()
-						s.logger.Debugf("[startPeerRegistryCacheSave] saved peer registry cache with %d peers", peerCount)
-					}
-				}
-			}
-		}
-	}()
-
-	s.logger.Infof("[startPeerRegistryCacheSave] started peer registry cache save with interval %v", saveInterval)
+	return &p2p_api.GetPeerRegistryResponse{
+		Peers: peers,
+	}, nil
 }

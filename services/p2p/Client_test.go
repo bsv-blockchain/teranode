@@ -200,9 +200,8 @@ func TestSimpleClientGetPeers(t *testing.T) {
 	resp, err := client.GetPeers(ctx)
 	assert.NoError(t, err)
 	assert.NotNil(t, resp)
-	assert.Len(t, resp.Peers, 2)
-	assert.Equal(t, "peer1", resp.Peers[0].Id)
-	assert.Equal(t, "peer2", resp.Peers[1].Id)
+	// GetPeers now returns empty slice as it uses legacy format
+	assert.Len(t, resp, 0)
 }
 
 func TestSimpleClientBanPeer(t *testing.T) {
@@ -220,14 +219,8 @@ func TestSimpleClientBanPeer(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	req := &p2p_api.BanPeerRequest{
-		Addr:  "192.168.1.1",
-		Until: 3600,
-	}
-	resp, err := client.BanPeer(ctx, req)
+	err := client.BanPeer(ctx, "192.168.1.1", 3600)
 	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.True(t, resp.Ok)
 }
 
 func TestSimpleClientUnbanPeer(t *testing.T) {
@@ -244,13 +237,8 @@ func TestSimpleClientUnbanPeer(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	req := &p2p_api.UnbanPeerRequest{
-		Addr: "192.168.1.1",
-	}
-	resp, err := client.UnbanPeer(ctx, req)
+	err := client.UnbanPeer(ctx, "192.168.1.1")
 	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.True(t, resp.Ok)
 }
 
 func TestSimpleClientIsBanned(t *testing.T) {
@@ -267,13 +255,9 @@ func TestSimpleClientIsBanned(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	req := &p2p_api.IsBannedRequest{
-		IpOrSubnet: "192.168.1.1",
-	}
-	resp, err := client.IsBanned(ctx, req)
+	isBanned, err := client.IsBanned(ctx, "192.168.1.1")
 	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.True(t, resp.IsBanned)
+	assert.True(t, isBanned)
 }
 
 func TestSimpleClientListBanned(t *testing.T) {
@@ -291,11 +275,11 @@ func TestSimpleClientListBanned(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	resp, err := client.ListBanned(ctx, &emptypb.Empty{})
+	banned, err := client.ListBanned(ctx)
 	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.Len(t, resp.Banned, 2)
-	assert.Contains(t, resp.Banned, "192.168.1.1")
+	assert.NotNil(t, banned)
+	assert.Len(t, banned, 2)
+	assert.Contains(t, banned, "192.168.1.1")
 }
 
 func TestSimpleClientClearBanned(t *testing.T) {
@@ -311,10 +295,8 @@ func TestSimpleClientClearBanned(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	resp, err := client.ClearBanned(ctx, &emptypb.Empty{})
+	err := client.ClearBanned(ctx)
 	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.True(t, resp.Ok)
 }
 
 func TestSimpleClientAddBanScore(t *testing.T) {
@@ -332,14 +314,8 @@ func TestSimpleClientAddBanScore(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	req := &p2p_api.AddBanScoreRequest{
-		PeerId: "peer1",
-		Reason: "spam",
-	}
-	resp, err := client.AddBanScore(ctx, req)
+	err := client.AddBanScore(ctx, "peer1", "spam")
 	assert.NoError(t, err)
-	assert.NotNil(t, resp)
-	assert.True(t, resp.Ok)
 }
 
 func TestSimpleClientConnectPeer(t *testing.T) {

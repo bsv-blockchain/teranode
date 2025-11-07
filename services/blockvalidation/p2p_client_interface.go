@@ -3,7 +3,7 @@ package blockvalidation
 import (
 	"context"
 
-	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 )
 
 // P2PClientI defines the interface for P2P client operations needed by BlockValidation.
@@ -31,7 +31,8 @@ type P2PClientI interface {
 	UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error
 
 	// GetPeersForCatchup returns peers suitable for catchup operations.
-	GetPeersForCatchup(ctx context.Context) (*p2p_api.GetPeersForCatchupResponse, error)
+	// Returns a slice of PeerInfo sorted by reputation (highest first).
+	GetPeersForCatchup(ctx context.Context) ([]*p2p.PeerInfo, error)
 
 	// ReportValidBlock reports that a block was successfully received and validated from a peer.
 	ReportValidBlock(ctx context.Context, peerID string, blockHash string) error

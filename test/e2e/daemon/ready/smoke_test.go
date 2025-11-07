@@ -872,7 +872,7 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 
 	// now try add a block with the transaction
 	_, block3 := td.CreateTestBlock(t, block2, 10101, newTx)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block3, block3.Height, "legacy", "")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block3, block3.Height, "", "legacy")
 	// TODO should this be an error?
 	require.NoError(t, err)
 }

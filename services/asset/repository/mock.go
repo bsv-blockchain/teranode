@@ -8,6 +8,9 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/stretchr/testify/mock"
@@ -330,4 +333,31 @@ func (m *Mock) FindBlocksContainingSubtree(_ context.Context, subtreeHash *chain
 	}
 
 	return args.Get(0).([]uint32), args.Get(1).([]uint32), args.Get(2).([]int), args.Error(3)
+}
+
+// GetBlockchainClient returns the blockchain client interface used by the repository.
+//
+// Returns:
+//   - *blockchain.ClientI: Blockchain client interface
+func (m *Mock) GetBlockchainClient() blockchain.ClientI {
+	args := m.Called()
+	return args.Get(0).(blockchain.ClientI)
+}
+
+// GetBlockvalidationClient returns the block validation client interface used by the repository.
+//
+// Returns:
+//   - blockvalidation.Interface: Block validation client interface
+func (m *Mock) GetBlockvalidationClient() blockvalidation.Interface {
+	args := m.Called()
+	return args.Get(0).(blockvalidation.Interface)
+}
+
+// GetP2PClient returns the P2P client interface used by the repository.
+//
+// Returns:
+//   - p2p.ClientI: P2P client interface
+func (m *Mock) GetP2PClient() p2p.ClientI {
+	args := m.Called()
+	return args.Get(0).(p2p.ClientI)
 }

@@ -601,7 +601,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 					u.logger.Infof("[catchup] Processing catchup request for block %s from peer %s (%s)", c.block.Hash().String(), c.peerID, c.baseURL)
 
-					if err := u.catchup(ctx, c.block, c.baseURL, c.peerID); err != nil {
+					if err := u.catchup(ctx, c.block, c.peerID, c.baseURL); err != nil {
 						// Check if the error is due to another catchup in progress
 						if errors.Is(err, errors.ErrCatchupInProgress) {
 							u.logger.Warnf("[catchup] Catchup already in progress, requeueing block %s from peer %s", c.block.Hash().String(), c.peerID)
@@ -653,7 +653,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 								u.logger.Infof("[catchup] Trying peer %s (score: %.2f) for block %s", bestPeer.ID, bestPeer.CatchupReputationScore, blockHash.String())
 
 								// Try catchup with this peer
-								if altErr := u.catchup(ctx, c.block, bestPeer.DataHubURL, bestPeer.ID); altErr == nil {
+								if altErr := u.catchup(ctx, c.block, bestPeer.ID, bestPeer.DataHubURL); altErr == nil {
 									u.logger.Infof("[catchup] Successfully processed block %s from peer %s (via P2P service)", blockHash.String(), bestPeer.ID)
 									// Clear processing marker and alternatives
 									u.processBlockNotify.Delete(*blockHash)
@@ -689,7 +689,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 								u.logger.Infof("[catchup] Trying cached alternative peer %s for block %s", alt.peerID, blockHash.String())
 
 								// Try catchup with alternative peer
-								if altErr := u.catchup(ctx, alt.block, alt.baseURL, alt.peerID); altErr == nil {
+								if altErr := u.catchup(ctx, alt.block, alt.peerID, alt.baseURL); altErr == nil {
 									u.logger.Infof("[catchup] Successfully processed block %s from alternative peer %s", blockHash.String(), alt.peerID)
 									// Clear processing marker and alternatives
 									u.processBlockNotify.Delete(*blockHash)
@@ -1187,7 +1187,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		baseURL = "legacy" // default to legacy if not provided
 	}
 
-	if err = u.processBlockFound(ctx, block.Header.Hash(), baseURL, request.PeerId, block); err != nil {
+	if err = u.processBlockFound(ctx, block.Header.Hash(), request.PeerId, baseURL, block); err != nil {
 		// error from processBlockFound is already wrapped
 		return nil, errors.WrapGRPC(err)
 	}
@@ -1273,7 +1273,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 //   - useBlock: Optional pre-loaded block to avoid retrieval (variadic parameter)
 //
 // Returns an error if block processing, validation, or dependency management fails
-func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, peerID string, useBlock ...*model.Block) error {
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, peerID, baseURL string, useBlock ...*model.Block) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFound),
@@ -1699,7 +1699,7 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 	}
 
 	// Try to process with the primary source
-	err := u.processBlockFound(ctx, blockFound.hash, blockFound.baseURL, blockFound.peerID)
+	err := u.processBlockFound(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 
 	// If fetch failed and it's not a validation error, try alternative sources
 	if err != nil && (errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err)) {
@@ -1716,7 +1716,7 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 			u.logger.Infof("[processBlockWithPriority] Trying alternative source for block %s from %s (peer: %s)", blockFound.hash.String(), alternative.baseURL, alternative.peerID)
 
 			// Try with alternative source
-			altErr := u.processBlockFound(ctx, alternative.hash, alternative.baseURL, alternative.peerID)
+			altErr := u.processBlockFound(ctx, alternative.hash, alternative.peerID, alternative.baseURL)
 			if altErr == nil {
 				// Success with alternative source
 				return nil

@@ -68,7 +68,7 @@ type CatchupContext struct {
 //
 // Returns:
 //   - error: If any step fails or safety checks are violated
-func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, baseURL string, peerID string) (err error) {
+func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, baseURL string) (err error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "catchup",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[catchup][%s] starting catchup to %s", blockUpTo.Hash().String(), baseURL),
@@ -316,7 +316,7 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 func (u *Server) fetchHeaders(ctx context.Context, catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 1: Fetching headers from peer %s", catchupCtx.blockUpTo.Hash().String(), catchupCtx.baseURL)
 
-	result, _, err := u.catchupGetBlockHeaders(ctx, catchupCtx.blockUpTo, catchupCtx.baseURL, catchupCtx.peerID)
+	result, _, err := u.catchupGetBlockHeaders(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL)
 	if err != nil {
 		return errors.NewProcessingError("[catchup][%s] failed to get block headers: %w", catchupCtx.blockUpTo.Hash().String(), err)
 	}
@@ -457,7 +457,7 @@ func (u *Server) validateForkDepth(catchupCtx *CatchupContext) error {
 func (u *Server) checkSecretMining(ctx context.Context, catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 4: Checking for secret mining", catchupCtx.blockUpTo.Hash().String())
 
-	return u.checkSecretMiningFromCommonAncestor(ctx, catchupCtx.blockUpTo, catchupCtx.baseURL, catchupCtx.peerID, catchupCtx.commonAncestorHash, catchupCtx.commonAncestorMeta)
+	return u.checkSecretMiningFromCommonAncestor(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL, catchupCtx.commonAncestorHash, catchupCtx.commonAncestorMeta)
 }
 
 // filterHeaders filters headers to only those after the common ancestor that we don't have.
@@ -1021,7 +1021,7 @@ func getLowestCheckpointHeight(checkpoints []chaincfg.Checkpoint) uint32 {
 //
 // Returns:
 //   - error: If secret mining is detected
-func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockUpTo *model.Block, baseURL string, peerID string, commonAncestorHash *chainhash.Hash, commonAncestorMeta *model.BlockHeaderMeta) error {
+func (u *Server) checkSecretMiningFromCommonAncestor(ctx context.Context, blockUpTo *model.Block, peerID, baseURL string, commonAncestorHash *chainhash.Hash, commonAncestorMeta *model.BlockHeaderMeta) error {
 	// Check whether the common ancestor is more than X blocks behind our current chain.
 	// This indicates potential secret mining.
 	currentHeight := u.utxoStore.GetBlockHeight()

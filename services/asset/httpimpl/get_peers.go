@@ -5,9 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/labstack/echo/v4"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // PeerInfoResponse represents the JSON response for a single peer
@@ -53,23 +52,20 @@ func (h *HTTP) GetPeers(c echo.Context) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
 
-	// Initialize persistent gRPC clients if not already done
-	h.initGRPCClients(ctx)
+	p2pClient := h.repository.GetP2PClient()
 
 	// Check if P2P client connection is available
-	if h.p2pClientConn == nil {
-		h.logger.Errorf("[GetPeers] P2P gRPC client not available: %v", h.p2pClientInitErr)
+	if p2pClient == nil {
+		h.logger.Errorf("[GetPeers] P2P client not available")
 		return c.JSON(http.StatusServiceUnavailable, PeersResponse{
 			Peers: []PeerInfoResponse{},
 			Count: 0,
 		})
 	}
 
-	// Create P2P service client from persistent connection
-	client := p2p_api.NewPeerServiceClient(h.p2pClientConn)
-
-	// Get comprehensive peer registry data
-	registryResp, err := client.GetPeerRegistry(ctx, &emptypb.Empty{})
+	// Get comprehensive peer registry data using the p2p.ClientI interface
+	// Returns []*p2p.PeerInfo
+	peers, err := p2pClient.GetPeerRegistry(ctx)
 	if err != nil {
 		h.logger.Errorf("[GetPeers] Failed to get peer registry: %v", err)
 		return c.JSON(http.StatusInternalServerError, PeersResponse{
@@ -78,37 +74,38 @@ func (h *HTTP) GetPeers(c echo.Context) error {
 		})
 	}
 
-	// Convert gRPC response to JSON response
-	peerResponses := make([]PeerInfoResponse, 0, len(registryResp.Peers))
-	for _, peer := range registryResp.Peers {
+	// Convert native PeerInfo to JSON response
+	peerResponses := make([]PeerInfoResponse, 0, len(peers))
+	for _, peerPtr := range peers {
+		peer := (*p2p.PeerInfo)(peerPtr) // Explicit type assertion to satisfy import checker
 		peerResponses = append(peerResponses, PeerInfoResponse{
-			ID:              peer.Id,
+			ID:              peer.ID.String(),
 			ClientName:      peer.ClientName,
 			Height:          peer.Height,
 			BlockHash:       peer.BlockHash,
-			DataHubURL:      peer.DataHubUrl,
-			BanScore:        int(peer.BanScore),
+			DataHubURL:      peer.DataHubURL,
+			BanScore:        peer.BanScore,
 			IsBanned:        peer.IsBanned,
 			IsConnected:     peer.IsConnected,
-			ConnectedAt:     peer.ConnectedAt,
+			ConnectedAt:     peer.ConnectedAt.Unix(),
 			BytesReceived:   peer.BytesReceived,
-			LastBlockTime:   peer.LastBlockTime,
-			LastMessageTime: peer.LastMessageTime,
-			URLResponsive:   peer.UrlResponsive,
-			LastURLCheck:    peer.LastUrlCheck,
+			LastBlockTime:   peer.LastBlockTime.Unix(),
+			LastMessageTime: peer.LastMessageTime.Unix(),
+			URLResponsive:   peer.URLResponsive,
+			LastURLCheck:    peer.LastURLCheck.Unix(),
 
 			// Interaction/catchup metrics (using the original field names for backward compatibility)
 			CatchupAttempts:        peer.InteractionAttempts,
 			CatchupSuccesses:       peer.InteractionSuccesses,
 			CatchupFailures:        peer.InteractionFailures,
-			CatchupLastAttempt:     peer.LastInteractionAttempt,
-			CatchupLastSuccess:     peer.LastInteractionSuccess,
-			CatchupLastFailure:     peer.LastInteractionFailure,
+			CatchupLastAttempt:     peer.LastInteractionAttempt.Unix(),
+			CatchupLastSuccess:     peer.LastInteractionSuccess.Unix(),
+			CatchupLastFailure:     peer.LastInteractionFailure.Unix(),
 			CatchupReputationScore: peer.ReputationScore,
 			CatchupMaliciousCount:  peer.MaliciousCount,
-			CatchupAvgResponseTime: peer.AvgResponseTimeMs,
+			CatchupAvgResponseTime: peer.AvgResponseTime.Milliseconds(),
 			LastCatchupError:       peer.LastCatchupError,
-			LastCatchupErrorTime:   peer.LastCatchupErrorTime,
+			LastCatchupErrorTime:   peer.LastCatchupErrorTime.Unix(),
 		})
 	}
 

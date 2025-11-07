@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
 	"github.com/labstack/echo/v4"
 )
 
@@ -14,21 +13,18 @@ func (h *HTTP) GetCatchupStatus(c echo.Context) error {
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 5*time.Second)
 	defer cancel()
 
-	// Initialize persistent gRPC clients if not already done
-	h.initGRPCClients(ctx)
-
-	// Check if BlockValidation client connection is available
-	if h.blockvalClientConn == nil {
-		h.logger.Errorf("[GetCatchupStatus] BlockValidation gRPC client not available: %v", h.blockvalClientInitErr)
+	// Get BlockValidation client from repository
+	blockValidationClient := h.repository.GetBlockvalidationClient()
+	if blockValidationClient == nil {
+		h.logger.Errorf("[GetCatchupStatus] BlockValidation client not available")
 		return c.JSON(http.StatusServiceUnavailable, map[string]interface{}{
 			"error":          "BlockValidation service not available",
 			"is_catching_up": false,
 		})
 	}
 
-	// Create BlockValidation API client from persistent connection
-	client := blockvalidation_api.NewBlockValidationAPIClient(h.blockvalClientConn)
-	resp, err := client.GetCatchupStatus(ctx, &blockvalidation_api.EmptyMessage{})
+	// Get catchup status
+	status, err := blockValidationClient.GetCatchupStatus(ctx)
 	if err != nil {
 		h.logger.Errorf("[GetCatchupStatus] Failed to get catchup status: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
@@ -37,36 +33,36 @@ func (h *HTTP) GetCatchupStatus(c echo.Context) error {
 		})
 	}
 
-	// Convert gRPC response to JSON
+	// Convert to JSON response
 	jsonResp := map[string]interface{}{
-		"is_catching_up":         resp.IsCatchingUp,
-		"peer_id":                resp.PeerId,
-		"peer_url":               resp.PeerUrl,
-		"target_block_hash":      resp.TargetBlockHash,
-		"target_block_height":    resp.TargetBlockHeight,
-		"current_height":         resp.CurrentHeight,
-		"total_blocks":           resp.TotalBlocks,
-		"blocks_fetched":         resp.BlocksFetched,
-		"blocks_validated":       resp.BlocksValidated,
-		"start_time":             resp.StartTime,
-		"duration_ms":            resp.DurationMs,
-		"fork_depth":             resp.ForkDepth,
-		"common_ancestor_hash":   resp.CommonAncestorHash,
-		"common_ancestor_height": resp.CommonAncestorHeight,
+		"is_catching_up":         status.IsCatchingUp,
+		"peer_id":                status.PeerID,
+		"peer_url":               status.PeerURL,
+		"target_block_hash":      status.TargetBlockHash,
+		"target_block_height":    status.TargetBlockHeight,
+		"current_height":         status.CurrentHeight,
+		"total_blocks":           status.TotalBlocks,
+		"blocks_fetched":         status.BlocksFetched,
+		"blocks_validated":       status.BlocksValidated,
+		"start_time":             status.StartTime,
+		"duration_ms":            status.DurationMs,
+		"fork_depth":             status.ForkDepth,
+		"common_ancestor_hash":   status.CommonAncestorHash,
+		"common_ancestor_height": status.CommonAncestorHeight,
 	}
 
 	// Add previous attempt if available
-	if resp.PreviousAttempt != nil {
+	if status.PreviousAttempt != nil {
 		jsonResp["previous_attempt"] = map[string]interface{}{
-			"peer_id":             resp.PreviousAttempt.PeerId,
-			"peer_url":            resp.PreviousAttempt.PeerUrl,
-			"target_block_hash":   resp.PreviousAttempt.TargetBlockHash,
-			"target_block_height": resp.PreviousAttempt.TargetBlockHeight,
-			"error_message":       resp.PreviousAttempt.ErrorMessage,
-			"error_type":          resp.PreviousAttempt.ErrorType,
-			"attempt_time":        resp.PreviousAttempt.AttemptTime,
-			"duration_ms":         resp.PreviousAttempt.DurationMs,
-			"blocks_validated":    resp.PreviousAttempt.BlocksValidated,
+			"peer_id":             status.PreviousAttempt.PeerID,
+			"peer_url":            status.PreviousAttempt.PeerURL,
+			"target_block_hash":   status.PreviousAttempt.TargetBlockHash,
+			"target_block_height": status.PreviousAttempt.TargetBlockHeight,
+			"error_message":       status.PreviousAttempt.ErrorMessage,
+			"error_type":          status.PreviousAttempt.ErrorType,
+			"attempt_time":        status.PreviousAttempt.AttemptTime,
+			"duration_ms":         status.PreviousAttempt.DurationMs,
+			"blocks_validated":    status.PreviousAttempt.BlocksValidated,
 		}
 	}
 

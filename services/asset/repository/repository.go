@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -59,6 +60,9 @@ type Interface interface {
 	GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error)
 	GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
+	GetBlockchainClient() blockchain.ClientI
+	GetBlockvalidationClient() blockvalidation.Interface
+	GetP2PClient() p2p.ClientI
 }
 
 // Repository implements blockchain data access across multiple storage backends.
@@ -71,6 +75,7 @@ type Repository struct {
 	BlockPersisterStore   blob.Store
 	BlockchainClient      blockchain.ClientI
 	BlockvalidationClient blockvalidation.Interface
+	P2PClient             p2p.ClientI
 }
 
 // NewRepository creates a new Repository instance with the provided dependencies.
@@ -806,4 +811,28 @@ func (repo *Repository) GetBlockLocator(ctx context.Context, blockHeaderHash *ch
 	}
 
 	return locator, nil
+}
+
+// GetBlockchainClient returns the blockchain client interface used by the repository.
+//
+// Returns:
+//   - *blockchain.ClientI: Blockchain client interface
+func (repo *Repository) GetBlockchainClient() blockchain.ClientI {
+	return repo.BlockchainClient
+}
+
+// GetBlockvalidationClient returns the block validation client interface used by the repository.
+//
+// Returns:
+//   - blockvalidation.Interface: Block validation client interface
+func (repo *Repository) GetBlockvalidationClient() blockvalidation.Interface {
+	return repo.BlockvalidationClient
+}
+
+// GetP2PClient returns the P2P client interface used by the repository.
+//
+// Returns:
+//   - p2p.ClientI: P2P client interface
+func (repo *Repository) GetP2PClient() p2p.ClientI {
+	return repo.P2PClient
 }

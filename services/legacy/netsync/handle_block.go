@@ -201,7 +201,7 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "legacy", ""); err != nil {
+	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy"); err != nil {
 		if errors.Is(err, errors.ErrBlockExists) {
 			sm.logger.Infof("[SyncManager:processBlock][%s %d] block already exists", teranodeBlock.Hash().String(), teranodeBlock.Height)
 			return nil

@@ -7,52 +7,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// PeerInfo holds all information about a peer
-type PeerInfo struct {
-	ID              peer.ID
-	ClientName      string // Human-readable name of the client software
-	Height          int32
-	BlockHash       string
-	DataHubURL      string
-	BanScore        int
-	IsBanned        bool
-	IsConnected     bool // Whether this peer is directly connected (vs gossiped)
-	ConnectedAt     time.Time
-	BytesReceived   uint64
-	LastBlockTime   time.Time
-	LastMessageTime time.Time // Last time we received any message from this peer
-	URLResponsive   bool      // Whether the DataHub URL is responsive
-	LastURLCheck    time.Time // Last time we checked URL responsiveness
-	Storage         string    // Storage mode: "full", "pruned", or empty (unknown/old version)
-
-	// Interaction metrics - track peer reliability across all interactions (blocks, subtrees, catchup, etc.)
-	InteractionAttempts    int64         // Total number of interactions with this peer
-	InteractionSuccesses   int64         // Number of successful interactions
-	InteractionFailures    int64         // Number of failed interactions
-	LastInteractionAttempt time.Time     // Last time we interacted with this peer
-	LastInteractionSuccess time.Time     // Last successful interaction
-	LastInteractionFailure time.Time     // Last failed interaction
-	ReputationScore        float64       // Reputation score (0-100) for overall reliability
-	MaliciousCount         int64         // Count of malicious behavior detections
-	AvgResponseTime        time.Duration // Average response time for all interactions
-
-	// Interaction type breakdown (optional tracking)
-	BlocksReceived       int64 // Number of blocks received from this peer
-	SubtreesReceived     int64 // Number of subtrees received from this peer
-	TransactionsReceived int64 // Number of transactions received from this peer
-	CatchupBlocks        int64 // Number of blocks received during catchup
-
-	// Sync attempt tracking for backoff and recovery
-	LastSyncAttempt      time.Time // When we last attempted to sync with this peer
-	SyncAttemptCount     int       // Number of sync attempts with this peer
-	LastReputationReset  time.Time // When reputation was last reset for recovery
-	ReputationResetCount int       // How many times reputation has been reset (for exponential cooldown)
-
-	// Catchup error tracking
-	LastCatchupError     string    // Last error message from catchup attempt with this peer
-	LastCatchupErrorTime time.Time // When the last catchup error occurred
-}
-
 // PeerRegistry maintains peer information
 // This is a pure data store with no business logic
 type PeerRegistry struct {

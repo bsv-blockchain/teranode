@@ -13,6 +13,9 @@ import (
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -617,4 +620,16 @@ func (m *MockRepositoryForMerkleProof) GetLegacyBlockReader(ctx context.Context,
 
 func (m *MockRepositoryForMerkleProof) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error) {
 	return nil, nil
+}
+
+func (m *MockRepositoryForMerkleProof) GetBlockchainClient() blockchain.ClientI {
+	return nil
+}
+
+func (m *MockRepositoryForMerkleProof) GetBlockvalidationClient() blockvalidation.Interface {
+	return nil
+}
+
+func (m *MockRepositoryForMerkleProof) GetP2PClient() p2p.ClientI {
+	return nil
 }

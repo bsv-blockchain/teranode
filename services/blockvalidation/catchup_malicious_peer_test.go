@@ -99,7 +99,7 @@ func TestCatchup_EclipseAttack(t *testing.T) {
 		}
 
 		// Try to catch up with the first malicious peer
-		err := server.catchup(ctx, maliciousBlock, "http://malicious-peer-0", "")
+		err := server.catchup(ctx, maliciousBlock, "", "http://malicious-peer-0")
 
 		// Should detect something is wrong
 		assert.Error(t, err)
@@ -181,7 +181,7 @@ func TestCatchup_EclipseAttack(t *testing.T) {
 		// This tests peer diversity and validation
 
 		// Try with honest peer
-		err = server.catchup(ctx, targetBlock, "http://honest-peer", "peer-honest-001")
+		err = server.catchup(ctx, targetBlock, "peer-honest-001", "http://honest-peer")
 
 		// Should work with honest peer
 		if err != nil {
@@ -190,7 +190,7 @@ func TestCatchup_EclipseAttack(t *testing.T) {
 		}
 
 		// Try with malicious peer - should fail
-		err = server.catchup(ctx, targetBlock, "http://malicious-peer-0", "peer-malicious-001")
+		err = server.catchup(ctx, targetBlock, "peer-malicious-001", "http://malicious-peer-0")
 		if err == nil {
 			t.Log("Warning: Accepted malicious peer data without error")
 		}
@@ -478,7 +478,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			peerURL := fmt.Sprintf("http://sybil-peer-%d", i)
 			peerID := fmt.Sprintf("peer-sybil-%03d", i)
-			err := server.catchup(ctx, targetBlock, peerURL, peerID)
+			err := server.catchup(ctx, targetBlock, peerID, peerURL)
 			if err != nil {
 				failCount++
 				t.Logf("Expected: Sybil peer %d failed: %v", i, err)
@@ -494,7 +494,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Maybe()
 
 		// Try the honest peer - should succeed
-		err = server.catchup(ctx, targetBlock, "http://honest-peer", "peer-honest-sybil-001")
+		err = server.catchup(ctx, targetBlock, "peer-honest-sybil-001", "http://honest-peer")
 		if err == nil {
 			successCount++
 			t.Logf("Expected: Honest peer succeeded")
@@ -586,7 +586,7 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 			httpmock.NewBytesResponder(200, testhelpers.HeadersToBytes(brokenHeaders)),
 		)
 
-		err := server.catchup(ctx, targetBlock, "http://malicious-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://malicious-peer")
 
 		// Should detect the broken chain
 		if err != nil {
@@ -673,7 +673,7 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 		httpMock.RegisterHeaderResponse("http://confused-peer", shuffledHeaders)
 		httpMock.Activate()
 
-		err := server.catchup(ctx, targetBlock, "http://confused-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://confused-peer")
 
 		// Should detect headers are not properly chained
 		assert.Error(t, err)
@@ -770,7 +770,7 @@ func TestCatchup_SecretMiningDetection(t *testing.T) {
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Maybe()
 
 		// Should detect secret mining attempt
-		err := server.catchup(ctx, targetBlock, "http://secret-miner", "peer-secret-miner-001")
+		err := server.catchup(ctx, targetBlock, "peer-secret-miner-001", "http://secret-miner")
 
 		// Should trigger secret mining detection or fail during validation
 		if err == nil {
@@ -850,7 +850,7 @@ func TestCatchup_SecretMiningDetection(t *testing.T) {
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Maybe()
 
 		// Should allow legitimate reorg
-		err := server.catchup(ctx, targetBlock, "http://legitimate-peer", "peer-legitimate-001")
+		err := server.catchup(ctx, targetBlock, "peer-legitimate-001", "http://legitimate-peer")
 
 		// Should not trigger secret mining for legitimate reorg
 		if err != nil {

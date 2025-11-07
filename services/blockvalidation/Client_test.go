@@ -324,7 +324,7 @@ func TestClient_ProcessBlock(t *testing.T) {
 			return req.Height == 100 && len(req.Block) > 0
 		}), mock.Anything).Return(&blockvalidation_api.EmptyMessage{}, nil)
 
-		err := client.ProcessBlock(ctx, block, 100, "legacy", "")
+		err := client.ProcessBlock(ctx, block, 100, "", "legacy")
 		assert.NoError(t, err)
 		mockClient.AssertExpectations(t)
 	})
@@ -334,7 +334,7 @@ func TestClient_ProcessBlock(t *testing.T) {
 		mockClient.On("ProcessBlock", ctx, mock.Anything, mock.Anything).Return(
 			nil, status.Error(codes.Internal, "processing error"))
 
-		err := client.ProcessBlock(ctx, block, 100, "legacy", "")
+		err := client.ProcessBlock(ctx, block, 100, "", "legacy")
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
 	})
@@ -348,7 +348,7 @@ func TestClient_ProcessBlock(t *testing.T) {
 			Header: nil, // This should cause serialization to fail
 		}
 
-		err := client.ProcessBlock(ctx, invalidBlock, 100, "legacy", "")
+		err := client.ProcessBlock(ctx, invalidBlock, 100, "", "legacy")
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
 	})

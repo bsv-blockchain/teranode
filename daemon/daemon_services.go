@@ -401,6 +401,16 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		return err
 	}
 
+	// Get the P2P client for the Asset service
+	var p2pClient p2p.ClientI
+
+	p2pClient, err = d.daemonStores.GetP2PClient(
+		ctx, createLogger(loggerP2P), appSettings,
+	)
+	if err != nil {
+		return err
+	}
+
 	// Initialize the Asset service with the necessary parts
 	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
 		createLogger(serviceAsset),
@@ -411,6 +421,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockPersisterStore,
 		blockchainClient,
 		blockvalidationClient,
+		p2pClient,
 	))
 }
 

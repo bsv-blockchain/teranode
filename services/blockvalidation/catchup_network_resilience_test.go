@@ -74,7 +74,7 @@ func TestCatchup_PartialNetworkFailure(t *testing.T) {
 		httpMock.RegisterFlakeyResponse("http://unreliable-peer", 1, testHeaders[1:])
 		httpMock.Activate()
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://unreliable-peer", "peer-unreliable-001")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "peer-unreliable-001", "http://unreliable-peer")
 
 		suite.RequireNoError(err)
 		assert.NotNil(t, result)
@@ -131,7 +131,7 @@ func TestCatchup_PartialNetworkFailure(t *testing.T) {
 		httpMock.RegisterFlakeyResponse("http://flaky-peer", 3, testHeaders[1:])
 		httpMock.Activate()
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://flaky-peer", "peer-flaky-001")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "peer-flaky-001", "http://flaky-peer")
 
 		suite.RequireNoError(err)
 		assert.NotNil(t, result)
@@ -199,7 +199,7 @@ func TestCatchup_ConnectionDropMidTransfer(t *testing.T) {
 		httpMock.RegisterFlakeyResponse("http://dropping-peer", 1, fullHeaders)
 		httpMock.Activate()
 
-		_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://dropping-peer", "peer-dropping-002")
+		_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "peer-dropping-002", "http://dropping-peer")
 
 		if err != nil {
 			breaker := suite.Server.peerCircuitBreakers.GetBreaker("peer-dropping-002")
@@ -270,17 +270,17 @@ func TestCatchup_ConnectionDropMidTransfer(t *testing.T) {
 		peerID := "peer-bad-001"
 
 		ctx1, cancel1 := context.WithTimeout(suite.Ctx, 2*time.Second)
-		_, _, err1 := suite.Server.catchupGetBlockHeaders(ctx1, targetBlock, "http://bad-peer", peerID)
+		_, _, err1 := suite.Server.catchupGetBlockHeaders(ctx1, targetBlock, peerID, "http://bad-peer")
 		cancel1()
 		assert.Error(t, err1)
 
 		ctx2, cancel2 := context.WithTimeout(suite.Ctx, 2*time.Second)
-		_, _, err2 := suite.Server.catchupGetBlockHeaders(ctx2, targetBlock, "http://bad-peer", peerID)
+		_, _, err2 := suite.Server.catchupGetBlockHeaders(ctx2, targetBlock, peerID, "http://bad-peer")
 		cancel2()
 		assert.Error(t, err2)
 
 		ctx3, cancel3 := context.WithTimeout(suite.Ctx, 2*time.Second)
-		_, _, err3 := suite.Server.catchupGetBlockHeaders(ctx3, targetBlock, "http://bad-peer", peerID)
+		_, _, err3 := suite.Server.catchupGetBlockHeaders(ctx3, targetBlock, peerID, "http://bad-peer")
 		cancel3()
 		assert.Error(t, err3)
 		assert.Contains(t, err3.Error(), "circuit breaker open")
@@ -363,7 +363,7 @@ func TestCatchup_FlappingPeer(t *testing.T) {
 		failCount := 0
 
 		for i := 0; i < 6; i++ {
-			_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://flapping-peer", "peer-flapping-002")
+			_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "peer-flapping-002", "http://flapping-peer")
 			if err != nil {
 				failCount++
 			} else {
@@ -457,7 +457,7 @@ func TestCatchup_FlappingPeer(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			reqCtx, reqCancel := context.WithTimeout(suite.Ctx, 2*time.Second)
-			_, _, _ = suite.Server.catchupGetBlockHeaders(reqCtx, targetBlock, "http://degrading-peer", "peer-degrading-001")
+			_, _, _ = suite.Server.catchupGetBlockHeaders(reqCtx, targetBlock, "peer-degrading-001", "http://degrading-peer")
 			reqCancel()
 			time.Sleep(50 * time.Millisecond)
 		}
@@ -541,7 +541,7 @@ func TestCatchup_NetworkPartition(t *testing.T) {
 
 			// Attempt catchup from this peer
 			peerID := fmt.Sprintf("peer-partition-%03d", peerIdx)
-			result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerURL, peerID)
+			result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerID, peerURL)
 
 			if err == nil && result != nil {
 				// Note: peerMetrics field has been removed from Server struct
@@ -620,7 +620,7 @@ func TestCatchup_NetworkLatencyHandling(t *testing.T) {
 		httpMock.Activate()
 
 		start := time.Now()
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://slow-peer", "peer-slow-001")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "peer-slow-001", "http://slow-peer")
 		elapsed := time.Since(start)
 
 		// Should succeed but take time
@@ -694,7 +694,7 @@ func TestCatchup_NetworkLatencyHandling(t *testing.T) {
 		httpMock.Activate()
 
 		// Should timeout due to slow response
-		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://very-slow-peer", "peer-very-slow-001")
+		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "peer-very-slow-001", "http://very-slow-peer")
 
 		assert.Error(t, err)
 		// Should get a timeout error for slow peer response
@@ -792,7 +792,7 @@ func TestCatchup_ConcurrentNetworkRequests(t *testing.T) {
 
 				peerURL := fmt.Sprintf("http://peer-%d", idx)
 				peerID := fmt.Sprintf("peer-concurrent-%03d", idx)
-				result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerURL, peerID)
+				result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerID, peerURL)
 				results[idx] = err == nil && result != nil
 			}(i)
 		}

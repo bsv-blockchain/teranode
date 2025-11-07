@@ -72,8 +72,8 @@ func (m *mockBlockValidationInterface) BlockFound(ctx context.Context, blockHash
 	return args.Error(0)
 }
 
-func (m *mockBlockValidationInterface) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, baseURL string, peerID string) error {
-	args := m.Called(ctx, block, blockHeight)
+func (m *mockBlockValidationInterface) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
+	args := m.Called(ctx, block, blockHeight, peerID, baseURL)
 	return args.Error(0)
 }
 
@@ -420,7 +420,7 @@ func Test_Server_processBlockFound(t *testing.T) {
 	s := New(ulogger.TestLogger{}, tSettings, nil, txStore, utxoStore, nil, blockchainClient, kafkaConsumerClient, nil, nil)
 	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, nil)
 
-	err = s.processBlockFound(context.Background(), block.Hash(), "legacy", "", block)
+	err = s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
 	require.NoError(t, err)
 }
 
@@ -624,7 +624,7 @@ func TestServer_catchup(t *testing.T) {
 				return httpmock.NewBytesResponse(200, responseBytes), nil
 			})
 
-		err = server.catchup(ctx, lastBlock, baseURL, "test-peer-001")
+		err = server.catchup(ctx, lastBlock, "test-peer-001", baseURL)
 		require.NoError(t, err)
 	})
 }

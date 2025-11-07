@@ -26,7 +26,6 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
-	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -124,167 +123,6 @@ func createTestServer(t *testing.T) *Server {
 	}
 
 	return s
-}
-
-func TestGetIPFromMultiaddr(t *testing.T) {
-	s := &Server{}
-	ctx := context.Background()
-
-	tests := []struct {
-		name     string
-		maddr    string
-		expected string
-		nilIP    bool
-		error    bool
-	}{
-		{
-			name:     "valid ip4 address",
-			maddr:    "/ip4/127.0.0.1/tcp/8333",
-			expected: "127.0.0.1",
-			nilIP:    false,
-			error:    false,
-		},
-		{
-			name:     "valid ip6 address",
-			maddr:    "/ip6/::1/tcp/8333",
-			expected: "::1",
-			nilIP:    false,
-			error:    false,
-		},
-		{
-			name:     "invalid multiaddress format",
-			maddr:    "invalid",
-			expected: "",
-			nilIP:    true,
-			error:    true,
-		},
-		{
-			name:     "no ip in multiaddress",
-			maddr:    "/tcp/8333",
-			expected: "",
-			nilIP:    true,
-			error:    false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var (
-				maddr ma.Multiaddr // nolint:misspell
-				err   error
-			)
-
-			// Try to create a multiaddr - this might fail for invalid formats
-			maddr, err = ma.NewMultiaddr(tt.maddr) // nolint:misspell
-			if tt.error {
-				require.Error(t, err, "Expected error creating multiaddr")
-
-				return // Skip further testing as we can't create a valid multiaddr
-			}
-
-			require.NoError(t, err)
-
-			ip, err := s.getIPFromMultiaddr(ctx, maddr)
-			require.NoError(t, err, "getIPFromMultiaddr should not return an error")
-
-			if tt.nilIP {
-				assert.Nil(t, ip, "Expected nil IP for %s", tt.name)
-			} else {
-				assert.NotNil(t, ip, "Expected non-nil IP for %s", tt.name)
-				assert.Equal(t, tt.expected, ip.String(), "IP string representation should match")
-			}
-		})
-	}
-}
-
-func TestResolveDNS(t *testing.T) {
-	// This is an integration test that requires network connectivity
-	// Skip if we're in a CI environment or if explicitly requested
-	if testing.Short() {
-		t.Skip("Skipping DNS resolution test in short mode")
-	}
-
-	// Create a server instance
-	logger := ulogger.New("test-server")
-	server := &Server{
-		logger: logger,
-	}
-
-	// Test cases
-	testCases := []struct {
-		name        string
-		inputAddr   string
-		expectError bool
-	}{
-		{
-			name:        "valid domain with IPv4",
-			inputAddr:   "/dns4/example.com/tcp/8333",
-			expectError: false,
-		},
-		{
-			name:        "invalid domain",
-			inputAddr:   "/dns4/this-is-an-invalid-domain-that-does-not-exist.test/tcp/8333",
-			expectError: true,
-		},
-		{
-			name:        "non-DNS multiaddr",
-			inputAddr:   "/tcp/8333",
-			expectError: true,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Parse the multiaddr
-			maddr, err := ma.NewMultiaddr(tc.inputAddr)
-			require.NoError(t, err, "Failed to create multiaddr")
-
-			// Call the function under test
-			ctx := context.Background()
-			ip, err := server.resolveDNS(ctx, maddr)
-
-			// Check results
-			if tc.expectError {
-				assert.Error(t, err, "Expected an error for %s", tc.inputAddr)
-				assert.Nil(t, ip, "Expected nil IP when there's an error")
-			} else {
-				if err != nil {
-					// Only fail the test if we have confirmed connectivity
-					// This makes the test more resilient to network issues
-					t.Logf("DNS resolution failed but we won't fail the test: %v", err)
-					t.Skip("Skipping due to possible network connectivity issues")
-				} else {
-					assert.NotNil(t, ip, "Expected a valid IP address")
-					t.Logf("Resolved %s to IP: %s", tc.inputAddr, ip.String())
-				}
-			}
-		})
-	}
-
-	// Now test the specific error cases in the function
-	t.Run("empty address list", func(t *testing.T) {
-		// Create a test context
-		ctx := context.Background()
-
-		// We'll use a valid multiaddr but we'll replace the resolver.Resolve result
-		// This is a manual test to verify error handling
-		maddr, err := ma.NewMultiaddr("/dns4/example.com/tcp/8333")
-		require.NoError(t, err)
-
-		// This test depends on the internal behaviour of the server.resolveDNS method
-		// which uses madns.DefaultResolver.Resolve under the hood
-		result, err := server.resolveDNS(ctx, maddr)
-
-		// If DNS resolution failed for whatever reason, skip this test
-		if err != nil && !strings.Contains(err.Error(), "no addresses found") {
-			t.Skip("DNS resolution failed, skipping specific error case test")
-		}
-
-		// If the test gets this far and the resolution succeeded, log it
-		if err == nil {
-			t.Logf("DNS resolution succeeded where we expected failure: %v", result)
-		}
-	})
 }
 
 func TestServerHandlers(t *testing.T) {
@@ -2133,7 +1971,6 @@ func TestServerStartFull(t *testing.T) {
 	mockP2PNode.On("GetID").Return(peer.ID("mock-peer-id"))
 	mockP2PNode.On("Subscribe", mock.Anything).Return(make(<-chan p2pMessageBus.Message))
 
-	mockValidation := new(blockvalidation.MockBlockValidation)
 	logger := ulogger.New("test")
 	settings := createBaseTestSettings()
 	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -2160,8 +1997,6 @@ func TestServerStartFull(t *testing.T) {
 	mockP2PNode.On("GetTopic", mock.Anything).Return(topic)
 	mockP2PNode.On("Publish", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	mockP2PNode.On("ConnectedPeers").Return([]p2pMessageBus.PeerInfo{}) // Return empty list of connected peers
-
-	server.blockValidationClient = mockValidation
 
 	// Run server
 	go func() {

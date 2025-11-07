@@ -35,46 +35,47 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight int
 	}
 
 	// Query P2P service for peers suitable for catchup
-	resp, err := u.p2pClient.GetPeersForCatchup(ctx)
+	peerInfos, err := u.p2pClient.GetPeersForCatchup(ctx)
 	if err != nil {
 		u.logger.Warnf("[peer_selection] Failed to get peers from P2P service: %v", err)
 		return nil, err
 	}
 
-	if resp == nil || len(resp.Peers) == 0 {
+	if len(peerInfos) == 0 {
 		u.logger.Debugf("[peer_selection] No peers available from P2P service")
 		return nil, nil
 	}
 
-	// Convert proto peers to our internal type
-	peers := make([]PeerForCatchup, 0, len(resp.Peers))
-	for _, p := range resp.Peers {
+	// Convert PeerInfo to our internal type
+	peers := make([]PeerForCatchup, 0, len(peerInfos))
+	for _, p := range peerInfos {
 		// Filter out peers that don't have the target height yet
 		// (we only want peers that are at or above our target)
 		if p.Height < targetHeight {
-			u.logger.Debugf("[peer_selection] Skipping peer %s (height %d < target %d)", p.Id, p.Height, targetHeight)
+			u.logger.Debugf("[peer_selection] Skipping peer %s (height %d < target %d)", p.ID.String(), p.Height, targetHeight)
 			continue
 		}
 
 		// Filter out peers without DataHub URLs (listen-only nodes)
-		if p.DataHubUrl == "" {
-			u.logger.Debugf("[peer_selection] Skipping peer %s (no DataHub URL - listen-only node)", p.Id)
+		if p.DataHubURL == "" {
+			u.logger.Debugf("[peer_selection] Skipping peer %s (no DataHub URL - listen-only node)", p.ID.String())
 			continue
 		}
 
 		peers = append(peers, PeerForCatchup{
-			ID:                     p.Id,
-			DataHubURL:             p.DataHubUrl,
+			ID:                     p.ID.String(),
+			Storage:                p.Storage,
+			DataHubURL:             p.DataHubURL,
 			Height:                 p.Height,
 			BlockHash:              p.BlockHash,
-			CatchupReputationScore: p.CatchupReputationScore,
-			CatchupAttempts:        p.CatchupAttempts,
-			CatchupSuccesses:       p.CatchupSuccesses,
-			CatchupFailures:        p.CatchupFailures,
+			CatchupReputationScore: p.ReputationScore,
+			CatchupAttempts:        p.InteractionAttempts,
+			CatchupSuccesses:       p.InteractionSuccesses,
+			CatchupFailures:        p.InteractionFailures,
 		})
 	}
 
-	u.logger.Infof("[peer_selection] Selected %d peers for catchup (from %d total)", len(peers), len(resp.Peers))
+	u.logger.Infof("[peer_selection] Selected %d peers for catchup (from %d total)", len(peers), len(peerInfos))
 	for i, p := range peers {
 		successRate := float64(0)
 

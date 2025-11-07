@@ -1874,22 +1874,22 @@ func (td *TestDaemon) ConnectToPeer(t *testing.T, peer *TestDaemon) {
 
 			return
 		case <-ticker.C:
-			r, err := td.P2PClient.GetPeers(td.Ctx)
+			peers, err := td.P2PClient.GetPeers(td.Ctx)
 			if err != nil {
 				// If there's an error calling RPC, log it and continue retrying
 				t.Logf("Error calling getpeerinfo: %v. Retrying...", err)
 				continue
 			}
 
-			if len(r.Peers) == 0 {
+			if len(peers) == 0 {
 				t.Logf("getpeerinfo returned empty peer list. Retrying...")
 				continue
 			}
 
 			found := false
 
-			for _, p := range r.Peers {
-				if p != nil && p.Id == peer.Settings.P2P.PeerID {
+			for _, p := range peers {
+				if p != nil && p.ID.String() == peer.Settings.P2P.PeerID {
 					found = true
 					break
 				}

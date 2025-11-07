@@ -96,7 +96,7 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 	for i := 0; i < numWorkers; i++ {
 		workerID := i
 		g.Go(func() error {
-			return u.blockWorker(gCtx, workerID, workQueue, resultQueue, baseURL, peerID, blockUpTo)
+			return u.blockWorker(gCtx, workerID, workQueue, resultQueue, peerID, baseURL, blockUpTo)
 		})
 	}
 
@@ -181,7 +181,8 @@ func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*mo
 }
 
 // blockWorker processes blocks and fetches their subtree data in parallel
-func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan workItem, resultQueue chan<- resultItem, baseURL string, peerID string, blockUpTo *model.Block) error {
+func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan workItem, resultQueue chan<- resultItem,
+	peerID, baseURL string, blockUpTo *model.Block) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "blockWorker",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[catchup:blockWorker-%d][%s] starting worker", workerID, blockUpTo.Hash().String()),
@@ -197,7 +198,7 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 			}
 
 			// Fetch subtree data for this block
-			err := u.fetchSubtreeDataForBlock(ctx, work.block, baseURL, peerID)
+			err := u.fetchSubtreeDataForBlock(ctx, work.block, peerID, baseURL)
 			if err != nil {
 				// Send result (even if error occurred)
 				result := resultItem{
@@ -298,7 +299,7 @@ func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan result
 // fetchSubtreeDataForBlock fetches subtree and subtreeData for all subtrees in a block
 // and stores them in the subtreeStore for later use by block validation.
 // This function fetches both the subtree (for subtreeToCheck) and raw subtree data concurrently.
-func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Block, baseURL string, peerID string) error {
+func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Block, peerID, baseURL string) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(gCtx, "fetchSubtreeDataForBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchSubtreeDataForBlock][%s] fetching subtree data for block with %d subtrees", block.Hash().String(), len(block.Subtrees)),
@@ -326,7 +327,7 @@ func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Blo
 		subtreeHashCopy := *subtreeHash // Capture for goroutine
 
 		g.Go(func() error {
-			return u.fetchAndStoreSubtreeAndSubtreeData(ctx, block, &subtreeHashCopy, baseURL, peerID)
+			return u.fetchAndStoreSubtreeAndSubtreeData(ctx, block, &subtreeHashCopy, peerID, baseURL)
 		})
 	}
 
@@ -339,7 +340,7 @@ func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Blo
 }
 
 // fetchAndStoreSubtree fetches and stores only the subtree (for subtreeToCheck)
-func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, peerID string, baseURL string) (*subtreepkg.Subtree, error) {
+func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, peerID, baseURL string) (*subtreepkg.Subtree, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtree",
 		tracing.WithParentStat(u.stats),
 		// tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtree] fetching subtree for %s", subtreeHash.String()),
@@ -440,7 +441,8 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 }
 
 // fetchAndStoreSubtreeData fetches and stores only the subtreeData
-func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, baseURL string, peerID string) error {
+func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
+	subtree *subtreepkg.Subtree, peerID, baseURL string) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtreeData",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeData][%s] Fetching subtree data from peer %s (%s) for subtree %s", block.Hash().String(), peerID, baseURL, subtreeHash.String()),
@@ -514,7 +516,8 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 
 // fetchAndStoreSubtreeAndSubtreeData fetches both subtree and subtreeData for a single subtree hash
 // and stores them in the subtreeStore.
-func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, baseURL string, peerID string) error {
+func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
+	peerID, baseURL string) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtreeAndSubtreeData",
 		tracing.WithParentStat(u.stats),
 		// tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeAndSubtreeData] fetching subtree and data for %s", subtreeHash.String()),
@@ -528,7 +531,7 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 	}
 
 	// Then, fetch and store the subtreeData (if it doesn't already exist)
-	if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, baseURL, peerID); err != nil {
+	if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL); err != nil {
 		return err
 	}
 
@@ -637,7 +640,7 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 // Returns:
 //   - *model.Block: The fetched block
 //   - error: If request fails or block is invalid
-func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, peerID string, baseURL string) (*model.Block, error) {
+func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, peerID, baseURL string) (*model.Block, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchSingleBlock",
 		tracing.WithParentStat(u.stats),
 	)

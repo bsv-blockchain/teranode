@@ -107,6 +107,8 @@ func (d *Stores) GetP2PClient(ctx context.Context, logger ulogger.Logger, appSet
 		return nil, err
 	}
 
+	d.mainP2PClient = p2pClient
+
 	return p2pClient, nil
 }
 
