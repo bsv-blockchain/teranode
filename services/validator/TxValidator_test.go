@@ -625,24 +625,24 @@ func TestCheckP2SHOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	// At Genesis activation height, p2sh should not be rejected
-	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight-1, nil, &Options{})
-	require.NoError(t, err)
-
-	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight-1, &Options{})
-	require.NoError(t, err)
-
-	// At Genesis activation height, p2sh should be rejected
 	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight, nil, &Options{})
-	require.Error(t, err)
+	require.NoError(t, err)
 
 	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight, &Options{})
-	require.Error(t, err)
-
-	// At Genesis activation height, with skip policy check, p2sh should be accepted
-	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight, nil, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 
-	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight, &Options{SkipPolicyChecks: true})
+	// After Genesis activation height, p2sh should be rejected
+	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, nil, &Options{})
+	require.Error(t, err)
+
+	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, &Options{})
+	require.Error(t, err)
+
+	// After Genesis activation height, with skip policy check, p2sh should be accepted
+	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, nil, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+
+	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
