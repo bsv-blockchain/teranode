@@ -535,6 +535,12 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil
 			},
+			getBlockHeaderFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return mockBlock.Header, &model.BlockHeaderMeta{
+					Height:    100,
+					ChainWork: []byte{0x01, 0x02, 0x03},
+				}, nil
+			},
 			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
 				if height == 101 {
 					return nextBlock, nil
@@ -575,6 +581,12 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 250}, nil
 			},
+			getBlockHeaderFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return mockBlock.Header, &model.BlockHeaderMeta{
+					Height:    200,
+					ChainWork: []byte{0x01, 0x02, 0x03},
+				}, nil
+			},
 			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
 				return nil, errors.ErrBlockNotFound // No next block
 			},
@@ -603,6 +615,12 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		mockBlockchainClient := &mockBlockchainClient{
 			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil
+			},
+			getBlockHeaderFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return mockBlock.Header, &model.BlockHeaderMeta{
+					Height:    100,
+					ChainWork: []byte{0x01, 0x02, 0x03},
+				}, nil
 			},
 			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
 				return nil, errors.ErrBlockNotFound
@@ -659,6 +677,12 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		mockBlockchainClient := &mockBlockchainClient{
 			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil
+			},
+			getBlockHeaderFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return mockBlock.Header, &model.BlockHeaderMeta{
+					Height:    100,
+					ChainWork: []byte{0x01, 0x02, 0x03},
+				}, nil
 			},
 			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
 				return nil, errors.New(errors.ERR_ERROR, "database connection error")
@@ -1270,6 +1294,12 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return blockHeader, bestBlockMeta, nil
 			},
+			getBlockHeaderFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, &model.BlockHeaderMeta{
+					Height:    100000,
+					ChainWork: []byte{0x01, 0x02, 0x03},
+				}, nil
+			},
 			getBlockHeadersFunc: func(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 				// Return dummy headers for median time calculation
 				headers := make([]*model.BlockHeader, 11)
@@ -1347,6 +1377,12 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 			},
 			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return blockHeader, bestBlockMeta, nil
+			},
+			getBlockHeaderFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, &model.BlockHeaderMeta{
+					Height:    100000,
+					ChainWork: []byte{0x01, 0x02, 0x03},
+				}, nil
 			},
 			getBlockHeadersFunc: func(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 				// Return dummy headers for median time calculation

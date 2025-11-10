@@ -375,6 +375,12 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 		return nil, err
 	}
 
+	// Get block metadata for this specific block to retrieve its chain work
+	_, blockMeta, err := s.blockchainClient.GetBlockHeader(ctx, b.Hash())
+	if err != nil {
+		return nil, err
+	}
+
 	// Get next block hash unless there are none.
 	nextBlock, err := s.blockchainClient.GetBlockByHeight(ctx, b.Height+1)
 	if err != nil && !errors.Is(err, errors.ErrBlockNotFound) {
@@ -435,7 +441,7 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 		NextHash:      nextBlockHash,
 		NumTx:         int(b.TransactionCount),
 		MedianTime:    int64(medianTime),
-		ChainWork:     hex.EncodeToString(bestBlockMeta.ChainWork),
+		ChainWork:     hex.EncodeToString(blockMeta.ChainWork),
 	}
 
 	// For verbosity 1 and above, return the JSON object
