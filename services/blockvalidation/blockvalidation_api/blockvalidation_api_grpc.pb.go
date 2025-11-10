@@ -23,6 +23,7 @@ const (
 	BlockValidationAPI_BlockFound_FullMethodName       = "/blockvalidation_api.BlockValidationAPI/BlockFound"
 	BlockValidationAPI_ProcessBlock_FullMethodName     = "/blockvalidation_api.BlockValidationAPI/ProcessBlock"
 	BlockValidationAPI_ValidateBlock_FullMethodName    = "/blockvalidation_api.BlockValidationAPI/ValidateBlock"
+	BlockValidationAPI_RevalidateBlock_FullMethodName  = "/blockvalidation_api.BlockValidationAPI/RevalidateBlock"
 	BlockValidationAPI_GetCatchupStatus_FullMethodName = "/blockvalidation_api.BlockValidationAPI/GetCatchupStatus"
 )
 
@@ -35,6 +36,7 @@ type BlockValidationAPIClient interface {
 	BlockFound(ctx context.Context, in *BlockFoundRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	ProcessBlock(ctx context.Context, in *ProcessBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	ValidateBlock(ctx context.Context, in *ValidateBlockRequest, opts ...grpc.CallOption) (*ValidateBlockResponse, error)
+	RevalidateBlock(ctx context.Context, in *RevalidateBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 	GetCatchupStatus(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*CatchupStatusResponse, error)
 }
 
@@ -86,6 +88,16 @@ func (c *blockValidationAPIClient) ValidateBlock(ctx context.Context, in *Valida
 	return out, nil
 }
 
+func (c *blockValidationAPIClient) RevalidateBlock(ctx context.Context, in *RevalidateBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, BlockValidationAPI_RevalidateBlock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockValidationAPIClient) GetCatchupStatus(ctx context.Context, in *EmptyMessage, opts ...grpc.CallOption) (*CatchupStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CatchupStatusResponse)
@@ -105,6 +117,7 @@ type BlockValidationAPIServer interface {
 	BlockFound(context.Context, *BlockFoundRequest) (*EmptyMessage, error)
 	ProcessBlock(context.Context, *ProcessBlockRequest) (*EmptyMessage, error)
 	ValidateBlock(context.Context, *ValidateBlockRequest) (*ValidateBlockResponse, error)
+	RevalidateBlock(context.Context, *RevalidateBlockRequest) (*EmptyMessage, error)
 	GetCatchupStatus(context.Context, *EmptyMessage) (*CatchupStatusResponse, error)
 	mustEmbedUnimplementedBlockValidationAPIServer()
 }
@@ -127,6 +140,9 @@ func (UnimplementedBlockValidationAPIServer) ProcessBlock(context.Context, *Proc
 }
 func (UnimplementedBlockValidationAPIServer) ValidateBlock(context.Context, *ValidateBlockRequest) (*ValidateBlockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateBlock not implemented")
+}
+func (UnimplementedBlockValidationAPIServer) RevalidateBlock(context.Context, *RevalidateBlockRequest) (*EmptyMessage, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RevalidateBlock not implemented")
 }
 func (UnimplementedBlockValidationAPIServer) GetCatchupStatus(context.Context, *EmptyMessage) (*CatchupStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetCatchupStatus not implemented")
@@ -224,6 +240,24 @@ func _BlockValidationAPI_ValidateBlock_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockValidationAPI_RevalidateBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevalidateBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockValidationAPIServer).RevalidateBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockValidationAPI_RevalidateBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockValidationAPIServer).RevalidateBlock(ctx, req.(*RevalidateBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockValidationAPI_GetCatchupStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyMessage)
 	if err := dec(in); err != nil {
@@ -264,6 +298,10 @@ var BlockValidationAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateBlock",
 			Handler:    _BlockValidationAPI_ValidateBlock_Handler,
+		},
+		{
+			MethodName: "RevalidateBlock",
+			Handler:    _BlockValidationAPI_RevalidateBlock_Handler,
 		},
 		{
 			MethodName: "GetCatchupStatus",

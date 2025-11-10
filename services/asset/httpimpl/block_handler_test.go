@@ -378,7 +378,7 @@ func TestRevalidateBlock(t *testing.T) {
 		requestBody := `{"blockHash": "` + validBlockHash + `"}`
 		handler, mockClient, c, rec := setupBlockHandlerTest(t, requestBody)
 
-		handler.blockvalidationClient.(*blockvalidation.Mock).On("ValidateBlock", mock.Anything, mock.Anything, mock.Anything).
+		handler.blockvalidationClient.(*blockvalidation.Mock).On("RevalidateBlock", mock.Anything, mock.Anything).
 			Return(nil)
 
 		// Mock the blockchain client responses
@@ -407,7 +407,7 @@ func TestRevalidateBlock(t *testing.T) {
 		requestBody := `{"blockHash": "` + validBlockHash + `"}`
 		handler, mockClient, c, _ := setupBlockHandlerTest(t, requestBody)
 
-		handler.blockvalidationClient.(*blockvalidation.Mock).On("ValidateBlock", mock.Anything, mock.Anything, mock.Anything).
+		handler.blockvalidationClient.(*blockvalidation.Mock).On("RevalidateBlock", mock.Anything, mock.Anything).
 			Return(errors.NewBlockInvalidError("Failed to revalidate block"))
 
 		// Mock the blockchain client responses

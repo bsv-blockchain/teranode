@@ -12,6 +12,7 @@ service BlockValidationAPI {
   rpc BlockFound (BlockFoundRequest) returns (EmptyMessage) {}
   rpc ProcessBlock (ProcessBlockRequest) returns (EmptyMessage) {}
   rpc ValidateBlock (ValidateBlockRequest) returns (ValidateBlockResponse) {}
+  rpc RevalidateBlock (RevalidateBlockRequest) returns (EmptyMessage) {}
   rpc GetCatchupStatus (EmptyMessage) returns (CatchupStatusResponse) {}
 }
 
@@ -52,6 +53,11 @@ message ValidateBlockRequest {
 message ValidateBlockResponse {
   bool ok = 1;
   string message = 2;
+}
+
+// swagger:model RevalidateBlockRequest
+message RevalidateBlockRequest {
+  bytes hash = 1;
 }
 
 // swagger:model PreviousCatchupAttempt

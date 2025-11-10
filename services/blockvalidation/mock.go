@@ -51,6 +51,11 @@ func (m *Mock) ValidateBlock(ctx context.Context, block *model.Block, options *V
 	return args.Error(0)
 }
 
+func (m *Mock) RevalidateBlock(ctx context.Context, blockHash chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
 // GetCatchupStatus performs a mock catchup status retrieval.
 func (m *Mock) GetCatchupStatus(ctx context.Context) (*CatchupStatus, error) {
 	args := m.Called(ctx)

@@ -372,6 +372,51 @@ func (x *ValidateBlockResponse) GetMessage() string {
 	return ""
 }
 
+// swagger:model RevalidateBlockRequest
+type RevalidateBlockRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Hash          []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevalidateBlockRequest) Reset() {
+	*x = RevalidateBlockRequest{}
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevalidateBlockRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevalidateBlockRequest) ProtoMessage() {}
+
+func (x *RevalidateBlockRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevalidateBlockRequest.ProtoReflect.Descriptor instead.
+func (*RevalidateBlockRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RevalidateBlockRequest) GetHash() []byte {
+	if x != nil {
+		return x.Hash
+	}
+	return nil
+}
+
 // swagger:model PreviousCatchupAttempt
 type PreviousCatchupAttempt struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
@@ -390,7 +435,7 @@ type PreviousCatchupAttempt struct {
 
 func (x *PreviousCatchupAttempt) Reset() {
 	*x = PreviousCatchupAttempt{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[6]
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -402,7 +447,7 @@ func (x *PreviousCatchupAttempt) String() string {
 func (*PreviousCatchupAttempt) ProtoMessage() {}
 
 func (x *PreviousCatchupAttempt) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[6]
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -415,7 +460,7 @@ func (x *PreviousCatchupAttempt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreviousCatchupAttempt.ProtoReflect.Descriptor instead.
 func (*PreviousCatchupAttempt) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{6}
+	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *PreviousCatchupAttempt) GetPeerId() string {
@@ -505,7 +550,7 @@ type CatchupStatusResponse struct {
 
 func (x *CatchupStatusResponse) Reset() {
 	*x = CatchupStatusResponse{}
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[7]
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -517,7 +562,7 @@ func (x *CatchupStatusResponse) String() string {
 func (*CatchupStatusResponse) ProtoMessage() {}
 
 func (x *CatchupStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[7]
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -530,7 +575,7 @@ func (x *CatchupStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CatchupStatusResponse.ProtoReflect.Descriptor instead.
 func (*CatchupStatusResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{7}
+	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CatchupStatusResponse) GetIsCatchingUp() bool {
@@ -664,7 +709,9 @@ const file_services_blockvalidation_blockvalidation_api_blockvalidation_api_prot
 	"\x0fis_revalidation\x18\x03 \x01(\bR\x0eisRevalidation\"A\n" +
 	"\x15ValidateBlockResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xdb\x02\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\",\n" +
+	"\x16RevalidateBlockRequest\x12\x12\n" +
+	"\x04hash\x18\x01 \x01(\fR\x04hash\"\xdb\x02\n" +
 	"\x16PreviousCatchupAttempt\x12\x17\n" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12\x19\n" +
 	"\bpeer_url\x18\x02 \x01(\tR\apeerUrl\x12*\n" +
@@ -696,7 +743,7 @@ const file_services_blockvalidation_blockvalidation_api_blockvalidation_api_prot
 	"fork_depth\x18\f \x01(\rR\tforkDepth\x120\n" +
 	"\x14common_ancestor_hash\x18\r \x01(\tR\x12commonAncestorHash\x124\n" +
 	"\x16common_ancestor_height\x18\x0e \x01(\rR\x14commonAncestorHeight\x12V\n" +
-	"\x10previous_attempt\x18\x0f \x01(\v2+.blockvalidation_api.PreviousCatchupAttemptR\x0fpreviousAttempt2\xf5\x03\n" +
+	"\x10previous_attempt\x18\x0f \x01(\v2+.blockvalidation_api.PreviousCatchupAttemptR\x0fpreviousAttempt2\xda\x04\n" +
 	"\x12BlockValidationAPI\x12V\n" +
 	"\n" +
 	"HealthGRPC\x12!.blockvalidation_api.EmptyMessage\x1a#.blockvalidation_api.HealthResponse\"\x00\x12Y\n" +
@@ -704,6 +751,7 @@ const file_services_blockvalidation_blockvalidation_api_blockvalidation_api_prot
 	"BlockFound\x12&.blockvalidation_api.BlockFoundRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12]\n" +
 	"\fProcessBlock\x12(.blockvalidation_api.ProcessBlockRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12h\n" +
 	"\rValidateBlock\x12).blockvalidation_api.ValidateBlockRequest\x1a*.blockvalidation_api.ValidateBlockResponse\"\x00\x12c\n" +
+	"\x0fRevalidateBlock\x12+.blockvalidation_api.RevalidateBlockRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12c\n" +
 	"\x10GetCatchupStatus\x12!.blockvalidation_api.EmptyMessage\x1a*.blockvalidation_api.CatchupStatusResponse\"\x00B\x18Z\x16./;blockvalidation_apib\x06proto3"
 
 var (
@@ -718,7 +766,7 @@ func file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto
 	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescData
 }
 
-var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_goTypes = []any{
 	(*EmptyMessage)(nil),           // 0: blockvalidation_api.EmptyMessage
 	(*HealthResponse)(nil),         // 1: blockvalidation_api.HealthResponse
@@ -726,25 +774,28 @@ var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_
 	(*ProcessBlockRequest)(nil),    // 3: blockvalidation_api.ProcessBlockRequest
 	(*ValidateBlockRequest)(nil),   // 4: blockvalidation_api.ValidateBlockRequest
 	(*ValidateBlockResponse)(nil),  // 5: blockvalidation_api.ValidateBlockResponse
-	(*PreviousCatchupAttempt)(nil), // 6: blockvalidation_api.PreviousCatchupAttempt
-	(*CatchupStatusResponse)(nil),  // 7: blockvalidation_api.CatchupStatusResponse
-	(*timestamppb.Timestamp)(nil),  // 8: google.protobuf.Timestamp
+	(*RevalidateBlockRequest)(nil), // 6: blockvalidation_api.RevalidateBlockRequest
+	(*PreviousCatchupAttempt)(nil), // 7: blockvalidation_api.PreviousCatchupAttempt
+	(*CatchupStatusResponse)(nil),  // 8: blockvalidation_api.CatchupStatusResponse
+	(*timestamppb.Timestamp)(nil),  // 9: google.protobuf.Timestamp
 }
 var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_depIdxs = []int32{
-	8, // 0: blockvalidation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	6, // 1: blockvalidation_api.CatchupStatusResponse.previous_attempt:type_name -> blockvalidation_api.PreviousCatchupAttempt
+	9, // 0: blockvalidation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	7, // 1: blockvalidation_api.CatchupStatusResponse.previous_attempt:type_name -> blockvalidation_api.PreviousCatchupAttempt
 	0, // 2: blockvalidation_api.BlockValidationAPI.HealthGRPC:input_type -> blockvalidation_api.EmptyMessage
 	2, // 3: blockvalidation_api.BlockValidationAPI.BlockFound:input_type -> blockvalidation_api.BlockFoundRequest
 	3, // 4: blockvalidation_api.BlockValidationAPI.ProcessBlock:input_type -> blockvalidation_api.ProcessBlockRequest
 	4, // 5: blockvalidation_api.BlockValidationAPI.ValidateBlock:input_type -> blockvalidation_api.ValidateBlockRequest
-	0, // 6: blockvalidation_api.BlockValidationAPI.GetCatchupStatus:input_type -> blockvalidation_api.EmptyMessage
-	1, // 7: blockvalidation_api.BlockValidationAPI.HealthGRPC:output_type -> blockvalidation_api.HealthResponse
-	0, // 8: blockvalidation_api.BlockValidationAPI.BlockFound:output_type -> blockvalidation_api.EmptyMessage
-	0, // 9: blockvalidation_api.BlockValidationAPI.ProcessBlock:output_type -> blockvalidation_api.EmptyMessage
-	5, // 10: blockvalidation_api.BlockValidationAPI.ValidateBlock:output_type -> blockvalidation_api.ValidateBlockResponse
-	7, // 11: blockvalidation_api.BlockValidationAPI.GetCatchupStatus:output_type -> blockvalidation_api.CatchupStatusResponse
-	7, // [7:12] is the sub-list for method output_type
-	2, // [2:7] is the sub-list for method input_type
+	6, // 6: blockvalidation_api.BlockValidationAPI.RevalidateBlock:input_type -> blockvalidation_api.RevalidateBlockRequest
+	0, // 7: blockvalidation_api.BlockValidationAPI.GetCatchupStatus:input_type -> blockvalidation_api.EmptyMessage
+	1, // 8: blockvalidation_api.BlockValidationAPI.HealthGRPC:output_type -> blockvalidation_api.HealthResponse
+	0, // 9: blockvalidation_api.BlockValidationAPI.BlockFound:output_type -> blockvalidation_api.EmptyMessage
+	0, // 10: blockvalidation_api.BlockValidationAPI.ProcessBlock:output_type -> blockvalidation_api.EmptyMessage
+	5, // 11: blockvalidation_api.BlockValidationAPI.ValidateBlock:output_type -> blockvalidation_api.ValidateBlockResponse
+	0, // 12: blockvalidation_api.BlockValidationAPI.RevalidateBlock:output_type -> blockvalidation_api.EmptyMessage
+	8, // 13: blockvalidation_api.BlockValidationAPI.GetCatchupStatus:output_type -> blockvalidation_api.CatchupStatusResponse
+	8, // [8:14] is the sub-list for method output_type
+	2, // [2:8] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name
 	2, // [2:2] is the sub-list for extension extendee
 	0, // [0:2] is the sub-list for field type_name
@@ -761,7 +812,7 @@ func file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDesc), len(file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

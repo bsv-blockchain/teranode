@@ -4613,6 +4613,10 @@ func (m *mockBlockValidationClient) ValidateBlock(ctx context.Context, block *mo
 	return nil
 }
 
+func (m *mockBlockValidationClient) RevalidateBlock(ctx context.Context, blockHash chainhash.Hash) error {
+	return nil
+}
+
 func (m *mockBlockValidationClient) GetCatchupStatus(ctx context.Context) (*blockvalidation.CatchupStatus, error) {
 	return &blockvalidation.CatchupStatus{IsCatchingUp: false}, nil
 }

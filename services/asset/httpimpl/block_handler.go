@@ -189,16 +189,7 @@ func (h *BlockHandler) InvalidateBlock(c echo.Context) error {
 //   - error: Any error encountered during block revalidation
 func (h *BlockHandler) RevalidateBlock(c echo.Context) error {
 	return h.handleBlockOperation(c, "revalidate", func(ctx echo.Context, blockHash *chainhash.Hash) error {
-		block, err := h.blockchainClient.GetBlock(ctx.Request().Context(), blockHash)
-		if err != nil {
-			return errors.NewProcessingError("error getting block", err)
-		}
-
-		options := &blockvalidation.ValidateBlockOptions{
-			IsRevalidation: true,
-		}
-
-		return h.blockvalidationClient.ValidateBlock(ctx.Request().Context(), block, options)
+		return h.blockvalidationClient.RevalidateBlock(ctx.Request().Context(), *blockHash)
 	})
 }
 
