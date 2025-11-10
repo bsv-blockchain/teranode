@@ -4617,6 +4617,9 @@ func (m *mockBlockValidationClient) ValidateBlock(ctx context.Context, block *mo
 	}
 	return nil
 }
+func (m *mockBlockValidationClient) RevalidateBlock(ctx context.Context, blockHash chainhash.Hash) error {
+	return nil
+}
 func (m *mockBlockchainClient) IsFullyReady(ctx context.Context) (bool, error) { return false, nil }
 func (m *mockBlockchainClient) Run(ctx context.Context, source string) error   { return nil }
 func (m *mockBlockchainClient) CatchUpBlocks(ctx context.Context) error        { return nil }

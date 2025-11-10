@@ -203,3 +203,25 @@ func (s *Client) ValidateBlock(ctx context.Context, block *model.Block, options 
 
 	return nil
 }
+
+// RevalidateBlock forces revalidation of a previously invalidated block.
+// This is useful for scenarios where the block's validity may have changed
+// due to updates in consensus rules or blockchain state.
+//
+// Parameters:
+//   - ctx: Context for the revalidation operation
+//   - blockHash: Unique identifier of the block to revalidate
+//
+// Returns an error if revalidation fails or service communication errors occur
+func (s *Client) RevalidateBlock(ctx context.Context, blockHash chainhash.Hash) error {
+	req := &blockvalidation_api.RevalidateBlockRequest{
+		Hash: blockHash.CloneBytes(),
+	}
+
+	_, err := s.apiClient.RevalidateBlock(ctx, req)
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}

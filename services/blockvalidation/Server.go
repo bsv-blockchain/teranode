@@ -1034,6 +1034,42 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	return &blockvalidation_api.EmptyMessage{}, nil
 }
 
+func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_api.RevalidateBlockRequest) (*blockvalidation_api.EmptyMessage, error) {
+	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "RevalidateBlock",
+		tracing.WithParentStat(u.stats),
+		tracing.WithLogMessage(u.logger, "[RevalidateBlock][%s] revalidate block called", utils.ReverseAndHexEncodeSlice(request.Hash)),
+	)
+	defer deferFn()
+
+	blockHash, err := chainhash.NewHash(request.Hash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[RevalidateBlock][%s] failed to create hash from bytes", utils.ReverseAndHexEncodeSlice(request.Hash), err))
+	}
+
+	block, err := u.blockchainClient.GetBlock(ctx, blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to get block", blockHash.String(), err))
+	}
+
+	_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(ctx, blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to get block header", blockHash.String(), err))
+	}
+
+	// Create validation options
+	opts := &ValidateBlockOptions{
+		DisableOptimisticMining: true,
+		IsRevalidation:          true,
+	}
+
+	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, blockHeaderMeta.PeerID, u.blockValidation.bloomFilterStats, opts)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed block re-validation", block.String(), err))
+	}
+
+	return &blockvalidation_api.EmptyMessage{}, nil
+}
+
 // ProcessBlock handles validation of a complete block at a specified height.
 // This method is typically used during initial block sync or when receiving blocks
 // through legacy interfaces.
