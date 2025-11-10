@@ -884,7 +884,14 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 	start = gocore.CurrentTime()
 	buffer := make([]byte, chainhash.HashSize)
-	bufferedReader := bufio.NewReaderSize(body, 1024*128)
+
+	// Use pooled bufio.Reader
+	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+	bufferedReader.Reset(body)
+	defer func() {
+		bufferedReader.Reset(nil)
+		bufioReaderPool.Put(bufferedReader)
+	}()
 
 	u.logger.Debugf("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
 
@@ -1029,8 +1036,11 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 						if isRunning {
 							// add tx to the orphanage
 							u.logger.Debugf("[validateSubtree][%s] transaction %s is missing parent, adding to orphanage", subtreeHash.String(), tx.TxIDChainHash().String())
-							u.orphanage.Set(*tx.TxIDChainHash(), tx)
-							addedToOrphanage.Add(1)
+							if u.orphanage.Set(*tx.TxIDChainHash(), tx) {
+								addedToOrphanage.Add(1)
+							} else {
+								u.logger.Warnf("[validateSubtree][%s] Failed to add transaction %s to orphanage - orphanage is full", subtreeHash.String(), tx.TxIDChainHash().String())
+							}
 						}
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Report invalid subtree - contains truly invalid transaction

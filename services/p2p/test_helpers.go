@@ -48,6 +48,7 @@ func CreateTestSettings() *settings.Settings {
 		P2P: settings.P2PSettings{
 			BanThreshold: 100,
 			BanDuration:  24 * time.Hour,
+			DisableNAT:   true, // Disable NAT in tests to prevent data races in libp2p
 		},
 	}
 	return s
@@ -70,6 +71,7 @@ func CreateTestPeerInfo(id peer.ID, height int32, healthy bool, banned bool, dat
 		URLResponsive:   dataHubURL != "",
 		LastURLCheck:    time.Now(),
 		LastHealthCheck: time.Now(),
+		Storage:         "full", // Default test peers to full nodes
 	}
 }
 
@@ -115,6 +117,7 @@ func CreateTestPeerInfoList(count int) []*PeerInfo {
 			URLResponsive:   false,
 			LastURLCheck:    time.Now(),
 			LastHealthCheck: time.Now(),
+			Storage:         "full", // Default test peers to full nodes
 		}
 	}
 
@@ -154,6 +157,7 @@ func SetupTestBlockchain(t *testing.T) *TestBlockchainSetup {
 		P2P: settings.P2PSettings{
 			BanThreshold: 100,
 			BanDuration:  24 * time.Hour,
+			DisableNAT:   true, // Disable NAT in tests to prevent data races in libp2p
 		},
 	}
 

@@ -740,7 +740,7 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		tx1DoubleSpend.Version = 2
 
 		// spend the parent tx with tx2
-		_, err = s.utxoStore.Spend(ctx, tx1DoubleSpend)
+		_, err = s.utxoStore.Spend(ctx, tx1DoubleSpend, 122)
 		require.NoError(t, err)
 
 		_, err = s.utxoStore.Create(ctx, tx1DoubleSpend, 122)

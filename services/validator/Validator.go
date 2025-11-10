@@ -80,6 +80,7 @@ const (
 // - Managing UTXO state transitions and double-spend prevention
 // - Coordinating with block assembly for transaction inclusion
 // - Handling both individual and batch validation scenarios
+
 type Validator struct {
 	// logger provides structured logging capabilities for the validator, enabling comprehensive
 	// monitoring and debugging of validation operations. All validation activities, errors, and
@@ -238,6 +239,13 @@ func (v *Validator) GetMedianBlockTime() uint32 {
 	return v.utxoStore.GetMedianBlockTime()
 }
 
+// GetBlockState returns an atomic snapshot of both block height and median block time
+// from the UTXO store. This prevents race conditions that could occur when reading
+// these values separately, ensuring consistency during validation.
+func (v *Validator) GetBlockState() utxo.BlockState {
+	return v.utxoStore.GetBlockState()
+}
+
 // Validate performs comprehensive validation of a transaction.
 // It checks transaction finality, validates inputs and outputs, updates the UTXO set,
 // and optionally adds the transaction to block assembly.
@@ -377,15 +385,18 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	var spentUtxos []*utxo.Spend
 
+	// Get atomic block state to prevent race conditions between height and median time reads
+	blockState := v.GetBlockState()
+
 	if blockHeight == 0 {
-		// set block height from the utxo store
-		blockHeight = v.GetBlockHeight()
+		blockHeight = blockState.Height + 1
 	}
 
 	// We do not check IsFinal for transactions before BIP113 change (block height 419328)
 	// This is an exception for transactions before the media block time was used
 	if blockHeight > v.settings.ChainCfgParams.CSVHeight {
-		utxoStoreMedianBlockTime := v.GetMedianBlockTime()
+
+		utxoStoreMedianBlockTime := blockState.MedianTime
 		if utxoStoreMedianBlockTime == 0 {
 			err = errors.NewProcessingError("utxo store not ready, block height: %d, median block time: %d", blockHeight, utxoStoreMedianBlockTime)
 			span.RecordError(err)
@@ -394,7 +405,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 
 		// this function should be moved into go-bt
-		if err = util.IsTransactionFinal(tx, blockHeight+1, utxoStoreMedianBlockTime); err != nil {
+		if err = util.IsTransactionFinal(tx, blockHeight, utxoStoreMedianBlockTime); err != nil {
 			err = errors.NewUtxoNonFinalError("[Validate][%s] transaction is not final", txID, err)
 			span.RecordError(err)
 
@@ -473,7 +484,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	)
 
 	// this will reverse the spends if there is an error
-	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, validationOptions.IgnoreLocked); err != nil {
+	if spentUtxos, err = v.spendUtxos(decoupledCtx, tx, blockHeight, validationOptions.IgnoreLocked); err != nil {
 		if errors.Is(err, errors.ErrUtxoError) {
 			saveAsConflicting := false
 
@@ -720,8 +731,10 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 	}
 
 	if len(txMeta.BlockHeights) == 0 {
+		// Get atomic block state to ensure consistency
+		blockState := v.utxoStore.GetBlockState()
 		for _, idx := range idxs {
-			utxoHeights[idx] = v.utxoStore.GetBlockHeight()
+			utxoHeights[idx] = blockState.Height
 		}
 	} else {
 		for _, idx := range idxs {
@@ -802,6 +815,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 	}
 
 	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+		Key:   []byte(txHash.String()),
 		Value: value,
 	})
 
@@ -812,7 +826,7 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 
 // spendUtxos attempts to spend the UTXOs referenced by transaction inputs.
 // Returns the spent UTXOs and error if spending fails.
-func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, ignoreLocked bool) ([]*utxo.Spend, error) {
+func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreLocked bool) ([]*utxo.Spend, error) {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "spendUtxos",
 		tracing.WithHistogram(prometheusTransactionSpendUtxos),
 	)
@@ -822,7 +836,7 @@ func (v *Validator) spendUtxos(ctx context.Context, tx *bt.Tx, ignoreLocked bool
 		err error
 	)
 
-	spends, err := v.utxoStore.Spend(ctx, tx, utxo.IgnoreFlags{
+	spends, err := v.utxoStore.Spend(ctx, tx, blockHeight, utxo.IgnoreFlags{
 		IgnoreConflicting: false,
 		IgnoreLocked:      ignoreLocked,
 	})

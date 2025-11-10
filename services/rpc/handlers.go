@@ -45,6 +45,7 @@ import (
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -104,7 +105,36 @@ func handleGetBlock(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	return s.blockToJSON(ctx, b, *c.Verbosity)
+	result, err := s.blockToJSON(ctx, b, *c.Verbosity)
+	if err != nil {
+		return nil, err
+	}
+
+	// If verbosity > 0, check if block is on main chain and adjust confirmations
+	if *c.Verbosity > 0 {
+		// Check if this block is on the main chain
+		isOnMainChain, err := s.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{b.ID})
+		if err != nil {
+			return nil, err
+		}
+
+		if !isOnMainChain {
+			// Type switch to modify confirmations field for orphaned blocks
+			switch v := result.(type) {
+			case *bsvjson.GetBlockVerboseTxResult:
+				v.GetBlockBaseVerboseResult.Confirmations = -1
+				return v, nil
+			case *bsvjson.GetBlockVerboseResult:
+				v.GetBlockBaseVerboseResult.Confirmations = -1
+				return v, nil
+			default:
+				// Should not happen with current implementation, but be defensive
+				return result, nil
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // handleGetBlockByHeight implements the getblockbyheight command, which retrieves information
@@ -249,9 +279,26 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 			Bits:         b.Bits.String(),
 			Difficulty:   diffFloat,
 			MerkleRoot:   b.HashMerkleRoot.String(),
-			// Confirmations: int64(1 + bestBlockMeta.Height - meta.Height),
-			Height: heightInt32,
+			Height:       heightInt32,
 		}
+
+		// Check if this block is on the main chain
+		isOnMainChain, err := s.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{meta.ID})
+		if err != nil {
+			return nil, err
+		}
+
+		if !isOnMainChain {
+			headerReply.Confirmations = -1
+			return headerReply, nil
+		}
+
+		// Block is on the main chain, calculate confirmations
+		_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+		if err != nil {
+			return nil, err
+		}
+		headerReply.Confirmations = 1 + int64(bestBlockMeta.Height) - int64(meta.Height)
 
 		return headerReply, nil
 	}
@@ -323,7 +370,7 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 		PreviousHash:  b.Header.HashPrevBlock.String(),
 		Nonce:         b.Header.Nonce,
 		Time:          int64(b.Header.Timestamp),
-		Confirmations: int64(1 + bestBlockMeta.Height - b.Height),
+		Confirmations: 1 + int64(bestBlockMeta.Height) - int64(b.Height),
 		Height:        int64(b.Height),
 		Size:          blkBytesInt32,
 		Bits:          b.Header.Bits.String(),
@@ -360,7 +407,7 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 		// 		}
 		// 		rawTxns[i] = *rawTxn
 		// 	}
-		blockReply = bsvjson.GetBlockVerboseTxResult{
+		blockReply = &bsvjson.GetBlockVerboseTxResult{
 			GetBlockBaseVerboseResult: baseBlockReply,
 
 			// Tx: rawTxns,
@@ -739,20 +786,29 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 	s.logger.Debugf("tx to send: %v", tx)
 
-	d, err := NewDistributor(context.Background(), s.logger, s.settings)
-	if err != nil {
-		return nil, errors.NewServiceError("could not create distributor", err)
+	// Store the transaction in blob store first (following the pattern from propagation service)
+	if s.txStore != nil {
+		err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())
+		if err != nil {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCInternal.Code,
+				Message: "Failed to store transaction: " + err.Error(),
+			}
+		}
 	}
 
-	res, err := d.SendTransaction(context.Background(), tx)
+	// Validate the transaction synchronously
+	// This will validate scripts, check UTXOs, spend them, create new UTXOs, and send to block assembly
+	_, err = s.validatorClient.Validate(ctx, tx, 0)
 	if err != nil {
 		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInvalidParameter,
+			Code:    bsvjson.ErrRPCVerify,
 			Message: "TX rejected: " + err.Error(),
 		}
 	}
 
-	return res, nil
+	// Return the transaction ID as a hex string per Bitcoin RPC spec
+	return tx.TxID(), nil
 }
 
 // handleGenerate implements the generate command, which instructs the node to

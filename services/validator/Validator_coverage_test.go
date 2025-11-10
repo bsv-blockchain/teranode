@@ -153,14 +153,19 @@ func TestValidator_Validate_CallsValidateWithOptions(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 
-	nullStore, _ := nullstore.NewNullStore()
+	// Use sqlitememory store so we have a real UTXO store without the parent UTXO
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
 	settings := test.CreateBaseTestSettings(t)
+	utxoStore, err := sql.New(ctx, logger, settings, utxoStoreURL)
+	require.NoError(t, err)
 
 	// Create a block assembler to avoid nil pointer issues
 	blockAssemblyClient, err := blockassembly.NewClient(ctx, logger, settings)
 	require.NoError(t, err)
 
-	validator, err := New(ctx, logger, settings, nullStore, nil, nil, blockAssemblyClient, nil)
+	validator, err := New(ctx, logger, settings, utxoStore, nil, nil, blockAssemblyClient, nil)
 	require.NoError(t, err)
 
 	// Create a simple transaction using the transactions helper
@@ -178,7 +183,7 @@ func TestValidator_Validate_CallsValidateWithOptions(t *testing.T) {
 
 	// This should call ValidateWithOptions internally
 	_, err = validator.Validate(ctx, tx, 100)
-	// The error is expected since we don't have proper UTXOs set up
+	// The error is expected since the parent UTXO doesn't exist in the store
 	assert.Error(t, err)
 }
 
@@ -535,7 +540,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_WithConflicting(t *testing.
 	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
 
 	// Mock spendUtxos to return UTXO error with spends containing errors
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything).Return(spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError))
+	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return(spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError))
 
 	// Mock CreateInUtxoStore for conflicting transaction
 	mockStore.On("Create", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil)
@@ -581,7 +586,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound(t *testing.T) {
 	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
 
 	// Mock spendUtxos to return TxNotFound error (parent DAH'd)
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything).Return([]*utxo.Spend{}, errors.ErrTxNotFound)
+	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.ErrTxNotFound)
 
 	// Mock GetMeta to return existing tx (already blessed)
 	existingMeta := &meta.Data{Tx: tx}
@@ -626,7 +631,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound_NotInStore(t *te
 	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
 
 	// Mock spendUtxos to return TxNotFound error
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything).Return([]*utxo.Spend{}, errors.ErrTxNotFound)
+	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.ErrTxNotFound)
 
 	// Mock GetMeta to also fail (tx not in store)
 	mockStore.On("GetMeta", mock.Anything, tx.TxIDChainHash()).Return(nil, errors.ErrTxNotFound)
@@ -671,7 +676,7 @@ func XTestValidator_ValidateInternal_SpendUtxosError_GeneralError(t *testing.T) 
 	mockStore.On("GetBlockHeight").Return(uint32(100))
 
 	// Mock spendUtxos to return a general error (not UTXO or TxNotFound)
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything).Return([]*utxo.Spend{}, assert.AnError)
+	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, assert.AnError)
 
 	options := &Options{}
 
@@ -707,15 +712,15 @@ func TestValidator_ValidateInternal_UTXOError_ConflictingTxCreation(t *testing.T
 		transactions.WithChangeOutput(),
 	)
 
-	// Mock parent tx extension - empty BlockHeights to trigger GetBlockHeight() call
+	// Mock parent tx extension
 	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
 	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
-	mockStore.On("GetBlockHeight").Return(uint32(100))
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock spendUtxos to return UTXO error with conflicting spend
 	spends := []*utxo.Spend{{TxID: &chainhash.Hash{}, Vout: 0, Err: errors.ErrSpent}}
 	utxoErr := errors.NewUtxoError("utxo error", errors.ErrUtxoError)
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything).Return(spends, utxoErr)
+	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return(spends, utxoErr)
 
 	// Mock CreateInUtxoStore for conflicting transaction
 	mockStore.On("Create", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil)
@@ -751,13 +756,13 @@ func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
 		transactions.WithChangeOutput(),
 	)
 
-	// Mock parent tx extension - empty BlockHeights to trigger GetBlockHeight() call
+	// Mock parent tx extension
 	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
 	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
-	mockStore.On("GetBlockHeight").Return(uint32(100))
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock spendUtxos to return TxNotFound error
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything).Return([]*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
+	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
 
 	// Mock GetMeta to return existing tx (blessed scenario)
 	mockStore.On("GetMeta", mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
@@ -793,14 +798,14 @@ func TestValidator_ValidateInternal_GeneralSpendError(t *testing.T) {
 		transactions.WithChangeOutput(),
 	)
 
-	// Mock parent tx extension - empty BlockHeights to trigger GetBlockHeight() call
+	// Mock parent tx extension
 	parentTxMeta := &meta.Data{Tx: coinbaseTx, BlockHeights: []uint32{}}
 	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(parentTxMeta, nil)
-	mockStore.On("GetBlockHeight").Return(uint32(100))
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
 	// Mock spendUtxos to return a general error
 	generalErr := errors.NewProcessingError("general spending error")
-	mockStore.On("Spend", mock.Anything, tx, mock.Anything).Return([]*utxo.Spend{}, generalErr)
+	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, generalErr)
 
 	options := &Options{}
 	_, err = v.validateInternal(ctx, tx, 100, options)

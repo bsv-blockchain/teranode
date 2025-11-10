@@ -30,7 +30,7 @@ func createTestSettings() *settings.Settings {
 			CleanupParentUpdateBatcherDurationMillis: 10,
 			CleanupDeleteBatcherSize:                 256,
 			CleanupDeleteBatcherDurationMillis:       10,
-			CleanupMaxConcurrentOperations:           128,
+			CleanupMaxConcurrentOperations:           0,   //  0 = auto-detect from connection queue size
 			UtxoBatchSize:                            128, // Add missing UtxoBatchSize
 		},
 	}
@@ -1514,4 +1514,331 @@ func TestBatchingIntegration(t *testing.T) {
 			t.Logf("Job results: %d completed, %d cancelled, %d failed", completedJobs, cancelledJobs, failedJobs)
 		})
 	})
+}
+
+// TestCleanupWithBlockPersisterCoordination tests cleanup coordination with block persister
+func TestCleanupWithBlockPersisterCoordination(t *testing.T) {
+	t.Run("BlockPersisterBehind_LimitsCleanup", func(t *testing.T) {
+		logger := ulogger.NewErrorTestLogger(t, func() {})
+		ctx := context.Background()
+
+		container, err := aeroTest.RunContainer(ctx)
+		require.NoError(t, err)
+		defer func() {
+			_ = container.Terminate(ctx)
+		}()
+
+		host, err := container.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := container.ServicePort(ctx)
+		require.NoError(t, err)
+
+		client, err := uaerospike.NewClient(host, port)
+		require.NoError(t, err)
+		defer client.Close()
+
+		tSettings := createTestSettings()
+		tSettings.GlobalBlockHeightRetention = 100
+
+		// Simulate block persister at height 50
+		persistedHeight := uint32(50)
+		getPersistedHeight := func() uint32 {
+			return persistedHeight
+		}
+
+		indexWaiter := &MockIndexWaiter{
+			Client:    client,
+			Namespace: "test",
+			Set:       "transactions",
+		}
+		external := memory.New()
+
+		service, err := NewService(tSettings, Options{
+			Logger:             logger,
+			Ctx:                ctx,
+			IndexWaiter:        indexWaiter,
+			Client:             client,
+			ExternalStore:      external,
+			Namespace:          "test",
+			Set:                "transactions",
+			WorkerCount:        1,
+			MaxJobsHistory:     10,
+			GetPersistedHeight: getPersistedHeight,
+		})
+		require.NoError(t, err)
+
+		// Trigger cleanup at height 200
+		// Expected: Limited to 50 + 100 = 150 (not 200)
+		done := make(chan string, 1)
+		service.Start(ctx)
+
+		// Add logging to verify safe height calculation
+		err = service.UpdateBlockHeight(200, done)
+		require.NoError(t, err)
+
+		// Wait for completion
+		select {
+		case status := <-done:
+			assert.Equal(t, cleanup.JobStatusCompleted.String(), status)
+		case <-time.After(5 * time.Second):
+			t.Fatal("Cleanup should complete within 5 seconds")
+		}
+
+		// Note: Actual verification would require checking logs for "Limiting cleanup" message
+		// or querying which records were actually deleted
+	})
+
+	t.Run("BlockPersisterCaughtUp_NoLimitation", func(t *testing.T) {
+		logger := ulogger.NewErrorTestLogger(t, func() {})
+		ctx := context.Background()
+
+		container, err := aeroTest.RunContainer(ctx)
+		require.NoError(t, err)
+		defer func() {
+			_ = container.Terminate(ctx)
+		}()
+
+		host, err := container.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := container.ServicePort(ctx)
+		require.NoError(t, err)
+
+		client, err := uaerospike.NewClient(host, port)
+		require.NoError(t, err)
+		defer client.Close()
+
+		tSettings := createTestSettings()
+		tSettings.GlobalBlockHeightRetention = 100
+
+		// Block persister caught up at height 150
+		getPersistedHeight := func() uint32 {
+			return uint32(150)
+		}
+
+		indexWaiter := &MockIndexWaiter{
+			Client:    client,
+			Namespace: "test",
+			Set:       "transactions",
+		}
+		external := memory.New()
+
+		service, err := NewService(tSettings, Options{
+			Logger:             logger,
+			Ctx:                ctx,
+			IndexWaiter:        indexWaiter,
+			Client:             client,
+			ExternalStore:      external,
+			Namespace:          "test",
+			Set:                "transactions",
+			WorkerCount:        1,
+			MaxJobsHistory:     10,
+			GetPersistedHeight: getPersistedHeight,
+		})
+		require.NoError(t, err)
+
+		// Trigger cleanup at height 200
+		// Expected: No limitation (150 + 100 = 250 > 200)
+		done := make(chan string, 1)
+		service.Start(ctx)
+
+		err = service.UpdateBlockHeight(200, done)
+		require.NoError(t, err)
+
+		select {
+		case status := <-done:
+			assert.Equal(t, cleanup.JobStatusCompleted.String(), status)
+		case <-time.After(5 * time.Second):
+			t.Fatal("Cleanup should complete within 5 seconds")
+		}
+	})
+
+	t.Run("BlockPersisterNotRunning_HeightZero", func(t *testing.T) {
+		logger := ulogger.NewErrorTestLogger(t, func() {})
+		ctx := context.Background()
+
+		container, err := aeroTest.RunContainer(ctx)
+		require.NoError(t, err)
+		defer func() {
+			_ = container.Terminate(ctx)
+		}()
+
+		host, err := container.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := container.ServicePort(ctx)
+		require.NoError(t, err)
+
+		client, err := uaerospike.NewClient(host, port)
+		require.NoError(t, err)
+		defer client.Close()
+
+		tSettings := createTestSettings()
+
+		// Block persister not running - returns 0
+		getPersistedHeight := func() uint32 {
+			return uint32(0)
+		}
+
+		indexWaiter := &MockIndexWaiter{
+			Client:    client,
+			Namespace: "test",
+			Set:       "transactions",
+		}
+		external := memory.New()
+
+		service, err := NewService(tSettings, Options{
+			Logger:             logger,
+			Ctx:                ctx,
+			IndexWaiter:        indexWaiter,
+			Client:             client,
+			ExternalStore:      external,
+			Namespace:          "test",
+			Set:                "transactions",
+			WorkerCount:        1,
+			MaxJobsHistory:     10,
+			GetPersistedHeight: getPersistedHeight,
+		})
+		require.NoError(t, err)
+
+		// Cleanup should proceed normally (no limitation when height = 0)
+		done := make(chan string, 1)
+		service.Start(ctx)
+
+		err = service.UpdateBlockHeight(100, done)
+		require.NoError(t, err)
+
+		select {
+		case status := <-done:
+			assert.Equal(t, cleanup.JobStatusCompleted.String(), status)
+		case <-time.After(5 * time.Second):
+			t.Fatal("Cleanup should complete within 5 seconds")
+		}
+	})
+
+	t.Run("NoGetPersistedHeightFunction_NormalCleanup", func(t *testing.T) {
+		logger := ulogger.NewErrorTestLogger(t, func() {})
+		ctx := context.Background()
+
+		container, err := aeroTest.RunContainer(ctx)
+		require.NoError(t, err)
+		defer func() {
+			_ = container.Terminate(ctx)
+		}()
+
+		host, err := container.Host(ctx)
+		require.NoError(t, err)
+
+		port, err := container.ServicePort(ctx)
+		require.NoError(t, err)
+
+		client, err := uaerospike.NewClient(host, port)
+		require.NoError(t, err)
+		defer client.Close()
+
+		tSettings := createTestSettings()
+
+		indexWaiter := &MockIndexWaiter{
+			Client:    client,
+			Namespace: "test",
+			Set:       "transactions",
+		}
+		external := memory.New()
+
+		// Create service WITHOUT getPersistedHeight
+		service, err := NewService(tSettings, Options{
+			Logger:             logger,
+			Ctx:                ctx,
+			IndexWaiter:        indexWaiter,
+			Client:             client,
+			ExternalStore:      external,
+			Namespace:          "test",
+			Set:                "transactions",
+			WorkerCount:        1,
+			MaxJobsHistory:     10,
+			GetPersistedHeight: nil, // Not set
+		})
+		require.NoError(t, err)
+
+		// Cleanup should proceed normally
+		done := make(chan string, 1)
+		service.Start(ctx)
+
+		err = service.UpdateBlockHeight(100, done)
+		require.NoError(t, err)
+
+		select {
+		case status := <-done:
+			assert.Equal(t, cleanup.JobStatusCompleted.String(), status)
+		case <-time.After(5 * time.Second):
+			t.Fatal("Cleanup should complete within 5 seconds")
+		}
+	})
+}
+
+// TestSetPersistedHeightGetter tests the setter method
+func TestSetPersistedHeightGetter(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t, func() {})
+	ctx := context.Background()
+
+	container, err := aeroTest.RunContainer(ctx)
+	require.NoError(t, err)
+	defer func() {
+		_ = container.Terminate(ctx)
+	}()
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	port, err := container.ServicePort(ctx)
+	require.NoError(t, err)
+
+	client, err := uaerospike.NewClient(host, port)
+	require.NoError(t, err)
+	defer client.Close()
+
+	tSettings := createTestSettings()
+	tSettings.GlobalBlockHeightRetention = 50
+
+	indexWaiter := &MockIndexWaiter{
+		Client:    client,
+		Namespace: "test",
+		Set:       "transactions",
+	}
+	external := memory.New()
+
+	// Create service without getter initially
+	service, err := NewService(tSettings, Options{
+		Logger:         logger,
+		Ctx:            ctx,
+		IndexWaiter:    indexWaiter,
+		Client:         client,
+		ExternalStore:  external,
+		Namespace:      "test",
+		Set:            "transactions",
+		WorkerCount:    1,
+		MaxJobsHistory: 10,
+	})
+	require.NoError(t, err)
+
+	// Set the getter after creation
+	persistedHeight := uint32(100)
+	service.SetPersistedHeightGetter(func() uint32 {
+		return persistedHeight
+	})
+
+	// Verify it's used (cleanup at 200 should be limited to 100+50=150)
+	service.Start(ctx)
+	done := make(chan string, 1)
+
+	err = service.UpdateBlockHeight(200, done)
+	require.NoError(t, err)
+
+	select {
+	case status := <-done:
+		assert.Equal(t, cleanup.JobStatusCompleted.String(), status)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Cleanup should complete within 5 seconds")
+	}
 }

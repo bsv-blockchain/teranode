@@ -21,13 +21,17 @@ type Server struct {
     blockAssemblyClient       blockassembly.ClientI                   // Block assembly service client
 
     blockFoundCh              chan processBlockFound                  // Channel for newly discovered blocks
+    blockPriorityQueue        *BlockPriorityQueue                     // Priority queue for block processing
+    blockClassifier           *BlockClassifier                        // Block priority classification
+    forkManager               *ForkManager                            // Fork processing management
     catchupCh                 chan processBlockCatchup                // Channel for catchup block processing
 
     blockValidation           *BlockValidation                        // Core validation logic and state
     validatorClient           validator.Interface                     // Transaction validation services
 
     kafkaConsumerClient       kafka.KafkaConsumerGroupI              // Kafka message consumption client
-    processSubtreeNotify      *ttlcache.Cache[chainhash.Hash, bool]   // Cache for subtree processing state
+    processBlockNotify        *ttlcache.Cache[chainhash.Hash, bool]   // Cache for block processing state
+    catchupAlternatives       *ttlcache.Cache[chainhash.Hash, []processBlockCatchup] // Alternative peer sources for catchup blocks
     stats                     *gocore.Stat                            // Operational metrics tracking
     peerCircuitBreakers       *catchup.PeerCircuitBreakers            // Circuit breakers for peer management
     peerMetrics               *catchup.CatchupMetrics                 // Peer performance metrics
@@ -123,6 +127,9 @@ type BlockValidation struct {
     // blockHashesCurrentlyValidated tracks blocks in validation process
     blockHashesCurrentlyValidated *txmap.SwissMap
 
+    // blocksCurrentlyValidating tracks blocks being validated to prevent concurrent validation
+    blocksCurrentlyValidating *txmap.SyncedMap[chainhash.Hash, *validationResult]
+
     // blockBloomFiltersBeingCreated tracks bloom filters being generated
     blockBloomFiltersBeingCreated *txmap.SwissMap
 
@@ -155,7 +162,7 @@ The `BlockValidation` type handles the core validation logic for blocks in Teran
 #### New
 
 ```go
-func New(logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, txStore blob.Store, utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, kafkaConsumerClient kafka.KafkaConsumerGroupI) *Server
+func New(logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, txStore blob.Store, utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, kafkaConsumerClient kafka.KafkaConsumerGroupI, blockAssemblyClient blockassembly.ClientI) *Server
 ```
 
 Creates a new instance of the `Server` with:
@@ -210,7 +217,7 @@ Performs a gRPC health check on the service, including:
 #### Start
 
 ```go
-func (u *Server) Start(ctx context.Context) error
+func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error
 ```
 
 Starts all service components:
@@ -256,53 +263,71 @@ Processes complete blocks:
 - Handles height calculation
 - Integrates with blockchain state
 
-#### SubtreeFound
+#### ValidateBlock
 
 ```go
-func (u *Server) SubtreeFound(_ context.Context, req *blockvalidation_api.SubtreeFoundRequest) (*blockvalidation_api.EmptyMessage, error)
+func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api.ValidateBlockRequest) (*blockvalidation_api.ValidateBlockResponse, error)
 ```
 
-Handles notification of new subtrees.
+Validates a block directly from the block bytes without needing to fetch it from the network or database. This method is typically used for testing or when the block is already available in memory, and no internal updates or database operations are needed.
 
-#### Get
+#### ValidateBlock
 
 ```go
-func (u *Server) Get(ctx context.Context, request *blockvalidation_api.GetSubtreeRequest) (*blockvalidation_api.GetSubtreeResponse, error)
+func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api.ValidateBlockRequest) (*blockvalidation_api.ValidateBlockResponse, error)
 ```
 
-Retrieves subtree data from storage.
+Validates a block and returns validation results without adding it to the blockchain. This method performs comprehensive block validation including structure checks, transaction validation, and consensus rule verification.
 
-#### Exists
+### Internal Methods
+
+#### processBlockFound
 
 ```go
-func (u *Server) Exists(ctx context.Context, request *blockvalidation_api.ExistsSubtreeRequest) (*blockvalidation_api.ExistsSubtreeResponse, error)
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, peerID string, useBlock ...*model.Block) error
 ```
 
-Verifies subtree existence in storage.
+Internal method that processes a newly discovered block. Handles block retrieval, validation, and integration with the blockchain state.
 
-#### SetTxMeta
+#### checkParentProcessingComplete
 
 ```go
-func (u *Server) SetTxMeta(ctx context.Context, request *blockvalidation_api.SetTxMetaRequest) (*blockvalidation_api.SetTxMetaResponse, error)
+func (u *Server) checkParentProcessingComplete(ctx context.Context, block *model.Block, baseURL string)
 ```
 
-Queues transaction metadata updates.
+Verifies that a block's parent has completed processing before proceeding with validation. Ensures proper block ordering and chain consistency.
 
-#### DelTxMeta
+#### startBlockProcessingSystem
 
 ```go
-func (u *Server) DelTxMeta(ctx context.Context, request *blockvalidation_api.DelTxMetaRequest) (*blockvalidation_api.DelTxMetaResponse, error)
+func (u *Server) startBlockProcessingSystem(ctx context.Context)
 ```
 
-Removes transaction metadata.
+Initializes the priority-based block processing system with support for parallel fork processing. Sets up worker goroutines and processing queues.
 
-#### SetMinedMulti
+#### blockProcessingWorker
 
 ```go
-func (u *Server) SetMinedMulti(ctx context.Context, request *blockvalidation_api.SetMinedMultiRequest) (*blockvalidation_api.SetMinedMultiResponse, error)
+func (u *Server) blockProcessingWorker(ctx context.Context, workerID int)
 ```
 
-Marks multiple transactions as mined in a block.
+Worker goroutine that processes blocks from the priority queue. Handles block classification, validation, and error recovery.
+
+#### addBlockToPriorityQueue
+
+```go
+func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound processBlockFound)
+```
+
+Adds a block to the priority queue with appropriate classification based on its relationship to the current chain tip.
+
+#### processBlockWithPriority
+
+```go
+func (u *Server) processBlockWithPriority(ctx context.Context, blockFound processBlockFound) error
+```
+
+Processes a block based on its assigned priority, handling both normal processing and retry scenarios with alternative peer sources.
 
 ### BlockValidation
 

@@ -106,11 +106,19 @@ export const getColDefs = (t) => {
       },
     },
     {
-      id: 'tx_count_in_assembly',
+      id: 'tx_count',
       name: t(`${fieldKey}.tx_assembly`),
       type: 'number',
       props: {
-        width: '7%',
+        width: '6%',
+      },
+    },
+    {
+      id: 'subtree_count',
+      name: t(`${fieldKey}.subtree_assembly`),
+      type: 'number',
+      props: {
+        width: '6%',
       },
     },
     {
@@ -140,6 +148,14 @@ export const getColDefs = (t) => {
     {
       id: 'listen_mode',
       name: t(`${fieldKey}.listen_mode`),
+      type: 'string',
+      props: {
+        width: '8%',
+      },
+    },
+    {
+      id: 'storage',
+      name: t(`${fieldKey}.storage`),
       type: 'string',
       props: {
         width: '8%',
@@ -275,37 +291,28 @@ export const renderCells = {
       value: '',
     }
   },
-  tx_count_in_assembly: (idField, item, colId) => {
-    // Get the transaction count (either from the mapped field or from block_assembly)
-    const txCount = item[colId] || item.block_assembly?.txCount || 0
-    const blockAssembly = item.block_assembly
-    
-    // If we have block assembly details, make it clickable
-    if (blockAssembly) {
-      const nodeId = item.peer_id || item.base_url
-      const nodeUrl = item.base_url || ''
-      
-      return {
-        component: RenderClickableSpan,
-        props: {
-          text: txCount !== undefined ? formatNum(txCount) : '-',
-          className: 'num',
-          onClick: () => {
-            blockAssemblyModalStore.show(nodeId, nodeUrl, blockAssembly)
-          },
-        },
-        value: '',
-      }
-    } else {
-      // No block assembly details, just show the number
-      return {
-        component: RenderSpan,
-        props: {
-          value: txCount !== undefined ? formatNum(txCount) : '-',
-          className: 'num',
-        },
-        value: '',
-      }
+  tx_count: (idField, item, colId) => {
+    const txCount = item[colId] ?? item.tx_count ?? 0
+
+    return {
+      component: RenderSpan,
+      props: {
+        value: txCount !== undefined ? formatNum(txCount) : '-',
+        className: 'num',
+      },
+      value: '',
+    }
+  },
+  subtree_count: (idField, item, colId) => {
+    const subtreeCount = item[colId] ?? item.subtree_count ?? 0
+
+    return {
+      component: RenderSpan,
+      props: {
+        value: subtreeCount !== undefined ? formatNum(subtreeCount) : '-',
+        className: 'num',
+      },
+      value: '',
     }
   },
   min_mining_tx_fee: (idField, item, colId) => {
@@ -427,6 +434,29 @@ export const renderCells = {
       className = 'status-success'
     } else if (mode === 'listen_only') {
       displayValue = 'Listen Only'
+      className = 'status-warning'
+    }
+
+    return {
+      component: RenderSpan,
+      props: {
+        value: displayValue,
+        className: className,
+      },
+      value: '',
+    }
+  },
+  storage: (idField, item, colId) => {
+    const mode = item[colId] || '-'
+    let className = ''
+    let displayValue = mode
+
+    // Display: Full (green) or Pruned (warning/orange)
+    if (mode === 'full') {
+      displayValue = 'Full'
+      className = 'status-success'
+    } else if (mode === 'pruned') {
+      displayValue = 'Pruned'
       className = 'status-warning'
     }
 

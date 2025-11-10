@@ -44,6 +44,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
@@ -771,7 +772,17 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 			}
 
 			if len(conflictingNodes) > 0 {
-				losingTxHashesMap, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, conflictingNodes, processedConflictingHashesMap)
+				if block.Height == 0 {
+					// get the block height from the blockchain client
+					_, blockHeaderMeta, err := stp.blockchainClient.GetBlockHeader(ctx, block.Hash())
+					if err != nil {
+						return errors.NewProcessingError("[moveForwardBlock][%s] error getting block header meta", block.String(), err)
+					}
+
+					block.Height = blockHeaderMeta.Height
+				}
+
+				losingTxHashesMap, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, conflictingNodes, processedConflictingHashesMap)
 				if err != nil {
 					return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
 				}
@@ -784,7 +795,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 				}
 			}
 
-			if err := stp.processCoinbaseUtxos(context.Background(), block); err != nil {
+			if err = stp.processCoinbaseUtxos(context.Background(), block); err != nil {
 				return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
 			}
 		}
@@ -1652,7 +1663,38 @@ func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlo
 	return <-errChan
 }
 
-// reorgBlocks adds all transactions that are in the block given to the current subtrees
+// reorgBlocks performs an incremental blockchain reorganization by processing blocks efficiently.
+//
+// This is the optimized path for handling small to medium-sized blockchain reorganizations
+// (< CoinbaseMaturity blocks). It's more efficient than reset() because it:
+// - Keeps existing subtrees intact where possible
+// - Only modifies affected transactions incrementally
+// - Avoids reloading all transactions from UTXO store
+//
+// The reorg process:
+// 1. Move back: Loads transactions from moveBackBlocks into block assembly
+//   - Extracts transactions from blocks no longer on main chain
+//   - Adds them to subtrees for re-mining
+//   - Tracks which transactions were in moveBack blocks
+//
+// 2. Move forward: Processes transactions from moveForwardBlocks
+//   - Marks transactions (that weren't in moveBack) as ON longest chain (clears unmined_since) - Line 1796
+//   - Removes them from block assembly (they're now mined)
+//
+// 3. Mark remaining block assembly txs as NOT on longest chain (sets unmined_since) - Lines 1816, 1854
+//   - These are transactions still unmined after the reorg
+//
+// This function is MUTUALLY EXCLUSIVE with BlockAssembler.reset():
+// - Small/medium successful reorgs: Use reorgBlocks() (this function)
+// - Large/failed/invalid reorgs: Use reset() (BlockAssembler)
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - moveBackBlocks: Blocks being removed from main chain (now on side chain)
+//   - moveForwardBlocks: Blocks being added to main chain (new longest chain)
+//
+// Returns:
+//   - error: Any error encountered during reorg (triggers fallback to reset())
 func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block) (err error) {
 	if moveBackBlocks == nil {
 		return errors.NewProcessingError("you must pass in blocks to move down the chain")
@@ -1664,7 +1706,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 	stp.logger.Infof("reorgBlocks with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks))
 
-	if len(moveForwardBlocks) > 0 {
+	if len(moveForwardBlocks) == 1 && len(moveBackBlocks) == 0 {
 		// wait for the last block to be processed first, mined_set etc.
 		ok, err := stp.waitForBlockBeingMined(ctx, moveForwardBlocks[len(moveForwardBlocks)-1].Hash())
 		if err != nil {
@@ -1673,6 +1715,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 		if !ok {
 			return errors.NewProcessingError("[reorgBlocks] timeout waiting for block being mined %s", moveForwardBlocks[len(moveForwardBlocks)-1].Hash().String())
+		}
+	} else {
+		// other operation, wait for all blocks to be processed first, mined_set etc.
+		if err = stp.WaitForPendingBlocks(ctx); err != nil {
+			return errors.NewProcessingError("[reorgBlocks] error waiting for blocks being mined", err)
 		}
 	}
 
@@ -1788,10 +1835,10 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		}
 	}
 
-	// everything now in block assembly is not mined the longest chain
+	// everything now in block assembly is not mined on the longest chain
 	// so we need to set the unminedSince for all transactions in block assembly
 	for _, subtree := range stp.chainedSubtrees {
-		markNotOnLongestChain := make([]chainhash.Hash, 0, len(subtree.Nodes))
+		notOnLongestChain := make([]chainhash.Hash, 0, len(subtree.Nodes))
 
 		for _, node := range subtree.Nodes {
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
@@ -1799,18 +1846,18 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 				continue
 			}
 
-			markNotOnLongestChain = append(markNotOnLongestChain, node.Hash)
+			notOnLongestChain = append(notOnLongestChain, node.Hash)
 		}
 
-		if len(markNotOnLongestChain) > 0 {
-			if err = stp.utxoStore.MarkTransactionsOnLongestChain(ctx, markNotOnLongestChain, false); err != nil {
-				return errors.NewProcessingError("[reorgBlocks] error marking transactions as not on longest chain in utxo store", err)
+		if len(notOnLongestChain) > 0 {
+			if err = stp.markNotOnLongestChain(ctx, moveBackBlocks, moveForwardBlocks, notOnLongestChain); err != nil {
+				return err
 			}
 		}
 	}
 
 	// also for the current subtree
-	markNotOnLongestChain := make([]chainhash.Hash, 0, len(stp.currentSubtree.Nodes))
+	notOnLongestChain := make([]chainhash.Hash, 0, len(stp.currentSubtree.Nodes))
 
 	for _, node := range stp.currentSubtree.Nodes {
 		if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
@@ -1818,32 +1865,12 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 			continue
 		}
 
-		markNotOnLongestChain = append(markNotOnLongestChain, node.Hash)
+		notOnLongestChain = append(notOnLongestChain, node.Hash)
 	}
 
-	if len(markNotOnLongestChain) > 0 {
-		if len(moveBackBlocks) == 1 && len(moveForwardBlocks) == 0 {
-			// special case: if we only moved back and did not move forward, it probably means we just invalidated a block
-			// in that case, we need to validate whether to update the transactions or not
-			_, blockHeaderMeta, err := stp.blockchainClient.GetBlockHeader(ctx, moveBackBlocks[0].Header.Hash())
-			if err != nil {
-				return errors.NewProcessingError("[reorgBlocks] error getting block header meta for block we moved back", err)
-			}
-
-			if blockHeaderMeta.Invalid {
-				// the block we moved back is invalid, so we cannot just mark all transactions as not on the longest chain
-				markNotOnLongestChain, err = stp.checkMarkNotOnLongestChain(ctx, moveBackBlocks[0], markNotOnLongestChain)
-				if err != nil {
-					return errors.NewProcessingError("[reorgBlocks] error checking which transactions to mark as not on longest chain", err)
-				}
-			}
-		}
-
-		// check again if we have any transactions to mark, after the checkMarkNotOnLongestChain
-		if len(markNotOnLongestChain) > 0 {
-			if err = stp.utxoStore.MarkTransactionsOnLongestChain(ctx, markNotOnLongestChain, false); err != nil {
-				return errors.NewProcessingError("[reorgBlocks] error marking transactions as not on longest chain in utxo store", err)
-			}
+	if len(notOnLongestChain) > 0 {
+		if err = stp.markNotOnLongestChain(ctx, moveBackBlocks, moveForwardBlocks, notOnLongestChain); err != nil {
+			return err
 		}
 	}
 
@@ -1877,6 +1904,33 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		stp.finalizeBlockProcessing(ctx, block)
 	} else {
 		return errors.NewProcessingError("[reorgBlocks] no blocks to finalize after reorg")
+	}
+
+	return nil
+}
+
+func (stp *SubtreeProcessor) markNotOnLongestChain(ctx context.Context, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, markNotOnLongestChain []chainhash.Hash) error {
+	if len(moveBackBlocks) == 1 && len(moveForwardBlocks) == 0 {
+		// special case: likely an invalidation; validate whether to update the transactions or not
+		_, blockHeaderMeta, err := stp.blockchainClient.GetBlockHeader(ctx, moveBackBlocks[0].Header.Hash())
+		if err != nil {
+			return errors.NewProcessingError("[reorgBlocks] error getting block header meta for block we moved back", err)
+		}
+
+		if blockHeaderMeta.Invalid {
+			// the block we moved back is invalid, so we cannot just mark all transactions as not on the longest chain
+			markNotOnLongestChain, err = stp.checkMarkNotOnLongestChain(ctx, moveBackBlocks[0], markNotOnLongestChain)
+			if err != nil {
+				return errors.NewProcessingError("[reorgBlocks] error checking which transactions to mark as not on longest chain", err)
+			}
+		}
+	}
+
+	// check again if we have any transactions to mark, after the checkMarkNotOnLongestChain
+	if len(markNotOnLongestChain) > 0 {
+		if err := stp.utxoStore.MarkTransactionsOnLongestChain(ctx, markNotOnLongestChain, false); err != nil {
+			return errors.NewProcessingError("[reorgBlocks] error marking transactions as not on longest chain in utxo store", err)
+		}
 	}
 
 	return nil
@@ -2019,6 +2073,14 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 	lastIncompleteSubtree := stp.currentSubtree
 	chainedSubtrees := stp.chainedSubtrees
 
+	// process coinbase utxos
+	if err = stp.removeCoinbaseUtxos(ctx, block); err != nil {
+		// no need to error out if the key doesn't exist anyway
+		if !errors.Is(err, errors.ErrTxNotFound) {
+			return nil, nil, errors.NewProcessingError("[moveBackBlock][%s] error removing coinbase utxo", block.String(), err)
+		}
+	}
+
 	// create new subtrees and add all the transactions from the block to it
 	if subtreesNodes, conflictingHashes, err = stp.moveBackBlockCreateNewSubtrees(ctx, block, createProperlySizedSubtrees); err != nil {
 		return nil, nil, err
@@ -2108,28 +2170,22 @@ func (stp *SubtreeProcessor) moveBackBlockCreateNewSubtrees(ctx context.Context,
 	_ = stp.currentSubtree.AddCoinbaseNode()
 
 	// run through the nodes of the subtrees in order and add to the new subtrees
-	for idx, subtreeNodes := range subtreesNodes {
-		subtreeHash := block.Subtrees[idx]
+	if len(subtreesNodes) > 0 {
+		for idx, subtreeNodes := range subtreesNodes {
+			subtreeHash := block.Subtrees[idx]
 
-		if idx == 0 {
-			// process coinbase utxos
-			if err = stp.removeCoinbaseUtxos(ctx, block); err != nil {
-				// no need to error out if the key doesn't exist anyway
-				if !errors.Is(err, errors.ErrTxNotFound) {
-					return nil, nil, errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error removing coinbase utxo", block.String(), subtreeHash.String(), err)
+			if idx == 0 {
+				// skip the first transaction of the first subtree (coinbase)
+				for i := 1; i < len(subtreeNodes); i++ {
+					if err = stp.addNode(subtreeNodes[i], &subtreeMetaTxInpoints[idx][i], true); err != nil {
+						return nil, nil, errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
+					}
 				}
-			}
-
-			// skip the first transaction of the first subtree (coinbase)
-			for i := 1; i < len(subtreeNodes); i++ {
-				if err = stp.addNode(subtreeNodes[i], &subtreeMetaTxInpoints[idx][i], true); err != nil {
-					return nil, nil, errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
-				}
-			}
-		} else {
-			for i, node := range subtreeNodes {
-				if err = stp.addNode(node, &subtreeMetaTxInpoints[idx][i], true); err != nil {
-					return nil, nil, errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
+			} else {
+				for i, node := range subtreeNodes {
+					if err = stp.addNode(node, &subtreeMetaTxInpoints[idx][i], true); err != nil {
+						return nil, nil, errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
+					}
 				}
 			}
 		}
@@ -2332,7 +2388,17 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 			return nil, errors.NewProcessingError("[moveForwardBlock][%s] error waiting for block to be mined", block.String(), err)
 		}
 
-		if losingTxHashesMap, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, conflictingNodes, processedConflictingHashesMap); err != nil {
+		if block.Height == 0 {
+			// get the block height from the blockchain client
+			_, blockHeaderMeta, err := stp.blockchainClient.GetBlockHeader(ctx, block.Header.Hash())
+			if err != nil {
+				return nil, errors.NewProcessingError("[moveForwardBlock][%s] error getting block header for genesis block", block.String(), err)
+			}
+
+			block.Height = blockHeaderMeta.Height
+		}
+
+		if losingTxHashesMap, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, conflictingNodes, processedConflictingHashesMap); err != nil {
 			return nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
 		}
 
@@ -2614,9 +2680,61 @@ func (stp *SubtreeProcessor) waitForBlockBeingMined(ctx context.Context, blockHa
 				return true, nil
 			}
 
+			stp.logger.Infof("[waitForBlockBeingMined] waiting for block %s to be mined", blockHash.String())
 			time.Sleep(1 * time.Second)
 		}
 	}
+}
+
+// WaitForPendingBlocks waits for any pending blocks to be processed before loading unmined transactions.
+// This method continuously polls the blockchain client to check if there are any blocks that have not been
+// marked as mined yet. It will wait until the list of blocks returned by GetBlocksMinedNotSet is empty,
+// indicating that all blocks have been processed and marked as mined.
+//
+// The method implements a polling loop with a 1-second interval and includes logging to provide visibility
+// into the waiting process. This ensures that the BlockAssembly service doesn't start loading unmined
+// transactions until all pending blocks have been fully processed.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout support
+//
+// Returns:
+//   - error: Any error encountered during the waiting process or blockchain client calls
+func (stp *SubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
+	_, _, deferFn := tracing.Tracer("SubtreeProcessor").Start(ctx, "WaitForPendingBlocks",
+		tracing.WithParentStat(stp.stats),
+		tracing.WithLogMessage(stp.logger, "[WaitForPendingBlocks] checking for pending blocks"),
+	)
+	defer deferFn()
+
+	// Use retry utility with infinite retries until no pending blocks remain
+	_, err := retry.Retry(ctx, stp.logger, func() (interface{}, error) {
+		blockNotMined, err := stp.blockchainClient.GetBlocksMinedNotSet(ctx)
+		if err != nil {
+			return nil, errors.NewProcessingError("error getting blocks with mined not set", err)
+		}
+
+		if len(blockNotMined) == 0 {
+			stp.logger.Infof("[WaitForPendingBlocks] no pending blocks found, ready to load unmined transactions")
+			return nil, nil
+		}
+
+		for _, block := range blockNotMined {
+			stp.logger.Debugf("[WaitForPendingBlocks] waiting for block %s to be processed, height %d, ID %d", block.Hash(), block.Height, block.ID)
+		}
+
+		// Return an error to trigger retry when blocks are still pending
+		return nil, errors.NewProcessingError("waiting for %d blocks to be processed", len(blockNotMined))
+	},
+		retry.WithMessage("[WaitForPendingBlocks] blockchain service check"),
+		retry.WithInfiniteRetry(),
+		retry.WithExponentialBackoff(),
+		retry.WithBackoffDurationType(1*time.Second),
+		retry.WithBackoffFactor(2.0),
+		retry.WithMaxBackoff(30*time.Second),
+	)
+
+	return err
 }
 
 // dequeueDuringBlockMovement processes the transaction queue during block movement.

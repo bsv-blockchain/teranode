@@ -95,7 +95,7 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 	for i := 0; i < numWorkers; i++ {
 		workerID := i
 		g.Go(func() error {
-			return u.blockWorker(gCtx, workerID, workQueue, resultQueue, baseURL, blockUpTo)
+			return u.blockWorker(gCtx, workerID, workQueue, resultQueue, baseURL, catchupCtx.peerID, blockUpTo)
 		})
 	}
 
@@ -180,7 +180,7 @@ func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*mo
 }
 
 // blockWorker processes blocks and fetches their subtree data in parallel
-func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan workItem, resultQueue chan<- resultItem, baseURL string, blockUpTo *model.Block) error {
+func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan workItem, resultQueue chan<- resultItem, baseURL string, peerID string, blockUpTo *model.Block) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "blockWorker",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[catchup:blockWorker-%d][%s] starting worker", workerID, blockUpTo.Hash().String()),
@@ -196,7 +196,7 @@ func (u *Server) blockWorker(ctx context.Context, workerID int, workQueue <-chan
 			}
 
 			// Fetch subtree data for this block
-			err := u.fetchSubtreeDataForBlock(ctx, work.block, baseURL)
+			err := u.fetchSubtreeDataForBlock(ctx, work.block, baseURL, peerID)
 			if err != nil {
 				// Send result (even if error occurred)
 				result := resultItem{
@@ -270,7 +270,7 @@ func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan result
 					case validateBlocksChan <- orderedResult.block:
 						delete(results, nextIndex)
 						nextIndex++
-						size.Add(-1)
+						// Note: size counter is decremented by validateBlocksOnChannel after processing
 					case <-ctx.Done():
 						return ctx.Err()
 					}
@@ -297,7 +297,7 @@ func (u *Server) orderedDelivery(gCtx context.Context, resultQueue <-chan result
 // fetchSubtreeDataForBlock fetches subtree and subtreeData for all subtrees in a block
 // and stores them in the subtreeStore for later use by block validation.
 // This function fetches both the subtree (for subtreeToCheck) and raw subtree data concurrently.
-func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Block, baseURL string) error {
+func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Block, baseURL string, peerID string) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(gCtx, "fetchSubtreeDataForBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchSubtreeDataForBlock][%s] fetching subtree data for block with %d subtrees", block.Hash().String(), len(block.Subtrees)),
@@ -325,7 +325,7 @@ func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Blo
 		subtreeHashCopy := *subtreeHash // Capture for goroutine
 
 		g.Go(func() error {
-			return u.fetchAndStoreSubtreeAndSubtreeData(ctx, block, &subtreeHashCopy, baseURL)
+			return u.fetchAndStoreSubtreeAndSubtreeData(ctx, block, &subtreeHashCopy, baseURL, peerID)
 		})
 	}
 
@@ -350,20 +350,23 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 	// Check if we already have the subtree
 	subtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
 	if err != nil {
-		u.logger.Warnf("[catchup:fetchAndStoreSubtree] Error checking subtree existence for %s: %v", subtreeHash.String(), err)
+		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Error checking subtree existence for %s: %v", subtreeHash.String(), err)
 	}
 
 	if subtreeExists {
 		u.logger.Debugf("[catchup:fetchAndStoreSubtree] Subtree already exists for %s, loading from store", subtreeHash.String())
+
 		// Load existing subtree from store
 		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
 		if err != nil {
 			return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to get existing subtree for %s", subtreeHash.String(), err)
 		}
+
 		subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeBytes)
 		if err != nil {
 			return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to deserialize existing subtree for %s", subtreeHash.String(), err)
 		}
+
 		return subtree, nil
 	}
 
@@ -427,10 +430,10 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 }
 
 // fetchAndStoreSubtreeData fetches and stores only the subtreeData
-func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, baseURL string) error {
+func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, baseURL string, peerID string) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtreeData",
 		tracing.WithParentStat(u.stats),
-		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeData] fetching subtree data for %s", subtreeHash.String()),
+		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeData][%s] Fetching subtree data from peer %s (%s) for subtree %s", block.Hash().String(), peerID, baseURL, subtreeHash.String()),
 	)
 	defer deferFn()
 
@@ -439,7 +442,7 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	// Check if we already have the subtreeData
 	subtreeDataExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 	if err != nil {
-		u.logger.Warnf("[catchup:fetchAndStoreSubtreeData] Error checking subtreeData existence for %s: %v", subtreeHash.String(), err)
+		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Error checking subtreeData existence for %s: %v", subtreeHash.String(), err)
 	}
 
 	if subtreeDataExists {
@@ -453,8 +456,14 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	}
 	defer subtreeDataReader.Close()
 
-	// create a buffered reader to read the subtreeData
-	subtreeDataBufferedReader := io.NopCloser(bufio.NewReaderSize(subtreeDataReader, 1024*512))
+	// Use pooled buffered reader to reduce GC pressure
+	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+	bufferedReader.Reset(subtreeDataReader)
+	defer func() {
+		bufferedReader.Reset(nil)
+		bufioReaderPool.Put(bufferedReader)
+	}()
+	subtreeDataBufferedReader := io.NopCloser(bufferedReader)
 
 	// loading the subtree data like this will validate the data as it is read
 	// compared to the transactions in the subtree
@@ -476,7 +485,7 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	// Try to serialize the subtreeData to validate it's complete
 	subtreeDataBytes, err := subtreeData.Serialize()
 	if err != nil {
-		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Failed to serialize subtreeData for %s", subtreeHash.String(), err)
+		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Peer %s (%s) provided incomplete subtree data for %s", peerID, baseURL, subtreeHash.String(), err)
 	}
 
 	// Store subtreeData (raw data) in subtreeStore
@@ -495,7 +504,7 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 
 // fetchAndStoreSubtreeAndSubtreeData fetches both subtree and subtreeData for a single subtree hash
 // and stores them in the subtreeStore.
-func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, baseURL string) error {
+func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, baseURL string, peerID string) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtreeAndSubtreeData",
 		tracing.WithParentStat(u.stats),
 		// tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeAndSubtreeData] fetching subtree and data for %s", subtreeHash.String()),
@@ -509,7 +518,7 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 	}
 
 	// Then, fetch and store the subtreeData (if it doesn't already exist)
-	if err := u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, baseURL); err != nil {
+	if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, baseURL, peerID); err != nil {
 		return err
 	}
 

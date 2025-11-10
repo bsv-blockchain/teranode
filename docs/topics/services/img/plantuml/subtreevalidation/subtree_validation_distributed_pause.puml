@@ -1,0 +1,166 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+title Distributed Pause Mechanism for Subtree Validation
+
+participant "Pod A\n(Block Validation)" as PodA
+participant "Pod B\n(Subtree Processing)" as PodB
+participant "Pod C\n(Subtree Processing)" as PodC
+database "Shared Storage\n(Quorum)" as Storage
+entity "__SUBTREE_PAUSE__.lock" as PauseLock
+
+== Block Validation Starts on Pod A ==
+
+PodA -> PodA: CheckBlockSubtrees() called
+activate PodA
+
+PodA -> PodA: setPauseProcessing(ctx)
+activate PodA
+
+PodA -> Storage: AcquirePauseLock(ctx)
+activate Storage
+Storage -> PauseLock: Create lock file with timestamp
+PauseLock --> Storage: Lock created
+Storage --> PodA: Lock acquired, release function returned
+deactivate Storage
+
+PodA -> PodA: Set local atomic flag\npauseSubtreeProcessing = true
+
+PodA -> PodA: Start heartbeat goroutine
+activate PodA #LightBlue
+note right of PodA: Heartbeat updates lock\nevery timeout/2 seconds\n(default: 5 seconds)
+PodA -> Storage: Update lock timestamp
+Storage -> PauseLock: Update modification time
+deactivate PodA
+
+deactivate PodA
+
+== Other Pods Check Pause Status ==
+
+PodB -> PodB: Process subtree message from Kafka
+activate PodB
+
+PodB -> PodB: Check isPauseActive()
+activate PodB
+
+PodB -> PodB: Check local atomic flag (fast path)
+note right: Local flag = false
+
+PodB -> Storage: IsPauseActive() (distributed check)
+activate Storage
+Storage -> PauseLock: Check if lock exists and is fresh
+PauseLock --> Storage: Lock exists, age < timeout
+Storage --> PodB: Pause is active = true
+deactivate Storage
+
+PodB -> PodB: Skip processing, return message to queue
+deactivate PodB
+deactivate PodB
+
+PodC -> PodC: Process subtree message from Kafka
+activate PodC
+
+PodC -> PodC: Check isPauseActive()
+activate PodC
+
+PodC -> Storage: IsPauseActive() (distributed check)
+activate Storage
+Storage -> PauseLock: Check if lock exists and is fresh
+PauseLock --> Storage: Lock exists, age < timeout
+Storage --> PodC: Pause is active = true
+deactivate Storage
+
+PodC -> PodC: Skip processing, return message to queue
+deactivate PodC
+deactivate PodC
+
+== Block Validation Completes ==
+
+PodA -> PodA: Block validation complete
+PodA -> PodA: Release pause lock (deferred)
+activate PodA
+
+PodA -> PodA: Cancel heartbeat context
+note right: Heartbeat goroutine stops
+
+PodA -> Storage: Remove lock file
+activate Storage
+Storage -> PauseLock: Delete lock file
+PauseLock --> Storage: Lock removed
+Storage --> PodA: Lock released
+deactivate Storage
+
+PodA -> PodA: Set local atomic flag\npauseSubtreeProcessing = false
+deactivate PodA
+
+deactivate PodA
+
+== Processing Resumes on All Pods ==
+
+PodB -> PodB: Next Kafka message
+activate PodB
+PodB -> PodB: Check isPauseActive()
+PodB -> Storage: IsPauseActive()
+activate Storage
+Storage -> PauseLock: Check if lock exists
+PauseLock --> Storage: Lock does not exist
+Storage --> PodB: Pause is active = false
+deactivate Storage
+PodB -> PodB: Continue processing subtree
+deactivate PodB
+
+PodC -> PodC: Next Kafka message
+activate PodC
+PodC -> PodC: Check isPauseActive()
+PodC -> Storage: IsPauseActive()
+activate Storage
+Storage -> PauseLock: Check if lock exists
+PauseLock --> Storage: Lock does not exist
+Storage --> PodC: Pause is active = false
+deactivate Storage
+PodC -> PodC: Continue processing subtree
+deactivate PodC
+
+== Crash Recovery Scenario ==
+
+note over PodA: Pod A crashes during block validation
+
+PodA ->x PodA: Crash/Terminate
+note right: Heartbeat stops updating lock
+
+... After timeout period (10 seconds) ...
+
+PodB -> PodB: Process subtree message
+activate PodB
+PodB -> Storage: IsPauseActive()
+activate Storage
+Storage -> PauseLock: Check lock age
+note right: Lock timestamp > timeout\n(stale lock detected)
+Storage -> PauseLock: Remove stale lock
+PauseLock --> Storage: Stale lock cleaned up
+Storage --> PodB: Pause is active = false
+deactivate Storage
+PodB -> PodB: Continue processing
+deactivate PodB
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

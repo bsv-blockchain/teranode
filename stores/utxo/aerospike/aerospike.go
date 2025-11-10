@@ -349,6 +349,13 @@ func (s *Store) GetMedianBlockTime() uint32 {
 	return s.medianBlockTime.Load()
 }
 
+func (s *Store) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     s.blockHeight.Load(),
+		MedianTime: s.medianBlockTime.Load(),
+	}
+}
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	/* As written by one of the Aerospike developers, Go contexts are not supported:
 
@@ -754,7 +761,9 @@ func (s *Store) setPreserveUntilForExternalFile(ctx context.Context, key []byte,
 	// Create .preserveUntil file with the preserveUntilHeight value
 	preserveUntilData := []byte(fmt.Sprintf("%d", preserveUntilHeight))
 
-	if err := s.externalStore.Set(ctx, key, fileformat.FileTypePreserveUntil, preserveUntilData, options.WithSkipHeader(true)); err != nil {
+	if err := s.externalStore.Set(ctx, key, fileformat.FileTypePreserveUntil, preserveUntilData,
+		options.WithSkipHeader(true),
+		options.WithAllowOverwrite(true)); err != nil {
 		return errors.NewStorageError("failed to create .preserveUntil file", err)
 	}
 

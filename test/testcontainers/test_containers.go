@@ -20,7 +20,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/propagation"
-	distributor "github.com/bsv-blockchain/teranode/services/rpc"
 	"github.com/bsv-blockchain/teranode/settings"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/test/utils/wait"
@@ -138,7 +137,6 @@ type TestClient struct {
 	BlockAssemblyClient   *blockassembly.Client
 	PropagationClient     *propagation.Client
 	BlockValidationClient *blockvalidation.Client
-	DistributorClient     *distributor.Distributor
 	Settings              *settings.Settings
 	RPCURL                *url.URL
 }
@@ -167,15 +165,6 @@ func (tc *TestContainer) GetNodeClients(t *testing.T, settingsContext string) *T
 	require.NoError(t, err)
 
 	clients.BlockValidationClient = blockValidationClient
-
-	distributorClient, err := distributor.NewDistributor(tc.Ctx, tc.Logger, tSettings,
-		distributor.WithBackoffDuration(200*time.Millisecond),
-		distributor.WithRetryAttempts(3),
-		distributor.WithFailureTolerance(0),
-	)
-	require.NoError(t, err)
-
-	clients.DistributorClient = distributorClient
 
 	clients.RPCURL = tSettings.RPC.RPCListenerURL
 

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/teranode/services/asset/asset_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/gorilla/websocket"
@@ -25,23 +24,6 @@ const (
 	shortTimeout      = 50 * time.Millisecond
 	errClientNotAdded = "Client channel not added to clientChannels"
 )
-
-func TestCreatePingMessage(t *testing.T) {
-	t.Run("without P2PClient", func(t *testing.T) {
-		// Create server without P2PClient
-		server := &Server{
-			P2PClient: nil,
-			logger:    ulogger.New("test-server"),
-		}
-
-		msg, err := server.createPingMessage(baseURL)
-		require.NoError(t, err)
-		assert.Equal(t, asset_api.Type_PING.String(), msg.Type)
-		assert.Equal(t, baseURL, msg.BaseURL)
-		assert.Empty(t, msg.PeerID) // PeerID should be empty when P2PClient is nil
-		assert.NotEmpty(t, msg.Timestamp)
-	})
-}
 
 func TestBroadcastMessage(t *testing.T) {
 	tests := []struct {
@@ -244,6 +226,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 		settings: &settings.Settings{
 			P2P: settings.P2PSettings{
 				ListenMode: settings.ListenModeFull,
+				DisableNAT: true, // Disable NAT in tests to prevent data races in libp2p
 			},
 		},
 	}
@@ -263,7 +246,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 
 	go func() {
 		close(processorStarted)
-		s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, baseURL, ctx)
+		s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
 		close(processorDone)
 	}()
 
@@ -383,6 +366,7 @@ func TestHandleWebSocket(t *testing.T) {
 		settings: &settings.Settings{
 			P2P: settings.P2PSettings{
 				ListenMode: settings.ListenModeFull,
+				DisableNAT: true, // Disable NAT in tests to prevent data races in libp2p
 			},
 		},
 	}

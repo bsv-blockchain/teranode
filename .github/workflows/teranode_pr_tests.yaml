@@ -1,11 +1,13 @@
-name: Teranode main pull request tests
+name: Teranode PR tests
 
 on:
   pull_request:
+    paths-ignore:
+      - 'docs/**'
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: write
   id-token: write
 
 env:
@@ -14,40 +16,59 @@ env:
   GO_VERSION: "1.25.2"
 
 jobs:
-  golangci:
-    name: lint
-    runs-on: teranode-runner
+  golangci-lint:
+    name: golangci-lint
+    runs-on: teranode-runner-8-core
     steps:
-      - uses: actions/checkout@v4
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+          comment_on_pr: "false"
 
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+      - name: golangci-lint with checkstyle report
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
-          version: latest
-          only-new-issues: true
-          args: --timeout=5m
+          version: v2.5.0
+          args: --timeout=5m --output.checkstyle.path=golangci-lint-report.xml --output.text.path=stdout
+
+      - name: Upload golangci-lint report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: golangci-lint-report
+          path: golangci-lint-report.xml
+          retention-days: 1
 
   test:
     name: test
-    runs-on: teranode-runner
+    runs-on: teranode-runner-16-core
     steps:
-      - uses: actions/checkout@v4
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+          comment_on_pr: "false"
+
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
       # Only login to Docker Hub for internal PRs to avoid rate limits.
       # Fork PRs won't have access to secrets and will skip this step.
       - name: Login to Docker Hub
         if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/login-action@v3
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
         with:
           username: ${{ vars.DOCKER_ORG }}
           password: ${{ secrets.DOCKER_ORG_TOKEN }}
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: false
@@ -58,111 +79,30 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-report
           path: coverage.out
           retention-days: 1
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results
-          path: /tmp/teranode-test-results/test-results.txt
-          retention-days: 2
       # - name: Publish Test Summary Results
       #   if: always()
       #   run: npx github-actions-ctrf ctrf-report.json
 
-  smoketest:
-    name: smoketest
-    runs-on: teranode-runner
+  filename-check-report:
+    name: filename check report
+    runs-on: ubuntu-latest
     steps:
-      # Only login to Docker Hub for internal PRs to avoid rate limits.
-      # Fork PRs won't have access to secrets and will skip this step.
-      - name: Login to Docker Hub
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: docker/login-action@v3
-        with:
-          username: ${{ vars.DOCKER_ORG }}
-          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Generate filename check report
+        run: ./scripts/check_filenames.sh
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: "false"
-
-      - name: Run Smoke tests
-        run: make smoketest
-        continue-on-error: false
-        env:
-          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
-
-      - name: Run Long tests
-        run: make sequentialtest
-        continue-on-error: false
-        env:
-          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
-
-      - name: Upload smoketest results
+      - name: Upload filename check report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: smoketest-results
-          path: /tmp/teranode-test-results/smoketest-results.txt
-          retention-days: 2
+          name: sonar-filename-report
+          path: sonar_filename_report.json
+          retention-days: 1
 
-      - name: Upload sequentialtest results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sequentialtest-results
-          path: /tmp/teranode-test-results/sequentialtest-results.txt
-          retention-days: 2
-
-  sonarqube:
-    name: Sonarqube
-    runs-on: teranode-runner
-    needs: test
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: coverage-report
-
-      - name: Run filename check script
-        run: |
-          ./scripts/check_filenames.sh
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
-      # Re-run golangci-lint separately without exiting on errors and generating a report for use in Sonar
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: latest
-          args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
-
-      - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v6
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-      - name: SonarQube Quality Gate check
-        uses: sonarsource/sonarqube-quality-gate-action@v1.2.0
-        timeout-minutes: 10
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

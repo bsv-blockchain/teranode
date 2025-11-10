@@ -18,6 +18,7 @@ package p2p
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -33,7 +34,6 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/go-p2p"
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -319,13 +319,16 @@ func NewServer(
 		return nil, errors.NewServiceError("failed to unmarshal key", err)
 	}
 	conf := p2pMessageBus.Config{
-		PrivateKey:      privKey,
-		Name:            tSettings.ClientName,
-		Logger:          logger,
-		PeerCacheFile:   getPeerCacheFilePath(tSettings.P2P.PeerCacheDir),
-		BootstrapPeers:  staticPeers,
-		RelayPeers:      tSettings.P2P.RelayPeers,
-		ProtocolVersion: bitcoinProtocolVersion,
+		PrivateKey:         privKey,
+		Name:               tSettings.ClientName,
+		Logger:             logger,
+		PeerCacheFile:      getPeerCacheFilePath(tSettings.P2P.PeerCacheDir),
+		BootstrapPeers:     staticPeers,
+		RelayPeers:         tSettings.P2P.RelayPeers,
+		ProtocolVersion:    bitcoinProtocolVersion,
+		DHTMode:            tSettings.P2P.DHTMode,
+		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
+		DisableNAT:         tSettings.P2P.DisableNAT,
 	}
 
 	if len(advertiseAddresses) > 0 {
@@ -387,7 +390,7 @@ func NewServer(
 
 	// Initialize new clean architecture components
 	p2pServer.peerRegistry = NewPeerRegistry()
-	p2pServer.peerSelector = NewPeerSelector(logger)
+	p2pServer.peerSelector = NewPeerSelector(logger, tSettings)
 	p2pServer.peerHealthChecker = NewPeerHealthChecker(logger, p2pServer.peerRegistry, tSettings)
 	p2pServer.syncCoordinator = NewSyncCoordinator(
 		logger,
@@ -785,7 +788,7 @@ func (s *Server) rejectedTxHandler(ctx context.Context) func(msg *kafka.KafkaMes
 		s.logger.Debugf("[rejectedTxHandler] Received internal rejected tx notification for %s: %s (broadcasting to p2p network)",
 			hash.String(), m.Reason)
 
-		rejectedTxMessage := p2p.RejectedTxMessage{
+		rejectedTxMessage := RejectedTxMessage{
 			TxID:   hash.String(),
 			Reason: m.Reason,
 			PeerID: s.P2PClient.GetID(),
@@ -852,30 +855,6 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 	}
 }
 
-// NodeStatusMessage represents a node status update message
-type NodeStatusMessage struct {
-	Type                string   `json:"type"`
-	BaseURL             string   `json:"base_url"`
-	PeerID              string   `json:"peer_id"`
-	Version             string   `json:"version"`
-	CommitHash          string   `json:"commit_hash"`
-	BestBlockHash       string   `json:"best_block_hash"`
-	BestHeight          uint32   `json:"best_height"`
-	FSMState            string   `json:"fsm_state"`
-	StartTime           int64    `json:"start_time"`
-	Uptime              float64  `json:"uptime"`
-	ClientName          string   `json:"client_name"` // Name of this node client
-	MinerName           string   `json:"miner_name"`  // Name of the miner that mined the best block
-	ListenMode          string   `json:"listen_mode"`
-	ChainWork           string   `json:"chain_work"`                      // Chain work as hex string
-	SyncPeerID          string   `json:"sync_peer_id,omitempty"`          // ID of the peer we're syncing from
-	SyncPeerHeight      int32    `json:"sync_peer_height,omitempty"`      // Height of the sync peer
-	SyncPeerBlockHash   string   `json:"sync_peer_block_hash,omitempty"`  // Best block hash of the sync peer
-	SyncConnectedAt     int64    `json:"sync_connected_at,omitempty"`     // Unix timestamp when we first connected to this sync peer
-	MinMiningTxFee      *float64 `json:"min_mining_tx_fee,omitempty"`     // Minimum mining transaction fee configured for this node (nil = unknown, 0 = no fee)
-	ConnectedPeersCount int      `json:"connected_peers_count,omitempty"` // Number of connected peers
-}
-
 func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string) {
 	var nodeStatusMessage NodeStatusMessage
 
@@ -889,12 +868,13 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 
 	// Log all received node_status messages for debugging
 	if from == nodeStatusMessage.PeerID {
-		s.logger.Debugf("[handleNodeStatusTopic] DIRECT node_status from %s (is_self: %v, version: %s, height: %d)",
-			nodeStatusMessage.PeerID, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight)
+		s.logger.Infof("[handleNodeStatusTopic] DIRECT node_status from %s (is_self: %v, version: %s, height: %d, storage: %q)",
+			nodeStatusMessage.PeerID, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight, nodeStatusMessage.Storage)
 	} else {
-		s.logger.Debugf("[handleNodeStatusTopic] RELAY  node_status (originator: %s, via: %s, is_self: %v, version: %s, height: %d)",
-			nodeStatusMessage.PeerID, from, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight)
+		s.logger.Infof("[handleNodeStatusTopic] RELAY  node_status (originator: %s, via: %s, is_self: %v, version: %s, height: %d, storage: %q)",
+			nodeStatusMessage.PeerID, from, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight, nodeStatusMessage.Storage)
 	}
+	s.logger.Debugf("[handleNodeStatusTopic] Received JSON: %s", string(m))
 
 	// Skip further processing for our own messages (peer height updates, etc.)
 	// but still forward to WebSocket
@@ -925,6 +905,8 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 		CommitHash:          nodeStatusMessage.CommitHash,
 		BestBlockHash:       nodeStatusMessage.BestBlockHash,
 		BestHeight:          nodeStatusMessage.BestHeight,
+		TxCount:             nodeStatusMessage.TxCount,
+		SubtreeCount:        nodeStatusMessage.SubtreeCount,
 		FSMState:            nodeStatusMessage.FSMState,
 		StartTime:           nodeStatusMessage.StartTime,
 		Uptime:              nodeStatusMessage.Uptime,
@@ -938,6 +920,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 		SyncConnectedAt:     nodeStatusMessage.SyncConnectedAt,
 		MinMiningTxFee:      nodeStatusMessage.MinMiningTxFee,
 		ConnectedPeersCount: nodeStatusMessage.ConnectedPeersCount,
+		Storage:             nodeStatusMessage.Storage,
 	}:
 	default:
 		s.logger.Warnf("[handleNodeStatusTopic] notification channel full, dropped node_status notification for %s", nodeStatusMessage.PeerID)
@@ -970,6 +953,13 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 				s.updateBlockHash(peerID, nodeStatusMessage.BestBlockHash)
 				s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", nodeStatusMessage.BestBlockHash, peerID)
 			}
+
+			// Update storage mode if provided
+			// Store whether the peer is a full node or pruned node
+			if nodeStatusMessage.Storage != "" {
+				s.updateStorage(peerID, nodeStatusMessage.Storage)
+				s.logger.Debugf("[handleNodeStatusTopic] Updated storage mode to %s for peer %s", nodeStatusMessage.Storage, peerID)
+			}
 		}
 	}
 
@@ -993,12 +983,19 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return errors.NewError("error getting block header and meta for BlockMessage: %w", err)
 	}
 
-	blockMessage := p2p.BlockMessage{
+	if meta.Invalid {
+		// do not announce invalid blocks
+		s.logger.Infof("[handleBlockNotification] Not announcing invalid block %s", hash.String())
+		return nil
+	}
+
+	blockMessage := BlockMessage{
 		Hash:       hash.String(),
 		Height:     meta.Height,
 		DataHubURL: s.AssetHTTPAddressURL,
 		PeerID:     s.P2PClient.GetID(),
 		Header:     hex.EncodeToString(h.Bytes()),
+		ClientName: s.settings.ClientName,
 	}
 
 	msgBytes, err = json.Marshal(blockMessage)
@@ -1200,6 +1197,22 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		connectedPeersCount = len(allPeers)
 	}
 
+	// Get block assembly state (tx count and subtree count)
+	txCount := uint64(0)
+	subtreeCount := uint32(0)
+	if s.blockAssemblyClient != nil {
+		if state, err := s.blockAssemblyClient.GetBlockAssemblyState(ctx); err == nil && state != nil {
+			txCount = state.TxCount
+			subtreeCount = state.SubtreeCount
+		} else if err != nil {
+			s.logger.Debugf("[getNodeStatusMessage] Failed to get block assembly state: %v", err)
+		}
+	}
+
+	// Determine storage mode (full vs pruned) based on block persister status
+	storage := s.determineStorage(ctx, height)
+	s.logger.Infof("[getNodeStatusMessage] Determined storage=%q for this node at height %d", storage, height)
+
 	// Return the notification message
 	return &notificationMsg{
 		Timestamp:           time.Now().UTC().Format(isoFormat),
@@ -1210,6 +1223,8 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		CommitHash:          commit,
 		BestBlockHash:       blockHashStr,
 		BestHeight:          height,
+		TxCount:             txCount,
+		SubtreeCount:        subtreeCount,
 		FSMState:            fsmState,
 		StartTime:           startTime,
 		Uptime:              uptime,
@@ -1223,7 +1238,70 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		SyncConnectedAt:     syncConnectedAt,
 		MinMiningTxFee:      minMiningTxFee,
 		ConnectedPeersCount: connectedPeersCount,
+		Storage:             storage,
 	}
+}
+
+// determineStorage determines whether this node is a full node or pruned node.
+// A full node has the block persister running and within the retention window (default: 288 blocks).
+// Since data isn't purged until older than the retention period, a node can serve as "full"
+// as long as the persister lag is within this window.
+// A pruned node either doesn't have block persister running or it's lagging beyond the retention window.
+// Always returns "full" or "pruned" - never returns empty string.
+func (s *Server) determineStorage(ctx context.Context, bestHeight uint32) (mode string) {
+	if s.blockchainClient == nil {
+		return "pruned"
+	}
+
+	// Check if context is already canceled (e.g., during test shutdown)
+	select {
+	case <-ctx.Done():
+		return "pruned"
+	default:
+	}
+
+	// Handle mock panics gracefully in tests
+	defer func() {
+		if r := recover(); r != nil {
+			// Classify as pruned for safety
+			mode = "pruned"
+		}
+	}()
+
+	// Query block persister height from blockchain state
+	stateData, err := s.blockchainClient.GetState(ctx, "BlockPersisterHeight")
+	if err != nil || len(stateData) < 4 {
+		// Block persister not running or state not available - classify as pruned
+		return "pruned"
+	}
+
+	// Decode persisted height (little-endian uint32)
+	persistedHeight := binary.LittleEndian.Uint32(stateData)
+
+	// Calculate lag
+	var lag uint32
+	if bestHeight > persistedHeight {
+		lag = bestHeight - persistedHeight
+	} else {
+		lag = 0
+	}
+
+	// Get lag threshold from GlobalBlockHeightRetention
+	// Since data isn't purged until it's older than this retention window, the node can still
+	// serve as a full node as long as the persister is within this retention period.
+	lagThreshold := uint32(288) // Default 2 days of blocks (144 blocks/day * 2)
+	if s.settings != nil && s.settings.GlobalBlockHeightRetention > 0 {
+		lagThreshold = s.settings.GlobalBlockHeightRetention
+	}
+
+	// Determine mode based on retention window
+	// If BlockPersister is within the retention window, node is "full"
+	// If BlockPersister lags beyond the retention window, node is "pruned"
+	if lag <= lagThreshold {
+		return "full"
+	}
+
+	return "pruned"
 }
 
 func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
@@ -1242,6 +1320,8 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		CommitHash:          msg.CommitHash,
 		BestBlockHash:       msg.BestBlockHash,
 		BestHeight:          msg.BestHeight,
+		TxCount:             msg.TxCount,
+		SubtreeCount:        msg.SubtreeCount,
 		FSMState:            msg.FSMState,
 		StartTime:           msg.StartTime,
 		Uptime:              msg.Uptime,
@@ -1255,6 +1335,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		SyncConnectedAt:     msg.SyncConnectedAt,
 		MinMiningTxFee:      msg.MinMiningTxFee,
 		ConnectedPeersCount: msg.ConnectedPeersCount,
+		Storage:             msg.Storage,
 	}
 
 	msgBytes, err := json.Marshal(nodeStatusMessage)
@@ -1262,7 +1343,8 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 		return errors.NewError("nodeStatusMessage - json marshal error: %w", err)
 	}
 
-	s.logger.Debugf("[handleNodeStatusNotification] P2P publishing nodeStatusMessage to topic %s (height: %d, version: %s)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version)
+	s.logger.Infof("[handleNodeStatusNotification] P2P publishing node_status to topic %s (height=%d, version=%s, storage=%q)", s.nodeStatusTopicName, nodeStatusMessage.BestHeight, nodeStatusMessage.Version, nodeStatusMessage.Storage)
+	s.logger.Debugf("[handleNodeStatusNotification] JSON payload: %s", string(msgBytes))
 
 	if err = s.P2PClient.Publish(ctx, s.nodeStatusTopicName, msgBytes); err != nil {
 		return errors.NewError("nodeStatusMessage - publish error: %w", err)
@@ -1287,10 +1369,11 @@ func (s *Server) handleSubtreeNotification(ctx context.Context, hash *chainhash.
 
 	var msgBytes []byte
 
-	subtreeMessage := p2p.SubtreeMessage{
+	subtreeMessage := SubtreeMessage{
 		Hash:       hash.String(),
 		DataHubURL: s.AssetHTTPAddressURL,
 		PeerID:     s.P2PClient.GetID(),
+		ClientName: s.settings.ClientName,
 	}
 
 	msgBytes, err := json.Marshal(subtreeMessage)
@@ -1522,13 +1605,13 @@ func (s *Server) Stop(ctx context.Context) error {
 
 func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 	var (
-		blockMessage p2p.BlockMessage
+		blockMessage BlockMessage
 		hash         *chainhash.Hash
 		err          error
 	)
 
 	// decode request
-	blockMessage = p2p.BlockMessage{}
+	blockMessage = BlockMessage{}
 
 	err = json.Unmarshal(m, &blockMessage)
 	if err != nil {
@@ -1544,12 +1627,13 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 
 	select {
 	case s.notificationCh <- &notificationMsg{
-		Timestamp: time.Now().UTC().Format(isoFormat),
-		Type:      "block",
-		Hash:      blockMessage.Hash,
-		Height:    blockMessage.Height,
-		BaseURL:   blockMessage.DataHubURL,
-		PeerID:    blockMessage.PeerID,
+		Timestamp:  time.Now().UTC().Format(isoFormat),
+		Type:       "block",
+		Hash:       blockMessage.Hash,
+		Height:     blockMessage.Height,
+		BaseURL:    blockMessage.DataHubURL,
+		PeerID:     blockMessage.PeerID,
+		ClientName: blockMessage.ClientName,
 	}:
 	default:
 		s.logger.Warnf("[handleBlockTopic] notification channel full, dropped block notification for %s", blockMessage.Hash)
@@ -1631,13 +1715,13 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, from string) {
 
 func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, from string) {
 	var (
-		subtreeMessage p2p.SubtreeMessage
+		subtreeMessage SubtreeMessage
 		hash           *chainhash.Hash
 		err            error
 	)
 
 	// decode request
-	subtreeMessage = p2p.SubtreeMessage{}
+	subtreeMessage = SubtreeMessage{}
 
 	err = json.Unmarshal(m, &subtreeMessage)
 	if err != nil {
@@ -1660,11 +1744,12 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, from string) {
 
 	select {
 	case s.notificationCh <- &notificationMsg{
-		Timestamp: now.Format(isoFormat),
-		Type:      "subtree",
-		Hash:      subtreeMessage.Hash,
-		BaseURL:   subtreeMessage.DataHubURL,
-		PeerID:    subtreeMessage.PeerID,
+		Timestamp:  now.Format(isoFormat),
+		Type:       "subtree",
+		Hash:       subtreeMessage.Hash,
+		BaseURL:    subtreeMessage.DataHubURL,
+		PeerID:     subtreeMessage.PeerID,
+		ClientName: subtreeMessage.ClientName,
 	}:
 	default:
 		s.logger.Warnf("[handleSubtreeTopic] notification channel full, dropped subtree notification for %s", subtreeMessage.Hash)
@@ -1771,11 +1856,11 @@ func (s *Server) extractHost(urlStr string) string {
 
 func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, from string) {
 	var (
-		rejectedTxMessage p2p.RejectedTxMessage
+		rejectedTxMessage RejectedTxMessage
 		err               error
 	)
 
-	rejectedTxMessage = p2p.RejectedTxMessage{}
+	rejectedTxMessage = RejectedTxMessage{}
 
 	err = json.Unmarshal(m, &rejectedTxMessage)
 	if err != nil {
@@ -2378,6 +2463,13 @@ func (s *Server) getSyncPeer() peer.ID {
 func (s *Server) updateDataHubURL(peerID peer.ID, url string) {
 	if s.peerRegistry != nil && url != "" {
 		s.peerRegistry.UpdateDataHubURL(peerID, url)
+	}
+}
+
+// updateStorage updates peer storage mode in the registry
+func (s *Server) updateStorage(peerID peer.ID, mode string) {
+	if s.peerRegistry != nil && mode != "" {
+		s.peerRegistry.UpdateStorage(peerID, mode)
 	}
 }
 

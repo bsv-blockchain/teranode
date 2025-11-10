@@ -17,6 +17,7 @@ type Settings struct {
 	Commit                       string
 	Version                      string
 	Context                      string
+	IsAllInOneMode               bool // Runtime-computed: true if daemon is running multiple services in a single process
 	ServiceName                  string
 	TracingEnabled               bool
 	TracingSampleRate            float64
@@ -177,8 +178,6 @@ type BlockSettings struct {
 	GetAndValidateSubtreesConcurrency     int
 	KafkaWorkers                          int
 	ValidOrderAndBlessedConcurrency       int
-	StoreCacheEnabled                     bool
-	StoreCacheSize                        int
 	MaxSize                               int
 	BlockStore                            *url.URL
 	FailFastValidation                    bool
@@ -197,6 +196,7 @@ type BlockSettings struct {
 	UtxoStore                             *url.URL
 	FileStoreReadConcurrency              int
 	FileStoreWriteConcurrency             int
+	FileStoreUseSystemLimits              bool
 }
 
 type BlockChainSettings struct {
@@ -240,46 +240,48 @@ type BlockAssemblySettings struct {
 	UseDynamicSubtreeSize               bool
 	MiningCandidateCacheTimeout         time.Duration
 	BlockchainSubscriptionTimeout       time.Duration
+	ValidateParentChainOnRestart        bool
+	ParentValidationBatchSize           int
 }
 
 type BlockValidationSettings struct {
-	MaxRetries                                       int
-	RetrySleep                                       time.Duration
-	GRPCAddress                                      string
-	GRPCListenAddress                                string
-	KafkaWorkers                                     int
-	LocalSetTxMinedConcurrency                       int
-	MaxPreviousBlockHeadersToCheck                   uint64
-	MissingTransactionsBatchSize                     int
-	ProcessTxMetaUsingCacheBatchSize                 int
-	ProcessTxMetaUsingCacheConcurrency               int
-	ProcessTxMetaUsingCacheMissingTxThreshold        int
-	ProcessTxMetaUsingStoreBatchSize                 int
-	ProcessTxMetaUsingStoreConcurrency               int
-	ProcessTxMetaUsingStoreMissingTxThreshold        int
-	SkipCheckParentMined                             bool
-	SubtreeFoundChConcurrency                        int
-	SubtreeValidationAbandonThreshold                int
-	ValidateBlockSubtreesConcurrency                 int
-	ValidationMaxRetries                             int
-	ValidationRetrySleep                             time.Duration
-	OptimisticMining                                 bool
-	IsParentMinedRetryMaxRetry                       int
-	IsParentMinedRetryBackoffMultiplier              int
-	SubtreeGroupConcurrency                          int
-	BlockFoundChBufferSize                           int
-	CatchupChBufferSize                              int
-	UseCatchupWhenBehind                             bool
-	CatchupConcurrency                               int
-	ValidationWarmupCount                            int
-	BatchMissingTransactions                         bool
-	CheckSubtreeFromBlockTimeout                     time.Duration
-	CheckSubtreeFromBlockRetries                     int
-	CheckSubtreeFromBlockRetryBackoffDuration        time.Duration
-	SecretMiningThreshold                            uint32
-	ArePreviousBlocksProcessedMaxRetry               int
-	ArePreviousBlocksProcessedRetryBackoffMultiplier int
-	PreviousBlockHeaderCount                         uint64
+	MaxRetries                                int
+	RetrySleep                                time.Duration
+	GRPCAddress                               string
+	GRPCListenAddress                         string
+	KafkaWorkers                              int
+	LocalSetTxMinedConcurrency                int
+	MaxPreviousBlockHeadersToCheck            uint64
+	MissingTransactionsBatchSize              int
+	ProcessTxMetaUsingCacheBatchSize          int
+	ProcessTxMetaUsingCacheConcurrency        int
+	ProcessTxMetaUsingCacheMissingTxThreshold int
+	ProcessTxMetaUsingStoreBatchSize          int
+	ProcessTxMetaUsingStoreConcurrency        int
+	ProcessTxMetaUsingStoreMissingTxThreshold int
+	SkipCheckParentMined                      bool
+	SubtreeFoundChConcurrency                 int
+	SubtreeValidationAbandonThreshold         int
+	ValidateBlockSubtreesConcurrency          int
+	ValidationMaxRetries                      int
+	ValidationRetrySleep                      time.Duration
+	OptimisticMining                          bool
+	IsParentMinedRetryMaxRetry                int
+	IsParentMinedRetryBackoffMultiplier       int
+	IsParentMinedRetryBackoffDuration         time.Duration
+	SubtreeGroupConcurrency                   int
+	BlockFoundChBufferSize                    int
+	CatchupChBufferSize                       int
+	UseCatchupWhenBehind                      bool
+	CatchupConcurrency                        int
+	ValidationWarmupCount                     int
+	BatchMissingTransactions                  bool
+	CheckSubtreeFromBlockTimeout              time.Duration
+	CheckSubtreeFromBlockRetries              int
+	CheckSubtreeFromBlockRetryBackoffDuration time.Duration
+	SecretMiningThreshold                     uint32
+	PreviousBlockHeaderCount                  uint64
+	MaxBlocksBehindBlockAssembly              int
 	// Catchup configuration
 	CatchupMaxRetries            int // Maximum number of retries for catchup operations
 	CatchupIterationTimeout      int // Timeout in seconds for each catchup iteration
@@ -370,7 +372,7 @@ type UtxoStoreSettings struct {
 	CleanupParentUpdateBatcherDurationMillis int // Batch duration for parent record updates during cleanup (ms)
 	CleanupDeleteBatcherSize                 int // Batch size for record deletions during cleanup
 	CleanupDeleteBatcherDurationMillis       int // Batch duration for record deletions during cleanup (ms)
-	CleanupMaxConcurrentOperations           int // Maximum concurrent operations during cleanup processing
+	CleanupMaxConcurrentOperations           int // Maximum concurrent operations during cleanup (0 = use connection queue size)
 }
 
 type P2PSettings struct {
@@ -422,33 +424,40 @@ type P2PSettings struct {
 	PeerHealthCheckInterval       time.Duration // Interval between health checks (default: 30s)
 	PeerHealthHTTPTimeout         time.Duration // HTTP timeout for DataHub checks (default: 5s)
 	PeerHealthRemoveAfterFailures int           // Consecutive failures before removing a peer (default: 3)
+
+	// DHT configuration
+	DHTMode            string        // DHT mode: "server" (default, advertises on DHT) or "client" (query-only, no provider storage)
+	DHTCleanupInterval time.Duration // Interval for DHT provider record cleanup (default: 24h, only applies to server mode)
+
+	// DisableNAT disables NAT traversal features (UPnP/NAT-PMP port mapping, NAT service, hole punching).
+	// Set to true in test environments where NAT traversal is not needed.
+	// Default: false (NAT features enabled)
+	DisableNAT bool
+
+	// Node mode configuration (full vs pruned)
+	AllowPrunedNodeFallback bool // If true, fall back to pruned nodes when no full nodes available (default: true). Selects youngest pruned node (smallest height) to minimize UTXO pruning risk.
 }
 
 type CoinbaseSettings struct {
-	DB                          string
-	UserPwd                     string
-	ArbitraryText               string
-	GRPCAddress                 string
-	GRPCListenAddress           string
-	NotificationThreshold       int
-	P2PPeerID                   string
-	P2PPrivateKey               string
-	P2PStaticPeers              []string
-	ShouldWait                  bool
-	Store                       *url.URL
-	StoreDBTimeoutMillis        int
-	WaitForPeers                bool
-	WalletPrivateKey            string
-	DistributorBackoffDuration  time.Duration
-	DistributorMaxRetries       int
-	DistributorFailureTolerance int
-	DistributerWaitTime         int
-	DistributorTimeout          time.Duration
-	PeerStatusTimeout           time.Duration
-	SlackChannel                string
-	SlackToken                  string
-	TestMode                    bool
-	P2PPort                     int
+	DB                    string
+	UserPwd               string
+	ArbitraryText         string
+	GRPCAddress           string
+	GRPCListenAddress     string
+	NotificationThreshold int
+	P2PPeerID             string
+	P2PPrivateKey         string
+	P2PStaticPeers        []string
+	ShouldWait            bool
+	Store                 *url.URL
+	StoreDBTimeoutMillis  int
+	WaitForPeers          bool
+	WalletPrivateKey      string
+	PeerStatusTimeout     time.Duration
+	SlackChannel          string
+	SlackToken            string
+	TestMode              bool
+	P2PPort               int
 }
 
 type SubtreeValidationSettings struct {
@@ -474,6 +483,7 @@ type SubtreeValidationSettings struct {
 	BlacklistedBaseURLs            map[string]struct{}
 	BlockHeightRetentionAdjustment int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
 	OrphanageTimeout               time.Duration
+	OrphanageMaxSize               int // Maximum number of transactions that can be stored in the orphanage
 	// Concurrency limits
 	CheckBlockSubtreesConcurrency int           // Concurrency limit for CheckBlockSubtrees operations (default: 32)
 	PauseTimeout                  time.Duration // Maximum duration for subtree processing pauses during block validation (default: 5 minutes)

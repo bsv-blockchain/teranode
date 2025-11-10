@@ -128,8 +128,7 @@ func setupBlockchainClient(t *testing.T, testItems *baTestItems) (*blockchain.Mo
 	testItems.blockAssembler.blockchainClient = blockchainClient
 
 	// Set the best block header before starting listeners
-	testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
-	testItems.blockAssembler.bestBlockHeight.Store(0)
+	testItems.blockAssembler.setBestBlockHeader(genesisBlock.Header, 0)
 
 	// Return nil for mock since we're using a real client
 	return nil, subChan, genesisBlock
@@ -285,8 +284,10 @@ func TestBlockAssembly_Start(t *testing.T) {
 		err = blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
-		assert.Equal(t, uint32(1), blockAssembler.bestBlockHeight.Load())
-		assert.Equal(t, bestBlockHeader.Hash(), blockAssembler.bestBlockHeader.Load().Hash())
+		header, height := blockAssembler.CurrentBlock()
+
+		assert.Equal(t, uint32(1), height)
+		assert.Equal(t, bestBlockHeader.Hash(), header.Hash())
 	})
 
 	t.Run("Start with cleanup service enabled", func(t *testing.T) {
@@ -508,7 +509,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		require.NotNil(t, items)
 
-		items.blockAssembler.bestBlockHeader.Store(blockHeader1)
+		items.blockAssembler.setBestBlockHeader(blockHeader1, 1)
 		_, _, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), nil, 0)
 		require.Error(t, err)
 	})
@@ -518,8 +519,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		// set the cached BlockAssembler items to the correct values
-		items.blockAssembler.bestBlockHeader.Store(blockHeader4)
-		items.blockAssembler.bestBlockHeight.Store(4)
+		items.blockAssembler.setBestBlockHeader(blockHeader4, 4)
 
 		err := items.addBlock(blockHeader1)
 		require.NoError(t, err)
@@ -563,8 +563,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NoError(t, err)
 
 		// set the cached BlockAssembler items to block 2
-		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
-		items.blockAssembler.bestBlockHeight.Store(2)
+		items.blockAssembler.setBestBlockHeader(blockHeader2, 2)
 
 		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), blockHeader3, 3)
 		require.NoError(t, err)
@@ -580,8 +579,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		// set the cached BlockAssembler items to the correct values
-		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
-		items.blockAssembler.bestBlockHeight.Store(2)
+		items.blockAssembler.setBestBlockHeader(blockHeader2, 2)
 
 		err := items.addBlock(blockHeader1)
 		require.NoError(t, err)
@@ -661,7 +659,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 		ulogger.TestLogger{},
 		ba.settings,
 		nil,
-		nil,
+		items.blockchainClient,
 		nil,
 		items.newSubtreeChan,
 		subtreeprocessor.WithBatcherSize(1),
@@ -1100,7 +1098,8 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 
 		// Create the exact scenario from the bug report: fees only, no subsidy
 		height := uint32(1) // Height 1 (after genesis)
-		testItems.blockAssembler.bestBlockHeight.Store(height - 1)
+		currentHeader, _ := testItems.blockAssembler.CurrentBlock()
+		testItems.blockAssembler.setBestBlockHeader(currentHeader, height-1)
 
 		// Handle subtree processing
 		var wg sync.WaitGroup
@@ -1224,7 +1223,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test cache functionality by directly manipulating cache
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Set up cache manually with a fixed time for deterministic testing
 		testTime := time.Now()
@@ -1241,7 +1241,7 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 
 		// Verify cache validity check works
 		ba.cachedCandidate.mu.RLock()
-		currentHeight := ba.bestBlockHeight.Load()
+		_, currentHeight := ba.CurrentBlock()
 		isValid := ba.cachedCandidate.candidate != nil &&
 			ba.cachedCandidate.lastHeight == currentHeight &&
 			testTime.Sub(ba.cachedCandidate.lastUpdate) < 5*time.Second
@@ -1281,7 +1281,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
 
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Start listeners in a goroutine since it will wait for readyCh
 		go func() {
@@ -1289,17 +1290,18 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		}()
 
 		// First call
-		h := ba.bestBlockHeight.Load()
+		_, h := ba.CurrentBlock()
 		t.Logf("First call: height=%d", h)
 		candidate1, _, err1 := ba.GetMiningCandidate(ctx)
-		h = ba.bestBlockHeight.Load()
+		_, h = ba.CurrentBlock()
 		t.Logf("Check call: height=%d", h)
 		require.NoError(t, err1)
 		require.NotNil(t, candidate1)
 		assert.Equal(t, uint32(2), candidate1.Height)
 
 		// Change block height (simulate new block)
-		ba.bestBlockHeight.Store(2)
+		currentHeader, _ = ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 2)
 		ba.invalidateMiningCandidateCache()
 
 		// Second call - should generate new candidate due to height change
@@ -1328,7 +1330,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
 
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Start listeners in a goroutine since it will wait for readyCh
 		go func() {
@@ -1371,7 +1374,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
 
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Clear any existing cache to ensure we test fresh generation
 		ba.cachedCandidate.mu.Lock()
@@ -1624,8 +1628,7 @@ func TestBlockAssembler_CacheInvalidation(t *testing.T) {
 		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
 		require.NoError(t, err)
 
-		ba.bestBlockHeader.Store(genesisBlock.Header)
-		ba.bestBlockHeight.Store(1)
+		ba.setBestBlockHeader(genesisBlock.Header, 1)
 
 		// Add transactions to trigger subtree creation
 		// Based on the test settings, we need 4 transactions to fill a subtree
@@ -1710,7 +1713,7 @@ func TestBlockAssembly_CurrentBlock(t *testing.T) {
 		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
 		require.NoError(t, err)
 
-		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
+		testItems.blockAssembler.setBestBlockHeader(genesisBlock.Header, 0)
 
 		currentBlockHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
 		assert.Equal(t, genesisBlock.Hash(), currentBlockHeader.Hash())
@@ -1823,8 +1826,9 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify state was properly initialized
-		assert.NotNil(t, blockAssembler.bestBlockHeader.Load())
-		assert.Equal(t, uint32(0), blockAssembler.bestBlockHeight.Load())
+		header, height := blockAssembler.CurrentBlock()
+		assert.NotNil(t, header)
+		assert.Equal(t, uint32(0), height)
 	})
 }
 
@@ -1843,15 +1847,15 @@ func TestBlockAssembly_processNewBlockAnnouncement_ErrorHandling(t *testing.T) {
 		testItems.blockAssembler.blockchainClient = mockBlockchainClient
 
 		// Capture initial state
-		initialHeight := testItems.blockAssembler.bestBlockHeight.Load()
-		initialHeader := testItems.blockAssembler.bestBlockHeader.Load()
+		initialHeader, initialHeight := testItems.blockAssembler.CurrentBlock()
 
 		// Call processNewBlockAnnouncement directly
 		testItems.blockAssembler.processNewBlockAnnouncement(context.Background())
 
 		// Verify state remains unchanged after error
-		assert.Equal(t, initialHeight, testItems.blockAssembler.bestBlockHeight.Load())
-		assert.Equal(t, initialHeader, testItems.blockAssembler.bestBlockHeader.Load())
+		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
+		assert.Equal(t, initialHeight, currentHeight)
+		assert.Equal(t, initialHeader, currentHeader)
 	})
 }
 
@@ -1869,6 +1873,14 @@ func TestBlockAssembly_setBestBlockHeader_CleanupServiceFailures(t *testing.T) {
 		testItems.blockAssembler.cleanupService = mockCleanupService
 		testItems.blockAssembler.cleanupServiceLoaded.Store(true)
 
+		// Start the cleanup queue worker
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		testItems.blockAssembler.startCleanupQueueWorker(ctx)
+
+		// Set state to running so cleanup is triggered
+		testItems.blockAssembler.setCurrentRunningState(StateRunning)
+
 		// Create a new block header
 		newHeader := &model.BlockHeader{
 			Version:        1,
@@ -1884,8 +1896,12 @@ func TestBlockAssembly_setBestBlockHeader_CleanupServiceFailures(t *testing.T) {
 		testItems.blockAssembler.setBestBlockHeader(newHeader, newHeight)
 
 		// Verify the block header was still set correctly
-		assert.Equal(t, newHeader, testItems.blockAssembler.bestBlockHeader.Load())
-		assert.Equal(t, newHeight, testItems.blockAssembler.bestBlockHeight.Load())
+		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
+		assert.Equal(t, newHeader, currentHeader)
+		assert.Equal(t, newHeight, currentHeight)
+
+		// Wait for background goroutine to complete (parent preserve + cleanup trigger)
+		time.Sleep(100 * time.Millisecond)
 
 		// Verify cleanup service was called
 		mockCleanupService.AssertCalled(t, "UpdateBlockHeight", newHeight, mock.Anything)
@@ -1913,8 +1929,9 @@ func TestBlockAssembly_setBestBlockHeader_CleanupServiceFailures(t *testing.T) {
 		testItems.blockAssembler.setBestBlockHeader(newHeader, newHeight)
 
 		// Verify the block header was set correctly
-		assert.Equal(t, newHeader, testItems.blockAssembler.bestBlockHeader.Load())
-		assert.Equal(t, newHeight, testItems.blockAssembler.bestBlockHeight.Load())
+		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
+		assert.Equal(t, newHeader, currentHeader)
+		assert.Equal(t, newHeight, currentHeight)
 	})
 }
 
@@ -1928,7 +1945,8 @@ func TestBlockAssembly_CoinbaseCalculationFix(t *testing.T) {
 
 		// Test the getMiningCandidate function directly with controlled fee values
 		ba := testItems.blockAssembler
-		ba.bestBlockHeight.Store(809) // Height from the original error
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 809) // Height from the original error
 
 		// Create a test scenario that simulates the fee calculation
 		// The original error: coinbase output (5000000098) > fees + subsidy (5000000097)
@@ -1979,6 +1997,10 @@ func (m *MockCleanupService) UpdateBlockHeight(height uint32, doneCh ...chan str
 	return args.Error(0)
 }
 
+func (m *MockCleanupService) SetPersistedHeightGetter(getter func() uint32) {
+	m.Called(getter)
+}
+
 // containsHash is a helper to check if a slice of hashes contains a specific hash
 func containsHash(list []chainhash.Hash, target chainhash.Hash) bool {
 	for _, h := range list {
@@ -1996,6 +2018,9 @@ func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNo
 	ctx := context.Background()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
+
+	// Disable parent validation for this test as it tests edge cases with UTXO store states
+	items.blockAssembler.settings.BlockAssembly.ValidateParentChainOnRestart = false
 
 	// Create a test tx and insert into UTXO store as unmined initially (unmined_since set)
 	tx := newTx(42)
@@ -2039,6 +2064,9 @@ func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStat
 	ctx := context.Background()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
+
+	// Disable parent validation for this test as it tests edge cases with UTXO store states
+	items.blockAssembler.settings.BlockAssembly.ValidateParentChainOnRestart = false
 
 	// Prepare a mined tx on the main chain
 	tx := newTx(43)
@@ -2085,6 +2113,9 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 	ctx := context.Background()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
+
+	// Disable parent validation for this test as it tests transaction filtering logic independently
+	items.blockAssembler.settings.BlockAssembly.ValidateParentChainOnRestart = false
 
 	// Create two test transactions
 	tx1 := newTx(100)
@@ -2147,51 +2178,6 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 
 	// tx2 should be in the assembler (it's still unmined)
 	assert.True(t, containsHash(hashes, *txHash2), "unmined transaction not on current chain should be loaded into assembler")
-}
-
-// TestStartUnminedTransactionCleanupCoverage tests startUnminedTransactionCleanup method (52.2% coverage)
-func TestStartUnminedTransactionCleanupCoverage(t *testing.T) {
-	initPrometheusMetrics()
-
-	t.Run("startUnminedTransactionCleanup with cleanup enabled", func(t *testing.T) {
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// Test startUnminedTransactionCleanup - uses hardcoded 10-minute interval
-
-		// Test startUnminedTransactionCleanup
-		ba.startUnminedTransactionCleanup(ctx)
-
-		// Allow some time for cleanup to potentially run
-		time.Sleep(100 * time.Millisecond)
-
-		// Cancel context to stop cleanup
-		cancel()
-
-		// Test passes if no panic occurs
-		assert.True(t, true, "startUnminedTransactionCleanup should handle cleanup gracefully")
-	})
-
-	t.Run("startUnminedTransactionCleanup with cleanup disabled", func(t *testing.T) {
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// startUnminedTransactionCleanup uses hardcoded 10-minute interval
-
-		// Test startUnminedTransactionCleanup - should return early
-		ba.startUnminedTransactionCleanup(ctx)
-
-		// Test passes if method returns without starting goroutine
-		assert.True(t, true, "startUnminedTransactionCleanup should return early when disabled")
-	})
 }
 
 // TestResetCoverage tests reset method (60.5% coverage)
@@ -2399,7 +2385,7 @@ func TestWaitForPendingBlocksCoverage(t *testing.T) {
 		ba.SetSkipWaitForPendingBlocks(true)
 
 		// Test waitForPendingBlocks - should return immediately
-		_ = ba.waitForPendingBlocks(context.Background())
+		_ = ba.subtreeProcessor.WaitForPendingBlocks(context.Background())
 
 		// Should return immediately when skip is enabled
 		assert.True(t, true, "waitForPendingBlocks should skip when enabled")
@@ -2418,7 +2404,7 @@ func TestWaitForPendingBlocksCoverage(t *testing.T) {
 		defer cancel()
 
 		// Test waitForPendingBlocks with timeout
-		_ = ba.waitForPendingBlocks(ctx)
+		_ = ba.subtreeProcessor.WaitForPendingBlocks(ctx)
 
 		// Should handle timeout gracefully
 		assert.True(t, true, "waitForPendingBlocks should handle timeout")
@@ -2468,7 +2454,8 @@ func TestGetMiningCandidate_SendTimeoutResetsGenerationFlag(t *testing.T) {
 	ba := testItems.blockAssembler
 
 	// Set up the block assembler with a valid height
-	ba.bestBlockHeight.Store(1)
+	currentHeader, _ := ba.CurrentBlock()
+	ba.setBestBlockHeader(currentHeader, 1)
 
 	// Don't start the listeners, so the channel send will timeout
 
@@ -2512,4 +2499,32 @@ func TestGetMiningCandidate_SendTimeoutResetsGenerationFlag(t *testing.T) {
 	assert.False(t, ba.cachedCandidate.generating, "generating flag should still be reset")
 	assert.Nil(t, ba.cachedCandidate.generationChan, "generation channel should still be nil")
 	ba.cachedCandidate.mu.RUnlock()
+}
+
+// TestGetLastPersistedHeight tests the GetLastPersistedHeight method
+func TestGetLastPersistedHeight(t *testing.T) {
+	initPrometheusMetrics()
+
+	t.Run("GetLastPersistedHeight returns initial zero value", func(t *testing.T) {
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Initially should be 0
+		height := ba.GetLastPersistedHeight()
+		assert.Equal(t, uint32(0), height)
+	})
+
+	t.Run("GetLastPersistedHeight returns updated value", func(t *testing.T) {
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Store a value
+		ba.lastPersistedHeight.Store(uint32(100))
+
+		// Should return the stored value
+		height := ba.GetLastPersistedHeight()
+		assert.Equal(t, uint32(100), height)
+	})
 }

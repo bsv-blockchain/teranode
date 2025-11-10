@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -17,77 +16,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
-
-func TestStartUnminedTransactionCleanup(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	t.Run("starts and stops cleanup ticker", func(t *testing.T) {
-		mockStore := new(utxo.MockUtxostore)
-		logger := ulogger.TestLogger{}
-		settings := test.CreateBaseTestSettings(t)
-
-		ba := &BlockAssembler{
-			utxoStore:       mockStore,
-			logger:          logger,
-			settings:        settings,
-			bestBlockHeight: atomic.Uint32{},
-		}
-
-		// Set block height to trigger cleanup
-		ba.bestBlockHeight.Store(100)
-
-		// Expect at least one cleanup call
-		mockStore.On("QueryOldUnminedTransactions", mock.Anything, mock.Anything).
-			Return([]chainhash.Hash{}, nil).
-			Maybe() // May or may not be called depending on timing
-
-		// Start cleanup
-		ba.startUnminedTransactionCleanup(ctx)
-
-		// Give it a moment to potentially run
-		time.Sleep(50 * time.Millisecond)
-
-		// Cancel context to stop
-		cancel()
-
-		// Give it time to stop
-		time.Sleep(50 * time.Millisecond)
-	})
-
-	t.Run("does not cleanup when block height is 0", func(t *testing.T) {
-		ctx := context.Background()
-		mockStore := new(utxo.MockUtxostore)
-		logger := ulogger.TestLogger{}
-		settings := test.CreateBaseTestSettings(t)
-
-		ba := &BlockAssembler{
-			utxoStore:       mockStore,
-			logger:          logger,
-			settings:        settings,
-			bestBlockHeight: atomic.Uint32{},
-		}
-
-		// Block height is 0
-		ba.bestBlockHeight.Store(0)
-
-		// Should not call cleanup
-		mockStore.AssertNotCalled(t, "QueryOldUnminedTransactions")
-
-		// Create a short-lived context
-		ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-		defer cancel()
-
-		ba.startUnminedTransactionCleanup(ctx)
-
-		// Wait for context to expire
-		<-ctx.Done()
-		time.Sleep(50 * time.Millisecond)
-
-		// Verify no cleanup was called
-		mockStore.AssertNotCalled(t, "QueryOldUnminedTransactions")
-	})
-}
 
 // TestCleanupDuringStartup tests that cleanup runs before loading unmined transactions
 func TestCleanupDuringStartup(t *testing.T) {
@@ -126,13 +54,14 @@ func TestCleanupDuringStartup(t *testing.T) {
 			utxoStore:        mockStore,
 			logger:           logger,
 			settings:         settings,
-			bestBlockHeight:  atomic.Uint32{},
+			bestBlock:        atomic.Pointer[BestBlockInfo]{},
 			subtreeProcessor: subtreeProcessor,
 			blockchainClient: blockchainClient,
+			cachedCandidate:  &CachedMiningCandidate{},
 		}
 
 		// Set block height
-		ba.bestBlockHeight.Store(100)
+		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions which includes cleanup
 		err := ba.loadUnminedTransactions(ctx, false)
@@ -212,7 +141,8 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 		mockSubtreeProcessor.On("AddDirectly", mock.MatchedBy(func(node subtree.SubtreeNode) bool {
 			return node.Hash.String() == normalTx.Hash.String()
 		}), mock.Anything, true).Return(nil).Once()
-		mockSubtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil)
+		// GetCurrentBlockHeader may be called multiple times during loading
+		mockSubtreeProcessor.On("GetCurrentBlockHeader").Return(blockHeader1, nil).Maybe()
 
 		blockchainClient := &blockchain.Mock{}
 		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
@@ -222,13 +152,13 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 			utxoStore:        mockStore,
 			logger:           logger,
 			settings:         settings,
-			bestBlockHeight:  atomic.Uint32{},
 			subtreeProcessor: mockSubtreeProcessor,
 			blockchainClient: blockchainClient,
+			cachedCandidate:  &CachedMiningCandidate{},
 		}
 
 		// Set block height
-		ba.bestBlockHeight.Store(100)
+		ba.setBestBlockHeader(nil, 100)
 
 		// Call loadUnminedTransactions
 		err := ba.loadUnminedTransactions(ctx, false)

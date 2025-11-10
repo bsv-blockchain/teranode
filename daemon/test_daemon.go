@@ -38,7 +38,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
-	distributor "github.com/bsv-blockchain/teranode/services/rpc"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -65,12 +64,12 @@ const (
 // TestDaemon is a struct that holds the test daemon instance and its dependencies.
 type TestDaemon struct {
 	AssetURL              string
+	BlockAssembler        *blockassembly.BlockAssembler
 	BlockAssemblyClient   *blockassembly.Client
 	BlockValidationClient *blockvalidation.Client
 	BlockValidation       *blockvalidation.BlockValidation
 	BlockchainClient      blockchain.ClientI
 	Ctx                   context.Context
-	DistributorClient     *distributor.Distributor
 	Logger                ulogger.Logger
 	PropagationClient     *propagation.Client
 	Settings              *settings.Settings
@@ -258,8 +257,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	path := filepath.Join("data", appSettings.ClientName)
 	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
-		// a bit hacky. Ideally, all stores sit under data/${ClientName}
-		path = "data"
+		// Create a unique data directory per test to avoid SQLite locking issues
+		// Use test name and timestamp to ensure uniqueness across sequential test runs
+		testName := strings.ReplaceAll(t.Name(), "/", "_")
+		path = filepath.Join("data", fmt.Sprintf("test_%s_%d", testName, time.Now().UnixNano()))
 	}
 
 	if !opts.SkipRemoveDataDir {
@@ -280,6 +281,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	chainParams.CoinbaseMaturity = 1
 	appSettings.ChainCfgParams = &chainParams
 
+	// Override DataFolder BEFORE creating any directories
+	// This ensures all store paths (blockstore, quorum, etc.) use the test-specific path
+	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
+		appSettings.DataFolder = path
+		// Override QuorumPath to ensure it uses the test-specific directory
+		// This prevents tests from sharing the same quorum directory
+		appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
+	}
+
 	absPath, err := filepath.Abs(path)
 	require.NoError(t, err)
 	t.Logf("Creating data directory: %s", absPath)
@@ -288,12 +298,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	require.NoError(t, err)
 
 	quorumPath := appSettings.SubtreeValidation.QuorumPath
-	require.NotNil(t, quorumPath, "No subtree_quorum_path specified")
+	require.NotEmpty(t, quorumPath, "No subtree_quorum_path specified")
 
 	err = os.MkdirAll(quorumPath, 0755)
 	require.NoError(t, err)
-
-	// Override with test settings...
 	appSettings.Asset.CentrifugeDisable = true
 	appSettings.UtxoStore.DBTimeout = 500 * time.Second
 	appSettings.LocalTestStartFromState = "RUNNING"
@@ -389,15 +397,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	blockValidationClient, err = blockvalidation.NewClient(ctx, logger, appSettings, "test")
 	require.NoError(t, err)
 
-	var distributorClient *distributor.Distributor
-
-	distributorClient, err = distributor.NewDistributor(ctx, logger, appSettings,
-		distributor.WithBackoffDuration(500*time.Millisecond),
-		distributor.WithRetryAttempts(10),
-		distributor.WithFailureTolerance(0),
-	)
-	require.NoError(t, err)
-
 	validatorClient, err := d.daemonStores.GetValidatorClient(ctx, logger, appSettings)
 	require.NoError(t, err)
 
@@ -456,17 +455,22 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	assert.NotNil(t, subtreeStore)
 	assert.NotNil(t, utxoStore)
 	assert.NotNil(t, p2pClient)
-	assert.NotNil(t, distributorClient)
 	assert.NotNil(t, blockValidation)
+
+	blockAssemblyService, err := d.ServiceManager.GetService("BlockAssembly")
+	require.NoError(t, err)
+
+	blockAssembler, ok := blockAssemblyService.(*blockassembly.BlockAssembly)
+	require.True(t, ok)
 
 	return &TestDaemon{
 		AssetURL:              fmt.Sprintf("http://127.0.0.1:%d", appSettings.Asset.HTTPPort),
+		BlockAssembler:        blockAssembler.GetBlockAssembler(),
 		BlockAssemblyClient:   blockAssemblyClient,
 		BlockValidationClient: blockValidationClient,
 		BlockValidation:       blockValidation,
 		BlockchainClient:      blockchainClient,
 		Ctx:                   ctx,
-		DistributorClient:     distributorClient,
 		Logger:                logger,
 		PropagationClient:     propagationClient,
 		Settings:              appSettings,
@@ -489,6 +493,12 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 
 	// Cancel context first to trigger HTTP server shutdowns
 	td.ctxCancel()
+
+	// Shutdown the logger to prevent race conditions on testing.T access
+	// Background goroutines may still be running and trying to log errors
+	if errorTestLogger, ok := td.Logger.(*ulogger.ErrorTestLogger); ok {
+		errorTestLogger.Shutdown()
+	}
 
 	// Cleanup daemon stores to reset singletons
 	td.d.daemonStores.Cleanup()
@@ -748,6 +758,13 @@ func (td *TestDaemon) VerifyNotOnLongestChainInUtxoStore(t *testing.T, tx *bt.Tx
 	readTx, err := td.UtxoStore.Get(td.Ctx, tx.TxIDChainHash(), fields.UnminedSince)
 	require.NoError(t, err, "Failed to get transaction %s", tx.String())
 	assert.Greater(t, readTx.UnminedSince, uint32(0), "Expected transaction %s to be on the longest chain", tx.TxIDChainHash().String())
+}
+
+// VerifyNotInUtxoStore verifies that the transaction does not exist in the UTXO store.
+func (td *TestDaemon) VerifyNotInUtxoStore(t *testing.T, tx *bt.Tx) {
+	_, err := td.UtxoStore.Get(td.Ctx, tx.TxIDChainHash(), fields.UnminedSince)
+	require.Error(t, err, "Expected error when getting transaction %s", tx.String())
+	assert.Equal(t, errors.Is(err, errors.ErrTxNotFound), true, "Expected ErrTxNotFound when getting transaction %s", tx.String())
 }
 
 // VerifyNotInBlockAssembly checks that the given transactions are not present in the block assembly candidate's subtrees.
@@ -1255,45 +1272,45 @@ finished:
 	}
 }
 
+func (td *TestDaemon) WaitForBlockStateChange(t *testing.T, expectedBlock *model.Block, timeout time.Duration) {
+	stateChangeCh := make(chan blockassembly.BestBlockInfo)
+	td.BlockAssembler.SetStateChangeCh(stateChangeCh)
+
+	defer func() {
+		td.BlockAssembler.SetStateChangeCh(nil)
+	}()
+
+	// wait until the block assembly reaches the expected block
+	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Timeout waiting for block assembly to reach block %s", expectedBlock.Header.Hash().String())
+		case bestBlockInfo := <-stateChangeCh:
+			t.Logf("Received BestBlockInfo: Height=%d, Hash=%s", bestBlockInfo.Height, bestBlockInfo.Header.Hash().String())
+			if bestBlockInfo.Header.Hash().IsEqual(expectedBlock.Header.Hash()) {
+				return
+			}
+		}
+	}
+}
+
 func (td *TestDaemon) WaitForBlock(t *testing.T, expectedBlock *model.Block, timeout time.Duration, skipVerifyChain ...bool) {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
+	defer cancel()
 
 	var (
-		err   error
-		state *blockassembly_api.StateMessage
+		err error
 	)
 
-finished:
-	for {
-		switch {
-		case time.Now().After(deadline):
-			t.Fatalf("Timeout waiting for block %s", expectedBlock.Header.Hash().String())
-		default:
-			_, err = td.BlockchainClient.GetBlock(td.Ctx, expectedBlock.Header.Hash())
-			if err == nil {
-				break finished
-			}
-
-			if !errors.Is(err, errors.ErrBlockNotFound) {
-				t.Fatalf("Failed to get block at hash %s: %v", expectedBlock.Header.Hash().String(), err)
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
+	_, err = td.BlockchainClient.GetBlock(ctx, expectedBlock.Header.Hash())
+	if err != nil {
+		t.Fatalf("Failed to get block at hash %s: %v", expectedBlock.Header.Hash().String(), err)
 	}
 
-	for state == nil || state.CurrentHash != expectedBlock.Header.Hash().String() || state.BlockAssemblyState != "running" {
-		state, err = td.BlockAssemblyClient.GetBlockAssemblyState(td.Ctx)
-		require.NoError(t, err)
-
-		if time.Now().After(deadline) {
-			t.Logf("Timeout waiting for block %s", expectedBlock.Header.Hash().String())
-			break
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	require.Equal(t, expectedBlock.Header.Hash().String(), state.CurrentHash, "Expected block assembly to reach hash %s but got %s", expectedBlock.Header.Hash().String(), state.CurrentHash)
+	td.WaitForBlockStateChange(t, expectedBlock, timeout)
 
 	if len(skipVerifyChain) > 0 && skipVerifyChain[0] {
 		return
@@ -1304,7 +1321,7 @@ finished:
 	for height := expectedBlock.Height - 1; height > 0; height-- {
 		var getBlockByHeight *model.Block
 
-		getBlockByHeight, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, height)
+		getBlockByHeight, err = td.BlockchainClient.GetBlockByHeight(ctx, height)
 		require.NoError(t, err)
 
 		require.Equal(t, previousBlockHash.String(), getBlockByHeight.Header.Hash().String(), blockHashMismatch, height)
@@ -1505,7 +1522,7 @@ func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int)
 		err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.privKey})
 		require.NoError(t, err)
 
-		_, err = td.DistributorClient.SendTransaction(td.Ctx, newTx)
+		err = td.PropagationClient.ProcessTransaction(td.Ctx, newTx)
 		require.NoError(t, err)
 
 		td.Logger.Infof("Transaction %d sent: %s", i+1, newTx.TxID())
@@ -1720,14 +1737,10 @@ func (td *TestDaemon) CreateParentTransactionWithNOutputs(t *testing.T, parentTx
 	}
 
 	// Send the transaction
-	var response []*distributor.ResponseWrapper
-
-	response, err = td.DistributorClient.SendTransaction(td.Ctx, newTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, newTx)
 	require.NoError(t, err)
 
-	require.Equal(t, len(response), 1)
-
-	td.Logger.Infof("Created parent transaction with %d outputs: %s, error: %v", count, newTx.TxID(), response[0].Error)
+	td.Logger.Infof("Created parent transaction with %d outputs: %s", count, newTx.TxID())
 
 	// Wait for the transaction to be processed by block assembly
 	err = td.WaitForTransactionInBlockAssembly(newTx, 10*time.Second)
@@ -1781,7 +1794,7 @@ func (td *TestDaemon) CreateAndSendTxsConcurrently(_ *testing.T, parentTx *bt.Tx
 				errorChan <- errors.NewProcessingError("Error filling inputs", err)
 			}
 
-			if _, err := td.DistributorClient.SendTransaction(td.Ctx, newTx); err != nil {
+			if err := td.PropagationClient.ProcessTransaction(td.Ctx, newTx); err != nil {
 				errorChan <- errors.NewProcessingError("Error sending transaction", err)
 			}
 
@@ -1897,4 +1910,37 @@ func (td *TestDaemon) DisconnectFromPeer(t *testing.T, peer *TestDaemon) {
 
 func peerAddress(peer *TestDaemon) string {
 	return fmt.Sprintf("/dns/127.0.0.1/tcp/%d/p2p/%s", peer.Settings.P2P.Port, peer.Settings.P2P.PeerID)
+}
+
+// WaitForBlockAssemblyToProcessTx waits for block assembly to process a transaction by polling GetTransactionHashes.
+// It checks if the transaction with the given hash string appears in the block assembly transaction list.
+// The function uses a context-based timeout (default 2 seconds) and polls every 100ms.
+func (td *TestDaemon) WaitForBlockAssemblyToProcessTx(t *testing.T, txHashStr string) {
+	timeout := 2 * time.Second
+	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Timeout - fail the test
+			t.Fatalf("tx %s not found in block assembly after %v timeout", txHashStr, timeout)
+			return
+
+		case <-ticker.C:
+			txs, err := td.BlockAssemblyClient.GetTransactionHashes(ctx)
+			if err != nil {
+				// Continue retrying on error
+				continue
+			}
+
+			// Check if our transaction is in the list
+			if slices.Contains(txs, txHashStr) {
+				return
+			}
+		}
+	}
 }
