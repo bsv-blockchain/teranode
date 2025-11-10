@@ -77,9 +77,11 @@ func Retry[T any](ctx context.Context, logger ulogger.Logger, f func() (T, error
 				waitTime = time.Duration(backoff) * setOptions.BackoffDurationType
 			}
 
-			// Log the retry message with wait time
-			logger.Warnf(setOptions.Message+" (attempt %d): %v, trying again in %.1f seconds",
-				i+1, err, waitTime.Seconds())
+			// Log the retry message with wait time (skip first 5 attempts to reduce noise)
+			if i >= 5 {
+				logger.Warnf(setOptions.Message+" (attempt %d): %v, trying again in %.1f seconds",
+					i+1, err, waitTime.Seconds())
+			}
 
 			// Wait before retrying
 			if setOptions.ExponentialBackoff {

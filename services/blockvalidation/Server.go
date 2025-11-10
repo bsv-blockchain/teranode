@@ -1261,7 +1261,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 	defer deferFn()
 
 	// Wait for block assembly to be ready before processing the block
-	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height); err != nil {
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return nil, errors.WrapGRPC(err)
 	}
@@ -1372,7 +1372,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	}
 
 	// Wait for block assembly to be ready before processing the block
-	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height); err != nil {
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
