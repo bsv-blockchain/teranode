@@ -323,14 +323,16 @@ func TestPopulateVersionInfoComponents(t *testing.T) {
 					parsedTime, err := time.Parse("20060102150405", timestampStr)
 					if err == nil {
 						// If we can parse it as a timestamp, verify it's reasonable
-						// (Could be git timestamp or current time)
-						// Allow for timezone differences and some timing flexibility
+						// Git timestamps can be arbitrarily old, so we just check:
+						// 1. Not before project start (2020)
+						// 2. Not more than 1 hour in the future (allowing for clock skew)
 						now := time.Now().UTC()
-						timeDiff := parsedTime.Sub(now)
-						assert.True(t, timeDiff < 25*time.Hour && timeDiff > -25*time.Hour,
-							"Timestamp should be within 25 hours of current time (git timestamp: %v, current: %v, diff: %v)",
-							parsedTime, now, timeDiff)
-						t.Logf("Parsed timestamp: %v (current: %v, diff: %v)", parsedTime, now, timeDiff)
+						projectStart := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+						assert.True(t, parsedTime.After(projectStart),
+							"Timestamp should be after project start date (got: %v)", parsedTime)
+						assert.True(t, parsedTime.Before(now.Add(1*time.Hour)),
+							"Timestamp should not be more than 1 hour in the future (got: %v, now: %v)", parsedTime, now)
+						t.Logf("Parsed timestamp: %v", parsedTime)
 					}
 				}
 			}
