@@ -14,7 +14,6 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
-	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
@@ -792,7 +791,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 			}
 
 			// Wait for block assembly to be ready if needed
-			if err := blockassemblyutil.WaitForBlockAssemblyReady(gCtx, u.logger, u.blockAssemblyClient, block.Height, uint32(u.settings.ChainCfgParams.CoinbaseMaturity/2)); err != nil {
+			if err := blockassemblyutil.WaitForBlockAssemblyReady(gCtx, u.logger, u.blockAssemblyClient, block.Height, u.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 				return errors.NewProcessingError("[catchup:validateBlocksOnChannel][%s] failed to wait for block assembly for block %s: %v", blockUpTo.Hash().String(), block.Hash().String(), err)
 			}
 
@@ -815,18 +814,15 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 				}
 
 				// Validate the block using standard validation
+				// Note: ValidateBlockWithOptions now automatically stores invalid blocks with invalid=true
 				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, nil, opts); err != nil {
 					u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
 
-					// Only mark block as invalid for consensus violations (ErrBlockInvalid or ErrTxInvalid)
-					// Other errors like missing data, storage issues, or processing errors should not mark the block as invalid
+					// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation
+					// Just log and record metrics
 					if errors.Is(err, errors.ErrBlockInvalid) || errors.Is(err, errors.ErrTxInvalid) {
-						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules, marking as invalid", blockUpTo.Hash().String(), block.Hash().String())
-						if markErr := u.blockchainClient.AddBlock(gCtx, block, peerID, options.WithInvalid(true)); markErr != nil {
-							u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to store invalid block %s: %v", blockUpTo.Hash().String(), block.Hash().String(), markErr)
-						}
+						u.logger.Warnf("[catchup:validateBlocksOnChannel][%s] block %s violates consensus rules (already stored as invalid by ValidateBlockWithOptions)", blockUpTo.Hash().String(), block.Hash().String())
 					}
-					// For recoverable errors (storage, processing, missing data), don't mark as invalid - just fail and retry later
 
 					// Record metric for validation failure
 					if prometheusCatchupErrors != nil {

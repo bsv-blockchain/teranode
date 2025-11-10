@@ -83,4 +83,4 @@ kubectl delete -f kubernetes/teranode/teranode-configmap.yaml -n teranode-operat
 
 - [How to Install Teranode](minersHowToInstallation.md)
 - [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
-- [Teranode Sync Guide](../../../howto/miners/minersHowToSyncTheNode.md)
+- [Teranode Sync Guide](minersHowToSyncTheNode.md)

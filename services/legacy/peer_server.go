@@ -524,11 +524,16 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		return nil
 	}
 
-	// Ignore peers that aren't running Bitcoin
-	if strings.Contains(msg.UserAgent, "ABC") || strings.Contains(msg.UserAgent, "Cash") || strings.Contains(msg.UserAgent, "Unlimited") {
-		sp.server.logger.Debugf("Rejecting peer %s for not running compatible Bitcoin", sp.Peer)
+	// Only allow connections from peers running Bitcoin SV
+	// This prevents connections from BCH/BTC/BTG and other incompatible forks
+	userAgent := msg.UserAgent
+	if !strings.Contains(userAgent, "Bitcoin SV") && !strings.Contains(userAgent, "BSV") {
+		sp.server.logger.Warnf("Rejecting and banning peer %s with non-Bitcoin SV user agent: %s", sp.Peer, userAgent)
 
-		reason := "Sorry, you are not running Bitcoin"
+		// Ban the peer to prevent repeated connection attempts from incompatible clients
+		sp.server.BanPeer(sp)
+
+		reason := "Only Bitcoin SV clients are supported"
 
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}
@@ -917,11 +922,6 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 		tracing.WithHistogram(peerServerMetrics["OnGetHeaders"]),
 	)
 
-	// Ignore OnGetHeaders requests if not in sync.
-	if !sp.server.syncManager.IsCurrent() {
-		return
-	}
-
 	// Find the most recent known block in the best chain based on the block
 	// locator and fetch all the headers after it until either
 	// wire.MaxBlockHeadersPerMsg have been fetched or the provided stop
@@ -939,19 +939,21 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 		return
 	}
 
-	blockHeaders, _, err := sp.server.blockchainClient.GetBlockHeadersToCommonAncestor(sp.ctx, bestHeader.Hash(), msg.BlockLocatorHashes, wire.MaxBlockHeadersPerMsg)
+	blockHeaders, _, err := sp.server.blockchainClient.GetBlockHeadersFromCommonAncestor(sp.ctx, bestHeader.Hash(), util.HashPointersToValues(msg.BlockLocatorHashes), wire.MaxBlockHeadersPerMsg)
 	if err != nil {
-		sp.server.logger.Errorf("Failed to fetch block headers to common ancestor: %v", err)
+		sp.server.logger.Errorf("Failed to fetch block headers from common ancestor: %v", err)
 	}
 
 	// Send found headers to the requesting peer.
 	wireBlockHeaders := make([]*wire.BlockHeader, 0, len(blockHeaders))
 
 	for _, blockHeader := range blockHeaders {
-		if blockHeader.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
-			// skip genesis block
-			continue
-		}
+		// Note: We now include genesis block for proper header chain continuity
+		// SVNode needs genesis to validate the chain from block 0
+		// if blockHeader.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+		// 	// skip genesis block
+		// 	continue
+		// }
 
 		wireBlockHeaders = append(wireBlockHeaders, blockHeader.ToWireBlockHeader())
 
@@ -1156,7 +1158,7 @@ func (sp *serverPeer) OnReject(p *peer.Peer, msg *wire.MsgReject) {
 		tracing.WithHistogram(peerServerMetrics["OnReject"]),
 	)
 
-	sp.server.logger.Warnf("Received reject message from peer %s, code: %s, reason: %s", p, msg.Code.String(), msg.Reason)
+	sp.server.logger.Warnf("Received reject message from peer %s, cmd: %s, code: %s, reason: %s, hash: %s", p, msg.Cmd, msg.Code.String(), msg.Reason, msg.Hash.String())
 }
 
 // OnNotFound logs all not found messages received from the remote peer.
@@ -1772,6 +1774,7 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 			// }
 
 			s.handleRelayTxMsg(sp, msg, feeFilter)
+			return
 		}
 	})
 }
@@ -2658,6 +2661,8 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	if tSettings.ChainCfgParams.Name == "testnet" {
 		activeNetParams = &testNetParams
+	} else if tSettings.ChainCfgParams.Name == "teratestnet" {
+		activeNetParams = &teraTestNetParams
 	} else if tSettings.ChainCfgParams.Name == "regtest" {
 		activeNetParams = &regressionNetParams
 	}
@@ -2696,9 +2701,12 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	services &^= wire.SFNodeCF
 	// cfg.Prune
 
+	// We want to be able to advertise as full node, this should depend on determineNodeMode
+	// Requires https://github.com/bsv-blockchain/teranode/pull/50 to be merged
+	//services |= wire.SFNodeNetwork
+
 	services &^= wire.SFNodeNetwork
 	services |= wire.SFNodeNetworkLimited
-	// services |= wire.SFNodeNetwork
 
 	peersDir := cfg.DataDir
 	if !tSettings.Legacy.SavePeers {

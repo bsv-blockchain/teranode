@@ -510,10 +510,12 @@ func TestServerProcessOrphans(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
+	orphanage, err := NewOrphanage(time.Minute, 100, &logger)
+	require.NoError(t, err)
 	server := &Server{
 		logger:          logger,
 		settings:        tSettings,
-		orphanage:       expiringmap.New[chainhash.Hash, *bt.Tx](time.Minute),
+		orphanage:       orphanage,
 		validatorClient: &mockValidator{},
 		stats:           gocore.NewStat("test"),
 	}

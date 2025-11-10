@@ -79,7 +79,7 @@ spec:
     enabled: false
     spec: {}
   configMapName: teranode-operator-config
-  image: ghcr.io/bsv-blockchain/teranode:v0.10.8
+  image: ghcr.io/bsv-blockchain/teranode:v0.11.13
   legacy:
     enabled: true
     spec:

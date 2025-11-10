@@ -929,6 +929,69 @@ func (c *Client) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHe
 	return headers, metas, nil
 }
 
+// GetBlocksByHeight retrieves full blocks between two specified heights.
+// This method fetches complete blocks within a height range in a single efficient operation,
+// which is particularly useful for operations like subtree searching where full block data
+// including subtree hashes is needed for multiple consecutive blocks.
+//
+// The method communicates with the blockchain service via gRPC to retrieve the blocks
+// from the underlying blockchain store, then deserializes each block into the internal
+// model representation with all components (headers, subtrees, transaction metadata).
+//
+// Parameters:
+//   - ctx: Context for the operation with timeout and cancellation support
+//   - startHeight: Starting height for block retrieval (inclusive)
+//   - endHeight: Ending height for block retrieval (inclusive)
+//
+// Returns:
+//   - []*model.Block: Array of complete blocks in ascending height order
+//   - error: Any error encountered during retrieval or deserialization
+func (c *Client) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
+	resp, err := c.client.GetBlocksByHeight(ctx, &blockchain_api.GetBlocksByHeightRequest{
+		StartHeight: startHeight,
+		EndHeight:   endHeight,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	blocks := make([]*model.Block, 0, len(resp.Blocks))
+
+	for _, blockBytes := range resp.Blocks {
+		block, err := model.NewBlockFromBytes(blockBytes)
+		if err != nil {
+			return nil, err
+		}
+
+		blocks = append(blocks, block)
+	}
+
+	return blocks, nil
+}
+
+func (c *Client) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error) {
+	resp, err := c.client.FindBlocksContainingSubtree(ctx, &blockchain_api.FindBlocksContainingSubtreeRequest{
+		SubtreeHash: subtreeHash.CloneBytes(),
+		MaxBlocks:   maxBlocks,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	blocks := make([]*model.Block, 0, len(resp.Blocks))
+
+	for _, blockBytes := range resp.Blocks {
+		block, err := model.NewBlockFromBytes(blockBytes)
+		if err != nil {
+			return nil, err
+		}
+
+		blocks = append(blocks, block)
+	}
+
+	return blocks, nil
+}
+
 // InvalidateBlock marks a block as invalid in the blockchain.
 func (c *Client) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 	resp, err := c.client.InvalidateBlock(ctx, &blockchain_api.InvalidateBlockRequest{

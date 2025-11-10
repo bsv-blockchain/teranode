@@ -20,6 +20,7 @@ local BIN_SPENT_UTXOS = "spentUtxos"
 local BIN_SUBTREE_IDXS = "subtreeIdxs"
 local BIN_TOTAL_EXTRA_RECS = "totalExtraRecs"
 local BIN_LOCKED = "locked"
+local BIN_CREATING = "creating"
 local BIN_UTXOS = "utxos"
 local BIN_UTXO_SPENDABLE_IN = "utxoSpendableIn"
 local BIN_LAST_SPENT_STATE = "lastSpentState"  -- Tracks last signaled state: "ALLSPENT" or "NOTALLSPENT"
@@ -33,6 +34,7 @@ local STATUS_ERROR = "ERROR"
 local ERROR_CODE_TX_NOT_FOUND = "TX_NOT_FOUND"
 local ERROR_CODE_CONFLICTING = "CONFLICTING"
 local ERROR_CODE_LOCKED = "LOCKED"
+local ERROR_CODE_CREATING = "CREATING"
 local ERROR_CODE_FROZEN = "FROZEN"
 local ERROR_CODE_ALREADY_FROZEN = "ALREADY_FROZEN"
 local ERROR_CODE_FROZEN_UNTIL = "FROZEN_UNTIL"
@@ -49,6 +51,7 @@ local ERROR_CODE_INVALID_PARAMETER = "INVALID_PARAMETER"
 -- Message constants
 local MSG_CONFLICTING = "TX is conflicting"
 local MSG_LOCKED = "TX is locked and cannot be spent"
+local MSG_CREATING = "TX is being created and cannot be spent yet"
 local MSG_FROZEN = "UTXO is frozen"
 local MSG_ALREADY_FROZEN = "UTXO is already frozen"
 local MSG_FROZEN_UNTIL = "UTXO is not spendable until block "
@@ -279,7 +282,17 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
         return response
     end
-    
+
+    -- Check creating flag - blocks spending during multi-record transaction creation
+    -- Explicitly check for true since nil/absent means not creating
+    if rec[BIN_CREATING] == true then
+        response[FIELD_STATUS] = STATUS_ERROR
+        response[FIELD_ERROR_CODE] = ERROR_CODE_CREATING
+        response[FIELD_MESSAGE] = MSG_CREATING
+
+        return response
+    end
+
     if not ignoreConflicting then
         if rec[BIN_CONFLICTING] then
             response[FIELD_STATUS] = STATUS_ERROR
@@ -547,28 +560,40 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
 
     if unsetMined then
         -- Remove the block id and height/subtreeIdx at the same index from the bin if it exists, the block was invalidated
-        local newBlocks = list()
-        local newBlockHeights = list()
-        local newSubtreeIdxs = list()
-
+        local foundIdx = nil
         for i = 1, #blocks do
-            local b = blocks[i]
-            if b ~= blockID then
-                newBlocks[#newBlocks + 1] = b
-                newBlockHeights[#newBlockHeights + 1] = heights[i]
-                newSubtreeIdxs[#newSubtreeIdxs + 1] = subtreeIdxs[i]
+            if blocks[i] == blockID then
+                foundIdx = i
+                break
             end
         end
 
-        rec[BIN_BLOCK_IDS] = newBlocks
-        rec[BIN_BLOCK_HEIGHTS] = newBlockHeights
-        rec[BIN_SUBTREE_IDXS] = newSubtreeIdxs
+        -- Only rebuild lists if we found the blockID to remove
+        if foundIdx then
+            local newBlocks = list()
+            local newBlockHeights = list()
+            local newSubtreeIdxs = list()
+
+            for i = 1, #blocks do
+                if i ~= foundIdx then
+                    newBlocks[#newBlocks + 1] = blocks[i]
+                    newBlockHeights[#newBlockHeights + 1] = heights[i]
+                    newSubtreeIdxs[#newSubtreeIdxs + 1] = subtreeIdxs[i]
+                end
+            end
+
+            rec[BIN_BLOCK_IDS] = newBlocks
+            rec[BIN_BLOCK_HEIGHTS] = newBlockHeights
+            rec[BIN_SUBTREE_IDXS] = newSubtreeIdxs
+
+            blocks = newBlocks  -- Update local reference for response
+        end
     else
         -- Append the value to the list in the specified bin if it doesn't already exist
         local blockExists = false
 
-        for b in list.iterator(blocks) do
-            if b == blockID then
+        for i = 1, #blocks do
+            if blocks[i] == blockID then
                 blockExists = true
                 break
             end
@@ -590,7 +615,8 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     response[FIELD_BLOCK_IDS] = blocks
 
     -- if we have a block in the record on the longest chain, then it is no longer unmined
-    if blocks and #blocks > 0 then
+    local hasBlocks = #blocks > 0
+    if hasBlocks then
         if onLongestChain then
             rec[BIN_UNMINED_SINCE] = nil
         end
@@ -601,6 +627,12 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     -- set the record to not be locked again, if it was locked, since if was just mined into a block
     if rec[BIN_LOCKED] then
         rec[BIN_LOCKED] = false
+    end
+
+    -- Delete the creating bin entirely (nil removes it from record)
+    -- This saves storage space - absence means not creating
+    if rec[BIN_CREATING] then
+        rec[BIN_CREATING] = nil
     end
 
     local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)

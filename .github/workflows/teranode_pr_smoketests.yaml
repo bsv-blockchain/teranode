@@ -1,0 +1,179 @@
+name: Teranode PR smoke tests
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
+env:
+  REPO: teranode
+  SETTINGS_CONTEXT_DEFAULT: test
+  GO_VERSION: "1.25.2"
+
+jobs:
+  smoketest:
+    name: smoketest
+    runs-on: teranode-runner-8-core
+    steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+          comment_on_pr: "false"
+
+      # Only login to Docker Hub for internal PRs to avoid rate limits.
+      # Fork PRs won't have access to secrets and will skip this step.
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Run Smoke tests
+        run: make smoketest
+        continue-on-error: false
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload smoketest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoketest-results
+          path: /tmp/teranode-test-results/smoketest-results.txt
+          retention-days: 2
+
+  sequential-sqlite:
+    name: sequential-sqlite
+    runs-on: teranode-runner-8-core
+    steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+          comment_on_pr: "false"
+
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Run Sequential tests (SQLite)
+        run: make sequentialtest-sqlite
+        continue-on-error: false
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload sequentialtest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sequentialtest-sqlite-results
+          path: /tmp/teranode-test-results/sequentialtest-sqlite-results.txt
+          retention-days: 2
+
+  sequential-postgres:
+    name: sequential-postgres
+    runs-on: teranode-runner-8-core
+    steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+          comment_on_pr: "false"
+
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Run Sequential tests (Postgres)
+        run: make sequentialtest-postgres
+        continue-on-error: false
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload sequentialtest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sequentialtest-postgres-results
+          path: /tmp/teranode-test-results/sequentialtest-postgres-results.txt
+          retention-days: 2
+
+  sequential-aerospike:
+    name: sequential-aerospike
+    runs-on: teranode-runner-8-core
+    steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+          comment_on_pr: "false"
+
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: "false"
+
+      - name: Run Sequential tests (Aerospike)
+        run: make sequentialtest-aerospike
+        continue-on-error: false
+        env:
+          settings_context: ${{ env.SETTINGS_CONTEXT_DEFAULT }}
+
+      - name: Upload sequentialtest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sequentialtest-aerospike-results
+          path: /tmp/teranode-test-results/sequentialtest-aerospike-results.txt
+          retention-days: 2

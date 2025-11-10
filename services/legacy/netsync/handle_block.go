@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sync"
+	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -108,7 +109,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}()
 
 	// Wait for block assembly to be ready
-	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, uint32(sm.settings.ChainCfgParams.CoinbaseMaturity/2)); err != nil {
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, sm.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
@@ -345,6 +346,8 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 	defer deferFn()
 
 	g, gCtx := errgroup.WithContext(ctx)
+	// Limit to 3 concurrent writes (subtree, subtreeData, subtreeMeta)
+	util.SafeSetLimit(g, 3)
 
 	g.Go(func() error {
 		subtreeBytes, err := subtree.Serialize()
@@ -922,10 +925,12 @@ func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap *
 	}
 
 	inputLen := len(tx.Inputs)
-	populatedInputs := 0
+	populatedInputs := atomic.Int32{}
 
 	g := errgroup.Group{}
-	inputsLock := sync.Mutex{} // to protect the inputs slice from concurrent writes
+	// Limit goroutines to number of CPU cores to prevent scheduler thrashing
+	// This prevents spawning thousands of goroutines for transactions with many inputs
+	util.SafeSetLimit(&g, runtime.NumCPU()*2)
 
 	for i, input := range tx.Inputs {
 		i := i         // capture the loop variable
@@ -954,15 +959,11 @@ func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap *
 					}
 				}
 
-				// lock the inputs slice to prevent concurrent writes
-				inputsLock.Lock()
-
+				// No lock needed - each goroutine writes to a unique index
 				tx.Inputs[i].PreviousTxSatoshis = prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex].Satoshis
 				tx.Inputs[i].PreviousTxScript = bscript.NewFromBytes(*prevTxWrapper.Tx.Outputs[input.PreviousTxOutIndex].LockingScript)
 
-				populatedInputs++
-
-				inputsLock.Unlock() // unlock the inputs slice
+				populatedInputs.Add(1)
 
 				return nil
 			})
@@ -973,7 +974,7 @@ func (sm *SyncManager) ExtendTransaction(ctx context.Context, tx *bt.Tx, txMap *
 		return errors.NewProcessingError("failed to extend transaction %s", tx.TxIDChainHash(), err)
 	}
 
-	if populatedInputs == inputLen {
+	if int(populatedInputs.Load()) == inputLen {
 		// all inputs were populated, we can return early
 		return nil
 	}

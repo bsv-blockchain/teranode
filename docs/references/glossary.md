@@ -1,16 +1,16 @@
 # Teranode BSV Glossary
 
-**Alert Service**: A system that reintroduces alert functionality for Bitcoin, allowing for UTXO freezing/unfreezing, reassignment, peer management, and block invalidation.
+**Alert Service**: Implements Bitcoin SV alert functionality for UTXO freezing/unfreezing, peer banning/unbanning, and confiscation transaction processing.
 
-**Asset Server**: An interface to various data stores, handling transactions, subtrees, blocks, block headers, and UTXOs.
+**Asset Service**: Provides HTTP and WebSocket APIs for blockchain data access, serving transactions, subtrees, blocks, block headers, and UTXOs.
 
 **Block**: A container of grouped subtrees, including a coinbase transaction and a header, forming the blockchain.
 
-**Block Assembly Service**: Responsible for assembling new blocks and adding them to the blockchain. It groups transactions into subtrees and creates mining candidates.
+**Block Assembly Service**: Manages block creation including transaction selection, block template generation, and mining integration.
 
 **Block Header**: Metadata about a block, used to connect blocks in the blockchain and contains proof-of-work information.
 
-**Block Persister Service**: An overlay microservice that post-processes blocks, decorating transactions with metadata and persisting them to separate storage.
+**Block Persister Service**: Persists blocks and related data (transactions, UTXOs, subtrees) to storage, ensuring data consistency.
 
 **Block Validation Service**: Ensures the integrity and consistency of each block before it's added to the blockchain.
 
@@ -20,7 +20,6 @@
 
 **Checkpoint**: A known valid block height used as a trust anchor for validation optimization. Blocks below checkpoints can use quick validation since they are known to be valid.
 
-**Coinbase Service**: A test-only service designed to split Coinbase UTXOs into smaller UTXOs and manage the spendability of miner rewards.
 
 **Coinbase Transaction**: The first transaction in a block that creates new coins as a reward for the miner.
 
@@ -70,12 +69,12 @@
 
 **Teranode**: A high-performance implementation of the Bitcoin protocol designed to handle a massive scale of transactions.
 
-**TX Validator (Transaction Validator)**: Responsible for validating new transactions, persisting data into the UTXO store, and propagating transactions to other services.
-
 **UTXO (Unspent Transaction Output)**: Represents a piece of cryptocurrency that can be spent in future transactions.
 
 **UTXO Persister Service**: Creates and maintains an up-to-date Unspent Transaction Output (UTXO) file set for each block in the blockchain.
 
 **UTXO Store**: A datastore of UTXOs, tracking unspent transaction outputs that can be used as inputs in new transactions.
+
+**Validator Service**: Validates new transactions and coordinates with the UTXO store for transaction processing.
 
 This glossary covers the main terms and components of the Teranode BSV system as described in the documentation you provided. It should help readers quickly reference and understand key concepts throughout the documentation.

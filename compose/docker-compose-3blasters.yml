@@ -147,6 +147,15 @@ services:
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
       logLevel: "DEBUG"
+      KAFKA_BLOCKS: blocks-teranode1
+      KAFKA_BLOCKS_FINAL: blocks-final-teranode1
+      KAFKA_INVALID_BLOCKS: invalid-blocks-teranode1
+      KAFKA_INVALID_SUBTREES: invalid-subtrees-teranode1
+      KAFKA_LEGACY_INV: legacy-inv-teranode1
+      KAFKA_REJECTEDTX: rejectedtx-teranode1
+      KAFKA_SUBTREES: subtrees-teranode1
+      KAFKA_TXMETA: txmeta-teranode1
+      KAFKA_VALIDATORTXS: validatortxs-teranode1
     volumes:
       - ../settings.conf:/app/settings.conf
       - ../settings_local.conf:/app/settings_local.conf
@@ -209,6 +218,15 @@ services:
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
       logLevel: "DEBUG"
+      KAFKA_BLOCKS: blocks-teranode2
+      KAFKA_BLOCKS_FINAL: blocks-final-teranode2
+      KAFKA_INVALID_BLOCKS: invalid-blocks-teranode2
+      KAFKA_INVALID_SUBTREES: invalid-subtrees-teranode2
+      KAFKA_LEGACY_INV: legacy-inv-teranode2
+      KAFKA_REJECTEDTX: rejectedtx-teranode2
+      KAFKA_SUBTREES: subtrees-teranode2
+      KAFKA_TXMETA: txmeta-teranode2
+      KAFKA_VALIDATORTXS: validatortxs-teranode2
     volumes:
       - ../settings.conf:/app/settings.conf
       - ../settings_local.conf:/app/settings_local.conf
@@ -271,6 +289,15 @@ services:
       JAEGER_AGENT_HOST: localhost
       JAEGER_AGENT_PORT: 6831
       logLevel: "DEBUG"
+      KAFKA_BLOCKS: blocks-teranode3
+      KAFKA_BLOCKS_FINAL: blocks-final-teranode3
+      KAFKA_INVALID_BLOCKS: invalid-blocks-teranode3
+      KAFKA_INVALID_SUBTREES: invalid-subtrees-teranode3
+      KAFKA_LEGACY_INV: legacy-inv-teranode3
+      KAFKA_REJECTEDTX: rejectedtx-teranode3
+      KAFKA_SUBTREES: subtrees-teranode3
+      KAFKA_TXMETA: txmeta-teranode3
+      KAFKA_VALIDATORTXS: validatortxs-teranode3
     volumes:
       - ../settings.conf:/app/settings.conf
       - ../settings_local.conf:/app/settings_local.conf
@@ -312,7 +339,7 @@ services:
         "--host",
         "teranode1",
         "--stopHeight",
-        "120",
+        "1000",
         "--generate",
         "--initialBlocks",
         "100",
@@ -335,7 +362,7 @@ services:
     environment:
       SETTINGS_CONTEXT: "docker.teranode1.test.coinbase"
       profilerAddr: "localhost:17092"
-      COINBASE_RPC_URL: "http://teranode1:9292"
+      coinbase_rpc_url: "http://teranode1:9292"
       COINBASE_RPC_USER: "bitcoin"
       COINBASE_RPC_PASS: "bitcoin"
       COINBASE_DB_URL: "postgres://coinbase1:coinbase1@postgres:5432/coinbase1"
@@ -370,7 +397,7 @@ services:
         "--host",
         "teranode2",
         "--stopHeight",
-        "120",
+        "1000",
         "--generate",
         "--initialBlocks",
         "100",
@@ -378,6 +405,8 @@ services:
     restart: no
 
   coinbase2:
+    # profiles:
+    #   - skip
     <<: *teranode-coinbase-base
     container_name: coinbase2
     depends_on:
@@ -421,7 +450,7 @@ services:
         "--host",
         "teranode3",
         "--stopHeight",
-        "120",
+        "1000",
         "--generate",
         "--initialBlocks",
         "100",
@@ -430,6 +459,8 @@ services:
 
   coinbase3:
     <<: *teranode-coinbase-base
+    # profiles:
+    #   - skip
     container_name: coinbase3
     depends_on:
       - teranode3
@@ -488,6 +519,8 @@ services:
 
   tx-blaster-2:
     <<: *teranode-coinbase-base
+    # profiles:
+    #   - skip
     container_name: tx-blaster-2
     depends_on:
       - coinbase2
@@ -513,6 +546,8 @@ services:
       - ../data/txblaster2:/app/data
 
   tx-blaster-3:
+    # profiles:
+    #   - skip
     <<: *teranode-coinbase-base
     container_name: tx-blaster-3
     depends_on:

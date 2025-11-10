@@ -1715,6 +1715,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		require.NoError(t, err)
 
 		blockchainClient := &blockchain.Mock{}
+		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 
 		stp, err := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
@@ -2849,13 +2850,13 @@ func TestRemoveCoinbaseUtxosChildrenRemoval(t *testing.T) {
 		require.NoError(t, err)
 
 		// Establish parent-child relationships by spending
-		spends, err := utxoStore.Spend(ctx, childTx, utxo.IgnoreFlags{})
+		spends, err := utxoStore.Spend(ctx, childTx, 2, utxo.IgnoreFlags{})
 		assert.NoError(t, err)
 		for _, spend := range spends {
 			assert.NoError(t, spend.Err)
 		}
 
-		spends, err = utxoStore.Spend(ctx, grandchildTx, utxo.IgnoreFlags{})
+		spends, err = utxoStore.Spend(ctx, grandchildTx, 2, utxo.IgnoreFlags{})
 		assert.NoError(t, err)
 		for _, spend := range spends {
 			assert.NoError(t, spend.Err)

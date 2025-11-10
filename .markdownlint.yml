@@ -13,6 +13,9 @@ MD004:
 MD007:
   indent: 4  # 4 spaces for nested list items (exactly what we fixed!)
 
+MD029:
+  style: "ordered"  # Enforce sequential numbering (1/2/3, not 1/1/1)
+
 MD030:
   ul_single: 1  # 1 space after list marker for single-line items
   ol_single: 1  # 1 space after list marker for single-line items
@@ -34,3 +37,7 @@ MD012: true
 
 # Hard tabs
 MD010: true
+
+# Allow fenced code blocks (preferred for syntax highlighting)
+MD046:
+  style: "fenced"

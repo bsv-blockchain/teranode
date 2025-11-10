@@ -1,6 +1,6 @@
 x-teranode-base:
   &teranode-base
-  image: ghcr.io/bsv-blockchain/teranode:v0.10.8
+  image: ghcr.io/bsv-blockchain/teranode:v0.11.13
   networks:
     - teranode-network
   volumes:

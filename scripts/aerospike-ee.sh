@@ -1,16 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
 
-#!/bin/bash
+# Source common helper functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/docker-service-helper.sh"
 
-# Use DATADIR environment variable if set, otherwise default to ./data
-DATADIR="${DATADIR:-./data}"
+# Initialize and create aerospike data directory
+docker_service_init "aerospike"
 
-mkdir -p ${DATADIR}/aerospike
-
-DATA_PATH=$(realpath $DATADIR)
-export DATA_PATH
-
-cd deploy/docker/aerospike || exit
-docker compose -f docker-compose-ee.yml up -d
-
-echo "Aerospike enterprise edition evaluation mode started with persistent data in '${DATA_PATH}/aerospike"
-echo "Connect with aerospike://localhost:3000"
+# Run docker compose with custom compose file and service-specific info
+docker_service_run "${1:-up}" "deploy/docker/aerospike" "Aerospike enterprise edition (evaluation mode)" "docker-compose-ee.yml" \
+    "Persistent data: ${DATA_PATH}/aerospike" \
+    "Connect with: aerospike://localhost:3000"

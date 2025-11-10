@@ -6,8 +6,6 @@
   - [propagation\_api.proto](#propagation_apiproto)
     - [EmptyMessage](#emptymessage)
     - [BatchTransactionItem](#batchtransactionitem)
-    - [GetRequest](#getrequest)
-    - [GetResponse](#getresponse)
     - [HealthResponse](#healthresponse)
     - [ProcessTransactionBatchRequest](#processtransactionbatchrequest)
     - [ProcessTransactionBatchResponse](#processtransactionbatchresponse)
@@ -43,45 +41,13 @@ swagger:model EmptyMessage
 ### BatchTransactionItem
 Represents a single transaction item in a batch request with trace context support.
 
+swagger:model BatchTransactionItem
+
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | tx | [bytes](#bytes) |  | Raw transaction bytes to process |
 | trace_context | map<string, string> |  | Serialized OpenTelemetry trace context as key-value pairs for proper span propagation |
-
-
-
-
-<a name="GetRequest"></a>
-
-### GetRequest
-Represents a request to retrieve a transaction by its ID.
-
-swagger:model GetRequest
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| txid | [bytes](#bytes) |  | Transaction ID in bytes |
-
-
-
-
-
-
-<a name="GetResponse"></a>
-
-### GetResponse
-Contains the retrieved transaction data.
-
-swagger:model GetResponse
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| tx | [bytes](#bytes) |  | Raw transaction bytes |
-
-
 
 
 

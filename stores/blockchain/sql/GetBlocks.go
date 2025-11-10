@@ -13,8 +13,8 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -47,6 +47,18 @@ import (
 func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numberOfHeaders uint32) ([]*model.Block, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlocks")
 	defer deferFn()
+
+	// Try to get from response cache
+	// Use a derived cache key to avoid conflicts with other cached data
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlocks-%s-%d", blockHashFrom.String(), numberOfHeaders)))
+
+	cacheOp := s.responseCache.Begin(cacheID)
+	cached := cacheOp.Get()
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().([]*model.Block); ok {
+			return cacheData, nil
+		}
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -100,73 +112,13 @@ func (s *SQL) GetBlocks(ctx context.Context, blockHashFrom *chainhash.Hash, numb
 
 	defer rows.Close()
 
-	var (
-		subtreeCount     uint64
-		transactionCount uint64
-		sizeInBytes      uint64
-		subtreeBytes     []byte
-		hashPrevBlock    []byte
-		hashMerkleRoot   []byte
-		coinbaseTx       []byte
-		height           uint32
-		nBits            []byte
-	)
-
-	for rows.Next() {
-		block := &model.Block{
-			Header: &model.BlockHeader{},
-		}
-
-		if err = rows.Scan(
-			&block.ID,
-			&block.Header.Version,
-			&block.Header.Timestamp,
-			&nBits,
-			&block.Header.Nonce,
-			&hashPrevBlock,
-			&hashMerkleRoot,
-			&transactionCount,
-			&sizeInBytes,
-			&coinbaseTx,
-			&subtreeCount,
-			&subtreeBytes,
-			&height,
-		); err != nil {
-			return nil, errors.NewStorageError("failed to scan row", err)
-		}
-
-		bits, _ := model.NewNBitFromSlice(nBits)
-		block.Header.Bits = *bits
-
-		block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
-		if err != nil {
-			return nil, errors.NewStorageError("failed to convert hashPrevBlock", err)
-		}
-
-		block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
-		if err != nil {
-			return nil, errors.NewStorageError("failed to convert hashMerkleRoot", err)
-		}
-
-		block.TransactionCount = transactionCount
-		block.SizeInBytes = sizeInBytes
-
-		if len(coinbaseTx) > 0 {
-			block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
-			if err != nil {
-				return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
-			}
-		}
-
-		err = block.SubTreesFromBytes(subtreeBytes)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to convert subtrees", err)
-		}
-
-		block.Height = height
-
-		blocks = append(blocks, block)
+	blocks, err = s.processFullBlockRows(rows)
+	if err != nil {
+		return nil, err
 	}
+
+	// Cache the blocks result
+	cacheOp.Set(blocks, s.cacheTTL)
 
 	return blocks, nil
 }

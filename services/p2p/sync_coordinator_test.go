@@ -20,7 +20,7 @@ func TestSyncCoordinator_NewSyncCoordinator(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -52,7 +52,7 @@ func TestSyncCoordinator_SetGetLocalHeightCallback(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -88,7 +88,7 @@ func TestSyncCoordinator_StartAndStop(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -125,7 +125,7 @@ func TestSyncCoordinator_GetCurrentSyncPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -161,7 +161,7 @@ func TestSyncCoordinator_ClearSyncPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -196,7 +196,7 @@ func TestSyncCoordinator_TriggerSync(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -238,7 +238,7 @@ func TestSyncCoordinator_TriggerSync_NoPeersAvailable(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -272,7 +272,7 @@ func TestSyncCoordinator_HandlePeerDisconnected(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -316,7 +316,7 @@ func TestSyncCoordinator_HandlePeerDisconnected_NotSyncPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -360,7 +360,7 @@ func TestSyncCoordinator_HandleCatchupFailure(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -406,7 +406,7 @@ func TestSyncCoordinator_selectNewSyncPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -454,7 +454,7 @@ func TestSyncCoordinator_selectNewSyncPeer_ForcedPeer(t *testing.T) {
 	settings.P2P.ForceSyncPeer = "forced-peer"
 
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -499,7 +499,7 @@ func TestSyncCoordinator_UpdatePeerInfo(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -535,7 +535,7 @@ func TestSyncCoordinator_UpdateBanStatus(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -580,7 +580,7 @@ func TestSyncCoordinator_checkURLResponsiveness(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -620,7 +620,7 @@ func TestSyncCoordinator_checkAndUpdateURLResponsiveness(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -642,14 +642,17 @@ func TestSyncCoordinator_checkAndUpdateURLResponsiveness(t *testing.T) {
 		{
 			ID:         peer.ID("peer1"),
 			DataHubURL: successServer.URL,
+			Storage:    "full",
 		},
 		{
 			ID:         peer.ID("peer2"),
 			DataHubURL: "http://localhost:99999",
+			Storage:    "full",
 		},
 		{
 			ID:         peer.ID("peer3"),
 			DataHubURL: "",
+			Storage:    "full",
 		},
 	}
 
@@ -679,7 +682,7 @@ func TestSyncCoordinator_checkFSMState(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -728,7 +731,7 @@ func TestSyncCoordinator_evaluateSyncPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -786,7 +789,7 @@ func TestSyncCoordinator_evaluateSyncPeer_StuckAtHeight(t *testing.T) {
 	defer blockchainSetup.Cleanup()
 
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 
@@ -847,7 +850,7 @@ func TestSyncCoordinator_LogPeerList(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -874,12 +877,14 @@ func TestSyncCoordinator_LogPeerList(t *testing.T) {
 			DataHubURL: "http://example1.com",
 			Height:     100,
 			BanScore:   5,
+			Storage:    "full",
 		},
 		{
 			ID:         peer.ID("peer2"),
 			DataHubURL: "http://example2.com",
 			Height:     200,
 			BanScore:   10,
+			Storage:    "full",
 		},
 	}
 
@@ -891,7 +896,7 @@ func TestSyncCoordinator_LogCandidateList(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -918,12 +923,14 @@ func TestSyncCoordinator_LogCandidateList(t *testing.T) {
 			DataHubURL: "http://candidate1.com",
 			Height:     150,
 			BanScore:   3,
+			Storage:    "full",
 		},
 		{
 			ID:         peer.ID("candidate2"),
 			DataHubURL: "http://candidate2.com",
 			Height:     250,
 			BanScore:   7,
+			Storage:    "full",
 		},
 	}
 
@@ -935,7 +942,7 @@ func TestSyncCoordinator_CheckURLResponsiveness(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -979,7 +986,7 @@ func TestSyncCoordinator_CheckAndUpdateURLResponsiveness(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1051,7 +1058,7 @@ func TestSyncCoordinator_EvaluateSyncPeer_Coverage(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1166,7 +1173,7 @@ func TestSyncCoordinator_IsCaughtUp(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1214,7 +1221,7 @@ func TestSyncCoordinator_SendSyncTriggerToKafka(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1268,7 +1275,7 @@ func TestSyncCoordinator_SendSyncMessage(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1328,7 +1335,7 @@ func TestSyncCoordinator_MonitorFSM(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1419,7 +1426,7 @@ func TestSyncCoordinator_MonitorFSM_AdaptiveIntervals(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1488,7 +1495,7 @@ func TestSyncCoordinator_HandleFSMTransition_Simplified(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1564,7 +1571,7 @@ func TestSyncCoordinator_FilterEligiblePeers(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1585,11 +1592,11 @@ func TestSyncCoordinator_FilterEligiblePeers(t *testing.T) {
 	localHeight := int32(100)
 
 	peers := []*PeerInfo{
-		{ID: oldPeer, Height: 110},          // Old peer, should be skipped
-		{ID: peer.ID("peer1"), Height: 90},  // Below local height, should be skipped
-		{ID: peer.ID("peer2"), Height: 100}, // At local height, should be skipped
-		{ID: peer.ID("peer3"), Height: 120}, // Above local height, should be included
-		{ID: peer.ID("peer4"), Height: 115}, // Above local height, should be included
+		{ID: oldPeer, Height: 110, Storage: "full"},          // Old peer, should be skipped
+		{ID: peer.ID("peer1"), Height: 90, Storage: "full"},  // Below local height, should be skipped
+		{ID: peer.ID("peer2"), Height: 100, Storage: "full"}, // At local height, should be skipped
+		{ID: peer.ID("peer3"), Height: 120, Storage: "full"}, // Above local height, should be included
+		{ID: peer.ID("peer4"), Height: 115, Storage: "full"}, // Above local height, should be included
 	}
 
 	eligible := sc.filterEligiblePeers(peers, oldPeer, localHeight)
@@ -1603,7 +1610,7 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1625,8 +1632,8 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 1: Old peer is ahead of local height (should log that it's being skipped)
 	peers1 := []*PeerInfo{
-		{ID: oldPeer, Height: 110},          // Old peer ahead - should be skipped with logging
-		{ID: peer.ID("peer1"), Height: 120}, // New peer ahead - should be included
+		{ID: oldPeer, Height: 110, Storage: "full"},          // Old peer ahead - should be skipped with logging
+		{ID: peer.ID("peer1"), Height: 120, Storage: "full"}, // New peer ahead - should be included
 	}
 
 	eligible1 := sc.filterEligiblePeers(peers1, oldPeer, localHeight)
@@ -1635,8 +1642,8 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 2: Peer at same height as local (not old peer) - should be skipped but not logged
 	peers2 := []*PeerInfo{
-		{ID: peer.ID("peer2"), Height: 100}, // At local height, not old peer - skipped without special logging
-		{ID: peer.ID("peer3"), Height: 110}, // Above local height - included
+		{ID: peer.ID("peer2"), Height: 100, Storage: "full"}, // At local height, not old peer - skipped without special logging
+		{ID: peer.ID("peer3"), Height: 110, Storage: "full"}, // Above local height - included
 	}
 
 	eligible2 := sc.filterEligiblePeers(peers2, oldPeer, localHeight)
@@ -1645,8 +1652,8 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 3: Old peer behind local height - should be skipped
 	peers3 := []*PeerInfo{
-		{ID: oldPeer, Height: 90},           // Old peer behind - should be skipped
-		{ID: peer.ID("peer4"), Height: 105}, // New peer ahead - should be included
+		{ID: oldPeer, Height: 90, Storage: "full"},           // Old peer behind - should be skipped
+		{ID: peer.ID("peer4"), Height: 105, Storage: "full"}, // New peer ahead - should be included
 	}
 
 	eligible3 := sc.filterEligiblePeers(peers3, oldPeer, localHeight)
@@ -1655,11 +1662,11 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 4: Mix of peers to test all branches
 	peers4 := []*PeerInfo{
-		{ID: oldPeer, Height: 110},          // Old peer ahead - skipped with logging
-		{ID: peer.ID("peer5"), Height: 95},  // Below local - skipped
-		{ID: peer.ID("peer6"), Height: 100}, // At local - skipped
-		{ID: peer.ID("peer7"), Height: 115}, // Above local - included
-		{ID: peer.ID("peer8"), Height: 120}, // Above local - included
+		{ID: oldPeer, Height: 110, Storage: "full"},          // Old peer ahead - skipped with logging
+		{ID: peer.ID("peer5"), Height: 95, Storage: "full"},  // Below local - skipped
+		{ID: peer.ID("peer6"), Height: 100, Storage: "full"}, // At local - skipped
+		{ID: peer.ID("peer7"), Height: 115, Storage: "full"}, // Above local - included
+		{ID: peer.ID("peer8"), Height: 120, Storage: "full"}, // Above local - included
 	}
 
 	eligible4 := sc.filterEligiblePeers(peers4, oldPeer, localHeight)
@@ -1672,7 +1679,7 @@ func TestSyncCoordinator_SelectAndActivateNewPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1731,7 +1738,7 @@ func TestSyncCoordinator_UpdateBanStatus_SyncPeerBanned(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1802,7 +1809,7 @@ func TestSyncCoordinator_TriggerSync_SendMessageError(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1839,7 +1846,7 @@ func TestSyncCoordinator_HandleCatchupFailure_NoNewPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)
@@ -1877,7 +1884,7 @@ func TestSyncCoordinator_PeriodicEvaluation(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
+	selector := NewPeerSelector(logger, nil)
 	healthChecker := NewPeerHealthChecker(logger, registry, settings)
 	banManager := NewPeerBanManager(context.Background(), nil, settings)
 	blockchainSetup := SetupTestBlockchain(t)

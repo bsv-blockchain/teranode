@@ -17,6 +17,8 @@ package blockpersister
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockpersister/state"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -329,6 +332,34 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		}()
 	}
 
+	// STARTUP COORDINATION: Publish last persisted height for cleanup coordination
+	//
+	// PROBLEM: BlockAssembler's cleanup service may start before block persister and begin
+	// deleting transactions. Without knowing how far block persister has progressed, cleanup
+	// could delete transactions that block persister still needs to create .subtree_data files.
+	//
+	// SOLUTION: Publish our last persisted height to blockchain state on startup. BlockAssembler
+	// reads this state during its startup initialization, ensuring it knows the persisted height
+	// before cleanup runs for the first time.
+	//
+	// This prevents the startup race condition where:
+	//   1. BlockAssembler starts and begins cleanup
+	//   2. Block persister starts later
+	//   3. Cleanup deletes transactions before first BlockPersisted notification arrives
+	//
+	// By publishing state on startup, BlockAssembler can initialize immediately from this state.
+	// During runtime, BlockPersisted notifications keep the height current.
+	if lastHeight, err := u.state.GetLastPersistedBlockHeight(); err == nil && lastHeight > 0 {
+		if u.blockchainClient != nil {
+			heightBytes := binary.LittleEndian.AppendUint32(nil, lastHeight)
+			if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
+				u.logger.Warnf("[BlockPersister] Failed to publish initial state: %v", err)
+			} else {
+				u.logger.Infof("[BlockPersister] Published initial state: height %d", lastHeight)
+			}
+		}
+	}
+
 	// Start the processing loop in a goroutine
 	go func() {
 		for {
@@ -383,6 +414,40 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 					time.Sleep(time.Minute)
 
 					continue
+				}
+
+				// RUNTIME COORDINATION: Notify subscribers that block has been persisted
+				//
+				// After successfully creating .subtree_data file, notify BlockAssembler of our progress.
+				// BlockAssembler's cleanup service uses this to track how far we've progressed and
+				// ensure it doesn't delete transactions we still need.
+				//
+				// This notification includes the block height in metadata. BlockAssembler's notification
+				// handler updates its lastPersistedHeight, which cleanup queries via GetLastPersistedHeight()
+				// to calculate safe deletion bounds: min(requested_height, persisted_height + retention)
+				//
+				// See BlockAssembler.startChannelListeners for the notification handler.
+				if u.blockchainClient != nil {
+					notification := &blockchain_api.Notification{
+						Type: model.NotificationType_BlockPersisted,
+						Hash: block.Hash().CloneBytes(),
+						Metadata: &blockchain_api.NotificationMetadata{
+							Metadata: map[string]string{
+								"height": fmt.Sprintf("%d", block.Height),
+							},
+						},
+					}
+					if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
+						u.logger.Warnf("[BlockPersister] Failed to send persisted notification for block %s at height %d: %v",
+							block.Hash().String(), block.Height, err)
+					}
+
+					// Update BlockPersisterHeight state for P2P storage mode determination
+					heightBytes := binary.LittleEndian.AppendUint32(nil, block.Height)
+					if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
+						u.logger.Warnf("[BlockPersister] Failed to update BlockPersisterHeight state for block %s at height %d: %v",
+							block.Hash().String(), block.Height, err)
+					}
 				}
 
 				u.logger.Infof("Successfully processed block %s", block.Hash())

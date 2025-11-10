@@ -281,7 +281,7 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 
 	if errs != nil || nrErrors > 0 {
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
-		return nil, errors.NewError("aerospike batchRecord errors", errs)
+		return blockIDs, errors.NewError("aerospike batchRecord errors", errs)
 	}
 
 	// Execute aggregated follow-ups in batches

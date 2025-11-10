@@ -33,6 +33,7 @@ import (
 
 // TestBlockHandlerWithMaliciousPeer tests that blocks from malicious peers are still queued
 func TestBlockHandlerWithMaliciousPeer(t *testing.T) {
+	initPrometheusMetrics()
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
@@ -114,6 +115,7 @@ func TestBlockHandlerWithMaliciousPeer(t *testing.T) {
 
 // TestKafkaConsumerMessageHandling tests the full Kafka message processing flow
 func TestKafkaConsumerMessageHandling(t *testing.T) {
+	initPrometheusMetrics()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -281,6 +283,7 @@ func TestKafkaConsumerMessageHandling(t *testing.T) {
 
 // TestMaliciousPeerFailover tests failover when primary peer is malicious
 func TestMaliciousPeerFailover(t *testing.T) {
+	initPrometheusMetrics()
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
@@ -369,6 +372,7 @@ func TestMaliciousPeerFailover(t *testing.T) {
 
 // TestPeerReputationTracking tests peer reputation and failure tracking
 func TestPeerReputationTracking(t *testing.T) {
+	initPrometheusMetrics()
 	metrics := &catchup.CatchupMetrics{
 		PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
 	}
@@ -399,6 +403,7 @@ func TestPeerReputationTracking(t *testing.T) {
 
 // TestBlockFoundChannelErrorHandling tests error channel handling in blockFound processing
 func TestBlockFoundChannelErrorHandling(t *testing.T) {
+	initPrometheusMetrics()
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)

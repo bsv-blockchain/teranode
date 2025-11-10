@@ -12,6 +12,7 @@ service BlockValidationAPI {
   rpc BlockFound (BlockFoundRequest) returns (EmptyMessage) {}
   rpc ProcessBlock (ProcessBlockRequest) returns (EmptyMessage) {}
   rpc ValidateBlock (ValidateBlockRequest) returns (ValidateBlockResponse) {}
+  rpc RevalidateBlock (RevalidateBlockRequest) returns (EmptyMessage) {}
 }
 
 // swagger:model EmptyMessage
@@ -51,4 +52,9 @@ message ValidateBlockRequest {
 message ValidateBlockResponse {
   bool ok = 1;
   string message = 2;
+}
+
+// swagger:model RevalidateBlockRequest
+message RevalidateBlockRequest {
+  bytes hash = 1;
 }
