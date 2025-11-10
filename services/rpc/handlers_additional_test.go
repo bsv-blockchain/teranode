@@ -1270,6 +1270,22 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return blockHeader, bestBlockMeta, nil
 			},
+			getBlockHeadersFunc: func(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+				// Return dummy headers for median time calculation
+				headers := make([]*model.BlockHeader, 11)
+				dummyHash := chainhash.Hash{}
+				for i := range headers {
+					headers[i] = &model.BlockHeader{
+						Version:        1,
+						HashPrevBlock:  &dummyHash,
+						HashMerkleRoot: &dummyHash,
+						Timestamp:      uint32(1231006505 + i*600),
+						Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+						Nonce:          12345,
+					}
+				}
+				return headers, nil, nil
+			},
 			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
 				return nil, errors.ErrBlockNotFound
 			},
@@ -1297,7 +1313,7 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseResult)
 		assert.True(t, ok)
 		assert.NotNil(t, blockResult)
 		assert.Equal(t, int64(-1), blockResult.Confirmations, "orphan block should have -1 confirmations")
@@ -1332,6 +1348,22 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return blockHeader, bestBlockMeta, nil
 			},
+			getBlockHeadersFunc: func(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+				// Return dummy headers for median time calculation
+				headers := make([]*model.BlockHeader, 11)
+				dummyHash := chainhash.Hash{}
+				for i := range headers {
+					headers[i] = &model.BlockHeader{
+						Version:        1,
+						HashPrevBlock:  &dummyHash,
+						HashMerkleRoot: &dummyHash,
+						Timestamp:      uint32(1231006505 + i*600),
+						Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+						Nonce:          12345,
+					}
+				}
+				return headers, nil, nil
+			},
 			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
 				return nil, errors.ErrBlockNotFound
 			},
@@ -1359,7 +1391,7 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseResult)
 		assert.True(t, ok)
 		assert.NotNil(t, blockResult)
 		assert.Equal(t, int64(11), blockResult.Confirmations)
@@ -1566,6 +1598,22 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return blockHeader, blockHeaderMeta, nil
 			},
+			getBlockHeadersFunc: func(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+				// Return dummy headers for median time calculation
+				headers := make([]*model.BlockHeader, 11)
+				dummyHash := chainhash.Hash{}
+				for i := range headers {
+					headers[i] = &model.BlockHeader{
+						Version:        1,
+						HashPrevBlock:  &dummyHash,
+						HashMerkleRoot: &dummyHash,
+						Timestamp:      uint32(1231006505 + i*600), // Roughly 10 min apart
+						Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+						Nonce:          12345,
+					}
+				}
+				return headers, nil, nil
+			},
 			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return blockHeader, &model.BlockHeaderMeta{Height: 100100}, nil
 			},
@@ -1695,6 +1743,22 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return blockHeader, blockHeaderMeta, nil
 			},
+			getBlockHeadersFunc: func(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+				// Return dummy headers for median time calculation
+				headers := make([]*model.BlockHeader, 11)
+				dummyHash := chainhash.Hash{}
+				for i := range headers {
+					headers[i] = &model.BlockHeader{
+						Version:        1,
+						HashPrevBlock:  &dummyHash,
+						HashMerkleRoot: &dummyHash,
+						Timestamp:      uint32(1231006505 + i*600), // Roughly 10 min apart
+						Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+						Nonce:          12345,
+					}
+				}
+				return headers, nil, nil
+			},
 			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
 				return true, nil
 			},
@@ -1749,6 +1813,25 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 		mockClient := &mockBlockchainClient{
 			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 				return blockHeader, blockHeaderMeta, nil
+			},
+			getBlockHeadersFunc: func(ctx context.Context, hash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+				// Return dummy headers for median time calculation
+				headers := make([]*model.BlockHeader, 11)
+				dummyHash := chainhash.Hash{}
+				for i := range headers {
+					headers[i] = &model.BlockHeader{
+						Version:        1,
+						HashPrevBlock:  &dummyHash,
+						HashMerkleRoot: &dummyHash,
+						Timestamp:      uint32(1231006505 + i*600), // Roughly 10 min apart
+						Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+						Nonce:          12345,
+					}
+				}
+				return headers, nil, nil
+			},
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, &model.BlockHeaderMeta{Height: 100100}, nil
 			},
 			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
 				return false, nil
@@ -4088,6 +4171,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 					ClientCallTimeout: 5 * time.Second,
 					CacheEnabled:      false,
 				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
+				},
 			},
 		}
 
@@ -4131,6 +4220,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 					ClientCallTimeout: 5 * time.Second,
 					CacheEnabled:      false, // Disable cache
 				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
+				},
 			},
 		}
 
@@ -4162,6 +4257,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
 				},
 			},
 		}
@@ -4212,6 +4313,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
 				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
+				},
 			},
 		}
 
@@ -4258,6 +4365,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
 				},
 			},
 		}
@@ -4312,6 +4425,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 100 * time.Millisecond, // Very short timeout
 				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
+				},
 			},
 		}
 
@@ -4355,6 +4474,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				ChainCfgParams: &stnParams,
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
 				},
 			},
 		}
@@ -6037,8 +6162,32 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 			},
 		}
 
+		// Create mock blockchain client to support the new behavior
+		mockBlockchainClient := &mockBlockchainClient{
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil
+			},
+			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
+				// Create properly initialized block header with required fields
+				prevHash := chainhash.Hash{}
+				merkleRoot := chainhash.Hash{}
+				return &model.Block{
+					Header: &model.BlockHeader{
+						Version:        1,
+						HashPrevBlock:  &prevHash,
+						HashMerkleRoot: &merkleRoot,
+						Timestamp:      1234567890,
+						Bits:           model.NBit([4]byte{0x1d, 0x00, 0xff, 0xff}),
+						Nonce:          0,
+					},
+					Height: height,
+				}, nil
+			},
+		}
+
 		s := &RPCServer{
 			logger:              logger,
+			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams, // Use MainNet but set GenerateSupported = true
@@ -6055,7 +6204,11 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 
 		result, err := handleGenerateToAddress(context.Background(), s, cmd, nil)
 		require.NoError(t, err)
-		assert.Nil(t, result) // Function returns nil on success
+
+		// Function now returns block hashes array
+		blockHashes, ok := result.([]string)
+		assert.True(t, ok)
+		assert.Len(t, blockHashes, 5) // Should return 5 block hashes
 
 		// Verify the request was passed correctly to block assembly client
 		require.NotNil(t, capturedRequest)
@@ -6198,8 +6351,16 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 			},
 		}
 
+		// Create mock blockchain client
+		mockBlockchainClient := &mockBlockchainClient{
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100, ChainWork: []byte{0x01, 0x00}}, nil
+			},
+		}
+
 		s := &RPCServer{
 			logger:              logger,
+			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
@@ -6251,8 +6412,31 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 			},
 		}
 
+		// Create mock blockchain client
+		mockBlockchainClient := &mockBlockchainClient{
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100, ChainWork: []byte{0x01, 0x00}}, nil
+			},
+			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
+				prevHash := chainhash.Hash{}
+				merkleRoot := chainhash.Hash{}
+				return &model.Block{
+					Header: &model.BlockHeader{
+						Version:        1,
+						HashPrevBlock:  &prevHash,
+						HashMerkleRoot: &merkleRoot,
+						Timestamp:      1234567890,
+						Bits:           model.NBit([4]byte{0x1d, 0x00, 0xff, 0xff}),
+						Nonce:          0,
+					},
+					Height: height,
+				}, nil
+			},
+		}
+
 		s := &RPCServer{
 			logger:              logger,
+			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
@@ -6268,7 +6452,7 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 
 		result, err := handleGenerateToAddress(context.Background(), s, cmd, nil)
 		require.NoError(t, err)
-		assert.Nil(t, result)
+		assert.NotNil(t, result)
 
 		// Verify MaxTries is 0 when nil
 		require.NotNil(t, capturedRequest)
@@ -6285,8 +6469,31 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 			},
 		}
 
+		// Create mock blockchain client
+		mockBlockchainClient := &mockBlockchainClient{
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100, ChainWork: []byte{0x01, 0x00}}, nil
+			},
+			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
+				prevHash := chainhash.Hash{}
+				merkleRoot := chainhash.Hash{}
+				return &model.Block{
+					Header: &model.BlockHeader{
+						Version:        1,
+						HashPrevBlock:  &prevHash,
+						HashMerkleRoot: &merkleRoot,
+						Timestamp:      1234567890,
+						Bits:           model.NBit([4]byte{0x1d, 0x00, 0xff, 0xff}),
+						Nonce:          0,
+					},
+					Height: height,
+				}, nil
+			},
+		}
+
 		s := &RPCServer{
 			logger:              logger,
+			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
@@ -6303,7 +6510,7 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 
 		result, err := handleGenerateToAddress(context.Background(), s, cmd, nil)
 		require.NoError(t, err)
-		assert.Nil(t, result)
+		assert.NotNil(t, result)
 
 		// Verify large values are handled correctly
 		require.NotNil(t, capturedRequest)
