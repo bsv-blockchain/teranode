@@ -5533,8 +5533,6 @@
 <ul>
 <li><a href="#teranode-microservices-overview">Teranode Microservices Overview</a><ul>
 <li><a href="#index">Index</a></li>
-</ul>
-</li>
 <li><a href="#1-introduction">1. Introduction</a></li>
 <li><a href="#2-core-services">2. Core Services</a><ul>
 <li><a href="#21-asset-server">2.1 Asset Server</a></li>
@@ -5568,8 +5566,19 @@
 <li><a href="#6-interaction-patterns">6. Interaction Patterns</a></li>
 <li><a href="#7-related-resources">7. Related Resources</a></li>
 </ul>
+</li>
+</ul>
 <h2 id="1-introduction">1. Introduction</h2>
-<p>Teranode is designed as a collection of microservices that work together to provide a scalable and efficient blockchain network. This document provides an overview of each microservice, its responsibilities, and how it interacts with other components in the system.</p>
+<p>Teranode is designed as a collection of microservices that work together to provide a horizontally scalable and highly efficient blockchain network. The microservices architecture enables Teranode to achieve exceptional throughput exceeding 1 million transactions per second by distributing processing across multiple machines and allowing individual services to scale independently based on demand.</p>
+<p>This architectural approach provides several key advantages:</p>
+<ul>
+<li><strong>Horizontal Scalability</strong>: Services can be deployed across multiple machines, enabling the system to handle increasing transaction volumes by adding more compute resources</li>
+<li><strong>Independent Scaling</strong>: Each service can be scaled independently based on its specific resource requirements and bottlenecks</li>
+<li><strong>Distributed Processing</strong>: Work is distributed across specialized services that communicate asynchronously through Kafka and synchronously via gRPC</li>
+<li><strong>Fault Isolation</strong>: Issues in one service are contained and don't cascade to affect the entire system</li>
+<li><strong>Technology Flexibility</strong>: Each service can use the most appropriate technology stack and storage backend for its specific requirements</li>
+</ul>
+<p>This document provides an overview of each microservice, its responsibilities, and how it interacts with other components in the system.</p>
 <h2 id="2-core-services">2. Core Services</h2>
 <h3 id="21-asset-server">2.1 Asset Server</h3>
 <p>The Asset Server acts as an interface to various data stores, handling transactions, subtrees, blocks, and UTXOs. It uses the HTTP protocol for communication.</p>
@@ -5603,31 +5612,31 @@
 <li>GetBlock() and GetLastNBlocks()</li>
 <li>GetUTXO() and GetUTXOsByTXID()</li>
 </ul>
-<p>You can read more about this service <a href="../../services/assetServer/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/assetServer/">Asset Server documentation</a>.</p>
 <h3 id="22-propagation-service">2.2 Propagation Service</h3>
 <p>The Propagation Service is responsible for receiving and forwarding transactions across the network.</p>
 <p><strong>Key Responsibilities:</strong></p>
 <ul>
-<li>Receive transactions from the network through multiple communication channels (gRPC, UDP over IPv6 and HTTP)</li>
+<li>Receive transactions from the network through multiple communication channels (gRPC and HTTP)</li>
 <li>Perform initial sanity checks on transactions</li>
-<li>Forward valid transactions to the TX Validator Service</li>
+<li>Forward valid transactions to the Validator Service</li>
 </ul>
 <p><strong>Key Interactions:</strong></p>
 <p><img alt="Propagation_Service_Container_Diagram.png" src="../../services/img/Propagation_Service_Container_Diagram.png" /></p>
 <ul>
-<li>Receives transactions from other nodes via IPv6 multicast, gRPC or HTTP</li>
-<li>Forwards transactions to the TX Validator Service</li>
+<li>Receives transactions from other nodes via gRPC or HTTP</li>
+<li>Forwards transactions to the Validator Service</li>
 </ul>
 <p><img alt="Propagation_Service_Component_Diagram.png" src="../../services/img/Propagation_Service_Component_Diagram.png" /></p>
 <p><strong>Technology Stack:</strong></p>
 <ul>
 <li>Go programming language</li>
-<li>UDP and HTTP for network communication</li>
+<li>HTTP for network communication</li>
 <li>gRPC and Protocol Buffers for service communication</li>
 </ul>
-<p>You can read more about this service <a href="../../services/propagation/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/propagation/">Propagation Service documentation</a>.</p>
 <h3 id="23-validator-service">2.3 Validator Service</h3>
-<p>The TX Validator Service checks transactions against network rules and updates their status in the UTXO store.</p>
+<p>The Validator Service checks transactions against network rules and updates their status in the UTXO store.</p>
 <p><strong>Key Responsibilities:</strong></p>
 <p><img alt="Tx_Validator_Service_Container_Diagram.png" src="../../services/img/Tx_Validator_Service_Container_Diagram.png" /></p>
 <ul>
@@ -5655,7 +5664,7 @@
 <li>Kafka for message queuing (optional)</li>
 <li>BSV libraries for transaction validation</li>
 </ul>
-<p>You can read more about this service <a href="../../services/validator/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/validator/">Validator Service documentation</a>.</p>
 <h3 id="24-subtree-validation-service">2.4 Subtree Validation Service</h3>
 <p>This service validates newly received subtrees, adds metadata, and persists them in the Subtree Store.</p>
 <p><img alt="Subtree_Validation_Service_Container_Diagram.png" src="../../services/img/Subtree_Validation_Service_Container_Diagram.png" /></p>
@@ -5672,7 +5681,7 @@
 <li>UTXO validation for transactions within subtrees</li>
 <li>Handling unvalidated transactions within subtrees</li>
 </ul>
-<p>You can read more about this service <a href="../../services/subtreeValidation/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/subtreeValidation/">Subtree Validation Service documentation</a>.</p>
 <h3 id="25-block-validation-service">2.5 Block Validation Service</h3>
 <p>The Block Validation Service processes new blocks, checking their validity before they are added to the blockchain.</p>
 <p><img alt="Block_Validation_Service_Container_Diagram.png" src="../../services/img/Block_Validation_Service_Container_Diagram.png" /></p>
@@ -5697,7 +5706,7 @@
 <li>Extended Transactions</li>
 <li>UTXOs</li>
 </ul>
-<p>You can read more about this service <a href="../../services/blockValidation/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/blockValidation/">Block Validation Service documentation</a>.</p>
 <h3 id="26-block-assembly-service">2.6 Block Assembly Service</h3>
 <p>This service is responsible for creating subtrees and assembling block templates for miners.</p>
 <p><strong>Key Responsibilities:</strong></p>
@@ -5711,7 +5720,7 @@
 <p><img alt="Block_Assembly_Service_Component_Diagram.png" src="../../services/img/Block_Assembly_Service_Component_Diagram.png" /></p>
 <p><strong>Key Processes:</strong></p>
 <ul>
-<li>Receiving transactions from the TX Validator Service</li>
+<li>Receiving transactions from the Validator Service</li>
 <li>Grouping transactions into subtrees</li>
 <li>Creating mining candidates</li>
 <li>Processing subtrees and blocks from other nodes</li>
@@ -5723,9 +5732,9 @@
 <li>Subtrees</li>
 <li>UTXOs</li>
 </ul>
-<p>You can read more about this service <a href="../../services/blockAssembly/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/blockAssembly/">Block Assembly Service documentation</a>.</p>
 <h3 id="27-blockchain-service">2.7 Blockchain Service</h3>
-<p>The Blockchain Service manages block updates and maintains the node's copy of the blockchain.</p>
+<p>The Blockchain Service manages block updates and maintains the node's copy of the blockchain through a Finite State Machine (FSM) that coordinates blockchain state transitions.</p>
 <p><img alt="Blockchain_Service_Container_Diagram.png" src="../../services/img/Blockchain_Service_Container_Diagram.png" /></p>
 <p><strong>Key Responsibilities:</strong></p>
 <ul>
@@ -5746,7 +5755,7 @@
 <ul>
 <li>Blocks (including block header, coinbase TX, and block merkle root)</li>
 </ul>
-<p>You can read more about this service <a href="../../services/blockchain/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/blockchain/">Blockchain Service documentation</a>.</p>
 <h3 id="28-alert-service">2.8 Alert Service</h3>
 <p>The Alert Service handles system-wide alerts and notifications, including UTXO freezing and block invalidation.</p>
 <p><img alt="Alert_Service_Container_Diagram.png" src="../../services/img/Alert_Service_Container_Diagram.png" /></p>
@@ -5766,7 +5775,7 @@
 <li>Block invalidation</li>
 <li>Peer management</li>
 </ul>
-<p>You can read more about this service <a href="../../services/alert/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/alert/">Alert Service documentation</a>.</p>
 <h2 id="3-overlay-services">3. Overlay Services</h2>
 <h3 id="31-block-persister-service">3.1 Block Persister Service</h3>
 <p>This service post-processes blocks, adding transaction metadata and storing them as files.</p>
@@ -5790,7 +5799,7 @@
 <li>Subtrees</li>
 <li>UTXOs (additions and deletions)</li>
 </ul>
-<p>You can read more about this service <a href="../../services/blockPersister/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/blockPersister/">Block Persister Service documentation</a>.</p>
 <h3 id="32-utxo-persister-service">3.2 UTXO Persister Service</h3>
 <p>The UTXO Persister maintains an up-to-date record of all unspent transaction outputs.</p>
 <p><strong>Key Responsibilities:</strong></p>
@@ -5818,7 +5827,7 @@
 <li>Blob store for file storage</li>
 <li>Bitcoin SV libraries for blockchain operations</li>
 </ul>
-<p>You can read more about this service <a href="../../services/utxoPersister/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/utxoPersister/">UTXO Persister Service documentation</a>.</p>
 <h3 id="33-p2p-service">3.3 P2P Service</h3>
 <p>The P2P Service manages peer-to-peer communications within the network.</p>
 <p><img alt="P2P_System_Container_Diagram.png" src="../../services/img/P2P_System_Container_Diagram.png" /></p>
@@ -5838,7 +5847,7 @@
 <li>Processing TX validator messages</li>
 <li>Managing WebSocket notifications</li>
 </ul>
-<p>You can read more about this service <a href="../../services/p2p/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/p2p/">P2P Service documentation</a>.</p>
 <h3 id="34-legacy-service">3.4 Legacy Service</h3>
 <p>The Legacy Service facilitates communication between Teranode and traditional Bitcoin SV nodes.</p>
 <p><img alt="P2P_Legacy_Container_Diagram.png" src="../../services/img/Legacy_Container_Diagram.png" /></p>
@@ -5854,7 +5863,7 @@
 <li>Processing new blocks and converting them to Teranode format</li>
 <li>Handling requests from Teranode components for legacy data</li>
 </ul>
-<p>You can read more about this service <a href="../../services/legacy/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/legacy/">Legacy Service documentation</a>.</p>
 <h3 id="35-rpc-service">3.5 RPC Service</h3>
 <p>The RPC Service provides compatibility with the Bitcoin RPC interface, allowing clients to interact with the Teranode node using standard Bitcoin RPC commands.</p>
 <p><img alt="RPC_Component_Context_Diagram.png" src="../../services/img/RPC_Component_Context_Diagram.png" /></p>
@@ -5882,7 +5891,7 @@
 <li>HTTP/HTTPS for RPC communication</li>
 <li>JSON for request/response formatting</li>
 </ul>
-<p>You can read more about this service <a href="../../services/rpc/">here</a>.</p>
+<p>You can read more about this service in the <a href="../../services/rpc/">RPC Service documentation</a>.</p>
 <h2 id="4-stores">4. Stores</h2>
 <h3 id="41-tx-and-subtree-store-blob-server">4.1 TX and Subtree Store (Blob Server)</h3>
 <p>The Blob Server is a generic datastore used for storing transactions (extended tx) and subtrees.</p>
@@ -5914,7 +5923,7 @@
 <li>Extended Transaction Data Model</li>
 <li>Subtree Data Model</li>
 </ul>
-<p>You can read more about this store <a href="../../stores/blob/">here</a>.</p>
+<p>You can read more about this store in the <a href="../../stores/blob/">Blob Store documentation</a>.</p>
 <h3 id="42-utxo-store">4.2 UTXO Store</h3>
 <p>The UTXO Store is responsible for tracking spendable UTXOs based on the longest honest chain-tip in the network.</p>
 <p><img alt="UTXO_Store_Container_Context_Diagram.png" src="../../services/img/UTXO_Store_Container_Context_Diagram.png" /></p>
@@ -5945,7 +5954,7 @@
 <ul>
 <li>UTXO Meta Data, including transaction details, parent transaction hashes, block IDs, fees, and other metadata</li>
 </ul>
-<p>You can read more about this store <a href="../../stores/utxo/">here</a>.</p>
+<p>You can read more about this store in the <a href="../../stores/utxo/">UTXO Store documentation</a>.</p>
 <h2 id="5-other-components">5. Other Components</h2>
 <h3 id="51-kafka-message-broker">5.1 Kafka Message Broker</h3>
 <p>Kafka serves as the messaging middleware for inter-service communication in Teranode.</p>
@@ -5971,7 +5980,7 @@
 <li>Provides fault-tolerance and durability</li>
 <li>Allows for scalable message consumption</li>
 </ul>
-<p>You can read more about how Kafka is used <a href="../../kafka/kafka/">here</a>.</p>
+<p>You can read more about how Kafka is used in the <a href="../../kafka/kafka/">Kafka usage documentation</a>.</p>
 <h3 id="52-miners">5.2 Miners</h3>
 <p>Miners are responsible for the computational work of finding valid blocks.</p>
 <p><strong>Key Responsibilities:</strong></p>
@@ -5980,21 +5989,30 @@
 <li>Broadcast newly found blocks</li>
 </ul>
 <h2 id="6-interaction-patterns">6. Interaction Patterns</h2>
+<p>The Teranode microservices communicate through a combination of synchronous gRPC calls and asynchronous Kafka message streams, creating an event-driven architecture that enables high throughput and loose coupling between components.</p>
+<p><strong>Transaction Processing Flow:</strong></p>
 <ul>
-<li>Propagation Service receives transactions and forwards them to TX Validator via Kafka</li>
-<li>TX Validator validates transactions, updates UTXO Store, and forwards to Block Assembly and Subtree Validation via Kafka</li>
-<li>Block Assembly receives validated transactions from TX Validator via Kafka</li>
-<li>Subtree Validation Service validates subtrees and interacts with TX Validator for missing transactions</li>
-<li>Block Validation Service coordinates with Subtree Validation Service for block processing</li>
-<li>P2P Service propagates new blocks and subtrees to Block Validation and Subtree Validation via Kafka</li>
-<li>Blockchain Service sends finalized blocks to Block Persister via Kafka</li>
-<li>UTXO Store interacts with multiple services for UTXO management and validation</li>
+<li>Propagation Service receives incoming transactions from the network through multiple channels (gRPC, HTTP) and publishes them to Kafka for processing</li>
+<li>Validator Service consumes transaction messages from Kafka, validates them against Bitcoin consensus rules and network policies, updates the UTXO Store with transaction metadata, and publishes validated transaction IDs to Kafka</li>
+<li>Block Assembly Service consumes validated transaction IDs from Kafka and organizes them into subtrees for efficient block construction and mining</li>
+<li>Subtree Validation Service validates newly received subtrees and coordinates with the Validator Service for any missing transaction data</li>
+</ul>
+<p><strong>Block Processing Flow:</strong></p>
+<ul>
+<li>P2P Service receives new blocks and subtrees from peer nodes and propagates them via Kafka to the Block Validation and Subtree Validation services</li>
+<li>Block Validation Service coordinates with the Subtree Validation Service to verify all subtrees within a block, ensuring data integrity before acceptance</li>
+<li>Blockchain Service maintains the blockchain state machine, managing block additions, chain reorganizations, and finality determinations</li>
+<li>When a block is finalized, Blockchain Service publishes it via Kafka to the Block Persister Service for long-term storage</li>
+</ul>
+<p><strong>Data Access Patterns:</strong></p>
+<ul>
+<li>Asset Server provides a unified HTTP/WebSocket interface for querying blockchain data, acting as a facade over the UTXO Store, Blob Store, and Blockchain Store</li>
+<li>UTXO Store serves as a central state management component, interacting with multiple services (Validator, Block Assembly, Block Validation) for UTXO operations and double-spend prevention</li>
+<li>Blob Store provides persistent storage for transactions and subtrees, accessed by Asset Server, Block Assembly, and Block Validation services</li>
 </ul>
 <h2 id="7-related-resources">7. Related Resources</h2>
 <ul>
-<li>
-<p><a href="../teranode-overall-system-design/">Teranode Architecture Overview</a></p>
-</li>
+<li><a href="../teranode-overall-system-design/">Teranode Architecture Overview</a></li>
 <li>
 <p>Core Services:</p>
 <ul>
@@ -6006,33 +6024,29 @@
 <li><a href="../../services/blockAssembly/">Block Assembly Service</a></li>
 <li><a href="../../services/blockchain/">Blockchain Service</a></li>
 <li><a href="../../services/alert/">Alert Service</a></li>
-</ul>
-</li>
 <li>
 <p>Overlay Services:</p>
-<ul>
-<li><a href="../../services/blockPersister/">Block Persister Service</a></li>
+</li>
+<li>
+<p><a href="../../services/blockPersister/">Block Persister Service</a></p>
+</li>
 <li><a href="../../services/utxoPersister/">UTXO Persister Service</a></li>
-<li>
-<p><a href="../../services/p2p/">P2P Service</a></p>
-</li>
-<li>
-<p><a href="../../services/legacy/">Legacy Service</a></p>
-</li>
+<li><a href="../../services/p2p/">P2P Service</a></li>
+<li><a href="../../services/legacy/">Legacy Service</a></li>
 <li><a href="../../services/rpc/">RPC Server</a></li>
-</ul>
-</li>
 <li>
 <p>Stores:</p>
-<ul>
-<li><a href="../../stores/blob/">Blob Server</a></li>
-<li><a href="../../stores/utxo/">UTXO Store</a></li>
-</ul>
 </li>
 <li>
+<p><a href="../../stores/blob/">Blob Server</a></p>
+</li>
+<li><a href="../../stores/utxo/">UTXO Store</a></li>
+<li>
 <p>Messaging:</p>
-<ul>
-<li><a href="../../kafka/kafka/">Kafka</a></li>
+</li>
+<li>
+<p><a href="../../kafka/kafka/">Kafka</a></p>
+</li>
 </ul>
 </li>
 </ul>
