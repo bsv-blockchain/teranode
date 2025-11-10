@@ -281,6 +281,7 @@ type BlockValidationSettings struct {
 	CheckSubtreeFromBlockRetryBackoffDuration time.Duration
 	SecretMiningThreshold                     uint32
 	PreviousBlockHeaderCount                  uint64
+	MaxBlocksBehindBlockAssembly              int
 	// Catchup configuration
 	CatchupMaxRetries            int // Maximum number of retries for catchup operations
 	CatchupIterationTimeout      int // Timeout in seconds for each catchup iteration

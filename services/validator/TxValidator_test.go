@@ -614,6 +614,38 @@ func Test_MinFeePolicy(t *testing.T) {
 	}
 }
 
+func TestCheckP2SHOutput(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams.RequireStandard = true
+
+	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+
+	// See https://github.com/bitcoin-sv/teranode/issues/4333
+	txP2SH, err := bt.NewTxFromString("020000000000000000ef01e0d8bc7aae870d67eaf3021492735637ddae403feb7914fb739a53872a82d301000000006a473044022041215b9ac965ce93684340d86d74df5ccf2d0910f36173a9d691e8405b37fd400220300ab0376d9d75542eaaffb4fe1eead267f0ac537ae13a4349506274978066f7412103afe4a8eb7f3f69757235bb8db804a01156af9d1cace07af534ca9be7f4928a5effffffffacc88203000000001976a9140533653ad7e12be8ee8151bc586f04bf859ae4d788ac0267307e03000000001976a9140533653ad7e12be8ee8151bc586f04bf859ae4d788ace09304000000000017a914496164f9f2e373628c5cc0a5895d995aaf3bec658700000000")
+	require.NoError(t, err)
+
+	// At Genesis activation height, p2sh should not be rejected
+	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight, nil, &Options{})
+	require.NoError(t, err)
+
+	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight, &Options{})
+	require.NoError(t, err)
+
+	// After Genesis activation height, p2sh should be rejected
+	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, nil, &Options{})
+	require.Error(t, err)
+
+	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, &Options{})
+	require.Error(t, err)
+
+	// After Genesis activation height, with skip policy check, p2sh should be accepted
+	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, nil, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+
+	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+}
+
 func TestCheckFees(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 

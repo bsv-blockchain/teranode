@@ -272,16 +272,16 @@ func TestPopulateVersionInfoComponents(t *testing.T) {
 		assert.True(t, len(commit) > 0, "Commit should not be empty")
 
 		// Version should be in one of two formats:
-		// 1. vX.Y.Z (if git tag exists)
+		// 1. vX.Y.Z (if git tag exists) - can include suffixes like v1.2.3-beta
 		// 2. v0.0.0-TIMESTAMP-COMMIT (if no git tag)
-		if !strings.Contains(version, "-") {
-			// Should be a simple version tag like v1.2.3
-			assert.Regexp(t, `^v\d+\.\d+\.\d+`, version, "Version should match vX.Y.Z format")
-		} else {
-			// Should be timestamp-based format
+		if strings.HasPrefix(version, "v0.0.0-") {
+			// Timestamp-based format (no git tag)
 			parts := strings.Split(version, "-")
-			assert.True(t, len(parts) >= 2, "Timestamp-based version should have at least 2 parts")
+			assert.True(t, len(parts) >= 3, "Timestamp-based version should have format v0.0.0-TIMESTAMP-COMMIT")
 			assert.Equal(t, "v0.0.0", parts[0], "Timestamp-based version should start with v0.0.0")
+		} else {
+			// Tag-based format (can have any format, but typically vX.Y.Z with optional suffix)
+			assert.Regexp(t, `^v\d+\.\d+\.\d+`, version, "Version should match vX.Y.Z format")
 		}
 	})
 
@@ -323,14 +323,16 @@ func TestPopulateVersionInfoComponents(t *testing.T) {
 					parsedTime, err := time.Parse("20060102150405", timestampStr)
 					if err == nil {
 						// If we can parse it as a timestamp, verify it's reasonable
-						// (Could be git timestamp or current time)
-						// Allow for timezone differences and some timing flexibility
+						// Git timestamps can be arbitrarily old, so we just check:
+						// 1. Not before project start (2020)
+						// 2. Not more than 1 hour in the future (allowing for clock skew)
 						now := time.Now().UTC()
-						timeDiff := parsedTime.Sub(now)
-						assert.True(t, timeDiff < 25*time.Hour && timeDiff > -25*time.Hour,
-							"Timestamp should be within 25 hours of current time (git timestamp: %v, current: %v, diff: %v)",
-							parsedTime, now, timeDiff)
-						t.Logf("Parsed timestamp: %v (current: %v, diff: %v)", parsedTime, now, timeDiff)
+						projectStart := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+						assert.True(t, parsedTime.After(projectStart),
+							"Timestamp should be after project start date (got: %v)", parsedTime)
+						assert.True(t, parsedTime.Before(now.Add(1*time.Hour)),
+							"Timestamp should not be more than 1 hour in the future (got: %v, now: %v)", parsedTime, now)
+						t.Logf("Parsed timestamp: %v", parsedTime)
 					}
 				}
 			}
@@ -368,7 +370,7 @@ func TestPopulateVersionInfoEdgeCases(t *testing.T) {
 		assert.NotEmpty(t, commit, "Commit populated")
 
 		// The version format tells us which code path was taken
-		if strings.Contains(version, "-") {
+		if strings.HasPrefix(version, "v0.0.0-") {
 			t.Logf("Timestamp-based version generated: %s", version)
 			parts := strings.Split(version, "-")
 			if len(parts) >= 3 {
