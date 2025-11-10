@@ -5615,11 +5615,11 @@
 </ul>
 </li>
 <li><a href="#3-chain-reorganization-handling">Chain Reorganization Handling</a><ul>
-<li><a href="#phase-1-mark-original-as-conflicting">Phase 1: Mark Original as Conflicting</a></li>
-<li><a href="#phase-2-unspend-original">Phase 2: Unspend Original</a></li>
-<li><a href="#phase-3-process-double-spend">Phase 3: Process Double Spend</a></li>
-<li><a href="#phase-4-update-double-spend-status">Phase 4: Update Double Spend Status</a></li>
-<li><a href="#phase-5-cleanup">Phase 5: Cleanup</a></li>
+<li><a href="#phase-1-mark-original-as-conflicting">3.1 Phase 1: Mark Original as Conflicting</a></li>
+<li><a href="#phase-2-unspend-original">3.2 Phase 2: Unspend Original</a></li>
+<li><a href="#phase-3-process-double-spend">3.3 Phase 3: Process Double Spend</a></li>
+<li><a href="#phase-4-update-double-spend-status">3.4 Phase 4: Update Double Spend Status</a></li>
+<li><a href="#phase-5-cleanup">3.5 Phase 5: Cleanup</a></li>
 </ul>
 </li>
 <li><a href="#4-other-resources">Other Resources</a></li>
@@ -5687,7 +5687,7 @@
 <p><strong>Processing Phases</strong>:</p>
 <ul>
 <li>Detection during transaction validation (double spends outright rejected)</li>
-<li>Special handling during block processing (third party blocks with conflicting transactions are processed, and the conflicting transactions stored and marked as such)</li>
+<li>Special handling during block processing (blocks from other nodes with conflicting transactions are processed, and the conflicting transactions stored and marked as such)</li>
 <li>Chain reorganization handling - should a reorganization occur, conflicting transactions are reprocessed, with the original ones now marked as "conflicting"</li>
 <li>
 <p>Five-phase commit process for resolving conflicts:</p>
@@ -5756,7 +5756,7 @@ In this scenario, Teranode understands that the conflicting transaction has been
 <ul>
 <li>All transactions that spend outputs from a conflicting transaction are also marked as conflicting</li>
 <li>This creates a chain of conflicts that must be tracked</li>
-<li>The conflict status is stored in the first "common" parent (the first parent transaction that is not conflicting) using the <code>conflictingChildren</code> field</li>
+<li>The conflict status is stored in the first non-conflicting parent transaction using the <code>conflictingChildren</code> field</li>
 </ul>
 </li>
 <li>
@@ -5879,7 +5879,7 @@ In this scenario, Teranode understands that the conflicting transaction has been
 <p>During chain reorganization, when a block containing a double spend becomes part of the longest chain, Teranode must transition the UTXO set from the original transaction to the double spend (the "conflicting" transaction).</p>
 <p>This is handled through a <strong>five-phase commit process</strong>:</p>
 <p><img alt="double_spend_five_phase_commit_process.svg" src="../img/plantuml/double_spend_five_phase_commit_process.svg" /></p>
-<h4 id="phase-1-mark-original-as-conflicting">Phase 1: Mark Original as Conflicting</h4>
+<h3 id="phase-1-mark-original-as-conflicting">Phase 1: Mark Original as Conflicting</h3>
 <ul>
 <li>The original transaction and all its children are marked as conflicting. This is done recursively through the transaction chain, ensuring all dependent transactions are properly marked.</li>
 </ul>
@@ -5896,11 +5896,11 @@ In this scenario, Teranode understands that the conflicting transaction has been
     - Adds transaction hashes to `ConflictingNodes[]` array
     - Persists updated subtree
 </code></pre></div>
-<h4 id="phase-2-unspend-original">Phase 2: Unspend Original</h4>
+<h3 id="phase-2-unspend-original">Phase 2: Unspend Original</h3>
 <ul>
 <li>The original transaction is unspent, releasing its parent UTXOs</li>
 <li>All child transactions are also unspent</li>
-<li>Parent UTXOs are marked as "not spendable" to prevent other transactions from spending them during the reorganization process (this is a temporariry measure, remove the last step of the process)</li>
+<li>Parent UTXOs are marked as "not spendable" to prevent other transactions from spending them during the reorganization process (this is a temporary measure, removed in the last step of the process)</li>
 </ul>
 <div class="highlight"><pre><span></span><code>Technical changes:
 
@@ -5911,7 +5911,7 @@ In this scenario, Teranode understands that the conflicting transaction has been
     - Removes spend markers from tx_original&#39;s outputs
     - Maintains conflict flags and TTLs
 </code></pre></div>
-<h4 id="phase-3-process-double-spend">Phase 3: Process Double Spend</h4>
+<h3 id="phase-3-process-double-spend">Phase 3: Process Double Spend</h3>
 <ul>
 <li>The double spend transaction is processed, spending its inputs even though some UTXOs are marked as not spendable. This is allowed specifically for this phase of the reorg process.</li>
 </ul>
@@ -5924,7 +5924,7 @@ In this scenario, Teranode understands that the conflicting transaction has been
     - Ignores `locked` flag during spend
     - No TTL set on double spend transaction
 </code></pre></div>
-<h4 id="phase-4-update-double-spend-status">Phase 4: Update Double Spend Status</h4>
+<h3 id="phase-4-update-double-spend-status">Phase 4: Update Double Spend Status</h3>
 <ul>
 <li>The double spend transaction is marked as non-conflicting, establishing it as the valid transaction in the new chain.</li>
 </ul>
@@ -5938,7 +5938,7 @@ In this scenario, Teranode understands that the conflicting transaction has been
 
     - Removes hash from `ConflictingNodes[]` if present
 </code></pre></div>
-<h4 id="phase-5-cleanup">Phase 5: Cleanup</h4>
+<h3 id="phase-5-cleanup">Phase 5: Cleanup</h3>
 <ul>
 <li>Parent UTXOs are made "spendable" again, removing the temporary restriction.</li>
 </ul>

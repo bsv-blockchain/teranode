@@ -5492,7 +5492,7 @@ When a block is found, its validation is expedited due to the continuous process
 <tr>
 <td><strong>SubTrees</strong></td>
 <td>Not used.</td>
-<td>A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots.  </br></br> Each subtree contains 1 million transactions. Subtrees are broadcast every second. </br></br>Broadcast frequently for faster and continuous data propagation.</td>
+<td>A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots.  <br/><br/> Each subtree contains 1 million transactions. Subtrees are broadcast every second. <br/><br/>Broadcast frequently for faster and continuous data propagation.</td>
 </tr>
 <tr>
 <td><strong>Blocks</strong></td>
@@ -5507,7 +5507,7 @@ When a block is found, its validation is expedited due to the continuous process
 <tr>
 <td><strong>Processed Transactions per second</strong></td>
 <td>3.3 to 7 transactions per second.</td>
-<td>Guaranteees a minimum of <strong>1 million transactions per second</strong> (100,000 x faster than BTC).</td>
+<td>Guarantees a minimum of <strong>1 million transactions per second</strong> (100,000 x faster than BTC).</td>
 </tr>
 <tr>
 <td><strong>Scalability Approach</strong></td>
@@ -5542,18 +5542,14 @@ When a block is found, its validation is expedited due to the continuous process
 <li>P2P Service</li>
 <li>P2P Bootstrap Service</li>
 <li>Legacy Service</li>
+<li>RPC Service</li>
 </ul>
 </li>
 <li>
 <p>Stores:</p>
 <ul>
-<li>
-<p>Stores:</p>
-<ul>
-<li>TX and Subtree Store]</li>
+<li>TX and Subtree Store</li>
 <li>UTXO Store</li>
-</ul>
-</li>
 </ul>
 </li>
 <li>
@@ -5601,7 +5597,7 @@ When a block is found, its validation is expedited due to the continuous process
 <td><strong>SubTrees</strong></td>
 <td>Not used.</td>
 <td>Not used. Traditional block propagation.</td>
-<td>A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots. </br></br> Each subtree contains 1 million transactions. Subtrees are broadcast every second. </br></br>Broadcast frequently for faster and continuous data propagation.</td>
+<td>A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots. <br/><br/> Each subtree contains 1 million transactions. Subtrees are broadcast every second. <br/><br/>Broadcast frequently for faster and continuous data propagation.</td>
 </tr>
 <tr>
 <td><strong>Blocks</strong></td>
@@ -5619,7 +5615,7 @@ When a block is found, its validation is expedited due to the continuous process
 <td><strong>Processed Transactions per second</strong></td>
 <td>3.3 to 7 transactions per second.</td>
 <td>Up to several thousand transactions per second.</td>
-<td>Guaranteees a minimum of <strong>1 million transactions per second</strong> (100,000 x faster than BTC).</td>
+<td>Guarantees a minimum of <strong>1 million transactions per second</strong> (100,000 x faster than BTC).</td>
 </tr>
 <tr>
 <td><strong>Mempool</strong></td>
@@ -5639,10 +5635,10 @@ When a block is found, its validation is expedited due to the continuous process
 <h2 id="5-node-workflow">5. Node Workflow</h2>
 <ol>
 <li><strong>Transaction Submission</strong>: Transactions are received by all nodes via a broadcast service.</li>
-<li><strong>Transaction Validation</strong>: The TX Validator Service checks each transaction against network rules.</li>
-<li><strong>Subtree Assembly</strong>: The Block Assembly Service organizes transactions into subtrees.</li>
-<li><strong>Subtree Validation</strong>: The Block Validation Service validates received subtrees.</li>
-<li><strong>Block Assembly</strong>: The Block Assembly Service compiles block templates consisting of subtrees.</li>
+<li><strong>Transaction Validation</strong>: The Validator Service checks each transaction against network rules.</li>
+<li><strong>Subtree Assembly</strong>: The Block Assembly Service organizes validated transactions into subtrees.</li>
+<li><strong>Subtree Validation</strong>: The Subtree Validation Service validates received subtrees.</li>
+<li><strong>Block Assembly</strong>: The Block Assembly Service compiles block templates consisting of validated subtrees.</li>
 <li><strong>Block Validation</strong>: When a valid block is found, it's sent to the Block Validation Service for final checks before being appended to the blockchain.</li>
 </ol>
 <p><img alt="ValidationSequenceDiagram.svg" src="../img/ValidationSequenceDiagram.svg" /></p>
