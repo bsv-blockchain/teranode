@@ -372,6 +372,51 @@ func (x *ValidateBlockResponse) GetMessage() string {
 	return ""
 }
 
+// swagger:model RevalidateBlockRequest
+type RevalidateBlockRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Hash          []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RevalidateBlockRequest) Reset() {
+	*x = RevalidateBlockRequest{}
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevalidateBlockRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevalidateBlockRequest) ProtoMessage() {}
+
+func (x *RevalidateBlockRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevalidateBlockRequest.ProtoReflect.Descriptor instead.
+func (*RevalidateBlockRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RevalidateBlockRequest) GetHash() []byte {
+	if x != nil {
+		return x.Hash
+	}
+	return nil
+}
+
 var File_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto protoreflect.FileDescriptor
 
 const file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDesc = "" +
@@ -398,14 +443,17 @@ const file_services_blockvalidation_blockvalidation_api_blockvalidation_api_prot
 	"\x0fis_revalidation\x18\x03 \x01(\bR\x0eisRevalidation\"A\n" +
 	"\x15ValidateBlockResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage2\x90\x03\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\",\n" +
+	"\x16RevalidateBlockRequest\x12\x12\n" +
+	"\x04hash\x18\x01 \x01(\fR\x04hash2\xf5\x03\n" +
 	"\x12BlockValidationAPI\x12V\n" +
 	"\n" +
 	"HealthGRPC\x12!.blockvalidation_api.EmptyMessage\x1a#.blockvalidation_api.HealthResponse\"\x00\x12Y\n" +
 	"\n" +
 	"BlockFound\x12&.blockvalidation_api.BlockFoundRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12]\n" +
 	"\fProcessBlock\x12(.blockvalidation_api.ProcessBlockRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12h\n" +
-	"\rValidateBlock\x12).blockvalidation_api.ValidateBlockRequest\x1a*.blockvalidation_api.ValidateBlockResponse\"\x00B\x18Z\x16./;blockvalidation_apib\x06proto3"
+	"\rValidateBlock\x12).blockvalidation_api.ValidateBlockRequest\x1a*.blockvalidation_api.ValidateBlockResponse\"\x00\x12c\n" +
+	"\x0fRevalidateBlock\x12+.blockvalidation_api.RevalidateBlockRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00B\x18Z\x16./;blockvalidation_apib\x06proto3"
 
 var (
 	file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescOnce sync.Once
@@ -419,28 +467,31 @@ func file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto
 	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescData
 }
 
-var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_goTypes = []any{
-	(*EmptyMessage)(nil),          // 0: blockvalidation_api.EmptyMessage
-	(*HealthResponse)(nil),        // 1: blockvalidation_api.HealthResponse
-	(*BlockFoundRequest)(nil),     // 2: blockvalidation_api.BlockFoundRequest
-	(*ProcessBlockRequest)(nil),   // 3: blockvalidation_api.ProcessBlockRequest
-	(*ValidateBlockRequest)(nil),  // 4: blockvalidation_api.ValidateBlockRequest
-	(*ValidateBlockResponse)(nil), // 5: blockvalidation_api.ValidateBlockResponse
-	(*timestamppb.Timestamp)(nil), // 6: google.protobuf.Timestamp
+	(*EmptyMessage)(nil),           // 0: blockvalidation_api.EmptyMessage
+	(*HealthResponse)(nil),         // 1: blockvalidation_api.HealthResponse
+	(*BlockFoundRequest)(nil),      // 2: blockvalidation_api.BlockFoundRequest
+	(*ProcessBlockRequest)(nil),    // 3: blockvalidation_api.ProcessBlockRequest
+	(*ValidateBlockRequest)(nil),   // 4: blockvalidation_api.ValidateBlockRequest
+	(*ValidateBlockResponse)(nil),  // 5: blockvalidation_api.ValidateBlockResponse
+	(*RevalidateBlockRequest)(nil), // 6: blockvalidation_api.RevalidateBlockRequest
+	(*timestamppb.Timestamp)(nil),  // 7: google.protobuf.Timestamp
 }
 var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_depIdxs = []int32{
-	6, // 0: blockvalidation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	7, // 0: blockvalidation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
 	0, // 1: blockvalidation_api.BlockValidationAPI.HealthGRPC:input_type -> blockvalidation_api.EmptyMessage
 	2, // 2: blockvalidation_api.BlockValidationAPI.BlockFound:input_type -> blockvalidation_api.BlockFoundRequest
 	3, // 3: blockvalidation_api.BlockValidationAPI.ProcessBlock:input_type -> blockvalidation_api.ProcessBlockRequest
 	4, // 4: blockvalidation_api.BlockValidationAPI.ValidateBlock:input_type -> blockvalidation_api.ValidateBlockRequest
-	1, // 5: blockvalidation_api.BlockValidationAPI.HealthGRPC:output_type -> blockvalidation_api.HealthResponse
-	0, // 6: blockvalidation_api.BlockValidationAPI.BlockFound:output_type -> blockvalidation_api.EmptyMessage
-	0, // 7: blockvalidation_api.BlockValidationAPI.ProcessBlock:output_type -> blockvalidation_api.EmptyMessage
-	5, // 8: blockvalidation_api.BlockValidationAPI.ValidateBlock:output_type -> blockvalidation_api.ValidateBlockResponse
-	5, // [5:9] is the sub-list for method output_type
-	1, // [1:5] is the sub-list for method input_type
+	6, // 5: blockvalidation_api.BlockValidationAPI.RevalidateBlock:input_type -> blockvalidation_api.RevalidateBlockRequest
+	1, // 6: blockvalidation_api.BlockValidationAPI.HealthGRPC:output_type -> blockvalidation_api.HealthResponse
+	0, // 7: blockvalidation_api.BlockValidationAPI.BlockFound:output_type -> blockvalidation_api.EmptyMessage
+	0, // 8: blockvalidation_api.BlockValidationAPI.ProcessBlock:output_type -> blockvalidation_api.EmptyMessage
+	5, // 9: blockvalidation_api.BlockValidationAPI.ValidateBlock:output_type -> blockvalidation_api.ValidateBlockResponse
+	0, // 10: blockvalidation_api.BlockValidationAPI.RevalidateBlock:output_type -> blockvalidation_api.EmptyMessage
+	6, // [6:11] is the sub-list for method output_type
+	1, // [1:6] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name
 	1, // [1:1] is the sub-list for extension extendee
 	0, // [0:1] is the sub-list for field type_name
@@ -457,7 +508,7 @@ func file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDesc), len(file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

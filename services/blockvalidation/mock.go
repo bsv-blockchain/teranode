@@ -51,6 +51,11 @@ func (m *Mock) ValidateBlock(ctx context.Context, block *model.Block, options *V
 	return args.Error(0)
 }
 
+func (m *Mock) RevalidateBlock(ctx context.Context, blockHash chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
 // mockKafkaConsumer implements kafka.KafkaConsumerGroupI for testing
 type mockKafkaConsumer struct {
 	mock.Mock

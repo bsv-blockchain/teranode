@@ -761,7 +761,9 @@ func (s *Store) setPreserveUntilForExternalFile(ctx context.Context, key []byte,
 	// Create .preserveUntil file with the preserveUntilHeight value
 	preserveUntilData := []byte(fmt.Sprintf("%d", preserveUntilHeight))
 
-	if err := s.externalStore.Set(ctx, key, fileformat.FileTypePreserveUntil, preserveUntilData, options.WithSkipHeader(true)); err != nil {
+	if err := s.externalStore.Set(ctx, key, fileformat.FileTypePreserveUntil, preserveUntilData,
+		options.WithSkipHeader(true),
+		options.WithAllowOverwrite(true)); err != nil {
 		return errors.NewStorageError("failed to create .preserveUntil file", err)
 	}
 
