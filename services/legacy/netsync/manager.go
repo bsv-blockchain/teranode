@@ -649,16 +649,21 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	validNetworkSpeed := sm.syncPeerState.validNetworkSpeed(sm.minSyncPeerNetworkSpeed)
 	lastBlockSince := time.Since(sm.syncPeerState.getLastBlockTime())
 
-	sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v)", sm.syncPeer.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime)
+	sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v), headers-first mode: %v", sm.syncPeer.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime, sm.headersFirstMode)
+
+	// Don't check network speed during headers-first mode, as we're intentionally
+	// downloading small headers (80 bytes each) rather than full blocks. The peer
+	// may appear slow because we're not requesting much data, not because it's actually slow.
+	isNetworkSpeedViolation := !sm.headersFirstMode && (validNetworkSpeed >= maxNetworkViolations)
 
 	// Check network speed of the sync peer and its last block time. If we're currently
 	// flushing the cache skip this round.
-	if (validNetworkSpeed < maxNetworkViolations) && (lastBlockSince <= maxLastBlockTime) {
+	if !isNetworkSpeedViolation && (lastBlockSince <= maxLastBlockTime) {
 		return
 	}
 
 	var reason string
-	if validNetworkSpeed >= maxNetworkViolations {
+	if isNetworkSpeedViolation {
 		reason = "network speed violation"
 	} else if lastBlockSince > maxLastBlockTime {
 		reason = "last block time out of range"
@@ -1129,8 +1134,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			// TODO TEMPORARY: we should not panic here, but return the error
 			panic(err)
 		}
-	} else {
-		sm.logger.Infof("accepted block %v", bmsg.blockHash)
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
@@ -1176,6 +1179,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			heightUpdate = blockHeightInt32
 		}
 	}
+
+	sm.logger.Infof("accepted block %v at height %d", bmsg.blockHash, heightUpdate)
 
 	// Clear the rejected transactions.
 	sm.rejectedTxns.Clear()

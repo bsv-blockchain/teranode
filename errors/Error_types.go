@@ -196,6 +196,11 @@ func NewTxLockedError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_LOCKED, message, params...)
 }
 
+// NewTxCreatingError creates a new error with the transaction creating error code.
+func NewTxCreatingError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_CREATING, message, params...)
+}
+
 // NewTxCoinbaseImmatureError creates a new error with the transaction coinbase immature error code.
 func NewTxCoinbaseImmatureError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_COINBASE_IMMATURE, message, params...)

@@ -140,6 +140,15 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 				aggErr = errors.Join(aggErr, recErr)
 			}
 		}
+
+		response := batchRecords[i].BatchRec().Record
+		if response != nil && response.Bins != nil {
+			successMap := response.Bins[LuaSuccess.String()].(map[interface{}]interface{})
+			status, ok := successMap["status"].(string)
+			if !ok || status != "OK" {
+				aggErr = errors.Join(aggErr, errors.NewProcessingError(successMap["message"].(string)))
+			}
+		}
 	}
 
 	return aggErr
@@ -590,7 +599,7 @@ func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aer
 func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerospike.BatchRecordIfc, batchByKey []aerospike.MapValue, batch []*batchSpend, txID *chainhash.Hash, thisBlockHeight uint32, batchID uint64) {
 	batchErr := batchRecord.BatchRec().Err
 	if batchErr != nil {
-		s.handleBatchError(batchByKey, batch, txID, thisBlockHeight, batchID, batchErr)
+		s.handleBatchError(batchByKey, batch, thisBlockHeight, batchID, batchErr)
 		return
 	}
 
@@ -612,15 +621,16 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	}
 
 	// Process based on status
-	if res.Status == LuaStatusOK {
+	switch res.Status {
+	case LuaStatusOK:
 		s.handleSuccessfulSpends(batchByKey, batch)
-	} else if res.Status == LuaStatusError {
+	case LuaStatusError:
 		s.handleErrorSpends(res, batchByKey, batch, txID, thisBlockHeight, batchID)
 	}
 }
 
 // handleBatchError handles errors from batch operations
-func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batchSpend, txID *chainhash.Hash, thisBlockHeight uint32, batchID uint64, err error) {
+func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batchSpend, thisBlockHeight uint32, batchID uint64, err error) {
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
@@ -709,6 +719,8 @@ func (s *Store) createGeneralError(errorCode LuaErrorCode, txID *chainhash.Hash,
 		return errors.NewTxConflictingError("[SPEND_BATCH_LUA][%s] transaction is conflicting, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
 	case LuaErrorCodeLocked:
 		return errors.NewTxLockedError("[SPEND_BATCH_LUA][%s] transaction is locked, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
+	case LuaErrorCodeCreating:
+		return errors.NewTxCreatingError("[SPEND_BATCH_LUA][%s] transaction is creating, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
 	case LuaErrorCodeCoinbaseImmature:
 		return errors.NewTxCoinbaseImmatureError("[SPEND_BATCH_LUA][%s] coinbase is locked, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
 	case LuaErrorCodeTxNotFound:
