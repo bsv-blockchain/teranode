@@ -4379,6 +4379,52 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/settings/global_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Global Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/policy_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Policy Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/settings/kafka_settings/" class="md-nav__link">
         
   
@@ -4417,10 +4463,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_4" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_4" id="__nav_5_6_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
             
   
   
@@ -4433,8 +4479,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_4">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_6">
             <span class="md-nav__icon md-icon"></span>
             Service Settings
           </label>
@@ -4769,10 +4815,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_5" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_5" id="__nav_5_6_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
             
   
   
@@ -4785,12 +4831,35 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_5">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_7">
             <span class="md-nav__icon md-icon"></span>
             Store Settings
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/stores/aerospike_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Aerospike Store
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -5325,7 +5394,10 @@
 </ul>
 <p>The P2P Service communicates with the Block Validation over either gRPC protocols.</p>
 <p><img alt="Subtree_Validation_Service_Component_Diagram.png" src="../img/Subtree_Validation_Service_Component_Diagram.png" /></p>
-<p>The detailed component diagram below shows the internal architecture of the Subtree Validation Service with code-verified connections:</p>
+<p>The detailed component diagram below shows the internal architecture of the Subtree Validation Service:</p>
+<blockquote>
+<p><strong>Note</strong>: This diagram represents a simplified component view showing the main architectural elements. The gRPC Server routes requests to handlers (<code>subtreeHandler.go</code>, <code>txmetaHandler.go</code>) which orchestrate validation logic, file-based locking, transaction fetching via HTTP, and interactions with external services. Kafka consumers process notifications and route them to the appropriate handlers for processing.</p>
+</blockquote>
 <p><img alt="Subtree_Validation_Component" src="../img/plantuml/subtreevalidation/Subtree_Validation_Component.svg" /></p>
 <h3 id="11-validator-integration">1.1 Validator Integration</h3>
 <p>The Subtree Validation service interacts with the Validator service to validate transactions that might be missing during subtree processing. This interaction can happen in two different configurations:</p>
@@ -5456,7 +5528,7 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li><code>subtree_quorum_absolute_timeout</code>: Timeout for lock staleness (default: 30 seconds)</li>
 </ul>
 <h2 id="3-grpc-protobuf-definitions">3. gRPC Protobuf Definitions</h2>
-<p>The Subtree Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen <a href="../../../references/protobuf_docs/subtreevalidationProto/">here</a>.</p>
+<p>The Subtree Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the <a href="../../../references/protobuf_docs/subtreevalidationProto/">Subtree Validation Protobuf Reference</a>.</p>
 <h2 id="4-data-model">4. Data Model</h2>
 <ul>
 <li><a href="../../datamodel/subtree_data_model/">Subtree Data Model</a>: Contain lists of transaction IDs and their Merkle root.</li>

@@ -2781,6 +2781,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="4.1.1. Receiving Inventory Notifications">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#inv-message-queueing-and-fsm-state-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      INV Message Queueing and FSM State Management
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -4424,6 +4439,52 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/settings/global_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Global Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/policy_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Policy Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/settings/kafka_settings/" class="md-nav__link">
         
   
@@ -4462,10 +4523,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_4" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_4" id="__nav_5_6_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
             
   
   
@@ -4478,8 +4539,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_4">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_6">
             <span class="md-nav__icon md-icon"></span>
             Service Settings
           </label>
@@ -4814,10 +4875,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_5" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_5" id="__nav_5_6_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
             
   
   
@@ -4830,12 +4891,35 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_5">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_7">
             <span class="md-nav__icon md-icon"></span>
             Store Settings
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/stores/aerospike_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Aerospike Store
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -5257,6 +5341,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="4.1.1. Receiving Inventory Notifications">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#inv-message-queueing-and-fsm-state-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      INV Message Queueing and FSM State Management
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -5495,7 +5594,22 @@ The service also receives blocks from the Teranode network and converts them bac
 </ol>
 <p>In the context of the Legacy Service, the reception of inv messages is a crucial step in the communication process between BSV nodes and Teranode nodes. These messages serve as the initial trigger for data exchange, allowing the service to identify new blocks or transactions and initiate the necessary actions to retrieve and process this data.</p>
 <p><img alt="legacy_p2p_bsv_to_teranode_inv_message.svg" src="../img/plantuml/legacyp2p/legacy_p2p_bsv_to_teranode_inv_message.svg" /></p>
-<ol>
+<h5 id="inv-message-queueing-and-fsm-state-management">INV Message Queueing and FSM State Management</h5>
+<p>To prevent message loss during blockchain state transitions, the Legacy Service implements Kafka-based queueing for INV messages. This mechanism ensures reliable message delivery across FSM (Finite State Machine) state changes:</p>
+<ul>
+<li><strong>FSM-Aware Processing</strong>: The service monitors the blockchain FSM state (polled every 2 seconds) and only processes INV messages when the node is in RUNNING state</li>
+<li><strong>Automatic Queueing</strong>: When the FSM is not in RUNNING state (e.g., during initialization, synchronization, or reorganization), incoming INV messages are queued in Kafka rather than being processed immediately</li>
+<li><strong>Seamless Resumption</strong>: Once the FSM transitions to RUNNING state, the Kafka listener starts and processes queued messages in order, ensuring no inventory notifications are lost</li>
+<li><strong>State Transition Safety</strong>: This prevents race conditions where messages arrive during critical state changes, maintaining data consistency and network synchronization</li>
+</ul>
+<p>This queueing mechanism is particularly important during:</p>
+<ul>
+<li>Node startup and initial blockchain synchronization</li>
+<li>Block reorganizations</li>
+<li>Network catchup operations</li>
+<li>
+<p>FSM state transitions that temporarily suspend normal processing</p>
+</li>
 <li>
 <p><strong>Connection Establishment:</strong> The Legacy Overlay Service establishes a connection with the MainNet, setting the stage for data exchange.</p>
 </li>
@@ -5514,7 +5628,7 @@ The service also receives blocks from the Teranode network and converts them bac
 <li>For a new transaction, the MainNet responds with <code>OnTx</code>, containing the transaction data. Similarly, the Legacy Service processes and stores this information.</li>
 </ul>
 </li>
-</ol>
+</ul>
 <h4 id="412-processing-new-transactions">4.1.2. Processing New Transactions</h4>
 <p>When the Legacy Service receives a new transaction from the BSV network, it undergoes several validation and processing steps before being accepted or rejected. The validator client plays a crucial role in this process.</p>
 <p><img alt="legacy_p2p_transaction_processing.svg" src="../img/plantuml/legacyp2p/legacy_p2p_transaction_processing.svg" /></p>

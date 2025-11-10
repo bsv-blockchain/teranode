@@ -5447,6 +5447,52 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/settings/global_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Global Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/policy_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Policy Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/settings/kafka_settings/" class="md-nav__link">
         
   
@@ -5485,10 +5531,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_4" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_4" id="__nav_5_6_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
             
   
   
@@ -5501,8 +5547,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_4">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_6">
             <span class="md-nav__icon md-icon"></span>
             Service Settings
           </label>
@@ -5837,10 +5883,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_5" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_5" id="__nav_5_6_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
             
   
   
@@ -5853,12 +5899,35 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_5">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_7">
             <span class="md-nav__icon md-icon"></span>
             Store Settings
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/stores/aerospike_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Aerospike Store
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -7798,6 +7867,11 @@
 <p>The API key is configured via the <code>grpc_admin_api_key</code> setting. If no API key is provided, the system will automatically generate a random 32-byte API key at startup, which will be logged for reference. The API key must be included in GRPC requests as metadata with the key <code>x-api-key</code>.</p>
 <h2 id="2-architecture">2. Architecture</h2>
 <p><img alt="RPC_Component_Context_Diagram.png" src="../img/RPC_Component_Context_Diagram.png" /></p>
+<p>The following diagram provides additional detail showing the RPC Service's internal structure and external service connections:</p>
+<blockquote>
+<p><strong>Note</strong>: This diagram shows a simplified component view. The RPC Server handles all JSON-RPC processing, command routing, and service client interactions through the <code>RPCServer</code> struct and its handler function map (<code>rpcHandlers</code>), rather than having separate handler components for each command category.</p>
+</blockquote>
+<p><img alt="RPC_Component" src="../img/plantuml/rpc/RPC_Component.svg" /></p>
 <p>The RPC server is a standalone service that listens for incoming requests and processes them based on the command type. The server starts by initializing the HTTP server and setting up the necessary configurations.</p>
 <p>It then listens for incoming requests and routes them to the appropriate handler based on the command type. The handler processes the request, executes the command, and returns the response to the client.</p>
 <p>In order to serve some of the requests, the RPC server interacts with the Teranode core services to fetch the required data.</p>

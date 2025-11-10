@@ -4175,6 +4175,52 @@
   
   
     <li class="md-nav__item">
+      <a href="../../global_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Global Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../policy_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Policy Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../kafka_settings/" class="md-nav__link">
         
   
@@ -4213,10 +4259,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_4" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5_6_6" checked>
         
           
-          <label class="md-nav__link" for="__nav_5_6_4" id="__nav_5_6_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
             
   
   
@@ -4229,8 +4275,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_4_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_5_6_4">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5_6_6">
             <span class="md-nav__icon md-icon"></span>
             Service Settings
           </label>
@@ -4727,10 +4773,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_5" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_5" id="__nav_5_6_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
             
   
   
@@ -4743,12 +4789,35 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_5">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_7">
             <span class="md-nav__icon md-icon"></span>
             Store Settings
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../stores/aerospike_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Aerospike Store
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -5252,7 +5321,7 @@
 <td>int</td>
 <td>1024</td>
 <td>blockvalidation_processTxMetaUsingStore_BatchSize</td>
-<td>Transaction metadata batch size</td>
+<td><strong>SHARED</strong> - Transaction metadata batch size (shared with Block Validation service)</td>
 </tr>
 <tr>
 <td>SkipUTXODelete</td>
@@ -5303,6 +5372,7 @@
 <h3 id="transaction-processing">Transaction Processing</h3>
 <ul>
 <li>When <code>BatchMissingTransactions</code> is true, uses <code>ProcessTxMetaUsingStoreBatchSize</code></li>
+<li><strong>Note</strong>: <code>ProcessTxMetaUsingStoreBatchSize</code> uses the <code>blockvalidation_</code> prefix (not <code>blockpersister_</code>) as it's a shared setting with the Block Validation service. Both services use the same batch size for consistent transaction metadata processing.</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies</h2>
 <table>

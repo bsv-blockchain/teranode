@@ -4273,6 +4273,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#global-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Settings
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#services" class="md-nav__link">
     <span class="md-ellipsis">
       Services
@@ -4343,6 +4352,52 @@
   
   
     <li class="md-nav__item">
+      <a href="global_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Global Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="policy_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Policy Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="kafka_settings/" class="md-nav__link">
         
   
@@ -4381,10 +4436,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_4" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_4" id="__nav_5_6_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
             
   
   
@@ -4397,8 +4452,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_4">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_6">
             <span class="md-nav__icon md-icon"></span>
             Service Settings
           </label>
@@ -4733,10 +4788,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_5" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_5" id="__nav_5_6_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
             
   
   
@@ -4749,12 +4804,35 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_5">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_7">
             <span class="md-nav__icon md-icon"></span>
             Store Settings
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="stores/aerospike_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Aerospike Store
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -5163,6 +5241,15 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#global-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      Global Settings
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#services" class="md-nav__link">
     <span class="md-ellipsis">
       Services
@@ -5239,15 +5326,15 @@
 </ol>
 <h3 id="example">Example</h3>
 <p>Suppose we have a base setting named <code>DATABASE_URL</code> to define the database connection URL for our application.</p>
-<p>The base setting might be:
+<p>The base setting might be:</p>
 <div class="highlight"><pre><span></span><code>DATABASE_URL = &quot;database-url-default.com&quot;
-</code></pre></div></p>
-<p>As an example, we might have a <code>newenvironment1</code> database for development purposes. So, for the context <code>dev.newenvironment1</code>, there might be an override:
+</code></pre></div>
+<p>As an example, we might have a <code>newenvironment1</code> database for development purposes. So, for the context <code>dev.newenvironment1</code>, there might be an override:</p>
 <div class="highlight"><pre><span></span><code>DATABASE_URL.dev.newenvironment1 = &quot;database-url-environment1&quot;
-</code></pre></div></p>
-<p>There might also be a generic development database URL, defined as:
+</code></pre></div>
+<p>There might also be a generic development database URL, defined as:</p>
 <div class="highlight"><pre><span></span><code>DATABASE_URL.dev = &quot;database-url-dev.com&quot;
-</code></pre></div></p>
+</code></pre></div>
 <p>When the application is run against this development context (<code>dev.newenvironment1</code>):</p>
 <ul>
 <li>The system first checks for <code>DATABASE_URL.dev.newenvironment1</code>. If it exists, it's used.</li>
@@ -5298,7 +5385,7 @@
 <h3 id="best-practices">Best Practices</h3>
 <ol>
 <li>
-<p>Always pass the Settings object as a dependency to services that need configuration:
+<p>Always pass the Settings object as a dependency to services that need configuration:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">NewService</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">settings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Service</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Service</span><span class="p">{</span>
 <span class="w">        </span><span class="nx">logger</span><span class="p">:</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span>
@@ -5306,16 +5393,16 @@
 <span class="w">        </span><span class="c1">// ...</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
-</code></pre></div></p>
+</code></pre></div>
 </li>
 <li>
-<p>Access settings through the appropriate group rather than using direct key access:
+<p>Access settings through the appropriate group rather than using direct key access:</p>
 <div class="highlight"><pre><span></span><code><span class="c1">// Good</span>
 <span class="nx">maxRetries</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">settings</span><span class="p">.</span><span class="nx">BlockChain</span><span class="p">.</span><span class="nx">MaxRetries</span>
 
 <span class="c1">// Avoid (historical style, now deprecated)</span>
 <span class="nx">maxRetries</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Config</span><span class="p">().</span><span class="nx">GetInt</span><span class="p">(</span><span class="s">&quot;blockchain_maxRetries&quot;</span><span class="p">)</span>
-</code></pre></div></p>
+</code></pre></div>
 </li>
 <li>
 <p>Use the type system to your advantage - settings are strongly typed within their respective groups.</p>
@@ -5324,6 +5411,11 @@
 <p><strong>Note</strong>: The old <code>gocore.Config()</code> approach with direct key access is deprecated. Always use the new Settings object for accessing configuration values.</p>
 <h2 id="detailed-settings-reference">Detailed Settings Reference</h2>
 <p>For comprehensive documentation of all available settings, see the following references organized by component:</p>
+<h3 id="global-settings">Global Settings</h3>
+<ul>
+<li><a href="global_settings/">Global Settings</a> - System-wide settings (tracing, logging, security, gRPC, monitoring)</li>
+<li><a href="policy_settings/">Policy Settings</a> - BSV Blockchain consensus rules and transaction validation policies</li>
+</ul>
 <h3 id="services">Services</h3>
 <ul>
 <li><a href="services/alert_settings/">Alert Service Settings</a></li>
@@ -5342,8 +5434,9 @@
 </ul>
 <h3 id="stores">Stores</h3>
 <ul>
-<li><a href="stores/utxo_settings/">UTXO Store Settings</a></li>
+<li><a href="stores/aerospike_settings/">Aerospike Store Settings</a></li>
 <li><a href="stores/blob_settings/">Blob Store Settings</a></li>
+<li><a href="stores/utxo_settings/">UTXO Store Settings</a></li>
 </ul>
 <h3 id="messaging">Messaging</h3>
 <ul>

@@ -2973,6 +2973,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="4.7. UTXO Batch Processing and External Storage mode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#external-transaction-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      External Transaction Cache
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -4553,6 +4568,52 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/settings/global_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Global Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/policy_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Policy Settings
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/settings/kafka_settings/" class="md-nav__link">
         
   
@@ -4591,10 +4652,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_4" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_6" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_4" id="__nav_5_6_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_6" id="__nav_5_6_6_label" tabindex="0">
             
   
   
@@ -4607,8 +4668,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_4">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_6">
             <span class="md-nav__icon md-icon"></span>
             Service Settings
           </label>
@@ -4943,10 +5004,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_5" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5_6_7" >
         
           
-          <label class="md-nav__link" for="__nav_5_6_5" id="__nav_5_6_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5_6_7" id="__nav_5_6_7_label" tabindex="0">
             
   
   
@@ -4959,12 +5020,35 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5_6_5">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_5_6_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5_6_7">
             <span class="md-nav__icon md-icon"></span>
             Store Settings
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/stores/aerospike_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Aerospike Store
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -5430,6 +5514,21 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="4.7. UTXO Batch Processing and External Storage mode">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#external-transaction-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      External Transaction Cache
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -5720,6 +5819,9 @@
 <span class="p">}</span>
 </code></pre></div>
 <p>The following diagram provides a deeper level of detail into the UTXO Store's internal components and their interactions:</p>
+<blockquote>
+<p><strong>Note</strong>: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Cleanup Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.</p>
+</blockquote>
 <p><img alt="utxo_store_detailed_component.svg" src="../../services/img/plantuml/utxo/utxo_store_detailed_component.svg" /></p>
 <p>The following datastores are supported (either in development / experimental or production mode):</p>
 <ol>
@@ -5936,7 +6038,15 @@
 <p>Aerospike is the primary datastore for the UTXO store. However, to overcome Aerospike's record size limitation of 1MB, the system implements an external storage mechanism for large transactions.</p>
 <p>If a transaction is too large to fit in a single Aerospike record (indicated by a <code>RECORD_TOO_BIG</code> error), or if the system is configured to externalize all transactions, the UTXO store will store the full transaction data in an external storage (typically AWS S3, but any external storage can be used).</p>
 <p>In such cases, the full transaction data is stored externally, while metadata and UTXOs are still stored in Aerospike, potentially across multiple records. The Aerospike record will have an <code>external</code> flag set to true, indicating that the full transaction data is stored externally.</p>
-<p>When the UTXO data is needed, the system will first check the Aerospike record. If the `external flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.</p>
+<p>When the UTXO data is needed, the system will first check the Aerospike record. If the <code>external</code> flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.</p>
+<h4 id="external-transaction-cache">External Transaction Cache</h4>
+<p>To optimize performance when reading externally stored transactions, the UTXO store implements an optional external transaction cache (configured via <code>utxostore_useExternalTxCache</code>, enabled by default). This short-lived cache (10-second expiration) is particularly beneficial for:</p>
+<ul>
+<li>Transactions with many outputs being spent concurrently</li>
+<li>Scenarios where multiple inputs reference the same large transaction</li>
+<li>Reducing redundant external storage reads during high-throughput validation</li>
+</ul>
+<p>The cache handles concurrent reads efficiently, preventing multiple simultaneous fetches of the same external transaction data.</p>
 <h3 id="48-alert-system-and-utxo-management">4.8. Alert System and UTXO Management</h3>
 <p>The UTXO Store supports advanced UTXO management features, which can be utilized by an alert system.</p>
 <p><img alt="utxo_freeze_reassign.svg" src="../../services/img/plantuml/utxo/utxo_freeze_reassign.svg" /></p>
@@ -5963,8 +6073,9 @@
 <ul>
 <li>Verifies the UTXO exists and is frozen</li>
 <li>Updates the UTXO hash to the new value</li>
-<li>Sets spendable block height to current + ReAssignedUtxoSpendableAfterBlocks</li>
+<li>Sets spendable block height to current + 1,000 blocks (defined by <code>ReAssignedUtxoSpendableAfterBlocks</code> constant)</li>
 <li>Logs the reassignment for audit purposes</li>
+<li><strong>Important</strong>: Reassigned UTXOs cannot be spent until 1,000 blocks have passed after the reassignment to ensure network consensus and prevent disputes</li>
 </ul>
 </li>
 </ol>

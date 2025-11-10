@@ -28,29 +28,7 @@ title RPC Service - Component Diagram (Code-Verified Connections)
 
 Container_Boundary(rpc_service, "RPC Service") {
 
-Component(http_server, "HTTP Server", "Go HTTP", "JSON-RPC over HTTP endpoint")
-
-Component(json_rpc_handler, "JSON-RPC Handler", "Go", "Processes JSON-RPC requests and responses")
-
-Component(command_router, "Command Router", "Go", "Routes RPC commands to appropriate handlers")
-
-Component(blockchain_handlers, "Blockchain Handlers", "Go", "Block and chain operation handlers")
-
-Component(mining_handlers, "Mining Handlers", "Go", "Mining and block template handlers")
-
-Component(peer_handlers, "Peer Handlers", "Go", "Peer management handlers")
-
-Component(utxo_handlers, "UTXO Handlers", "Go", "UTXO query and management handlers")
-
-Component(admin_handlers, "Admin Handlers", "Go", "Administrative operation handlers")
-
-Component(transaction_handlers, "Transaction Handlers", "Go", "Transaction submission handlers")
-
-Component(help_cacher, "Help Cacher", "Go", "Caches RPC command help text")
-
-Component(metrics_collector, "Metrics Collector", "Prometheus", "Collects RPC performance metrics")
-
-Component(health_monitor, "Health Monitor", "Go", "Monitors service and dependency health")
+Component(rpc_server, "RPC Server", "Go", "HTTP server with JSON-RPC handler routing commands to handler functions")
 
 Component(blockchain_client, "Blockchain Client", "Go gRPC", "Interface to Blockchain service")
 
@@ -92,45 +70,25 @@ Person(admin, "Administrator", "Node operator")
 
 ' External API interactions
 
-Rel(external_user, http_server, "JSON-RPC requests", "HTTP")
+Rel(external_user, rpc_server, "JSON-RPC requests", "HTTP")
 
-Rel(admin, http_server, "Administrative requests", "HTTP")
+Rel(admin, rpc_server, "Administrative requests", "HTTP")
 
-' Request processing flow
+' RPC Server to service client interactions
 
-Rel(http_server, json_rpc_handler, "Parse JSON-RPC")
+Rel(rpc_server, blockchain_client, "Blockchain and admin operations")
 
-Rel(json_rpc_handler, command_router, "Route commands")
+Rel(rpc_server, block_assembly_client, "Mining operations")
 
-Rel(command_router, blockchain_handlers, "Blockchain commands")
+Rel(rpc_server, propagation_client, "Submit transactions")
 
-Rel(command_router, mining_handlers, "Mining commands")
+Rel(rpc_server, p2p_client, "P2P operations")
 
-Rel(command_router, peer_handlers, "Peer commands")
+Rel(rpc_server, legacy_peer_client, "Legacy peer operations")
 
-Rel(command_router, utxo_handlers, "UTXO commands")
+Rel(rpc_server, utxo_store_client, "UTXO queries and operations")
 
-Rel(command_router, admin_handlers, "Admin commands")
-
-Rel(command_router, transaction_handlers, "Transaction commands")
-
-' Handler to client interactions
-
-Rel(blockchain_handlers, blockchain_client, "Blockchain operations")
-
-Rel(mining_handlers, block_assembly_client, "Mining operations")
-
-Rel(transaction_handlers, propagation_client, "Submit transactions")
-
-Rel(peer_handlers, p2p_client, "P2P operations")
-
-Rel(peer_handlers, legacy_peer_client, "Legacy peer operations")
-
-Rel(utxo_handlers, utxo_store_client, "UTXO queries and operations")
-
-Rel(admin_handlers, blockchain_client, "Administrative operations")
-
-Rel(blockchain_handlers, asset_http_client, "Transaction hex data")
+Rel(rpc_server, asset_http_client, "Transaction hex data")
 
 ' Service client connections (CODE-VERIFIED)
 
@@ -148,27 +106,6 @@ Rel(utxo_store_client, utxo_store, "Database queries", "Direct")
 
 Rel(asset_http_client, asset_server, "HTTP requests", "HTTP")
 
-' Support components
-
-Rel(command_router, help_cacher, "Get command help")
-
-Rel(json_rpc_handler, metrics_collector, "Request metrics")
-
-Rel(health_monitor, blockchain_client, "Health checks")
-
-Rel(health_monitor, block_assembly_client, "Health checks")
-
-Rel(health_monitor, p2p_client, "Health checks")
-
-Rel(health_monitor, utxo_store_client, "Health checks")
-
-Rel(health_monitor, propagation_client, "Health checks")
-
-Rel(health_monitor, asset_http_client, "Health checks")
-
-' Administrative access
-
-Rel(admin, http_server, "Administrative operations", "HTTP")
 
 SHOW_LEGEND()
 
