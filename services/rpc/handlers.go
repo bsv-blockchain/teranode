@@ -280,6 +280,7 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 		medianTime, err := calculateMedianTime(ctx, s.blockchainClient, b.Hash())
 		if err != nil {
 			// If we can't calculate median time, use block time
+			s.logger.Warnf("Failed to calculate median time for block %s: %v, falling back to block timestamp", b.Hash(), err)
 			medianTime = b.Timestamp
 		}
 
@@ -414,6 +415,7 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 	medianTime, err := calculateMedianTime(ctx, s.blockchainClient, b.Hash())
 	if err != nil {
 		// If we can't calculate median time, use block time
+		s.logger.Warnf("Failed to calculate median time for block %s: %v, falling back to block timestamp", b.Hash(), err)
 		medianTime = b.Header.Timestamp
 	}
 
@@ -2766,6 +2768,7 @@ func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int
 	}
 
 	// Collect the block hashes of the generated blocks
+	// Note: There may be a brief delay between block generation and availability in blockchain client
 	var blockHashes []string
 	for i := int32(1); i <= count; i++ {
 		targetHeight := startHeight + uint32(i)
