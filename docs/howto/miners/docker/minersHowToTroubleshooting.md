@@ -149,7 +149,7 @@ If a third party service fails, you must restore its functionality. Once it is b
 
 ##### Solution: Proper Cleanup Before Switching Networks
 
-Before starting a different Teranode network, you must properly stop and remove containers from the currently running network,
+Before starting a different Teranode network, you must properly stop and remove containers from the currently running network.
 
 ------
 
