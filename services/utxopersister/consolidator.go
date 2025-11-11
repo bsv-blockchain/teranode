@@ -279,7 +279,9 @@ func (c *consolidator) processAdditionsFromReader(ctx context.Context, r io.Read
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			maxScriptSize := CalculateMaxScriptSize(c.settings.Policy.MaxScriptSizePolicy)
+			// Use MaxUint32 for processing UTXO additions - these contain already-validated
+			// data from mined blocks. Policy limits should not be enforced during consolidation.
+			maxScriptSize := uint32(^uint32(0)) // math.MaxUint32
 			wrapper, err := NewUTXOWrapperFromReader(ctx, r, maxScriptSize)
 			if err != nil {
 				if errors.Is(err, io.EOF) {

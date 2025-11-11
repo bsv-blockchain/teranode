@@ -197,12 +197,12 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 		v.logger.Warnf(errorLogMsg)
 
 		errCode := errVerify.Code()
-		policyRelatedError := (errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||
+		policyRelatedError := errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||
 			errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW ||
 			errCode == bdkscript.SCRIPT_ERR_SCRIPTNUM_MINENCODE ||
 			errCode == bdkscript.SCRIPT_ERR_SCRIPT_SIZE ||
 			errCode == bdkscript.SCRIPT_ERR_PUBKEY_COUNT ||
-			errCode == bdkscript.SCRIPT_ERR_STACK_SIZE)
+			errCode == bdkscript.SCRIPT_ERR_STACK_SIZE
 
 		if !consensus && policyRelatedError {
 			// See https://github.com/bsv-blockchain/teranode/issues/2016

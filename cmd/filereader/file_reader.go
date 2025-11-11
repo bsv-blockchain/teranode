@@ -375,7 +375,9 @@ func handleUtxoSet(ctx context.Context, br *bufio.Reader, settings *settings.Set
 		for {
 			var ud *utxopersister.UTXOWrapper
 
-			maxScriptSize := utxopersister.CalculateMaxScriptSize(settings.Policy.MaxScriptSizePolicy)
+			// Use MaxUint32 for reading UTXO set files - these contain already-validated
+			// data from mined blocks. Policy limits should not be enforced during file reading.
+			maxScriptSize := uint32(^uint32(0)) // math.MaxUint32
 			ud, err = utxopersister.NewUTXOWrapperFromReader(ctx, br, maxScriptSize)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
@@ -423,7 +425,9 @@ func handleUtxoAdditions(ctx context.Context, br *bufio.Reader, settings *settin
 		for {
 			var ud *utxopersister.UTXOWrapper
 
-			maxScriptSize := utxopersister.CalculateMaxScriptSize(settings.Policy.MaxScriptSizePolicy)
+			// Use MaxUint32 for reading UTXO additions - these contain already-validated
+			// data from mined blocks. Policy limits should not be enforced during file reading.
+			maxScriptSize := uint32(^uint32(0)) // math.MaxUint32
 			ud, err = utxopersister.NewUTXOWrapperFromReader(ctx, br, maxScriptSize)
 			if err != nil {
 				if errors.Is(err, io.EOF) {

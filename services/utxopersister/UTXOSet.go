@@ -568,8 +568,9 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 			case <-ctx.Done():
 				return ctx.Err()
 			default:
-				// Read the next 36 bytes...
-				maxScriptSize := CalculateMaxScriptSize(us.settings.Policy.MaxScriptSizePolicy)
+				// Use MaxUint32 for reading previous UTXO set - these contain already-validated
+				// data from mined blocks. Policy limits should not be enforced during UTXO set processing.
+				maxScriptSize := uint32(^uint32(0)) // math.MaxUint32
 				utxoWrapper, err := NewUTXOWrapperFromReader(ctx, previousUTXOSetReader, maxScriptSize)
 				if err != nil {
 					if err == io.EOF {

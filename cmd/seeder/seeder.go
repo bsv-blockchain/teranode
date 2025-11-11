@@ -431,7 +431,9 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 			default:
 				var utxoWrapper *utxopersister.UTXOWrapper
 
-				maxScriptSize := utxopersister.CalculateMaxScriptSize(appSettings.Policy.MaxScriptSizePolicy)
+				// Use MaxUint32 for seeding operations - UTXO set files contain already-validated
+				// data from mined blocks. Policy limits should not be enforced during seeding.
+				maxScriptSize := uint32(^uint32(0)) // math.MaxUint32
 				utxoWrapper, err = utxopersister.NewUTXOWrapperFromReader(gCtx, reader, maxScriptSize)
 				if err != nil {
 					if errors.Is(err, io.EOF) {

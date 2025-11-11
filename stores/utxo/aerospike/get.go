@@ -1346,7 +1346,10 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 	} else {
 		bufferedReader := bufio.NewReader(bytes.NewReader(txBytes))
 
-		maxScriptSize := utxopersister.CalculateMaxScriptSize(s.settings.Policy.MaxScriptSizePolicy)
+		// Use MaxUint32 for consensus operations - transactions in external storage are already
+		// part of mined blocks and have passed consensus validation. Policy limits should only
+		// be enforced when accepting new transactions into mempool, not when reading already-mined data.
+		maxScriptSize := uint32(^uint32(0)) // math.MaxUint32
 		uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, bufferedReader, maxScriptSize)
 		if err != nil {
 			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read outputs from reader", previousTxHash.String(), err)
