@@ -4,7 +4,6 @@ package utxopersister
 import (
 	"context"
 	"io"
-	"math"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -106,7 +105,7 @@ func checkAdditions(t *testing.T, ud *UTXOSet) {
 	defer r.Close()
 
 	for {
-		utxoWrapper, err := NewUTXOWrapperFromReader(context.Background(), r, math.MaxUint32)
+		utxoWrapper, err := NewUTXOWrapperFromReader(context.Background(), r)
 		if err != nil {
 			assert.ErrorIs(t, err, io.EOF)
 			break

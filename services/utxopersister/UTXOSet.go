@@ -569,8 +569,7 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 				return ctx.Err()
 			default:
 				// Read the next 36 bytes...
-				maxScriptSize := CalculateMaxScriptSize(us.settings.Policy.MaxScriptSizePolicy)
-				utxoWrapper, err := NewUTXOWrapperFromReader(ctx, previousUTXOSetReader, maxScriptSize)
+				utxoWrapper, err := NewUTXOWrapperFromReader(ctx, previousUTXOSetReader)
 				if err != nil {
 					if err == io.EOF {
 						break OUTER
