@@ -1,3 +1,10 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file contains helper functions for processing block-related database operations.
+// These utilities handle common tasks such as scanning database rows, converting between
+// database representations and model objects, and processing query results efficiently.
 package sql
 
 import (

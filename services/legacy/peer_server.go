@@ -3,6 +3,8 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
+// Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
+// and blockchain synchronization using the traditional Bitcoin network protocol.
 package legacy
 
 import (
@@ -141,6 +143,15 @@ var _ net.Addr = simpleAddr{}
 
 // broadcastMsg provides the ability to house a bitcoin message to be broadcast
 // to all connected peers except specified excluded peers.
+//
+// This structure is used by the server's message broadcasting system to efficiently
+// distribute protocol messages (blocks, transactions, inventory announcements) to
+// multiple peers while allowing selective exclusion of specific peers.
+//
+// Fields:
+//   - message: The wire protocol message to broadcast (MsgBlock, MsgTx, MsgInv, etc.)
+//   - excludePeers: List of peers that should not receive this message, typically
+//     used to avoid sending a message back to the peer that originally sent it
 type broadcastMsg struct {
 	message      wire.Message
 	excludePeers []*serverPeer

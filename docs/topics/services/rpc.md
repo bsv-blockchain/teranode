@@ -145,6 +145,12 @@ The API key is configured via the `grpc_admin_api_key` setting. If no API key is
 
 ![RPC_Component_Context_Diagram.png](img/RPC_Component_Context_Diagram.png)
 
+The following diagram provides additional detail showing the RPC Service's internal structure and external service connections:
+
+> **Note**: This diagram shows a simplified component view. The RPC Server handles all JSON-RPC processing, command routing, and service client interactions through the `RPCServer` struct and its handler function map (`rpcHandlers`), rather than having separate handler components for each command category.
+
+![RPC_Component](img/plantuml/rpc/RPC_Component.svg)
+
 The RPC server is a standalone service that listens for incoming requests and processes them based on the command type. The server starts by initializing the HTTP server and setting up the necessary configurations.
 
 It then listens for incoming requests and routes them to the appropriate handler based on the command type. The handler processes the request, executes the command, and returns the response to the client.

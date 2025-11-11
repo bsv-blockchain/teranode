@@ -43,7 +43,9 @@ The P2P Service communicates with the Block Validation over either gRPC protocol
 
 ![Subtree_Validation_Service_Component_Diagram.png](img/Subtree_Validation_Service_Component_Diagram.png)
 
-The detailed component diagram below shows the internal architecture of the Subtree Validation Service with code-verified connections:
+The detailed component diagram below shows the internal architecture of the Subtree Validation Service:
+
+> **Note**: This diagram represents a simplified component view showing the main architectural elements. The gRPC Server routes requests to handlers (`subtreeHandler.go`, `txmetaHandler.go`) which orchestrate validation logic, file-based locking, transaction fetching via HTTP, and interactions with external services. Kafka consumers process notifications and route them to the appropriate handlers for processing.
 
 ![Subtree_Validation_Component](img/plantuml/subtreevalidation/Subtree_Validation_Component.svg)
 
@@ -185,7 +187,7 @@ The distributed pause mechanism uses existing subtree validation settings:
 
 ## 3. gRPC Protobuf Definitions
 
-The Subtree Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/subtreevalidationProto.md).
+The Subtree Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the [Subtree Validation Protobuf Reference](../../references/protobuf_docs/subtreevalidationProto.md).
 
 ## 4. Data Model
 
@@ -259,7 +261,6 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 ## 8. Configuration Settings
 
 For comprehensive configuration documentation including all settings, defaults, and interactions, see the [subtree Validation Settings Reference](../../references/settings/services/subtreeValidation_settings.md).
-
 
 ## 9. Other Resources
 

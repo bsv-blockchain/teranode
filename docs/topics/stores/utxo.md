@@ -104,6 +104,8 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interfac
 
 The following diagram provides a deeper level of detail into the UTXO Store's internal components and their interactions:
 
+> **Note**: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Cleanup Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.
+
 ![utxo_store_detailed_component.svg](../services/img/plantuml/utxo/utxo_store_detailed_component.svg)
 
 The following datastores are supported (either in development / experimental or production mode):
@@ -341,7 +343,17 @@ If a transaction is too large to fit in a single Aerospike record (indicated by 
 
 In such cases, the full transaction data is stored externally, while metadata and UTXOs are still stored in Aerospike, potentially across multiple records. The Aerospike record will have an `external` flag set to true, indicating that the full transaction data is stored externally.
 
-When the UTXO data is needed, the system will first check the Aerospike record. If the `external flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.
+When the UTXO data is needed, the system will first check the Aerospike record. If the `external` flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.
+
+#### External Transaction Cache
+
+To optimize performance when reading externally stored transactions, the UTXO store implements an optional external transaction cache (configured via `utxostore_useExternalTxCache`, enabled by default). This short-lived cache (10-second expiration) is particularly beneficial for:
+
+- Transactions with many outputs being spent concurrently
+- Scenarios where multiple inputs reference the same large transaction
+- Reducing redundant external storage reads during high-throughput validation
+
+The cache handles concurrent reads efficiently, preventing multiple simultaneous fetches of the same external transaction data.
 
 ### 4.8. Alert System and UTXO Management
 
@@ -363,8 +375,9 @@ The UTXO Store supports advanced UTXO management features, which can be utilized
 3. **Reassigning UTXOs**: UTXOs can be reassigned to a new transaction output, but only if they are frozen first.
     - Verifies the UTXO exists and is frozen
     - Updates the UTXO hash to the new value
-    - Sets spendable block height to current + ReAssignedUtxoSpendableAfterBlocks
+    - Sets spendable block height to current + 1,000 blocks (defined by `ReAssignedUtxoSpendableAfterBlocks` constant)
     - Logs the reassignment for audit purposes
+    - **Important**: Reassigned UTXOs cannot be spent until 1,000 blocks have passed after the reassignment to ensure network consensus and prevent disputes
 
 ### 4.9. Unmined Transaction Management
 

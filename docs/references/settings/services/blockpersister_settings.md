@@ -11,7 +11,7 @@
 | PersisterHTTPListenAddress | string | ":8083" | blockPersister_httpListenAddress | HTTP server for blob store access |
 | BlockPersisterConcurrency | int | 8 | blockpersister_concurrency | **CRITICAL** - Parallel processing, reduced by half in all-in-one mode |
 | BatchMissingTransactions | bool | true | blockpersister_batchMissingTransactions | Transaction processing batching |
-| ProcessTxMetaUsingStoreBatchSize | int | 1024 | blockvalidation_processTxMetaUsingStore_BatchSize | Transaction metadata batch size |
+| ProcessTxMetaUsingStoreBatchSize | int | 1024 | blockvalidation_processTxMetaUsingStore_BatchSize | **SHARED** - Transaction metadata batch size (shared with Block Validation service) |
 | SkipUTXODelete | bool | false | blockpersister_skipUTXODelete | UTXO deletion behavior |
 | BlockPersisterPersistAge | uint32 | 2 | blockpersister_persistAge | **CRITICAL** - Blocks behind tip to avoid reorgs |
 | BlockPersisterPersistSleep | time.Duration | 1m | blockPersister_persistSleep | Sleep when no blocks available |
@@ -20,19 +20,24 @@
 ## Configuration Dependencies
 
 ### HTTP Server
+
 - When `PersisterHTTPListenAddress` is not empty, HTTP server starts
 - Requires valid `BlockStore` URL or returns configuration error
 
 ### Concurrency Management
+
 - `BlockPersisterConcurrency` reduced by half when `IsAllInOneMode` is true
 - Minimum concurrency of 1 enforced
 
 ### Block Processing Strategy
+
 - `BlockPersisterPersistAge` determines safety margin from chain tip
 - `BlockPersisterPersistSleep` controls polling frequency when idle
 
 ### Transaction Processing
+
 - When `BatchMissingTransactions` is true, uses `ProcessTxMetaUsingStoreBatchSize`
+- **Note**: `ProcessTxMetaUsingStoreBatchSize` uses the `blockvalidation_` prefix (not `blockpersister_`) as it's a shared setting with the Block Validation service. Both services use the same batch size for consistent transaction metadata processing.
 
 ## Service Dependencies
 
