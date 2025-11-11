@@ -447,12 +447,13 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 	}
 
 	// For verbosity 1 and above, return the JSON object
-	// Note: We do not return transaction arrays or hashes for any verbosity level
-	// This is by design to avoid performance issues with large blocks
-	// Since both GetBlockVerboseResult and GetBlockVerboseTxResult are identical now,
-	// we just use GetBlockVerboseResult for all verbosity levels >= 1
+	// Note: Tx field is intentionally kept empty for performance reasons
+	// to avoid large response bodies with potentially millions of transactions
+	s.logger.Debugf("Returning block %s with empty tx array (num_tx=%d) for performance reasons", b.Hash(), b.TransactionCount)
+
 	blockReply = &bsvjson.GetBlockVerboseResult{
 		GetBlockBaseVerboseResult: baseBlockReply,
+		Tx:                        []string{}, // Empty array for backward compatibility
 	}
 
 	return blockReply, nil

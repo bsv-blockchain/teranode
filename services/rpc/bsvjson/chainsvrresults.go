@@ -53,16 +53,18 @@ type GetBlockBaseVerboseResult struct {
 
 // GetBlockVerboseResult models the data from the getblock command when the
 // verbose flag is set to 1 (default).
-// Note: Transaction data is not included to avoid performance issues with large blocks.
+// Note: Tx field is returned as empty array for performance reasons to avoid large response bodies.
 type GetBlockVerboseResult struct {
 	*GetBlockBaseVerboseResult
+	Tx []string `json:"tx"`
 }
 
 // GetBlockVerboseTxResult models the data from the getblock command when the
 // verbose flag is set to 2.
-// Note: Transaction data is not included to avoid performance issues with large blocks.
+// Note: Tx field is returned as empty array for performance reasons to avoid large response bodies.
 type GetBlockVerboseTxResult struct {
 	*GetBlockBaseVerboseResult
+	Tx []TxRawResult `json:"tx"`
 }
 
 // AddMultisigAddressResult models the data returned from the addmultisigaddress
