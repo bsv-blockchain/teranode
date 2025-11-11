@@ -28,16 +28,9 @@
 | BanDuration | time.Duration | 24h | p2p_ban_duration | Ban duration |
 | ForceSyncPeer | string | "" | p2p_force_sync_peer | **CRITICAL** - Forced sync peer override |
 | SharePrivateAddresses | bool | true | p2p_share_private_addresses | Private address advertisement |
-| PeerHealthCheckInterval | time.Duration | 30s | p2p_health_check_interval | **CRITICAL** - Health check timing |
-| PeerHealthHTTPTimeout | time.Duration | 5s | p2p_health_http_timeout | **CRITICAL** - Health check HTTP timeout |
-| PeerHealthRemoveAfterFailures | int | 3 | p2p_health_remove_after_failures | **CRITICAL** - Failure threshold for peer removal |
 | AllowPrunedNodeFallback | bool | true | p2p_allow_pruned_node_fallback | **CRITICAL** - Pruned node fallback behavior |
 
 ## Configuration Dependencies
-
-### Peer Health Management
-- `PeerHealthCheckInterval`, `PeerHealthHTTPTimeout`, and `PeerHealthRemoveAfterFailures` work together
-- Controls peer health monitoring and removal behavior
 
 ### Forced Sync Peer Selection
 - `ForceSyncPeer` overrides automatic peer selection

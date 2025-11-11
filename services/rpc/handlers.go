@@ -52,7 +52,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer_api"
 	"github.com/bsv-blockchain/teranode/services/legacy/txscript"
-	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -1102,7 +1102,7 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 	var legacyPeerInfo *peer_api.GetPeersResponse
 
-	var newPeerInfo *p2p_api.GetPeersResponse
+	var newPeerInfo []*p2p.PeerInfo
 
 	// get legacy peer info
 	if s.peerClient != nil {
@@ -1139,7 +1139,7 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		peerCount += len(legacyPeerInfo.Peers)
 	}
 
-	// get new peer info
+	// get new peer info from p2p service
 	if s.p2pClient != nil {
 		// create a timeout context to prevent hanging if p2p service is not responding
 		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
@@ -1147,7 +1147,7 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 		// use a goroutine with select to handle timeouts more reliably
 		type peerResult struct {
-			resp *p2p_api.GetPeersResponse
+			resp []*p2p.PeerInfo
 			err  error
 		}
 		resultCh := make(chan peerResult, 1)
@@ -1171,9 +1171,9 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		}
 	}
 	if newPeerInfo != nil {
-		peerCount += len(newPeerInfo.Peers)
+		peerCount += len(newPeerInfo)
 
-		for _, np := range newPeerInfo.Peers {
+		for _, np := range newPeerInfo {
 			s.logger.Debugf("new peer: %v", np)
 		}
 	}
@@ -1216,24 +1216,23 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	}
 
 	if newPeerInfo != nil {
-		for _, p := range newPeerInfo.Peers {
+		for _, p := range newPeerInfo {
 			info := &bsvjson.GetPeerInfoResult{
-				PeerID:         p.Id,
-				Addr:           p.Addr,
-				ServicesStr:    p.Services,
-				Inbound:        p.Inbound,
-				StartingHeight: p.StartingHeight,
-				LastSend:       p.LastSend,
-				LastRecv:       p.LastRecv,
-				BytesSent:      p.BytesSent,
+				PeerID:         p.ID.String(),
+				Addr:           p.DataHubURL, // Use DataHub URL as address
+				SubVer:         p.ClientName,
+				CurrentHeight:  p.Height,
+				StartingHeight: p.Height, // Use current height as starting height
+				BanScore:       int32(p.BanScore),
 				BytesRecv:      p.BytesReceived,
-				ConnTime:       p.ConnTime,
-				PingTime:       float64(p.PingTime),
-				TimeOffset:     p.TimeOffset,
-				Version:        p.Version,
-				SubVer:         p.SubVer,
-				CurrentHeight:  p.CurrentHeight,
-				BanScore:       p.Banscore,
+				BytesSent:      0, // P2P doesn't track bytes sent currently
+				ConnTime:       p.ConnectedAt.Unix(),
+				TimeOffset:     0, // P2P doesn't track time offset
+				PingTime:       p.AvgResponseTime.Seconds(),
+				Version:        0,                        // P2P doesn't track protocol version
+				LastSend:       p.LastMessageTime.Unix(), // Last time we sent/received any message
+				LastRecv:       p.LastBlockTime.Unix(),   // Last time we received a block
+				Inbound:        p.IsConnected,            // Whether peer is currently connected
 			}
 			infos = append(infos, info)
 		}
@@ -1545,7 +1544,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	difficultyBigFloat := bestBlockHeader.Bits.CalculateDifficulty()
 	difficulty, _ := difficultyBigFloat.Float64()
 
-	var p2pConnections *p2p_api.GetPeersResponse
+	var p2pConnections []*p2p.PeerInfo
 	if s.p2pClient != nil {
 		// create a timeout context to prevent hanging if p2p service is not responding
 		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
@@ -1553,7 +1552,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 
 		// use a goroutine with select to handle timeouts more reliably
 		type peerResult struct {
-			resp *p2p_api.GetPeersResponse
+			resp []*p2p.PeerInfo
 			err  error
 		}
 		resultCh := make(chan peerResult, 1)
@@ -1611,7 +1610,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 
 	connectionCount := 0
 	if p2pConnections != nil {
-		connectionCount += len(p2pConnections.Peers)
+		connectionCount += len(p2pConnections)
 	}
 
 	if legacyConnections != nil {
@@ -1957,11 +1956,11 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	var p2pBanned bool
 
 	if s.p2pClient != nil {
-		isBanned, err := s.p2pClient.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+		isBanned, err := s.p2pClient.IsBanned(ctx, c.IPOrSubnet)
 		if err != nil {
 			s.logger.Warnf("Failed to check if banned in P2P service: %v", err)
 		} else {
-			p2pBanned = isBanned.IsBanned
+			p2pBanned = isBanned
 		}
 	}
 
@@ -2027,13 +2026,13 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 
 		// Use a goroutine with select to handle timeouts more reliably
 		type p2pResult struct {
-			resp *p2p_api.ListBannedResponse
+			resp []string
 			err  error
 		}
 		resultCh := make(chan p2pResult, 1)
 
 		go func() {
-			resp, err := s.p2pClient.ListBanned(p2pCtx, &emptypb.Empty{})
+			resp, err := s.p2pClient.ListBanned(p2pCtx)
 			resultCh <- p2pResult{resp: resp, err: err}
 		}()
 
@@ -2042,7 +2041,7 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 			if result.err != nil {
 				s.logger.Warnf("Failed to get banned list in P2P service: %v", result.err)
 			} else {
-				bannedList = result.resp.Banned
+				bannedList = result.resp
 			}
 		case <-p2pCtx.Done():
 			// Timeout reached
@@ -2122,7 +2121,7 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 
 	// check if P2P service is available
 	if s.p2pClient != nil {
-		_, err := s.p2pClient.ClearBanned(ctx, &emptypb.Empty{})
+		err := s.p2pClient.ClearBanned(ctx)
 		if err != nil {
 			s.logger.Warnf("Failed to clear banned list in P2P service: %v", err)
 		}
@@ -2215,18 +2214,10 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 		// ban teranode peers
 		if s.p2pClient != nil {
-			banPeerResponse, err := s.p2pClient.BanPeer(ctx, &p2p_api.BanPeerRequest{
-				Addr:  c.IPOrSubnet,
-				Until: expirationTimeInt64,
-			})
+			err := s.p2pClient.BanPeer(ctx, c.IPOrSubnet, expirationTimeInt64)
 			if err == nil {
-				if banPeerResponse.Ok {
-					success = true
-
-					s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
-				} else {
-					s.logger.Errorf("Failed to add ban for %s until %v", c.IPOrSubnet, expirationTime)
-				}
+				success = true
+				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 			} else {
 				s.logger.Errorf("Error while trying to ban teranode peer: %v", err)
 			}
@@ -2265,15 +2256,9 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		var success bool
 
 		if s.p2pClient != nil {
-			unbanPeerResponse, err := s.p2pClient.UnbanPeer(ctx, &p2p_api.UnbanPeerRequest{
-				Addr: c.IPOrSubnet,
-			})
+			err := s.p2pClient.UnbanPeer(ctx, c.IPOrSubnet)
 			if err == nil {
-				if unbanPeerResponse.Ok {
-					success = true
-				} else {
-					s.logger.Errorf("Failed to unban teranode peer: %v", err)
-				}
+				success = true
 			} else {
 				s.logger.Errorf("Error while trying to unban teranode peer: %v", err)
 			}

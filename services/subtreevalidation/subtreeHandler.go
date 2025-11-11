@@ -143,6 +143,7 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 		v := ValidateSubtree{
 			SubtreeHash:   *hash,
 			BaseURL:       baseURL.String(),
+			PeerID:        kafkaMsg.PeerId,
 			TxHashes:      nil,
 			AllowFailFast: true,
 		}

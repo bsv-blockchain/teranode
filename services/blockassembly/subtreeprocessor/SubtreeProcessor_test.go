@@ -164,7 +164,7 @@ func TestRotate(t *testing.T) {
 		require.NoError(t, err)
 
 		// Add transactions through the queue
-		stp.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 	}
 
 	// Wait for the subtree to be processed
@@ -251,7 +251,7 @@ func Test_RemoveTxFromSubtrees(t *testing.T) {
 		for i := uint64(0); i < 42; i++ {
 			hash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
 			// Use the parent hash instead of self-reference to avoid duplicate skipping
-			_ = stp.addNode(subtreepkg.SubtreeNode{Hash: hash, Fee: i}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}}, true)
+			_ = stp.addNode(subtreepkg.Node{Hash: hash, Fee: i}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}}, true)
 		}
 
 		// check the length of the subtrees
@@ -351,7 +351,7 @@ func TestReChainSubtrees(t *testing.T) {
 	for i := uint64(0); i < 42; i++ {
 		hash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
 		// Use the parent hash instead of self-reference to avoid duplicate skipping
-		_ = stp.addNode(subtreepkg.SubtreeNode{Hash: hash, Fee: i}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}}, true)
+		_ = stp.addNode(subtreepkg.Node{Hash: hash, Fee: i}, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}}, true)
 	}
 
 	// With 42 unique transactions and 4 items per subtree:
@@ -454,7 +454,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+				stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 			}
 		}
 
@@ -494,7 +494,7 @@ func TestGetMerkleProofForCoinbase(t *testing.T) {
 			if i == 0 {
 				stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 			} else {
-				stp.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+				stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 			}
 		}
 
@@ -586,7 +586,7 @@ func TestMoveForwardBlock(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+			stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 		}
 	}
 
@@ -669,7 +669,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	require.NoError(t, err)
 
 	hash, _ := chainhash.NewHashFromStr("6affcabb2013261e764a5d4286b463b11127f4fd1de05368351530ddb3f19942")
-	subtreeProcessor.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1, SizeInBytes: 294}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+	subtreeProcessor.Add(subtreepkg.Node{Hash: *hash, Fee: 1, SizeInBytes: 294}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 
 	// we should not have the transaction in the subtrees yet, it should be stuck in the queue
 	assert.Equal(t, 1, subtreeProcessor.GetCurrentLength())
@@ -752,7 +752,7 @@ func TestIncompleteSubtreeMoveForwardBlock(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+			stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 		}
 	}
 
@@ -854,7 +854,7 @@ func TestSubtreeMoveForwardBlockNewCurrent(t *testing.T) {
 		if i == 0 {
 			stp.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+			stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 		}
 	}
 
@@ -938,11 +938,11 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 		if i == 0 {
 			subtreeProcessor.currentSubtree.ReplaceRootNode(hash, 0, 0)
 		} else {
-			subtreeProcessor.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
+			subtreeProcessor.Add(subtreepkg.Node{Hash: *hash, Fee: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hash}})
 		}
 	}
 	// add 1 more hash to create the second subtree
-	subtreeProcessor.Add(subtreepkg.SubtreeNode{Hash: *hashes[0], Fee: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hashes[0]}})
+	subtreeProcessor.Add(subtreepkg.Node{Hash: *hashes[0], Fee: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*hashes[0]}})
 
 	wg.Wait()
 
@@ -1043,7 +1043,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 				for j := 0; j < 3 && i*4+j < len(txIDs); j++ {
 					hash, _ := chainhash.NewHashFromStr(txIDs[i*4+j])
 					hashes[i*4+j] = hash
-					_ = subtree.AddSubtreeNode(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1})
+					_ = subtree.AddSubtreeNode(subtreepkg.Node{Hash: *hash, Fee: 1})
 				}
 			} else {
 				// Add 4 transactions to other subtrees
@@ -1051,7 +1051,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 					idx := (i-1)*4 + 3 + j
 					hash, _ := chainhash.NewHashFromStr(txIDs[idx])
 					hashes[idx] = hash
-					_ = subtree.AddSubtreeNode(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1})
+					_ = subtree.AddSubtreeNode(subtreepkg.Node{Hash: *hash, Fee: 1})
 				}
 			}
 			chainedSubtrees = append(chainedSubtrees, subtree)
@@ -1063,7 +1063,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		_ = lastSubtree.AddCoinbaseNode()
 		hash, _ := chainhash.NewHashFromStr(txIDs[15])
 		hashes[15] = hash
-		_ = lastSubtree.AddSubtreeNode(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1})
+		_ = lastSubtree.AddSubtreeNode(subtreepkg.Node{Hash: *hash, Fee: 1})
 		chainedSubtrees = append(chainedSubtrees, lastSubtree)
 
 		// Setup fresh subtree processor state
@@ -1090,7 +1090,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		require.NoError(t, err)
 
 		// Count all transactions in the result
-		remainder := make([]subtreepkg.SubtreeNode, 0)
+		remainder := make([]subtreepkg.Node, 0)
 		for _, subtree := range subtreeProcessor.chainedSubtrees {
 			remainder = append(remainder, subtree.Nodes...)
 		}
@@ -1161,7 +1161,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 			t.Fatalf("processRemainderTxHashes returned error: %v", err)
 		}
 
-		remainder = make([]subtreepkg.SubtreeNode, 0)
+		remainder = make([]subtreepkg.Node, 0)
 		for _, subtree := range subtreeProcessor.chainedSubtrees {
 			remainder = append(remainder, subtree.Nodes...)
 		}
@@ -1213,7 +1213,7 @@ func BenchmarkBlockAssembler_AddTx(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < 100_000; i++ {
-		stp.Add(subtreepkg.SubtreeNode{Hash: *txHashes[i], Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*txHashes[i]}})
+		stp.Add(subtreepkg.Node{Hash: *txHashes[i], Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{*txHashes[i]}})
 	}
 }
 
@@ -1307,7 +1307,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		stp, _ := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
 
 		for _, txHash := range txHashes {
-			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 
 		// Wait for 4 subtrees to be created
@@ -1416,7 +1416,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		// Add some initial state to verify it remains unchanged
 		initialTxHash, err := generateTxHash()
 		require.NoError(t, err)
-		stp.Add(subtreepkg.SubtreeNode{Hash: initialTxHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{initialTxHash}})
+		stp.Add(subtreepkg.Node{Hash: initialTxHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{initialTxHash}})
 		time.Sleep(50 * time.Millisecond) // Allow processing
 
 		// Capture original state
@@ -1501,7 +1501,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 		time.Sleep(100 * time.Millisecond) // Allow processing
 
@@ -1657,7 +1657,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 
 		// Wait for processing to complete
@@ -1724,7 +1724,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		for i := 0; i < 2; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 		time.Sleep(50 * time.Millisecond) // Allow processing
 
@@ -1775,7 +1775,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 		time.Sleep(100 * time.Millisecond) // Allow processing
 
@@ -1827,7 +1827,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 		time.Sleep(100 * time.Millisecond) // Allow processing
 
@@ -1884,7 +1884,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 		time.Sleep(100 * time.Millisecond) // Allow processing
 
@@ -1939,7 +1939,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		for i := 0; i < 2; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 		time.Sleep(50 * time.Millisecond) // Allow processing
 
@@ -2023,7 +2023,7 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		for i := 0; i < 2; i++ {
 			txHash, err := generateTxHash()
 			require.NoError(t, err)
-			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
+			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}})
 		}
 		time.Sleep(50 * time.Millisecond) // Allow processing
 
@@ -2130,7 +2130,7 @@ func Test_removeMap(t *testing.T) {
 
 		for _, txHash := range txHashes {
 			// Use parent hash instead of self-reference to avoid duplicate skipping
-			stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}})
+			stp.Add(subtreepkg.Node{Hash: txHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{parentHash}})
 		}
 
 		waitForSubtreeProcessorQueueToEmpty(t, stp)
@@ -2198,7 +2198,7 @@ func createSubtree(t *testing.T, length uint64, createCoinbase bool) *subtreepkg
 	return subtree
 }
 
-func createSubtreeMeta(t *testing.T, subtree *subtreepkg.Subtree) *subtreepkg.SubtreeMeta {
+func createSubtreeMeta(t *testing.T, subtree *subtreepkg.Subtree) *subtreepkg.Meta {
 	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
 
 	parent := chainhash.HashH([]byte("txInpoints"))
@@ -2285,7 +2285,7 @@ func BenchmarkAddNode(b *testing.B) {
 	b.ResetTimer()
 
 	for i, txHash := range txHashes {
-		stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: uint64(i)}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}) // nolint:gosec
+		stp.Add(subtreepkg.Node{Hash: txHash, Fee: uint64(i)}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}) // nolint:gosec
 	}
 
 	err := g.Wait()
@@ -2314,7 +2314,7 @@ func BenchmarkAddNodeWithMap(b *testing.B) {
 	b.ResetTimer()
 
 	for i, txHash := range txHashes {
-		stp.Add(subtreepkg.SubtreeNode{Hash: txHash, Fee: uint64(i)}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}) //nolint:gosec
+		stp.Add(subtreepkg.Node{Hash: txHash, Fee: uint64(i)}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{txHash}}) //nolint:gosec
 	}
 
 	err := g.Wait()
@@ -2447,7 +2447,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 				txHash, err := generateTxHash()
 				require.NoError(t, err)
 
-				node := subtreepkg.SubtreeNode{
+				node := subtreepkg.Node{
 					Hash: txHash,
 				}
 
@@ -2564,7 +2564,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 				txHash, err := generateTxHash()
 				require.NoError(t, err)
 
-				node := subtreepkg.SubtreeNode{
+				node := subtreepkg.Node{
 					Hash: txHash,
 				}
 
@@ -2635,7 +2635,7 @@ func TestRemoveTxsFromSubtreesBasic(t *testing.T) {
 
 		// Add a transaction to the current subtree
 		txHash := chainhash.HashH([]byte("test_tx_current"))
-		node := subtreepkg.SubtreeNode{
+		node := subtreepkg.Node{
 			Hash:        txHash,
 			Fee:         1000,
 			SizeInBytes: 250,
@@ -2678,7 +2678,7 @@ func TestRemoveTxsFromSubtreesBasic(t *testing.T) {
 		}
 
 		for i, hash := range txHashes {
-			node := subtreepkg.SubtreeNode{
+			node := subtreepkg.Node{
 				Hash:        hash,
 				Fee:         1000 + uint64(i*100),
 				SizeInBytes: 250,
@@ -2712,7 +2712,7 @@ func TestRemoveTxsFromSubtreesBasic(t *testing.T) {
 			hash := chainhash.HashH([]byte("chained_tx_" + string(rune('0'+i))))
 			allHashes = append(allHashes, hash)
 
-			node := subtreepkg.SubtreeNode{
+			node := subtreepkg.Node{
 				Hash:        hash,
 				Fee:         1000 + uint64(i*100),
 				SizeInBytes: 250,
@@ -2759,7 +2759,7 @@ func TestRemoveTxsFromSubtreesIntegration(t *testing.T) {
 			hash := chainhash.HashH([]byte("integration_tx_" + string(rune('A'+i))))
 			testHashes[i] = hash
 
-			node := subtreepkg.SubtreeNode{
+			node := subtreepkg.Node{
 				Hash:        hash,
 				Fee:         1000 + uint64(i*500),
 				SizeInBytes: 200 + uint64(i*50),
@@ -2865,8 +2865,8 @@ func TestRemoveCoinbaseUtxosChildrenRemoval(t *testing.T) {
 		// Add child transactions to subtree processor
 		childHash := *childTx.TxIDChainHash()
 		grandchildHash := *grandchildTx.TxIDChainHash()
-		stp.Add(subtreepkg.SubtreeNode{Hash: childHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{childHash}})
-		stp.Add(subtreepkg.SubtreeNode{Hash: grandchildHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{grandchildHash}})
+		stp.Add(subtreepkg.Node{Hash: childHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{childHash}})
+		stp.Add(subtreepkg.Node{Hash: grandchildHash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{grandchildHash}})
 
 		// Verify child transactions are in subtree before removal
 		childrenBefore, err := utxo.GetAndLockChildren(ctx, utxoStore, *coinbase.TxIDChainHash())
@@ -3145,7 +3145,7 @@ func TestAddNode_TransactionCounting(t *testing.T) {
 
 		// Create a transaction node
 		txHash := chainhash.HashH([]byte("test_tx"))
-		node := subtreepkg.SubtreeNode{
+		node := subtreepkg.Node{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
@@ -3175,7 +3175,7 @@ func TestAddNode_TransactionCounting(t *testing.T) {
 
 		// Create a transaction node
 		txHash := chainhash.HashH([]byte("test_tx"))
-		node := subtreepkg.SubtreeNode{
+		node := subtreepkg.Node{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
@@ -3285,7 +3285,7 @@ func TestSubtreeProcessor_ConcurrentOperations_StateConsistency(t *testing.T) {
 				defer wg.Done()
 				for j := 0; j < txPerGoroutine; j++ {
 					txHash := chainhash.HashH([]byte(fmt.Sprintf("tx_%d_%d", routineID, j)))
-					node := subtreepkg.SubtreeNode{
+					node := subtreepkg.Node{
 						Hash:        txHash,
 						Fee:         uint64(100 + routineID + j),
 						SizeInBytes: uint64(250 + routineID + j),
@@ -3439,7 +3439,7 @@ func TestSubtreeProcessor_ErrorRecovery_ChannelOperations(t *testing.T) {
 		go func() {
 			// Add a transaction
 			txHash := chainhash.HashH([]byte("test_tx"))
-			node := subtreepkg.SubtreeNode{
+			node := subtreepkg.Node{
 				Hash:        txHash,
 				Fee:         100,
 				SizeInBytes: 250,

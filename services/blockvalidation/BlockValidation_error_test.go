@@ -411,7 +411,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	}
 
 	// Inject our mock Kafka producer directly into the BlockValidation struct
-	bv.BlockValidation.invalidBlockKafkaProducer = mockKafka
+	bv.invalidBlockKafkaProducer = mockKafka
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
@@ -538,7 +538,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	}
 
 	// Inject our mock Kafka producer directly into the BlockValidation struct
-	bv.BlockValidation.invalidBlockKafkaProducer = mockKafka
+	bv.invalidBlockKafkaProducer = mockKafka
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)

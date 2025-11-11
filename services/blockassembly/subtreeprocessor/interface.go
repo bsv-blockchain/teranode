@@ -44,7 +44,7 @@ type Interface interface {
 	// Parameters:
 	//   - node: The transaction node to add to processing
 	//   - txInpoints: Transaction input points for dependency tracking
-	Add(node subtree.SubtreeNode, txInpoints subtree.TxInpoints)
+	Add(node subtree.Node, txInpoints subtree.TxInpoints)
 
 	// AddDirectly adds a transaction node directly to the processor without
 	// using the queue. This is typically used for block assembly startup.
@@ -59,7 +59,7 @@ type Interface interface {
 	//   - error: Any error encountered during the addition
 	//
 	// Note: This method bypasses the normal queue processing and should be used
-	AddDirectly(node subtree.SubtreeNode, txInpoints subtree.TxInpoints, skipNotification bool) error
+	AddDirectly(node subtree.Node, txInpoints subtree.TxInpoints, skipNotification bool) error
 
 	// GetCurrentRunningState returns the current operational state of the processor.
 	// This provides visibility into whether the processor is running, stopped,

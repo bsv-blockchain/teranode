@@ -43,6 +43,9 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block from blockchain client", err)
 	}
 
+	// Extract PeerID from request for tracking
+	peerID := request.PeerId
+
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "CheckBlockSubtrees",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
@@ -329,6 +332,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					SubtreeHash:   subtreeHash,
 					BaseURL:       request.BaseUrl,
 					AllowFailFast: false,
+					PeerID:        peerID,
 				}
 
 				subtree, err := u.ValidateSubtreeInternal(
@@ -371,6 +375,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 				SubtreeHash:   subtreeHash,
 				BaseURL:       request.BaseUrl,
 				AllowFailFast: false,
+				PeerID:        peerID,
 			}
 
 			subtree, err := u.ValidateSubtreeInternal(

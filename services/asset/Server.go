@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -56,6 +57,7 @@ type Server struct {
 	centrifugeServer      *centrifuge_impl.Centrifuge
 	blockchainClient      blockchain.ClientI
 	blockvalidationClient blockvalidation.Interface
+	p2pClient             p2p.ClientI
 }
 
 // NewServer creates a new Server instance with the provided dependencies.
@@ -78,7 +80,8 @@ type Server struct {
 // Returns:
 //   - *Server: A fully initialized Server instance ready for use
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
-	subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface) *Server {
+	subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI,
+	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI) *Server {
 	s := &Server{
 		logger:                logger,
 		settings:              tSettings,
@@ -88,6 +91,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		blockPersisterStore:   blockPersisterStore,
 		blockchainClient:      blockchainClient,
 		blockvalidationClient: blockvalidationClient,
+		p2pClient:             p2pClient,
 	}
 
 	return s
@@ -185,7 +189,8 @@ func (v *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("no asset_httpListenAddress setting found")
 	}
 
-	repo, err := repository.NewRepository(v.logger, v.settings, v.utxoStore, v.txStore, v.blockchainClient, v.blockvalidationClient, v.subtreeStore, v.blockPersisterStore)
+	repo, err := repository.NewRepository(v.logger, v.settings, v.utxoStore, v.txStore, v.blockchainClient,
+		v.blockvalidationClient, v.subtreeStore, v.blockPersisterStore, v.p2pClient)
 	if err != nil {
 		return errors.NewServiceError("error creating repository", err)
 	}

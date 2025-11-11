@@ -69,7 +69,7 @@ type processBlockFound struct {
 	// if needed during validation
 	baseURL string
 
-	// peerID is the P2P peer identifier used for peerMetrics tracking
+	// peerID is the P2P peer identifier used for peer tracking via P2P service
 	peerID string
 
 	// errCh receives any errors encountered during block validation and allows
@@ -88,7 +88,7 @@ type processBlockCatchup struct {
 	// retrieved if needed during catchup
 	baseURL string
 
-	// peerID is the P2P peer identifier used for peerMetrics tracking
+	// peerID is the P2P peer identifier used for peer tracking via P2P service
 	peerID string
 }
 
@@ -170,12 +170,14 @@ type Server struct {
 	// cascading failures and protect against misbehaving peers
 	peerCircuitBreakers *catchup.PeerCircuitBreakers
 
-	// peerMetrics tracks performance and reputation metrics for each peer
-	peerMetrics *catchup.CatchupMetrics
-
 	// headerChainCache provides efficient access to block headers during catchup
 	// with proper chain validation to avoid redundant fetches during block validation
 	headerChainCache *catchup.HeaderChainCache
+
+	// p2pClient provides access to the P2P service for peer registry operations
+	// including catchup metrics reporting. This is optional and may be nil if
+	// BlockValidation is running in the same process as the P2P service.
+	p2pClient P2PClientI
 
 	// isCatchingUp is an atomic flag to prevent concurrent catchup operations.
 	// When true, indicates that a catchup operation is currently in progress.
@@ -207,6 +209,24 @@ type Server struct {
 	// The success rate can be calculated as: catchupSuccesses / catchupAttempts.
 	// The value persists for the lifetime of the server and is never reset.
 	catchupSuccesses atomic.Int64
+
+	// activeCatchupCtx stores the current catchup context for status reporting to the dashboard.
+	// This is updated when a catchup operation starts and cleared when it completes.
+	// Protected by activeCatchupCtxMu for thread-safe access.
+	activeCatchupCtx   *CatchupContext
+	activeCatchupCtxMu sync.RWMutex
+
+	// catchupProgress tracks the current progress through block headers during catchup.
+	// blocksFetched and blocksValidated are updated as blocks are processed.
+	// These counters are reset at the start of each catchup operation.
+	// Protected by activeCatchupCtxMu for thread-safe access.
+	blocksFetched   atomic.Int64
+	blocksValidated atomic.Int64
+
+	// previousCatchupAttempt stores details about the last failed catchup attempt.
+	// This is used to display in the dashboard why we switched from one peer to another.
+	// Protected by activeCatchupCtxMu for thread-safe access.
+	previousCatchupAttempt *PreviousAttempt
 }
 
 // New creates a new block validation server with the provided dependencies.
@@ -220,6 +240,8 @@ type Server struct {
 //   - validatorClient: provides transaction validation
 //   - blockchainClient: interfaces with the blockchain
 //   - kafkaConsumerClient: handles Kafka message consumption
+//   - blockAssemblyClient: interfaces with block assembly service
+//   - p2pClient: interfaces with P2P service for peer registry operations
 func New(
 	logger ulogger.Logger,
 	tSettings *settings.Settings,
@@ -230,6 +252,7 @@ func New(
 	blockchainClient blockchain.ClientI,
 	kafkaConsumerClient kafka.KafkaConsumerGroupI,
 	blockAssemblyClient blockassembly.ClientI,
+	p2pClient P2PClientI,
 ) *Server {
 	initPrometheusMetrics()
 
@@ -279,10 +302,8 @@ func New(
 		stats:               gocore.NewStat("blockvalidation"),
 		kafkaConsumerClient: kafkaConsumerClient,
 		peerCircuitBreakers: catchup.NewPeerCircuitBreakers(*cbConfig),
-		peerMetrics: &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		},
-		headerChainCache: catchup.NewHeaderChainCache(logger),
+		headerChainCache:    catchup.NewHeaderChainCache(logger),
+		p2pClient:           p2pClient,
 	}
 
 	return bVal
@@ -417,6 +438,61 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMes
 	}, errors.WrapGRPC(err)
 }
 
+// GetCatchupStatus returns the current catchup status via gRPC.
+// This method provides real-time information about ongoing catchup operations
+// for monitoring and dashboard display purposes.
+//
+// The response includes details about the peer being synced from, progress metrics,
+// and timing information. If no catchup is active, the response will indicate
+// IsCatchingUp=false and other fields will be empty/zero.
+//
+// This method is thread-safe and can be called concurrently with catchup operations.
+//
+// Parameters:
+//   - ctx: Context for the gRPC request
+//   - _: Empty request message (unused but required by gRPC interface)
+//
+// Returns:
+//   - *blockvalidation_api.CatchupStatusResponse: Current catchup status
+//   - error: Any error encountered (always nil for this method)
+func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.CatchupStatusResponse, error) {
+	status := u.getCatchupStatusInternal()
+
+	resp := &blockvalidation_api.CatchupStatusResponse{
+		IsCatchingUp:         status.IsCatchingUp,
+		PeerId:               status.PeerID,
+		PeerUrl:              status.PeerURL,
+		TargetBlockHash:      status.TargetBlockHash,
+		TargetBlockHeight:    status.TargetBlockHeight,
+		CurrentHeight:        status.CurrentHeight,
+		TotalBlocks:          int32(status.TotalBlocks),
+		BlocksFetched:        status.BlocksFetched,
+		BlocksValidated:      status.BlocksValidated,
+		StartTime:            status.StartTime,
+		DurationMs:           status.DurationMs,
+		ForkDepth:            status.ForkDepth,
+		CommonAncestorHash:   status.CommonAncestorHash,
+		CommonAncestorHeight: status.CommonAncestorHeight,
+	}
+
+	// Add previous attempt if available
+	if status.PreviousAttempt != nil {
+		resp.PreviousAttempt = &blockvalidation_api.PreviousCatchupAttempt{
+			PeerId:            status.PreviousAttempt.PeerID,
+			PeerUrl:           status.PreviousAttempt.PeerURL,
+			TargetBlockHash:   status.PreviousAttempt.TargetBlockHash,
+			TargetBlockHeight: status.PreviousAttempt.TargetBlockHeight,
+			ErrorMessage:      status.PreviousAttempt.ErrorMessage,
+			ErrorType:         status.PreviousAttempt.ErrorType,
+			AttemptTime:       status.PreviousAttempt.AttemptTime,
+			DurationMs:        status.PreviousAttempt.DurationMs,
+			BlocksValidated:   status.PreviousAttempt.BlocksValidated,
+		}
+	}
+
+	return resp, nil
+}
+
 // Init initializes the block validation server with required dependencies and services.
 // It establishes connections to subtree validation services, configures UTXO store access,
 // and starts background processing components. This method must be called before Start().
@@ -488,6 +564,13 @@ func (u *Server) Init(ctx context.Context) (err error) {
 								}
 							}
 						}()
+						if u.isPeerMalicious(ctx, blockFound.peerID) {
+							u.logger.Warnf("[blockFound][%s] peer %s (%s) is marked as malicious, skipping", bf.hash.String(), bf.peerID, bf.baseURL)
+							if bf.errCh != nil {
+								bf.errCh <- errors.NewProcessingError("peer %s is marked as malicious", bf.peerID)
+							}
+							return
+						}
 						u.logger.Debugf("[Init] Worker %d starting processBlockFoundChannel for block %s", workerID, bf.hash.String())
 						if err := u.processBlockFoundChannel(ctx, bf); err != nil {
 							u.logger.Errorf("[Init] processBlockFoundChannel failed for block %s: %v", bf.hash.String(), err)
@@ -510,62 +593,85 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 			case c := <-u.catchupCh:
 				{
-					if u.peerMetrics != nil && c.peerID != "" {
-						peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(c.peerID)
-						if peerMetric != nil {
-							if peerMetric.IsBad() || peerMetric.IsMalicious() {
-								u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad (score: %0.0f) or malicious (attempts: %d), skipping", c.block.Hash().String(), c.peerID, c.baseURL, peerMetric.GetReputation(), peerMetric.GetMaliciousAttempts())
-								continue
-							}
-						}
+					// Check if peer is bad or malicious before attempting catchup
+					if u.isPeerBad(c.peerID) || u.isPeerMalicious(ctx, c.peerID) {
+						u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad or malicious, skipping", c.block.Hash().String(), c.peerID, c.baseURL)
+						continue
 					}
 
-					if err := u.catchup(ctx, c.block, c.baseURL, c.peerID); err != nil {
-						var (
-							peerMetric        *catchup.PeerCatchupMetrics
-							reputationScore   float64
-							maliciousAttempts int64
-						)
+					u.logger.Infof("[catchup] Processing catchup request for block %s from peer %s (%s)", c.block.Hash().String(), c.peerID, c.baseURL)
 
-						// this should be moved into the catchup directly...
-						if u.peerMetrics != nil && c.peerID != "" {
-							peerMetric = u.peerMetrics.GetOrCreatePeerMetrics(c.peerID)
-							if peerMetric != nil {
-								peerMetric.RecordFailure()
-								reputationScore = peerMetric.ReputationScore
-								maliciousAttempts = peerMetric.MaliciousAttempts
-
-								if !peerMetric.IsTrusted() {
-									u.logger.Warnf("[catchup][%s] peer %s has low reputation score: %.2f, malicious attempts: %d", c.block.Hash().String(), c.peerID, reputationScore, maliciousAttempts)
-								}
-							}
+					if err := u.catchup(ctx, c.block, c.peerID, c.baseURL); err != nil {
+						// Check if the error is due to another catchup in progress
+						if errors.Is(err, errors.ErrCatchupInProgress) {
+							u.logger.Warnf("[catchup] Catchup already in progress, requeueing block %s from peer %s", c.block.Hash().String(), c.peerID)
+							continue
 						}
 
-						u.logger.Errorf("[Init] failed to process catchup signal for block [%s], peer reputation: %.2f, malicious attempts: %d, [%v]", c.block.Hash().String(), reputationScore, maliciousAttempts, err)
+						// Report catchup failure to P2P service
+						u.reportCatchupFailure(ctx, c.peerID)
+
+						u.logger.Errorf("[Init] failed to process catchup signal for block [%s] from peer %s: %v", c.block.Hash().String(), c.peerID, err)
 
 						// Report peer failure to blockchain service (which notifies P2P to switch peers)
 						if reportErr := u.blockchainClient.ReportPeerFailure(ctx, c.block.Hash(), c.peerID, "catchup", err.Error()); reportErr != nil {
 							u.logger.Errorf("[Init] failed to report peer failure: %v", reportErr)
 						}
 
-						// If block is invalid, don't try other peers; return early
+						// If block is invalid, don't try other peers; continue to next catchup request
 						// Block is expected to be added to the block store as invalid somewhere else
 						if errors.Is(err, errors.ErrBlockInvalid) ||
 							errors.Is(err, errors.ErrTxMissingParent) ||
 							errors.Is(err, errors.ErrTxNotFound) ||
 							errors.Is(err, errors.ErrTxInvalid) {
 							u.logger.Warnf("[catchup] Block %s is invalid, not trying alternative sources", c.block.Hash().String())
-							return
+							// Clean up the processing notification for this block so it can be retried later if needed
+							u.processBlockNotify.Delete(*c.block.Hash())
+							continue
 						}
 
 						// Try alternative sources for catchup
 						blockHash := c.block.Hash()
-						defer u.catchupAlternatives.Delete(*blockHash)
+						// Clean up alternatives after processing (no defer in loop)
 
+						// First, try to get intelligent peer selection from P2P service
+						bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, int32(c.block.Height))
+						if peerErr != nil {
+							u.logger.Warnf("[catchup] Failed to get best peers from P2P service: %v", peerErr)
+						}
+
+						// Try best peers from P2P service first
+						if len(bestPeers) > 0 {
+							u.logger.Infof("[catchup] Trying %d peers from P2P service for block %s after primary peer %s failed", len(bestPeers), blockHash.String(), c.peerID)
+
+							for _, bestPeer := range bestPeers {
+								// Skip the same peer that just failed
+								if bestPeer.ID == c.peerID {
+									continue
+								}
+
+								u.logger.Infof("[catchup] Trying peer %s (score: %.2f) for block %s", bestPeer.ID, bestPeer.CatchupReputationScore, blockHash.String())
+
+								// Try catchup with this peer
+								if altErr := u.catchup(ctx, c.block, bestPeer.ID, bestPeer.DataHubURL); altErr == nil {
+									u.logger.Infof("[catchup] Successfully processed block %s from peer %s (via P2P service)", blockHash.String(), bestPeer.ID)
+									// Clear processing marker and alternatives
+									u.processBlockNotify.Delete(*blockHash)
+									u.catchupAlternatives.Delete(*blockHash)
+									break // Success, exit the peer loop
+								} else {
+									u.logger.Warnf("[catchup] Peer %s also failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
+									u.reportCatchupFailure(ctx, bestPeer.ID)
+									// Failure will be reported by the catchup function itself
+								}
+							}
+						}
+
+						// If P2P service peers didn't work, fall back to cached alternatives
 						alternatives := u.catchupAlternatives.Get(*blockHash)
 						if alternatives != nil && alternatives.Value() != nil {
 							altList := alternatives.Value()
-							u.logger.Infof("[catchup] Trying %d alternative sources for block %s after primary peer %s failed", len(altList), blockHash.String(), c.peerID)
+							u.logger.Infof("[catchup] Trying %d cached alternative sources for block %s", len(altList), blockHash.String())
 
 							// Try each alternative
 							for _, alt := range altList {
@@ -575,38 +681,32 @@ func (u *Server) Init(ctx context.Context) (err error) {
 								}
 
 								// Check if peer is bad or malicious
-								if u.peerMetrics != nil && alt.peerID != "" {
-									altPeerMetric := u.peerMetrics.GetOrCreatePeerMetrics(alt.peerID)
-									if altPeerMetric != nil && (altPeerMetric.IsBad() || altPeerMetric.IsMalicious()) {
-										u.logger.Warnf("[catchup] Skipping alternative peer %s - marked as bad or malicious", alt.peerID)
-										continue
-									}
+								if u.isPeerBad(alt.peerID) || u.isPeerMalicious(ctx, alt.peerID) {
+									u.logger.Warnf("[catchup] Skipping alternative peer %s - marked as bad or malicious", alt.peerID)
+									continue
 								}
 
-								u.logger.Infof("[catchup] Trying alternative peer %s for block %s", alt.peerID, blockHash.String())
+								u.logger.Infof("[catchup] Trying cached alternative peer %s for block %s", alt.peerID, blockHash.String())
 
 								// Try catchup with alternative peer
-								if altErr := u.catchup(ctx, alt.block, alt.baseURL, alt.peerID); altErr == nil {
+								if altErr := u.catchup(ctx, alt.block, alt.peerID, alt.baseURL); altErr == nil {
 									u.logger.Infof("[catchup] Successfully processed block %s from alternative peer %s", blockHash.String(), alt.peerID)
+									// Clear processing marker and alternatives
+									u.processBlockNotify.Delete(*blockHash)
+									u.catchupAlternatives.Delete(*blockHash)
 									break
 								} else {
 									u.logger.Warnf("[catchup] Alternative peer %s also failed for block %s: %v", alt.peerID, blockHash.String(), altErr)
-									// Record failure for alternative peer
-									if u.peerMetrics != nil && alt.peerID != "" {
-										altPeerMetric := u.peerMetrics.GetOrCreatePeerMetrics(alt.peerID)
-										if altPeerMetric != nil {
-											altPeerMetric.RecordFailure()
-										}
-									}
+									u.reportCatchupFailure(ctx, alt.peerID)
 								}
 							}
-							// Clear processing marker to allow retries
-							u.processBlockNotify.Delete(*blockHash)
 						} else {
-							u.logger.Infof("[catchup] No alternative sources available for block %s", blockHash.String())
-							// Clear processing marker to allow retries
-							u.processBlockNotify.Delete(*blockHash)
+							u.logger.Infof("[catchup] No cached alternative sources available for block %s", blockHash.String())
 						}
+
+						// Clear processing marker and alternatives to allow retries
+						u.processBlockNotify.Delete(*blockHash)
+						u.catchupAlternatives.Delete(*blockHash)
 					} else {
 						// Success - clear alternatives for this block
 						u.catchupAlternatives.Delete(*c.block.Hash())
@@ -700,19 +800,15 @@ func (u *Server) blockHandler(kafkaMsg *kafkamessage.KafkaBlockTopicMessage) err
 		return errors.NewProcessingError("[BlockFound] invalid URL scheme '%s' - expected http or https", baseURL.Scheme)
 	}
 
-	// Don't skip blocks from malicious peers entirely - we still want to add them to the queue
-	// in case other peers have the same block. The malicious check will be done when fetching.
-	if u.peerMetrics != nil && kafkaMsg.GetPeerId() != "" {
-		peerMetrics := u.peerMetrics.GetOrCreatePeerMetrics(kafkaMsg.GetPeerId())
-
-		if peerMetrics != nil && peerMetrics.IsMalicious() {
-			u.logger.Warnf("[BlockFound][%s] peer %s is malicious, but still adding to queue for potential alternative sources [%s]", hash.String(), kafkaMsg.GetPeerId(), baseURL.String())
-			// Continue processing - the block might be available from other peers
-		}
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Don't skip blocks from malicious peers entirely - we still want to add them to the queue
+	// in case other peers have the same block. The malicious check will be done when fetching.
+	if u.isPeerMalicious(ctx, kafkaMsg.GetPeerId()) {
+		u.logger.Warnf("[BlockFound][%s] peer %s is malicious, but still adding to queue for potential alternative sources [%s]", hash.String(), kafkaMsg.GetPeerId(), baseURL.String())
+		// Continue processing - the block might be available from other peers
+	}
 
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
@@ -808,7 +904,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 	if shouldConsiderCatchup {
 		// Fetch the block to classify it before deciding on catchup
-		block, err := u.fetchSingleBlock(ctx, blockFound.hash, blockFound.baseURL)
+		block, err := u.fetchSingleBlock(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 		if err != nil {
 			if blockFound.errCh != nil {
 				blockFound.errCh <- err
@@ -828,6 +924,10 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 		// If parent doesn't exist, always use catchup
 		if !parentExists {
+			if u.isPeerMalicious(ctx, blockFound.peerID) {
+				u.logger.Warnf("[processBlockFoundChannel][%s] peer %s is malicious, skipping catchup for block with missing parent", blockFound.hash.String(), blockFound.peerID)
+				return nil
+			}
 			u.logger.Infof("[processBlockFoundChannel] Parent block %s doesn't exist for block %s, using catchup",
 				block.Header.HashPrevBlock.String(), blockFound.hash.String())
 
@@ -1123,7 +1223,7 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 		baseURL = "legacy" // default to legacy if not provided
 	}
 
-	if err = u.processBlockFound(ctx, block.Header.Hash(), baseURL, request.PeerId, block); err != nil {
+	if err = u.processBlockFound(ctx, block.Header.Hash(), request.PeerId, baseURL, block); err != nil {
 		// error from processBlockFound is already wrapped
 		return nil, errors.WrapGRPC(err)
 	}
@@ -1209,7 +1309,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 //   - useBlock: Optional pre-loaded block to avoid retrieval (variadic parameter)
 //
 // Returns an error if block processing, validation, or dependency management fails
-func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, peerID string, useBlock ...*model.Block) error {
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, peerID, baseURL string, useBlock ...*model.Block) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "processBlockFound",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusBlockValidationProcessBlockFound),
@@ -1218,12 +1318,9 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	defer deferFn()
 
 	// Check if the peer is malicious before attempting to fetch
-	if u.peerMetrics != nil && peerID != "" {
-		peerMetrics := u.peerMetrics.GetOrCreatePeerMetrics(peerID)
-		if peerMetrics != nil && peerMetrics.IsMalicious() {
-			u.logger.Warnf("[processBlockFound][%s] peer %s is malicious, not fetching from [%s]", hash.String(), peerID, baseURL)
-			return errors.NewProcessingError("[processBlockFound][%s] peer %s is malicious", hash.String(), peerID)
-		}
+	if u.isPeerMalicious(ctx, peerID) {
+		u.logger.Warnf("[processBlockFound][%s] peer %s is malicious, not fetching from [%s]", hash.String(), peerID, baseURL)
+		return errors.NewProcessingError("[processBlockFound][%s] peer %s is malicious", hash.String(), peerID)
 	}
 
 	// first check if the block exists, it might have already been processed
@@ -1241,7 +1338,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	if len(useBlock) > 0 {
 		block = useBlock[0]
 	} else {
-		block, err = u.fetchSingleBlock(ctx, hash, baseURL)
+		block, err = u.fetchSingleBlock(ctx, hash, peerID, baseURL)
 		if err != nil {
 			return err
 		}
@@ -1292,14 +1389,6 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, ba
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, u.blockValidation.bloomFilterStats, opts)
 	if err != nil {
 		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
-	}
-
-	// peer sent us a valid block, so increase its reputation score
-	if u.peerMetrics != nil && peerID != "" {
-		peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(peerID)
-		if peerMetric != nil {
-			peerMetric.RecordSuccess()
-		}
 	}
 
 	return nil
@@ -1449,13 +1538,8 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 			if err != nil {
 				u.logger.Errorf("[BlockProcessing] Worker %d failed to process block %s: %v", workerID, blockFound.hash.String(), err)
 
-				// Record peer failure if applicable
-				if u.peerMetrics != nil && blockFound.peerID != "" {
-					peerMetric := u.peerMetrics.GetOrCreatePeerMetrics(blockFound.peerID)
-					if peerMetric != nil {
-						peerMetric.RecordFailure()
-					}
-				}
+				// Note: Failures are not reported here as these are normal block processing failures
+				// Catchup failures are reported by the catchup() function
 
 				// Update processed metric with failure
 				if prometheusBlockPriorityQueueProcessed != nil {
@@ -1520,8 +1604,13 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 		return
 	}
 
+	// Create isolated context with timeout for transient fetch operation
+	// This ensures fetch failures don't affect other operations using parent context
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer fetchCancel()
+
 	// Fetch the block to classify it
-	block, err := u.fetchSingleBlock(ctx, blockFound.hash, blockFound.baseURL)
+	block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to fetch block %s: %v", blockFound.hash.String(), err)
 		if blockFound.errCh != nil {
@@ -1576,16 +1665,20 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 
 		// Send directly to catchup channel (non-blocking)
 		go func() {
+			u.logger.Infof("[addBlockToPriorityQueue] Attempting to send block %s to catchup channel (queue size: %d/%d)",
+				blockFound.hash.String(), len(u.catchupCh), cap(u.catchupCh))
+
 			select {
 			case u.catchupCh <- processBlockCatchup{
 				block:   block,
 				baseURL: blockFound.baseURL,
 				peerID:  blockFound.peerID,
 			}:
-				u.logger.Debugf("[addBlockToPriorityQueue] Sent block %s to catchup channel", blockFound.hash.String())
+				u.logger.Infof("[addBlockToPriorityQueue] Successfully sent block %s to catchup channel", blockFound.hash.String())
 			default:
 				// Channel is full, log warning but don't block
-				u.logger.Warnf("[addBlockToPriorityQueue] Catchup channel full, dropping block %s from peer %s", blockFound.hash.String(), blockFound.peerID)
+				u.logger.Warnf("[addBlockToPriorityQueue] Catchup channel full (%d/%d), dropping block %s from peer %s",
+					len(u.catchupCh), cap(u.catchupCh), blockFound.hash.String(), blockFound.peerID)
 				// Clear the processing marker so it can be retried later
 				u.processBlockNotify.Delete(*blockFound.hash)
 			}
@@ -1647,7 +1740,7 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 	}
 
 	// Try to process with the primary source
-	err := u.processBlockFound(ctx, blockFound.hash, blockFound.baseURL, blockFound.peerID)
+	err := u.processBlockFound(ctx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 
 	// If fetch failed and it's not a validation error, try alternative sources
 	if err != nil && (errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err)) {
@@ -1664,7 +1757,7 @@ func (u *Server) processBlockWithPriority(ctx context.Context, blockFound proces
 			u.logger.Infof("[processBlockWithPriority] Trying alternative source for block %s from %s (peer: %s)", blockFound.hash.String(), alternative.baseURL, alternative.peerID)
 
 			// Try with alternative source
-			altErr := u.processBlockFound(ctx, alternative.hash, alternative.baseURL, alternative.peerID)
+			altErr := u.processBlockFound(ctx, alternative.hash, alternative.peerID, alternative.baseURL)
 			if altErr == nil {
 				// Success with alternative source
 				return nil

@@ -294,7 +294,7 @@ type BlockValidationSettings struct {
 	// Block fetching configuration
 	FetchLargeBatchSize     int // Large batches for maximum HTTP efficiency (default: 100, peer limit)
 	FetchNumWorkers         int // Number of worker goroutines for parallel processing (default: 16)
-	FetchBufferSize         int // Buffer size for channels (default: 500)
+	FetchBufferSize         int // Buffer size for channels (default: 50)
 	SubtreeFetchConcurrency int // Concurrent subtree fetches per block (default: 8)
 	// Transaction extension timeout
 	ExtendTransactionTimeout time.Duration // Timeout for extending transactions (default: 120s)
@@ -419,11 +419,6 @@ type P2PSettings struct {
 	PeerMapMaxSize         int           // Maximum entries in peer maps (default: 100000)
 	PeerMapTTL             time.Duration // Time-to-live for peer map entries (default: 30m)
 	PeerMapCleanupInterval time.Duration // Cleanup interval (default: 5m)
-
-	// Peer health checker configuration
-	PeerHealthCheckInterval       time.Duration // Interval between health checks (default: 30s)
-	PeerHealthHTTPTimeout         time.Duration // HTTP timeout for DataHub checks (default: 5s)
-	PeerHealthRemoveAfterFailures int           // Consecutive failures before removing a peer (default: 3)
 
 	// DHT configuration
 	DHTMode            string        // DHT mode: "server" (default, advertises on DHT) or "client" (query-only, no provider storage)

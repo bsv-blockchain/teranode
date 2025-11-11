@@ -1192,7 +1192,7 @@ func (stp *SubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHead
 //
 // Returns:
 //   - error: Any error encountered during addition
-func (stp *SubtreeProcessor) addNode(node subtreepkg.SubtreeNode, parents *subtreepkg.TxInpoints, skipNotification bool) (err error) {
+func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.TxInpoints, skipNotification bool) (err error) {
 	// parent can only be set to nil, when they are already in the map
 	if parents == nil {
 		if p, ok := stp.currentTxMap.Get(node.Hash); !ok {
@@ -1293,7 +1293,7 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 //
 // Parameters:
 //   - node: Transaction node to add
-func (stp *SubtreeProcessor) Add(node subtreepkg.SubtreeNode, txInpoints subtreepkg.TxInpoints) {
+func (stp *SubtreeProcessor) Add(node subtreepkg.Node, txInpoints subtreepkg.TxInpoints) {
 	stp.queue.enqueue(node, txInpoints)
 }
 
@@ -1308,7 +1308,7 @@ func (stp *SubtreeProcessor) Add(node subtreepkg.SubtreeNode, txInpoints subtree
 //
 // Returns:
 //   - error: Any error encountered during addition
-func (stp *SubtreeProcessor) AddDirectly(node subtreepkg.SubtreeNode, txInpoints subtreepkg.TxInpoints, skipNotification bool) error {
+func (stp *SubtreeProcessor) AddDirectly(node subtreepkg.Node, txInpoints subtreepkg.TxInpoints, skipNotification bool) error {
 	if _, ok := stp.currentTxMap.Get(node.Hash); ok {
 		return errors.NewInvalidArgumentError("transaction already exists in currentTxMap")
 	}
@@ -2056,7 +2056,7 @@ func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 //
 // Returns:
 //   - error: Any error encountered during processing
-func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Block, createProperlySizedSubtrees bool) (subtreesNodes [][]subtreepkg.SubtreeNode, conflictingHashes []chainhash.Hash, err error) {
+func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Block, createProperlySizedSubtrees bool) (subtreesNodes [][]subtreepkg.Node, conflictingHashes []chainhash.Hash, err error) {
 	if block == nil {
 		return nil, nil, errors.NewProcessingError("[moveBackBlock] you must pass in a block to moveBackBlock")
 	}
@@ -2138,7 +2138,7 @@ func (stp *SubtreeProcessor) moveBackBlockAddPreviousNodes(ctx context.Context, 
 	return nil
 }
 
-func (stp *SubtreeProcessor) moveBackBlockCreateNewSubtrees(ctx context.Context, block *model.Block, createProperlySizedSubtrees bool) ([][]subtreepkg.SubtreeNode, []chainhash.Hash, error) {
+func (stp *SubtreeProcessor) moveBackBlockCreateNewSubtrees(ctx context.Context, block *model.Block, createProperlySizedSubtrees bool) ([][]subtreepkg.Node, []chainhash.Hash, error) {
 	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "moveBackBlockCreateNewSubtrees",
 		tracing.WithLogMessage(stp.logger, "[moveBackBlock:CreateNewSubtrees][%s] with %d subtrees: create new subtrees", block.String(), len(block.Subtrees)),
 	)
@@ -2246,7 +2246,7 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 	return nil
 }
 
-func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block *model.Block) ([][]subtreepkg.SubtreeNode, [][]subtreepkg.TxInpoints, []chainhash.Hash, error) {
+func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block *model.Block) ([][]subtreepkg.Node, [][]subtreepkg.TxInpoints, []chainhash.Hash, error) {
 	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "moveBackBlockGetSubtrees",
 		tracing.WithLogMessage(stp.logger, "[moveBackBlock:GetSubtrees][%s] with %d subtrees: get subtrees", block.String(), len(block.Subtrees)),
 	)
@@ -2256,7 +2256,7 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 	util.SafeSetLimit(g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
 
 	// get all the subtrees in parallel
-	subtreesNodes := make([][]subtreepkg.SubtreeNode, len(block.Subtrees))
+	subtreesNodes := make([][]subtreepkg.Node, len(block.Subtrees))
 	subtreeMetaTxInpoints := make([][]subtreepkg.TxInpoints, len(block.Subtrees))
 	conflictingHashes := make([]chainhash.Hash, 0, 1024) // preallocate some space
 	conflictingHashesMu := sync.Mutex{}
@@ -2508,7 +2508,7 @@ func (stp *SubtreeProcessor) processOwnBlockNodes(_ context.Context, block *mode
 }
 
 // processOwnBlockSubtreeNodes processes nodes from a subtree for our own block
-func (stp *SubtreeProcessor) processOwnBlockSubtreeNodes(block *model.Block, nodes []subtreepkg.SubtreeNode, currentTxMap *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], removeMapLength int, coinbaseID *chainhash.Hash, skipNotification bool) error {
+func (stp *SubtreeProcessor) processOwnBlockSubtreeNodes(block *model.Block, nodes []subtreepkg.Node, currentTxMap *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints], removeMapLength int, coinbaseID *chainhash.Hash, skipNotification bool) error {
 	for _, node := range nodes {
 		if node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
 			continue
@@ -2862,7 +2862,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	util.SafeSetLimit(g, stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
 
 	// we need to process this in order, so we first process all subtrees in parallel, but keeping the order
-	remainderSubtrees := make([][]subtreepkg.SubtreeNode, len(chainedSubtrees))
+	remainderSubtrees := make([][]subtreepkg.Node, len(chainedSubtrees))
 	removeMapLength := stp.removeMap.Length()
 
 	for idx, subtree := range chainedSubtrees {
@@ -2870,7 +2870,7 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 		st := subtree
 
 		g.Go(func() error {
-			remainderSubtrees[idx] = make([]subtreepkg.SubtreeNode, 0, len(st.Nodes)/10) // expect max 10% of the nodes to be different
+			remainderSubtrees[idx] = make([]subtreepkg.Node, 0, len(st.Nodes)/10) // expect max 10% of the nodes to be different
 			// don't use the util function, keep the memory local in this function, no jumping between heap and stack
 			// err = st.Difference(transactionMap, &remainderSubtrees[idx])
 			for _, node := range st.Nodes {

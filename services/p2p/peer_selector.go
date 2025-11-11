@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"sort"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -10,9 +11,10 @@ import (
 
 // SelectionCriteria defines criteria for peer selection
 type SelectionCriteria struct {
-	LocalHeight  int32
-	ForcedPeerID peer.ID // If set, only this peer will be selected
-	PreviousPeer peer.ID // The previously selected peer, if any
+	LocalHeight         int32
+	ForcedPeerID        peer.ID       // If set, only this peer will be selected
+	PreviousPeer        peer.ID       // The previously selected peer, if any
+	SyncAttemptCooldown time.Duration // Cooldown period before retrying a peer
 }
 
 // PeerSelector handles peer selection logic
@@ -114,14 +116,28 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*PeerInfo, criteria Se
 		return ""
 	}
 
-	// Sort candidates
-	// Priority: 1) BanScore (asc), 2) Height (desc for full, asc for pruned), 3) HealthDuration (asc), 4) PeerID
+	// Sort candidates by: 1) ReputationScore (descending), 2) BanScore (ascending), 3) Height (descending), 4) PeerID (for stability)
+	//
+	// Reputation score is prioritized because:
+	// - It's a comprehensive measure of peer reliability (0-100 scale)
+	// - It takes into account success rate, failure rate, malicious behavior, and response time
+	// - A peer with a higher reputation score is more trustworthy and likely to provide valid data
+	// - Example: If we're at height 700, and have two peers:
+	//   * Peer A at height 1000 with reputation 30 (low reliability, many failures)
+	//   * Peer B at height 800 with reputation 85 (high reliability, few failures)
+	//   We prefer Peer B despite its lower height, as it's more reliable
+	// - Ban score is still considered as a secondary factor for additional safety
+	// - This strategy minimizes the risk of syncing invalid data and reduces wasted effort
 	sort.Slice(candidates, func(i, j int) bool {
-		// First priority: Lower ban score is better (more trustworthy peer)
+		// First priority: Higher reputation score is better (more trustworthy peer)
+		if candidates[i].ReputationScore != candidates[j].ReputationScore {
+			return candidates[i].ReputationScore > candidates[j].ReputationScore
+		}
+		// Second priority: Lower ban score is better (additional safety check)
 		if candidates[i].BanScore != candidates[j].BanScore {
 			return candidates[i].BanScore < candidates[j].BanScore
 		}
-		// Second priority: Height preference depends on node type
+		// Third priority: Higher block height is better (more data available)
 		if candidates[i].Height != candidates[j].Height {
 			if isFullNode {
 				// Full nodes: prefer higher height (more data)
@@ -130,11 +146,8 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*PeerInfo, criteria Se
 			// Pruned nodes: prefer LOWER height (youngest, less UTXO pruning)
 			return candidates[i].Height < candidates[j].Height
 		}
-		// Third priority: Sort by peer health duration (lower is better)
-		if candidates[i].HealthDuration != candidates[j].HealthDuration {
-			return candidates[i].HealthDuration < candidates[j].HealthDuration
-		}
 		// Fourth priority: Sort by peer ID for deterministic ordering
+		// This ensures consistent selection when peers have identical scores and heights
 		return candidates[i].ID < candidates[j].ID
 	})
 
@@ -165,22 +178,16 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*PeerInfo, criteria Se
 }
 
 // isEligible checks if a peer meets selection criteria
-func (ps *PeerSelector) isEligible(p *PeerInfo, _ SelectionCriteria) bool {
+func (ps *PeerSelector) isEligible(p *PeerInfo, criteria SelectionCriteria) bool {
 	// Always exclude banned peers
 	if p.IsBanned {
 		ps.logger.Debugf("[PeerSelector] Peer %s is banned (score: %d)", p.ID, p.BanScore)
 		return false
 	}
 
-	// Check health
-	if !p.IsHealthy {
-		ps.logger.Debugf("[PeerSelector] Peer %s not healthy", p.ID)
-		return false
-	}
-
-	// Check DataHub requirement
+	// Check DataHub URL requirement - this protects against listen-only nodes
 	if p.DataHubURL == "" {
-		ps.logger.Debugf("[PeerSelector] Peer %s has no DataHub URL", p.ID)
+		ps.logger.Debugf("[PeerSelector] Peer %s has no DataHub URL (listen-only node)", p.ID)
 		return false
 	}
 
@@ -194,6 +201,22 @@ func (ps *PeerSelector) isEligible(p *PeerInfo, _ SelectionCriteria) bool {
 	if p.Height <= 0 {
 		ps.logger.Debugf("[PeerSelector] Peer %s has invalid height %d", p.ID, p.Height)
 		return false
+	}
+
+	// Check reputation threshold - peers with very low reputation should not be selected
+	if p.ReputationScore < 20.0 {
+		ps.logger.Debugf("[PeerSelector] Peer %s has very low reputation %.2f (below threshold 20.0)", p.ID, p.ReputationScore)
+		return false
+	}
+
+	// Check sync attempt cooldown if specified
+	if criteria.SyncAttemptCooldown > 0 && !p.LastSyncAttempt.IsZero() {
+		timeSinceLastAttempt := time.Since(p.LastSyncAttempt)
+		if timeSinceLastAttempt < criteria.SyncAttemptCooldown {
+			ps.logger.Debugf("[PeerSelector] Peer %s attempted recently (%v ago, cooldown: %v)",
+				p.ID, timeSinceLastAttempt.Round(time.Second), criteria.SyncAttemptCooldown)
+			return false
+		}
 	}
 
 	return true

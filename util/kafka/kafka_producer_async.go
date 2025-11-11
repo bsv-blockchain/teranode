@@ -327,7 +327,22 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 					Value: sarama.ByteEncoder(msgBytes.Value),
 				}
 
-				c.Producer.Input() <- message
+				// Check if closed again right before sending to avoid race condition
+				// where Close() is called between the check above and the send below
+				if c.closed.Load() {
+					break
+				}
+
+				// Use a function with recover to safely handle sends to potentially closed channel
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							// Channel was closed during send, this is expected during shutdown
+							c.Config.Logger.Debugf("[kafka] Recovered from send to closed channel during shutdown")
+						}
+					}()
+					c.Producer.Input() <- message
+				}()
 			}
 		}()
 

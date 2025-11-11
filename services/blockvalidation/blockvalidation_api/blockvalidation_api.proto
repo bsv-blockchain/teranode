@@ -13,6 +13,7 @@ service BlockValidationAPI {
   rpc ProcessBlock (ProcessBlockRequest) returns (EmptyMessage) {}
   rpc ValidateBlock (ValidateBlockRequest) returns (ValidateBlockResponse) {}
   rpc RevalidateBlock (RevalidateBlockRequest) returns (EmptyMessage) {}
+  rpc GetCatchupStatus (EmptyMessage) returns (CatchupStatusResponse) {}
 }
 
 // swagger:model EmptyMessage
@@ -30,7 +31,7 @@ message BlockFoundRequest {
   bytes hash = 1;
   string base_url = 2;
   bool wait_to_complete = 3;
-  string peer_id = 4; // P2P peer identifier for peerMetrics tracking
+  string peer_id = 4; // P2P peer identifier for peer tracking via P2P service
 }
 
 // swagger:model ProcessBlockRequest
@@ -38,7 +39,7 @@ message ProcessBlockRequest {
   bytes block = 1;
   uint32 height = 2;
   string base_url = 3;
-  string peer_id = 4; // P2P peer identifier for peerMetrics tracking
+  string peer_id = 4; // P2P peer identifier for peer tracking via P2P service
 }
 
 // swagger:model ValidateBlockRequest
@@ -57,4 +58,36 @@ message ValidateBlockResponse {
 // swagger:model RevalidateBlockRequest
 message RevalidateBlockRequest {
   bytes hash = 1;
+}
+
+// swagger:model PreviousCatchupAttempt
+message PreviousCatchupAttempt {
+  string peer_id = 1;
+  string peer_url = 2;
+  string target_block_hash = 3;
+  uint32 target_block_height = 4;
+  string error_message = 5;
+  string error_type = 6;
+  int64 attempt_time = 7;
+  int64 duration_ms = 8;
+  int64 blocks_validated = 9;
+}
+
+// swagger:model CatchupStatusResponse
+message CatchupStatusResponse {
+  bool is_catching_up = 1;
+  string peer_id = 2;
+  string peer_url = 3;
+  string target_block_hash = 4;
+  uint32 target_block_height = 5;
+  uint32 current_height = 6;
+  int32 total_blocks = 7;
+  int64 blocks_fetched = 8;
+  int64 blocks_validated = 9;
+  int64 start_time = 10;
+  int64 duration_ms = 11;
+  uint32 fork_depth = 12;
+  string common_ancestor_hash = 13;
+  uint32 common_ancestor_height = 14;
+  PreviousCatchupAttempt previous_attempt = 15;
 }

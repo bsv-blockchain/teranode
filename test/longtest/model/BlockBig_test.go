@@ -171,7 +171,7 @@ func createTestBlockWithMultipleTxs(t *testing.T, txCount uint64, subtreeSize in
 
 	var (
 		subtree           *subtreepkg.Subtree
-		subtreeMeta       *subtreepkg.SubtreeMeta
+		subtreeMeta       *subtreepkg.Meta
 		subtreeBytes      []byte
 		firstSubtreeBytes []byte
 		subtreeMetaBytes  []byte

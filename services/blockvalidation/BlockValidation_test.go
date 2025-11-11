@@ -157,7 +157,7 @@ func (m *MockSubtreeValidationClient) CheckSubtreeFromBlock(ctx context.Context,
 	return nil
 }
 
-func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
+func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string) error {
 	blockBytes, err := block.Bytes()
 	if err != nil {
 		return errors.NewServiceError("failed to serialize block for subtree validation", err)
@@ -166,6 +166,7 @@ func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, bl
 	request := subtreevalidation_api.CheckBlockSubtreesRequest{
 		Block:   blockBytes,
 		BaseUrl: baseURL,
+		PeerId:  peerID,
 	}
 
 	_, err = m.server.CheckBlockSubtrees(ctx, &request)
@@ -231,7 +232,7 @@ func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockcha
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -1502,7 +1503,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 		defer deferFunc()
 
 		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
-		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
@@ -1511,7 +1512,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			Subtrees: make([]*chainhash.Hash, 0),
 		}
 
-		err = blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000")
+		err = blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000")
 		require.NoError(t, err)
 	})
 
@@ -1521,7 +1522,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 
 		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 		subtreeValidationClient.Mock.On("CheckSubtreeFromBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 		blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, nil, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
@@ -1536,7 +1537,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			},
 		}
 
-		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000"))
+		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000"))
 	})
 
 	t.Run("fallback to series", func(t *testing.T) {
@@ -1545,7 +1546,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 
 		subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
 		// First call - for subtree1 - success
-		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything).
+		subtreeValidationClient.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).
 			Once().
 			Run(func(args mock.Arguments) {
@@ -1569,10 +1570,10 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			},
 		}
 
-		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "http://localhost:8000"))
+		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000"))
 
 		// check that the subtree validation was called 3 times
-		assert.Len(t, subtreeValidationClient.Mock.Calls, 1)
+		assert.Len(t, subtreeValidationClient.Calls, 1)
 	})
 }
 

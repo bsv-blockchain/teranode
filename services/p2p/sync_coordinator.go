@@ -25,7 +25,6 @@ type SyncCoordinator struct {
 	settings         *settings.Settings
 	registry         *PeerRegistry
 	selector         *PeerSelector
-	healthChecker    *PeerHealthChecker
 	banManager       PeerBanManagerI
 	blockchainClient blockchain.ClientI
 
@@ -36,6 +35,12 @@ type SyncCoordinator struct {
 	lastSyncTrigger time.Time // Track when we last triggered sync
 	lastLocalHeight uint32    // Track last known local height
 	lastBlockHash   string    // Track last known block hash
+
+	// Backoff management
+	allPeersAttempted       bool      // Flag when all eligible peers have been tried
+	lastAllPeersAttemptTime time.Time // When we last exhausted all peers
+	backoffMultiplier       int       // Current backoff multiplier (1, 2, 4, 8...)
+	maxBackoffMultiplier    int       // Maximum backoff multiplier (e.g., 32)
 
 	// Dependencies for sync operations
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI // Kafka producer for blocks
@@ -52,7 +57,6 @@ func NewSyncCoordinator(
 	settings *settings.Settings,
 	registry *PeerRegistry,
 	selector *PeerSelector,
-	healthChecker *PeerHealthChecker,
 	banManager PeerBanManagerI,
 	blockchainClient blockchain.ClientI,
 	blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
@@ -62,11 +66,12 @@ func NewSyncCoordinator(
 		settings:                  settings,
 		registry:                  registry,
 		selector:                  selector,
-		healthChecker:             healthChecker,
 		banManager:                banManager,
 		blockchainClient:          blockchainClient,
 		blocksKafkaProducerClient: blocksKafkaProducerClient,
 		stopCh:                    make(chan struct{}),
+		backoffMultiplier:         1,
+		maxBackoffMultiplier:      32, // Max backoff of 64 seconds (32 * 2s)
 	}
 }
 
@@ -88,9 +93,9 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 	// Get all peers
 	peers := sc.registry.GetAllPeers()
 
-	// Check if any peer is significantly ahead of us
+	// Check if any peer is significantly ahead of us and has a good reputation
 	for _, p := range peers {
-		if p.Height > localHeight {
+		if p.Height > localHeight && p.ReputationScore > 20 {
 			return false // At least one peer is ahead
 		}
 	}
@@ -101,9 +106,6 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 // Start begins the coordinator
 func (sc *SyncCoordinator) Start(ctx context.Context) {
 	sc.logger.Infof("[SyncCoordinator] Starting sync coordinator")
-
-	// Start health checker
-	sc.healthChecker.Start(ctx)
 
 	// Start FSM monitoring
 	sc.wg.Add(1)
@@ -119,7 +121,6 @@ func (sc *SyncCoordinator) Start(ctx context.Context) {
 // Stop stops the coordinator
 func (sc *SyncCoordinator) Stop() {
 	close(sc.stopCh)
-	sc.healthChecker.Stop()
 	sc.wg.Wait()
 }
 
@@ -150,8 +151,13 @@ func (sc *SyncCoordinator) TriggerSync() error {
 	newPeer := sc.selectNewSyncPeer()
 	if newPeer == "" {
 		sc.logger.Warnf("[SyncCoordinator] No suitable sync peer found")
+		// Check if we've tried all available peers
+		sc.checkAllPeersAttempted()
 		return nil
 	}
+
+	// Record the sync attempt for this peer
+	sc.registry.RecordSyncAttempt(newPeer)
 
 	// Update current sync peer
 	sc.mu.Lock()
@@ -160,6 +166,9 @@ func (sc *SyncCoordinator) TriggerSync() error {
 	sc.syncStartTime = time.Now()
 	sc.lastSyncTrigger = time.Now() // Track when we trigger sync
 	sc.mu.Unlock()
+
+	// Reset backoff if we found a peer to sync with
+	sc.resetBackoff()
 
 	// Notify if peer changed
 	if newPeer != oldPeer {
@@ -203,11 +212,11 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 	failedPeer := sc.currentSyncPeer
 	sc.mu.RUnlock()
 
-	// Mark the failed peer as unhealthy BEFORE clearing and triggering sync
-	// This ensures the peer selector won't re-select the same peer
+	// Record failure for the failed peer BEFORE clearing and triggering sync
+	// This ensures reputation is updated so the peer selector won't re-select the same peer
 	if failedPeer != "" {
-		sc.logger.Infof("[SyncCoordinator] Marking failed peer %s as unhealthy", failedPeer)
-		sc.registry.UpdateHealth(failedPeer, false)
+		sc.logger.Infof("[SyncCoordinator] Recording failure for failed peer %s", failedPeer)
+		sc.registry.RecordCatchupFailure(failedPeer)
 	}
 
 	// Clear current sync peer
@@ -234,8 +243,9 @@ func (sc *SyncCoordinator) selectNewSyncPeer() peer.ID {
 
 	// Build selection criteria
 	criteria := SelectionCriteria{
-		LocalHeight:  localHeight,
-		PreviousPeer: previousPeer,
+		LocalHeight:         localHeight,
+		PreviousPeer:        previousPeer,
+		SyncAttemptCooldown: 1 * time.Minute, // Don't retry peers for at least 1 minute
 	}
 
 	// Check for forced peer
@@ -294,6 +304,11 @@ func (sc *SyncCoordinator) checkFSMState(ctx context.Context) {
 		return
 	}
 
+	// Check if we're in backoff mode
+	if sc.isInBackoffPeriod() {
+		return
+	}
+
 	currentState, err := sc.blockchainClient.GetFSMCurrentState(ctx)
 	if err != nil {
 		sc.logger.Errorf("[SyncCoordinator] Failed to get FSM state: %v", err)
@@ -310,6 +325,9 @@ func (sc *SyncCoordinator) checkFSMState(ctx context.Context) {
 
 	// When FSM is RUNNING, we need to find a new sync peer and trigger catchup
 	if *currentState == blockchain_api.FSMStateType_RUNNING {
+		// Check if we should attempt reputation recovery
+		sc.considerReputationRecovery()
+
 		sc.handleRunningState(ctx)
 	}
 }
@@ -332,19 +350,23 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 				sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed (local height: %d < peer height: %d)",
 					currentPeer, localHeight, peerInfo.Height)
 
-				// Add ban score for catchup failure
-				// Disabled for now, there are many situations where this can happen, we should ban based on actual
-				// errors happening in the sync, not during FSM transitions
-				// if sc.banManager != nil {
-				//	score, banned := sc.banManager.AddScore(string(currentPeer), ReasonCatchupFailure)
-				//	if banned {
-				//		sc.logger.Warnf("[SyncCoordinator] Peer %s banned after catchup failure (score: %d)", currentPeer, score)
-				//	} else {
-				//		sc.logger.Infof("[SyncCoordinator] Added ban score to peer %s for catchup failure (score: %d)", currentPeer, score)
-				//	}
-				//	// Update the ban status in the registry so the peer selector knows about it
-				//	sc.registry.UpdateBanStatus(currentPeer, score, banned)
-				// }
+				// Record catchup failure for reputation tracking
+				/* if sc.registry != nil {
+					// Get peer info to check failure count
+					peerInfo, _ := sc.registry.GetPeer(currentPeer)
+
+					// If this peer has failed multiple times recently, treat as malicious
+					// (likely on an invalid chain)
+					if peerInfo.InteractionFailures > 2 &&
+						time.Since(peerInfo.LastInteractionFailure) < 5*time.Minute {
+						sc.registry.RecordMaliciousInteraction(currentPeer)
+						sc.logger.Warnf("[SyncCoordinator] Peer %s has failed %d times recently, marking as potentially malicious",
+							currentPeer, peerInfo.InteractionFailures)
+					} else {
+						sc.registry.RecordCatchupFailure(currentPeer)
+						sc.logger.Infof("[SyncCoordinator] Recorded catchup failure for peer %s (reputation will decrease)", currentPeer)
+					}
+				}*/
 
 				sc.ClearSyncPeer()
 				_ = sc.TriggerSync()
@@ -353,7 +375,9 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 				// We've caught up or surpassed the peer, this is success not failure
 				sc.logger.Infof("[SyncCoordinator] Sync completed successfully with peer %s (local height: %d, peer height: %d)",
 					currentPeer, localHeight, peerInfo.Height)
-				// Don't add ban score, just look for a better peer if needed
+				// Reset backoff on success
+				sc.resetBackoff()
+				// Look for a better peer if needed
 				_ = sc.TriggerSync()
 				return true // Transition handled
 			}
@@ -462,7 +486,13 @@ func (sc *SyncCoordinator) logPeerList(peers []*PeerInfo) {
 // logCandidateList logs the list of candidate peers that were skipped
 func (sc *SyncCoordinator) logCandidateList(candidates []*PeerInfo) {
 	for _, p := range candidates {
-		sc.logger.Infof("[SyncCoordinator] Candidate skipped: %s (height=%d, banScore=%d, url=%s)", p.ID, p.Height, p.BanScore, p.DataHubURL)
+		// Include more details about why peer might be skipped
+		lastAttemptStr := "never"
+		if !p.LastSyncAttempt.IsZero() {
+			lastAttemptStr = fmt.Sprintf("%v ago", time.Since(p.LastSyncAttempt).Round(time.Second))
+		}
+		sc.logger.Infof("[SyncCoordinator] Candidate skipped: %s (height=%d, reputation=%.1f, lastAttempt=%s, url=%s)",
+			p.ID, p.Height, p.ReputationScore, lastAttemptStr, p.DataHubURL)
 	}
 }
 
@@ -505,9 +535,9 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 		return
 	}
 
-	// Check if peer is still healthy
-	if !peerInfo.IsHealthy {
-		sc.logger.Warnf("[SyncCoordinator] Sync peer %s is unhealthy", currentPeer)
+	// Check if peer has low reputation
+	if peerInfo.ReputationScore < 20.0 {
+		sc.logger.Warnf("[SyncCoordinator] Sync peer %s has low reputation (%.2f)", currentPeer, peerInfo.ReputationScore)
 		sc.ClearSyncPeer()
 		_ = sc.TriggerSync()
 		return
@@ -518,8 +548,8 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 		timeSinceLastMessage := time.Since(peerInfo.LastMessageTime)
 		if timeSinceLastMessage > 1*time.Minute {
 			sc.logger.Warnf("[SyncCoordinator] Sync peer %s inactive for %v", currentPeer, timeSinceLastMessage)
-			// Mark peer as unhealthy due to inactivity
-			sc.registry.UpdateHealth(currentPeer, false)
+			// Record failure due to inactivity
+			sc.registry.RecordCatchupFailure(currentPeer)
 			sc.ClearSyncPeer()
 			_ = sc.TriggerSync()
 			return
@@ -615,6 +645,115 @@ func (sc *SyncCoordinator) checkAndUpdateURLResponsiveness(peers []*PeerInfo) {
 				sc.logger.Debugf("[SyncCoordinator] Peer %s URL %s is not responsive", p.ID, p.DataHubURL)
 			}
 		}
+	}
+}
+
+// isInBackoffPeriod checks if we're currently in a backoff period
+func (sc *SyncCoordinator) isInBackoffPeriod() bool {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+
+	if !sc.allPeersAttempted {
+		return false // Not in backoff if we haven't tried all peers
+	}
+
+	// Calculate backoff duration based on current multiplier
+	backoffDuration := time.Duration(sc.backoffMultiplier) * fastMonitorInterval
+	timeSinceLastAttempt := time.Since(sc.lastAllPeersAttemptTime)
+
+	if timeSinceLastAttempt < backoffDuration {
+		remainingTime := backoffDuration - timeSinceLastAttempt
+		sc.logger.Infof("[SyncCoordinator] In backoff period, %v remaining (multiplier: %dx)",
+			remainingTime.Round(time.Second), sc.backoffMultiplier)
+		return true
+	}
+
+	// Backoff period expired, increase multiplier for next time
+	if sc.backoffMultiplier < sc.maxBackoffMultiplier {
+		sc.backoffMultiplier *= 2
+	}
+
+	return false
+}
+
+// resetBackoff resets the backoff state when sync succeeds
+func (sc *SyncCoordinator) resetBackoff() {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	if sc.allPeersAttempted {
+		sc.logger.Infof("[SyncCoordinator] Resetting backoff state after successful sync")
+		sc.allPeersAttempted = false
+		sc.backoffMultiplier = 1
+		sc.lastAllPeersAttemptTime = time.Time{}
+	}
+}
+
+// enterBackoffMode marks that all peers have been attempted
+func (sc *SyncCoordinator) enterBackoffMode() {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	if !sc.allPeersAttempted {
+		sc.allPeersAttempted = true
+		sc.lastAllPeersAttemptTime = time.Now()
+		backoffDuration := time.Duration(sc.backoffMultiplier) * fastMonitorInterval
+		sc.logger.Warnf("[SyncCoordinator] All eligible peers have been attempted, entering backoff for %v",
+			backoffDuration)
+	}
+}
+
+// checkAllPeersAttempted checks if all eligible peers have been attempted recently
+func (sc *SyncCoordinator) checkAllPeersAttempted() {
+	// Get all peers and check how many were attempted recently
+	peers := sc.registry.GetAllPeers()
+	localHeight := sc.getLocalHeightSafe()
+
+	eligibleCount := 0
+	recentlyAttemptedCount := 0
+	syncAttemptCooldown := 1 * time.Minute // Don't retry a peer for at least 1 minute
+
+	for _, p := range peers {
+		// Count peers that would normally be eligible
+		if p.Height > localHeight && !p.IsBanned &&
+			p.DataHubURL != "" && p.URLResponsive && p.ReputationScore >= 20 {
+			eligibleCount++
+
+			// Check if attempted recently
+			if !p.LastSyncAttempt.IsZero() &&
+				time.Since(p.LastSyncAttempt) < syncAttemptCooldown {
+				recentlyAttemptedCount++
+			}
+		}
+	}
+
+	// If all eligible peers were attempted recently, enter backoff
+	if eligibleCount > 0 && eligibleCount == recentlyAttemptedCount {
+		sc.logger.Warnf("[SyncCoordinator] All %d eligible peers have been attempted recently",
+			eligibleCount)
+		sc.enterBackoffMode()
+	}
+}
+
+// considerReputationRecovery checks if any bad peers should have their reputation reset
+func (sc *SyncCoordinator) considerReputationRecovery() {
+	// Calculate cooldown based on how many times we've been in backoff
+	baseCooldown := 5 * time.Minute
+	if sc.backoffMultiplier > 1 {
+		// Exponentially increase cooldown if we've been in backoff multiple times
+		cooldownMultiplier := sc.backoffMultiplier / 2
+		if cooldownMultiplier < 1 {
+			cooldownMultiplier = 1
+		}
+		baseCooldown *= time.Duration(cooldownMultiplier)
+	}
+
+	peersRecovered := sc.registry.ReconsiderBadPeers(baseCooldown)
+	if peersRecovered > 0 {
+		sc.logger.Infof("[SyncCoordinator] Recovered reputation for %d peers after %v cooldown",
+			peersRecovered, baseCooldown)
+		// Reset backoff since we have new peers to try
+		sc.resetBackoff()
 	}
 }
 

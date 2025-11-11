@@ -1087,7 +1087,7 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 //
 // Parameters:
 //   - node: Transaction node to add
-func (b *BlockAssembler) AddTx(node subtree.SubtreeNode, txInpoints subtree.TxInpoints) {
+func (b *BlockAssembler) AddTx(node subtree.Node, txInpoints subtree.TxInpoints) {
 	b.subtreeProcessor.Add(node, txInpoints)
 }
 
@@ -2141,7 +2141,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 	}
 
 	for _, unminedTransaction := range unminedTransactions {
-		subtreeNode := subtree.SubtreeNode{
+		subtreeNode := subtree.Node{
 			Hash:        *unminedTransaction.Hash,
 			Fee:         unminedTransaction.Fee,
 			SizeInBytes: unminedTransaction.Size,

@@ -125,11 +125,11 @@ func (m *MockSubtreeProcessor) SubtreeCount() int {
 }
 
 // Add implements Interface.Add
-func (m *MockSubtreeProcessor) Add(node subtree.SubtreeNode, txInpoints subtree.TxInpoints) {
+func (m *MockSubtreeProcessor) Add(node subtree.Node, txInpoints subtree.TxInpoints) {
 	m.Called(node, txInpoints)
 }
 
-func (m *MockSubtreeProcessor) AddDirectly(node subtree.SubtreeNode, txInpoints subtree.TxInpoints, skipNotification bool) error {
+func (m *MockSubtreeProcessor) AddDirectly(node subtree.Node, txInpoints subtree.TxInpoints, skipNotification bool) error {
 	args := m.Called(node, txInpoints, skipNotification)
 
 	if args.Get(0) == nil {

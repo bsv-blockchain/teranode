@@ -100,7 +100,165 @@ message AddBanScoreRequest {
     bool success = 1;
     string error = 2;
   }
-  
+
+  // Catchup metrics reporting messages
+  message RecordCatchupAttemptRequest {
+    string peer_id = 1;
+  }
+
+  message RecordCatchupAttemptResponse {
+    bool ok = 1;
+  }
+
+  message RecordCatchupSuccessRequest {
+    string peer_id = 1;
+    int64 duration_ms = 2; // Duration in milliseconds
+  }
+
+  message RecordCatchupSuccessResponse {
+    bool ok = 1;
+  }
+
+  message RecordCatchupFailureRequest {
+    string peer_id = 1;
+  }
+
+  message RecordCatchupFailureResponse {
+    bool ok = 1;
+  }
+
+  message RecordCatchupMaliciousRequest {
+    string peer_id = 1;
+  }
+
+  message RecordCatchupMaliciousResponse {
+    bool ok = 1;
+  }
+
+  message UpdateCatchupReputationRequest {
+    string peer_id = 1;
+    double score = 2; // Score between 0-100
+  }
+
+  message UpdateCatchupReputationResponse {
+    bool ok = 1;
+  }
+
+  message UpdateCatchupErrorRequest {
+    string peer_id = 1;
+    string error_msg = 2;
+  }
+
+  message UpdateCatchupErrorResponse {
+    bool ok = 1;
+  }
+
+  message GetPeersForCatchupRequest {
+    // Empty for now, can add filtering params later
+  }
+
+  message PeerInfoForCatchup {
+    string id = 1;
+    int32 height = 2;
+    string block_hash = 3;
+    string data_hub_url = 4;
+    double catchup_reputation_score = 5;
+    int64 catchup_attempts = 6;
+    int64 catchup_successes = 7;
+    int64 catchup_failures = 8;
+  }
+
+  message GetPeersForCatchupResponse {
+    repeated PeerInfoForCatchup peers = 1;
+  }
+
+  // Report valid subtree reception
+  message ReportValidSubtreeRequest {
+    string peer_id = 1;      // Peer ID that provided the subtree
+    string subtree_hash = 2;
+  }
+
+  message ReportValidSubtreeResponse {
+    bool success = 1;
+    string message = 2;
+  }
+
+  // Report valid block reception
+  message ReportValidBlockRequest {
+    string peer_id = 1;      // Peer ID that provided the block
+    string block_hash = 2;
+  }
+
+  message ReportValidBlockResponse {
+    bool success = 1;
+    string message = 2;
+  }
+
+  // Messages for peer status checking
+  message IsPeerMaliciousRequest {
+    string peer_id = 1;
+  }
+
+  message IsPeerMaliciousResponse {
+    bool is_malicious = 1;
+    string reason = 2;  // Optional reason why peer is considered malicious
+  }
+
+  message IsPeerUnhealthyRequest {
+    string peer_id = 1;
+  }
+
+  message IsPeerUnhealthyResponse {
+    bool is_unhealthy = 1;
+    string reason = 2;  // Optional reason why peer is considered unhealthy
+    float reputation_score = 3;  // Current reputation score
+  }
+
+  // Comprehensive peer information with all registry metadata
+  message PeerRegistryInfo {
+    string id = 1;
+    int32 height = 2;
+    string block_hash = 3;
+    string data_hub_url = 4;
+    int32 ban_score = 5;
+    bool is_banned = 6;
+    bool is_connected = 7;
+    int64 connected_at = 8;  // Unix timestamp
+    uint64 bytes_received = 9;
+    int64 last_block_time = 10;  // Unix timestamp
+    int64 last_message_time = 11;  // Unix timestamp
+    bool url_responsive = 12;
+    int64 last_url_check = 13;  // Unix timestamp
+
+    // Interaction/catchup metrics
+    int64 interaction_attempts = 14;
+    int64 interaction_successes = 15;
+    int64 interaction_failures = 16;
+    int64 last_interaction_attempt = 17;  // Unix timestamp
+    int64 last_interaction_success = 18;  // Unix timestamp
+    int64 last_interaction_failure = 19;  // Unix timestamp
+    double reputation_score = 20;
+    int64 malicious_count = 21;
+    int64 avg_response_time_ms = 22;
+    string storage = 23;
+    string client_name = 24;  // Human-readable name of the client
+    string last_catchup_error = 25;  // Last error message from catchup attempt
+    int64 last_catchup_error_time = 26;  // Unix timestamp of last catchup error
+  }
+
+  message GetPeerRegistryResponse {
+    repeated PeerRegistryInfo peers = 1;
+  }
+
+  message GetPeerRequest {
+    string peer_id = 1;
+  }
+
+  message GetPeerResponse {
+    PeerRegistryInfo peer = 1;  // Will be null/empty if peer not found
+    bool found = 2;
+  }
+
   // Add new service for peer operations
   service PeerService {
     rpc GetPeers(google.protobuf.Empty) returns (GetPeersResponse) {}
@@ -112,5 +270,28 @@ message AddBanScoreRequest {
     rpc AddBanScore(AddBanScoreRequest) returns (AddBanScoreResponse) {}
     rpc ConnectPeer(ConnectPeerRequest) returns (ConnectPeerResponse) {}
     rpc DisconnectPeer(DisconnectPeerRequest) returns (DisconnectPeerResponse) {}
+
+    // Catchup metrics reporting endpoints
+    rpc RecordCatchupAttempt(RecordCatchupAttemptRequest) returns (RecordCatchupAttemptResponse) {}
+    rpc RecordCatchupSuccess(RecordCatchupSuccessRequest) returns (RecordCatchupSuccessResponse) {}
+    rpc RecordCatchupFailure(RecordCatchupFailureRequest) returns (RecordCatchupFailureResponse) {}
+    rpc RecordCatchupMalicious(RecordCatchupMaliciousRequest) returns (RecordCatchupMaliciousResponse) {}
+    rpc UpdateCatchupReputation(UpdateCatchupReputationRequest) returns (UpdateCatchupReputationResponse) {}
+    rpc UpdateCatchupError(UpdateCatchupErrorRequest) returns (UpdateCatchupErrorResponse) {}
+    rpc GetPeersForCatchup(GetPeersForCatchupRequest) returns (GetPeersForCatchupResponse) {}
+
+    // Subtree and block validation reporting
+    rpc ReportValidSubtree(ReportValidSubtreeRequest) returns (ReportValidSubtreeResponse) {}
+    rpc ReportValidBlock(ReportValidBlockRequest) returns (ReportValidBlockResponse) {}
+
+    // Peer status checking
+    rpc IsPeerMalicious(IsPeerMaliciousRequest) returns (IsPeerMaliciousResponse) {}
+    rpc IsPeerUnhealthy(IsPeerUnhealthyRequest) returns (IsPeerUnhealthyResponse) {}
+
+    // Get full peer registry data with all metadata
+    rpc GetPeerRegistry(google.protobuf.Empty) returns (GetPeerRegistryResponse) {}
+
+    // Get single peer information by peer ID
+    rpc GetPeer(GetPeerRequest) returns (GetPeerResponse) {}
   }
   

@@ -13,6 +13,9 @@ import (
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -191,7 +194,7 @@ func TestGetMerkleProof(t *testing.T) {
 		// Create mock subtree with proper initialization
 		mockSubtree, err := subtree.NewTreeByLeafCount(2)
 		require.NoError(t, err, "Failed to create subtree")
-		mockSubtree.Nodes = []subtree.SubtreeNode{
+		mockSubtree.Nodes = []subtree.Node{
 			{Hash: *txHash},
 			{Hash: chainhash.Hash{}},
 		}
@@ -447,7 +450,7 @@ func TestGetMerkleProof(t *testing.T) {
 		}
 
 		mockSubtree, _ := subtree.NewTreeByLeafCount(2)
-		mockSubtree.Nodes = []subtree.SubtreeNode{
+		mockSubtree.Nodes = []subtree.Node{
 			{Hash: *txHash},
 			{Hash: chainhash.Hash{}},
 		}
@@ -505,7 +508,7 @@ func TestMerkleProofAdapter(t *testing.T) {
 		}
 
 		st := &subtree.Subtree{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *txHash},
 			},
 		}
@@ -587,7 +590,7 @@ func (m *MockRepositoryForMerkleProof) GetSubtree(ctx context.Context, hash *cha
 	return args.Get(0).(*subtree.Subtree), args.Error(1)
 }
 
-func (m *MockRepositoryForMerkleProof) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.SubtreeData, error) {
+func (m *MockRepositoryForMerkleProof) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {
 	return nil, nil
 }
 
@@ -617,4 +620,16 @@ func (m *MockRepositoryForMerkleProof) GetLegacyBlockReader(ctx context.Context,
 
 func (m *MockRepositoryForMerkleProof) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error) {
 	return nil, nil
+}
+
+func (m *MockRepositoryForMerkleProof) GetBlockchainClient() blockchain.ClientI {
+	return nil
+}
+
+func (m *MockRepositoryForMerkleProof) GetBlockvalidationClient() blockvalidation.Interface {
+	return nil
+}
+
+func (m *MockRepositoryForMerkleProof) GetP2PClient() p2p.ClientI {
+	return nil
 }

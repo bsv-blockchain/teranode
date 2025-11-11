@@ -130,6 +130,10 @@ type Server struct {
 
 	// currentBlockIDsMap is used to store the current block IDs for the current best block height
 	currentBlockIDsMap atomic.Pointer[map[uint32]bool]
+
+	// p2pClient interfaces with the P2P service
+	// Used to report successful subtree fetches to improve peer reputation
+	p2pClient P2PClientI
 }
 
 var (
@@ -175,6 +179,7 @@ func New(
 	blockchainClient blockchain.ClientI,
 	subtreeConsumerClient kafka.KafkaConsumerGroupI,
 	txmetaConsumerClient kafka.KafkaConsumerGroupI,
+	p2pClient P2PClientI,
 ) (*Server, error) {
 	u := &Server{
 		logger:                            logger,
@@ -191,6 +196,7 @@ func New(
 		subtreeConsumerClient:             subtreeConsumerClient,
 		txmetaConsumerClient:              txmetaConsumerClient,
 		invalidSubtreeDeDuplicateMap:      expiringmap.New[string, struct{}](time.Minute * 1),
+		p2pClient:                         p2pClient,
 	}
 
 	var err error

@@ -212,7 +212,7 @@ func handleSubtreeData(br *bufio.Reader, logger ulogger.Logger, settings *settin
 		return errors.NewProcessingError("error reading subtree", err)
 	}
 
-	var sd *subtree.SubtreeData
+	var sd *subtree.Data
 
 	sd, err = subtree.NewSubtreeDataFromReader(st, br)
 	if err != nil {
@@ -258,7 +258,7 @@ func handleSubtreeMeta(br *bufio.Reader, logger ulogger.Logger, settings *settin
 		return errors.NewProcessingError("error reading subtree", err)
 	}
 
-	var subtreeMeta *subtree.SubtreeMeta
+	var subtreeMeta *subtree.Meta
 
 	subtreeMeta, err = subtree.NewSubtreeMetaFromReader(st, br)
 	if err != nil {

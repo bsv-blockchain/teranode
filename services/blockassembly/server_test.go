@@ -177,7 +177,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		require.NoError(t, err)
 
 		for i := uint64(0); i < 10; i++ {
-			server.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+			server.blockAssembler.AddTx(subtreepkg.Node{
 				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
 				Fee:         i,
 				SizeInBytes: i,
@@ -402,7 +402,7 @@ func TestTxCount(t *testing.T) {
 		// to avoid TxInpoints serialization issues
 		for i := 0; i < 3; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
-			server.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+			server.blockAssembler.AddTx(subtreepkg.Node{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
@@ -425,7 +425,7 @@ func TestSubmitMiningSolution_InvalidBlock_HandlesReset(t *testing.T) {
 		// Add some transactions to create a mining candidate
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
-			server.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+			server.blockAssembler.AddTx(subtreepkg.Node{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
@@ -1164,7 +1164,7 @@ func TestRemoveTxIntensive(t *testing.T) {
 
 		// First add a transaction
 		txHash := chainhash.HashH([]byte("test-tx-to-remove"))
-		server.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+		server.blockAssembler.AddTx(subtreepkg.Node{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
@@ -1312,7 +1312,7 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 		// Add some transactions to create subtrees
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("mining-tx-%d", i)))
-			server.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+			server.blockAssembler.AddTx(subtreepkg.Node{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
@@ -1820,7 +1820,7 @@ func TestRemoveTxEdgeCases(t *testing.T) {
 
 		// Add a transaction first
 		txHash := chainhash.HashH([]byte("test-tx-remove"))
-		server.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+		server.blockAssembler.AddTx(subtreepkg.Node{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,

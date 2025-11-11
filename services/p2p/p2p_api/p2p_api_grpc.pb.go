@@ -20,15 +20,28 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	PeerService_GetPeers_FullMethodName       = "/p2p_api.PeerService/GetPeers"
-	PeerService_BanPeer_FullMethodName        = "/p2p_api.PeerService/BanPeer"
-	PeerService_UnbanPeer_FullMethodName      = "/p2p_api.PeerService/UnbanPeer"
-	PeerService_IsBanned_FullMethodName       = "/p2p_api.PeerService/IsBanned"
-	PeerService_ListBanned_FullMethodName     = "/p2p_api.PeerService/ListBanned"
-	PeerService_ClearBanned_FullMethodName    = "/p2p_api.PeerService/ClearBanned"
-	PeerService_AddBanScore_FullMethodName    = "/p2p_api.PeerService/AddBanScore"
-	PeerService_ConnectPeer_FullMethodName    = "/p2p_api.PeerService/ConnectPeer"
-	PeerService_DisconnectPeer_FullMethodName = "/p2p_api.PeerService/DisconnectPeer"
+	PeerService_GetPeers_FullMethodName                = "/p2p_api.PeerService/GetPeers"
+	PeerService_BanPeer_FullMethodName                 = "/p2p_api.PeerService/BanPeer"
+	PeerService_UnbanPeer_FullMethodName               = "/p2p_api.PeerService/UnbanPeer"
+	PeerService_IsBanned_FullMethodName                = "/p2p_api.PeerService/IsBanned"
+	PeerService_ListBanned_FullMethodName              = "/p2p_api.PeerService/ListBanned"
+	PeerService_ClearBanned_FullMethodName             = "/p2p_api.PeerService/ClearBanned"
+	PeerService_AddBanScore_FullMethodName             = "/p2p_api.PeerService/AddBanScore"
+	PeerService_ConnectPeer_FullMethodName             = "/p2p_api.PeerService/ConnectPeer"
+	PeerService_DisconnectPeer_FullMethodName          = "/p2p_api.PeerService/DisconnectPeer"
+	PeerService_RecordCatchupAttempt_FullMethodName    = "/p2p_api.PeerService/RecordCatchupAttempt"
+	PeerService_RecordCatchupSuccess_FullMethodName    = "/p2p_api.PeerService/RecordCatchupSuccess"
+	PeerService_RecordCatchupFailure_FullMethodName    = "/p2p_api.PeerService/RecordCatchupFailure"
+	PeerService_RecordCatchupMalicious_FullMethodName  = "/p2p_api.PeerService/RecordCatchupMalicious"
+	PeerService_UpdateCatchupReputation_FullMethodName = "/p2p_api.PeerService/UpdateCatchupReputation"
+	PeerService_UpdateCatchupError_FullMethodName      = "/p2p_api.PeerService/UpdateCatchupError"
+	PeerService_GetPeersForCatchup_FullMethodName      = "/p2p_api.PeerService/GetPeersForCatchup"
+	PeerService_ReportValidSubtree_FullMethodName      = "/p2p_api.PeerService/ReportValidSubtree"
+	PeerService_ReportValidBlock_FullMethodName        = "/p2p_api.PeerService/ReportValidBlock"
+	PeerService_IsPeerMalicious_FullMethodName         = "/p2p_api.PeerService/IsPeerMalicious"
+	PeerService_IsPeerUnhealthy_FullMethodName         = "/p2p_api.PeerService/IsPeerUnhealthy"
+	PeerService_GetPeerRegistry_FullMethodName         = "/p2p_api.PeerService/GetPeerRegistry"
+	PeerService_GetPeer_FullMethodName                 = "/p2p_api.PeerService/GetPeer"
 )
 
 // PeerServiceClient is the client API for PeerService service.
@@ -46,6 +59,24 @@ type PeerServiceClient interface {
 	AddBanScore(ctx context.Context, in *AddBanScoreRequest, opts ...grpc.CallOption) (*AddBanScoreResponse, error)
 	ConnectPeer(ctx context.Context, in *ConnectPeerRequest, opts ...grpc.CallOption) (*ConnectPeerResponse, error)
 	DisconnectPeer(ctx context.Context, in *DisconnectPeerRequest, opts ...grpc.CallOption) (*DisconnectPeerResponse, error)
+	// Catchup metrics reporting endpoints
+	RecordCatchupAttempt(ctx context.Context, in *RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*RecordCatchupAttemptResponse, error)
+	RecordCatchupSuccess(ctx context.Context, in *RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*RecordCatchupSuccessResponse, error)
+	RecordCatchupFailure(ctx context.Context, in *RecordCatchupFailureRequest, opts ...grpc.CallOption) (*RecordCatchupFailureResponse, error)
+	RecordCatchupMalicious(ctx context.Context, in *RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*RecordCatchupMaliciousResponse, error)
+	UpdateCatchupReputation(ctx context.Context, in *UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*UpdateCatchupReputationResponse, error)
+	UpdateCatchupError(ctx context.Context, in *UpdateCatchupErrorRequest, opts ...grpc.CallOption) (*UpdateCatchupErrorResponse, error)
+	GetPeersForCatchup(ctx context.Context, in *GetPeersForCatchupRequest, opts ...grpc.CallOption) (*GetPeersForCatchupResponse, error)
+	// Subtree and block validation reporting
+	ReportValidSubtree(ctx context.Context, in *ReportValidSubtreeRequest, opts ...grpc.CallOption) (*ReportValidSubtreeResponse, error)
+	ReportValidBlock(ctx context.Context, in *ReportValidBlockRequest, opts ...grpc.CallOption) (*ReportValidBlockResponse, error)
+	// Peer status checking
+	IsPeerMalicious(ctx context.Context, in *IsPeerMaliciousRequest, opts ...grpc.CallOption) (*IsPeerMaliciousResponse, error)
+	IsPeerUnhealthy(ctx context.Context, in *IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*IsPeerUnhealthyResponse, error)
+	// Get full peer registry data with all metadata
+	GetPeerRegistry(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetPeerRegistryResponse, error)
+	// Get single peer information by peer ID
+	GetPeer(ctx context.Context, in *GetPeerRequest, opts ...grpc.CallOption) (*GetPeerResponse, error)
 }
 
 type peerServiceClient struct {
@@ -146,6 +177,136 @@ func (c *peerServiceClient) DisconnectPeer(ctx context.Context, in *DisconnectPe
 	return out, nil
 }
 
+func (c *peerServiceClient) RecordCatchupAttempt(ctx context.Context, in *RecordCatchupAttemptRequest, opts ...grpc.CallOption) (*RecordCatchupAttemptResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordCatchupAttemptResponse)
+	err := c.cc.Invoke(ctx, PeerService_RecordCatchupAttempt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) RecordCatchupSuccess(ctx context.Context, in *RecordCatchupSuccessRequest, opts ...grpc.CallOption) (*RecordCatchupSuccessResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordCatchupSuccessResponse)
+	err := c.cc.Invoke(ctx, PeerService_RecordCatchupSuccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) RecordCatchupFailure(ctx context.Context, in *RecordCatchupFailureRequest, opts ...grpc.CallOption) (*RecordCatchupFailureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordCatchupFailureResponse)
+	err := c.cc.Invoke(ctx, PeerService_RecordCatchupFailure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) RecordCatchupMalicious(ctx context.Context, in *RecordCatchupMaliciousRequest, opts ...grpc.CallOption) (*RecordCatchupMaliciousResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordCatchupMaliciousResponse)
+	err := c.cc.Invoke(ctx, PeerService_RecordCatchupMalicious_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) UpdateCatchupReputation(ctx context.Context, in *UpdateCatchupReputationRequest, opts ...grpc.CallOption) (*UpdateCatchupReputationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateCatchupReputationResponse)
+	err := c.cc.Invoke(ctx, PeerService_UpdateCatchupReputation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) UpdateCatchupError(ctx context.Context, in *UpdateCatchupErrorRequest, opts ...grpc.CallOption) (*UpdateCatchupErrorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateCatchupErrorResponse)
+	err := c.cc.Invoke(ctx, PeerService_UpdateCatchupError_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) GetPeersForCatchup(ctx context.Context, in *GetPeersForCatchupRequest, opts ...grpc.CallOption) (*GetPeersForCatchupResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPeersForCatchupResponse)
+	err := c.cc.Invoke(ctx, PeerService_GetPeersForCatchup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) ReportValidSubtree(ctx context.Context, in *ReportValidSubtreeRequest, opts ...grpc.CallOption) (*ReportValidSubtreeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportValidSubtreeResponse)
+	err := c.cc.Invoke(ctx, PeerService_ReportValidSubtree_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) ReportValidBlock(ctx context.Context, in *ReportValidBlockRequest, opts ...grpc.CallOption) (*ReportValidBlockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportValidBlockResponse)
+	err := c.cc.Invoke(ctx, PeerService_ReportValidBlock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) IsPeerMalicious(ctx context.Context, in *IsPeerMaliciousRequest, opts ...grpc.CallOption) (*IsPeerMaliciousResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IsPeerMaliciousResponse)
+	err := c.cc.Invoke(ctx, PeerService_IsPeerMalicious_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) IsPeerUnhealthy(ctx context.Context, in *IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*IsPeerUnhealthyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IsPeerUnhealthyResponse)
+	err := c.cc.Invoke(ctx, PeerService_IsPeerUnhealthy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) GetPeerRegistry(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetPeerRegistryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPeerRegistryResponse)
+	err := c.cc.Invoke(ctx, PeerService_GetPeerRegistry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *peerServiceClient) GetPeer(ctx context.Context, in *GetPeerRequest, opts ...grpc.CallOption) (*GetPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPeerResponse)
+	err := c.cc.Invoke(ctx, PeerService_GetPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PeerServiceServer is the server API for PeerService service.
 // All implementations must embed UnimplementedPeerServiceServer
 // for forward compatibility.
@@ -161,6 +322,24 @@ type PeerServiceServer interface {
 	AddBanScore(context.Context, *AddBanScoreRequest) (*AddBanScoreResponse, error)
 	ConnectPeer(context.Context, *ConnectPeerRequest) (*ConnectPeerResponse, error)
 	DisconnectPeer(context.Context, *DisconnectPeerRequest) (*DisconnectPeerResponse, error)
+	// Catchup metrics reporting endpoints
+	RecordCatchupAttempt(context.Context, *RecordCatchupAttemptRequest) (*RecordCatchupAttemptResponse, error)
+	RecordCatchupSuccess(context.Context, *RecordCatchupSuccessRequest) (*RecordCatchupSuccessResponse, error)
+	RecordCatchupFailure(context.Context, *RecordCatchupFailureRequest) (*RecordCatchupFailureResponse, error)
+	RecordCatchupMalicious(context.Context, *RecordCatchupMaliciousRequest) (*RecordCatchupMaliciousResponse, error)
+	UpdateCatchupReputation(context.Context, *UpdateCatchupReputationRequest) (*UpdateCatchupReputationResponse, error)
+	UpdateCatchupError(context.Context, *UpdateCatchupErrorRequest) (*UpdateCatchupErrorResponse, error)
+	GetPeersForCatchup(context.Context, *GetPeersForCatchupRequest) (*GetPeersForCatchupResponse, error)
+	// Subtree and block validation reporting
+	ReportValidSubtree(context.Context, *ReportValidSubtreeRequest) (*ReportValidSubtreeResponse, error)
+	ReportValidBlock(context.Context, *ReportValidBlockRequest) (*ReportValidBlockResponse, error)
+	// Peer status checking
+	IsPeerMalicious(context.Context, *IsPeerMaliciousRequest) (*IsPeerMaliciousResponse, error)
+	IsPeerUnhealthy(context.Context, *IsPeerUnhealthyRequest) (*IsPeerUnhealthyResponse, error)
+	// Get full peer registry data with all metadata
+	GetPeerRegistry(context.Context, *emptypb.Empty) (*GetPeerRegistryResponse, error)
+	// Get single peer information by peer ID
+	GetPeer(context.Context, *GetPeerRequest) (*GetPeerResponse, error)
 	mustEmbedUnimplementedPeerServiceServer()
 }
 
@@ -197,6 +376,45 @@ func (UnimplementedPeerServiceServer) ConnectPeer(context.Context, *ConnectPeerR
 }
 func (UnimplementedPeerServiceServer) DisconnectPeer(context.Context, *DisconnectPeerRequest) (*DisconnectPeerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DisconnectPeer not implemented")
+}
+func (UnimplementedPeerServiceServer) RecordCatchupAttempt(context.Context, *RecordCatchupAttemptRequest) (*RecordCatchupAttemptResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecordCatchupAttempt not implemented")
+}
+func (UnimplementedPeerServiceServer) RecordCatchupSuccess(context.Context, *RecordCatchupSuccessRequest) (*RecordCatchupSuccessResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecordCatchupSuccess not implemented")
+}
+func (UnimplementedPeerServiceServer) RecordCatchupFailure(context.Context, *RecordCatchupFailureRequest) (*RecordCatchupFailureResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecordCatchupFailure not implemented")
+}
+func (UnimplementedPeerServiceServer) RecordCatchupMalicious(context.Context, *RecordCatchupMaliciousRequest) (*RecordCatchupMaliciousResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecordCatchupMalicious not implemented")
+}
+func (UnimplementedPeerServiceServer) UpdateCatchupReputation(context.Context, *UpdateCatchupReputationRequest) (*UpdateCatchupReputationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateCatchupReputation not implemented")
+}
+func (UnimplementedPeerServiceServer) UpdateCatchupError(context.Context, *UpdateCatchupErrorRequest) (*UpdateCatchupErrorResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateCatchupError not implemented")
+}
+func (UnimplementedPeerServiceServer) GetPeersForCatchup(context.Context, *GetPeersForCatchupRequest) (*GetPeersForCatchupResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPeersForCatchup not implemented")
+}
+func (UnimplementedPeerServiceServer) ReportValidSubtree(context.Context, *ReportValidSubtreeRequest) (*ReportValidSubtreeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportValidSubtree not implemented")
+}
+func (UnimplementedPeerServiceServer) ReportValidBlock(context.Context, *ReportValidBlockRequest) (*ReportValidBlockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReportValidBlock not implemented")
+}
+func (UnimplementedPeerServiceServer) IsPeerMalicious(context.Context, *IsPeerMaliciousRequest) (*IsPeerMaliciousResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method IsPeerMalicious not implemented")
+}
+func (UnimplementedPeerServiceServer) IsPeerUnhealthy(context.Context, *IsPeerUnhealthyRequest) (*IsPeerUnhealthyResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method IsPeerUnhealthy not implemented")
+}
+func (UnimplementedPeerServiceServer) GetPeerRegistry(context.Context, *emptypb.Empty) (*GetPeerRegistryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPeerRegistry not implemented")
+}
+func (UnimplementedPeerServiceServer) GetPeer(context.Context, *GetPeerRequest) (*GetPeerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetPeer not implemented")
 }
 func (UnimplementedPeerServiceServer) mustEmbedUnimplementedPeerServiceServer() {}
 func (UnimplementedPeerServiceServer) testEmbeddedByValue()                     {}
@@ -381,6 +599,240 @@ func _PeerService_DisconnectPeer_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerService_RecordCatchupAttempt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordCatchupAttemptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).RecordCatchupAttempt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_RecordCatchupAttempt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).RecordCatchupAttempt(ctx, req.(*RecordCatchupAttemptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_RecordCatchupSuccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordCatchupSuccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).RecordCatchupSuccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_RecordCatchupSuccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).RecordCatchupSuccess(ctx, req.(*RecordCatchupSuccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_RecordCatchupFailure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordCatchupFailureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).RecordCatchupFailure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_RecordCatchupFailure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).RecordCatchupFailure(ctx, req.(*RecordCatchupFailureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_RecordCatchupMalicious_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordCatchupMaliciousRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).RecordCatchupMalicious(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_RecordCatchupMalicious_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).RecordCatchupMalicious(ctx, req.(*RecordCatchupMaliciousRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_UpdateCatchupReputation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateCatchupReputationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).UpdateCatchupReputation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_UpdateCatchupReputation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).UpdateCatchupReputation(ctx, req.(*UpdateCatchupReputationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_UpdateCatchupError_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateCatchupErrorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).UpdateCatchupError(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_UpdateCatchupError_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).UpdateCatchupError(ctx, req.(*UpdateCatchupErrorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_GetPeersForCatchup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPeersForCatchupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).GetPeersForCatchup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_GetPeersForCatchup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).GetPeersForCatchup(ctx, req.(*GetPeersForCatchupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_ReportValidSubtree_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportValidSubtreeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).ReportValidSubtree(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_ReportValidSubtree_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).ReportValidSubtree(ctx, req.(*ReportValidSubtreeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_ReportValidBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportValidBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).ReportValidBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_ReportValidBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).ReportValidBlock(ctx, req.(*ReportValidBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_IsPeerMalicious_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IsPeerMaliciousRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).IsPeerMalicious(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_IsPeerMalicious_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).IsPeerMalicious(ctx, req.(*IsPeerMaliciousRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_IsPeerUnhealthy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IsPeerUnhealthyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).IsPeerUnhealthy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_IsPeerUnhealthy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).IsPeerUnhealthy(ctx, req.(*IsPeerUnhealthyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_GetPeerRegistry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).GetPeerRegistry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_GetPeerRegistry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).GetPeerRegistry(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PeerService_GetPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).GetPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_GetPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).GetPeer(ctx, req.(*GetPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PeerService_ServiceDesc is the grpc.ServiceDesc for PeerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -423,6 +875,58 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DisconnectPeer",
 			Handler:    _PeerService_DisconnectPeer_Handler,
+		},
+		{
+			MethodName: "RecordCatchupAttempt",
+			Handler:    _PeerService_RecordCatchupAttempt_Handler,
+		},
+		{
+			MethodName: "RecordCatchupSuccess",
+			Handler:    _PeerService_RecordCatchupSuccess_Handler,
+		},
+		{
+			MethodName: "RecordCatchupFailure",
+			Handler:    _PeerService_RecordCatchupFailure_Handler,
+		},
+		{
+			MethodName: "RecordCatchupMalicious",
+			Handler:    _PeerService_RecordCatchupMalicious_Handler,
+		},
+		{
+			MethodName: "UpdateCatchupReputation",
+			Handler:    _PeerService_UpdateCatchupReputation_Handler,
+		},
+		{
+			MethodName: "UpdateCatchupError",
+			Handler:    _PeerService_UpdateCatchupError_Handler,
+		},
+		{
+			MethodName: "GetPeersForCatchup",
+			Handler:    _PeerService_GetPeersForCatchup_Handler,
+		},
+		{
+			MethodName: "ReportValidSubtree",
+			Handler:    _PeerService_ReportValidSubtree_Handler,
+		},
+		{
+			MethodName: "ReportValidBlock",
+			Handler:    _PeerService_ReportValidBlock_Handler,
+		},
+		{
+			MethodName: "IsPeerMalicious",
+			Handler:    _PeerService_IsPeerMalicious_Handler,
+		},
+		{
+			MethodName: "IsPeerUnhealthy",
+			Handler:    _PeerService_IsPeerUnhealthy_Handler,
+		},
+		{
+			MethodName: "GetPeerRegistry",
+			Handler:    _PeerService_GetPeerRegistry_Handler,
+		},
+		{
+			MethodName: "GetPeer",
+			Handler:    _PeerService_GetPeer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

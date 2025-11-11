@@ -284,7 +284,7 @@ Validates a block and returns validation results without adding it to the blockc
 #### processBlockFound
 
 ```go
-func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, baseURL string, peerID string, useBlock ...*model.Block) error
+func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, peerID string, baseURL string, useBlock ...*model.Block) error
 ```
 
 Internal method that processes a newly discovered block. Handles block retrieval, validation, and integration with the blockchain state.

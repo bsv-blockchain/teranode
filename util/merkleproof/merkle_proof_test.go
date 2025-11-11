@@ -51,7 +51,7 @@ func TestConstructMerkleProof(t *testing.T) {
 		// Create a subtree with two transactions
 		st, err := subtree.NewTreeByLeafCount(2)
 		require.NoError(t, err)
-		st.Nodes = []subtree.SubtreeNode{
+		st.Nodes = []subtree.Node{
 			{Hash: *coinbaseHash},
 			{Hash: *tx1Hash},
 		}
@@ -114,7 +114,7 @@ func TestConstructMerkleProof(t *testing.T) {
 		// Create first subtree with coinbase and tx1
 		st1, err := subtree.NewTreeByLeafCount(2)
 		require.NoError(t, err)
-		st1.Nodes = []subtree.SubtreeNode{
+		st1.Nodes = []subtree.Node{
 			{Hash: *coinbaseHash},
 			{Hash: *tx1Hash},
 		}
@@ -123,7 +123,7 @@ func TestConstructMerkleProof(t *testing.T) {
 		// Create second subtree with tx2 and tx3
 		st2, err := subtree.NewTreeByLeafCount(2)
 		require.NoError(t, err)
-		st2.Nodes = []subtree.SubtreeNode{
+		st2.Nodes = []subtree.Node{
 			{Hash: *tx2Hash},
 			{Hash: *tx3Hash},
 		}
@@ -188,7 +188,7 @@ func TestConstructMerkleProof(t *testing.T) {
 		// Create a subtree with two transactions
 		st, err := subtree.NewTreeByLeafCount(2)
 		require.NoError(t, err)
-		st.Nodes = []subtree.SubtreeNode{
+		st.Nodes = []subtree.Node{
 			{Hash: *coinbaseHash},
 			{Hash: *tx1Hash},
 		}
@@ -482,7 +482,7 @@ func TestMerkleProofWithRealTransaction(t *testing.T) {
 		// Create a subtree with both transactions
 		st, err := subtree.NewTreeByLeafCount(2)
 		require.NoError(t, err)
-		st.Nodes = []subtree.SubtreeNode{
+		st.Nodes = []subtree.Node{
 			{Hash: *txHash},
 			{Hash: *tx2Hash},
 		}

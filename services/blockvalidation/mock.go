@@ -40,7 +40,7 @@ func (m *Mock) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseUR
 }
 
 // ProcessBlock performs a mock block processing.
-func (m *Mock) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, baseURL string, peerID string) error {
+func (m *Mock) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
 	args := m.Called(ctx, block, blockHeight)
 	return args.Error(0)
 }
@@ -54,6 +54,15 @@ func (m *Mock) ValidateBlock(ctx context.Context, block *model.Block, options *V
 func (m *Mock) RevalidateBlock(ctx context.Context, blockHash chainhash.Hash) error {
 	args := m.Called(ctx, blockHash)
 	return args.Error(0)
+}
+
+// GetCatchupStatus performs a mock catchup status retrieval.
+func (m *Mock) GetCatchupStatus(ctx context.Context) (*CatchupStatus, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*CatchupStatus), args.Error(1)
 }
 
 // mockKafkaConsumer implements kafka.KafkaConsumerGroupI for testing
