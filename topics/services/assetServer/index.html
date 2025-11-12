@@ -7012,11 +7012,43 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 <p><img alt="asset_server_http_get_block_header.svg" src="../img/plantuml/assetserver/asset_server_http_get_block_header.svg" /></p>
 <h3 id="415-getblockbyhash-getblocks-and-getlastnblocks">4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()</h3>
+<p><strong>GetBlockByHash</strong> - Get a single block by hash:</p>
 <ul>
-<li><strong>URL</strong>: <code>/block/:hash</code> (single), <code>/blocks</code> (multiple), <code>/blocks/last/:count</code> (last N blocks)</li>
+<li><strong>URL</strong>: <code>/api/v1/block/:hash</code> (also available: <code>/api/v1/block/:hash/hex</code>, <code>/api/v1/block/:hash/json</code>)</li>
 <li><strong>Method</strong>: GET</li>
+<li><strong>URL Parameters</strong>: <code>hash</code> - Block hash (64-character hex string)</li>
+<li><strong>Response Format</strong>: Binary (default), Hex, or JSON</li>
+<li><strong>Content</strong>: Complete block data with subtree identifiers</li>
+</ul>
+<p><strong>GetBlocks</strong> - Get paginated list of blocks:</p>
+<ul>
+<li><strong>URL</strong>: <code>/api/v1/blocks</code></li>
+<li><strong>Method</strong>: GET</li>
+<li>
+<p><strong>Query Parameters</strong>:</p>
+<ul>
+<li><code>offset</code> (integer, optional, default: 0) - Number of blocks to skip from tip</li>
+<li><code>limit</code> (integer, optional, default: 20, max: 100) - Maximum blocks to return</li>
+<li><code>includeOrphans</code> (boolean, optional, default: false) - Include orphaned blocks</li>
+<li><strong>Response Format</strong>: JSON with pagination metadata</li>
+<li><strong>Content</strong>: Block list with pagination information</li>
+</ul>
+</li>
+</ul>
+<p><strong>GetLastNBlocks</strong> - Get most recent N blocks:</p>
+<ul>
+<li><strong>URL</strong>: <code>/api/v1/lastblocks</code></li>
+<li><strong>Method</strong>: GET</li>
+<li>
+<p><strong>Query Parameters</strong>:</p>
+<ul>
+<li><code>n</code> (integer, optional, default: 10) - Number of blocks to retrieve</li>
+<li><code>fromHeight</code> (unsigned integer, optional, default: 0) - Starting block height</li>
+<li><code>includeOrphans</code> (boolean, optional, default: false) - Include orphaned blocks</li>
 <li><strong>Response Format</strong>: JSON</li>
-<li><strong>Content</strong>: Block data with subtree identifiers and metadata</li>
+<li><strong>Content</strong>: Array of recent blocks in descending order (newest first)</li>
+</ul>
+</li>
 </ul>
 <p><img alt="asset_server_http_get_block.svg" src="../img/plantuml/assetserver/asset_server_http_get_block.svg" /></p>
 <h3 id="416-getutxo-and-getutxosbytxid">4.1.6. GetUTXO() and GetUTXOsByTXID()</h3>

@@ -7885,33 +7885,68 @@
 <li>
 <p><strong>GET <code>/api/v1/block/:hash/forks</code></strong></p>
 <ul>
-<li>Purpose: Get fork information for a block</li>
-<li>Parameters: <code>hash</code> - Block hash (hex string)</li>
-<li>Returns: Fork data (JSON)</li>
+<li>Purpose: Get fork information and tree structure for a block</li>
+<li>URL Parameters: <code>hash</code> - Block hash (hex string)</li>
+<li>
+<p>Query Parameters:</p>
+<ul>
+<li><code>limit</code> (integer, optional, default: 20, max: 100) - Maximum blocks to include in tree<ul>
+<li>Returns: Fork data (JSON) with parent-child block relationships</li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 <li>
 <p><strong>GET <code>/api/v1/blocks</code></strong></p>
 <ul>
 <li>Purpose: Get paginated blocks list</li>
-<li>Parameters: <code>offset</code>, <code>limit</code> (optional)</li>
-<li>Returns: Blocks list (JSON)</li>
+<li>
+<p>Query Parameters:</p>
+<ul>
+<li><code>offset</code> (integer, optional, default: 0) - Number of blocks to skip from tip</li>
+<li><code>limit</code> (integer, optional, default: 20, max: 100) - Maximum blocks to return</li>
+<li><code>includeOrphans</code> (boolean, optional, default: false) - Include orphaned blocks<ul>
+<li>Returns: Blocks list (JSON) with pagination metadata</li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 <li>
 <p><strong>GET <code>/api/v1/blocks/:hash</code></strong></p>
 <ul>
-<li>Purpose: Get multiple blocks starting with specified hash (binary)</li>
-<li>Parameters: <code>hash</code> - Starting block hash, <code>n</code> - Number of blocks (optional)</li>
+<li>Purpose: Get N consecutive blocks starting from specified hash</li>
+<li>URL Parameters: <code>hash</code> - Starting block hash (hex string)</li>
+<li>
+<p>Query Parameters:</p>
+<ul>
+<li><code>n</code> (integer, optional, default: 100, max: 1000) - Number of blocks to retrieve<ul>
 <li>Returns: Block data (binary)</li>
+<li>Also available: <code>/api/v1/blocks/:hash/hex</code> (hex), <code>/api/v1/blocks/:hash/json</code> (JSON)</li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 <li>
 <p><strong>GET <code>/api/v1/lastblocks</code></strong></p>
 <ul>
 <li>Purpose: Get most recent blocks</li>
-<li>Parameters: <code>n</code> (optional) - Number of blocks, <code>includeorphans</code> (optional), <code>height</code> (optional)</li>
+<li>
+<p>Query Parameters:</p>
+<ul>
+<li><code>n</code> (integer, optional, default: 10) - Number of blocks to retrieve</li>
+<li><code>fromHeight</code> (unsigned integer, optional, default: 0) - Starting block height</li>
+<li><code>includeOrphans</code> (boolean, optional, default: false) - Include orphaned blocks<ul>
 <li>Returns: Recent blocks data (JSON)</li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 <li>
@@ -7945,6 +7980,24 @@
 <li>Returns: Block data (binary)</li>
 </ul>
 </li>
+<li>
+<p><strong>GET <code>/api/v1/block_locator</code></strong></p>
+<ul>
+<li>Purpose: Get block locator hashes for blockchain synchronization</li>
+<li>
+<p>Query Parameters:</p>
+<ul>
+<li><code>hash</code> (string, optional) - Block hash to start from (default: best block)</li>
+<li><code>height</code> (unsigned integer, optional) - Block height (ignored if hash provided)<ul>
+<li>Returns: JSON array of block hashes at exponentially increasing distances</li>
+<li>Response Format: <code>{ "block_locator": ["&lt;hash1&gt;", "&lt;hash2&gt;", ...] }</code></li>
+<li>Notes: Uses exponential backoff algorithm; always includes genesis block</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 <h3 id="block-header-endpoints">Block Header Endpoints</h3>
 <ul>
@@ -7959,9 +8012,18 @@
 <li>
 <p><strong>GET <code>/api/v1/headers/:hash</code></strong></p>
 <ul>
-<li>Purpose: Get multiple headers starting from hash (binary)</li>
-<li>Parameters: <code>hash</code> - Starting block hash, <code>n</code> - Number of headers (optional)</li>
-<li>Returns: Block headers (binary)</li>
+<li>Purpose: Get N consecutive block headers starting from specified hash</li>
+<li>URL Parameters: <code>hash</code> - Starting block hash (hex string)</li>
+<li>
+<p>Query Parameters:</p>
+<ul>
+<li><code>n</code> (integer, optional, default: 100, max: 1000) - Number of headers to retrieve<ul>
+<li>Returns: Block headers (binary, 80 bytes per header)</li>
+<li>Also available: <code>/api/v1/headers/:hash/hex</code> (hex), <code>/api/v1/headers/:hash/json</code> (JSON)</li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 <li>
@@ -8121,18 +8183,37 @@
 <li>
 <p><strong>GET <code>/api/v1/block/:hash/subtrees/json</code></strong></p>
 <ul>
-<li>Purpose: Get all subtrees for a block</li>
-<li>Parameters: <code>hash</code> - Block hash</li>
-<li>Returns: Subtree data array (JSON)</li>
+<li>Purpose: Get paginated list of subtrees for a block</li>
+<li>URL Parameters: <code>hash</code> - Block hash (hex string)</li>
+<li>
+<p>Query Parameters:</p>
+<ul>
+<li><code>offset</code> (integer, optional, default: 0) - Number of subtrees to skip</li>
+<li><code>limit</code> (integer, optional, default: 20, max: 100) - Maximum subtrees to return<ul>
+<li>Returns: Subtree data array (JSON) with pagination metadata</li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
 <h3 id="search-endpoints">Search Endpoints</h3>
 <ul>
 <li><strong>GET <code>/api/v1/search</code></strong><ul>
-<li>Purpose: Search for blockchain entities</li>
-<li>Parameters: <code>query</code> - Search term (hash or height)</li>
+<li>Purpose: Search for blockchain entities by hash or height</li>
+<li>
+<p>Query Parameters:</p>
+<ul>
+<li><code>q</code> (string, required) - Search query (64-character hex string or numeric block height)<ul>
 <li>Returns: Search results (JSON)</li>
+<li>Response Format: <code>{ "type": "block|tx|subtree", "hash": "&lt;hash&gt;" }</code></li>
+<li>Search Priority: Block hash → Transaction hash → Subtree hash → Block height (if numeric)</li>
+<li>Status Codes: 200 OK, 400 Bad Request (missing or invalid query), 404 Not Found</li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
