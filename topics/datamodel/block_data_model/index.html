@@ -3417,15 +3417,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#block-storage-metadata" class="md-nav__link">
+  <a href="#block-header-metadata-blockheadermeta" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Block Storage Metadata
+        Block Header Metadata (BlockHeaderMeta)
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Block Storage Metadata">
+    <nav class="md-nav" aria-label="Block Header Metadata (BlockHeaderMeta)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -6035,15 +6035,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#block-storage-metadata" class="md-nav__link">
+  <a href="#block-header-metadata-blockheadermeta" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Block Storage Metadata
+        Block Header Metadata (BlockHeaderMeta)
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Block Storage Metadata">
+    <nav class="md-nav" aria-label="Block Header Metadata (BlockHeaderMeta)">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -6138,7 +6138,8 @@
 <p>The Teranode BSV model introduces a novel approach to block propagation, optimizing the network for high transaction throughput.</p>
 <p>Teranode Blocks contain lists of subtree identifiers, not transactions. This is practical for nodes because they have been processing subtrees continuously, this allows for quick validation of blocks.</p>
 <p><img alt="TERANODE_Block.svg" src="../../architecture/img/TERANODE_Block.svg" /></p>
-<p>Each block is an abstraction which is a container of a group of subtrees. A block contains a variable number of subtrees, a coinbase transaction, and a header, called a block header, which includes the block ID of the previous block, effectively creating a chain.</p>
+<p>Each block is an abstraction which is a container of a group of subtrees. A block contains a variable number of subtrees (all of equal size), a coinbase transaction, and a header, called a block header, which includes the block ID of the previous block, effectively creating a chain.</p>
+<p>Source: <code>model/Block.go</code> (Block struct definition)</p>
 <table>
 <thead>
 <tr>
@@ -6151,23 +6152,49 @@
 <tr>
 <td>Header</td>
 <td>*BlockHeader</td>
-<td>The Block Header</td>
+<td>The Block Header (see <a href="../block_header_data_model/">Block Header Data Model</a>)</td>
 </tr>
 <tr>
 <td>CoinbaseTx</td>
 <td>*bt.Tx</td>
-<td>The coinbase transaction.</td>
+<td>The coinbase transaction</td>
+</tr>
+<tr>
+<td>TransactionCount</td>
+<td>uint64</td>
+<td>Total number of transactions in the block</td>
+</tr>
+<tr>
+<td>SizeInBytes</td>
+<td>uint64</td>
+<td>Total size of the block in bytes</td>
 </tr>
 <tr>
 <td>Subtrees</td>
 <td>[]*chainhash.Hash</td>
-<td>An array of hashes, representing the subtrees of the block.</td>
+<td>Array of subtree root hashes representing batches of transactions in the block</td>
+</tr>
+<tr>
+<td>SubtreeSlices</td>
+<td>[]*subtreepkg.Subtree</td>
+<td>The actual subtree data structures (populated on demand via blob store)</td>
+</tr>
+<tr>
+<td>Height</td>
+<td>uint32</td>
+<td>Block height in the blockchain (0 for genesis)</td>
+</tr>
+<tr>
+<td>ID</td>
+<td>uint32</td>
+<td>Unique identifier for the block in storage (assigned by blockchain service)</td>
 </tr>
 </tbody>
 </table>
-<p>This table provides an overview of each field in the <code>Block</code> struct, including the data type and a brief description of its purpose or contents.</p>
-<h2 id="block-storage-metadata">Block Storage Metadata</h2>
-<p>In addition to the core block data, Teranode maintains additional metadata for block management:</p>
+<p>This table provides an overview of the primary fields in the <code>Block</code> struct. Note that all subtrees in a block must be the same size, except the last subtree which may be smaller (validated in <code>Block.GetAndValidateSubtrees()</code> in <code>model/Block.go</code>).</p>
+<h2 id="block-header-metadata-blockheadermeta">Block Header Metadata (BlockHeaderMeta)</h2>
+<p>In addition to the core block data, Teranode maintains additional metadata for block management in the <code>BlockHeaderMeta</code> struct. This metadata is stored alongside the block header in the blockchain store and tracks the block's state through various processing stages.</p>
+<p>Source: <code>model/BlockHeaderMeta.go</code> (BlockHeaderMeta struct)</p>
 <table>
 <thead>
 <tr>
@@ -6179,7 +6206,7 @@
 <tbody>
 <tr>
 <td>ID</td>
-<td>uint64</td>
+<td>uint32</td>
 <td>Unique identifier for the block in storage</td>
 </tr>
 <tr>
@@ -6200,12 +6227,13 @@
 </tbody>
 </table>
 <h3 id="block-id-pre-allocation">Block ID Pre-allocation</h3>
-<p>Teranode supports pre-allocation of block IDs through the blockchain service's <code>GetNextBlockID</code> method. This feature enables:</p>
+<p>Teranode supports pre-allocation of block IDs through the blockchain service's <code>GetNextBlockID()</code> method (in <code>services/blockchain/Interface.go</code>). This feature enables:</p>
 <ul>
-<li>Parallel block processing with guaranteed unique IDs</li>
-<li>Quick validation scenarios where blocks need IDs before full processing</li>
-<li>Recovery scenarios requiring coordinated ID assignment across services</li>
+<li><strong>Parallel block processing</strong> with guaranteed unique IDs across distributed services</li>
+<li><strong>Quick validation scenarios</strong> where blocks need IDs before full processing (e.g., during catchup operations in <code>services/blockvalidation/quick_validate.go</code>)</li>
+<li><strong>Recovery scenarios</strong> requiring coordinated ID assignment across services</li>
 </ul>
+<p>The method returns a uint64 value that increments atomically, ensuring no ID collisions even in high-concurrency environments. Block IDs are stored as uint32 in the Block struct, supporting approximately 4.3 billion blocks.</p>
 <h3 id="invalid-block-tracking">Invalid Block Tracking</h3>
 <p>Blocks can be marked as invalid during validation, particularly during catchup operations. Invalid blocks:</p>
 <ul>
@@ -6214,7 +6242,7 @@
 <li>Help identify problematic peers providing bad blocks</li>
 <li>Can be tracked for potential revalidation in recovery scenarios</li>
 </ul>
-<p>For details about the block header, please check the <code>references</code> section below.</p>
+<p>For details about the block header, see the <a href="../block_header_data_model/">Block Header Data Model</a> or the Additional Resources section below.</p>
 <p>Please note that the use of subtrees within blocks represents a data abstraction for a more optimal propagation of transactions. The data model is still the same as Bitcoin, with blocks containing transactions. The subtrees are used to optimize the propagation of transactions and blocks.</p>
 <h2 id="advantages-of-the-teranode-bsv-model">Advantages of the Teranode BSV Model</h2>
 <ul>
@@ -6226,15 +6254,16 @@
 </li>
 </ul>
 <h2 id="network-behavior">Network Behavior</h2>
+<p>Teranode's block processing involves multiple specialized services working together:</p>
 <ul>
 <li>
-<p><strong>Transactions</strong>: They are broadcast network-wide, and each node further propagates the transactions.</p>
+<p><strong>Transactions</strong>: Broadcast network-wide by the Propagation service (<code>services/propagation/</code>), which receives transactions via gRPC/UDP/HTTP and forwards them to other nodes. Each node further propagates transactions and validates them through the Validator service (<code>services/validator/</code>).</p>
 </li>
 <li>
-<p><strong>Subtrees</strong>: Nodes broadcast subtrees to indicate prepared batches of transactions for block inclusion, allowing other nodes to perform preliminary validations.</p>
+<p><strong>Subtrees</strong>: The Block Assembly service (<code>services/blockassembly/</code>) creates subtrees from validated transactions and broadcasts them via Kafka events. Nodes broadcast subtrees to indicate prepared batches of transactions for block inclusion, allowing other nodes to perform preliminary validations. Subtrees are stored in the Blob Store (<code>stores/blob/</code>) for retrieval during block validation.</p>
 </li>
 <li>
-<p><strong>Block Propagation</strong>: When a block is found, its validation is expedited due to the continuous processing of subtrees. If a node encounters a subtree within a new block that it is unaware of, it can request the details from the node that submitted the block.</p>
+<p><strong>Block Propagation</strong>: When a block is found, the Block Validation service (<code>services/blockvalidation/</code>) validates it. Validation is expedited due to the continuous processing of subtrees. If a node encounters a subtree within a new block that it is unaware of, it can request the details from the Blob Store. The Blockchain service (<code>services/blockchain/</code>) manages the blockchain state machine and coordinates block acceptance.</p>
 </li>
 </ul>
 <p>This proactive approach with subtrees enables the network to handle a significantly higher volume of transactions while maintaining quick validation times. It also allows nodes to utilize their processing power more evenly over time, rather than experiencing idle times between blocks. This model ensures that Teranode BSV can scale effectively to meet high transaction demands without the bottlenecks experienced by the BTC network.</p>

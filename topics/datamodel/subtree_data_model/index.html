@@ -3485,10 +3485,22 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#subtree-composition" class="md-nav__link">
+  <a href="#subtree-storage-and-transfer" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Subtree Composition
+        Subtree Storage and Transfer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Subtree Storage and Transfer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#storage-format-48-mb-per-subtree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage Format (48 MB per subtree)
       
     </span>
   </a>
@@ -3496,21 +3508,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#calculation" class="md-nav__link">
+  <a href="#network-transfer-format-32-mb-per-subtree" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Calculation:
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#data-transfer-between-nodes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Data Transfer Between Nodes
+        Network Transfer Format (32 MB per subtree)
       
     </span>
   </a>
@@ -3521,8 +3522,8 @@
     </nav>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#efficiency" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3532,8 +3533,8 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#lightweight" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3541,6 +3542,11 @@
       
     </span>
   </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -6047,10 +6053,22 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#subtree-composition" class="md-nav__link">
+  <a href="#subtree-storage-and-transfer" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Subtree Composition
+        Subtree Storage and Transfer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Subtree Storage and Transfer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#storage-format-48-mb-per-subtree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Storage Format (48 MB per subtree)
       
     </span>
   </a>
@@ -6058,21 +6076,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#calculation" class="md-nav__link">
+  <a href="#network-transfer-format-32-mb-per-subtree" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Calculation:
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#data-transfer-between-nodes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Data Transfer Between Nodes
+        Network Transfer Format (32 MB per subtree)
       
     </span>
   </a>
@@ -6083,8 +6090,8 @@
     </nav>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#efficiency" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6094,8 +6101,8 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#lightweight" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6103,6 +6110,11 @@
       
     </span>
   </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -6136,7 +6148,7 @@
 
 <h1 id="teranode-data-model-subtrees">Teranode Data Model - Subtrees</h1>
 <p>The Subtrees are an innovation aimed at improving the scalability and real-time processing capabilities of the blockchain system.</p>
-<h3 id="structure">Structure</h3>
+<h2 id="structure">Structure</h2>
 <p>The concept of subtrees is a distinct feature not found in the BTC design.</p>
 <ol>
 <li>
@@ -6163,7 +6175,7 @@
 <tr>
 <td>Height</td>
 <td>int</td>
-<td>The height of the subtree within the blockchain.</td>
+<td>The height of the Merkle tree (number of levels). Calculated as ceil(log2(number of nodes)). For 1,048,576 nodes, height = 20.</td>
 </tr>
 <tr>
 <td>Fees</td>
@@ -6178,7 +6190,7 @@
 <tr>
 <td>FeeHash</td>
 <td>chainhash.Hash</td>
-<td>Hash representing the combined fees of the subtree.</td>
+<td>Hash representing the combined fees of the subtree. <strong>Note:</strong> This field is currently unused.</td>
 </tr>
 <tr>
 <td>Nodes</td>
@@ -6188,14 +6200,14 @@
 <tr>
 <td>ConflictingNodes</td>
 <td>[]chainhash.Hash</td>
-<td>List of hashes representing nodes that conflict, requiring checks during block assembly.</td>
+<td>List of transaction hashes that have UTXO conflicts (double-spend attempts). These transactions are flagged during validation and require special handling during block assembly to ensure only one conflicting transaction is included.</td>
 </tr>
 </tbody>
 </table>
-<p>Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.</p>
-<p>Note - For subtree files in the <code>subtree-store</code> S3 buckets, each subtree has a size of 48MB.</p>
-<h5 id="subtree-composition">Subtree Composition</h5>
-<p>Each subtree consists of:</p>
+<p>Here, a <code>SubtreeNode</code> is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.</p>
+<h3 id="subtree-storage-and-transfer">Subtree Storage and Transfer</h3>
+<h4 id="storage-format-48-mb-per-subtree">Storage Format (48 MB per subtree)</h4>
+<p>Each subtree file stored in the <code>subtree-store</code> buckets contains full node data. The structure consists of:</p>
 <ul>
 <li>root hash: 32 bytes</li>
 <li>fees: 8 bytes (uint64)</li>
@@ -6205,23 +6217,31 @@
 <li>numberOfConflictingNodes: 8 bytes (uint64)</li>
 <li>conflictingNodes: 32 bytes per conflicting node</li>
 </ul>
-<h5 id="calculation">Calculation:</h5>
+<p><strong>Size Calculation:</strong></p>
 <div class="highlight"><pre><span></span><code>Fixed header: 32 + 8 + 8 + 8 + 8 = 64 bytes
+Per transaction node: 48 bytes (hash:32 + fee:8 + size:8)
 
-Additional - Per transaction node: 48 bytes
+For 1,048,576 transactions:
+  Header: 64 bytes
+  Nodes: 1,048,576 × 48 = 50,331,648 bytes
+  Total: ≈ 48 MB
 </code></pre></div>
-<h5 id="data-transfer-between-nodes">Data Transfer Between Nodes</h5>
-<p>However - only 32MB is transferred between the nodes. Each subtree transfer includes:</p>
+<h4 id="network-transfer-format-32-mb-per-subtree">Network Transfer Format (32 MB per subtree)</h4>
+<p>When nodes request subtrees during catchup operations via the <code>/subtree/{hash}</code> endpoint, only transaction hashes are transferred to minimize bandwidth usage:</p>
 <ul>
-<li>hash: 32 bytes
-<div class="highlight"><pre><span></span><code>1024 * 1024 * (32) = 32MB
-</code></pre></div></li>
+<li>Transaction hash only: 32 bytes per node</li>
 </ul>
+<p><strong>Transfer Size Calculation:</strong></p>
+<div class="highlight"><pre><span></span><code>For 1,048,576 transactions:
+  1,048,576 × 32 bytes = 33,554,432 bytes = 32 MB exactly
+</code></pre></div>
+<p>This optimization reduces network transfer by 33% compared to sending full node data. The receiving node reconstructs the full subtree structure by setting fees and sizes to zero initially, which are later populated during validation.</p>
 <h3 id="efficiency">Efficiency</h3>
-<p>Subtrees are broadcast every second (assuming a baseline throughput of 1M transactions per second), making data propagation more continuous rather than batched every 10 minutes. Although blocks are still created every 10 minutes, subtrees are broadcast every second.</p>
+<p>Subtrees are created and broadcast when they reach their configured size (default: 1,048,576 transactions via the <code>InitialMerkleItemsPerSubtree</code> setting in <code>settings/settings.go</code>). The size dynamically adjusts based on transaction volume and utilization patterns. At a baseline throughput of 1 million transactions per second, this results in approximately one subtree per second, though actual timing varies with network load.</p>
+<p>This approach makes data propagation more continuous rather than batched every 10 minutes. Although blocks are still created every 10 minutes, subtrees are created and broadcast as soon as they are full.</p>
 <ol>
 <li>
-<p>Broadcasting subtrees at this high frequency allows receiving nodes to validate batches quickly and continuously, essentially "pre-approving" them for inclusion in a block.</p>
+<p>Creating subtrees at this high frequency allows receiving nodes to validate batches quickly and continuously, essentially "pre-approving" them for inclusion in a block.</p>
 </li>
 <li>
 <p>This contrasts with the BTC design, where a new block and its transactions are broadcast approximately every 10 minutes after being confirmed by miners.</p>

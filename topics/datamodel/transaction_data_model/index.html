@@ -6597,19 +6597,26 @@
 <p>During validation, the Validator Service automatically handles format conversion when necessary:</p>
 <ol>
 <li><strong>Check if Extended</strong>: The validator checks <code>tx.IsExtended()</code> status on the transaction</li>
-<li><strong>Automatic Extension</strong>: If not extended, the validator:</li>
+<li>
+<p><strong>Automatic Extension</strong>: If not extended, the validator:</p>
+<ul>
 <li>Queries the UTXO store for each input's parent transaction</li>
 <li>Extracts the referenced output's satoshi value and locking script</li>
 <li>Decorates the transaction inputs with this data in-memory</li>
 <li>Marks the transaction as extended for the validation process</li>
-<li><strong>Validation</strong>: Proceeds with full validation including script verification using the extended data</li>
+</ul>
+</li>
+<li>
+<p><strong>Validation</strong>: Proceeds with full validation including script verification using the extended data</p>
+</li>
 </ol>
 <p>This extension process happens transparently at multiple checkpoints throughout the validation pipeline:</p>
 <ul>
-<li><code>Validator.Validate()</code> in <code>services/validator/Validator.go</code> - Before transaction format validation</li>
-<li><code>Validator.validateConsensusRules()</code> in <code>services/validator/Validator.go</code> - Before consensus rule checks</li>
-<li><code>Validator.validateScripts()</code> in <code>services/validator/Validator.go</code> - Before script validation</li>
-<li><code>quickValidate()</code> in <code>services/blockvalidation/quick_validate.go</code> - During block validation for historical blocks</li>
+<li><code>Validator.Validate()</code> in <code>services/validator/Validator.go</code> - Main validation entry point</li>
+<li><code>Validator.validateTransaction()</code> in <code>services/validator/Validator.go</code> - Before transaction format validation</li>
+<li><code>Validator.validateTransactionScripts()</code> in <code>services/validator/Validator.go</code> - Before script validation</li>
+<li><code>BlockValidation.quickValidateBlock()</code> in <code>services/blockvalidation/quick_validate.go</code> - During block validation for historical blocks</li>
+<li><code>BlockValidation.ExtendTransaction()</code> in <code>services/blockvalidation/quick_validate.go</code> - During block processing when transactions are not extended</li>
 </ul>
 <p><strong>Key implementation details:</strong></p>
 <ul>
@@ -6707,7 +6714,7 @@
 <tr>
 <td><strong>Storage</strong></td>
 <td>Not specified</td>
-<td>Always standard format</td>
+<td>Received format preserved</td>
 </tr>
 <tr>
 <td><strong>Extension</strong></td>
@@ -6729,8 +6736,8 @@
 <h3 id="implementation-references">Implementation References</h3>
 <p>For developers interested in the implementation details:</p>
 <ul>
-<li>Extension logic: <code>Validator.Validate()</code> method in <code>services/validator/Validator.go</code></li>
-<li>UTXO decoration: <code>PreviousOutputsDecorate()</code> method in <code>stores/utxo/*/</code> implementations</li>
+<li>Extension logic: <code>Validator.extendTransaction()</code> method in <code>services/validator/Validator.go</code></li>
+<li>UTXO decoration: <code>PreviousOutputsDecorate()</code> method in <code>stores/utxo/Interface.go</code> and implementations</li>
 <li>Storage serialization: Uses go-bt library's <code>SerializeBytes()</code> method (preserves received format)</li>
 </ul>
 <h2 id="additional-resources">Additional Resources</h2>
