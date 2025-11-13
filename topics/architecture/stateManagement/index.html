@@ -6547,7 +6547,6 @@
 
 
 <h1 id="state-management-in-teranode">🗂️️ State Management in Teranode</h1>
-<p>Last Modified: 3-February-2025</p>
 <ol>
 <li><a href="#1-introduction">Introduction</a></li>
 <li><a href="#2-state-machine-in-teranode">State Machine in Teranode</a></li>
@@ -6570,6 +6569,7 @@
 <li><a href="#35-waiting-on-state-machine-transitions">3.5. Waiting on State Machine Transitions</a></li>
 </ul>
 </li>
+<li><a href="#4-other-resources">Other Resources</a></li>
 </ol>
 <h2 id="1-introduction">1. Introduction</h2>
 <p>A Finite State Machine is a model used in computer science that describes a system which can be in one of a finite number of states at any given time. The machine can transition between these predefined states based on inputs or conditions (an "event").</p>
@@ -6606,8 +6606,7 @@
 <li><strong>CatchupBlocks</strong>: Transitions to <em>CatchingBlocks</em> from <em>Running</em></li>
 <li><strong>Stop</strong>: Transitions to <em>Idle</em> from <em>LegacySyncing</em>, <em>Running</em>, or <em>CatchingBlocks</em></li>
 </ul>
-<p>Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command <code>go run services/blockchain/fsm_visualizer/main.go</code>. The generated <code>docs/state-machine.diagram.md</code> can be visualized using <a href="https://mermaid.live/">https://mermaid.live/</a>.
-fsm_visualizer main.go.</p>
+<p>Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command <code>go run services/blockchain/fsm_visualizer/main.go</code>. The generated <code>docs/state-machine.diagram.md</code> can be visualized using <a href="https://mermaid.live/">https://mermaid.live/</a>.</p>
 <h2 id="3-functionality">3. Functionality</h2>
 <h3 id="31-state-machine-initialization">3.1. State Machine Initialization</h3>
 <p>As part of its own initialization, the Blockchain service initializes the FSM in the <strong>Idle</strong> state, before it transitions to a LegacySyncing or Running state.</p>
@@ -6634,12 +6633,8 @@ fsm_visualizer main.go.</p>
 <p>The Blockchain service also exposes the following gRPC methods to interact with the FSM programmatically:</p>
 <ul>
 <li><strong>GetFSMCurrentState</strong> - Returns the current state of the FSM</li>
-<li>
-<p><strong>SendFSMEvent</strong> - Sends an event to the FSM to trigger a state transition</p>
-</li>
-<li>
-<p><strong>LegacySync</strong> - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent method)</p>
-</li>
+<li><strong>SendFSMEvent</strong> - Sends an event to the FSM to trigger a state transition</li>
+<li><strong>LegacySync</strong> - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent method)</li>
 <li><strong>Run</strong> - Transitions the FSM to the Running state (delegates on the SendFSMEvent method)</li>
 <li><strong>CatchUpBlocks</strong> - Transitions the FSM to the CatchingBlocks state (delegates on the SendFSMEvent method)</li>
 </ul>

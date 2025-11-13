@@ -4016,6 +4016,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#circular-error-prevention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circular Error Prevention
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#best-practices-for-error-wrapping" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4077,10 +4088,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#best-practices" class="md-nav__link">
+  <a href="#grpc-error-wrapping-best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Best Practices
+        gRPC Error Wrapping Best Practices
       
     </span>
   </a>
@@ -4160,10 +4171,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#best-practices_1" class="md-nav__link">
+  <a href="#extra-data-best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Best Practices
+        Extra Data Best Practices
       
     </span>
   </a>
@@ -4232,10 +4243,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#best-practices_2" class="md-nav__link">
+  <a href="#error-protobuf-best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Best Practices
+        Error Protobuf Best Practices
       
     </span>
   </a>
@@ -4248,10 +4259,249 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#27-unit-tests" class="md-nav__link">
+  <a href="#27-error-utility-functions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.7. Unit Tests
+        2.7. Error Utility Functions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.7. Error Utility Functions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#error-classification-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Classification Functions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Classification Functions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#isretryableerrorerr-error-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IsRetryableError(err error) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#isnetworkerrorerr-error-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IsNetworkError(err error) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ismaliciousresponseerrorerr-error-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IsMaliciousResponseError(err error) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#istemporaryerrorerr-error-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IsTemporaryError(err error) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#iscontexterrorerr-error-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IsContextError(err error) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#error-categorization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Categorization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Categorization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#geterrorcategoryerr-error-string" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetErrorCategory(err error) string
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#additional-utility-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Additional Utility Functions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Additional Utility Functions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#joinerrs-error-error" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Join(errs ...error) error
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#asdataerr-error-target-interface-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AsData(err error, target interface{}) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removeinvalidutf8s-string-string" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RemoveInvalidUTF8(s string) string
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errorcodetogrpccode-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ErrorCodeToGRPCCode Mapping
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#28-stack-traces-and-formatting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.8. Stack Traces and Formatting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.8. Stack Traces and Formatting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-stack-trace-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic Stack Trace Capture
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#format-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Format Method
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stack-trace-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stack Trace Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#best-practices-for-stack-traces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices for Stack Traces
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#29-unit-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.9. Unit Tests
       
     </span>
   </a>
@@ -6477,6 +6727,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#circular-error-prevention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circular Error Prevention
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#best-practices-for-error-wrapping" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6538,10 +6799,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#best-practices" class="md-nav__link">
+  <a href="#grpc-error-wrapping-best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Best Practices
+        gRPC Error Wrapping Best Practices
       
     </span>
   </a>
@@ -6621,10 +6882,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#best-practices_1" class="md-nav__link">
+  <a href="#extra-data-best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Best Practices
+        Extra Data Best Practices
       
     </span>
   </a>
@@ -6693,10 +6954,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#best-practices_2" class="md-nav__link">
+  <a href="#error-protobuf-best-practices" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Best Practices
+        Error Protobuf Best Practices
       
     </span>
   </a>
@@ -6709,10 +6970,249 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#27-unit-tests" class="md-nav__link">
+  <a href="#27-error-utility-functions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.7. Unit Tests
+        2.7. Error Utility Functions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.7. Error Utility Functions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#error-classification-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Classification Functions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Classification Functions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#isretryableerrorerr-error-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IsRetryableError(err error) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#isnetworkerrorerr-error-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IsNetworkError(err error) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ismaliciousresponseerrorerr-error-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IsMaliciousResponseError(err error) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#istemporaryerrorerr-error-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IsTemporaryError(err error) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#iscontexterrorerr-error-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        IsContextError(err error) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#error-categorization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Categorization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Categorization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#geterrorcategoryerr-error-string" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetErrorCategory(err error) string
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#additional-utility-functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Additional Utility Functions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Additional Utility Functions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#joinerrs-error-error" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Join(errs ...error) error
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#asdataerr-error-target-interface-bool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AsData(err error, target interface{}) bool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removeinvalidutf8s-string-string" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RemoveInvalidUTF8(s string) string
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errorcodetogrpccode-mapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ErrorCodeToGRPCCode Mapping
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#28-stack-traces-and-formatting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.8. Stack Traces and Formatting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.8. Stack Traces and Formatting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#automatic-stack-trace-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Automatic Stack Trace Capture
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#format-method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Format Method
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stack-trace-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stack Trace Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#best-practices-for-stack-traces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices for Stack Traces
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#29-unit-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.9. Unit Tests
       
     </span>
   </a>
@@ -6741,7 +7241,7 @@
 
 
 
-<h1 id="error-handling">📘 Error Handling</h1>
+<h1 id="error-handling">Error Handling</h1>
 <h2 id="index">Index</h2>
 <ol>
 <li><a href="#1-introduction">Introduction</a><ul>
@@ -6754,29 +7254,39 @@
 <li><a href="#2-error-handling-in-teranode">Error Handling in Teranode</a><ul>
 <li><a href="#21-error-handling-strategy">2.1. Error Handling Strategy</a></li>
 <li><a href="#22-sentinel-errors-in-teranode">2.2. Sentinel Errors in Teranode</a></li>
-<li><a href="#23-error-wrapping-in-teranode">2.3. Error Wrapping in Teranode</a></li>
+<li><a href="#23-error-wrapping-in-teranode">2.3. Error Wrapping in Teranode</a><ul>
 <li><a href="#error-creation-and-wrapping">Error Creation and Wrapping</a></li>
 <li><a href="#unwrapping-errors">Unwrapping Errors</a></li>
 <li><a href="#best-practices-for-error-wrapping">Best Practices for Error Wrapping</a></li>
-<li><a href="#24-grpc-error-wrapping-in-teranode">2.4. gRPC Error Wrapping in Teranode</a></li>
+</ul>
+</li>
+<li><a href="#24-grpc-error-wrapping-in-teranode">2.4. gRPC Error Wrapping in Teranode</a><ul>
 <li><a href="#converting-teranode-errors-to-grpc-errors">Converting Teranode Errors to gRPC Errors</a></li>
 <li><a href="#converting-grpc-errors-back-to-teranode-errors">Converting gRPC Errors back to Teranode Errors</a></li>
 <li><a href="#practical-example">Practical Example</a></li>
-<li><a href="#best-practices">Best Practices</a></li>
-<li><a href="#25-extra-data-in-error-handling">2.5. Extra Data in Error Handling</a></li>
+<li><a href="#grpc-error-wrapping-best-practices">gRPC Error Wrapping Best Practices</a></li>
+</ul>
+</li>
+<li><a href="#25-extra-data-in-error-handling">2.5. Extra Data in Error Handling</a><ul>
 <li><a href="#error-structure">Error Structure</a></li>
 <li><a href="#purpose-and-usage">Purpose and Usage</a></li>
 <li><a href="#example-implementation">Example Implementation</a></li>
 <li><a href="#type-assertions-with-extra-data">Type Assertions with Extra Data</a></li>
 <li><a href="#usage-example">Usage Example</a></li>
-<li><a href="#best-practices">Best Practices</a></li>
-<li><a href="#26-error-protobuf">2.6. Error Protobuf</a></li>
+<li><a href="#extra-data-best-practices">Extra Data Best Practices</a></li>
+</ul>
+</li>
+<li><a href="#26-error-protobuf">2.6. Error Protobuf</a><ul>
 <li><a href="#error-protocol-definition">Error Protocol Definition</a></li>
 <li><a href="#key-components">Key Components</a></li>
 <li><a href="#purpose-and-benefits">Purpose and Benefits</a></li>
 <li><a href="#integration-with-teranodes-error-handling">Integration with Teranode's Error Handling</a></li>
-<li><a href="#best-practices">Best Practices</a></li>
-<li><a href="#27-unit-tests">2.7. Unit Tests</a></li>
+<li><a href="#error-protobuf-best-practices">Error Protobuf Best Practices</a></li>
+</ul>
+</li>
+<li><a href="#27-error-utility-functions">2.7. Error Utility Functions</a></li>
+<li><a href="#28-stack-traces-and-formatting">2.8. Stack Traces and Formatting</a></li>
+<li><a href="#29-unit-tests">2.9. Unit Tests</a></li>
 </ul>
 </li>
 </ol>
@@ -6902,16 +7412,19 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 <h3 id="21-error-handling-strategy">2.1. Error Handling Strategy</h3>
 <p>Teranode follows a structured error handling strategy that combines the use of predefined error types, error wrapping, and consistent error creation patterns. This approach ensures clear, consistent, and traceable error handling throughout the application.</p>
 <p><img alt="error_handling_flow.svg" src="../img/plantuml/error_handling_flow.svg" /></p>
-<p>The <code>errors/Error.go</code> file contains the core error type definition and functions for creating, wrapping, and unwrapping errors. The <code>errors/Error_types.go</code> file defines specific error types and provides functions for creating these errors.</p>
-<p>An error in Teranode is defined as a struct containing an error code, a message, an optional wrapped error, and optional extra data:</p>
+<p>The <code>errors/errors.go</code> file contains the core error type definition and functions for creating, wrapping, and unwrapping errors. The <code>errors/Error_types.go</code> file defines specific error types and provides functions for creating these errors. Additional functionality is provided in <code>errors/error_utils.go</code> and <code>errors/Error_data.go</code>.</p>
+<p>An error in Teranode is defined as a struct with unexported fields to encapsulate error details, including stack trace information:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Error</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">Code</span><span class="w">       </span><span class="nx">ERR</span>
-<span class="w">    </span><span class="nx">Message</span><span class="w">    </span><span class="kt">string</span>
-<span class="w">    </span><span class="nx">WrappedErr</span><span class="w"> </span><span class="kt">error</span>
-<span class="w">    </span><span class="nx">Data</span><span class="w">       </span><span class="nx">ErrData</span>
+<span class="w">    </span><span class="nx">code</span><span class="w">       </span><span class="nx">ERR</span><span class="w">       </span><span class="c1">// Error code from the ERR enum</span>
+<span class="w">    </span><span class="nx">message</span><span class="w">    </span><span class="kt">string</span><span class="w">    </span><span class="c1">// Human-readable error message</span>
+<span class="w">    </span><span class="nx">file</span><span class="w">       </span><span class="kt">string</span><span class="w">    </span><span class="c1">// Source file where error was created</span>
+<span class="w">    </span><span class="nx">line</span><span class="w">       </span><span class="kt">int</span><span class="w">       </span><span class="c1">// Line number where error was created</span>
+<span class="w">    </span><span class="nx">function</span><span class="w">   </span><span class="kt">string</span><span class="w">    </span><span class="c1">// Function name where error was created</span>
+<span class="w">    </span><span class="nx">wrappedErr</span><span class="w"> </span><span class="kt">error</span><span class="w">     </span><span class="c1">// Optional wrapped error for error chains</span>
+<span class="w">    </span><span class="nx">data</span><span class="w">       </span><span class="nx">ErrDataI</span><span class="w">  </span><span class="c1">// Optional structured error data</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>The <code>ERR</code> type is an enum defined in the <code>error.proto</code> file, providing a standardized set of error codes across the system.</p>
+<p>The <code>ERR</code> type is an enum defined in the <code>error.proto</code> file, providing a standardized set of error codes across the system. The unexported fields ensure that errors are created through the provided constructor functions, and the file/line/function fields enable detailed stack trace information for debugging.</p>
 <p>Teranode emphasizes the use of specific error creation functions for different error types. These functions are defined in <code>Error_types.go</code> and follow a naming convention of <code>New&lt;ErrorType&gt;Error</code>. For example:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">NewStorageError</span><span class="p">(</span><span class="nx">message</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">params</span><span class="w"> </span><span class="o">...</span><span class="kd">interface</span><span class="p">{})</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">ERR_STORAGE_ERROR</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="p">,</span><span class="w"> </span><span class="nx">params</span><span class="o">...</span><span class="p">)</span>
@@ -6961,8 +7474,8 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 
 <span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 <span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-<span class="w">    </span><span class="s">&quot;errors&quot;</span>
-<span class="w">    </span><span class="s">&quot;github.com/your-project/errors&quot;</span><span class="w"> </span><span class="c1">// Import your custom errors package</span>
+
+<span class="w">    </span><span class="s">&quot;github.com/bsv-blockchain/teranode/errors&quot;</span><span class="w"> </span><span class="c1">// Import Teranode&#39;s custom errors package</span>
 <span class="p">)</span>
 
 <span class="c1">// Data represents a simple data structure</span>
@@ -7024,56 +7537,104 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 <p>Error wrapping in Teranode enables the creation of nested errors and their propagation through different layers of the application. This mechanism allows an error to carry its history along with new context, effectively creating a chain of errors that leads back to the original issue.</p>
 <p>By maintaining a trail of errors, developers can trace back through the execution flow to understand what led to the error. Additionally, different layers of the application can decide how to handle errors based on their type and origin.</p>
 <h4 id="error-creation-and-wrapping">Error Creation and Wrapping</h4>
-<p>The <code>New</code> function in Teranode's error package creates and returns a pointer to an <code>Error</code> struct, which includes fields for the error code, a message, and an optional wrapped error.</p>
+<p>The <code>New</code> function in Teranode's error package creates and returns a pointer to an <code>Error</code> struct, which includes fields for the error code, a message, file/line/function information, and an optional wrapped error.</p>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">code</span><span class="w"> </span><span class="nx">ERR</span><span class="p">,</span><span class="w"> </span><span class="nx">message</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">params</span><span class="w"> </span><span class="o">...</span><span class="kd">interface</span><span class="p">{})</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">wErr</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span>
 
 <span class="w">    </span><span class="c1">// Extract the wrapped error, if present</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">params</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">params</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="nx">params</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">].(</span><span class="o">*</span><span class="nx">Error</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">lastParam</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">params</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="nx">params</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+
+<span class="w">        </span><span class="k">switch</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">lastParam</span><span class="p">.(</span><span class="kd">type</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span><span class="p">:</span>
+<span class="w">            </span><span class="c1">// Wrap Teranode error directly</span>
 <span class="w">            </span><span class="nx">wErr</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">err</span>
+<span class="w">            </span><span class="nx">params</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">params</span><span class="p">[:</span><span class="nb">len</span><span class="p">(</span><span class="nx">params</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+<span class="w">        </span><span class="k">case</span><span class="w"> </span><span class="kt">error</span><span class="p">:</span>
+<span class="w">            </span><span class="c1">// Convert any error to Teranode error</span>
+<span class="w">            </span><span class="nx">wErr</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Error</span><span class="p">{</span><span class="nx">message</span><span class="p">:</span><span class="w"> </span><span class="nx">err</span><span class="p">.</span><span class="nx">Error</span><span class="p">()}</span>
 <span class="w">            </span><span class="nx">params</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">params</span><span class="p">[:</span><span class="nb">len</span><span class="p">(</span><span class="nx">params</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
 <span class="w">        </span><span class="p">}</span>
 <span class="w">    </span><span class="p">}</span>
 
 <span class="w">    </span><span class="c1">// Format the message with the remaining parameters</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">params</span><span class="p">)</span><span class="w"> </span><span class="p">&gt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nx">message</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="nx">message</span><span class="p">,</span><span class="w"> </span><span class="nx">params</span><span class="o">...</span><span class="p">)</span>
+<span class="w">        </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="nx">message</span><span class="p">,</span><span class="w"> </span><span class="nx">params</span><span class="o">...</span><span class="p">)</span>
+<span class="w">        </span><span class="nx">message</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">err</span><span class="p">.</span><span class="nx">Error</span><span class="p">()</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="c1">// Check if the code exists in the ErrorConstants enum</span>
+<span class="w">    </span><span class="c1">// Capture stack trace information</span>
+<span class="w">    </span><span class="nx">pc</span><span class="p">,</span><span class="w"> </span><span class="nx">file</span><span class="p">,</span><span class="w"> </span><span class="nx">line</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runtime</span><span class="p">.</span><span class="nx">Caller</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">fn</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runtime</span><span class="p">.</span><span class="nx">FuncForPC</span><span class="p">(</span><span class="nx">pc</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">parts</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Split</span><span class="p">(</span><span class="nx">fn</span><span class="p">.</span><span class="nx">Name</span><span class="p">(),</span><span class="w"> </span><span class="s">&quot;/&quot;</span><span class="p">)</span>
+
+<span class="w">    </span><span class="c1">// Check if the code exists in the ERR enum</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">ERR_name</span><span class="p">[</span><span class="nb">int32</span><span class="p">(</span><span class="nx">code</span><span class="p">)];</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Error</span><span class="p">{</span>
-<span class="w">            </span><span class="nx">Code</span><span class="p">:</span><span class="w">       </span><span class="nx">code</span><span class="p">,</span>
-<span class="w">            </span><span class="nx">Message</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;invalid error code&quot;</span><span class="p">,</span>
-<span class="w">            </span><span class="nx">WrappedErr</span><span class="p">:</span><span class="w"> </span><span class="nx">wErr</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">returnErr</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Error</span><span class="p">{</span>
+<span class="w">            </span><span class="nx">code</span><span class="p">:</span><span class="w">     </span><span class="nx">code</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">message</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;invalid error code&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">file</span><span class="p">:</span><span class="w">     </span><span class="nx">file</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">line</span><span class="p">:</span><span class="w">     </span><span class="nx">line</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">function</span><span class="p">:</span><span class="w"> </span><span class="nx">parts</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="nx">parts</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
 <span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">wErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">wErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">returnErr</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">!</span><span class="nx">wErr</span><span class="p">.</span><span class="nx">contains</span><span class="p">(</span><span class="nx">returnErr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nx">returnErr</span><span class="p">.</span><span class="nx">wrappedErr</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">wErr</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">returnErr</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Error</span><span class="p">{</span>
-<span class="w">        </span><span class="nx">Code</span><span class="p">:</span><span class="w">       </span><span class="nx">code</span><span class="p">,</span>
-<span class="w">        </span><span class="nx">Message</span><span class="p">:</span><span class="w">    </span><span class="nx">message</span><span class="p">,</span>
-<span class="w">        </span><span class="nx">WrappedErr</span><span class="p">:</span><span class="w"> </span><span class="nx">wErr</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">returnErr</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Error</span><span class="p">{</span>
+<span class="w">        </span><span class="nx">code</span><span class="p">:</span><span class="w">     </span><span class="nx">code</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">message</span><span class="p">:</span><span class="w">  </span><span class="nx">message</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">file</span><span class="p">:</span><span class="w">     </span><span class="nx">file</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">line</span><span class="p">:</span><span class="w">     </span><span class="nx">line</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">function</span><span class="p">:</span><span class="w"> </span><span class="nx">parts</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="nx">parts</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
 <span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="c1">// Only wrap if wErr exists and won&#39;t create a cycle</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">wErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nx">wErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">returnErr</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="p">!</span><span class="nx">wErr</span><span class="p">.</span><span class="nx">contains</span><span class="p">(</span><span class="nx">returnErr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">returnErr</span><span class="p">.</span><span class="nx">wrappedErr</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">wErr</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">returnErr</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>The <code>New</code> function operates as follows:</p>
 <ol>
-<li>It takes an error code, a message, and a variadic <code>params</code> slice which may include one error to be wrapped.</li>
-<li>If the last parameter in <code>params</code> is an error, it's treated as the error to be wrapped. This error is stored in the <code>WrappedErr</code> field of the <code>Error</code> struct.</li>
-<li>Any additional parameters are used to format the message string using <code>fmt.Sprintf</code>, allowing for dynamic message content based on runtime values.</li>
+<li>It takes an error code, a message, and a variadic <code>params</code> slice which may include formatting parameters and optionally one error to be wrapped.</li>
+<li>
+<p>If the last parameter in <code>params</code> is an error of ANY type, it's treated as the error to be wrapped:</p>
+<ul>
+<li>If it's a <code>*Error</code> (Teranode error), it's wrapped directly</li>
+<li>If it's any other <code>error</code> type, it's converted to a Teranode error first</li>
+<li>Any additional parameters are used to format the message string using <code>fmt.Errorf</code>, allowing for dynamic message content based on runtime values.</li>
+<li>Stack trace information (file, line, function) is automatically captured using <code>runtime.Caller</code>.</li>
+<li>The function includes circular reference prevention using the <code>contains()</code> method to avoid infinite error chains.</li>
+</ul>
+</li>
 </ol>
 <p>Here's a practical example of using the <code>New</code> function to create and wrap errors:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">someOperation</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">doSomethingThatMightFail</span><span class="p">()</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="c1">// Wrap the error with additional context and return</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">ErrInvalidArgument</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;operation failed due to underlying error: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">        </span><span class="c1">// Wrap the error with additional context</span>
+<span class="w">        </span><span class="c1">// Note: Use the error CODE (ERR_INVALID_ARGUMENT), not the sentinel error</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">ERR_INVALID_ARGUMENT</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;operation failed: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">.</span><span class="nx">Error</span><span class="p">(),</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+<span class="p">}</span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">anotherOperation</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// You can also use the type-specific constructor functions</span>
+<span class="w">    </span><span class="nx">dbErr</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">someDatabase</span><span class="w"> </span><span class="nx">Query</span><span class="p">()</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">dbErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// This automatically handles error wrapping</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">NewStorageError</span><span class="p">(</span><span class="s">&quot;failed to query database&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">dbErr</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>In this scenario, <code>someOperation</code> calls another function and wraps any error returned by this function with additional context, using the custom <code>New</code> function.</p>
+<p>In these scenarios, the functions wrap errors returned by other functions with additional context. The <code>New</code> function can wrap both Teranode errors and standard Go errors, automatically converting standard errors to Teranode's error type.</p>
 <h4 id="unwrapping-errors">Unwrapping Errors</h4>
 <p>The <code>Unwrap</code> method in the <code>Error</code> structure returns the error that was wrapped within the current error, if any:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span><span class="p">)</span><span class="w"> </span><span class="nx">Unwrap</span><span class="p">()</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
@@ -7095,95 +7656,221 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 <span class="p">}</span>
 </code></pre></div>
 <p>In this example, <code>errors.Unwrap</code> is used in a loop to keep unwrapping the error until no more wrapped errors are found, effectively reaching the original error. This approach is particularly useful when diagnosing an issue and understanding the sequence of errors that led to the final state.</p>
+<h4 id="circular-error-prevention">Circular Error Prevention</h4>
+<p>Teranode's error system includes automatic circular reference detection to prevent infinite error chains. The <code>contains()</code> method checks if adding an error would create a cycle before wrapping:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span><span class="p">)</span><span class="w"> </span><span class="nx">contains</span><span class="p">(</span><span class="nx">target</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span><span class="p">)</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Builds a set of all errors in e&#39;s chain</span>
+<span class="w">    </span><span class="c1">// Checks if any error in target&#39;s chain exists in e&#39;s chain</span>
+<span class="w">    </span><span class="c1">// Returns true if a cycle would be created</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This is automatically invoked by:</p>
+<ul>
+<li><code>New()</code> when wrapping errors during error creation</li>
+<li><code>SetWrappedErr()</code> when manually setting wrapped errors</li>
+<li><code>Join()</code> when combining multiple errors</li>
+</ul>
+<p><strong>What this prevents</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">err1</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">NewError</span><span class="p">(</span><span class="s">&quot;error 1&quot;</span><span class="p">)</span>
+<span class="nx">err2</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">NewStorageError</span><span class="p">(</span><span class="s">&quot;error 2&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err1</span><span class="p">)</span>
+<span class="nx">err3</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">NewNetworkError</span><span class="p">(</span><span class="s">&quot;error 3&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err2</span><span class="p">)</span>
+
+<span class="c1">// This would create a cycle if not prevented:</span>
+<span class="nx">err1</span><span class="p">.</span><span class="nx">SetWrappedErr</span><span class="p">(</span><span class="nx">err3</span><span class="p">)</span><span class="w">  </span><span class="c1">// Silently ignored - cycle detected</span>
+</code></pre></div>
+<p>The circular detection traverses both error chains and prevents wrapping if:</p>
+<ol>
+<li>The error would wrap itself</li>
+<li>The wrapped error already contains the current error</li>
+<li>Adding the error would create any cycle in the chain</li>
+</ol>
+<p>This ensures error chains remain acyclic and can be safely traversed without infinite loops.</p>
 <h4 id="best-practices-for-error-wrapping">Best Practices for Error Wrapping</h4>
 <ol>
 <li>Unwrap errors only when necessary. For example, when handling specific error types differently, unwrap errors until finding the type you're looking for.</li>
 <li>Always log or monitor the full error chain before unwrapping in production environments to preserve the context and details of what went wrong.</li>
 <li>Use error wrapping to add context at each layer of the application, making it easier to trace the flow of execution that led to an error.</li>
 <li>When wrapping errors, include relevant information that might help in debugging, but be cautious not to include sensitive data.</li>
+<li>Let the automatic circular reference detection handle cycle prevention - don't try to manually check for cycles.</li>
+<li>Prefer wrapping errors at layer boundaries (e.g., when transitioning from storage to service layer) rather than wrapping at every function call.</li>
 </ol>
 <h3 id="24-grpc-error-wrapping-in-teranode">2.4. gRPC Error Wrapping in Teranode</h3>
 <p>As a distributed system utilizing gRPC, Teranode implements a robust mechanism for wrapping and unwrapping errors to ensure consistent error handling practices when errors cross service boundaries.</p>
 <h4 id="converting-teranode-errors-to-grpc-errors">Converting Teranode Errors to gRPC Errors</h4>
-<p>The <code>WrapGRPC</code> function in <code>Error.go</code> is responsible for converting Teranode's custom error types into gRPC-compatible errors. This function uses the <code>status</code> package from <code>google.golang.org/grpc</code> to create gRPC status errors.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">package</span><span class="w"> </span><span class="nx">errors</span>
-
-<span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-<span class="w">    </span><span class="s">&quot;google.golang.org/grpc/codes&quot;</span>
-<span class="w">    </span><span class="s">&quot;google.golang.org/grpc/status&quot;</span>
-<span class="w">    </span><span class="s">&quot;google.golang.org/protobuf/types/known/anypb&quot;</span>
-<span class="p">)</span>
-
-<span class="kd">func</span><span class="w"> </span><span class="nx">WrapGRPC</span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+<p>The <code>WrapGRPC</code> function in <code>errors.go</code> is responsible for converting Teranode's custom error types into gRPC-compatible errors. This function serializes the <strong>entire error chain</strong> with all wrapped errors, data, and stack trace information.</p>
+<p><strong>Key Implementation Details</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">WrapGRPC</span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">uErr</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">As</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">uErr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nx">details</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anypb</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">TError</span><span class="p">{</span>
-<span class="w">            </span><span class="nx">Code</span><span class="p">:</span><span class="w">    </span><span class="nx">uErr</span><span class="p">.</span><span class="nx">Code</span><span class="p">,</span>
-<span class="w">            </span><span class="nx">Message</span><span class="p">:</span><span class="w"> </span><span class="nx">uErr</span><span class="p">.</span><span class="nx">Message</span><span class="p">,</span>
-<span class="w">        </span><span class="p">})</span>
-<span class="w">        </span><span class="nx">st</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ErrorCodeToGRPCCode</span><span class="p">(</span><span class="nx">uErr</span><span class="p">.</span><span class="nx">Code</span><span class="p">),</span><span class="w"> </span><span class="nx">uErr</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
-<span class="w">        </span><span class="nx">st</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">st</span><span class="p">.</span><span class="nx">WithDetails</span><span class="p">(</span><span class="nx">details</span><span class="p">)</span>
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">codes</span><span class="p">.</span><span class="nx">Internal</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;error adding details to gRPC status&quot;</span><span class="p">).</span><span class="nx">Err</span><span class="p">()</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">castedErr</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">As</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">castedErr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Check if already wrapped - avoid double wrapping</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">wrappedErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">FromError</span><span class="p">(</span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">wrappedErr</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="c1">// Already wrapped, skip further wrapping</span>
+<span class="w">            </span><span class="p">}</span>
 <span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="nx">wrappedErrDetails</span><span class="w"> </span><span class="p">[]</span><span class="nx">protoadapt</span><span class="p">.</span><span class="nx">MessageV1</span>
+
+<span class="w">        </span><span class="c1">// Serialize the main error with data and stack trace</span>
+<span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="nx">details</span><span class="w"> </span><span class="nx">protoadapt</span><span class="p">.</span><span class="nx">MessageV1</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">data</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nx">details</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">anypb</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">TError</span><span class="p">{</span>
+<span class="w">                </span><span class="nx">Code</span><span class="p">:</span><span class="w">     </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">code</span><span class="p">,</span>
+<span class="w">                </span><span class="nx">Message</span><span class="p">:</span><span class="w">  </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">message</span><span class="p">,</span>
+<span class="w">                </span><span class="nx">Data</span><span class="p">:</span><span class="w">     </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">data</span><span class="p">.</span><span class="nx">EncodeErrorData</span><span class="p">(),</span><span class="w">  </span><span class="c1">// Include error data</span>
+<span class="w">                </span><span class="nx">File</span><span class="p">:</span><span class="w">     </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">file</span><span class="p">,</span><span class="w">     </span><span class="c1">// Stack trace info</span>
+<span class="w">                </span><span class="nx">Line</span><span class="p">:</span><span class="w">     </span><span class="nb">int32</span><span class="p">(</span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">line</span><span class="p">),</span>
+<span class="w">                </span><span class="nx">Function</span><span class="p">:</span><span class="w"> </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">function</span><span class="p">,</span>
+<span class="w">            </span><span class="p">})</span>
+<span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nx">details</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">anypb</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">TError</span><span class="p">{</span>
+<span class="w">                </span><span class="nx">Code</span><span class="p">:</span><span class="w">     </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">code</span><span class="p">,</span>
+<span class="w">                </span><span class="nx">Message</span><span class="p">:</span><span class="w">  </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">message</span><span class="p">,</span>
+<span class="w">                </span><span class="nx">File</span><span class="p">:</span><span class="w">     </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">file</span><span class="p">,</span>
+<span class="w">                </span><span class="nx">Line</span><span class="p">:</span><span class="w">     </span><span class="nb">int32</span><span class="p">(</span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">line</span><span class="p">),</span>
+<span class="w">                </span><span class="nx">Function</span><span class="p">:</span><span class="w"> </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">function</span><span class="p">,</span>
+<span class="w">            </span><span class="p">})</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">        </span><span class="nx">wrappedErrDetails</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">wrappedErrDetails</span><span class="p">,</span><span class="w"> </span><span class="nx">details</span><span class="p">)</span>
+
+<span class="w">        </span><span class="c1">// Iterate through ALL wrapped errors in the chain</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">wrappedErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="nx">currWrappedErr</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">wrappedErr</span>
+<span class="w">            </span><span class="k">for</span><span class="w"> </span><span class="nx">currWrappedErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="kd">var</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">As</span><span class="p">(</span><span class="nx">currWrappedErr</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">err</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="c1">// Serialize each wrapped error with its data and stack trace</span>
+<span class="w">                    </span><span class="nx">details</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anypb</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">TError</span><span class="p">{</span>
+<span class="w">                        </span><span class="nx">Code</span><span class="p">:</span><span class="w">     </span><span class="nx">err</span><span class="p">.</span><span class="nx">code</span><span class="p">,</span>
+<span class="w">                        </span><span class="nx">Message</span><span class="p">:</span><span class="w">  </span><span class="nx">err</span><span class="p">.</span><span class="nx">message</span><span class="p">,</span>
+<span class="w">                        </span><span class="nx">Data</span><span class="p">:</span><span class="w">     </span><span class="nx">err</span><span class="p">.</span><span class="nx">data</span><span class="p">.</span><span class="nx">EncodeErrorData</span><span class="p">(),</span><span class="w"> </span><span class="c1">// if data exists</span>
+<span class="w">                        </span><span class="nx">File</span><span class="p">:</span><span class="w">     </span><span class="nx">err</span><span class="p">.</span><span class="nx">file</span><span class="p">,</span>
+<span class="w">                        </span><span class="nx">Line</span><span class="p">:</span><span class="w">     </span><span class="nb">int32</span><span class="p">(</span><span class="nx">err</span><span class="p">.</span><span class="nx">line</span><span class="p">),</span>
+<span class="w">                        </span><span class="nx">Function</span><span class="p">:</span><span class="w"> </span><span class="nx">err</span><span class="p">.</span><span class="nx">function</span><span class="p">,</span>
+<span class="w">                    </span><span class="p">})</span>
+<span class="w">                    </span><span class="nx">wrappedErrDetails</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">wrappedErrDetails</span><span class="p">,</span><span class="w"> </span><span class="nx">details</span><span class="p">)</span>
+<span class="w">                    </span><span class="nx">currWrappedErr</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">err</span><span class="p">.</span><span class="nx">wrappedErr</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="c1">// Create gRPC status with ALL details</span>
+<span class="w">        </span><span class="nx">st</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ErrorCodeToGRPCCode</span><span class="p">(</span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">code</span><span class="p">),</span><span class="w"> </span><span class="nx">castedErr</span><span class="p">.</span><span class="nx">message</span><span class="p">)</span>
+<span class="w">        </span><span class="nx">st</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">st</span><span class="p">.</span><span class="nx">WithDetails</span><span class="p">(</span><span class="nx">wrappedErrDetails</span><span class="o">...</span><span class="p">)</span>
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">st</span><span class="p">.</span><span class="nx">Err</span><span class="p">()</span>
 <span class="w">    </span><span class="p">}</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ErrorCodeToGRPCCode</span><span class="p">(</span><span class="nx">ErrUnknown</span><span class="p">.</span><span class="nx">Code</span><span class="p">),</span><span class="w"> </span><span class="nx">ErrUnknown</span><span class="p">.</span><span class="nx">Message</span><span class="p">).</span><span class="nx">Err</span><span class="p">()</span>
+
+<span class="w">    </span><span class="c1">// For non-Teranode errors, wrap as unknown</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">codes</span><span class="p">.</span><span class="nx">Internal</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">.</span><span class="nx">Error</span><span class="p">()).</span><span class="nx">Err</span><span class="p">()</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>The <code>WrapGRPC</code> function performs the following steps:</p>
+<p><strong>The <code>WrapGRPC</code> function</strong>:</p>
 <ol>
-<li>If the input error is nil, it returns nil.</li>
-<li>It attempts to cast the error to Teranode's custom <code>Error</code> type.</li>
-<li>If successful, it creates a new <code>TError</code> with the error's code and message.</li>
-<li>It then creates a new gRPC status with the corresponding gRPC code and message.</li>
-<li>The <code>TError</code> is added as a detail to the gRPC status.</li>
-<li>If the error is not a Teranode <code>Error</code>, it creates a generic "unknown" gRPC error.</li>
+<li><strong>Checks for nil</strong> and returns early if no error</li>
+<li><strong>Prevents double-wrapping</strong> by checking if the wrapped error is already a gRPC status</li>
+<li><strong>Serializes the main error</strong> including code, message, data (if present), and stack trace info (file/line/function)</li>
+<li><strong>Iterates through the entire wrapped error chain</strong>, serializing each error with its full context</li>
+<li><strong>Attaches all error details</strong> to a single gRPC status message</li>
+<li><strong>Maps error codes</strong> using <code>ErrorCodeToGRPCCode()</code> for the top-level gRPC status code</li>
+<li><strong>Handles non-Teranode errors</strong> by wrapping them with <code>codes.Internal</code></li>
 </ol>
-<p>This process allows the receiving service to understand not only the nature of the error but also to receive contextual metadata.</p>
+<p>This comprehensive serialization ensures that when an error crosses a gRPC boundary, all contextual information—including the complete error chain, typed error data, and stack traces—is preserved and transmitted to the receiving service.</p>
 <h4 id="converting-grpc-errors-back-to-teranode-errors">Converting gRPC Errors back to Teranode Errors</h4>
-<p>When a Teranode service receives a gRPC error, it needs to convert it back into an internal error format. The <code>UnwrapGRPC</code> function in <code>Error.go</code> handles this process:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">package</span><span class="w"> </span><span class="nx">errors</span>
-
-<span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-<span class="w">    </span><span class="s">&quot;google.golang.org/grpc/status&quot;</span>
-<span class="w">    </span><span class="s">&quot;google.golang.org/protobuf/proto&quot;</span>
-<span class="w">    </span><span class="s">&quot;google.golang.org/protobuf/types/known/anypb&quot;</span>
-<span class="p">)</span>
-
-<span class="kd">func</span><span class="w"> </span><span class="nx">UnwrapGRPC</span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+<p>When a Teranode service receives a gRPC error, it needs to convert it back into an internal error format. The <code>UnwrapGRPC</code> function in <code>errors.go</code> reconstructs the <strong>complete error chain</strong> including all wrapped errors, data, and stack trace information.</p>
+<p><strong>Key Implementation Details</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">UnwrapGRPC</span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 <span class="w">    </span><span class="p">}</span>
 
+<span class="w">    </span><span class="c1">// Check if it&#39;s a gRPC status error</span>
 <span class="w">    </span><span class="nx">st</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">status</span><span class="p">.</span><span class="nx">FromError</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="c1">// Not a gRPC status error</span>
-<span class="w">    </span><span class="p">}</span>
-
-<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">detail</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">st</span><span class="p">.</span><span class="nx">Details</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="nx">teranodeErr</span><span class="w"> </span><span class="nx">TError</span>
-<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">anypb</span><span class="p">.</span><span class="nx">UnmarshalTo</span><span class="p">(</span><span class="nx">detail</span><span class="p">.(</span><span class="o">*</span><span class="nx">anypb</span><span class="p">.</span><span class="nx">Any</span><span class="p">),</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">teranodeErr</span><span class="p">,</span><span class="w"> </span><span class="nx">proto</span><span class="p">.</span><span class="nx">UnmarshalOptions</span><span class="p">{});</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">teranodeErr</span><span class="p">.</span><span class="nx">Code</span><span class="p">,</span><span class="w"> </span><span class="nx">teranodeErr</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Error</span><span class="p">{</span>
+<span class="w">            </span><span class="nx">code</span><span class="p">:</span><span class="w">    </span><span class="nx">ERR_ERROR</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">message</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;error unwrapping gRPC details&quot;</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">wrappedErr</span><span class="p">:</span><span class="w"> </span><span class="nx">err</span><span class="p">,</span>
 <span class="w">        </span><span class="p">}</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">ErrUnknown</span><span class="p">.</span><span class="nx">Code</span><span class="p">,</span><span class="w"> </span><span class="nx">st</span><span class="p">.</span><span class="nx">Message</span><span class="p">())</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">st</span><span class="p">.</span><span class="nx">Details</span><span class="p">())</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Error</span><span class="p">{</span>
+<span class="w">            </span><span class="nx">code</span><span class="p">:</span><span class="w">    </span><span class="nx">ERR_ERROR</span><span class="p">,</span>
+<span class="w">            </span><span class="nx">message</span><span class="p">:</span><span class="w"> </span><span class="nx">err</span><span class="p">.</span><span class="nx">Error</span><span class="p">(),</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">prevErr</span><span class="p">,</span><span class="w"> </span><span class="nx">currErr</span><span class="w"> </span><span class="o">*</span><span class="nx">Error</span>
+
+<span class="w">    </span><span class="c1">// Iterate through details in REVERSE order to reconstruct chain</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">st</span><span class="p">.</span><span class="nx">Details</span><span class="p">())</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="o">--</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">detail</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">st</span><span class="p">.</span><span class="nx">Details</span><span class="p">()[</span><span class="nx">i</span><span class="p">]</span>
+<span class="w">        </span><span class="nx">detailAny</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">detail</span><span class="p">.(</span><span class="o">*</span><span class="nx">anypb</span><span class="p">.</span><span class="nx">Any</span><span class="p">)</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">continue</span><span class="w"> </span><span class="c1">// Skip if not the expected type</span>
+<span class="w">        </span><span class="p">}</span>
+
+<span class="w">        </span><span class="kd">var</span><span class="w"> </span><span class="nx">customDetails</span><span class="w"> </span><span class="nx">TError</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">anypb</span><span class="p">.</span><span class="nx">UnmarshalTo</span><span class="p">(</span><span class="nx">detailAny</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">customDetails</span><span class="p">,</span><span class="w"> </span><span class="nx">proto</span><span class="p">.</span><span class="nx">UnmarshalOptions</span><span class="p">{});</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="c1">// Create error with code and message</span>
+<span class="w">            </span><span class="nx">currErr</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">customDetails</span><span class="p">.</span><span class="nx">Code</span><span class="p">,</span><span class="w"> </span><span class="nx">customDetails</span><span class="p">.</span><span class="nx">Message</span><span class="p">)</span>
+
+<span class="w">            </span><span class="c1">// Restore error data if present</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">customDetails</span><span class="p">.</span><span class="nx">Data</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="nx">data</span><span class="p">,</span><span class="w"> </span><span class="nx">errorGettingData</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">GetErrorData</span><span class="p">(</span><span class="nx">customDetails</span><span class="p">.</span><span class="nx">Code</span><span class="p">,</span><span class="w"> </span><span class="nx">customDetails</span><span class="p">.</span><span class="nx">Data</span><span class="p">)</span>
+<span class="w">                </span><span class="k">if</span><span class="w"> </span><span class="nx">errorGettingData</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="nx">currErr</span><span class="p">.</span><span class="nx">data</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">nil</span><span class="w">  </span><span class="c1">// Could not deserialize data</span>
+<span class="w">                </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                    </span><span class="nx">currErr</span><span class="p">.</span><span class="nx">data</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">data</span>
+<span class="w">                </span><span class="p">}</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="c1">// Restore stack trace information</span>
+<span class="w">            </span><span class="nx">currErr</span><span class="p">.</span><span class="nx">file</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">customDetails</span><span class="p">.</span><span class="nx">File</span>
+<span class="w">            </span><span class="nx">currErr</span><span class="p">.</span><span class="nx">line</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">int</span><span class="p">(</span><span class="nx">customDetails</span><span class="p">.</span><span class="nx">Line</span><span class="p">)</span>
+<span class="w">            </span><span class="nx">currErr</span><span class="p">.</span><span class="nx">function</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">customDetails</span><span class="p">.</span><span class="nx">Function</span>
+
+<span class="w">            </span><span class="c1">// Link to previously reconstructed error (builds chain from bottom up)</span>
+<span class="w">            </span><span class="k">if</span><span class="w"> </span><span class="nx">prevErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">                </span><span class="nx">currErr</span><span class="p">.</span><span class="nx">wrappedErr</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">prevErr</span>
+<span class="w">            </span><span class="p">}</span>
+
+<span class="w">            </span><span class="nx">prevErr</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">currErr</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">currErr</span><span class="w">  </span><span class="c1">// Returns the top-level error with full chain</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>The <code>UnwrapGRPC</code> function:</p>
+<p><strong>The <code>UnwrapGRPC</code> function</strong>:</p>
 <ol>
-<li>Checks if the input is a gRPC status error.</li>
-<li>If it is, it iterates through the error details.</li>
-<li>It attempts to unmarshal each detail into a <code>TError</code>.</li>
-<li>If successful, it creates a new Teranode <code>Error</code> with the extracted code and message.</li>
-<li>If no matching detail is found, it creates a generic "unknown" Teranode error.</li>
+<li><strong>Validates the error</strong> is a gRPC status error</li>
+<li><strong>Extracts all error details</strong> from the gRPC status</li>
+<li><strong>Iterates in reverse order</strong> (bottom-up) to properly reconstruct the error chain</li>
+<li>
+<p><strong>For each detail</strong>:</p>
+<ul>
+<li>Unmarshals the <code>TError</code> protobuf message</li>
+<li>Creates a new <code>Error</code> with the code and message</li>
+<li>Deserializes error data using <code>GetErrorData()</code> if present</li>
+<li>Restores stack trace info (file, line, function)</li>
+<li>Links to the previous error to rebuild the wrapped error chain</li>
+<li><strong>Returns the top-level error</strong> with the complete reconstructed chain</li>
+</ul>
+</li>
 </ol>
-<p>This process allows Teranode to reconstruct its internal error types from gRPC errors, preserving error context across service boundaries.</p>
+<p>This process allows Teranode to fully reconstruct its internal error types from gRPC errors, preserving:</p>
+<ul>
+<li>All error codes and messages</li>
+<li>The complete error chain (all wrapped errors)</li>
+<li>Typed error data (e.g., <code>UtxoSpentErrData</code>)</li>
+<li>Stack trace information for each error in the chain</li>
+</ul>
+<p>The reverse iteration ensures that wrapped errors are properly linked, maintaining the same error hierarchy that existed before gRPC transmission.</p>
 <h4 id="practical-example">Practical Example</h4>
 <p>Here's an end-to-end example of how gRPC error wrapping and unwrapping works in Teranode:</p>
 <ol>
@@ -7205,7 +7892,7 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 <span class="p">}</span>
 </code></pre></div>
 <p>In this example, if an error occurs in the server, it's wrapped as a gRPC error before being sent to the client. The client then unwraps the gRPC error, allowing it to handle the error as a standard Teranode error.</p>
-<h4 id="best-practices">Best Practices</h4>
+<h4 id="grpc-error-wrapping-best-practices">gRPC Error Wrapping Best Practices</h4>
 <ol>
 <li>Maintain a clear mapping between Teranode error codes and gRPC status codes to ensure error meanings are preserved across service boundaries.</li>
 <li>Always wrap errors before sending them across gRPC boundaries, and unwrap them when receiving.</li>
@@ -7213,28 +7900,76 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 <li>Handle unwrapping errors gracefully, accounting for the possibility that the received error might not be a properly wrapped Teranode error.</li>
 </ol>
 <h3 id="25-extra-data-in-error-handling">2.5. Extra Data in Error Handling</h3>
-<p>Teranode's error handling system includes a feature for attaching additional contextual information to errors. This is implemented through the <code>Data</code> field in the <code>Error</code> struct.</p>
+<p>Teranode's error handling system includes a feature for attaching additional contextual information to errors. This is implemented through the <code>data</code> field in the <code>Error</code> struct.</p>
 <h4 id="error-structure">Error Structure</h4>
-<p>The Teranode error is represented by the following struct:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Error</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">Code</span><span class="w">       </span><span class="nx">ERR</span>
-<span class="w">    </span><span class="nx">Message</span><span class="w">    </span><span class="kt">string</span>
-<span class="w">    </span><span class="nx">WrappedErr</span><span class="w"> </span><span class="kt">error</span>
-<span class="w">    </span><span class="nx">Data</span><span class="w">       </span><span class="nx">ErrData</span>
+<p>The <code>data</code> field in the Error struct is of type <code>ErrDataI</code>, which is an interface defined in <code>Error_data.go</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// ErrDataI is an interface for error data that can be set, retrieved, and encoded.</span>
+<span class="kd">type</span><span class="w"> </span><span class="nx">ErrDataI</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">EncodeErrorData</span><span class="p">()</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="w">    </span><span class="c1">// Encode data for transmission over gRPC</span>
+<span class="w">    </span><span class="nx">Error</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span><span class="w">              </span><span class="c1">// String representation of the data</span>
+<span class="w">    </span><span class="nx">GetData</span><span class="p">(</span><span class="nx">key</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kd">interface</span><span class="p">{}</span><span class="w">      </span><span class="c1">// Retrieve value by key</span>
+<span class="w">    </span><span class="nx">SetData</span><span class="p">(</span><span class="nx">key</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">value</span><span class="w"> </span><span class="kd">interface</span><span class="p">{})</span><span class="w"> </span><span class="c1">// Set value by key</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>The <code>Data</code> field is of type <code>ErrData</code>, which is an interface defined as:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">ErrData</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">Error</span><span class="p">()</span><span class="w"> </span><span class="kt">string</span>
-<span class="p">}</span>
+<p>Teranode provides a generic implementation using a map:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// ErrData is a generic error data structure that implements the ErrDataI interface.</span>
+<span class="kd">type</span><span class="w"> </span><span class="nx">ErrData</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="kd">interface</span><span class="p">{}</span>
 </code></pre></div>
-<p>This design allows any type that implements the <code>Error()</code> method to be used as the <code>Data</code> field, providing flexibility in attaching various types of contextual information to errors.</p>
-<h4 id="purpose-and-usage">Purpose and Usage</h4>
-<p>The <code>Data</code> field serves two main purposes:</p>
+<p>This design provides two approaches for error data:</p>
 <ol>
-<li>It allows attaching additional contextual information or payload to the error.</li>
-<li>It enables type assertions for more specific error handling.</li>
+<li><strong>Generic Key-Value Data</strong>: Use the built-in <code>ErrData</code> map type for simple key-value pairs</li>
+<li><strong>Custom Typed Data</strong>: Implement <code>ErrDataI</code> for domain-specific structured error data (e.g., <code>UtxoSpentErrData</code>)</li>
 </ol>
+<p>The <code>EncodeErrorData()</code> method serializes the data to JSON bytes for transmission over gRPC, while <code>GetData</code>/<code>SetData</code> provide a convenient API for accessing the data programmatically.</p>
+<h4 id="purpose-and-usage">Purpose and Usage</h4>
+<p>The <code>data</code> field serves two main purposes:</p>
+<ol>
+<li>It allows attaching additional structured contextual information or payload to the error</li>
+<li>It enables type assertions for more specific error handling</li>
+</ol>
+<p><strong>Wrapped Errors vs Error Data</strong>:</p>
+<p>Understanding when to use wrapped errors versus error data is important for clear error handling:</p>
+<p><strong>Use Wrapped Errors when</strong>:</p>
+<ul>
+<li>You want to preserve the <strong>causal chain</strong> of what went wrong (error A caused error B)</li>
+<li>You're adding context at different layers of the application (network → service → storage)</li>
+<li>You want to maintain the full error history for debugging</li>
+<li>You need to check if a specific error type occurred anywhere in the chain using <code>errors.Is()</code></li>
+</ul>
+<p>Example:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">dbErr</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">database</span><span class="p">.</span><span class="nx">Query</span><span class="p">()</span><span class="w">  </span><span class="c1">// Original error from database</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">dbErr</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Wrap to show this happened during user retrieval</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">NewStorageError</span><span class="p">(</span><span class="s">&quot;failed to retrieve user&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">dbErr</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Use Error Data when</strong>:</p>
+<ul>
+<li>You need to attach <strong>domain-specific structured information</strong> to an error</li>
+<li>The information is metadata <strong>about</strong> the error, not a cause of it</li>
+<li>You want to include specific identifiers, timestamps, or state information</li>
+<li>You need typed access to error details for programmatic handling</li>
+</ul>
+<p>Example:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// UTXO spent error needs specific transaction hashes and timing</span>
+<span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">NewUtxoSpentErr</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">spendingTxHash</span><span class="p">,</span><span class="w"> </span><span class="nx">spentTime</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span><span class="p">)</span>
+<span class="c1">// Now error.data contains UtxoSpentErrData with typed fields</span>
+
+<span class="c1">// Later, extract and use the data:</span>
+<span class="kd">var</span><span class="w"> </span><span class="nx">spentData</span><span class="w"> </span><span class="o">*</span><span class="nx">UtxoSpentErrData</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">AsData</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">spentData</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Info</span><span class="p">(</span><span class="s">&quot;UTXO already spent&quot;</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;utxo&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">spentData</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;by_tx&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">spentData</span><span class="p">.</span><span class="nx">SpendingTxHash</span><span class="p">,</span>
+<span class="w">        </span><span class="s">&quot;at&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">spentData</span><span class="p">.</span><span class="nx">Time</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>You can use both together</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// Wrap a database error AND attach domain-specific data</span>
+<span class="nx">dbErr</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">database</span><span class="p">.</span><span class="nx">Query</span><span class="p">()</span>
+<span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">NewUtxoSpentErr</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">spendingTxHash</span><span class="p">,</span><span class="w"> </span><span class="nx">time</span><span class="p">.</span><span class="nx">Now</span><span class="p">(),</span><span class="w"> </span><span class="nx">dbErr</span><span class="p">)</span>
+<span class="c1">// Now err.wrappedErr = dbErr AND err.data = UtxoSpentErrData</span>
+</code></pre></div>
 <p>This is distinct from wrapped errors, which are used for error chaining and preserving the error stack.</p>
 <h4 id="example-implementation">Example Implementation</h4>
 <p>Here's an example of how to use the <code>Data</code> field:</p>
@@ -7303,57 +8038,83 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 <span class="p">}</span>
 </code></pre></div>
 <p>In this example, <code>errors.As</code> is used to check if the error contains <code>UtxoSpentErrData</code>. If it does, you can access the specific details of the UTXO spent error.</p>
-<h4 id="best-practices_1">Best Practices</h4>
+<h4 id="extra-data-best-practices">Extra Data Best Practices</h4>
 <ol>
-<li>Use the <code>Data</code> field to attach structured, relevant information to errors when additional context is needed.</li>
-<li>Implement the <code>ErrData</code> interface for custom error data structures to ensure compatibility with Teranode's error system.</li>
-<li>Utilize <code>errors.As</code> for type assertions when handling errors, to access specific error data when available.</li>
+<li>Use the <code>data</code> field to attach structured, relevant information to errors when additional context is needed beyond the error message.</li>
+<li>Implement the <code>ErrDataI</code> interface for custom error data structures to ensure compatibility with Teranode's error system and gRPC serialization.</li>
+<li>Utilize <code>errors.As</code> or <code>errors.AsData</code> for type assertions when handling errors, to access specific error data when available.</li>
+<li>For simple key-value data, use the generic <code>ErrData</code> map type rather than creating custom implementations.</li>
+<li>When creating custom error data types, ensure the <code>EncodeErrorData()</code> method properly serializes all necessary fields to JSON.</li>
 </ol>
 <h3 id="26-error-protobuf">2.6. Error Protobuf</h3>
 <p>Teranode uses Protocol Buffers (protobuf) to define a standardized structure for error messages. This approach ensures consistency in error handling across different services within the Teranode ecosystem.</p>
 <h4 id="error-protocol-definition">Error Protocol Definition</h4>
-<p>The <code>error.proto</code> file defines the structure of error messages using the Protocol Buffers language. Here's an example of what this file might look like:</p>
+<p>The <code>error.proto</code> file defines the structure of error messages using the Protocol Buffers language. Here is the actual definition:</p>
 <div class="highlight"><pre><span></span><code><span class="k">syntax</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;proto3&quot;</span><span class="p">;</span>
 
-<span class="kn">package</span><span class="w"> </span><span class="nn">teranode</span><span class="o">.</span><span class="n">errors</span><span class="p">;</span>
+<span class="k">option</span><span class="w"> </span><span class="na">go_package</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;github.com/bsv-blockchain/teranode/errors&quot;</span><span class="p">;</span>
 
-<span class="k">option</span><span class="w"> </span><span class="na">go_package</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;github.com/teranode/errors&quot;</span><span class="p">;</span>
+<span class="kn">package</span><span class="w"> </span><span class="nn">errors</span><span class="p">;</span>
 
-<span class="c1">// TError represents a Teranode error</span>
+<span class="c1">// TError represents a Teranode error with full context</span>
 <span class="kd">message</span><span class="w"> </span><span class="nc">TError</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="n">ERR</span><span class="w"> </span><span class="na">code</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
-<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="kd">message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
-<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">wrapped_error</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="w">  </span><span class="n">ERR</span><span class="w"> </span><span class="na">code</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w">              </span><span class="c1">// Error code from the ERR enum</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="kd">message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span><span class="w">        </span><span class="c1">// Human-readable error message</span>
+<span class="w">  </span><span class="kt">bytes</span><span class="w"> </span><span class="na">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span><span class="w">            </span><span class="c1">// Optional structured error data (JSON-encoded)</span>
+<span class="w">  </span><span class="n">TError</span><span class="w"> </span><span class="na">wrappedError</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span><span class="w">   </span><span class="c1">// Nested wrapped error (recursive structure)</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">file</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span><span class="w">           </span><span class="c1">// Source file where error was created</span>
+<span class="w">  </span><span class="kt">int32</span><span class="w"> </span><span class="na">line</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span><span class="w">            </span><span class="c1">// Line number where error was created</span>
+<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">function</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span><span class="w">       </span><span class="c1">// Function name where error was created</span>
 <span class="p">}</span>
 
 <span class="c1">// ERR enumerates all possible error codes in Teranode</span>
+<span class="c1">// Error codes are grouped by category in ranges of 10</span>
 <span class="kd">enum</span><span class="w"> </span><span class="n">ERR</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// General errors 0-9</span>
 <span class="w">  </span><span class="na">UNKNOWN</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 <span class="w">  </span><span class="na">INVALID_ARGUMENT</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
-<span class="w">  </span><span class="na">NOT_FOUND</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
-<span class="w">  </span><span class="na">ALREADY_EXISTS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
-<span class="w">  </span><span class="na">PERMISSION_DENIED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
-<span class="w">  </span><span class="na">UNAUTHENTICATED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
-<span class="w">  </span><span class="na">RESOURCE_EXHAUSTED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span>
-<span class="w">  </span><span class="na">FAILED_PRECONDITION</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span>
-<span class="w">  </span><span class="na">ABORTED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span>
-<span class="w">  </span><span class="na">INTERNAL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">9</span><span class="p">;</span>
-<span class="w">  </span><span class="na">UNAVAILABLE</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
-<span class="w">  </span><span class="c1">// ... other error codes ...</span>
+<span class="w">  </span><span class="na">THRESHOLD_EXCEEDED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="w">  </span><span class="na">NOT_FOUND</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
+<span class="w">  </span><span class="na">PROCESSING</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
+<span class="w">  </span><span class="na">CONFIGURATION</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">5</span><span class="p">;</span>
+<span class="w">  </span><span class="na">CONTEXT</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span>
+<span class="w">  </span><span class="na">CONTEXT_CANCELED</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span>
+<span class="w">  </span><span class="na">EXTERNAL</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span>
+<span class="w">  </span><span class="na">ERROR</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">9</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// Block errors 10-19</span>
+<span class="w">  </span><span class="na">BLOCK_NOT_FOUND</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
+<span class="w">  </span><span class="na">BLOCK_INVALID</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">11</span><span class="p">;</span>
+<span class="w">  </span><span class="na">BLOCK_EXISTS</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">12</span><span class="p">;</span>
+<span class="w">  </span><span class="c1">// ... (additional error codes organized by category)</span>
+
+<span class="w">  </span><span class="c1">// Transaction errors 30-49</span>
+<span class="w">  </span><span class="c1">// Service errors 50-59</span>
+<span class="w">  </span><span class="c1">// Storage errors 60-69</span>
+<span class="w">  </span><span class="c1">// UTXO errors 70-79</span>
+<span class="w">  </span><span class="c1">// Kafka errors 80-89</span>
+<span class="w">  </span><span class="c1">// Blob errors 90-99</span>
+<span class="w">  </span><span class="c1">// State errors 100-109</span>
+<span class="w">  </span><span class="c1">// Network errors 110-119</span>
 <span class="p">}</span>
 </code></pre></div>
 <h4 id="key-components">Key Components</h4>
 <ol>
 <li>
-<p><strong>TError Message</strong>: This defines the structure of a Teranode error, including:</p>
+<p><strong>TError Message</strong>: This defines the structure of a Teranode error with seven fields:</p>
 <ul>
-<li><code>code</code>: An error code from the ERR enum.</li>
-<li><code>message</code>: A string describing the error.</li>
-<li><code>wrapped_error</code>: A string representation of any wrapped errors.</li>
+<li><code>code</code>: An error code from the ERR enum indicating the error type</li>
+<li><code>message</code>: A string describing the error in human-readable format</li>
+<li><code>data</code>: Optional binary data (JSON-encoded) containing structured error context</li>
+<li><code>wrappedError</code>: A nested TError message representing the wrapped error (supports recursive error chains)</li>
+<li><code>file</code>: Source file path where the error was created (for stack traces)</li>
+<li><code>line</code>: Line number where the error was created</li>
+<li><code>function</code>: Function name where the error was created</li>
 </ul>
+<p>The recursive <code>wrappedError</code> field allows for complete error chain serialization across gRPC boundaries, preserving the entire error stack with full context at each level.</p>
 </li>
 <li>
-<p><strong>ERR Enum</strong>: This enumerates all possible error codes in Teranode. Each error type is assigned a unique integer value, starting from 0. This enumeration helps standardize error codes across different services.</p>
+<p><strong>ERR Enum</strong>: This enumerates all possible error codes in Teranode. Error codes are organized into logical ranges of 10 by category (e.g., 10-19 for block errors, 30-49 for transaction errors), making the error categorization immediately apparent from the code value. Each error type is assigned a unique integer value, enabling standardized error handling across different services and programming languages.</p>
 </li>
 </ol>
 <h4 id="purpose-and-benefits">Purpose and Benefits</h4>
@@ -7383,15 +8144,182 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 <span class="p">}</span>
 </code></pre></div>
 <p>Here, <code>TError</code> is the generated struct from the protobuf definition, used to create a gRPC error with standardized details.</p>
-<h4 id="best-practices_2">Best Practices</h4>
+<h4 id="error-protobuf-best-practices">Error Protobuf Best Practices</h4>
 <ol>
 <li>Keep the <code>error.proto</code> file updated as new error types are introduced or existing ones are modified.</li>
 <li>Ensure that all services use the latest version of the compiled protobuf definitions.</li>
 <li>When adding new fields to the <code>TError</code> message, use new field numbers to maintain backward compatibility.</li>
 <li>Document the meaning and appropriate use of each error code in the <code>ERR</code> enum.</li>
+<li>Follow the error code range conventions (10s for blocks, 30s-40s for transactions, etc.) when adding new error codes.</li>
 </ol>
-<h3 id="27-unit-tests">2.7. Unit Tests</h3>
-<p>Extensive unit tests are available under the <code>errors</code> package (<code>Error_test.go</code>). Should you add any new functionality or scenario, it is recommended to update the unit tests to ensure that the error handling logic remains consistent and reliable.</p>
+<h3 id="27-error-utility-functions">2.7. Error Utility Functions</h3>
+<p>Teranode provides several utility functions in <code>error_utils.go</code> for categorizing and handling errors based on their characteristics.</p>
+<h4 id="error-classification-functions">Error Classification Functions</h4>
+<h5 id="isretryableerrorerr-error-bool">IsRetryableError(err error) bool</h5>
+<p>Determines if an error represents a transient condition that may succeed if retried:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">IsRetryableError</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Retry the operation with exponential backoff</span>
+<span class="w">    </span><span class="nx">time</span><span class="p">.</span><span class="nx">Sleep</span><span class="p">(</span><span class="nx">backoffDuration</span><span class="p">)</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">retry</span><span class="p">(</span><span class="nx">operation</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Retryable errors include:</p>
+<ul>
+<li><code>ERR_NETWORK_TIMEOUT</code></li>
+<li><code>ERR_NETWORK_ERROR</code></li>
+<li><code>ERR_SERVICE_UNAVAILABLE</code></li>
+<li><code>ERR_STORAGE_UNAVAILABLE</code></li>
+<li><code>ERR_NETWORK_CONNECTION_REFUSED</code></li>
+</ul>
+<p>Note: Context cancellation and deadline exceeded errors are NOT retryable.</p>
+<h5 id="isnetworkerrorerr-error-bool">IsNetworkError(err error) bool</h5>
+<p>Identifies network-related errors by checking error codes and common network error patterns:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">IsNetworkError</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Warn</span><span class="p">(</span><span class="s">&quot;Network error encountered&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;error&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">metrics</span><span class="p">.</span><span class="nx">IncrementNetworkErrors</span><span class="p">()</span>
+<span class="p">}</span>
+</code></pre></div>
+<h5 id="ismaliciousresponseerrorerr-error-bool">IsMaliciousResponseError(err error) bool</h5>
+<p>Detects errors that indicate potentially malicious peer behavior:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">IsMaliciousResponseError</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">peerManager</span><span class="p">.</span><span class="nx">BanPeer</span><span class="p">(</span><span class="nx">peerID</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;Malicious behavior detected&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewNetworkPeerMaliciousError</span><span class="p">(</span><span class="s">&quot;peer sent invalid data&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<h5 id="istemporaryerrorerr-error-bool">IsTemporaryError(err error) bool</h5>
+<p>Checks if an error implements the <code>Temporary()</code> interface or has error codes indicating temporary conditions:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">IsTemporaryError</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Wait and retry, or use alternative service instance</span>
+<span class="p">}</span>
+</code></pre></div>
+<h5 id="iscontexterrorerr-error-bool">IsContextError(err error) bool</h5>
+<p>Identifies context cancellation or deadline exceeded errors:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">IsContextError</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Don&#39;t retry - context was cancelled deliberately</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+<span class="p">}</span>
+</code></pre></div>
+<h4 id="error-categorization">Error Categorization</h4>
+<h5 id="geterrorcategoryerr-error-string">GetErrorCategory(err error) string</h5>
+<p>Returns a category string based on error code ranges, useful for logging and metrics:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">category</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">GetErrorCategory</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+<span class="nx">metrics</span><span class="p">.</span><span class="nx">IncrementErrorsByCategory</span><span class="p">(</span><span class="nx">category</span><span class="p">)</span>
+
+<span class="c1">// Returns one of: &quot;context&quot;, &quot;malicious&quot;, &quot;network&quot;, &quot;temporary&quot;,</span>
+<span class="c1">// &quot;block&quot;, &quot;subtree&quot;, &quot;transaction&quot;, &quot;service&quot;, &quot;storage&quot;, &quot;utxo&quot;,</span>
+<span class="c1">// &quot;kafka&quot;, &quot;blob&quot;, &quot;state&quot;, or &quot;unknown&quot;</span>
+</code></pre></div>
+<p>Error categories are determined by error code ranges:</p>
+<ul>
+<li>0-9: General errors</li>
+<li>10-19: Block errors</li>
+<li>20-29: Subtree errors</li>
+<li>30-49: Transaction errors</li>
+<li>50-59: Service errors</li>
+<li>60-69: Storage errors</li>
+<li>70-79: UTXO errors</li>
+<li>80-89: Kafka errors</li>
+<li>90-99: Blob errors</li>
+<li>100-109: State errors</li>
+<li>110-119: Network errors</li>
+</ul>
+<h4 id="additional-utility-functions">Additional Utility Functions</h4>
+<h5 id="joinerrs-error-error">Join(errs ...error) error</h5>
+<p>Combines multiple errors into a single error. If the first error is a Teranode <code>*Error</code>, subsequent errors are chained as wrapped errors:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">err1</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">doOperation1</span><span class="p">()</span>
+<span class="nx">err2</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">doOperation2</span><span class="p">()</span>
+<span class="nx">err3</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">doOperation3</span><span class="p">()</span>
+
+<span class="k">if</span><span class="w"> </span><span class="nx">err1</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">err2</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">err3</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">Join</span><span class="p">(</span><span class="nx">err1</span><span class="p">,</span><span class="w"> </span><span class="nx">err2</span><span class="p">,</span><span class="w"> </span><span class="nx">err3</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<h5 id="asdataerr-error-target-interface-bool">AsData(err error, target interface{}) bool</h5>
+<p>Attempts to extract error data from an error or its wrapped errors:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">var</span><span class="w"> </span><span class="nx">utxoData</span><span class="w"> </span><span class="o">*</span><span class="nx">UtxoSpentErrData</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">AsData</span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">utxoData</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Info</span><span class="p">(</span><span class="s">&quot;UTXO was spent&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;tx&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoData</span><span class="p">.</span><span class="nx">SpendingTxHash</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;time&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoData</span><span class="p">.</span><span class="nx">Time</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<h5 id="removeinvalidutf8s-string-string">RemoveInvalidUTF8(s string) string</h5>
+<p>Sanitizes error messages by removing invalid UTF-8 characters before transmission:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">sanitized</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">RemoveInvalidUTF8</span><span class="p">(</span><span class="nx">errorMessage</span><span class="p">)</span>
+<span class="c1">// Use sanitized string for gRPC transmission</span>
+</code></pre></div>
+<p>This function is automatically used internally when wrapping errors for gRPC transmission.</p>
+<h4 id="errorcodetogrpccode-mapping">ErrorCodeToGRPCCode Mapping</h4>
+<p>The <code>ErrorCodeToGRPCCode</code> function maps Teranode error codes to gRPC status codes:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">ErrorCodeToGRPCCode</span><span class="p">(</span><span class="nx">code</span><span class="w"> </span><span class="nx">ERR</span><span class="p">)</span><span class="w"> </span><span class="nx">codes</span><span class="p">.</span><span class="nx">Code</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">switch</span><span class="w"> </span><span class="nx">code</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="nx">ERR_UNKNOWN</span><span class="p">:</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">codes</span><span class="p">.</span><span class="nx">Unknown</span>
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="nx">ERR_INVALID_ARGUMENT</span><span class="p">:</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">codes</span><span class="p">.</span><span class="nx">InvalidArgument</span>
+<span class="w">    </span><span class="k">case</span><span class="w"> </span><span class="nx">ERR_THRESHOLD_EXCEEDED</span><span class="p">:</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">codes</span><span class="p">.</span><span class="nx">ResourceExhausted</span>
+<span class="w">    </span><span class="k">default</span><span class="p">:</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">codes</span><span class="p">.</span><span class="nx">Internal</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>Note</strong>: Most error codes currently map to <code>codes.Internal</code>. This mapping can be extended as needed for more specific gRPC status code requirements.</p>
+<h3 id="28-stack-traces-and-formatting">2.8. Stack Traces and Formatting</h3>
+<p>Teranode's error system automatically captures stack trace information when errors are created, enabling detailed debugging without manual stack trace management.</p>
+<h4 id="automatic-stack-trace-capture">Automatic Stack Trace Capture</h4>
+<p>When an error is created using <code>New()</code> or any <code>New*Error()</code> function, the following information is automatically captured:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">pc</span><span class="p">,</span><span class="w"> </span><span class="nx">file</span><span class="p">,</span><span class="w"> </span><span class="nx">line</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runtime</span><span class="p">.</span><span class="nx">Caller</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="w">  </span><span class="c1">// Skip 2 frames to get actual caller</span>
+<span class="nx">fn</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">runtime</span><span class="p">.</span><span class="nx">FuncForPC</span><span class="p">(</span><span class="nx">pc</span><span class="p">)</span>
+</code></pre></div>
+<p>This populates the <code>file</code>, <code>line</code>, and <code>function</code> fields of the Error struct, providing context about where the error originated.</p>
+<h4 id="format-method">Format Method</h4>
+<p>The <code>Format()</code> method implements <code>fmt.Formatter</code>, allowing custom formatting of errors based on the format verb used:</p>
+<p><strong>Basic formatting (default)</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;%v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span><span class="w">  </span><span class="c1">// ERR_STORAGE_ERROR (69): failed to store block -&gt; ERR_NETWORK_TIMEOUT (113): connection timeout</span>
+</code></pre></div>
+<p><strong>Detailed formatting with stack trace</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;%+v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span><span class="w">  </span><span class="c1">// Shows error message plus full stack trace</span>
+<span class="c1">// Output:</span>
+<span class="c1">// ERR_STORAGE_ERROR (69): failed to store block -&gt; ERR_NETWORK_TIMEOUT (113): connection timeout</span>
+<span class="c1">// - github.com/bsv-blockchain/teranode/stores/storage/storeBlock() /path/to/storage.go:142 [69] failed to store block</span>
+<span class="c1">// - github.com/bsv-blockchain/teranode/network/sendRequest() /path/to/network.go:88 [113] connection timeout</span>
+</code></pre></div>
+<p><strong>Go-syntax representation</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;%#v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span><span class="w">  </span><span class="c1">// Same as %+v, shows detailed stack trace</span>
+</code></pre></div>
+<p>Example usage in logging:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">log</span><span class="p">.</span><span class="nx">Error</span><span class="p">(</span><span class="s">&quot;Operation failed&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;error&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;%+v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">))</span>
+<span class="w">    </span><span class="c1">// Logs the full error chain with stack trace information</span>
+<span class="p">}</span>
+</code></pre></div>
+<h4 id="stack-trace-structure">Stack Trace Structure</h4>
+<p>The stack trace shows the error chain in reverse order (most recent first), with each level showing:</p>
+<ul>
+<li>Function name (full package path)</li>
+<li>File path</li>
+<li>Line number</li>
+<li>Error code</li>
+<li>Error message</li>
+</ul>
+<p>This provides a complete execution path that led to the error without requiring additional debugging tools.</p>
+<h4 id="best-practices-for-stack-traces">Best Practices for Stack Traces</h4>
+<ol>
+<li>Use <code>%+v</code> or <code>%#v</code> format when logging errors to get full context</li>
+<li>Use <code>%v</code> for user-facing error messages (hides implementation details)</li>
+<li>Stack traces are automatically included in gRPC error transmission</li>
+<li>Each wrapped error in the chain maintains its own stack frame</li>
+<li>Circular error detection prevents infinite loops in stack trace generation</li>
+</ol>
+<h3 id="29-unit-tests">2.9. Unit Tests</h3>
+<p>Extensive unit tests are available under the <code>errors</code> package, including:</p>
+<ul>
+<li><code>errors_test.go</code>: Tests for core Error type and methods</li>
+<li><code>error_types_test.go</code>: Tests for sentinel errors and constructor functions</li>
+<li><code>error_data_test.go</code>: Tests for ErrDataI interface and implementations</li>
+<li><code>error_utils_test.go</code>: Tests for utility functions</li>
+<li><code>error_data_utxo_spent_test.go</code>: Tests for specific error data types</li>
+</ul>
+<p>Should you add any new functionality or scenario, it is recommended to update the unit tests to ensure that the error handling logic remains consistent and reliable.</p>
 
 
 

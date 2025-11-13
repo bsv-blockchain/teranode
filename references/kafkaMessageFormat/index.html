@@ -9261,7 +9261,7 @@
 <hr />
 <h2 id="invalid-block-notification-message-format">Invalid Block Notification Message Format</h2>
 <h3 id="invalid-block-topic">Invalid Block Topic</h3>
-<p><code>kafka_invalidBlockConfig</code> is the Kafka topic used for broadcasting invalid block notifications. This topic allows services to notify other components when a block has been determined to be invalid.</p>
+<p><code>kafka_invalidBlocksConfig</code> is the Kafka topic used for broadcasting invalid block notifications. This topic allows services to notify other components when a block has been determined to be invalid.</p>
 <h3 id="message-structure_1">Message Structure</h3>
 <p>The invalid block message is defined in protobuf as <code>KafkaInvalidBlockTopicMessage</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">message</span><span class="w"> </span><span class="nc">KafkaInvalidBlockTopicMessage</span><span class="w"> </span><span class="p">{</span>
@@ -9442,7 +9442,7 @@
 <hr />
 <h2 id="invalid-subtree-notification-message-format">Invalid Subtree Notification Message Format</h2>
 <h3 id="invalid-subtree-topic">Invalid Subtree Topic</h3>
-<p><code>kafka_invalidSubtreeConfig</code> is the Kafka topic used for broadcasting invalid subtree notifications. This topic allows services to notify other components when a subtree has been determined to be invalid.</p>
+<p><code>kafka_invalidSubtreesConfig</code> is the Kafka topic used for broadcasting invalid subtree notifications. This topic allows services to notify other components when a subtree has been determined to be invalid.</p>
 <h3 id="message-structure_3">Message Structure</h3>
 <p>The invalid subtree message is defined in protobuf as <code>KafkaInvalidSubtreeTopicMessage</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">message</span><span class="w"> </span><span class="nc">KafkaInvalidSubtreeTopicMessage</span><span class="w"> </span><span class="p">{</span>
@@ -9932,6 +9932,12 @@
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;invalid transaction hash: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 
+<span class="w">    </span><span class="c1">// Determine rejection source</span>
+<span class="w">    </span><span class="nx">rejectionSource</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="s">&quot;internally&quot;</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">peerID</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">rejectionSource</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;by peer %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">peerID</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
 <span class="w">    </span><span class="c1">// Process the rejected transaction notification...</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">peerID</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="nx">log</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Transaction %s was rejected internally: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">txHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="nx">reason</span><span class="p">)</span>
@@ -10245,7 +10251,7 @@
 <p>Here's a general example of how to serialize a protobuf message for Kafka:</p>
 <div class="highlight"><pre><span></span><code><span class="c1">// Create a new message</span>
 <span class="nx">message</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">kafkamessage</span><span class="p">.</span><span class="nx">KafkaBlockTopicMessage</span><span class="p">{</span>
-<span class="w">    </span><span class="nx">Hash</span><span class="p">:</span><span class="w"> </span><span class="nx">blockHash</span><span class="p">[:],</span>
+<span class="w">    </span><span class="nx">Hash</span><span class="p">:</span><span class="w"> </span><span class="nx">blockHash</span><span class="p">.</span><span class="nx">String</span><span class="p">(),</span><span class="w"> </span><span class="c1">// convert hash to hex string</span>
 <span class="w">    </span><span class="nx">URL</span><span class="p">:</span><span class="w">  </span><span class="nx">datahubUrl</span><span class="p">,</span>
 <span class="p">}</span>
 
@@ -10275,9 +10281,11 @@
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;failed to deserialize message: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="c1">// Extract block hash</span>
-<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">blockHash</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span>
-<span class="w">    </span><span class="nb">copy</span><span class="p">(</span><span class="nx">blockHash</span><span class="p">[:],</span><span class="w"> </span><span class="nx">blockMessage</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// Convert string hash to chainhash.Hash</span>
+<span class="w">    </span><span class="nx">blockHash</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">NewHashFromStr</span><span class="p">(</span><span class="nx">blockMessage</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;invalid block hash: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
 
 <span class="w">    </span><span class="c1">// Extract DataHub URL</span>
 <span class="w">    </span><span class="nx">dataHubUrl</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">blockMessage</span><span class="p">.</span><span class="nx">URL</span>

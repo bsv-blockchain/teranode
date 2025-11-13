@@ -5889,10 +5889,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#new" class="md-nav__link">
+  <a href="#newopts-option" class="md-nav__link">
     <span class="md-ellipsis">
       
-        New()
+        New(opts ...Option)
       
     </span>
   </a>
@@ -5900,10 +5900,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#startlogger-args-settings-readych" class="md-nav__link">
+  <a href="#startlogger-args-appsettings-readychannel" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Start(logger, args, settings, readyCh)
+        Start(logger, args, appSettings, readyChannel...)
       
     </span>
   </a>
@@ -5911,10 +5911,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#stop" class="md-nav__link">
+  <a href="#stopskiptracershutdown" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Stop()
+        Stop(skipTracerShutdown...)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#addexternalservicename-initfunc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AddExternalService(name, initFunc)
       
     </span>
   </a>
@@ -6059,7 +6070,7 @@
   <a href="#key-communication-flows" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Key Communication Flows:
+        Key Communication Flows
       
     </span>
   </a>
@@ -6100,10 +6111,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#transaction-store" class="md-nav__link">
+  <a href="#stores-structure" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Transaction Store
+        Stores Structure
       
     </span>
   </a>
@@ -6111,10 +6122,22 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#utxo-store" class="md-nav__link">
+  <a href="#store-methods" class="md-nav__link">
     <span class="md-ellipsis">
       
-        UTXO Store
+        Store Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Store Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gettxstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetTxStore
       
     </span>
   </a>
@@ -6122,10 +6145,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#block-store" class="md-nav__link">
+  <a href="#getutxostore" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Block Store
+        GetUtxoStore
       
     </span>
   </a>
@@ -6133,10 +6156,131 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#subtree-store" class="md-nav__link">
+  <a href="#getblockstore" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Subtree Store
+        GetBlockStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getsubtreestore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetSubtreeStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getblockpersisterstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetBlockPersisterStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gettempstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetTempStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getblockchainclient" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetBlockchainClient
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getvalidatorclient" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetValidatorClient
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#profiler-and-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profiler and Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Profiler and Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#profiler-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profiler Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tracing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tracing
       
     </span>
   </a>
@@ -6193,6 +6337,39 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#postgresql-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PostgreSQL Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profiling-and-monitoring-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profiling and Monitoring Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#advanced-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6210,10 +6387,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration" class="md-nav__link">
+  <a href="#configuration-priority" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuration
+        Configuration Priority
       
     </span>
   </a>
@@ -6373,10 +6550,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#new" class="md-nav__link">
+  <a href="#newopts-option" class="md-nav__link">
     <span class="md-ellipsis">
       
-        New()
+        New(opts ...Option)
       
     </span>
   </a>
@@ -6384,10 +6561,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#startlogger-args-settings-readych" class="md-nav__link">
+  <a href="#startlogger-args-appsettings-readychannel" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Start(logger, args, settings, readyCh)
+        Start(logger, args, appSettings, readyChannel...)
       
     </span>
   </a>
@@ -6395,10 +6572,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#stop" class="md-nav__link">
+  <a href="#stopskiptracershutdown" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Stop()
+        Stop(skipTracerShutdown...)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#addexternalservicename-initfunc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AddExternalService(name, initFunc)
       
     </span>
   </a>
@@ -6543,7 +6731,7 @@
   <a href="#key-communication-flows" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Key Communication Flows:
+        Key Communication Flows
       
     </span>
   </a>
@@ -6584,10 +6772,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#transaction-store" class="md-nav__link">
+  <a href="#stores-structure" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Transaction Store
+        Stores Structure
       
     </span>
   </a>
@@ -6595,10 +6783,22 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#utxo-store" class="md-nav__link">
+  <a href="#store-methods" class="md-nav__link">
     <span class="md-ellipsis">
       
-        UTXO Store
+        Store Methods
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Store Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#gettxstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetTxStore
       
     </span>
   </a>
@@ -6606,10 +6806,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#block-store" class="md-nav__link">
+  <a href="#getutxostore" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Block Store
+        GetUtxoStore
       
     </span>
   </a>
@@ -6617,10 +6817,131 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#subtree-store" class="md-nav__link">
+  <a href="#getblockstore" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Subtree Store
+        GetBlockStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getsubtreestore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetSubtreeStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getblockpersisterstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetBlockPersisterStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gettempstore" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetTempStore
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getblockchainclient" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetBlockchainClient
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#getvalidatorclient" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GetValidatorClient
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#profiler-and-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profiler and Metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Profiler and Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#profiler-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profiler Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tracing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tracing
       
     </span>
   </a>
@@ -6677,6 +6998,39 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#postgresql-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PostgreSQL Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profiling-and-monitoring-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Profiling and Monitoring Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#advanced-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Advanced Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6694,10 +7048,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#configuration" class="md-nav__link">
+  <a href="#configuration-priority" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Configuration
+        Configuration Priority
       
     </span>
   </a>
@@ -6737,29 +7091,54 @@
 <h2 id="core-components">Core Components</h2>
 <h3 id="daemon-structure">Daemon Structure</h3>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Daemon</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">doneCh</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
+<span class="w">    </span><span class="nx">Ctx</span><span class="w">                </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span>
+<span class="w">    </span><span class="nx">ServiceManager</span><span class="w">     </span><span class="o">*</span><span class="nx">servicemanager</span><span class="p">.</span><span class="nx">ServiceManager</span>
+<span class="w">    </span><span class="nx">doneCh</span><span class="w">             </span><span class="kd">chan</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
+<span class="w">    </span><span class="c1">// ... additional fields for internal state management</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>The Daemon struct contains a <code>doneCh</code> channel for shutdown coordination.</p>
+<p>The Daemon struct contains key fields for lifecycle management:</p>
+<ul>
+<li><code>Ctx</code>: Context for the daemon instance</li>
+<li><code>ServiceManager</code>: Manages all running services</li>
+<li><code>doneCh</code>: Channel for shutdown coordination</li>
+<li>Additional unexported fields manage internal state, stores, and synchronization</li>
+</ul>
 <h3 id="main-functions">Main Functions</h3>
-<h4 id="new">New()</h4>
-<p>Creates a new Daemon instance:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">()</span><span class="w"> </span><span class="o">*</span><span class="nx">Daemon</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">Daemon</span><span class="p">{</span>
-<span class="w">        </span><span class="nx">doneCh</span><span class="p">:</span><span class="w"> </span><span class="nb">make</span><span class="p">(</span><span class="kd">chan</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}),</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="p">}</span>
+<h4 id="newopts-option">New(opts ...Option)</h4>
+<p>Creates a new Daemon instance with optional configuration:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Daemon</span>
 </code></pre></div>
-<h4 id="startlogger-args-settings-readych">Start(logger, args, settings, readyCh)</h4>
+<p>Functional options can be used to configure the daemon during initialization (e.g., custom logger factory, external services). See <code>daemon_options.go</code> for available options.</p>
+<h4 id="startlogger-args-appsettings-readychannel">Start(logger, args, appSettings, readyChannel...)</h4>
 <p>Starts the daemon and initializes services based on configuration:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Daemon</span><span class="p">)</span><span class="w"> </span><span class="nx">Start</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">args</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">readyChannel</span><span class="w"> </span><span class="o">...</span><span class="kd">chan</span><span class="w"> </span><span class="kd">struct</span><span class="p">{})</span>
+</code></pre></div>
+<p>Parameters:</p>
 <ul>
 <li><code>logger</code>: Logger instance for output</li>
-<li><code>args</code>: Command line arguments for service selection</li>
-<li><code>settings</code>: Configuration settings</li>
-<li><code>readyCh</code>: Optional channel to signal when initialization is complete</li>
+<li><code>args</code>: Command line arguments for service selection (e.g., <code>"-all=0"</code>, <code>"-blockchain=1"</code>)</li>
+<li><code>appSettings</code>: Configuration settings object</li>
+<li><code>readyChannel</code>: Optional variadic channel to signal when initialization is complete</li>
 </ul>
-<h4 id="stop">Stop()</h4>
-<p>Gracefully shuts down the daemon and all running services.</p>
+<h4 id="stopskiptracershutdown">Stop(skipTracerShutdown...)</h4>
+<p>Gracefully shuts down the daemon and all running services:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Daemon</span><span class="p">)</span><span class="w"> </span><span class="nx">Stop</span><span class="p">(</span><span class="nx">skipTracerShutdown</span><span class="w"> </span><span class="o">...</span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+</code></pre></div>
+<p>Parameters:</p>
+<ul>
+<li><code>skipTracerShutdown</code>: Optional boolean to skip tracer shutdown (defaults to false)</li>
+</ul>
+<h4 id="addexternalservicename-initfunc">AddExternalService(name, initFunc)</h4>
+<p>Registers an external service to be initialized and managed by the daemon:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Daemon</span><span class="p">)</span><span class="w"> </span><span class="nx">AddExternalService</span><span class="p">(</span><span class="nx">name</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">initFunc</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="nx">servicemanager</span><span class="p">.</span><span class="nx">Service</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">))</span>
+</code></pre></div>
+<p>Parameters:</p>
+<ul>
+<li><code>name</code>: Name of the service for identification</li>
+<li><code>initFunc</code>: Function that initializes and returns the service instance</li>
+</ul>
+<p>This method allows external packages to register their services with the daemon before calling <code>Start()</code>. The external services will be initialized and managed alongside built-in services.</p>
 <h2 id="service-management">Service Management</h2>
 <h3 id="service-initialization">Service Initialization</h3>
 <p>Services are initialized based on command-line flags or configuration settings. Each service can be enabled/disabled using:</p>
@@ -6788,28 +7167,40 @@
 <ul>
 <li><code>/health/readiness</code>: Readiness check</li>
 <li><code>/health/liveness</code>: Liveness check</li>
-<li>Port configurable via <code>HealthCheckPort</code> setting</li>
+<li><code>/health</code>: Legacy endpoint (deprecated, redirects to readiness)</li>
+<li>Address configurable via <code>HealthCheckHTTPListenAddress</code> setting (defaults to port 8000)</li>
 </ul>
 <h2 id="service-initialization-flow">Service Initialization Flow</h2>
 <h3 id="startup-sequence">Startup Sequence</h3>
-<p>When the daemon starts, it initializes services in a specific order based on dependencies. The sequence generally follows:</p>
+<p>When the daemon starts, it initializes services in the following specific order:</p>
 <ol>
-<li>Core infrastructure services (Blockchain, UTXO stores)</li>
-<li>Validation services (Validator, Block Validation)</li>
-<li>Communication services (Propagation, P2P)</li>
-<li>Assembly and persistence services</li>
+<li><strong>Blockchain</strong> - Core blockchain state management (FSM)</li>
+<li><strong>P2P</strong> - Peer-to-peer networking</li>
+<li><strong>Asset</strong> - HTTP/WebSocket API server</li>
+<li><strong>RPC</strong> - JSON-RPC server</li>
+<li><strong>Alert</strong> - Network alert system</li>
+<li><strong>BlockPersister</strong> - Block persistence</li>
+<li><strong>UTXOPersister</strong> - UTXO persistence</li>
+<li><strong>BlockAssembly</strong> - Block assembly for mining</li>
+<li><strong>SubtreeValidation</strong> - UTXO subtree validation</li>
+<li><strong>BlockValidation</strong> - Block validation</li>
+<li><strong>Validator</strong> - Transaction validation (if running as separate service)</li>
+<li><strong>Propagation</strong> - Transaction propagation</li>
+<li><strong>Legacy</strong> - Legacy Bitcoin protocol support</li>
+<li><strong>External Services</strong> - Any services registered via <code>AddExternalService()</code></li>
 </ol>
+<p>This order ensures dependencies are available when each service initializes.</p>
 <h3 id="service-dependencies-and-deployment-models">Service Dependencies and Deployment Models</h3>
 <p>Many services have dependencies on other services. For example, the Propagation service depends on the Validator service.</p>
 <h4 id="service-dependency-overview">Service Dependency Overview</h4>
 <p><img alt="serviceDependencyOverview.png" src="../img/mermaid/serviceDependencyOverview.png" /></p>
 <p>Note: This diagram shows logical dependencies. The actual implementation may use different communication methods (direct calls, gRPC, or Kafka) depending on configuration.</p>
 <h4 id="validator-service-deployment">Validator Service Deployment</h4>
-<p>The Validator can be deployed in two distinct ways, controlled by the <code>validator.useLocalValidator</code> setting:</p>
+<p>The Validator can be deployed in two distinct ways, controlled by the <code>Validator.UseLocalValidator</code> setting:</p>
 <ol>
-<li>
-<p><strong>Local Validator</strong> (recommended for production):
-   <div class="highlight"><pre><span></span><code><span class="c1">// When validator.useLocalValidator=true</span>
+<li><strong>Local Validator</strong> (recommended for production):</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="c1">// When Validator.UseLocalValidator=true</span>
 <span class="nx">mainValidatorClient</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">logger</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">tSettings</span><span class="p">,</span>
@@ -6817,15 +7208,13 @@
 <span class="w">    </span><span class="nx">txMetaKafkaProducerClient</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">rejectedTxKafkaProducerClient</span><span class="p">,</span>
 <span class="p">)</span>
-</code></pre></div></p>
-</li>
-<li>
-<p><strong>Remote Validator Service</strong>:
-   <div class="highlight"><pre><span></span><code><span class="c1">// When validator.useLocalValidator=false</span>
-<span class="nx">mainValidatorClient</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">NewClient</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="p">)</span>
-</code></pre></div></p>
-</li>
+</code></pre></div>
+<ol>
+<li><strong>Remote Validator Service</strong>:</li>
 </ol>
+<div class="highlight"><pre><span></span><code><span class="c1">// When Validator.UseLocalValidator=false</span>
+<span class="nx">mainValidatorClient</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">NewClient</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="p">)</span>
+</code></pre></div>
 <p>The Propagation service and other services can use either deployment model:</p>
 <div class="highlight"><pre><span></span><code><span class="nx">validatorClient</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">GetValidatorClient</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="p">)</span>
 <span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
@@ -6845,11 +7234,11 @@
 <h3 id="service-communication-patterns">Service Communication Patterns</h3>
 <p>Teranode services communicate using several methods:</p>
 <ol>
-<li><strong>Direct method calls</strong>: When using local services (e.g., local validator)</li>
-<li><strong>gRPC</strong>: For remote service communication with bi-directional streaming support</li>
-<li><strong>Kafka</strong>: For asynchronous messaging and event-driven communication</li>
+<li><strong>Direct method calls</strong> - When using local services (e.g., local validator)</li>
+<li><strong>gRPC</strong> - For remote service communication with bi-directional streaming support</li>
+<li><strong>Kafka</strong> - For asynchronous messaging and event-driven communication</li>
 </ol>
-<h4 id="key-communication-flows">Key Communication Flows:</h4>
+<h4 id="key-communication-flows">Key Communication Flows</h4>
 <ul>
 <li><strong>Tx Validator to Subtree Validation</strong>: Uses Kafka for transaction metadata</li>
 <li><strong>P2P to Subtree Validation</strong>: Uses Kafka for notifications (not gRPC)</li>
@@ -6873,20 +7262,80 @@
 </code></pre></div>
 <p>This pattern ensures consistent state across all services using these components.</p>
 <h2 id="store-management">Store Management</h2>
-<p>The daemon manages several types of stores:</p>
-<h3 id="transaction-store">Transaction Store</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">GetTxStore</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<h3 id="stores-structure">Stores Structure</h3>
+<p>The daemon uses an internal <code>Stores</code> struct to manage singleton instances of stores and clients:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Stores</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">mainBlockPersisterStore</span><span class="w">     </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
+<span class="w">    </span><span class="nx">mainBlockStore</span><span class="w">              </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
+<span class="w">    </span><span class="nx">mainBlockValidationClient</span><span class="w">   </span><span class="nx">blockvalidation</span><span class="p">.</span><span class="nx">Interface</span>
+<span class="w">    </span><span class="nx">mainSubtreeStore</span><span class="w">            </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
+<span class="w">    </span><span class="nx">mainSubtreeValidationClient</span><span class="w"> </span><span class="nx">subtreevalidation</span><span class="p">.</span><span class="nx">Interface</span>
+<span class="w">    </span><span class="nx">mainTempStore</span><span class="w">               </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
+<span class="w">    </span><span class="nx">mainTxStore</span><span class="w">                 </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span>
+<span class="w">    </span><span class="nx">mainUtxoStore</span><span class="w">               </span><span class="nx">utxostore</span><span class="p">.</span><span class="nx">Store</span>
+<span class="w">    </span><span class="nx">mainValidatorClient</span><span class="w">         </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span>
+<span class="p">}</span>
 </code></pre></div>
-<h3 id="utxo-store">UTXO Store</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">GetUtxoStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">utxostore</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<p>This struct maintains singleton instances to ensure only one instance of each store/client exists per daemon instance. All store getter methods check if an instance already exists before creating a new one.</p>
+<h3 id="store-methods">Store Methods</h3>
+<p>The daemon's internal <code>Stores</code> struct provides methods to access different types of stores:</p>
+<h4 id="gettxstore">GetTxStore</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">GetTxStore</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
-<h3 id="block-store">Block Store</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">GetBlockStore</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<p>Returns the transaction store instance, creating it if it doesn't exist.</p>
+<h4 id="getutxostore">GetUtxoStore</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">GetUtxoStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">utxostore</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
-<h3 id="subtree-store">Subtree Store</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">GetSubtreeStore</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<p>Returns the UTXO store instance, creating it if it doesn't exist.</p>
+<h4 id="getblockstore">GetBlockStore</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">GetBlockStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
-<p>All stores follow a singleton pattern, ensuring only one instance exists per store type.</p>
+<p>Returns the block store instance, creating it if it doesn't exist.</p>
+<h4 id="getsubtreestore">GetSubtreeStore</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">GetSubtreeStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Returns the subtree store instance, creating it if it doesn't exist.</p>
+<h4 id="getblockpersisterstore">GetBlockPersisterStore</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">GetBlockPersisterStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Returns the block persister store instance, creating it if it doesn't exist.</p>
+<h4 id="gettempstore">GetTempStore</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">GetTempStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Returns the temporary store instance, creating it if it doesn't exist. Used by the Legacy service.</p>
+<h4 id="getblockchainclient">GetBlockchainClient</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">GetBlockchainClient</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">source</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Creates and returns a new blockchain client instance. Unlike other getters, this always creates a new client to maintain source information.</p>
+<h4 id="getvalidatorclient">GetValidatorClient</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">GetValidatorClient</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Returns the validator client instance. Creates either a local validator or remote client based on <code>Validator.UseLocalValidator</code> setting.</p>
+<h4 id="cleanup">Cleanup</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">Cleanup</span><span class="p">()</span>
+</code></pre></div>
+<p>Resets all singleton stores. This is particularly important for tests where stores may persist between test runs.</p>
+<h2 id="profiler-and-metrics">Profiler and Metrics</h2>
+<p>The daemon automatically initializes profiling and metrics endpoints when configured:</p>
+<h3 id="profiler-endpoints">Profiler Endpoints</h3>
+<p>When <code>ProfilerAddr</code> is set, the daemon exposes pprof endpoints for profiling:</p>
+<ul>
+<li><code>/debug/pprof/</code> - Profile index</li>
+<li><code>/debug/pprof/cmdline</code> - Command line arguments</li>
+<li><code>/debug/pprof/profile</code> - CPU profile</li>
+<li><code>/debug/pprof/symbol</code> - Symbol lookup</li>
+<li><code>/debug/pprof/trace</code> - Execution trace</li>
+<li><code>/debug/fgprof</code> - Full goroutine profiler (fgprof)</li>
+</ul>
+<h3 id="metrics-endpoints">Metrics Endpoints</h3>
+<p>The daemon supports multiple metrics systems:</p>
+<ul>
+<li><strong>Stats Server</strong>: When <code>StatsPrefix</code> is set, exposes stats at <code>http://&lt;ProfilerAddr&gt;/&lt;StatsPrefix&gt;/stats</code></li>
+<li><strong>Prometheus</strong>: When <code>PrometheusEndpoint</code> is set, exposes Prometheus metrics at the configured endpoint (e.g., <code>/metrics</code>)</li>
+</ul>
+<p>All metrics are exposed on the same address as the profiler (<code>ProfilerAddr</code>).</p>
+<h3 id="tracing">Tracing</h3>
+<p>When <code>TracingEnabled</code> is set to true, the daemon initializes distributed tracing support using the configured tracing backend.</p>
 <h2 id="configuration-options">Configuration Options</h2>
 <p>The daemon uses a variety of configuration options to control service behavior and deployment models. Here are the key settings that affect daemon initialization and service configuration:</p>
 <h3 id="service-deployment-settings">Service Deployment Settings</h3>
@@ -6901,22 +7350,46 @@
 </thead>
 <tbody>
 <tr>
-<td><code>validator.useLocalValidator</code></td>
+<td><code>Validator.UseLocalValidator</code></td>
 <td>Controls whether the validator runs as a local component (true) or as a separate service (false)</td>
 <td><code>true</code></td>
 <td>Significant performance impact; local validator is recommended for production</td>
 </tr>
 <tr>
-<td><code>grpc_resolver</code></td>
-<td>Determines the gRPC resolver to use for client connections</td>
+<td><code>Validator.GRPCListenAddress</code></td>
+<td>gRPC listen address for validator service (when running as separate service)</td>
 <td>-</td>
-<td>Supports Kubernetes ("k8s" or "kubernetes") and other resolvers</td>
+<td>Required when UseLocalValidator is false</td>
 </tr>
 <tr>
-<td><code>healthCheckPort</code></td>
-<td>Port for health check endpoints</td>
-<td><code>8080</code></td>
+<td><code>BlockValidation.GRPCListenAddress</code></td>
+<td>gRPC listen address for block validation service</td>
+<td>-</td>
+<td>If empty, block validation service won't start</td>
+</tr>
+<tr>
+<td><code>BlockAssembly.GRPCListenAddress</code></td>
+<td>gRPC listen address for block assembly service</td>
+<td>-</td>
+<td>If empty, block assembly service won't start</td>
+</tr>
+<tr>
+<td><code>Propagation.GRPCListenAddress</code></td>
+<td>gRPC listen address for propagation service</td>
+<td>-</td>
+<td>If empty, propagation service won't start</td>
+</tr>
+<tr>
+<td><code>HealthCheckHTTPListenAddress</code></td>
+<td>HTTP listen address for health check endpoints</td>
+<td><code>:8000</code></td>
 <td>Exposed on <code>/health/readiness</code> and <code>/health/liveness</code></td>
+</tr>
+<tr>
+<td><code>Context</code></td>
+<td>Environment context (e.g., "dev", "test", "docker", "operator")</td>
+<td>-</td>
+<td>Affects port prefixes and service configuration</td>
 </tr>
 </tbody>
 </table>
@@ -6932,22 +7405,46 @@
 </thead>
 <tbody>
 <tr>
-<td><code>utxoStore.UtxoStore</code></td>
-<td>URL to UTXO store</td>
+<td><code>UtxoStore.UtxoStore</code></td>
+<td>URL to UTXO store (e.g., "sqlite:///path", "memory:///", "aerospike://...")</td>
 <td>-</td>
-<td>Can be file-based, SQLite, or other storage backends</td>
+<td>Required for UTXO operations; affects performance significantly</td>
 </tr>
 <tr>
-<td><code>blockChain.StoreURL</code></td>
-<td>URL to blockchain store</td>
+<td><code>BlockChain.StoreURL</code></td>
+<td>URL to blockchain store (PostgreSQL or SQLite)</td>
 <td>-</td>
-<td>Affects block storage location</td>
+<td>Required; stores block headers and chain state</td>
 </tr>
 <tr>
-<td><code>subtreeValidation.SubtreeStore</code></td>
+<td><code>SubtreeValidation.SubtreeStore</code></td>
 <td>URL to subtree store</td>
 <td>-</td>
-<td>Controls where subtrees are stored</td>
+<td>Required; controls where merkle subtrees are stored</td>
+</tr>
+<tr>
+<td><code>Block.TxStore</code></td>
+<td>URL to transaction store</td>
+<td>-</td>
+<td>Required; stores transaction data</td>
+</tr>
+<tr>
+<td><code>Block.BlockStore</code></td>
+<td>URL to block store</td>
+<td>-</td>
+<td>Required; stores full blocks</td>
+</tr>
+<tr>
+<td><code>Block.PersisterStore</code></td>
+<td>URL to block persister store</td>
+<td>-</td>
+<td>Used by block persister service</td>
+</tr>
+<tr>
+<td><code>Legacy.TempStore</code></td>
+<td>URL to temporary store</td>
+<td><code>file://./tmp</code></td>
+<td>Used by legacy service for temporary data</td>
 </tr>
 </tbody>
 </table>
@@ -6963,22 +7460,121 @@
 </thead>
 <tbody>
 <tr>
-<td><code>kafka_validatortxsConfig</code></td>
-<td>Kafka configuration for validator transactions</td>
+<td><code>Kafka.Brokers</code></td>
+<td>Kafka broker addresses</td>
 <td>-</td>
-<td>Affects how transaction data is shared between services</td>
+<td>Required for inter-service communication</td>
 </tr>
 <tr>
-<td><code>propagation_grpcListenAddress</code></td>
-<td>gRPC listen address for propagation service</td>
+<td><code>Kafka.ValidatorTxsConfig</code></td>
+<td>Kafka topic configuration for validator transactions</td>
 <td>-</td>
-<td>Controls propagation service networking</td>
+<td>Affects how transaction data flows between services</td>
 </tr>
 <tr>
-<td><code>validator_kafkaWorkers</code></td>
+<td><code>Validator.KafkaWorkers</code></td>
 <td>Number of Kafka workers for validator service</td>
 <td><code>100</code></td>
 <td>Affects throughput of Kafka message processing</td>
+</tr>
+<tr>
+<td><code>ClientName</code></td>
+<td>Client identifier for Kafka consumer groups</td>
+<td>-</td>
+<td>Ensures unique consumer group names per instance</td>
+</tr>
+</tbody>
+</table>
+<h3 id="postgresql-settings">PostgreSQL Settings</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Description</th>
+<th>Default</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PostgresCheckAddress</code></td>
+<td>PostgreSQL server address to check before starting</td>
+<td>-</td>
+<td>Used with <code>-wait_for_postgres=1</code> flag</td>
+</tr>
+</tbody>
+</table>
+<h3 id="profiling-and-monitoring-settings">Profiling and Monitoring Settings</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Description</th>
+<th>Default</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ProfilerAddr</code></td>
+<td>Address for profiler and metrics endpoints</td>
+<td>-</td>
+<td>If set, enables pprof and stats endpoints</td>
+</tr>
+<tr>
+<td><code>StatsPrefix</code></td>
+<td>URL prefix for stats endpoint</td>
+<td>-</td>
+<td>If set, enables stats server at <code>/&lt;prefix&gt;/stats</code></td>
+</tr>
+<tr>
+<td><code>PrometheusEndpoint</code></td>
+<td>Endpoint path for Prometheus metrics</td>
+<td>-</td>
+<td>If set, exposes Prometheus metrics (e.g., <code>/metrics</code>)</td>
+</tr>
+<tr>
+<td><code>TracingEnabled</code></td>
+<td>Enable distributed tracing</td>
+<td><code>false</code></td>
+<td>Initializes tracing backend when true</td>
+</tr>
+<tr>
+<td><code>UseDatadogProfiler</code></td>
+<td>Enable Datadog profiler</td>
+<td><code>false</code></td>
+<td>Starts Datadog profiling when true</td>
+</tr>
+<tr>
+<td><code>LogLevel</code></td>
+<td>Logging level for all services</td>
+<td><code>info</code></td>
+<td>Controls verbosity of logs</td>
+</tr>
+</tbody>
+</table>
+<h3 id="advanced-settings">Advanced Settings</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Description</th>
+<th>Default</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LocalTestStartFromState</code></td>
+<td>Starting state for local testing blockchain FSM</td>
+<td>-</td>
+<td>Can be set via <code>-localTestStartFromState</code> flag</td>
+</tr>
+<tr>
+<td><code>ChainCfgParams</code></td>
+<td>Bitcoin network parameters (mainnet, testnet, regtest)</td>
+<td>mainnet</td>
+<td>Determines consensus rules and network magic</td>
 </tr>
 </tbody>
 </table>
@@ -7079,17 +7675,17 @@
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<p>Additionally, using the following function:
-<div class="highlight"><pre><span></span><code>tSettings := settings.NewSettings() // This reads gocore.Config and applies sensible defaults
+<p>Additionally, using the following function:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">tSettings</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">settings</span><span class="p">.</span><span class="nx">NewSettings</span><span class="p">()</span><span class="w"> </span><span class="c1">// This reads gocore.Config and applies sensible defaults</span>
 </code></pre></div>
-will initialise settings with generic defaults, ideal for tests.</p>
-<h2 id="configuration">Configuration</h2>
-<p>The daemon uses a combination of (in this priority order):</p>
+<p>will initialise settings with generic defaults, ideal for tests.</p>
+<h2 id="configuration-priority">Configuration Priority</h2>
+<p>The daemon uses configuration from multiple sources in this priority order (highest to lowest):</p>
 <ol>
-<li>Command line arguments</li>
-<li>Environment variables</li>
-<li>Configuration files</li>
-<li>Default settings</li>
+<li>Command line arguments (e.g., <code>-blockchain=1</code>, <code>-all=0</code>)</li>
+<li>Environment variables (when using <code>gocore.Config()</code>)</li>
+<li>Configuration files (<code>settings.conf</code>, <code>settings_local.conf</code>)</li>
+<li>Default settings (hardcoded in <code>settings/settings.go</code>)</li>
 </ol>
 
 
