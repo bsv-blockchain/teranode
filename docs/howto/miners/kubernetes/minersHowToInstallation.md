@@ -35,7 +35,7 @@ Additionally, ensure you have a storage provider capable of providing ReadWriteM
 
 ![miniKubeOperatorPrerequisites.svg](img/mermaid/miniKubeOperatorPrerequisites.svg)
 
-## Download the Teranode source code 
+## Download the Teranode source code
 
 ```bash
 cd $YOUR_WORKING_DIR
@@ -164,6 +164,37 @@ Apply the Teranode configuration and custom resources:
 kubectl apply -f deploy/kubernetes/teranode/teranode-configmap.yaml -n teranode-operator
 kubectl apply -f deploy/kubernetes/teranode/teranode-cr.yaml -n teranode-operator
 ```
+
+**Network Configuration:**
+
+By default, this configuration deploys Teranode to connect to the **teratestnet** network. To connect to a different network:
+
+1. Edit `deploy/kubernetes/teranode/teranode-configmap.yaml` and change the `network` setting:
+
+    - For BSV testnet: `network: "testnet"`
+    - For BSV mainnet: `network: "mainnet"`
+
+2. For **testnet** or **mainnet**, you must enable the legacy service in `deploy/kubernetes/teranode/teranode-cr.yaml`:
+
+    ```yaml
+    legacy:
+      enabled: true
+      spec:
+        deploymentOverrides:
+          imagePullPolicy: Never
+          replicas: 1
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+    ```
+
+3. Apply the updated configuration:
+
+    ```bash
+    kubectl apply -f deploy/kubernetes/teranode/teranode-configmap.yaml -n teranode-operator
+    kubectl apply -f deploy/kubernetes/teranode/teranode-cr.yaml -n teranode-operator
+    ```
 
 #### Start Syncing Process
 
