@@ -109,34 +109,6 @@ docker network connect minikube nfs-server
 kubectl apply -f deploy/kubernetes/nfs/
 ```
 
-#### ARM-based Systems
-
-For arm based systems, you can use this variant:
-
-```bash
-docker volume create nfs-volume
-
-docker run -d --name nfs-server --privileged \
-    -v nfs-volume:/minikube-storage \
-    alpine:latest \
-    sh -c "apk add --no-cache nfs-utils && \
-        mkdir -p /minikube-storage && \
-        chmod 777 /minikube-storage && \
-        echo '/minikube-storage *(rw,sync,no_subtree_check,no_root_squash,insecure,fsid=0)' > /etc/exports && \
-        exportfs -r && \
-        rpcbind && \
-        rpc.statd && \
-        rpc.nfsd 8 && \
-        rpc.mountd && \
-        tail -f /dev/null"
-
-# connect the nfs-server to the minikube network
-docker network connect minikube nfs-server
-
-# create the PersistentVolume
-kubectl apply -f deploy/kubernetes/nfs/
-```
-
 ### Load Teranode Images
 
 Pull and load the required Teranode images into Minikube:
