@@ -1174,17 +1174,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#arm-based-systems" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ARM-based Systems
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -6356,17 +6345,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#arm-based-systems" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ARM-based Systems
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -6617,30 +6595,6 @@ docker<span class="w"> </span>network<span class="w"> </span>connect<span class=
 <span class="c1"># create the PersistentVolume</span>
 kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/nfs/
 </code></pre></div>
-<h4 id="arm-based-systems">ARM-based Systems</h4>
-<p>For arm based systems, you can use this variant:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>volume<span class="w"> </span>create<span class="w"> </span>nfs-volume
-
-docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>nfs-server<span class="w"> </span>--privileged<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-v<span class="w"> </span>nfs-volume:/minikube-storage<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>alpine:latest<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>sh<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;apk add --no-cache nfs-utils &amp;&amp; \</span>
-<span class="s2">        mkdir -p /minikube-storage &amp;&amp; \</span>
-<span class="s2">        chmod 777 /minikube-storage &amp;&amp; \</span>
-<span class="s2">        echo &#39;/minikube-storage *(rw,sync,no_subtree_check,no_root_squash,insecure,fsid=0)&#39; &gt; /etc/exports &amp;&amp; \</span>
-<span class="s2">        exportfs -r &amp;&amp; \</span>
-<span class="s2">        rpcbind &amp;&amp; \</span>
-<span class="s2">        rpc.statd &amp;&amp; \</span>
-<span class="s2">        rpc.nfsd 8 &amp;&amp; \</span>
-<span class="s2">        rpc.mountd &amp;&amp; \</span>
-<span class="s2">        tail -f /dev/null&quot;</span>
-
-<span class="c1"># connect the nfs-server to the minikube network</span>
-docker<span class="w"> </span>network<span class="w"> </span>connect<span class="w"> </span>minikube<span class="w"> </span>nfs-server
-
-<span class="c1"># create the PersistentVolume</span>
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/nfs/
-</code></pre></div>
 <h3 id="load-teranode-images">Load Teranode Images</h3>
 <p>Pull and load the required Teranode images into Minikube:</p>
 <h4 id="identify-available-versions">Identify Available Versions</h4>
@@ -6679,6 +6633,37 @@ helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class=
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-configmap.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
 kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-cr.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
 </code></pre></div>
+<p><strong>Network Configuration:</strong></p>
+<p>By default, this configuration deploys Teranode to connect to the <strong>teratestnet</strong> network. To connect to a different network:</p>
+<ol>
+<li>
+<p>Edit <code>deploy/kubernetes/teranode/teranode-configmap.yaml</code> and change the <code>network</code> setting:</p>
+<ul>
+<li>For BSV testnet: <code>network: "testnet"</code></li>
+<li>For BSV mainnet: <code>network: "mainnet"</code></li>
+</ul>
+</li>
+<li>
+<p>For <strong>testnet</strong> or <strong>mainnet</strong>, you must enable the legacy service in <code>deploy/kubernetes/teranode/teranode-cr.yaml</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">legacy</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">spec</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">deploymentOverrides</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">imagePullPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Never</span>
+<span class="w">      </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">      </span><span class="nt">resources</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
+<span class="w">          </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
+</code></pre></div>
+</li>
+<li>
+<p>Apply the updated configuration:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-configmap.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-cr.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</code></pre></div>
+</li>
+</ol>
 <h4 id="start-syncing-process">Start Syncing Process</h4>
 <p>A fresh Teranode starts up in IDLE state by default. To start syncing from the network, you can run:</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>-fsmstate<span class="w"> </span>running
