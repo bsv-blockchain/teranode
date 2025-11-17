@@ -35,7 +35,7 @@ Additionally, ensure you have a storage provider capable of providing ReadWriteM
 
 ![miniKubeOperatorPrerequisites.svg](img/mermaid/miniKubeOperatorPrerequisites.svg)
 
-## Download the Teranode source code 
+## Download the Teranode source code
 
 ```bash
 cd $YOUR_WORKING_DIR
@@ -109,34 +109,6 @@ docker network connect minikube nfs-server
 kubectl apply -f deploy/kubernetes/nfs/
 ```
 
-#### ARM-based Systems
-
-For arm based systems, you can use this variant:
-
-```bash
-docker volume create nfs-volume
-
-docker run -d --name nfs-server --privileged \
-    -v nfs-volume:/minikube-storage \
-    alpine:latest \
-    sh -c "apk add --no-cache nfs-utils && \
-        mkdir -p /minikube-storage && \
-        chmod 777 /minikube-storage && \
-        echo '/minikube-storage *(rw,sync,no_subtree_check,no_root_squash,insecure,fsid=0)' > /etc/exports && \
-        exportfs -r && \
-        rpcbind && \
-        rpc.statd && \
-        rpc.nfsd 8 && \
-        rpc.mountd && \
-        tail -f /dev/null"
-
-# connect the nfs-server to the minikube network
-docker network connect minikube nfs-server
-
-# create the PersistentVolume
-kubectl apply -f deploy/kubernetes/nfs/
-```
-
 ### Load Teranode Images
 
 Pull and load the required Teranode images into Minikube:
@@ -192,6 +164,37 @@ Apply the Teranode configuration and custom resources:
 kubectl apply -f deploy/kubernetes/teranode/teranode-configmap.yaml -n teranode-operator
 kubectl apply -f deploy/kubernetes/teranode/teranode-cr.yaml -n teranode-operator
 ```
+
+**Network Configuration:**
+
+By default, this configuration deploys Teranode to connect to the **teratestnet** network. To connect to a different network:
+
+1. Edit `deploy/kubernetes/teranode/teranode-configmap.yaml` and change the `network` setting:
+
+    - For BSV testnet: `network: "testnet"`
+    - For BSV mainnet: `network: "mainnet"`
+
+2. For **testnet** or **mainnet**, you must enable the legacy service in `deploy/kubernetes/teranode/teranode-cr.yaml`:
+
+    ```yaml
+    legacy:
+      enabled: true
+      spec:
+        deploymentOverrides:
+          imagePullPolicy: Never
+          replicas: 1
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+    ```
+
+3. Apply the updated configuration:
+
+    ```bash
+    kubectl apply -f deploy/kubernetes/teranode/teranode-configmap.yaml -n teranode-operator
+    kubectl apply -f deploy/kubernetes/teranode/teranode-cr.yaml -n teranode-operator
+    ```
 
 #### Start Syncing Process
 
