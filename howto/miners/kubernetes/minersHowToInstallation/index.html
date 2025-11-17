@@ -6651,24 +6651,26 @@ kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> <
 </ul>
 <h4 id="set-image-versions">Set Image Versions</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">OPERATOR_VERSION</span><span class="o">=</span>v0.5.5<span class="w"> </span><span class="c1"># Or use &#39;latest&#39;</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_VERSION</span><span class="o">=</span>v0.11.13<span class="w"> </span><span class="c1"># Or use &#39;latest&#39;</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">ECR_REGISTRY</span><span class="o">=</span>ghcr.io/bsv-blockchain
+<span class="nb">export</span><span class="w"> </span><span class="nv">OPERATOR_VERSION</span><span class="o">=</span>v0.1.3
+<span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_VERSION</span><span class="o">=</span>v0.12.3
+<span class="nb">export</span><span class="w"> </span><span class="nv">GHCR_REGISTRY</span><span class="o">=</span>ghcr.io/bsv-blockchain
 </code></pre></div>
 <h4 id="load-images-into-minikube">Load Images into Minikube</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Load Teranode Operator</span>
-docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
-minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
+docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
+minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
 
 <span class="c1"># Load Teranode Public</span>
-docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
-minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
+docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
+minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
 </code></pre></div>
 <h3 id="deploy-teranode">Deploy Teranode</h3>
 <p>The Teranode Operator manages the lifecycle of Teranode instances:</p>
 <h4 id="install-teranode-operator">Install Teranode Operator</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Install operator</span>
-helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>teranode-operator<span class="w"> </span>oci://ghcr.io/bsv-blockchain/teranode-operator<span class="w"> </span><span class="se">\</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># Install CRDs first</span>
+kubectl<span class="w"> </span>apply<span class="w"> </span>--server-side<span class="w"> </span>-f<span class="w"> </span>https://raw.githubusercontent.com/bsv-blockchain/teranode-operator/<span class="nv">$OPERATOR_VERSION</span>/deploy/crds.yaml
+<span class="c1"># Install operator</span>
+helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>teranode-operator<span class="w"> </span>oci://ghcr.io/bsv-blockchain/helm/teranode-operator<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-operator.yaml
 </code></pre></div>
@@ -6678,8 +6680,8 @@ helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class=
 kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-cr.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
 </code></pre></div>
 <h4 id="start-syncing-process">Start Syncing Process</h4>
-<p>A fresh Teranode starts up in IDLE state by default. To start syncing from the legacy network, you can run:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>-fsmstate<span class="w"> </span>legacysyncing
+<p>A fresh Teranode starts up in IDLE state by default. To start syncing from the network, you can run:</p>
+<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>-fsmstate<span class="w"> </span>running
 </code></pre></div>
 <p>To know more about the syncing process, please refer to the <a href="../minersHowToSyncTheNode/">Teranode Sync Guide</a></p>
 <h2 id="verifying-the-deployment">Verifying the Deployment</h2>

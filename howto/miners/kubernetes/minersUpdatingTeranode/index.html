@@ -6178,20 +6178,20 @@
 <div class="highlight"><pre><span></span><code><span class="c1"># Set new versions</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">OPERATOR_VERSION</span><span class="o">=</span>&lt;new-version&gt;
 <span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_VERSION</span><span class="o">=</span>&lt;new-version&gt;
-<span class="nb">export</span><span class="w"> </span><span class="nv">ECR_REGISTRY</span><span class="o">=</span>ghcr.io/bsv-blockchain
+<span class="nb">export</span><span class="w"> </span><span class="nv">GHCR_REGISTRY</span><span class="o">=</span>ghcr.io/bsv-blockchain
 </code></pre></div>
 <h3 id="2-update-images">2. Update Images</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Pull new images</span>
-docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
-docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
+docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
+docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
 
 <span class="c1"># Load into Minikube</span>
-minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
-minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$ECR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
+minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
+minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
 </code></pre></div>
 <h3 id="3-update-operator">3. Update Operator</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Update operator</span>
-helm<span class="w"> </span>upgrade<span class="w"> </span>teranode-operator<span class="w"> </span>oci://ghcr.io/bsv-blockchain/teranode-operator<span class="w"> </span><span class="se">\</span>
+helm<span class="w"> </span>upgrade<span class="w"> </span>teranode-operator<span class="w"> </span>oci://ghcr.io/bsv-blockchain/helm/teranode-operator<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-f<span class="w"> </span>kubernetes/teranode/teranode-operator.yaml
 </code></pre></div>

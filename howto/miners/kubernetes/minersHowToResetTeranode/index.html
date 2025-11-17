@@ -6367,7 +6367,7 @@ kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> <
 kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="nv">$AEROSPIKE_POD</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>bash
 
 <span class="c1"># Truncate the UTXO set</span>
-asadm<span class="w"> </span>--enable<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;manage truncate ns utxo-store set utxo&quot;</span>
+asadm<span class="w"> </span>--enable<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;manage truncate ns utxo-store&quot;</span>
 
 <span class="c1"># Verify the total records count (should slowly decrease to 0)</span>
 asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;info&quot;</span>
