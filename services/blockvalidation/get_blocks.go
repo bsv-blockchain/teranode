@@ -101,7 +101,7 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 	// Start batch fetching and work distribution
 	g.Go(func() error {
 		defer close(workQueue)
-		return u.batchFetchAndDistribute(gCtx, blockHeaders, workQueue, baseURL, blockUpTo, largeBatchSize)
+		return u.batchFetchAndDistribute(gCtx, blockHeaders, workQueue, peerID, baseURL, blockUpTo, largeBatchSize)
 	})
 
 	// Wait for all goroutines to complete
@@ -114,7 +114,7 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 }
 
 // batchFetchAndDistribute fetches blocks in large batches and immediately distributes them to workers
-func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*model.BlockHeader, workQueue chan<- workItem, baseURL string, blockUpTo *model.Block, batchSize int) error {
+func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*model.BlockHeader, workQueue chan<- workItem, peerID string, baseURL string, blockUpTo *model.Block, batchSize int) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "batchFetchAndDistribute",
 		tracing.WithParentStat(u.stats),
 	)
@@ -134,7 +134,7 @@ func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*mo
 			blockUpTo.Hash().String(), i, end-1, len(batchHeaders))
 
 		// Fetch entire batch in one HTTP request, from last block, since the data is returned newest-first
-		blocks, err := u.fetchBlocksBatch(ctx, batchHeaders[len(batchHeaders)-1].Hash(), uint32(len(batchHeaders)), baseURL)
+		blocks, err := u.fetchBlocksBatch(ctx, batchHeaders[len(batchHeaders)-1].Hash(), uint32(len(batchHeaders)), peerID, baseURL)
 		if err != nil {
 			return errors.NewProcessingError("[catchup:batchFetchAndDistribute][%s] failed to fetch batch starting at %s", blockUpTo.Hash().String(), batchHeaders[0].Hash().String(), err)
 		}
@@ -366,7 +366,7 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 	}
 
 	// Fetch subtree from peer
-	subtreeNodeBytes, subtreeErr := u.fetchSubtreeFromPeer(ctx, subtreeHash, baseURL)
+	subtreeNodeBytes, subtreeErr := u.fetchSubtreeFromPeer(ctx, subtreeHash, peerID, baseURL)
 	if subtreeErr != nil {
 		return nil, errors.NewServiceError("[catchup:fetchAndStoreSubtree] Failed to fetch subtree for %s", subtreeHash.String(), subtreeErr)
 	}
@@ -455,7 +455,7 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 		return nil
 	}
 
-	subtreeDataReader, err := u.fetchSubtreeDataFromPeer(ctx, subtreeHash, baseURL)
+	subtreeDataReader, err := u.fetchSubtreeDataFromPeer(ctx, subtreeHash, peerID, baseURL)
 	if err != nil {
 		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Failed to fetch subtreeData for %s", subtreeHash.String(), err)
 	}
@@ -532,7 +532,7 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 }
 
 // fetchSubtreeFromPeer fetches subtree (for subtreeToCheck) from a peer via HTTP
-func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, baseURL string) ([]byte, error) {
+func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, peerID string, baseURL string) ([]byte, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchSubtreeFromPeer",
 		tracing.WithParentStat(u.stats),
 	)
@@ -549,6 +549,13 @@ func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhas
 		return nil, errors.NewServiceError("[catchup:fetchSubtreeFromPeer] failed to fetch subtree from %s", url, err)
 	}
 
+	// Track bytes downloaded from peer
+	if u.p2pClient != nil && peerID != "" {
+		if err := u.p2pClient.RecordBytesDownloaded(ctx, peerID, uint64(len(subtreeBytes))); err != nil {
+			u.logger.Warnf("[fetchSubtreeFromPeer][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), len(subtreeBytes), peerID, err)
+		}
+	}
+
 	if len(subtreeBytes) == 0 {
 		return nil, errors.NewNotFoundError("[catchup:fetchSubtreeFromPeer] empty subtree received from %s", url)
 	}
@@ -558,8 +565,28 @@ func (u *Server) fetchSubtreeFromPeer(ctx context.Context, subtreeHash *chainhas
 	return subtreeBytes, nil
 }
 
+// countingReadCloser wraps an io.ReadCloser and counts bytes read
+type countingReadCloser struct {
+	reader    io.ReadCloser
+	bytesRead uint64
+	onClose   func(uint64) // Callback when closed with total bytes read
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.reader.Read(p)
+	c.bytesRead += uint64(n)
+	return n, err
+}
+
+func (c *countingReadCloser) Close() error {
+	if c.onClose != nil {
+		c.onClose(c.bytesRead)
+	}
+	return c.reader.Close()
+}
+
 // fetchSubtreeDataFromPeer fetches subtree data from a peer via HTTP
-func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, baseURL string) (io.ReadCloser, error) {
+func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chainhash.Hash, peerID string, baseURL string) (io.ReadCloser, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchSubtreeDataFromPeer",
 		tracing.WithParentStat(u.stats),
 	)
@@ -577,7 +604,23 @@ func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chai
 		return nil, errors.NewServiceError("[catchup:fetchSubtreeDataFromPeer] failed to fetch subtree data from %s", url, err)
 	}
 
-	return subtreeDataReader, nil
+	// Wrap with counting reader to track bytes when stream is consumed
+	countingReader := &countingReadCloser{
+		reader: subtreeDataReader,
+		onClose: func(bytesRead uint64) {
+			// Track bytes downloaded from peer when reader is closed (after all data consumed)
+			// Decouple the context to ensure tracking completes even if parent context is cancelled
+			if u.p2pClient != nil && peerID != "" {
+				trackCtx, _, deferFn := tracing.DecoupleTracingSpan(ctx, "blockvalidation", "recordBytesDownloaded")
+				defer deferFn()
+				if err := u.p2pClient.RecordBytesDownloaded(trackCtx, peerID, bytesRead); err != nil {
+					u.logger.Warnf("[fetchSubtreeDataFromPeer][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), bytesRead, peerID, err)
+				}
+			}
+		},
+	}
+
+	return countingReader, nil
 }
 
 // fetchBlocksBatch fetches a batch of blocks from a peer starting from the specified hash.
@@ -591,7 +634,7 @@ func (u *Server) fetchSubtreeDataFromPeer(ctx context.Context, subtreeHash *chai
 // Returns:
 //   - []*model.Block: Fetched blocks
 //   - error: If request fails or blocks are invalid
-func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n uint32, baseURL string) ([]*model.Block, error) {
+func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n uint32, peerID string, baseURL string) ([]*model.Block, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchBlocksBatch",
 		tracing.WithParentStat(u.stats),
 	)
@@ -600,6 +643,13 @@ func (u *Server) fetchBlocksBatch(ctx context.Context, hash *chainhash.Hash, n u
 	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/blocks/%s?n=%d", baseURL, hash.String(), n))
 	if err != nil {
 		return nil, errors.NewProcessingError("[catchup:fetchBlocksBatch][%s] failed to get blocks from peer", hash.String(), err)
+	}
+
+	// Track bytes downloaded from peer
+	if u.p2pClient != nil && peerID != "" {
+		if err := u.p2pClient.RecordBytesDownloaded(ctx, peerID, uint64(len(blockBytes))); err != nil {
+			u.logger.Warnf("[fetchBlocksBatch][%s] failed to record %d bytes downloaded from peer %s: %v", hash.String(), len(blockBytes), peerID, err)
+		}
 	}
 
 	blockReader := bytes.NewReader(blockBytes)
@@ -642,6 +692,13 @@ func (u *Server) fetchSingleBlock(ctx context.Context, hash *chainhash.Hash, pee
 	blockBytes, err := util.DoHTTPRequest(ctx, fmt.Sprintf("%s/block/%s", baseURL, hash.String()))
 	if err != nil {
 		return nil, errors.NewProcessingError("[catchup:fetchSingleBlock][%s] failed to get block from peer", hash.String(), err)
+	}
+
+	// Track bytes downloaded from peer
+	if u.p2pClient != nil && peerID != "" {
+		if err := u.p2pClient.RecordBytesDownloaded(ctx, peerID, uint64(len(blockBytes))); err != nil {
+			u.logger.Warnf("[fetchSingleBlock][%s] failed to record %d bytes downloaded from peer %s: %v", hash.String(), len(blockBytes), peerID, err)
+		}
 	}
 
 	block, err := model.NewBlockFromBytes(blockBytes)

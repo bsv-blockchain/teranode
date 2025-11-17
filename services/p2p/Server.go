@@ -320,6 +320,8 @@ func NewServer(
 		DHTMode:            tSettings.P2P.DHTMode,
 		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
 		DisableNAT:         tSettings.P2P.DisableNAT,
+		EnableMDNS:         tSettings.P2P.EnableMDNS,
+		AllowPrivateIPs:    tSettings.P2P.AllowPrivateIPs,
 	}
 
 	if len(advertiseAddresses) > 0 {
@@ -1729,6 +1731,42 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 	}
 
 	return &p2p_api.AddBanScoreResponse{Ok: true}, nil
+}
+
+// RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.
+// This method is called by services (blockvalidation, subtreevalidation) after downloading
+// data from a peer's DataHub URL to track total network usage per peer.
+// Parameters:
+//   - ctx: Context for the operation
+//   - req: Request containing peer_id and bytes_downloaded
+//
+// Returns a response indicating success or an error if the peer cannot be found.
+func (s *Server) RecordBytesDownloaded(ctx context.Context, req *p2p_api.RecordBytesDownloadedRequest) (*p2p_api.RecordBytesDownloadedResponse, error) {
+	// Decode the peer ID string
+	peerID, err := peer.Decode(req.PeerId)
+	if err != nil {
+		s.logger.Errorf("[RecordBytesDownloaded] failed to decode peer ID %s: %v", req.PeerId, err)
+		return &p2p_api.RecordBytesDownloadedResponse{Ok: false}, errors.NewServiceError("failed to decode peer ID", err)
+	}
+
+	// Get current peer info from registry
+	peerInfo, exists := s.peerRegistry.GetPeer(peerID)
+	if !exists {
+		s.logger.Warnf("[RecordBytesDownloaded] peer %s not found in registry", req.PeerId)
+		// Still return success - peer might not be in registry yet
+		return &p2p_api.RecordBytesDownloadedResponse{Ok: true}, nil
+	}
+
+	// Calculate new total bytes received
+	newTotal := peerInfo.BytesReceived + req.BytesDownloaded
+
+	// Update the peer registry with the new total
+	s.peerRegistry.UpdateNetworkStats(peerID, newTotal)
+
+	s.logger.Debugf("[RecordBytesDownloaded] Updated peer %s: added %d bytes, new total: %d bytes",
+		req.PeerId, req.BytesDownloaded, newTotal)
+
+	return &p2p_api.RecordBytesDownloadedResponse{Ok: true}, nil
 }
 
 // ReportInvalidBlock adds ban score to the peer that sent an invalid block.

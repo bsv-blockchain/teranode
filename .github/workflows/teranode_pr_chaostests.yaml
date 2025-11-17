@@ -48,9 +48,11 @@ jobs:
         run: |
           cd compose
           docker compose -f docker-compose-ss.yml up -d postgres toxiproxy-postgres kafka-shared toxiproxy-kafka
-          # Wait for services to be healthy
+          # Wait for PostgreSQL to be healthy
           timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps postgres | grep -q "healthy"; do sleep 2; done'
-          timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps toxiproxy-postgres | grep -q "healthy"; do sleep 2; done'
+          # Wait for toxiproxy services to be up and API responding (no healthcheck in minimal image)
+          timeout 60 bash -c 'until curl -sf http://localhost:8474/version >/dev/null; do sleep 2; done'
+          timeout 60 bash -c 'until curl -sf http://localhost:8475/version >/dev/null; do sleep 2; done'
           # Wait for Kafka to be ready (no healthcheck, just wait for it to be up)
           timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps kafka-shared | grep -q "Up"; do sleep 2; done'
           sleep 10  # Extra wait for Kafka to be fully ready
@@ -97,7 +99,6 @@ jobs:
 
   chaostest2:
     name: chaostest2
-    if: false  # Temporarily disabled - flaky test
     runs-on: teranode-runner-4-core
     steps:
       - name: Workflow Telemetry
@@ -128,9 +129,11 @@ jobs:
         run: |
           cd compose
           docker compose -f docker-compose-ss.yml up -d postgres toxiproxy-postgres kafka-shared toxiproxy-kafka
-          # Wait for services to be healthy
+          # Wait for PostgreSQL to be healthy
           timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps postgres | grep -q "healthy"; do sleep 2; done'
-          timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps toxiproxy-postgres | grep -q "healthy"; do sleep 2; done'
+          # Wait for toxiproxy services to be up and API responding (no healthcheck in minimal image)
+          timeout 60 bash -c 'until curl -sf http://localhost:8474/version >/dev/null; do sleep 2; done'
+          timeout 60 bash -c 'until curl -sf http://localhost:8475/version >/dev/null; do sleep 2; done'
           # Wait for Kafka to be ready (no healthcheck, just wait for it to be up)
           timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps kafka-shared | grep -q "Up"; do sleep 2; done'
           sleep 10  # Extra wait for Kafka to be fully ready

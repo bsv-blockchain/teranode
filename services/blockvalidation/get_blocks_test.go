@@ -493,7 +493,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		)
 
 		// Call fetchBlocksBatch
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
 		require.NoError(t, err)
 		require.Len(t, fetchedBlocks, 1)
 		assert.Equal(t, targetHash, fetchedBlocks[0].Header.Hash())
@@ -651,7 +651,7 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 		)
 
 		// Call fetchBlocksBatch
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
 		require.NoError(t, err)
 		require.Len(t, fetchedBlocks, 1)
 		assert.Equal(t, targetHash, fetchedBlocks[0].Header.Hash())
@@ -710,7 +710,7 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		)
 
 		// Call fetchBlocksBatch
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
 		require.NoError(t, err)
 		require.Len(t, fetchedBlocks, 1)
 		assert.Equal(t, targetHash, fetchedBlocks[0].Header.Hash())
@@ -743,7 +743,7 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		)
 
 		// Call fetchBlocksBatch
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 3, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 3, "test-peer-id", "http://test-peer")
 		require.NoError(t, err)
 		require.Len(t, fetchedBlocks, 3)
 
@@ -771,7 +771,7 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		defer httpmock.DeactivateAndReset()
 
 		// Call fetchBlocksBatch - should return error
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get blocks from peer")
 		require.Nil(t, fetchedBlocks)
@@ -1398,7 +1398,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
 			httpmock.NewBytesResponder(200, expectedData))
 
-		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		assert.NoError(t, err)
 		assert.Equal(t, expectedData, result)
 	})
@@ -1416,7 +1416,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(500, "Internal Server Error"))
 
-		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "failed to fetch subtree")
@@ -1435,7 +1435,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
 			httpmock.NewBytesResponder(200, []byte{}))
 
-		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "empty subtree received")
@@ -1455,7 +1455,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewBytesResponder(200, expectedData))
 
-		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
 		defer reader.Close()
@@ -1479,7 +1479,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(404, "Not Found"))
 
-		result, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
@@ -1498,7 +1498,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewBytesResponder(200, []byte{}))
 
-		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		// Empty response is not an error for the fetcher - it just returns an empty reader
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
@@ -2229,7 +2229,7 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeURL,
 			httpmock.NewBytesResponder(200, expectedData))
 
-		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		assert.NoError(t, err)
 		assert.Equal(t, expectedData, data)
 	})
@@ -2241,7 +2241,7 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeURL,
 			httpmock.NewErrorResponder(errors.NewNetworkError("HTTP request failed")))
 
-		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		assert.Contains(t, err.Error(), "failed to fetch subtree")
@@ -2254,7 +2254,7 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeURL,
 			httpmock.NewBytesResponder(200, []byte{})) // Empty response
 
-		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		assert.Contains(t, err.Error(), "empty subtree received")
@@ -2280,7 +2280,7 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel() // Cancel immediately
 
-		data, err := server.fetchSubtreeFromPeer(cancelCtx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeFromPeer(cancelCtx, subtreeHash, "test-peer-id", baseURL)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		// Check for either context canceled or the wrapped error containing context cancellation
@@ -2315,7 +2315,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewBytesResponder(200, expectedData))
 
-		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, baseURL)
+		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
 		defer reader.Close()
@@ -2333,7 +2333,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewErrorResponder(errors.NewNetworkError("HTTP request failed")))
 
-		data, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
@@ -2346,7 +2346,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewBytesResponder(200, []byte{})) // Empty response
 
-		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, baseURL)
+		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		// Empty response is not an error for the fetcher - it just returns an empty reader
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
@@ -2378,7 +2378,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel() // Cancel immediately
 
-		data, err := server.fetchSubtreeDataFromPeer(cancelCtx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeDataFromPeer(cancelCtx, subtreeHash, "test-peer-id", baseURL)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		// Check for either context canceled or the wrapped error containing context cancellation
@@ -2700,7 +2700,7 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		)
 
 		// Call fetchBlocksBatch directly to test EOF handling
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(context.Background(), blocks[1].Header.Hash(), 2, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(context.Background(), blocks[1].Header.Hash(), 2, "test-peer-id", "http://test-peer")
 
 		// Should succeed and return only the first block (EOF handled gracefully)
 		assert.NoError(t, err)

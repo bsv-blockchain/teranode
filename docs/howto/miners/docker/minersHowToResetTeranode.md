@@ -77,7 +77,7 @@ For more control or when debugging specific components, you can clean up each se
 docker exec -it aerospike /bin/bash
 
 # Truncate the UTXO set
-asadm --enable -e "manage truncate ns utxo-store set utxo"
+asadm --enable -e "manage truncate ns utxo-store"
 
 # Verify the total records count (should slowly decrease to 0)
 asadm -e "info"

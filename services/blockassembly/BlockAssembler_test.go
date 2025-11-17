@@ -1652,6 +1652,198 @@ func TestBlockAssembler_CacheInvalidation(t *testing.T) {
 	})
 }
 
+func TestBlockAssembler_SmartCacheInvalidation(t *testing.T) {
+	t.Run("Cache invalidates after configured max age", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Override the smart cache max age to 500ms for faster testing
+		ba.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge = 500 * time.Millisecond
+
+		// Setup cache with initial state
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastHeight = 1
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 100
+		ba.cachedCandidate.lastSizeInBytes = 50000
+		ba.cachedCandidate.lastSubtreeCount = 1
+		ba.cachedCandidate.mu.Unlock()
+
+		// Should NOT invalidate immediately (no significant change)
+		shouldInvalidate := ba.shouldInvalidateCache(100, 50000, 1)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate when no significant change")
+
+		// Wait for cache to age past max age
+		time.Sleep(600 * time.Millisecond)
+
+		// Should invalidate due to age
+		shouldInvalidate = ba.shouldInvalidateCache(100, 50000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate after max age")
+	})
+
+	t.Run("Cache invalidates on transaction count change > 10%", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 1000
+		ba.cachedCandidate.lastSizeInBytes = 500000
+		ba.cachedCandidate.lastSubtreeCount = 1
+		ba.cachedCandidate.mu.Unlock()
+
+		// 9% change - should NOT invalidate
+		shouldInvalidate := ba.shouldInvalidateCache(1090, 500000, 1)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate with 9%% tx count change")
+
+		// 11% change - should invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1110, 500000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 11%% tx count change")
+
+		// 11% decrease - should also invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(890, 500000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 11%% tx count decrease")
+	})
+
+	t.Run("Cache invalidates on block size change > 1MB", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 1000
+		ba.cachedCandidate.lastSizeInBytes = 10_000_000 // 10MB
+		ba.cachedCandidate.lastSubtreeCount = 1
+		ba.cachedCandidate.mu.Unlock()
+
+		// 900KB change - should NOT invalidate
+		shouldInvalidate := ba.shouldInvalidateCache(1000, 10_000_000+900_000, 1)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate with 900KB size change")
+
+		// 1.1MB change - should invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 10_000_000+1_100_000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 1.1MB size change")
+
+		// 1.1MB decrease - should also invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 10_000_000-1_100_000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 1.1MB size decrease")
+	})
+
+	t.Run("Cache invalidates on subtree count change", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 1000
+		ba.cachedCandidate.lastSizeInBytes = 500000
+		ba.cachedCandidate.lastSubtreeCount = 5
+		ba.cachedCandidate.mu.Unlock()
+
+		// Same count - should NOT invalidate
+		shouldInvalidate := ba.shouldInvalidateCache(1000, 500000, 5)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate with same subtree count")
+
+		// Different count - should invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 500000, 6)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with different subtree count")
+
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 500000, 4)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with decreased subtree count")
+	})
+
+	t.Run("Cache does not invalidate when no cache exists", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// No cache exists (nil candidate)
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = nil
+		ba.cachedCandidate.mu.Unlock()
+
+		// Should NOT invalidate (nothing to invalidate)
+		shouldInvalidate := ba.shouldInvalidateCache(1000, 500000, 5)
+		assert.False(t, shouldInvalidate, "Should not invalidate when no cache exists")
+	})
+
+	t.Run("Combined scenario - realistic high-load situation", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Set longer max age for this test
+		ba.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge = 10 * time.Second
+
+		// Setup cache with initial state
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 10000
+		ba.cachedCandidate.lastSizeInBytes = 50_000_000 // 50MB
+		ba.cachedCandidate.lastSubtreeCount = 10
+		ba.cachedCandidate.mu.Unlock()
+
+		// Simulate steady trickle of transactions (5% increase, 500KB increase)
+		// Should NOT invalidate (below thresholds)
+		shouldInvalidate := ba.shouldInvalidateCache(10500, 50_500_000, 10)
+		assert.False(t, shouldInvalidate, "Small steady increase should not invalidate cache")
+
+		// Simulate burst of transactions (15% increase, 2MB increase)
+		// Should invalidate due to tx count threshold
+		shouldInvalidate = ba.shouldInvalidateCache(11500, 52_000_000, 10)
+		assert.True(t, shouldInvalidate, "Burst of transactions should invalidate cache")
+
+		// Simulate new subtree completed
+		// Should invalidate due to subtree count change
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.mu.Unlock()
+		shouldInvalidate = ba.shouldInvalidateCache(11500, 52_000_000, 11)
+		assert.True(t, shouldInvalidate, "New subtree should invalidate cache")
+	})
+
+	t.Run("Cache metrics tracking", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache and verify metrics are tracked
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 500
+		ba.cachedCandidate.lastSizeInBytes = 250000
+		ba.cachedCandidate.lastSubtreeCount = 3
+		ba.cachedCandidate.mu.Unlock()
+
+		// Verify tracked values
+		ba.cachedCandidate.mu.RLock()
+		assert.Equal(t, uint32(500), ba.cachedCandidate.lastTxCount, "TX count should be tracked")
+		assert.Equal(t, uint64(250000), ba.cachedCandidate.lastSizeInBytes, "Size should be tracked")
+		assert.Equal(t, 3, ba.cachedCandidate.lastSubtreeCount, "Subtree count should be tracked")
+		ba.cachedCandidate.mu.RUnlock()
+	})
+}
+
 func TestBlockAssembly_GetCurrentRunningState(t *testing.T) {
 	t.Run("GetCurrentRunningState returns correct state", func(t *testing.T) {
 		initPrometheusMetrics()

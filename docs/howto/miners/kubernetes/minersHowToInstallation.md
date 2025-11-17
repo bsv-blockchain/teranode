@@ -152,21 +152,21 @@ You can find the latest available version published on GitHub Container Registry
 
 ```bash
 # Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)
-export OPERATOR_VERSION=v0.5.5 # Or use 'latest'
-export TERANODE_VERSION=v0.11.13 # Or use 'latest'
-export ECR_REGISTRY=ghcr.io/bsv-blockchain
+export OPERATOR_VERSION=v0.1.3
+export TERANODE_VERSION=v0.12.3
+export GHCR_REGISTRY=ghcr.io/bsv-blockchain
 ```
 
 #### Load Images into Minikube
 
 ```bash
 # Load Teranode Operator
-docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
-minikube image load $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
+docker pull $GHCR_REGISTRY/teranode-operator:$OPERATOR_VERSION
+minikube image load $GHCR_REGISTRY/teranode-operator:$OPERATOR_VERSION
 
 # Load Teranode Public
-docker pull $ECR_REGISTRY/teranode:$TERANODE_VERSION
-minikube image load $ECR_REGISTRY/teranode:$TERANODE_VERSION
+docker pull $GHCR_REGISTRY/teranode:$TERANODE_VERSION
+minikube image load $GHCR_REGISTRY/teranode:$TERANODE_VERSION
 ```
 
 ### Deploy Teranode
@@ -176,8 +176,10 @@ The Teranode Operator manages the lifecycle of Teranode instances:
 #### Install Teranode Operator
 
 ```bash
+# Install CRDs first
+kubectl apply --server-side -f https://raw.githubusercontent.com/bsv-blockchain/teranode-operator/$OPERATOR_VERSION/deploy/crds.yaml
 # Install operator
-helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/teranode-operator \
+helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/helm/teranode-operator \
     -n teranode-operator \
     -f deploy/kubernetes/teranode/teranode-operator.yaml
 ```
@@ -193,10 +195,10 @@ kubectl apply -f deploy/kubernetes/teranode/teranode-cr.yaml -n teranode-operato
 
 #### Start Syncing Process
 
-A fresh Teranode starts up in IDLE state by default. To start syncing from the legacy network, you can run:
+A fresh Teranode starts up in IDLE state by default. To start syncing from the network, you can run:
 
 ```bash
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate running
 ```
 
 To know more about the syncing process, please refer to the [Teranode Sync Guide](minersHowToSyncTheNode.md)

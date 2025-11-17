@@ -2313,7 +2313,7 @@ func (sm *SyncManager) kafkaBlocksFinalListener(ctx context.Context, kafkaURL *u
 			return nil
 		}
 
-		hash, err := chainhash.NewHash(msg.Key)
+		hash, err := chainhash.NewHashFromStr(string(msg.Key))
 		if err != nil {
 			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create hash from Kafka message key: %v", hash, err)
 			// not going to retry, if we cannot parse the message

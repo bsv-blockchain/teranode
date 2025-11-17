@@ -33,6 +33,22 @@ var bufioReaderPool = sync.Pool{
 	},
 }
 
+// countingReadCloser wraps an io.ReadCloser and counts bytes read
+type countingReadCloser struct {
+	reader    io.ReadCloser
+	bytesRead *uint64 // Pointer to allow external access to count
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.reader.Read(p)
+	atomic.AddUint64(c.bytesRead, uint64(n))
+	return n, err
+}
+
+func (c *countingReadCloser) Close() error {
+	return c.reader.Close()
+}
+
 // CheckBlockSubtrees validates that all subtrees referenced in a block exist in storage.
 //
 // Pauses subtree processing during validation to avoid conflicts and returns missing
@@ -212,6 +228,13 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree from %s", subtreeHash.String(), url, err)
 				}
 
+				// Track bytes downloaded from peer
+				if u.p2pClient != nil && peerID != "" {
+					if err := u.p2pClient.RecordBytesDownloaded(gCtx, peerID, uint64(len(subtreeNodeBytes))); err != nil {
+						u.logger.Warnf("[CheckBlockSubtrees][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), len(subtreeNodeBytes), peerID, err)
+					}
+				}
+
 				subtreeToCheck, err = subtreepkg.NewIncompleteTreeByLeafCount(len(subtreeNodeBytes) / chainhash.HashSize)
 				if err != nil {
 					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to create subtree structure", subtreeHash.String(), err)
@@ -262,9 +285,26 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					return errors.NewServiceError("[CheckBlockSubtrees][%s] failed to get subtree data from %s", subtreeHash.String(), url, subtreeDataErr)
 				}
 
+				// Wrap with counting reader to track bytes downloaded
+				var bytesRead uint64
+				countingBody := &countingReadCloser{
+					reader:    body,
+					bytesRead: &bytesRead,
+				}
+
 				// Process transactions directly from the stream while storing to disk
-				err = u.processSubtreeDataStream(gCtx, subtreeToCheck, body, &subtreeTxs[subtreeIdx])
-				_ = body.Close()
+				err = u.processSubtreeDataStream(gCtx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx])
+				_ = countingBody.Close()
+
+				// Track bytes downloaded from peer after stream is consumed
+				// Decouple the context to ensure tracking completes even if parent context is cancelled
+				if u.p2pClient != nil && peerID != "" {
+					trackCtx, _, deferFn := tracing.DecoupleTracingSpan(gCtx, "subtreevalidation", "recordBytesDownloaded")
+					defer deferFn()
+					if err := u.p2pClient.RecordBytesDownloaded(trackCtx, peerID, bytesRead); err != nil {
+						u.logger.Warnf("[CheckBlockSubtrees][%s] failed to record %d bytes downloaded from peer %s: %v", subtreeHash.String(), bytesRead, peerID, err)
+					}
+				}
 
 				if err != nil {
 					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to process subtree data stream", subtreeHash.String(), err)
@@ -636,6 +676,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 							} else {
 								u.logger.Warnf("[processTransactionsInLevels] Failed to add transaction %s to orphanage - orphanage is full", tx.TxIDChainHash().String())
 							}
+						} else {
+							u.logger.Debugf("[processTransactionsInLevels] Transaction %s missing parent, but FSM not in RUNNING state - not adding to orphanage", tx.TxIDChainHash().String())
 						}
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Log truly invalid transactions
@@ -670,7 +712,6 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	}
 
 	if errorsFound.Load() > 0 {
-		u.logger.Warnf("[processTransactionsInLevels] Completed processing with %d errors, %d transactions added to orphanage", errorsFound.Load(), addedToOrphanage.Load())
 		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors, %d transactions added to orphanage", errorsFound.Load(), addedToOrphanage.Load())
 	}
 

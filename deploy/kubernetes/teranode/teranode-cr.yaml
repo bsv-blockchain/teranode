@@ -3,6 +3,7 @@ kind: Cluster
 metadata:
   name: teranode-cluster
 spec:
+  image: ghcr.io/bsv-blockchain/teranode:v0.12.3
   alertSystem:
     enabled: true
     spec:
@@ -79,9 +80,8 @@ spec:
     enabled: false
     spec: {}
   configMapName: teranode-operator-config
-  image: ghcr.io/bsv-blockchain/teranode:v0.11.13
   legacy:
-    enabled: true
+    enabled: false
     spec:
       deploymentOverrides:
         imagePullPolicy: Never
@@ -91,7 +91,7 @@ spec:
             cpu: 100m
             memory: 256Mi
   peer:
-    enabled: false
+    enabled: true
     spec:
       deploymentOverrides:
         imagePullPolicy: Never

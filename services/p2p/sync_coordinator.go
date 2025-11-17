@@ -785,6 +785,7 @@ func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer peer.ID, bestHash str
 	}
 
 	sc.blocksKafkaProducerClient.Publish(&kafka.Message{
+		Key:   []byte(bestHash),
 		Value: value,
 	})
 	sc.logger.Infof("[sendSyncTriggerToKafka] Sent sync trigger to Kafka for block %s from peer %s", bestHash, syncPeer)

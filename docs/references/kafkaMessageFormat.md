@@ -243,7 +243,7 @@ func handleBlockMessage(msg *kafka.Message) error {
 
 ### Invalid Block Topic
 
-`kafka_invalidBlockConfig` is the Kafka topic used for broadcasting invalid block notifications. This topic allows services to notify other components when a block has been determined to be invalid.
+`kafka_invalidBlocksConfig` is the Kafka topic used for broadcasting invalid block notifications. This topic allows services to notify other components when a block has been determined to be invalid.
 
 ### Message Structure
 
@@ -463,7 +463,7 @@ func handleSubtreeMessage(msg *kafka.Message) error {
 
 ### Invalid Subtree Topic
 
-`kafka_invalidSubtreeConfig` is the Kafka topic used for broadcasting invalid subtree notifications. This topic allows services to notify other components when a subtree has been determined to be invalid.
+`kafka_invalidSubtreesConfig` is the Kafka topic used for broadcasting invalid subtree notifications. This topic allows services to notify other components when a subtree has been determined to be invalid.
 
 ### Message Structure
 
@@ -1030,6 +1030,12 @@ func handleRejectedTxMessage(msg *kafka.Message) error {
         return fmt.Errorf("invalid transaction hash: %w", err)
     }
 
+    // Determine rejection source
+    rejectionSource := "internally"
+    if peerID != "" {
+        rejectionSource = fmt.Sprintf("by peer %s", peerID)
+    }
+
     // Process the rejected transaction notification...
     if peerID == "" {
         log.Printf("Transaction %s was rejected internally: %s", txHash.String(), reason)
@@ -1386,7 +1392,7 @@ Here's a general example of how to serialize a protobuf message for Kafka:
 ```go
 // Create a new message
 message := &kafkamessage.KafkaBlockTopicMessage{
-    Hash: blockHash[:],
+    Hash: blockHash.String(), // convert hash to hex string
     URL:  datahubUrl,
 }
 
@@ -1420,9 +1426,11 @@ func handleBlockMessage(msg *kafka.Message) error {
         return fmt.Errorf("failed to deserialize message: %w", err)
     }
 
-    // Extract block hash
-    var blockHash chainhash.Hash
-    copy(blockHash[:], blockMessage.Hash)
+    // Convert string hash to chainhash.Hash
+    blockHash, err := chainhash.NewHashFromStr(blockMessage.Hash)
+    if err != nil {
+        return fmt.Errorf("invalid block hash: %w", err)
+    }
 
     // Extract DataHub URL
     dataHubUrl := blockMessage.URL

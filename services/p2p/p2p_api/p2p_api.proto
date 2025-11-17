@@ -250,6 +250,16 @@ message AddBanScoreRequest {
     repeated PeerRegistryInfo peers = 1;
   }
 
+  // Record bytes downloaded via HTTP from a peer
+  message RecordBytesDownloadedRequest {
+    string peer_id = 1;          // Peer ID that provided the data
+    uint64 bytes_downloaded = 2; // Number of bytes downloaded
+  }
+
+  message RecordBytesDownloadedResponse {
+    bool ok = 1;
+  }
+
   message GetPeerRequest {
     string peer_id = 1;
   }
@@ -290,6 +300,9 @@ message AddBanScoreRequest {
 
     // Get full peer registry data with all metadata
     rpc GetPeerRegistry(google.protobuf.Empty) returns (GetPeerRegistryResponse) {}
+
+    // Record bytes downloaded via HTTP from a peer
+    rpc RecordBytesDownloaded(RecordBytesDownloadedRequest) returns (RecordBytesDownloadedResponse) {}
 
     // Get single peer information by peer ID
     rpc GetPeer(GetPeerRequest) returns (GetPeerResponse) {}

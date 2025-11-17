@@ -12,4 +12,8 @@ import (
 type P2PClientI interface {
 	// ReportValidSubtree reports that a subtree was successfully fetched and validated from a peer.
 	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
+
+	// RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.
+	// This is called after downloading data (subtrees, etc.) from a peer's DataHub URL.
+	RecordBytesDownloaded(ctx context.Context, peerID string, bytesDownloaded uint64) error
 }

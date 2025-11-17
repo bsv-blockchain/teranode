@@ -219,9 +219,13 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DifficultyCache:                     getBool("blockassembly_difficultyCache", true, alternativeContext...),
 			UseDynamicSubtreeSize:               getBool("blockassembly_useDynamicSubtreeSize", false, alternativeContext...),
 			MiningCandidateCacheTimeout:         getDuration("blockassembly_miningCandidateCacheTimeout", 5*time.Second),
+			MiningCandidateSmartCacheMaxAge:     getDuration("blockassembly_miningCandidateSmartCacheMaxAge", 10*time.Second, alternativeContext...),
 			BlockchainSubscriptionTimeout:       getDuration("blockassembly_blockchainSubscriptionTimeout", 5*time.Minute, alternativeContext...),
 			ValidateParentChainOnRestart:        getBool("blockassembly_validateParentChainOnRestart", true, alternativeContext...),
 			ParentValidationBatchSize:           getInt("blockassembly_parentValidationBatchSize", 1000, alternativeContext...),
+			// getMiningCandidate timeout settings
+			GetMiningCandidateSendTimeout:     getDuration("blockassembly_getMiningCandidate_send_timeout", 1*time.Second, alternativeContext...),
+			GetMiningCandidateResponseTimeout: getDuration("blockassembly_getMiningCandidate_response_timeout", 10*time.Second, alternativeContext...),
 		},
 		BlockChain: BlockChainSettings{
 			GRPCAddress:           getString("blockchain_grpcAddress", "localhost:8087", alternativeContext...),
@@ -387,6 +391,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// DHT configuration
 			DHTMode:            getString("p2p_dht_mode", "server", alternativeContext...),
 			DHTCleanupInterval: getDuration("p2p_dht_cleanup_interval", 24*time.Hour, alternativeContext...),
+			// Network scanning prevention (important for shared hosting/cloud)
+			// Safe defaults: mDNS disabled, private IPs filtered
+			EnableMDNS:      getBool("p2p_enable_mdns", false, alternativeContext...),       // Default false to prevent LAN scanning alerts
+			AllowPrivateIPs: getBool("p2p_allow_private_ips", false, alternativeContext...), // Default false for production safety
 			// Full/pruned node selection configuration
 			AllowPrunedNodeFallback: getBool("p2p_allow_pruned_node_fallback", true, alternativeContext...),
 			DisableNAT:              getBool("p2p_disable_nat", false, alternativeContext...),

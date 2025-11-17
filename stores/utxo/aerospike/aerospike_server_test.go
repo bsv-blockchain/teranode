@@ -940,18 +940,34 @@ func TestAerospike(t *testing.T) {
 		_, err = store.Create(ctx, bigTx, 0)
 		require.NoError(t, err)
 
-		bigTxKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), bigTx.TxIDChainHash().CloneBytes())
+		bigTxKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(bigTx.TxIDChainHash(), 0))
 		require.NoError(t, err)
 
-		// Read initial counter
+		// Get the master record
 		rec, err := client.Get(util.GetAerospikeReadPolicy(tSettings), bigTxKey)
 		require.NoError(t, err)
+
+		// Check the creating bin is removed
+		assert.Nil(t, rec.Bins["creating"])
 
 		// The spentExtraRecords will be nil if not set
 		initial := 0
 		if v, ok := rec.Bins["spentExtraRecs"].(int); ok {
 			initial = v
 		}
+
+		totalExtraRecs := rec.Bins[fields.TotalExtraRecs.String()].(int)
+		assert.Equal(t, 1, totalExtraRecs)
+
+		childKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(bigTx.TxIDChainHash(), 1))
+		require.NoError(t, err)
+
+		// Get the master record
+		rec, err = client.Get(util.GetAerospikeReadPolicy(tSettings), childKey)
+		require.NoError(t, err)
+
+		// Check the creating bin is removed
+		assert.Nil(t, rec.Bins["creating"])
 
 		// Increment via multi API
 		require.NoError(t, store.IncrementSpentRecordsMulti([]*chainhash.Hash{bigTx.TxIDChainHash()}, 1))
@@ -1649,6 +1665,11 @@ func TestAerospikeWithBatchSize(t *testing.T) {
 		external, ok := value.Bins[fields.External.String()].(bool)
 		require.True(t, ok)
 		assert.True(t, external)
+
+		// Check the creating bin is removed
+		value, err = client.Get(util.GetAerospikeReadPolicy(tSettings), txKey, fields.Creating.String())
+		require.NoError(t, err)
+		assert.Nil(t, value.Bins[fields.Creating.String()])
 
 		spendsAll, err := store.Spend(ctx, spendTxAll, 1)
 		require.NoError(t, err)

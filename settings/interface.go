@@ -239,9 +239,13 @@ type BlockAssemblySettings struct {
 	DifficultyCache                     bool
 	UseDynamicSubtreeSize               bool
 	MiningCandidateCacheTimeout         time.Duration
+	MiningCandidateSmartCacheMaxAge     time.Duration
 	BlockchainSubscriptionTimeout       time.Duration
 	ValidateParentChainOnRestart        bool
 	ParentValidationBatchSize           int
+	// GetMiningCandidate timeouts
+	GetMiningCandidateSendTimeout     time.Duration // Timeout when sending request on internal channel (default: 1s)
+	GetMiningCandidateResponseTimeout time.Duration // Timeout waiting for mining candidate response (default: 10s)
 }
 
 type BlockValidationSettings struct {
@@ -428,6 +432,20 @@ type P2PSettings struct {
 	// Set to true in test environments where NAT traversal is not needed.
 	// Default: false (NAT features enabled)
 	DisableNAT bool
+
+	// EnableMDNS enables multicast DNS peer discovery on the local network.
+	// IMPORTANT: Only enable on isolated local networks. On shared hosting (e.g., Hetzner, AWS)
+	// without VLANs, mDNS broadcasts appear as network scanning and may result in abuse reports.
+	// Default: false (mDNS disabled for production safety)
+	// Set to true only for local development networks with proper isolation
+	EnableMDNS bool
+
+	// AllowPrivateIPs allows connections to private/local IP addresses during peer discovery.
+	// When true, allows connections to RFC1918 private networks (10.x, 172.16.x, 192.168.x).
+	// IMPORTANT: Only enable on private networks. On shared hosting, this may trigger network scanning alerts.
+	// Default: false (private IPs filtered for production safety)
+	// Set to true only for local development or private network deployments
+	AllowPrivateIPs bool
 
 	// Node mode configuration (full vs pruned)
 	AllowPrunedNodeFallback bool // If true, fall back to pruned nodes when no full nodes available (default: true). Selects youngest pruned node (smallest height) to minimize UTXO pruning risk.

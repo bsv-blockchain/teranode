@@ -6,10 +6,12 @@ The Teranode project is structured as follows:
 teranode/
 │
 ├── main.go                       # Entry point to start the services
+├── main_test.go                  # Top-level integration tests
 │
-├── Makefile                      # Facilitates a variety of development and build tasks for the project
+├── Makefile                      # Build, test, and development task automation
 │
-├── settings.conf                 # Global settings with sensible defaults for all environments
+├── go.mod                        # Go module definition and dependencies
+├── go.sum                        # Go module checksums for dependency verification
 │
 ├── Dockerfile                    # Main Dockerfile for containerization
 │
@@ -87,11 +89,9 @@ teranode/
 ├── test/                         # Test utilities and integration tests
 │
 ├── ui/                           # User interface components
-│   └── dashboard/                # Teranode Dashboard UI
+│   └── dashboard/                # Teranode Dashboard UI (Svelte-based web interface)
 │
-├── ulogger/                      # Unified logging implementation
+├── ulogger/                      # Unified logging framework implementation
 │
-├── util/                         # Common utilities
-│
-└── venv/                         # Python virtual environment (local development)
+└── util/                         # Common utility functions and helper packages
 ```

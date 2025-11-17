@@ -41,6 +41,7 @@ const (
 	PeerService_IsPeerMalicious_FullMethodName         = "/p2p_api.PeerService/IsPeerMalicious"
 	PeerService_IsPeerUnhealthy_FullMethodName         = "/p2p_api.PeerService/IsPeerUnhealthy"
 	PeerService_GetPeerRegistry_FullMethodName         = "/p2p_api.PeerService/GetPeerRegistry"
+	PeerService_RecordBytesDownloaded_FullMethodName   = "/p2p_api.PeerService/RecordBytesDownloaded"
 	PeerService_GetPeer_FullMethodName                 = "/p2p_api.PeerService/GetPeer"
 )
 
@@ -75,6 +76,8 @@ type PeerServiceClient interface {
 	IsPeerUnhealthy(ctx context.Context, in *IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*IsPeerUnhealthyResponse, error)
 	// Get full peer registry data with all metadata
 	GetPeerRegistry(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetPeerRegistryResponse, error)
+	// Record bytes downloaded via HTTP from a peer
+	RecordBytesDownloaded(ctx context.Context, in *RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*RecordBytesDownloadedResponse, error)
 	// Get single peer information by peer ID
 	GetPeer(ctx context.Context, in *GetPeerRequest, opts ...grpc.CallOption) (*GetPeerResponse, error)
 }
@@ -297,6 +300,16 @@ func (c *peerServiceClient) GetPeerRegistry(ctx context.Context, in *emptypb.Emp
 	return out, nil
 }
 
+func (c *peerServiceClient) RecordBytesDownloaded(ctx context.Context, in *RecordBytesDownloadedRequest, opts ...grpc.CallOption) (*RecordBytesDownloadedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecordBytesDownloadedResponse)
+	err := c.cc.Invoke(ctx, PeerService_RecordBytesDownloaded_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *peerServiceClient) GetPeer(ctx context.Context, in *GetPeerRequest, opts ...grpc.CallOption) (*GetPeerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetPeerResponse)
@@ -338,6 +351,8 @@ type PeerServiceServer interface {
 	IsPeerUnhealthy(context.Context, *IsPeerUnhealthyRequest) (*IsPeerUnhealthyResponse, error)
 	// Get full peer registry data with all metadata
 	GetPeerRegistry(context.Context, *emptypb.Empty) (*GetPeerRegistryResponse, error)
+	// Record bytes downloaded via HTTP from a peer
+	RecordBytesDownloaded(context.Context, *RecordBytesDownloadedRequest) (*RecordBytesDownloadedResponse, error)
 	// Get single peer information by peer ID
 	GetPeer(context.Context, *GetPeerRequest) (*GetPeerResponse, error)
 	mustEmbedUnimplementedPeerServiceServer()
@@ -412,6 +427,9 @@ func (UnimplementedPeerServiceServer) IsPeerUnhealthy(context.Context, *IsPeerUn
 }
 func (UnimplementedPeerServiceServer) GetPeerRegistry(context.Context, *emptypb.Empty) (*GetPeerRegistryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetPeerRegistry not implemented")
+}
+func (UnimplementedPeerServiceServer) RecordBytesDownloaded(context.Context, *RecordBytesDownloadedRequest) (*RecordBytesDownloadedResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RecordBytesDownloaded not implemented")
 }
 func (UnimplementedPeerServiceServer) GetPeer(context.Context, *GetPeerRequest) (*GetPeerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetPeer not implemented")
@@ -815,6 +833,24 @@ func _PeerService_GetPeerRegistry_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PeerService_RecordBytesDownloaded_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecordBytesDownloadedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PeerServiceServer).RecordBytesDownloaded(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PeerService_RecordBytesDownloaded_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PeerServiceServer).RecordBytesDownloaded(ctx, req.(*RecordBytesDownloadedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PeerService_GetPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetPeerRequest)
 	if err := dec(in); err != nil {
@@ -923,6 +959,10 @@ var PeerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetPeerRegistry",
 			Handler:    _PeerService_GetPeerRegistry_Handler,
+		},
+		{
+			MethodName: "RecordBytesDownloaded",
+			Handler:    _PeerService_RecordBytesDownloaded_Handler,
 		},
 		{
 			MethodName: "GetPeer",

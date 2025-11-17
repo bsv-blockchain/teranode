@@ -795,7 +795,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 func (b *Blockchain) sendKafkaBlockFinalNotification(block *model.Block) error {
 	if b.blocksFinalKafkaAsyncProducer != nil {
-		key := block.Header.Hash().CloneBytes()
+		key := block.Header.Hash().String()
 
 		subtreeHashes := make([][]byte, len(block.Subtrees))
 		for i, subtreeHash := range block.Subtrees {
@@ -822,7 +822,7 @@ func (b *Blockchain) sendKafkaBlockFinalNotification(block *model.Block) error {
 		}
 
 		b.kafkaChan <- &kafka.Message{
-			Key:   key,
+			Key:   []byte(key),
 			Value: value,
 		}
 	}

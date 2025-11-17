@@ -2,6 +2,8 @@
 
 ## Framework Components
 
+Implementation files: `test/utils/testenv.go`, `test/utils/arrange.go`
+
 ### TeranodeTestEnv Structure
 
 ```go
@@ -126,6 +128,54 @@ func TestSomeFunctionality(t *testing.T) {
 }
 ```
 
+### TeranodeTestSuite Lifecycle
+
+Defined in `test/utils/arrange.go`. The `TeranodeTestSuite` provides a testify suite wrapper with automatic setup and teardown.
+
+```go
+type TeranodeTestSuite struct {
+    suite.Suite
+    TeranodeTestEnv *TeranodeTestEnv
+    TConfig         tconfig.TConfig
+}
+```
+
+#### Setup and Teardown
+
+The suite automatically handles test environment lifecycle:
+
+```go
+// SetupTest runs before each test
+func (suite *TeranodeTestSuite) SetupTest() {
+    // Initialize test environment
+    // Set up Docker nodes if configured
+    // Initialize node clients
+    // Send initial RUN event to blockchain
+    // Wait for all nodes to be healthy
+    // Optionally generate initial blocks based on InitBlockHeight
+}
+
+// TearDownTest runs after each test
+func (suite *TeranodeTestSuite) TearDownTest() {
+    // Stop Docker nodes
+    // Clean up resources
+    // Cancel context
+}
+```
+
+#### Helper Functions
+
+```go
+// setupLocalTeranodeTestEnv creates and configures the test environment (test/utils/arrange.go:167)
+func setupLocalTeranodeTestEnv(cfg tconfig.TConfig) (*TeranodeTestEnv, error)
+
+// teardownLocalTeranodeTestEnv cleans up the test environment (test/utils/arrange.go:176)
+func teardownLocalTeranodeTestEnv(testEnv *TeranodeTestEnv) error
+
+// SetupPostgresTestDaemon creates a test daemon with Postgres backend (test/utils/arrange.go:184)
+func SetupPostgresTestDaemon(t *testing.T, ctx context.Context, containerName string) *daemon.TestDaemon
+```
+
 ## Test Categories and Tags
 
 ### Core Test Categories
@@ -141,15 +191,16 @@ func TestSomeFunctionality(t *testing.T) {
 
 ### Service Port Mappings
 
-| Service | Internal Port | External Port Pattern |
-|---------|--------------|----------------------|
-| Health Check | 8090/tcp | 1009X |
-| Coinbase GRPC | 8093/tcp | 1009X |
-| Blockchain GRPC | 8087/tcp | 1208X |
-| Block Assembly GRPC | 8085/tcp | 1408X |
-| Propagation GRPC | 8084/tcp | 1608X |
-| Asset HTTP | 8091/tcp | Variable |
-| RPC | 8092/tcp | Variable |
+Note: The actual `docker-compose.e2etest.yml` uses dynamic port mapping. Ports are assigned by Docker and can be retrieved using `GetMappedPort()`.
+
+| Service | Internal Port/Range | Description |
+|---------|-------------|-------------|
+| Health Check | 8000/tcp | Daemon health check endpoint |
+| Services GRPC | 8081-8097/tcp | Range includes blockchain (8087), block assembly (8085), propagation (8084), etc. |
+| Monitoring | 8099/tcp | Metrics/monitoring endpoint |
+| Asset HTTP | 9091/tcp | Asset service HTTP API |
+| P2P | 9905/tcp | Peer-to-peer network communication |
+| RPC | 9292/tcp | JSON-RPC interface |
 
 ## Configuration Reference
 
@@ -169,8 +220,12 @@ SETTINGS_CONTEXT_3   # Configuration for node 3
 
 ### Docker Compose Configuration
 
+File: `test/docker-compose.e2etest.yml`
+
+Note: The actual compose file includes additional services not shown here: 3 Aerospike instances, Kafka/Redpanda console, 3 blob block stores, 3 blob subtree stores, and a test storage service.
+
 ```yaml
-# Base Configuration (docker-compose.e2etest.yml)
+# Simplified excerpt from docker-compose.e2etest.yml
 services:
   teranode1:
     image: teranode
@@ -191,24 +246,6 @@ services:
 
   teranode3:
     # Similar configuration with ports 14090, 14093, 14087, etc.
-```
-
-### Test Suite Configuration
-
-```go
-// Default Compose Files
-func (suite *BitcoinTestSuite) DefaultComposeFiles() []string {
-    return []string{"../../docker-compose.e2etest.yml"}
-}
-
-// Default Settings Map
-func (suite *BitcoinTestSuite) DefaultSettingsMap() map[string]string {
-    return map[string]string{
-        "SETTINGS_CONTEXT_1": "docker.ci.teranode1.tc1",
-        "SETTINGS_CONTEXT_2": "docker.ci.teranode2.tc1",
-        "SETTINGS_CONTEXT_3": "docker.ci.teranode3.tc1",
-    }
-}
 ```
 
 ## Utility Methods
@@ -304,6 +341,7 @@ func (n *TeranodeTestClient) CreateAndSendTxsConcurrently(t *testing.T, ctx cont
 ## API Reference
 
 ### Framework Methods
+
 ```go
 // Core Framework Methods
 func NewTeraNodeTestEnv(c tconfig.TConfig) *TeranodeTestEnv
@@ -325,53 +363,65 @@ func (n *TeranodeTestClient) CreateAndSendTxsConcurrently(t *testing.T, ctx cont
 
 ### Client Interfaces
 
-#### Blockchain Client
+#### Blockchain Client (`bc.ClientI`)
+
+Defined in `services/blockchain/Interface.go`. The blockchain client provides access to blockchain state and operations.
+
 ```go
+// Key methods from bc.ClientI
 type ClientI interface {
-    Health(ctx context.Context) (*HealthResponse, error)
-    Run(ctx context.Context) error
-    SubmitTransaction(ctx context.Context, tx *Transaction) error
-    VerifyTransaction(ctx context.Context, txid string) (bool, error)
+    // Health check returns (statusCode, message, error)
+    Health(ctx context.Context, checkLiveness bool) (int, string, error)
+
+    // Block operations
+    AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error
+    GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error)
+    GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error)
+
+    // FSM state management
+    Run(ctx context.Context, source string) error
+    Idle(ctx context.Context) error
+    GetFSMCurrentState(ctx context.Context) (*FSMStateType, error)
+    WaitForFSMtoTransitionToGivenState(ctx context.Context, state FSMStateType) error
+
+    // Subscription for blockchain events
+    Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error)
+
+    // ... many additional methods for headers, state, mining, etc.
 }
 ```
 
-#### Block Assembly Client
+#### Block Assembly Client (`ba.Client`)
+
+Defined in `services/blockassembly/client.go`. The block assembly client manages transaction assembly for block candidates.
 
 ```go
-type Client interface {
-    BlockAssemblyAPIClient() blockassembly_api.BlockAssemblyAPIClient
-    Health(ctx context.Context) (*HealthResponse, error)
+// Key methods from ba.Client
+type Client struct {
+    // ... fields ...
 }
+
+func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, error)
+func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error)
+func (s *Client) RemoveTx(ctx context.Context, hash *chainhash.Hash) error
+func (s *Client) GetMiningCandidate(ctx context.Context, includeSubtreeHashes ...bool) (*model.MiningCandidate, error)
+func (s *Client) SubmitMiningSolution(ctx context.Context, solution *model.MiningSolution) error
+func (s *Client) BlockAssemblyAPIClient() blockassembly_api.BlockAssemblyAPIClient
 ```
 
-#### Coinbase Client
+#### Coinbase Client (Test Stub)
+
+Defined in `test/utils/stubs/coinbase_client.go`. The coinbase client is a test stub that provides mock coinbase transaction functionality.
 
 ```go
-type Client interface {
-    Health(ctx context.Context) (*HealthResponse, error)
-    GetCoinbaseTransaction(ctx context.Context) (*Transaction, error)
+type CoinbaseClient struct {
+    balance uint64
 }
-```
 
-## Test Data Structures
-
-### Health Response
-
-```go
-type HealthResponse struct {
-    Ok      bool   `json:"ok"`
-    Message string `json:"message,omitempty"`
-}
-```
-
-### Transaction Structure
-
-```go
-type Transaction struct {
-    ID        string    `json:"id"`
-    Data      []byte    `json:"data"`
-    Timestamp time.Time `json:"timestamp"`
-}
+func NewCoinbaseClient() *CoinbaseClient
+func (c *CoinbaseClient) GetBalance(ctx context.Context) (uint64, uint64, error)
+func (c *CoinbaseClient) RequestFunds(ctx context.Context, address string, wait bool) (*bt.Tx, error)
+func (c *CoinbaseClient) SetMalformedUTXOConfig(ctx context.Context, percentage int32, malformationType MalformationType) error
 ```
 
 ## Error Types
@@ -381,28 +431,6 @@ type Transaction struct {
 errors.NewConfigurationError(format string, args ...interface{}) error
 errors.NewServiceError(format string, args ...interface{}) error
 errors.NewValidationError(format string, args ...interface{}) error
-```
-
-## Testing Constants
-
-### Node URLs
-
-```go
-const (
-    NodeURL1 = "http://localhost:10090" // Node 1 base URL
-    NodeURL2 = "http://localhost:12090" // Node 2 base URL
-    NodeURL3 = "http://localhost:14090" // Node 3 base URL
-)
-```
-
-### Timeouts and Delays
-
-```go
-const (
-    DefaultSetupTimeout    = 30 * time.Second
-    NodeStartupDelay      = 10 * time.Second
-    PropagationDelay      = 2 * time.Second
-)
 ```
 
 ## Directory Structure

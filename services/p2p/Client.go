@@ -588,6 +588,32 @@ func (c *Client) GetPeerRegistry(ctx context.Context) ([]*PeerInfo, error) {
 	return peers, nil
 }
 
+// RecordBytesDownloaded records the number of bytes downloaded via HTTP from a peer.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: Peer ID string that provided the data
+//   - bytesDownloaded: Number of bytes downloaded in this operation
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) RecordBytesDownloaded(ctx context.Context, peerID string, bytesDownloaded uint64) error {
+	req := &p2p_api.RecordBytesDownloadedRequest{
+		PeerId:          peerID,
+		BytesDownloaded: bytesDownloaded,
+	}
+
+	resp, err := c.client.RecordBytesDownloaded(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Ok {
+		return errors.NewServiceError("failed to record bytes downloaded")
+	}
+
+	return nil
+}
+
 // GetPeer retrieves information about a specific peer from the P2P service.
 // Returns nil if the peer is not found in the registry.
 func (c *Client) GetPeer(ctx context.Context, peerID string) (*PeerInfo, error) {

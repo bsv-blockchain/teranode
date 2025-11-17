@@ -1,7 +1,5 @@
 # 🗂️️ State Management in Teranode
 
-Last Modified: 3-February-2025
-
 1. [Introduction](#1-introduction)
 2. [State Machine in Teranode](#2-state-machine-in-teranode)
 3. [Functionality](#3-functionality)
@@ -21,6 +19,7 @@ Last Modified: 3-February-2025
     - [3.4.3. FSM Event: Catch up Blocks](#343-fsm-event-catch-up-blocks)
     - [3.4.4. FSM Event: Stop](#344-fsm-event-stop)
     - [3.5. Waiting on State Machine Transitions](#35-waiting-on-state-machine-transitions)
+4. [Other Resources](#4-other-resources)
 
 ## 1. Introduction
 
@@ -64,7 +63,6 @@ The FSM handles the following state **transitions**:
 - **Stop**: Transitions to _Idle_ from _LegacySyncing_, _Running_, or _CatchingBlocks_
 
 Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command `go run services/blockchain/fsm_visualizer/main.go`. The generated `docs/state-machine.diagram.md` can be visualized using <https://mermaid.live/>.
-fsm_visualizer main.go.
 
 ## 3. Functionality
 
@@ -104,7 +102,6 @@ The Blockchain service also exposes the following gRPC methods to interact with 
 
 - **GetFSMCurrentState** - Returns the current state of the FSM
 - **SendFSMEvent** - Sends an event to the FSM to trigger a state transition
-
 - **LegacySync** - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent method)
 - **Run** - Transitions the FSM to the Running state (delegates on the SendFSMEvent method)
 - **CatchUpBlocks** - Transitions the FSM to the CatchingBlocks state (delegates on the SendFSMEvent method)

@@ -14,28 +14,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math"
 	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 )
-
-// CalculateMaxScriptSize returns the maximum script size based on policy settings.
-// This prevents denial-of-service attacks where malicious actors could provide
-// extremely large script length values causing memory exhaustion.
-//
-// Note: Post-Genesis BSV has no hard consensus limit on script sizes, but nodes use policy
-// limits to determine which transactions they will relay and mine.
-func CalculateMaxScriptSize(maxScriptSizePolicy int) uint32 {
-	// Casting to uint64 to handle overflow when compiling on 32-bit systems
-	if maxScriptSizePolicy <= 0 || uint64(maxScriptSizePolicy) > math.MaxUint32 {
-		return math.MaxUint32
-	}
-
-	return uint32(maxScriptSizePolicy)
-}
 
 // UTXOWrapper wraps transaction outputs with additional metadata.
 // It encapsulates a transaction ID, block height, coinbase flag, and a collection of UTXOs
@@ -68,11 +52,6 @@ type UTXOWrapper struct {
 	// This field is not serialized but can be used for quick access to the count
 	// without needing to compute len(UTXOs) each time.
 	UTXOCount int
-
-	// maxScriptSize defines the maximum allowed script size for UTXO deserialization.
-	// This prevents denial-of-service attacks where malicious actors could provide
-	// extremely large script length values causing memory exhaustion.
-	maxScriptSize uint32
 
 	// Reusable buffer for reading fixed-size fields
 	// not concurrently accessed
@@ -192,7 +171,6 @@ func (uw *UTXOWrapper) DeletionBytes(index uint32) [36]byte {
 // Parameters:
 // - ctx: Context for controlling the deserialization process, allowing cancellation
 // - r: io.Reader from which to read the serialized UTXOWrapper data
-// - maxScriptSize: Maximum allowed script size for DoS protection
 //
 // Returns:
 // - *UTXOWrapper: Deserialized UTXOWrapper, or empty wrapper if EOF marker is encountered
@@ -206,8 +184,8 @@ func (uw *UTXOWrapper) DeletionBytes(index uint32) [36]byte {
 //
 // The method handles context cancellation, checking if the context is done
 // before proceeding with potentially blocking read operations.
-func NewUTXOWrapperFromReader(ctx context.Context, r io.Reader, maxScriptSize uint32) (*UTXOWrapper, error) {
-	uw := &UTXOWrapper{maxScriptSize: maxScriptSize}
+func NewUTXOWrapperFromReader(ctx context.Context, r io.Reader) (*UTXOWrapper, error) {
+	uw := &UTXOWrapper{}
 
 	if err := uw.FromReader(ctx, r); err != nil {
 		if err == io.EOF && uw.TxID.IsEqual(&chainhash.Hash{}) {
@@ -290,7 +268,6 @@ func (uw *UTXOWrapper) FromReader(ctx context.Context, r io.Reader, readUtxos ..
 //
 // Parameters:
 // - b: Byte slice containing the serialized UTXOWrapper data
-// - maxScriptSize: Maximum allowed script size for DoS protection
 //
 // Returns:
 // - *UTXOWrapper: Deserialized UTXOWrapper, or empty wrapper if EOF marker is encountered
@@ -300,8 +277,8 @@ func (uw *UTXOWrapper) FromReader(ctx context.Context, r io.Reader, readUtxos ..
 // and calls NewUTXOWrapperFromReader with a background context. It's useful for
 // deserializing UTXOWrapper data from memory or smaller in-memory buffers rather than
 // reading directly from storage or network streams.
-func NewUTXOWrapperFromBytes(b []byte, maxScriptSize uint32) (*UTXOWrapper, error) {
-	return NewUTXOWrapperFromReader(context.Background(), bytes.NewReader(b), maxScriptSize)
+func NewUTXOWrapperFromBytes(b []byte) (*UTXOWrapper, error) {
+	return NewUTXOWrapperFromReader(context.Background(), bytes.NewReader(b))
 }
 
 // String returns a string representation of the UTXOWrapper.
@@ -367,11 +344,6 @@ func (uw *UTXOWrapper) NewUTXOFromReader(r io.Reader, utxo *UTXO) error {
 	// Read the script length
 	l := uint32(uw.b16[12]) | uint32(uw.b16[13])<<8 | uint32(uw.b16[14])<<16 | uint32(uw.b16[15])<<24
 
-	// Validate script length before allocation to prevent DoS attacks
-	if l > uw.maxScriptSize {
-		return errors.NewStorageError("script length %d exceeds maximum allowed size %d", l, uw.maxScriptSize)
-	}
-
 	// Read the script
 	utxo.Script = make([]byte, l)
 
@@ -391,11 +363,6 @@ func (uw *UTXOWrapper) NewUTXOValueFromReader(r io.Reader) (uint64, error) {
 
 	// Read the script length
 	l := uint32(uw.b16[12]) | uint32(uw.b16[13])<<8 | uint32(uw.b16[14])<<16 | uint32(uw.b16[15])<<24
-
-	// Validate script length before allocation to prevent DoS attacks
-	if l > uw.maxScriptSize {
-		return 0, errors.NewStorageError("script length %d exceeds maximum allowed size %d", l, uw.maxScriptSize)
-	}
 
 	// Read the script into reusable buffer
 	var script []byte

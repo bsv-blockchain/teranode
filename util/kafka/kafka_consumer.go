@@ -19,7 +19,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
 	"github.com/bsv-blockchain/teranode/util/retry"
-	"github.com/ordishs/go-utils"
 )
 
 const memoryScheme = "memory"
@@ -608,7 +607,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			if err != nil {
 				key := ""
 				if msg != nil && msg.Key != nil {
-					key = utils.ReverseAndHexEncodeSlice(msg.Key)
+					key = string(msg.Key)
 				}
 
 				k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), skipping", k.Config.Topic, key)
@@ -634,7 +633,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 				if options.stopFn != nil {
 					key := ""
 					if msg != nil && msg.Key != nil {
-						key = utils.ReverseAndHexEncodeSlice(msg.Key)
+						key = string(msg.Key)
 					}
 
 					k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), stopping", k.Config.Topic, key)
@@ -662,7 +661,7 @@ func (k *KafkaConsumerGroup) Start(ctx context.Context, consumerFn func(message 
 			if err != nil {
 				key := ""
 				if msg != nil && msg.Key != nil {
-					key = utils.ReverseAndHexEncodeSlice(msg.Key)
+					key = string(msg.Key)
 				}
 
 				k.Config.Logger.Errorf("[kafka_consumer] error processing kafka message on topic %s (key: %s), skipping: %v", k.Config.Topic, key, err)
