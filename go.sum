@@ -152,8 +152,8 @@ github.com/bsv-blockchain/go-chaincfg v1.4.0 h1:GCtwu3TWQ0CNjNl9vWeZv36OXlkzVsVp
 github.com/bsv-blockchain/go-chaincfg v1.4.0/go.mod h1:KeeiUVPPPgzGBXfktDtfmUt80jwgfd6VfjORGNn4ZD4=
 github.com/bsv-blockchain/go-lockfree-queue v1.0.0 h1:rizOsTImw2Gk/iSTQRHqB+2OcJWBl5qN6pbIHqDWxRw=
 github.com/bsv-blockchain/go-lockfree-queue v1.0.0/go.mod h1:NS0Zfkaz8G3jDQNNr1rtvjeH45rxK7pVH4iV7xy4o4U=
-github.com/bsv-blockchain/go-p2p-message-bus v0.1.2 h1:LT2lpSlR5Sn45tIcmxgq00aK0MVS3Fcv/z5A6Wf+hxY=
-github.com/bsv-blockchain/go-p2p-message-bus v0.1.2/go.mod h1:EDXdSwa5QuwEyFzPaJZXpz0YEfqkorPRaGN+D05DFQg=
+github.com/bsv-blockchain/go-p2p-message-bus v0.1.3 h1:WklpkyeUWacwhmUbNVlxzkkVonOXkeUsAhT9H3ctpiY=
+github.com/bsv-blockchain/go-p2p-message-bus v0.1.3/go.mod h1:AJphp38wVUpL9kFxm9YhhUIKBVwJpLmuQXo/pfQJRUQ=
 github.com/bsv-blockchain/go-safe-conversion v1.1.0 h1:EjyF+fDsmSK0AwbN2NnIzel/z0dIJcT64KvIwTbWHFg=
 github.com/bsv-blockchain/go-safe-conversion v1.1.0/go.mod h1:KwO5HkH9S11kppAm7SedJhgaJnZbUMYRZalSq9fxLHQ=
 github.com/bsv-blockchain/go-sdk v1.2.10 h1:e3wK/4SgSPqhz4Aw9vnKN/JkIwequdqlPWToYNGvuOg=
@@ -594,8 +594,8 @@ github.com/libp2p/go-cidranger v1.1.0 h1:ewPN8EZ0dd1LSnrtuwd4709PXVcITVeuwbag38y
 github.com/libp2p/go-cidranger v1.1.0/go.mod h1:KWZTfSr+r9qEo9OkI9/SIEeAtw+NNoU0dXIXt15Okic=
 github.com/libp2p/go-flow-metrics v0.3.0 h1:q31zcHUvHnwDO0SHaukewPYgwOBSxtt830uJtUx6784=
 github.com/libp2p/go-flow-metrics v0.3.0/go.mod h1:nuhlreIwEguM1IvHAew3ij7A8BMlyHQJ279ao24eZZo=
-github.com/libp2p/go-libp2p v0.44.0 h1:5Gtt8OrF8yiXmH+Mx4+/iBeFRMK1TY3a8OrEBDEqAvs=
-github.com/libp2p/go-libp2p v0.44.0/go.mod h1:NovCojezAt4dnDd4fH048K7PKEqH0UFYYqJRjIIu8zc=
+github.com/libp2p/go-libp2p v0.45.0 h1:Pdhr2HsFXaYjtfiNcBP4CcRUONvbMFdH3puM9vV4Tiw=
+github.com/libp2p/go-libp2p v0.45.0/go.mod h1:NovCojezAt4dnDd4fH048K7PKEqH0UFYYqJRjIIu8zc=
 github.com/libp2p/go-libp2p-asn-util v0.4.1 h1:xqL7++IKD9TBFMgnLPZR6/6iYhawHKHl950SO9L6n94=
 github.com/libp2p/go-libp2p-asn-util v0.4.1/go.mod h1:d/NI6XZ9qxw67b4e+NgpQexCIiFYJjErASrYW4PFDN8=
 github.com/libp2p/go-libp2p-kad-dht v0.35.1 h1:RQglhc9OxqDwlFFdhQMwKxIPBIBfGsleROnK5hqVsoE=

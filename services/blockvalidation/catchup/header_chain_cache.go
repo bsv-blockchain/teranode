@@ -192,6 +192,15 @@ func (hc *HeaderChainCache) VerifyChainConnection(newHeader *model.BlockHeader) 
 	hc.mu.RLock()
 	defer hc.mu.RUnlock()
 
+	// Validate input parameters to prevent nil pointer dereference
+	if newHeader == nil {
+		return errors.NewProcessingError("header cannot be nil")
+	}
+
+	if newHeader.HashPrevBlock == nil {
+		return errors.NewProcessingError("header's HashPrevBlock cannot be nil")
+	}
+
 	// Check if the previous block exists in our chain
 	prevBlock, exists := hc.chainIndex[*newHeader.HashPrevBlock]
 	if !exists {

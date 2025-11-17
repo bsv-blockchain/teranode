@@ -182,6 +182,28 @@ The project includes a Bitcoin expert agent (`.claude/agents/bitcoin-expert.md`)
 - `largetxmetacache`: Production cache size
 - `aerospike`: Tests requiring Aerospike
 
+## Coding Conventions
+
+**All code must follow the standards defined in [`docs/references/codingConventions.md`](docs/references/codingConventions.md).**
+
+This includes:
+- Naming conventions (packages, variables, functions, interfaces, types, files)
+- Error handling patterns
+- Concurrency best practices
+- Testing standards (testify/require, table-driven tests)
+- Code formatting and linting rules
+- Commenting guidelines
+
+**Key highlights:**
+- File names: `snake_case.go` format (enforced by CI)
+- Variables: CamelCase for exported, camelCase for internal
+- Functions: VerbNoun pattern (CalculateTotal, ReadFile)
+- Getters: No "Get" prefix - use `Name()` not `GetName()`
+- Interfaces: Single-method ends in "-er" (Reader, Writer)
+- Tests: Use `require` from testify, avoid `t.Parallel()` unless testing concurrency
+- Error handling: Always check `if err != nil`, use `errors.New` not `fmt.Errorf`
+- Comments: Explain "why" not "what"
+
 ## Development Notes
 
 - Always run linting before commits: `make lint`

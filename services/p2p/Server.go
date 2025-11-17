@@ -320,6 +320,8 @@ func NewServer(
 		DHTMode:            tSettings.P2P.DHTMode,
 		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
 		DisableNAT:         tSettings.P2P.DisableNAT,
+		EnableMDNS:         tSettings.P2P.EnableMDNS,
+		AllowPrivateIPs:    tSettings.P2P.AllowPrivateIPs,
 	}
 
 	if len(advertiseAddresses) > 0 {

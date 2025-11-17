@@ -202,6 +202,10 @@ type CachedMiningCandidate struct {
 	lastUpdate     time.Time
 	generating     bool
 	generationChan chan struct{}
+	// Track state for smart invalidation
+	lastTxCount      uint32
+	lastSizeInBytes  uint64
+	lastSubtreeCount int
 }
 
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
@@ -282,6 +286,14 @@ func (b *BlockAssembler) QueueLength() int64 {
 //   - int: Total number of subtrees
 func (b *BlockAssembler) SubtreeCount() int {
 	return b.subtreeProcessor.SubtreeCount()
+}
+
+// GetChainedSubtrees returns all chained subtrees from the subtree processor.
+//
+// Returns:
+//   - []*subtree.Subtree: Slice of chained subtrees
+func (b *BlockAssembler) GetChainedSubtrees() []*subtree.Subtree {
+	return b.subtreeProcessor.GetChainedSubtrees()
 }
 
 // startChannelListeners initializes and starts all channel listeners for block assembly operations.
@@ -1143,51 +1155,104 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	)
 	defer deferFn()
 
-	// Try to get from cache first
-	b.cachedCandidate.mu.RLock()
+	// Declare currentHeight outside loop so it's available for cache update later
+	var currentHeight uint32
 
-	_, currentHeight := b.CurrentBlock()
+	// Use iterative approach instead of recursion to prevent stack overflow under load
+	for {
+		// Try to get from cache first
+		b.cachedCandidate.mu.RLock()
 
-	// Return cached if still valid (same height and within timeout)
-	if !b.settings.ChainCfgParams.ReduceMinDifficulty && b.cachedCandidate.candidate != nil &&
-		b.cachedCandidate.lastHeight == currentHeight &&
-		time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateCacheTimeout {
-		candidate := b.cachedCandidate.candidate
-		subtrees := b.cachedCandidate.subtrees
+		_, currentHeight = b.CurrentBlock()
+
+		// Return cached if still valid (same height and within timeout)
+		if !b.settings.ChainCfgParams.ReduceMinDifficulty && b.cachedCandidate.candidate != nil &&
+			b.cachedCandidate.lastHeight == currentHeight &&
+			time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateCacheTimeout {
+			candidate := b.cachedCandidate.candidate
+			subtrees := b.cachedCandidate.subtrees
+			b.cachedCandidate.mu.RUnlock()
+
+			// Record cache hit metrics
+			prometheusBlockAssemblerCacheHits.Inc()
+
+			b.logger.Debugf("[BlockAssembler] Returning cached mining candidate %s", candidate.Id)
+
+			return candidate, subtrees, nil
+		}
+
+		// Check if already generating
+		if b.cachedCandidate.generating {
+			// Return stale cache if available rather than blocking
+			// Miners can work with slightly stale data during high load
+			if b.cachedCandidate.candidate != nil &&
+				time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge {
+				candidate := b.cachedCandidate.candidate
+				subtrees := b.cachedCandidate.subtrees
+				b.cachedCandidate.mu.RUnlock()
+
+				b.logger.Debugf("[BlockAssembler] Returning stale cache during generation (age: %v)",
+					time.Since(b.cachedCandidate.lastUpdate))
+				prometheusBlockAssemblerCacheHits.Inc()
+
+				return candidate, subtrees, nil
+			}
+
+			// If stale cache too old or doesn't exist, wait for generation
+			ch := b.cachedCandidate.generationChan
+			b.cachedCandidate.mu.RUnlock()
+
+			// Wait for ongoing generation with timeout
+			select {
+			case <-ch:
+				// Generation complete, retry to get fresh cache (loop continues)
+				continue
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			case <-time.After(b.settings.BlockAssembly.GetMiningCandidateResponseTimeout):
+				// Timeout waiting for generation, retry (loop continues)
+				continue
+			}
+		}
+
+		// Mark as generating - upgrade to write lock
 		b.cachedCandidate.mu.RUnlock()
+		b.cachedCandidate.mu.Lock()
 
-		// Record cache hit metrics
-		prometheusBlockAssemblerCacheHits.Inc()
+		// Double check generating flag in case another goroutine set it while we upgraded locks
+		if b.cachedCandidate.generating {
+			// Return stale cache if available (same logic as above)
+			if b.cachedCandidate.candidate != nil &&
+				time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge {
+				candidate := b.cachedCandidate.candidate
+				subtrees := b.cachedCandidate.subtrees
+				b.cachedCandidate.mu.Unlock()
 
-		b.logger.Debugf("[BlockAssembler] Returning cached mining candidate %s", candidate.Id)
+				b.logger.Debugf("[BlockAssembler] Returning stale cache after lock upgrade (age: %v)",
+					time.Since(b.cachedCandidate.lastUpdate))
+				prometheusBlockAssemblerCacheHits.Inc()
 
-		return candidate, subtrees, nil
-	}
+				return candidate, subtrees, nil
+			}
 
-	// Check if already generating
-	if b.cachedCandidate.generating {
-		ch := b.cachedCandidate.generationChan
-		b.cachedCandidate.mu.RUnlock()
+			ch := b.cachedCandidate.generationChan
+			b.cachedCandidate.mu.Unlock()
 
-		// Wait for ongoing generation
-		<-ch
+			// Wait for ongoing generation
+			select {
+			case <-ch:
+				// Generation complete, retry (loop continues)
+				continue
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			case <-time.After(b.settings.BlockAssembly.GetMiningCandidateResponseTimeout):
+				// Timeout waiting for generation, retry (loop continues)
+				continue
+			}
+		}
 
-		return b.GetMiningCandidate(ctx)
-	}
-
-	// Mark as generating - upgrade to write lock
-	b.cachedCandidate.mu.RUnlock()
-	b.cachedCandidate.mu.Lock()
-
-	// Double check generating flag in case another goroutine set it while we upgraded locks
-	if b.cachedCandidate.generating {
-		ch := b.cachedCandidate.generationChan
-		b.cachedCandidate.mu.Unlock()
-
-		// Wait for ongoing generation
-		<-ch
-
-		return b.GetMiningCandidate(ctx)
+		// We have the write lock and no one else is generating - break out to generate
+		break
 	}
 
 	b.cachedCandidate.generating = true
@@ -1213,13 +1278,13 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 		close(responseCh)
 		// context cancelled, do not send
 		return nil, nil, ctx.Err()
-	case <-time.After(1 * time.Second):
+	case <-time.After(b.settings.BlockAssembly.GetMiningCandidateSendTimeout):
 		return nil, nil, errors.NewServiceError("timeout sending mining candidate request")
 	case b.miningCandidateCh <- responseCh:
 		// sent successfully
 	}
 
-	// wait for 10 seconds for the response
+	// wait for response with timeout
 	var candidate *model.MiningCandidate
 
 	var subtrees []*subtree.Subtree
@@ -1231,7 +1296,7 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 		// context cancelled, do not send
 		close(responseCh)
 		err = ctx.Err()
-	case <-time.After(10 * time.Second):
+	case <-time.After(b.settings.BlockAssembly.GetMiningCandidateResponseTimeout):
 		// make sure to close the channel, otherwise the for select will hang, because no one is reading from it
 		close(responseCh)
 
@@ -1244,11 +1309,22 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 
 	// Update cache on success
 	if err == nil {
+		// Calculate metrics for smart invalidation
+		var totalTxCount uint32
+		var totalSize uint64
+		for _, st := range subtrees {
+			totalTxCount += uint32(st.Length())
+			totalSize += st.SizeInBytes
+		}
+
 		b.cachedCandidate.mu.Lock()
 		b.cachedCandidate.candidate = candidate
 		b.cachedCandidate.subtrees = subtrees
 		b.cachedCandidate.lastHeight = currentHeight
 		b.cachedCandidate.lastUpdate = time.Now()
+		b.cachedCandidate.lastTxCount = totalTxCount
+		b.cachedCandidate.lastSizeInBytes = totalSize
+		b.cachedCandidate.lastSubtreeCount = len(subtrees)
 		b.cachedCandidate.mu.Unlock()
 
 		// Record cache miss metrics
@@ -2172,7 +2248,78 @@ func (b *BlockAssembler) invalidateMiningCandidateCache() {
 	b.cachedCandidate.lastHeight = 0
 	b.cachedCandidate.lastUpdate = time.Time{}
 	b.cachedCandidate.generating = false
+	b.cachedCandidate.lastTxCount = 0
+	b.cachedCandidate.lastSizeInBytes = 0
+	b.cachedCandidate.lastSubtreeCount = 0
 	b.cachedCandidate.mu.Unlock()
+}
+
+// shouldInvalidateCache determines if cache should be invalidated based on significant changes.
+// This prevents unnecessary invalidation during high-load scenarios when changes are minor.
+//
+// Returns true if ANY of these conditions are met:
+// - Cache age exceeds MiningCandidateSmartCacheMaxAge (default 10s) - ensures new txs are eventually included
+// - Transaction count changed by >10%
+// - Block size changed by >1MB
+// - Number of subtrees changed (structural change)
+func (b *BlockAssembler) shouldInvalidateCache(newTxCount uint32, newSizeInBytes uint64, newSubtreeCount int) bool {
+	b.cachedCandidate.mu.RLock()
+	defer b.cachedCandidate.mu.RUnlock()
+
+	// If no cache exists, don't invalidate (nothing to invalidate)
+	if b.cachedCandidate.candidate == nil {
+		return false
+	}
+
+	// Cache age check: invalidate if older than configured max age
+	// This ensures new transactions are included even if they don't trigger
+	// the threshold checks (e.g., steady trickle of small transactions)
+	cacheAge := time.Since(b.cachedCandidate.lastUpdate)
+	if cacheAge > b.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge {
+		return true
+	}
+
+	lastTxCount := b.cachedCandidate.lastTxCount
+	lastSizeInBytes := b.cachedCandidate.lastSizeInBytes
+	lastSubtreeCount := b.cachedCandidate.lastSubtreeCount
+
+	// Subtree count changed - definitely invalidate (structure changed)
+	if newSubtreeCount != lastSubtreeCount {
+		return true
+	}
+
+	// Transaction count changed by >10%
+	if lastTxCount > 0 {
+		txDelta := uint32(0)
+		if newTxCount > lastTxCount {
+			txDelta = newTxCount - lastTxCount
+		} else {
+			txDelta = lastTxCount - newTxCount
+		}
+
+		txChangePercent := (float64(txDelta) / float64(lastTxCount)) * 100
+		if txChangePercent > 10.0 {
+			return true
+		}
+	}
+
+	// Block size changed by >1MB (1048576 bytes)
+	const oneMB uint64 = 1048576
+	if lastSizeInBytes > 0 {
+		sizeDelta := uint64(0)
+		if newSizeInBytes > lastSizeInBytes {
+			sizeDelta = newSizeInBytes - lastSizeInBytes
+		} else {
+			sizeDelta = lastSizeInBytes - newSizeInBytes
+		}
+
+		if sizeDelta > oneMB {
+			return true
+		}
+	}
+
+	// Changes are minor, keep cache valid
+	return false
 }
 
 // SetSkipWaitForPendingBlocks sets the flag to skip waiting for pending blocks during startup.

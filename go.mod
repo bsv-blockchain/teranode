@@ -34,7 +34,7 @@ require (
 	github.com/json-iterator/go v1.1.12
 	github.com/kpango/fastime v1.1.9
 	github.com/lib/pq v1.10.9
-	github.com/libp2p/go-libp2p v0.44.0
+	github.com/libp2p/go-libp2p v0.45.0
 	github.com/libp2p/go-libp2p-kad-dht v0.35.1 // indirect
 	github.com/libp2p/go-libp2p-pubsub v0.15.0
 	github.com/libsv/go-bk v0.1.6 // indirect
@@ -176,7 +176,7 @@ require (
 	github.com/bsv-blockchain/go-batcher v1.1.0
 	github.com/bsv-blockchain/go-bn v1.0.3
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
-	github.com/bsv-blockchain/go-p2p-message-bus v0.1.2
+	github.com/bsv-blockchain/go-p2p-message-bus v0.1.3
 	github.com/bsv-blockchain/go-safe-conversion v1.1.0
 	github.com/bsv-blockchain/go-sdk v1.2.10
 	github.com/bsv-blockchain/go-tx-map v1.2.0
@@ -341,7 +341,7 @@ require (
 	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/multiformats/go-base32 v0.1.0 // indirect
 	github.com/multiformats/go-base36 v0.2.0 // indirect
-	github.com/multiformats/go-multiaddr-dns v0.4.1
+	github.com/multiformats/go-multiaddr-dns v0.4.1 // indirect
 	github.com/multiformats/go-multiaddr-fmt v0.1.0 // indirect
 	github.com/multiformats/go-multibase v0.2.0 // indirect
 	github.com/multiformats/go-multicodec v0.10.0 // indirect
