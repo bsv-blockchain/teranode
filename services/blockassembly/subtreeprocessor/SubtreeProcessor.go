@@ -244,6 +244,15 @@ type SubtreeProcessor struct {
 
 	// currentRunningState tracks the processor's operational state
 	currentRunningState atomic.Value
+
+	// announcementTicker periodically triggers currentSubtree announcements
+	announcementTicker *time.Ticker
+
+	// ctx is the context for the processor lifecycle
+	ctx context.Context
+
+	// cancel is the cancel function for the processor context
+	cancel context.CancelFunc
 }
 
 type State uint32
@@ -323,6 +332,11 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 	blockchainClient blockchain.ClientI, utxoStore utxostore.Store, newSubtreeChan chan NewSubtreeRequest, options ...Options) (*SubtreeProcessor, error) {
 	initPrometheusMetrics()
 
+	// Validate subtree announcement interval
+	if tSettings.BlockAssembly.SubtreeAnnouncementInterval <= 0 {
+		return nil, errors.NewInvalidArgumentError("SubtreeAnnouncementInterval must be greater than 0", nil)
+	}
+
 	initialItemsPerFile := tSettings.BlockAssembly.InitialMerkleItemsPerSubtree
 
 	firstSubtree, err := subtreepkg.NewTreeByLeafCount(initialItemsPerFile)
@@ -344,6 +358,9 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 	// - Short enough to adapt to genuine load changes (e.g., day/night cycles)
 	// - Small memory footprint (18 * sizeof(int) = 144 bytes)
 	const subtreeSampleSize = 18
+
+	// Create a child context with cancel for managing the processor lifecycle
+	processorCtx, cancel := context.WithCancel(ctx)
 
 	stp := &SubtreeProcessor{
 		settings:                 tSettings,
@@ -378,6 +395,9 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		logger:                   logger,
 		stats:                    gocore.NewStat("subtreeProcessor").NewStat("Add", false),
 		currentRunningState:      atomic.Value{},
+		announcementTicker:       time.NewTicker(tSettings.BlockAssembly.SubtreeAnnouncementInterval),
+		ctx:                      processorCtx,
+		cancel:                   cancel,
 	}
 	stp.setCurrentRunningState(StateStarting)
 
@@ -397,6 +417,11 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 		for {
 			select {
+			case <-stp.ctx.Done():
+				logger.Infof("[SubtreeProcessor] context cancelled, stopping processor")
+				stp.announcementTicker.Stop()
+				return
+
 			case getSubtreesChan := <-stp.getSubtreesChan:
 				stp.setCurrentRunningState(StateGetSubtrees)
 
@@ -439,6 +464,9 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 					// Without this wait, getMiningCandidate creates subtrees in the background while
 					// submitMiningSolution tries to setDAH on subtrees that might not yet exist.
 					<-send.ErrChan
+
+					// Reset the announcement timer since we just announced
+					stp.resetAnnouncementTicker()
 				}
 
 				getSubtreesChan <- completeSubtrees
@@ -560,6 +588,34 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 				stp.setCurrentRunningState(StateRunning)
 
+			case <-stp.announcementTicker.C:
+				// Periodically announce the current subtree if it has transactions
+				if stp.currentSubtree.Length() > 1 {
+					logger.Debugf("[SubtreeProcessor] periodic announcement of current subtree with %d transactions", stp.currentSubtree.Length()-1)
+
+					incompleteSubtree, err := subtreepkg.NewTreeByLeafCount(stp.currentItemsPerFile)
+					if err != nil {
+						logger.Errorf("[SubtreeProcessor] error creating incomplete subtree for periodic announcement: %s", err.Error())
+						continue
+					}
+
+					_ = incompleteSubtree.AddCoinbaseNode()
+					for _, node := range stp.currentSubtree.Nodes[1:] {
+						_ = incompleteSubtree.AddSubtreeNode(node)
+					}
+
+					incompleteSubtree.Fees = stp.currentSubtree.Fees
+
+					send := NewSubtreeRequest{
+						Subtree:     incompleteSubtree,
+						ParentTxMap: stp.currentTxMap,
+						ErrChan:     make(chan error),
+					}
+					newSubtreeChan <- send
+
+					<-send.ErrChan
+				}
+
 			default:
 				stp.setCurrentRunningState(StateDequeue)
 
@@ -631,6 +687,21 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 func (stp *SubtreeProcessor) setCurrentRunningState(state State) {
 	stp.currentRunningState.Store(state)
 	prometheusSubtreeProcessorCurrentState.Set(float64(state))
+}
+
+// resetAnnouncementTicker safely resets the announcement ticker by draining any pending ticks
+// before resetting. This prevents an immediate tick if one was already queued.
+//
+// Note: This method should only be called from the main processing goroutine to avoid race conditions.
+func (stp *SubtreeProcessor) resetAnnouncementTicker() {
+	// Drain any pending tick to avoid immediate firing after reset
+	select {
+	case <-stp.announcementTicker.C:
+		// Tick was pending, drained it
+	default:
+		// No pending tick
+	}
+	stp.announcementTicker.Reset(stp.settings.BlockAssembly.SubtreeAnnouncementInterval)
 }
 
 // GetCurrentRunningState returns the current operational state of the processor.
@@ -1284,6 +1355,11 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 	err = <-errCh
 	if err != nil {
 		return errors.NewProcessingError("[%s] error sending subtree to newSubtreeChan", oldSubtreeHash.String(), err)
+	}
+
+	// Reset the announcement timer since we just announced a complete subtree
+	if !skipNotification {
+		stp.resetAnnouncementTicker()
 	}
 
 	return nil
@@ -3275,4 +3351,13 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 	}
 
 	return hashes, conflictingNodes, nil
+}
+
+// Close gracefully shuts down the SubtreeProcessor.
+// It cancels the processor context, which triggers the main goroutine to stop
+// and properly clean up resources including the announcement ticker.
+func (stp *SubtreeProcessor) Close() {
+	if stp.cancel != nil {
+		stp.cancel()
+	}
 }

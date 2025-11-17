@@ -178,3 +178,8 @@ func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
 }
+
+// Close implements Interface.Close
+func (m *MockSubtreeProcessor) Close() {
+	m.Called()
+}

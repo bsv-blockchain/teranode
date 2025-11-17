@@ -226,7 +226,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// getMiningCandidate timeout settings
 			GetMiningCandidateSendTimeout:     getDuration("blockassembly_getMiningCandidate_send_timeout", 1*time.Second, alternativeContext...),
 			GetMiningCandidateResponseTimeout: getDuration("blockassembly_getMiningCandidate_response_timeout", 10*time.Second, alternativeContext...),
+			SubtreeAnnouncementInterval:       getDuration("blockassembly_subtreeAnnouncementInterval", 10*time.Second, alternativeContext...),
 		},
+
 		BlockChain: BlockChainSettings{
 			GRPCAddress:           getString("blockchain_grpcAddress", "localhost:8087", alternativeContext...),
 			GRPCListenAddress:     getString("blockchain_grpcListenAddress", ":8087", alternativeContext...),

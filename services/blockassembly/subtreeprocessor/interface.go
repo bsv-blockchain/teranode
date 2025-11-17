@@ -242,4 +242,10 @@ type Interface interface {
 	// Returns:
 	//   - error: Any error encountered while waiting
 	WaitForPendingBlocks(ctx context.Context) error
+
+	// Close gracefully shuts down the SubtreeProcessor.
+	// This method cancels the processor's internal context, which triggers the main
+	// processing goroutine to stop and clean up resources (such as the announcement ticker).
+	// It should be called when the processor is no longer needed to prevent resource leaks.
+	Close()
 }
