@@ -611,9 +611,22 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 						ParentTxMap: stp.currentTxMap,
 						ErrChan:     make(chan error),
 					}
-					newSubtreeChan <- send
 
-					<-send.ErrChan
+					// Send announcement, but respect context cancellation
+					select {
+					case newSubtreeChan <- send:
+						// Wait for response, also respecting context cancellation
+						select {
+						case <-send.ErrChan:
+							// Announcement completed
+						case <-stp.ctx.Done():
+							// Context cancelled while waiting for response
+							return
+						}
+					case <-stp.ctx.Done():
+						// Context cancelled while trying to send
+						return
+					}
 				}
 
 			default:
