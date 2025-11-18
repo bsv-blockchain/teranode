@@ -612,12 +612,13 @@ type StateMessage struct {
 	BlockAssemblyState    string                 `protobuf:"bytes,1,opt,name=blockAssemblyState,proto3" json:"blockAssemblyState,omitempty"`       // the state of the block assembly service
 	SubtreeProcessorState string                 `protobuf:"bytes,2,opt,name=subtreeProcessorState,proto3" json:"subtreeProcessorState,omitempty"` // the state of the block assembly subtree processor
 	SubtreeCount          uint32                 `protobuf:"varint,3,opt,name=subtreeCount,proto3" json:"subtreeCount,omitempty"`                  // the number of subtrees
-	TxCount               uint64                 `protobuf:"varint,4,opt,name=txCount,proto3" json:"txCount,omitempty"`                            // the number of transactions
-	QueueCount            int64                  `protobuf:"varint,5,opt,name=queueCount,proto3" json:"queueCount,omitempty"`                      // the size of the queue
-	CurrentHeight         uint32                 `protobuf:"varint,6,opt,name=currentHeight,proto3" json:"currentHeight,omitempty"`                // the height of the chaintip
-	CurrentHash           string                 `protobuf:"bytes,7,opt,name=currentHash,proto3" json:"currentHash,omitempty"`                     // the hash of the chaintip
-	RemoveMapCount        uint32                 `protobuf:"varint,8,opt,name=removeMapCount,proto3" json:"removeMapCount,omitempty"`              // the number of transactions in the remove map
-	Subtrees              []string               `protobuf:"bytes,9,rep,name=subtrees,proto3" json:"subtrees,omitempty"`                           // the hashes of the current subtrees
+	SubtreeSize           uint32                 `protobuf:"varint,4,opt,name=subtreeSize,proto3" json:"subtreeSize,omitempty"`                    // the size of each subtree
+	TxCount               uint64                 `protobuf:"varint,5,opt,name=txCount,proto3" json:"txCount,omitempty"`                            // the number of transactions
+	QueueCount            int64                  `protobuf:"varint,6,opt,name=queueCount,proto3" json:"queueCount,omitempty"`                      // the size of the queue
+	CurrentHeight         uint32                 `protobuf:"varint,7,opt,name=currentHeight,proto3" json:"currentHeight,omitempty"`                // the height of the chaintip
+	CurrentHash           string                 `protobuf:"bytes,8,opt,name=currentHash,proto3" json:"currentHash,omitempty"`                     // the hash of the chaintip
+	RemoveMapCount        uint32                 `protobuf:"varint,9,opt,name=removeMapCount,proto3" json:"removeMapCount,omitempty"`              // the number of transactions in the remove map
+	Subtrees              []string               `protobuf:"bytes,10,rep,name=subtrees,proto3" json:"subtrees,omitempty"`                          // the hashes of the current subtrees
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -669,6 +670,13 @@ func (x *StateMessage) GetSubtreeProcessorState() string {
 func (x *StateMessage) GetSubtreeCount() uint32 {
 	if x != nil {
 		return x.SubtreeCount
+	}
+	return 0
+}
+
+func (x *StateMessage) GetSubtreeSize() uint32 {
+	if x != nil {
+		return x.SubtreeSize
 	}
 	return 0
 }
@@ -965,19 +973,21 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\b_version\"\x1c\n" +
 	"\n" +
 	"OKResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xde\x02\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x80\x03\n" +
 	"\fStateMessage\x12.\n" +
 	"\x12blockAssemblyState\x18\x01 \x01(\tR\x12blockAssemblyState\x124\n" +
 	"\x15subtreeProcessorState\x18\x02 \x01(\tR\x15subtreeProcessorState\x12\"\n" +
-	"\fsubtreeCount\x18\x03 \x01(\rR\fsubtreeCount\x12\x18\n" +
-	"\atxCount\x18\x04 \x01(\x04R\atxCount\x12\x1e\n" +
+	"\fsubtreeCount\x18\x03 \x01(\rR\fsubtreeCount\x12 \n" +
+	"\vsubtreeSize\x18\x04 \x01(\rR\vsubtreeSize\x12\x18\n" +
+	"\atxCount\x18\x05 \x01(\x04R\atxCount\x12\x1e\n" +
 	"\n" +
-	"queueCount\x18\x05 \x01(\x03R\n" +
+	"queueCount\x18\x06 \x01(\x03R\n" +
 	"queueCount\x12$\n" +
-	"\rcurrentHeight\x18\x06 \x01(\rR\rcurrentHeight\x12 \n" +
-	"\vcurrentHash\x18\a \x01(\tR\vcurrentHash\x12&\n" +
-	"\x0eremoveMapCount\x18\b \x01(\rR\x0eremoveMapCount\x12\x1a\n" +
-	"\bsubtrees\x18\t \x03(\tR\bsubtrees\">\n" +
+	"\rcurrentHeight\x18\a \x01(\rR\rcurrentHeight\x12 \n" +
+	"\vcurrentHash\x18\b \x01(\tR\vcurrentHash\x12&\n" +
+	"\x0eremoveMapCount\x18\t \x01(\rR\x0eremoveMapCount\x12\x1a\n" +
+	"\bsubtrees\x18\n" +
+	" \x03(\tR\bsubtrees\">\n" +
 	"\x1cGetCurrentDifficultyResponse\x12\x1e\n" +
 	"\n" +
 	"difficulty\x18\x01 \x01(\x01R\n" +

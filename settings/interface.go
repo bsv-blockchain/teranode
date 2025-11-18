@@ -170,33 +170,34 @@ type AssetSettings struct {
 }
 
 type BlockSettings struct {
-	MinedCacheMaxMB                       int
-	PersisterStore                        *url.URL
-	PersisterHTTPListenAddress            string
-	StateFile                             string
-	CheckDuplicateTransactionsConcurrency int
-	GetAndValidateSubtreesConcurrency     int
-	KafkaWorkers                          int
-	ValidOrderAndBlessedConcurrency       int
-	MaxSize                               int
-	BlockStore                            *url.URL
-	FailFastValidation                    bool
-	FinalizeBlockValidationConcurrency    int
-	GetMissingTransactions                int
-	QuorumTimeout                         time.Duration
-	BlockPersisterConcurrency             int
-	BatchMissingTransactions              bool
-	ProcessTxMetaUsingStoreBatchSize      int
-	SkipUTXODelete                        bool
-	UTXOPersisterBufferSize               string
-	TxStore                               *url.URL
-	UTXOPersisterDirect                   bool
-	BlockPersisterPersistAge              uint32
-	BlockPersisterPersistSleep            time.Duration
-	UtxoStore                             *url.URL
-	FileStoreReadConcurrency              int
-	FileStoreWriteConcurrency             int
-	FileStoreUseSystemLimits              bool
+	MinedCacheMaxMB                         int
+	PersisterStore                          *url.URL
+	PersisterHTTPListenAddress              string
+	StateFile                               string
+	CheckDuplicateTransactionsConcurrency   int
+	GetAndValidateSubtreesConcurrency       int
+	KafkaWorkers                            int
+	ValidOrderAndBlessedConcurrency         int
+	MaxSize                                 int
+	BlockStore                              *url.URL
+	FailFastValidation                      bool
+	FinalizeBlockValidationConcurrency      int
+	GetMissingTransactions                  int
+	QuorumTimeout                           time.Duration
+	BlockPersisterConcurrency               int
+	BatchMissingTransactions                bool
+	ProcessTxMetaUsingStoreBatchSize        int
+	SkipUTXODelete                          bool
+	UTXOPersisterBufferSize                 string
+	TxStore                                 *url.URL
+	UTXOPersisterDirect                     bool
+	BlockPersisterPersistAge                uint32
+	BlockPersisterPersistSleep              time.Duration
+	BlockPersisterEnableDefensiveReorgCheck bool
+	UtxoStore                               *url.URL
+	FileStoreReadConcurrency                int
+	FileStoreWriteConcurrency               int
+	FileStoreUseSystemLimits                bool
 }
 
 type BlockChainSettings struct {

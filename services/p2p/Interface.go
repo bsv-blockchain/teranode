@@ -174,6 +174,10 @@ type ClientI interface {
 	// Score should be between 0 and 100.
 	UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error
 
+	// ResetReputation resets reputation metrics for a peer or all peers.
+	// If peerID is empty, resets all peers. Returns the number of peers reset.
+	ResetReputation(ctx context.Context, peerID string) (int, error)
+
 	// GetPeersForCatchup returns peers suitable for catchup operations.
 	// Returns peers sorted by reputation (highest first).
 	GetPeersForCatchup(ctx context.Context) ([]*PeerInfo, error)

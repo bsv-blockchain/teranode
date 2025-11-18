@@ -566,6 +566,67 @@ func (pr *PeerRegistry) ReconsiderBadPeers(cooldownPeriod time.Duration) int {
 	return peersRecovered
 }
 
+// ResetReputation resets reputation metrics for a specific peer or all peers.
+// If peerID is empty, resets all peers. Otherwise, resets only the specified peer.
+// Returns the number of peers that had their reputation reset.
+func (pr *PeerRegistry) ResetReputation(peerIDStr string) int {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	peersReset := 0
+
+	// Helper function to reset a single peer's reputation
+	resetPeer := func(info *PeerInfo) {
+		// Reset interaction metrics
+		info.InteractionAttempts = 0
+		info.InteractionSuccesses = 0
+		info.InteractionFailures = 0
+		info.LastInteractionAttempt = time.Time{}
+		info.LastInteractionSuccess = time.Time{}
+		info.LastInteractionFailure = time.Time{}
+
+		// Reset reputation score to neutral
+		info.ReputationScore = 50.0
+		info.MaliciousCount = 0
+		info.AvgResponseTime = 0
+
+		// Clear catchup error tracking
+		info.LastCatchupError = ""
+		info.LastCatchupErrorTime = time.Time{}
+
+		// Clear reputation reset tracking to allow fresh start
+		info.LastReputationReset = time.Time{}
+		info.ReputationResetCount = 0
+
+		// Clear sync attempt tracking
+		info.LastSyncAttempt = time.Time{}
+		info.SyncAttemptCount = 0
+	}
+
+	if peerIDStr == "" {
+		// Reset all peers
+		for _, info := range pr.peers {
+			resetPeer(info)
+			peersReset++
+		}
+	} else {
+		// Reset specific peer - decode the peer ID string first
+		peerID, err := peer.Decode(peerIDStr)
+		if err != nil {
+			// Invalid peer ID, return 0
+			return 0
+		}
+
+		info, exists := pr.peers[peerID]
+		if exists {
+			resetPeer(info)
+			peersReset = 1
+		}
+	}
+
+	return peersReset
+}
+
 // GetPeersForCatchup returns peers suitable for catchup operations
 // Filters for peers with DataHub URLs, sorted by reputation
 // This is a specialized version of GetPeersByReputation for catchup operations

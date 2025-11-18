@@ -1763,10 +1763,24 @@ func (s *Server) RecordBytesDownloaded(ctx context.Context, req *p2p_api.RecordB
 	// Update the peer registry with the new total
 	s.peerRegistry.UpdateNetworkStats(peerID, newTotal)
 
-	s.logger.Debugf("[RecordBytesDownloaded] Updated peer %s: added %d bytes, new total: %d bytes",
-		req.PeerId, req.BytesDownloaded, newTotal)
+	s.logger.Debugf("[RecordBytesDownloaded] Updated peer %s: added %d bytes, new total: %d bytes", req.PeerId, req.BytesDownloaded, newTotal)
 
 	return &p2p_api.RecordBytesDownloadedResponse{Ok: true}, nil
+}
+
+func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputationRequest) (*p2p_api.ResetReputationResponse, error) {
+	peersReset := s.peerRegistry.ResetReputation(req.PeerId)
+
+	if req.PeerId == "" {
+		s.logger.Infof("[ResetReputation] Reset reputation for all peers. Count: %d", peersReset)
+	} else {
+		s.logger.Infof("[ResetReputation] Reset reputation for peer %s", req.PeerId)
+	}
+
+	return &p2p_api.ResetReputationResponse{
+		Ok:         true,
+		PeersReset: int32(peersReset),
+	}, nil
 }
 
 // ReportInvalidBlock adds ban score to the peer that sent an invalid block.

@@ -32,6 +32,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -62,11 +63,12 @@ func New(logger ulogger.Logger, blocksFilePath string) *State {
 	}
 }
 
-// GetLastPersistedBlockHeight retrieves the height of the last persisted block
+// GetLastPersistedBlock retrieves the height and hash of the last persisted block
 // Returns:
-//   - uint32: the block height
+//   - uint32: the block height (0 if no blocks persisted)
+//   - *chainhash.Hash: the block hash (nil if no blocks persisted)
 //   - error: any error encountered
-func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
+func (s *State) GetLastPersistedBlock() (uint32, *chainhash.Hash, error) {
 	s.fileLock.Lock()
 	defer s.fileLock.Unlock()
 
@@ -74,16 +76,16 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 	file, err := os.Open(s.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, nil // Return 0 if file doesn't exist yet
+			return 0, nil, nil // Return zero values if file doesn't exist yet
 		}
 
-		return 0, errors.NewProcessingError("failed to open blocks file", err)
+		return 0, nil, errors.NewProcessingError("failed to open blocks file", err)
 	}
 	defer file.Close()
 
 	deferFn, err := s.lockFile(file, syscall.LOCK_SH)
 	if err != nil {
-		return 0, errors.NewProcessingError("could not lock file", err)
+		return 0, nil, errors.NewProcessingError("could not lock file", err)
 	}
 	defer deferFn()
 
@@ -97,20 +99,20 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 			offset = 0
 
 			if _, err := file.Seek(0, io.SeekStart); err != nil {
-				return 0, errors.NewProcessingError("failed to seek to start", err)
+				return 0, nil, errors.NewProcessingError("failed to seek to start", err)
 			}
 		} else {
-			return 0, errors.NewProcessingError("failed to seek from end", err)
+			return 0, nil, errors.NewProcessingError("failed to seek from end", err)
 		}
 	}
 
 	n, err := file.Read(buf)
 	if err != nil && err != io.EOF {
-		return 0, errors.NewProcessingError("failed to read file", err)
+		return 0, nil, errors.NewProcessingError("failed to read file", err)
 	}
 
 	if n == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 
 	buf = buf[:n] // Trim buffer to actual read size
@@ -123,13 +125,13 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 		// Find the second last newline by finding the last newline before the final one
 		lastNewline := bytes.LastIndex(buf, []byte{'\n'})
 		if lastNewline == -1 {
-			return 0, errors.NewProcessingError("no newline found in last chunk", nil)
+			return 0, nil, errors.NewProcessingError("no newline found in last chunk", nil)
 		}
 
 		// Find the second last newline
 		lastIndex = bytes.LastIndex(buf[:lastNewline], []byte{'\n'})
 		if lastIndex == -1 {
-			return 0, errors.NewProcessingError("no second newline found in last chunk", nil)
+			return 0, nil, errors.NewProcessingError("no second newline found in last chunk", nil)
 		}
 	}
 
@@ -141,25 +143,44 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 		lastLine = buf[lastIndex+1:]
 	}
 
-	// Parse height from the line
+	// Parse height and hash from the line (format: height,hash)
 	commaIndex := bytes.IndexByte(lastLine, ',')
 	if commaIndex == -1 {
-		return 0, errors.NewProcessingError("invalid line format: no comma found", nil)
+		return 0, nil, errors.NewProcessingError("invalid line format: no comma found", nil)
 	}
 
+	// Parse height
 	height, err := strconv.ParseUint(string(lastLine[:commaIndex]), 10, 32)
 	if err != nil {
-		return 0, errors.NewProcessingError("failed to parse block height", err)
+		return 0, nil, errors.NewProcessingError("failed to parse block height", err)
 	}
-
-	// Safe conversion since ParseUint with bitSize=32 ensures the value fits in uint32
 
 	heightUint32, err := safeconversion.Uint64ToUint32(height)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
-	return heightUint32, nil
+	// Extract hash (everything after comma, trimming newline)
+	hashBytes := lastLine[commaIndex+1:]
+	hashStr := string(bytes.TrimSpace(hashBytes))
+
+	// Parse the hash string into a chainhash.Hash
+	hash, err := chainhash.NewHashFromStr(hashStr)
+	if err != nil {
+		return 0, nil, errors.NewProcessingError("failed to parse block hash", err)
+	}
+
+	return heightUint32, hash, nil
+}
+
+// GetLastPersistedBlockHeight retrieves the height of the last persisted block
+// This is a convenience wrapper around GetLastPersistedBlock for backwards compatibility
+// Returns:
+//   - uint32: the block height
+//   - error: any error encountered
+func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
+	height, _, err := s.GetLastPersistedBlock()
+	return height, err
 }
 
 // AddBlock records a new block in the state file.

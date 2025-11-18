@@ -449,6 +449,32 @@ func (c *Client) UpdateCatchupReputation(ctx context.Context, peerID string, sco
 	return nil
 }
 
+// ResetReputation resets reputation metrics for a peer or all peers.
+// If peerID is empty, resets all peers. Returns the number of peers reset.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: The peer ID to reset (empty string for all peers)
+//
+// Returns:
+//   - int: Number of peers that had their reputation reset
+//   - error: Any error encountered during the operation
+func (c *Client) ResetReputation(ctx context.Context, peerID string) (int, error) {
+	req := &p2p_api.ResetReputationRequest{
+		PeerId: peerID,
+	}
+
+	resp, err := c.client.ResetReputation(ctx, req)
+	if err != nil {
+		return 0, err
+	}
+
+	if resp != nil && !resp.Ok {
+		return 0, errors.NewServiceError("failed to reset reputation")
+	}
+
+	return int(resp.PeersReset), nil
+}
+
 // GetPeersForCatchup returns peers suitable for catchup operations.
 // Parameters:
 //   - ctx: Context for the operation

@@ -271,6 +271,17 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
 		apiGroup.Use(authHandler.PostAuthMiddleware)
 
+		// Register dashboard-compatible API routes that need auth protection
+		// The dashboard's SvelteKit +server.ts endpoints don't work in production (adapter-static)
+		// so we need to provide the same endpoints directly in the Go backend
+		apiP2PGroup := e.Group("/api/p2p")
+		apiP2PGroup.Use(authHandler.PostAuthMiddleware) // Protect POST endpoints
+		apiP2PGroup.GET("/peers", h.GetPeers)
+		apiP2PGroup.POST("/reset-reputation", h.ResetReputation)
+
+		apiCatchupGroup := e.Group("/api/catchup")
+		apiCatchupGroup.GET("/status", h.GetCatchupStatus)
+
 		dashboardConfig := middleware.CORSConfig{
 			// Use AllowOriginFunc instead of AllowOrigins to dynamically approve origins
 			AllowOriginFunc: func(origin string) (bool, error) {
@@ -336,15 +347,6 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	// Register peers endpoint
 	apiGroup.GET("/peers", h.GetPeers)
-
-	// Register dashboard-compatible API routes
-	// The dashboard's SvelteKit +server.ts endpoints don't work in production (adapter-static)
-	// so we need to provide the same endpoints directly in the Go backend
-	apiP2PGroup := e.Group("/api/p2p")
-	apiP2PGroup.GET("/peers", h.GetPeers)
-
-	apiCatchupGroup := e.Group("/api/catchup")
-	apiCatchupGroup.GET("/status", h.GetCatchupStatus)
 
 	// Add OPTIONS handlers for block operations
 	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {

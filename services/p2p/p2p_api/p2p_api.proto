@@ -153,6 +153,15 @@ message AddBanScoreRequest {
     bool ok = 1;
   }
 
+  message ResetReputationRequest {
+    string peer_id = 1; // Empty string means reset all peers
+  }
+
+  message ResetReputationResponse {
+    bool ok = 1;
+    int32 peers_reset = 2; // Number of peers reset
+  }
+
   message GetPeersForCatchupRequest {
     // Empty for now, can add filtering params later
   }
@@ -288,6 +297,7 @@ message AddBanScoreRequest {
     rpc RecordCatchupMalicious(RecordCatchupMaliciousRequest) returns (RecordCatchupMaliciousResponse) {}
     rpc UpdateCatchupReputation(UpdateCatchupReputationRequest) returns (UpdateCatchupReputationResponse) {}
     rpc UpdateCatchupError(UpdateCatchupErrorRequest) returns (UpdateCatchupErrorResponse) {}
+    rpc ResetReputation(ResetReputationRequest) returns (ResetReputationResponse) {}
     rpc GetPeersForCatchup(GetPeersForCatchupRequest) returns (GetPeersForCatchupResponse) {}
 
     // Subtree and block validation reporting
