@@ -707,6 +707,12 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 //   - error: Any error encountered during shutdown
 func (ba *BlockAssembly) Stop(_ context.Context) error {
 	ba.jobStore.Stop()
+
+	// Close the subtree processor to stop the announcement ticker and cleanup resources
+	if ba.blockAssembler != nil && ba.blockAssembler.subtreeProcessor != nil {
+		ba.blockAssembler.subtreeProcessor.Close()
+	}
+
 	return nil
 }
 

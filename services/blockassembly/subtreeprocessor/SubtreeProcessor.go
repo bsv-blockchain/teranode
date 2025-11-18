@@ -433,7 +433,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 				// incomplete subtrees ?
 				if chainedCount == 0 && stp.currentSubtree.Length() > 1 {
-					incompleteSubtree, err := subtreepkg.NewTreeByLeafCount(stp.currentItemsPerFile)
+					incompleteSubtree, err := stp.createIncompleteSubtreeCopy()
 					if err != nil {
 						logger.Errorf("[SubtreeProcessor] error creating incomplete subtree: %s", err.Error())
 						getSubtreesChan <- nil
@@ -443,12 +443,6 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 						continue
 					}
 
-					_ = incompleteSubtree.AddCoinbaseNode()
-					for _, node := range stp.currentSubtree.Nodes[1:] {
-						_ = incompleteSubtree.AddSubtreeNode(node)
-					}
-
-					incompleteSubtree.Fees = stp.currentSubtree.Fees
 					completeSubtrees = append(completeSubtrees, incompleteSubtree)
 
 					// store (and announce) new incomplete subtree to other miners
@@ -457,16 +451,26 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 						ParentTxMap: stp.currentTxMap,
 						ErrChan:     make(chan error),
 					}
-					newSubtreeChan <- send
 
-					// Wait for a response to ensure proper synchronization.
-					// This prevents race conditions when mining initial blocks and running coinbase splitter together.
-					// Without this wait, getMiningCandidate creates subtrees in the background while
-					// submitMiningSolution tries to setDAH on subtrees that might not yet exist.
-					<-send.ErrChan
-
-					// Reset the announcement timer since we just announced
-					stp.resetAnnouncementTicker()
+					// Send announcement, respecting context cancellation
+					select {
+					case newSubtreeChan <- send:
+						// Wait for a response to ensure proper synchronization.
+						// This prevents race conditions when mining initial blocks and running coinbase splitter together.
+						// Without this wait, getMiningCandidate creates subtrees in the background while
+						// submitMiningSolution tries to setDAH on subtrees that might not yet exist.
+						select {
+						case <-send.ErrChan:
+							// Announcement completed, reset timer
+							stp.resetAnnouncementTicker()
+						case <-stp.ctx.Done():
+							// Context cancelled while waiting for response
+							return
+						}
+					case <-stp.ctx.Done():
+						// Context cancelled while trying to send
+						return
+					}
 				}
 
 				getSubtreesChan <- completeSubtrees
@@ -593,18 +597,11 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 				if stp.currentSubtree.Length() > 1 {
 					logger.Debugf("[SubtreeProcessor] periodic announcement of current subtree with %d transactions", stp.currentSubtree.Length()-1)
 
-					incompleteSubtree, err := subtreepkg.NewTreeByLeafCount(stp.currentItemsPerFile)
+					incompleteSubtree, err := stp.createIncompleteSubtreeCopy()
 					if err != nil {
 						logger.Errorf("[SubtreeProcessor] error creating incomplete subtree for periodic announcement: %s", err.Error())
 						continue
 					}
-
-					_ = incompleteSubtree.AddCoinbaseNode()
-					for _, node := range stp.currentSubtree.Nodes[1:] {
-						_ = incompleteSubtree.AddSubtreeNode(node)
-					}
-
-					incompleteSubtree.Fees = stp.currentSubtree.Fees
 
 					send := NewSubtreeRequest{
 						Subtree:     incompleteSubtree,
@@ -715,6 +712,37 @@ func (stp *SubtreeProcessor) resetAnnouncementTicker() {
 		// No pending tick
 	}
 	stp.announcementTicker.Reset(stp.settings.BlockAssembly.SubtreeAnnouncementInterval)
+}
+
+// createIncompleteSubtreeCopy creates a copy of the current subtree for announcement purposes.
+// It creates a new subtree with the same configuration and copies all nodes (except coinbase placeholder)
+// from the current subtree.
+//
+// Returns:
+//   - *subtreepkg.Subtree: The incomplete subtree copy, or nil if creation failed
+//   - error: Any error encountered during subtree creation or node copying
+func (stp *SubtreeProcessor) createIncompleteSubtreeCopy() (*subtreepkg.Subtree, error) {
+	incompleteSubtree, err := subtreepkg.NewTreeByLeafCount(stp.currentItemsPerFile)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add coinbase placeholder
+	if err = incompleteSubtree.AddCoinbaseNode(); err != nil {
+		return nil, err
+	}
+
+	// Copy all nodes from current subtree (skipping the coinbase placeholder at index 0)
+	for _, node := range stp.currentSubtree.Nodes[1:] {
+		if err = incompleteSubtree.AddSubtreeNode(node); err != nil {
+			return nil, err
+		}
+	}
+
+	// Copy fees
+	incompleteSubtree.Fees = stp.currentSubtree.Fees
+
+	return incompleteSubtree, nil
 }
 
 // GetCurrentRunningState returns the current operational state of the processor.
