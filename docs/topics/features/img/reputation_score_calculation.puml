@@ -1,0 +1,59 @@
+@startuml reputation_score_calculation
+!theme plain
+skinparam backgroundColor white
+skinparam activityBackgroundColor #f5f5f5
+skinparam activityBorderColor #333333
+
+title Reputation Score Calculation Algorithm
+
+start
+
+:Receive peer data;
+
+if (MaliciousCount > 0?) then (yes)
+  :Set score = 5.0;
+  stop
+else (no)
+endif
+
+:Calculate success rate;
+note right
+  successRate =
+  (successes / attempts) * 100
+end note
+
+:Apply weighted success rate;
+note right
+  weightedSuccess =
+  successRate * 0.6
+end note
+
+:Add weighted base score;
+note right
+  score = weightedSuccess +
+  (50.0 * 0.4)
+end note
+
+if (Failure within last hour?) then (yes)
+  :Apply failure penalty;
+  note right
+    score = score - 15.0
+  end note
+else (no)
+endif
+
+if (Success within last hour?) then (yes)
+  :Add recency bonus;
+  note right
+    score = score + 10.0
+  end note
+else (no)
+endif
+
+:Clamp score to 0-100;
+
+:Return final score;
+
+stop
+
+@enduml
