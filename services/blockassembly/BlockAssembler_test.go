@@ -666,6 +666,13 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	)
 	require.NoError(t, err)
 
+	// Ensure SubtreeProcessor is properly cleaned up when test ends
+	t.Cleanup(func() {
+		if ba.subtreeProcessor != nil {
+			ba.subtreeProcessor.Close()
+		}
+	})
+
 	items.blockAssembler = ba
 
 	return &items
