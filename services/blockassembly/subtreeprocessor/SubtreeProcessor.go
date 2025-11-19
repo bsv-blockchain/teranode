@@ -253,6 +253,9 @@ type SubtreeProcessor struct {
 
 	// cancel is the cancel function for the processor context
 	cancel context.CancelFunc
+
+	// closeOnce ensures Close() is only executed once
+	closeOnce sync.Once
 }
 
 type State uint32
@@ -3404,8 +3407,11 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16) (
 // Close gracefully shuts down the SubtreeProcessor.
 // It cancels the processor context, which triggers the main goroutine to stop
 // and properly clean up resources including the announcement ticker.
+// This method is safe to call multiple times.
 func (stp *SubtreeProcessor) Close() {
-	if stp.cancel != nil {
-		stp.cancel()
-	}
+	stp.closeOnce.Do(func() {
+		if stp.cancel != nil {
+			stp.cancel()
+		}
+	})
 }
