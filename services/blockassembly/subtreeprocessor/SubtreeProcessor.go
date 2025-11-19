@@ -411,6 +411,13 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 	stp.setCurrentRunningState(StateRunning)
 
 	go func() {
+		// Recover from panics (e.g., send on closed channel during shutdown)
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Warnf("[SubtreeProcessor] goroutine recovered from panic: %v", r)
+			}
+		}()
+
 		var (
 			err error
 		)
