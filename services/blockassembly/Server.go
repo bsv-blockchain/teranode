@@ -107,6 +107,9 @@ type BlockAssembly struct {
 
 	// skipWaitForPendingBlocks stores the flag value for tests
 	skipWaitForPendingBlocks bool
+
+	// stopOnce ensures Stop() is only executed once
+	stopOnce sync.Once
 }
 
 // subtreeRetrySend encapsulates the data needed for retrying subtree storage operations
@@ -699,6 +702,7 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 }
 
 // Stop gracefully shuts down the BlockAssembly service.
+// This method is idempotent and safe to call multiple times.
 //
 // Parameters:
 //   - ctx: Context for cancellation (currently unused)
@@ -706,12 +710,14 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 // Returns:
 //   - error: Any error encountered during shutdown
 func (ba *BlockAssembly) Stop(_ context.Context) error {
-	ba.jobStore.Stop()
+	ba.stopOnce.Do(func() {
+		ba.jobStore.Stop()
 
-	// Close the subtree processor to stop the announcement ticker and cleanup resources
-	if ba.blockAssembler != nil && ba.blockAssembler.subtreeProcessor != nil {
-		ba.blockAssembler.subtreeProcessor.Close()
-	}
+		// Close the subtree processor to stop the announcement ticker and cleanup resources
+		if ba.blockAssembler != nil && ba.blockAssembler.subtreeProcessor != nil {
+			ba.blockAssembler.subtreeProcessor.Close()
+		}
+	})
 
 	return nil
 }
