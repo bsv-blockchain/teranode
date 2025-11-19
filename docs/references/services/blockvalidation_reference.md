@@ -34,8 +34,8 @@ type Server struct {
     catchupAlternatives       *ttlcache.Cache[chainhash.Hash, []processBlockCatchup] // Alternative peer sources for catchup blocks
     stats                     *gocore.Stat                            // Operational metrics tracking
     peerCircuitBreakers       *catchup.PeerCircuitBreakers            // Circuit breakers for peer management
-    peerMetrics               *catchup.CatchupMetrics                 // Peer performance metrics
     headerChainCache          *catchup.HeaderChainCache               // Block header cache for catchup
+    p2pClient                 P2PClientI                              // P2P service client for peer registry operations
     isCatchingUp              atomic.Bool                             // Atomic flag for catchup operations
     catchupStatsMu            sync.RWMutex                            // Mutex for catchup statistics
     lastCatchupTime           time.Time                               // Timestamp of last catchup attempt
