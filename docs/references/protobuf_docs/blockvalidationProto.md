@@ -6,9 +6,12 @@
 
 - [blockvalidation_api.proto](#blockvalidation_api.proto)
     - [BlockFoundRequest](#BlockFoundRequest)
+    - [CatchupStatusResponse](#CatchupStatusResponse)
     - [EmptyMessage](#EmptyMessage)
     - [HealthResponse](#HealthResponse)
+    - [PreviousCatchupAttempt](#PreviousCatchupAttempt)
     - [ProcessBlockRequest](#ProcessBlockRequest)
+    - [RevalidateBlockRequest](#RevalidateBlockRequest)
     - [ValidateBlockRequest](#ValidateBlockRequest)
     - [ValidateBlockResponse](#ValidateBlockResponse)
 
@@ -34,6 +37,30 @@ swagger:model BlockFoundRequest
 | wait_to_complete | [bool](#bool) |  | Whether to wait for the block processing to complete |
 | peer_id | [string](#string) |  | P2P peer identifier for peerMetrics tracking |
 
+<a name="CatchupStatusResponse"></a>
+
+### CatchupStatusResponse
+
+swagger:model CatchupStatusResponse
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| is_catching_up | [bool](#bool) |  | Indicates if the node is currently catching up |
+| peer_id | [string](#string) |  | P2P peer identifier for the catchup source |
+| peer_url | [string](#string) |  | URL of the peer being used for catchup |
+| target_block_hash | [string](#string) |  | Hash of the target block to catch up to |
+| target_block_height | [uint32](#uint32) |  | Height of the target block |
+| current_height | [uint32](#uint32) |  | Current block height during catchup |
+| total_blocks | [int32](#int32) |  | Total number of blocks to process |
+| blocks_fetched | [int64](#int64) |  | Number of blocks fetched so far |
+| blocks_validated | [int64](#int64) |  | Number of blocks validated so far |
+| start_time | [int64](#int64) |  | Unix timestamp when catchup started |
+| duration_ms | [int64](#int64) |  | Duration of catchup in milliseconds |
+| fork_depth | [uint32](#uint32) |  | Depth of the fork being resolved |
+| common_ancestor_hash | [string](#string) |  | Hash of the common ancestor block |
+| common_ancestor_height | [uint32](#uint32) |  | Height of the common ancestor block |
+| previous_attempt | [PreviousCatchupAttempt](#PreviousCatchupAttempt) |  | Information about the previous catchup attempt if any |
+
 <a name="EmptyMessage"></a>
 
 ### EmptyMessage
@@ -54,6 +81,24 @@ swagger:model HealthResponse
 | details | [string](#string) |  | Additional health status details |
 | timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Timestamp when the health check was performed |
 
+<a name="PreviousCatchupAttempt"></a>
+
+### PreviousCatchupAttempt
+
+swagger:model PreviousCatchupAttempt
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| peer_id | [string](#string) |  | P2P peer identifier for the previous attempt |
+| peer_url | [string](#string) |  | URL of the peer used in the previous attempt |
+| target_block_hash | [string](#string) |  | Hash of the target block in the previous attempt |
+| target_block_height | [uint32](#uint32) |  | Height of the target block in the previous attempt |
+| error_message | [string](#string) |  | Error message from the previous attempt |
+| error_type | [string](#string) |  | Type of error encountered |
+| attempt_time | [int64](#int64) |  | Unix timestamp when the attempt was made |
+| duration_ms | [int64](#int64) |  | Duration of the attempt in milliseconds |
+| blocks_validated | [int64](#int64) |  | Number of blocks validated before failure |
+
 <a name="ProcessBlockRequest"></a>
 
 ### ProcessBlockRequest
@@ -66,6 +111,16 @@ swagger:model ProcessBlockRequest
 | height | [uint32](#uint32) |  | The height of the block in the blockchain |
 | base_url | [string](#string) |  | Base URL where the block can be retrieved from |
 | peer_id | [string](#string) |  | P2P peer identifier for peerMetrics tracking |
+
+<a name="RevalidateBlockRequest"></a>
+
+### RevalidateBlockRequest
+
+swagger:model RevalidateBlockRequest
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| hash | [bytes](#bytes) |  | The hash of the block to revalidate |
 
 <a name="ValidateBlockRequest"></a>
 
@@ -106,6 +161,8 @@ swagger:model ValidateBlockResponse
 | BlockFound | [BlockFoundRequest](#BlockFoundRequest) | [EmptyMessage](#EmptyMessage) | Notifies the service that a new block has been found and requires validation. |
 | ProcessBlock | [ProcessBlockRequest](#ProcessBlockRequest) | [EmptyMessage](#EmptyMessage) | Processes a block to validate its content and structure. |
 | ValidateBlock | [ValidateBlockRequest](#ValidateBlockRequest) | [ValidateBlockResponse](#ValidateBlockResponse) | Validates a block without processing it, returning validation results. |
+| RevalidateBlock | [RevalidateBlockRequest](#RevalidateBlockRequest) | [EmptyMessage](#EmptyMessage) | Revalidates a previously validated block by its hash. |
+| GetCatchupStatus | [EmptyMessage](#EmptyMessage) | [CatchupStatusResponse](#CatchupStatusResponse) | Returns the current catchup status including progress and peer information. |
 
  <!-- end services -->
 
