@@ -211,7 +211,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	// P2P
 	_, _, p2pPort := allocatePort("") // libp2p doesn't support pre-created listeners
-	appSettings.P2P.BootstrapAddresses = []string{}
 	appSettings.P2P.StaticPeers = nil
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
 	appSettings.P2P.Port = p2pPort
@@ -309,7 +308,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.ProfilerAddr = ""
 	appSettings.RPC.CacheEnabled = false
 	appSettings.UsePrometheusGRPCMetrics = false
-	appSettings.P2P.BootstrapAddresses = nil
 
 	// Override with test settings...
 	if opts.SettingsOverrideFunc != nil {

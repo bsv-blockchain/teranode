@@ -226,7 +226,7 @@ func TestStartNotificationProcessor(t *testing.T) {
 		settings: &settings.Settings{
 			P2P: settings.P2PSettings{
 				ListenMode: settings.ListenModeFull,
-				DisableNAT: true, // Disable NAT in tests to prevent data races in libp2p
+				EnableNAT:  false, // Disable NAT in tests to prevent data races in libp2p
 			},
 		},
 	}
@@ -366,7 +366,7 @@ func TestHandleWebSocket(t *testing.T) {
 		settings: &settings.Settings{
 			P2P: settings.P2PSettings{
 				ListenMode: settings.ListenModeFull,
-				DisableNAT: true, // Disable NAT in tests to prevent data races in libp2p
+				EnableNAT:  false, // Disable NAT in tests to prevent data races in libp2p
 			},
 		},
 	}
@@ -375,7 +375,7 @@ func TestHandleWebSocket(t *testing.T) {
 	notificationCh := make(chan *notificationMsg, 1)
 
 	// Create handler
-	handler := s.HandleWebSocket(notificationCh, baseURL)
+	handler := s.HandleWebSocket(notificationCh)
 
 	// Create test server
 	serverReady := make(chan struct{}, 1)

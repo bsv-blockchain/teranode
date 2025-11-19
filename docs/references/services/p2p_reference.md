@@ -413,8 +413,6 @@ The following settings can be configured for the p2p service:
 - `p2p_http_listen_address`: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
 - `p2p_grpc_address`: Specifies the gRPC address for external clients to connect to the P2P service.
 - `p2p_grpc_listen_address`: Specifies the gRPC listen address for the P2P service.
-- `p2p_bootstrap_addresses`: List of bootstrap peer addresses for initial network discovery.
-- `p2p_bootstrap_persistent`: A boolean flag (default: false) that controls whether bootstrap addresses are treated as persistent connections that automatically reconnect after disconnection.
 - `p2p_ban_threshold`: Score threshold at which peers are banned from the network.
 - `p2p_ban_duration`: Duration of time a peer remains banned after exceeding the ban threshold.
 - `securityLevelHTTP`: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.

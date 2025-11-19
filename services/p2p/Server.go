@@ -213,8 +213,6 @@ func NewServer(
 		return nil, errors.NewServiceError("error getting banlist", err)
 	}
 
-	staticPeers := tSettings.P2P.StaticPeers
-
 	privateKey := tSettings.P2P.PrivateKey
 
 	// Attempt to get the private key if not provided in settings
@@ -314,12 +312,11 @@ func NewServer(
 		Name:               tSettings.ClientName,
 		Logger:             logger,
 		PeerCacheFile:      getPeerCacheFilePath(tSettings.P2P.PeerCacheDir),
-		BootstrapPeers:     staticPeers,
 		RelayPeers:         tSettings.P2P.RelayPeers,
 		ProtocolVersion:    bitcoinProtocolVersion,
 		DHTMode:            tSettings.P2P.DHTMode,
 		DHTCleanupInterval: tSettings.P2P.DHTCleanupInterval,
-		DisableNAT:         tSettings.P2P.DisableNAT,
+		EnableNAT:          tSettings.P2P.EnableNAT,
 		EnableMDNS:         tSettings.P2P.EnableMDNS,
 		AllowPrivateIPs:    tSettings.P2P.AllowPrivateIPs,
 	}
@@ -501,7 +498,7 @@ func (s *Server) setupHTTPServer() *echo.Echo {
 		return c.String(http.StatusOK, "OK")
 	})
 
-	e.GET("/p2p-ws", s.HandleWebSocket(s.notificationCh, s.AssetHTTPAddressURL))
+	e.GET("/p2p-ws", s.HandleWebSocket(s.notificationCh))
 
 	return e
 }
@@ -1638,11 +1635,6 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 
 		// ignore localhost
 		if sp.ID == s.P2PClient.GetID() {
-			continue
-		}
-
-		// ignore bootstrap server
-		if contains(s.settings.P2P.BootstrapAddresses, sp.ID) {
 			continue
 		}
 

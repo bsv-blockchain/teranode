@@ -248,7 +248,7 @@ func (s *Server) sendInitialNodeStatuses(clientCh chan []byte) {
 	}
 }
 
-func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseURL string) func(c echo.Context) error {
+func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c echo.Context) error {
 	clientChannels := newClientChannelMap()
 	newClientCh := make(chan chan []byte, 1_000)
 	deadClientCh := make(chan chan []byte, 1_000)
