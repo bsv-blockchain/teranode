@@ -531,29 +531,6 @@ func createConflictingBlock(t *testing.T, td *daemon.TestDaemon, originalBlock *
 	return newBlock
 }
 
-func createFork(t *testing.T, td *daemon.TestDaemon, originalBlock *model.Block, blockTxs []*bt.Tx, nonce uint32) *model.Block {
-	// Get previous block so we can create an alternate bock for this block with no conflicting transactions.
-	previousBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, originalBlock.Height-1)
-	require.NoError(t, err)
-
-	// Step 1: Create and validate block with double spend transaction
-	_, newBlock := td.CreateTestBlock(t, previousBlock, nonce, blockTxs...)
-
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy"),
-		"Failed to process block with double spend transaction")
-
-	td.VerifyBlockByHash(t, newBlock, newBlock.Header.Hash())
-
-	// Verify block 102 is still the original block at height 102
-	td.WaitForBlockHeight(t, originalBlock, blockWait)
-
-	// Verify conflicting is set to false
-	td.VerifyConflictingInSubtrees(t, originalBlock.Subtrees[0], nil)
-	td.VerifyConflictingInUtxoStore(t, false, blockTxs...)
-
-	return newBlock
-}
-
 // testTripleForkedChain tests a scenario with three competing chains:
 //
 //	// Transaction Chains:

@@ -626,6 +626,14 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, checkDuplicateTr
 func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree, subIdx, subtreeSize int) (err error) {
 	var idx64 uint64
 
+	// Calculate the base index for this subtree by summing sizes of all previous subtrees.
+	// We cannot use (subIdx * subtreeSize) because the last subtree may be smaller.
+	// Per Block.go:1192: "all subtrees need to be the same size as the first tree, except the last one"
+	baseIdx := 0
+	for i := 0; i < subIdx; i++ {
+		baseIdx += b.SubtreeSlices[i].Size()
+	}
+
 	for txIdx := 0; txIdx < len(subtree.Nodes); txIdx++ {
 		if subIdx == 0 && txIdx == 0 && subtree.Nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			continue
@@ -633,7 +641,8 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree,
 
 		subtreeNode := subtree.Nodes[txIdx]
 
-		idx64, err = safeconversion.IntToUint64((subIdx * subtreeSize) + txIdx)
+		// Calculate the global transaction index as baseIdx + txIdx
+		idx64, err = safeconversion.IntToUint64(baseIdx + txIdx)
 		if err != nil {
 			return errors.NewProcessingError("[BLOCK][%s] failed to convert index to uint64", b.String(), err)
 		}
