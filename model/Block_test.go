@@ -2018,6 +2018,9 @@ func TestBlock_CheckDuplicateTransactionsInSubtree(t *testing.T) {
 		// Initialize the txMap for the block
 		block.txMap = txmap.NewSplitSwissMapUint64(10)
 
+		// Populate SubtreeSlices so the index calculation can access them
+		block.SubtreeSlices = []*subtreepkg.Subtree{subtree1, subtree2, subtree3}
+
 		subtreeSize := subtree1.Size()
 
 		err = block.checkDuplicateTransactionsInSubtree(subtree1, 0, subtreeSize)

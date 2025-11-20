@@ -30,6 +30,7 @@ import (
 // Bitcoin consensus history:
 // - BEFORE BIP34 (mainnet height 227,836): Duplicate coinbase transactions were possible
 //   - Block 91722 and 92038 contain duplicate coinbase transactions (pre-BIP34)
+//
 // - AFTER BIP34: Coinbase must include block height, naturally preventing duplicates
 //
 // This test verifies post-BIP34 behavior: duplicate coinbase should be rejected.
