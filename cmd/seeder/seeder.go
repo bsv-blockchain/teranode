@@ -431,8 +431,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 			default:
 				var utxoWrapper *utxopersister.UTXOWrapper
 
-				maxScriptSize := utxopersister.CalculateMaxScriptSize(appSettings.Policy.MaxScriptSizePolicy)
-				utxoWrapper, err = utxopersister.NewUTXOWrapperFromReader(gCtx, reader, maxScriptSize)
+				utxoWrapper, err = utxopersister.NewUTXOWrapperFromReader(gCtx, reader)
 				if err != nil {
 					if errors.Is(err, io.EOF) {
 						break OUTER

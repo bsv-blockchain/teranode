@@ -163,7 +163,7 @@ func testSideToMain(t *testing.T, td *daemon.TestDaemon, ctx context.Context, te
 	t.Logf("Mining %d blocks on main chain (without test tx)...", testCoinbaseMaturity+1)
 	for i := 0; i < testCoinbaseMaturity+1; i++ {
 		_, mainBlock := createTestBlockWithCorrectSubsidy(t, td, forkPointBlock, uint32(10000+i), nil)
-		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, mainBlock, mainBlock.Height, "legacy", ""))
+		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, mainBlock, mainBlock.Height, "", "legacy"))
 		forkPointBlock = mainBlock
 	}
 
@@ -180,7 +180,7 @@ func testSideToMain(t *testing.T, td *daemon.TestDaemon, ctx context.Context, te
 	td.WaitForBlockAssemblyToProcessTx(t, testTxHash.String())
 
 	_, sideBlock1 := createTestBlockWithCorrectSubsidy(t, td, forkPointBlock, uint32(20000), []*bt.Tx{testTx})
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock1, sideBlock1.Height, "legacy", ""))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock1, sideBlock1.Height, "", "legacy"))
 
 	// Wait for mined_set background job to complete
 	td.WaitForBlockBeingMined(t, sideBlock1)
@@ -200,7 +200,7 @@ func testSideToMain(t *testing.T, td *daemon.TestDaemon, ctx context.Context, te
 	prevBlock := sideBlock1
 	for i := 1; i < testCoinbaseMaturity+2; i++ {
 		_, sideBlock := createTestBlockWithCorrectSubsidy(t, td, prevBlock, uint32(20000+i), nil)
-		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock, sideBlock.Height, "legacy", ""))
+		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock, sideBlock.Height, "", "legacy"))
 		prevBlock = sideBlock
 	}
 
@@ -274,7 +274,7 @@ func testMainToSideAfterSideToMain(t *testing.T, td *daemon.TestDaemon, ctx cont
 	prevBlock := parentBlock
 	for i := 0; i < testCoinbaseMaturity+1; i++ {
 		_, sideBlock := createTestBlockWithCorrectSubsidy(t, td, prevBlock, uint32(30000+i), nil)
-		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock, sideBlock.Height, "legacy", ""))
+		require.NoError(t, td.BlockValidationClient.ProcessBlock(ctx, sideBlock, sideBlock.Height, "", "legacy"))
 		prevBlock = sideBlock
 		t.Logf("Side chain block %d/%d mined at height %d", i+1, testCoinbaseMaturity+1, sideBlock.Height)
 	}

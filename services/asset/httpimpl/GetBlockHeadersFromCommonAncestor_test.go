@@ -361,7 +361,7 @@ func TestGetBlockHeadersFromCommonAncestor_Integration(t *testing.T) {
 	}
 
 	// Create repository with real stores
-	repo, err := repository.NewRepository(logger, tSettings, nil, nil, blockchainClient, nil, nil, nil)
+	repo, err := repository.NewRepository(logger, tSettings, nil, nil, blockchainClient, nil, nil, nil, nil)
 	require.NoError(t, err)
 
 	// Create HTTP server with real repository

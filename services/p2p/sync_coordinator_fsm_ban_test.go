@@ -18,8 +18,7 @@ func TestSyncCoordinator_FSMTransitionBansPeerAndUpdatesRegistry(t *testing.T) {
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
 	selector := NewPeerSelector(logger, nil)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -28,7 +27,6 @@ func TestSyncCoordinator_FSMTransitionBansPeerAndUpdatesRegistry(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -36,20 +34,14 @@ func TestSyncCoordinator_FSMTransitionBansPeerAndUpdatesRegistry(t *testing.T) {
 
 	// Add a peer that will fail during catchup
 	failingPeer := peer.ID("failing-peer")
-	registry.AddPeer(failingPeer)
-	registry.UpdateHeight(failingPeer, 200, "hash200")
-	registry.UpdateDataHubURL(failingPeer, "http://failing.test")
-	registry.UpdateHealth(failingPeer, true)
-	registry.UpdateURLResponsiveness(failingPeer, true)
+	registry.Put(failingPeer, "", 200, nil, "http://failing.test")
+	registry.UpdateReputation(failingPeer, 80.0)
 	registry.UpdateStorage(failingPeer, "full")
 
 	// Add an alternative peer
 	goodPeer := peer.ID("good-peer")
-	registry.AddPeer(goodPeer)
-	registry.UpdateHeight(goodPeer, 190, "hash190")
-	registry.UpdateDataHubURL(goodPeer, "http://good.test")
-	registry.UpdateHealth(goodPeer, true)
-	registry.UpdateURLResponsiveness(goodPeer, true)
+	registry.Put(goodPeer, "", 190, nil, "http://good.test")
+	registry.UpdateReputation(goodPeer, 80.0)
 	registry.UpdateStorage(goodPeer, "full")
 
 	// Set the failing peer as current sync peer
@@ -63,7 +55,7 @@ func TestSyncCoordinator_FSMTransitionBansPeerAndUpdatesRegistry(t *testing.T) {
 	sc.handleFSMTransition(&runningState)
 
 	// Check that the peer's ban status was updated in the registry
-	peerInfo, exists := registry.GetPeer(failingPeer)
+	peerInfo, exists := registry.Get(failingPeer)
 	require.True(t, exists, "Failing peer should still exist in registry")
 	assert.True(t, peerInfo.BanScore > 0, "Peer should have non-zero ban score after catchup failure")
 
@@ -77,7 +69,7 @@ func TestSyncCoordinator_FSMTransitionBansPeerAndUpdatesRegistry(t *testing.T) {
 	}
 
 	// Now the peer should be banned in the registry
-	peerInfo, exists = registry.GetPeer(failingPeer)
+	peerInfo, exists = registry.Get(failingPeer)
 	require.True(t, exists, "Failing peer should still exist in registry")
 	assert.True(t, peerInfo.IsBanned, "Peer should be banned after multiple failures")
 	assert.True(t, peerInfo.BanScore >= 100, "Peer should have ban score >= 100")
@@ -94,9 +86,9 @@ func TestSyncCoordinator_BannedPeerNotReselected(t *testing.T) {
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
 	selector := NewPeerSelector(logger, nil)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
+
 	defer blockchainSetup.Cleanup()
 
 	sc := NewSyncCoordinator(
@@ -104,7 +96,6 @@ func TestSyncCoordinator_BannedPeerNotReselected(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -112,11 +103,8 @@ func TestSyncCoordinator_BannedPeerNotReselected(t *testing.T) {
 
 	// Add a peer with highest height but it's banned
 	bannedPeer := peer.ID("banned-peer")
-	registry.AddPeer(bannedPeer)
-	registry.UpdateHeight(bannedPeer, 300, "hash300")
-	registry.UpdateDataHubURL(bannedPeer, "http://banned.test")
-	registry.UpdateHealth(bannedPeer, true)
-	registry.UpdateURLResponsiveness(bannedPeer, true)
+	registry.Put(bannedPeer, "", 300, nil, "http://banned.test")
+	registry.UpdateReputation(bannedPeer, 80.0)
 	registry.UpdateStorage(bannedPeer, "full")
 
 	// Ban the peer
@@ -128,19 +116,13 @@ func TestSyncCoordinator_BannedPeerNotReselected(t *testing.T) {
 
 	// Add other peers with lower height
 	peer1 := peer.ID("peer1")
-	registry.AddPeer(peer1)
-	registry.UpdateHeight(peer1, 250, "hash250")
-	registry.UpdateDataHubURL(peer1, "http://peer1.test")
-	registry.UpdateHealth(peer1, true)
-	registry.UpdateURLResponsiveness(peer1, true)
+	registry.Put(peer1, "", 250, nil, "http://peer1.test")
+	registry.UpdateReputation(peer1, 80.0)
 	registry.UpdateStorage(peer1, "full")
 
 	peer2 := peer.ID("peer2")
-	registry.AddPeer(peer2)
-	registry.UpdateHeight(peer2, 240, "hash240")
-	registry.UpdateDataHubURL(peer2, "http://peer2.test")
-	registry.UpdateHealth(peer2, true)
-	registry.UpdateURLResponsiveness(peer2, true)
+	registry.Put(peer2, "", 240, nil, "http://peer2.test")
+	registry.UpdateReputation(peer2, 80.0)
 	registry.UpdateStorage(peer2, "full")
 
 	// Set local height
@@ -152,7 +134,7 @@ func TestSyncCoordinator_BannedPeerNotReselected(t *testing.T) {
 	assert.Equal(t, peer1, selectedPeer, "Should select peer1 with next highest height")
 
 	// Verify the banned peer is marked as banned in registry
-	bannedInfo, exists := registry.GetPeer(bannedPeer)
+	bannedInfo, exists := registry.Get(bannedPeer)
 	require.True(t, exists)
 	assert.True(t, bannedInfo.IsBanned, "Peer should be marked as banned in registry")
 }

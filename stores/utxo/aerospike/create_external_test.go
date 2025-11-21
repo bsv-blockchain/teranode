@@ -4,9 +4,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -139,5 +144,118 @@ func TestStoreExternallySuccessScenarios(t *testing.T) {
 		}
 
 		assert.Equal(t, 1, successCount, "Exactly one attempt should succeed completely")
+	})
+}
+
+// TestCreatingBinRemoval verifies that the creating bin is properly removed after transaction creation
+func TestCreatingBinRemoval(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	settings := test.CreateBaseTestSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, settings, logger)
+	defer cleanup()
+
+	t.Run("Unlocked transaction - creating bin removed", func(t *testing.T) {
+		cleanDB(t, client)
+
+		// Create a transaction that requires multiple records (external storage)
+		tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1)
+
+		// Create the transaction without locked flag
+		_, err := store.Create(ctx, tx, 100)
+		require.NoError(t, err, "Transaction creation should succeed")
+
+		// Verify the creating bin is NOT present in the records
+		txHash := tx.TxIDChainHash()
+		numRecords := 2 // Should have 2 records for UtxoBatchSize + 1 outputs
+
+		for i := 0; i < numRecords; i++ {
+			keySource := uaerospike.CalculateKeySourceInternal(txHash, uint32(i))
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
+			require.NoError(t, err)
+
+			record, err := client.Get(util.GetAerospikeReadPolicy(settings), key)
+			require.NoError(t, err, "Should be able to read record %d", i)
+			require.NotNil(t, record)
+
+			// Verify creating bin is NOT present (or is nil/false)
+			creatingValue, exists := record.Bins[fields.Creating.String()]
+			if exists {
+				// If it exists, it should be false or nil
+				assert.Nil(t, creatingValue, "Record %d should not have creating bin set after creation", i)
+			}
+			t.Logf("Record %d: creating bin properly cleared", i)
+		}
+	})
+
+	t.Run("Locked transaction - creating bin still removed", func(t *testing.T) {
+		cleanDB(t, client)
+
+		// Create a transaction that requires multiple records (external storage)
+		tx := createTransactionWithOutputs(settings.UtxoStore.UtxoBatchSize + 1)
+
+		// Create the transaction WITH locked flag
+		_, err := store.Create(ctx, tx, 100, utxo.WithLocked(true))
+		require.NoError(t, err, "Locked transaction creation should succeed")
+
+		// Verify the creating bin is NOT present in the records (even for locked transactions)
+		txHash := tx.TxIDChainHash()
+		numRecords := 2 // Should have 2 records for UtxoBatchSize + 1 outputs
+
+		for i := 0; i < numRecords; i++ {
+			keySource := uaerospike.CalculateKeySourceInternal(txHash, uint32(i))
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
+			require.NoError(t, err)
+
+			record, err := client.Get(util.GetAerospikeReadPolicy(settings), key)
+			require.NoError(t, err, "Should be able to read record %d", i)
+			require.NotNil(t, record)
+
+			// Verify creating bin is NOT present (or is nil/false)
+			creatingValue, exists := record.Bins[fields.Creating.String()]
+			if exists {
+				// If it exists, it should be false or nil
+				assert.Nil(t, creatingValue, "Record %d should not have creating bin set after creation (even for locked)", i)
+			}
+
+			// Verify locked flag IS present and true
+			lockedValue, exists := record.Bins[fields.Locked.String()]
+			if i == 0 { // Only first record has locked field
+				require.True(t, exists, "Record 0 should have locked bin")
+				assert.True(t, lockedValue.(bool), "Record 0 locked bin should be true")
+			}
+
+			t.Logf("Record %d: creating bin properly cleared, locked=%v", i, lockedValue)
+		}
+	})
+
+	t.Run("Small transaction - no creating bin needed", func(t *testing.T) {
+		cleanDB(t, client)
+
+		// Create a small transaction that fits in a single record (not external)
+		tx := createTransactionWithOutputs(10) // Small transaction
+
+		// Create the transaction
+		_, err := store.Create(ctx, tx, 100)
+		require.NoError(t, err, "Small transaction creation should succeed")
+
+		// Verify the creating bin was never set (not needed for single-record transactions)
+		txHash := tx.TxIDChainHash()
+		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txHash.CloneBytes())
+		require.NoError(t, err)
+
+		record, err := client.Get(util.GetAerospikeReadPolicy(settings), key)
+		require.NoError(t, err, "Should be able to read record")
+		require.NotNil(t, record)
+
+		// Verify creating bin is NOT present
+		_, exists := record.Bins[fields.Creating.String()]
+		assert.False(t, exists, "Small transaction should never have creating bin")
+		t.Logf("Small transaction: creating bin was never set (as expected)")
 	})
 }

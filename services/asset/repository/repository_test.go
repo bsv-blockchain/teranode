@@ -68,7 +68,7 @@ func TestTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(ulogger.TestLogger{}, tSettings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, tSettings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 	require.NoError(t, err)
 
 	// Get the transaction from the repository
@@ -249,7 +249,7 @@ func setupSubtreeData(t *testing.T) ([]chainhash.Hash, *chainhash.Hash, *reposit
 	require.NoError(t, err)
 
 	// Create a new repository
-	repo, err := repository.NewRepository(ulogger.TestLogger{}, tSettings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+	repo, err := repository.NewRepository(ulogger.TestLogger{}, tSettings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 	require.NoError(t, err)
 
 	return txns, key, repo
@@ -332,7 +332,7 @@ func TestRepository_GetBlockByHash(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		blockHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
@@ -366,7 +366,7 @@ func TestRepository_GetLastNBlocks(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		// Test with different parameters
@@ -407,7 +407,7 @@ func TestRepository_GetBlocks(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		blockHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
@@ -439,7 +439,7 @@ func TestRepository_GetBlockHeaders(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		blockHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
@@ -479,7 +479,7 @@ func TestRepository_GetBlockHeadersToCommonAncestor(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		blockHash1, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
@@ -516,7 +516,7 @@ func TestRepository_GetBlockHeadersFromCommonAncestor(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		blockHash1, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
@@ -553,7 +553,7 @@ func TestRepository_GetBlockHeadersFromHeight(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		headers, metas, err := repo.GetBlockHeadersFromHeight(ctx, 100, 10)
@@ -585,7 +585,7 @@ func TestRepository_GetSubtreeData(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		// Create a simple subtree
@@ -649,7 +649,7 @@ func TestRepository_GetSubtreeHead(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		// Create a simple subtree
@@ -700,7 +700,7 @@ func TestRepository_ErrorHandling(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, txStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		// Try to get non-existent transaction
@@ -732,7 +732,7 @@ func TestRepository_ErrorHandling(t *testing.T) {
 		blockchainClient, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, blockChainStore, nil, nil)
 		require.NoError(t, err)
 
-		repo, err := repository.NewRepository(logger, settings, utxoStore, errorStore, blockchainClient, nil, subtreeStore, blockStore)
+		repo, err := repository.NewRepository(logger, settings, utxoStore, errorStore, blockchainClient, nil, subtreeStore, blockStore, nil)
 		require.NoError(t, err)
 
 		// Try to get transaction from error store

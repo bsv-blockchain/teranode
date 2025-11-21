@@ -84,7 +84,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.False(t, ok)
 
 		// mine the tx
-		blockIDsMap, err := store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101})
+		blockIDsMap, err := store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101, OnLongestChain: true})
 		require.NoError(t, err)
 		assert.Len(t, blockIDsMap, 1)
 		assert.Equal(t, uint32(101), blockIDsMap[*tx.TxIDChainHash()][0])
@@ -248,6 +248,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 			fields.SpentUtxos.String():     2,
 			fields.BlockIDs.String():       []int{101},
 			fields.TotalExtraRecs.String(): 2,
+			fields.UnminedSince.String():   nil, // Clear unminedSince to simulate transaction on longest chain
 		})
 		require.NoError(t, err)
 

@@ -72,6 +72,10 @@ type ValidateBlockOptions struct {
 	// IsRevalidation indicates this is a revalidation of an invalid block.
 	// When true, skips existence check and clears invalid flag after successful validation.
 	IsRevalidation bool
+
+	// PeerID is the P2P peer identifier used for reputation tracking.
+	// This is used to track peer behavior during subtree validation.
+	PeerID string
 }
 
 // validationResult holds the result of a block validation for sharing between goroutines
@@ -1159,7 +1163,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// validate all the subtrees in the block
 		u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 
-		if err = u.validateBlockSubtrees(ctx, block, baseURL); err != nil {
+		if err = u.validateBlockSubtrees(ctx, block, opts.PeerID, baseURL); err != nil {
 			if errors.Is(err, errors.ErrTxInvalid) || errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxNotFound) {
 				u.logger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
 				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
@@ -1382,12 +1386,25 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// For reconsidered blocks, we need to clear the invalid flag
 				// The block data already exists, so we just update its status
 				u.logger.Infof("[ValidateBlock][%s] clearing invalid flag for successfully revalidated block", block.Hash().String())
-				if err = u.blockchainClient.RevalidateBlock(ctx, block.Header.Hash()); err != nil {
+
+				// Use background context for critical database operation
+				// Once we've validated the block, we MUST complete the storage operation
+				// even if the parent context (e.g., catchup) is canceled
+				storeCtx, storeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer storeCancel()
+
+				if err = u.blockchainClient.RevalidateBlock(storeCtx, block.Header.Hash()); err != nil {
 					return errors.NewServiceError("[ValidateBlock][%s] failed to clear invalid flag after successful revalidation", block.Hash().String(), err)
 				}
 			} else {
 				// Normal case - add new block
-				if err = u.blockchainClient.AddBlock(ctx, block, baseURL); err != nil {
+				// Use background context for critical database operation
+				// This prevents cascading cancellation from parent operations (e.g., fetch timeouts)
+				// ensuring data consistency by completing the write even if catchup is canceled
+				storeCtx, storeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer storeCancel()
+
+				if err = u.blockchainClient.AddBlock(storeCtx, block, baseURL); err != nil {
 					return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
 				}
 			}
@@ -1744,7 +1761,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	// validate all the subtrees in the block
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
-	if err = u.validateBlockSubtrees(ctx, blockData.block, blockData.baseURL); err != nil {
+	if err = u.validateBlockSubtrees(ctx, blockData.block, "", blockData.baseURL); err != nil {
 		return err
 	}
 
@@ -1915,15 +1932,16 @@ func (u *BlockValidation) updateSubtreesDAH(ctx context.Context, block *model.Bl
 // Parameters:
 //   - ctx: Context for the operation
 //   - block: Block containing subtrees to validate
+//   - peerID: P2P peer identifier for reputation tracking
 //   - baseURL: Source URL for missing subtree retrieval
 //
 // Returns an error if subtree validation fails.
-func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
+func (u *BlockValidation) validateBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string) error {
 	if len(block.Subtrees) == 0 {
 		return nil
 	}
 
-	return u.subtreeValidationClient.CheckBlockSubtrees(ctx, block, baseURL)
+	return u.subtreeValidationClient.CheckBlockSubtrees(ctx, block, peerID, baseURL)
 }
 
 // checkOldBlockIDs verifies that referenced blocks are in the current chain.

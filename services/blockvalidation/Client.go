@@ -149,7 +149,7 @@ func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, base
 //   - blockHeight: Expected chain height for the block
 //
 // Returns an error if block processing fails
-func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, baseURL, peerID string) error {
+func (s *Client) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
 	blockBytes, err := block.Bytes()
 	if err != nil {
 		return err
@@ -224,4 +224,54 @@ func (s *Client) RevalidateBlock(ctx context.Context, blockHash chainhash.Hash) 
 	}
 
 	return nil
+}
+
+// GetCatchupStatus retrieves the current status of blockchain catchup operations.
+// It queries the block validation service for information about ongoing or recent
+// catchup attempts, including progress metrics and peer information.
+//
+// Parameters:
+//   - ctx: Context for the operation, allowing for cancellation and timeouts
+//
+// Returns:
+//   - *CatchupStatus: Current catchup status information
+//   - error: Any error encountered during the status retrieval
+func (s *Client) GetCatchupStatus(ctx context.Context) (*CatchupStatus, error) {
+	resp, err := s.apiClient.GetCatchupStatus(ctx, &blockvalidation_api.EmptyMessage{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	status := &CatchupStatus{
+		IsCatchingUp:         resp.IsCatchingUp,
+		PeerID:               resp.PeerId,
+		PeerURL:              resp.PeerUrl,
+		TargetBlockHash:      resp.TargetBlockHash,
+		TargetBlockHeight:    resp.TargetBlockHeight,
+		CurrentHeight:        resp.CurrentHeight,
+		TotalBlocks:          int(resp.TotalBlocks),
+		BlocksFetched:        resp.BlocksFetched,
+		BlocksValidated:      resp.BlocksValidated,
+		StartTime:            resp.StartTime,
+		DurationMs:           resp.DurationMs,
+		ForkDepth:            resp.ForkDepth,
+		CommonAncestorHash:   resp.CommonAncestorHash,
+		CommonAncestorHeight: resp.CommonAncestorHeight,
+	}
+
+	if resp.PreviousAttempt != nil {
+		status.PreviousAttempt = &PreviousAttempt{
+			PeerID:            resp.PreviousAttempt.PeerId,
+			PeerURL:           resp.PreviousAttempt.PeerUrl,
+			TargetBlockHash:   resp.PreviousAttempt.TargetBlockHash,
+			TargetBlockHeight: resp.PreviousAttempt.TargetBlockHeight,
+			ErrorMessage:      resp.PreviousAttempt.ErrorMessage,
+			ErrorType:         resp.PreviousAttempt.ErrorType,
+			AttemptTime:       resp.PreviousAttempt.AttemptTime,
+			DurationMs:        resp.PreviousAttempt.DurationMs,
+			BlocksValidated:   resp.PreviousAttempt.BlocksValidated,
+		}
+	}
+
+	return status, nil
 }

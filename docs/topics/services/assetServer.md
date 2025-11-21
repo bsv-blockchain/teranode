@@ -140,10 +140,37 @@ The Asset Service exposes the following HTTP methods:
 
 ### 4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()
 
-- **URL**: `/block/:hash` (single), `/blocks` (multiple), `/blocks/last/:count` (last N blocks)
+**GetBlockByHash** - Get a single block by hash:
+
+- **URL**: `/api/v1/block/:hash` (also available: `/api/v1/block/:hash/hex`, `/api/v1/block/:hash/json`)
 - **Method**: GET
+- **URL Parameters**: `hash` - Block hash (64-character hex string)
+- **Response Format**: Binary (default), Hex, or JSON
+- **Content**: Complete block data with subtree identifiers
+
+**GetBlocks** - Get paginated list of blocks:
+
+- **URL**: `/api/v1/blocks`
+- **Method**: GET
+- **Query Parameters**:
+
+    - `offset` (integer, optional, default: 0) - Number of blocks to skip from tip
+    - `limit` (integer, optional, default: 20, max: 100) - Maximum blocks to return
+    - `includeOrphans` (boolean, optional, default: false) - Include orphaned blocks
+- **Response Format**: JSON with pagination metadata
+- **Content**: Block list with pagination information
+
+**GetLastNBlocks** - Get most recent N blocks:
+
+- **URL**: `/api/v1/lastblocks`
+- **Method**: GET
+- **Query Parameters**:
+
+    - `n` (integer, optional, default: 10) - Number of blocks to retrieve
+    - `fromHeight` (unsigned integer, optional, default: 0) - Starting block height
+    - `includeOrphans` (boolean, optional, default: false) - Include orphaned blocks
 - **Response Format**: JSON
-- **Content**: Block data with subtree identifiers and metadata
+- **Content**: Array of recent blocks in descending order (newest first)
 
 ![asset_server_http_get_block.svg](img/plantuml/assetserver/asset_server_http_get_block.svg)
 
@@ -587,6 +614,7 @@ export TERANODE_SERVER_CERTFILE=/path/to/cert.pem
 ### 7.3 Configuration Examples
 
 For comprehensive configuration documentation including all settings, defaults, and interactions, see the [asset Server Settings Reference](../../references/settings/services/asset_settings.md).
+
 ### 7.4 FSM Configuration
 
 - **fsm_state_restore**: Enables or disables the restore state for the Finite State Machine.

@@ -58,7 +58,6 @@ const (
 	blockHashMismatch         = "Block hash mismatch at height %d"
 	failedGettingSubtree      = "Failed to get subtree"
 	failedParsingSubtreeBytes = "Failed to parse subtree bytes"
-	failedParsingStorePort    = "Failed to parse store port: %v"
 )
 
 // TestDaemon is a struct that holds the test daemon instance and its dependencies.
@@ -211,7 +210,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	// P2P
 	_, _, p2pPort := allocatePort("") // libp2p doesn't support pre-created listeners
-	appSettings.P2P.BootstrapAddresses = []string{}
 	appSettings.P2P.StaticPeers = nil
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
 	appSettings.P2P.Port = p2pPort
@@ -309,7 +307,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.ProfilerAddr = ""
 	appSettings.RPC.CacheEnabled = false
 	appSettings.UsePrometheusGRPCMetrics = false
-	appSettings.P2P.BootstrapAddresses = nil
 
 	// Override with test settings...
 	if opts.SettingsOverrideFunc != nil {
@@ -1399,7 +1396,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 }
 
 // storeSubtreeFiles serializes and stores the subtree, subtree data, and subtree meta in the provided subtree store.
-func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData, subtreeMeta *subtreepkg.SubtreeMeta) error {
+func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data, subtreeMeta *subtreepkg.Meta) error {
 	subtreeBytes, err := subtree.Serialize()
 	if err != nil {
 		return err
@@ -1539,46 +1536,6 @@ func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int)
 type daemonDependency struct {
 	name string
 	port int
-}
-
-// calculateDependencies calculates the dependencies required for the daemon based on the provided app settings.
-// nolint:unused // This function is used to calculate the dependencies for the daemon.
-func calculateDependencies(t *testing.T, appSettings []*settings.Settings) []daemonDependency {
-	dependencies := make([]daemonDependency, 5)
-
-	// Blockchain store
-	blockchainURL := appSettings[0].BlockChain.StoreURL
-
-	port, err := strconv.Atoi(blockchainURL.Port())
-	if err != nil {
-		t.Fatalf(failedParsingStorePort, err)
-	}
-
-	dependencies = append(dependencies, daemonDependency{"postgres", port})
-
-	// Kafka
-	kafkaURL := appSettings[0].Kafka.BlocksConfig
-
-	port, err = strconv.Atoi(kafkaURL.Port())
-	if err != nil {
-		t.Fatalf(failedParsingStorePort, err)
-	}
-
-	dependencies = append(dependencies, daemonDependency{"kafka-shared", port})
-
-	// Aerospike
-	for i, s := range appSettings {
-		aeroURL := s.UtxoStore.UtxoStore
-
-		port, err = strconv.Atoi(aeroURL.Port())
-		if err != nil {
-			t.Fatalf(failedParsingStorePort, err)
-		}
-
-		dependencies = append(dependencies, daemonDependency{"aerospike-" + strconv.Itoa(i+1), port})
-	}
-
-	return dependencies
 }
 
 // StartDaemonDependencies starts the required dependencies for the daemon using Docker Compose.
@@ -1874,22 +1831,22 @@ func (td *TestDaemon) ConnectToPeer(t *testing.T, peer *TestDaemon) {
 
 			return
 		case <-ticker.C:
-			r, err := td.P2PClient.GetPeers(td.Ctx)
+			peers, err := td.P2PClient.GetPeers(td.Ctx)
 			if err != nil {
 				// If there's an error calling RPC, log it and continue retrying
 				t.Logf("Error calling getpeerinfo: %v. Retrying...", err)
 				continue
 			}
 
-			if len(r.Peers) == 0 {
+			if len(peers) == 0 {
 				t.Logf("getpeerinfo returned empty peer list. Retrying...")
 				continue
 			}
 
 			found := false
 
-			for _, p := range r.Peers {
-				if p != nil && p.Id == peer.Settings.P2P.PeerID {
+			for _, p := range peers {
+				if p != nil && p.ID.String() == peer.Settings.P2P.PeerID {
 					found = true
 					break
 				}

@@ -32,16 +32,14 @@ Container_Boundary(validator, "Validator Service") {
     Component(grpc_server, "gRPC Server", "Go gRPC", "Handles external validation API requests")
     Component(http_server, "HTTP Server", "Go HTTP", "Alternative HTTP API for validation requests")
 
-    Component(tx_validator, "Transaction Validator", "Go", "Core transaction validation logic with script interpreter")
-    Component(batch_processor, "Batch Processor", "Go", "Handles batched transaction validation for performance")
-    Component(size_router, "Size Router", "Go", "Routes large transactions via HTTP, small via Kafka")
+    Component(tx_validator, "Transaction Validator", "Go", "Core transaction validation logic with script interpreter and batch processing capability")
 
     Component(kafka_producer_txmeta, "TxMeta Kafka Producer", "Go Kafka", "Publishes transaction metadata")
     Component(kafka_producer_rejected, "Rejected Tx Kafka Producer", "Go Kafka", "Publishes rejected transaction notifications")
     Component(kafka_consumer, "Kafka Consumer", "Go Kafka", "Consumes validation requests from Propagation")
 
     Component(block_assembly_client, "Block Assembly Client", "Go gRPC", "Forwards valid transactions to Block Assembly")
-    Component(metrics_collector, "Metrics Collector", "Prometheus", "Collects validation performance metrics")
+    Component(prometheus_metrics, "Prometheus Metrics", "Prometheus", "Integrated metrics for validation performance")
     Component(health_monitor, "Health Monitor", "Go", "Monitors service health and dependencies")
 }
 
@@ -64,16 +62,14 @@ Rel(propagation, grpc_server, "Transaction validation", "gRPC")
 Rel(kafka, kafka_consumer, "Validation requests", "Kafka")
 
 ' Internal component interactions
-Rel(grpc_server, batch_processor, "Batch validation requests")
-Rel(http_server, batch_processor, "Individual validation requests")
-Rel(kafka_consumer, batch_processor, "Kafka validation requests")
-Rel(batch_processor, tx_validator, "Core validation")
-Rel(batch_processor, size_router, "Route by transaction size")
+Rel(grpc_server, tx_validator, "Validation requests", "gRPC")
+Rel(http_server, tx_validator, "Validation requests", "HTTP")
+Rel(kafka_consumer, tx_validator, "Validation requests", "Kafka")
 
-' Output routing
-Rel(size_router, block_assembly_client, "Valid transactions (direct)", "gRPC")
-Rel(size_router, kafka_producer_txmeta, "Transaction metadata", "Kafka")
-Rel(size_router, kafka_producer_rejected, "Rejected transactions", "Kafka")
+' Output routing - Validator outputs directly to Block Assembly and Kafka
+Rel(tx_validator, block_assembly_client, "Valid transactions", "gRPC")
+Rel(tx_validator, kafka_producer_txmeta, "Transaction metadata", "Kafka")
+Rel(tx_validator, kafka_producer_rejected, "Rejected transactions", "Kafka")
 
 ' External service interactions
 Rel(block_assembly_client, block_assembly, "Store valid transactions", "gRPC")
@@ -87,8 +83,7 @@ Rel(tx_validator, utxo_store, "UTXO validation/creation", "gRPC")
 Rel(tx_validator, blockchain, "Block height/chain state", "gRPC")
 
 ' Monitoring
-Rel(batch_processor, metrics_collector, "Validation metrics")
-Rel(tx_validator, metrics_collector, "Performance metrics")
+Rel(tx_validator, prometheus_metrics, "Performance metrics")
 Rel(health_monitor, utxo_store, "Health checks")
 Rel(health_monitor, blockchain, "Health checks")
 

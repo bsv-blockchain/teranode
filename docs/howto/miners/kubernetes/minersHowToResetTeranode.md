@@ -67,7 +67,7 @@ AEROSPIKE_POD=$(kubectl get pods -n teranode-operator -l app=aerospike -o jsonpa
 kubectl exec -it $AEROSPIKE_POD -n teranode-operator -- bash
 
 # Truncate the UTXO set
-asadm --enable -e "manage truncate ns utxo-store set utxo"
+asadm --enable -e "manage truncate ns utxo-store"
 
 # Verify the total records count (should slowly decrease to 0)
 asadm -e "info"

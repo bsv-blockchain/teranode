@@ -248,19 +248,19 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		stp.InitCurrentBlockHeader(moveBackBlock2.Header)
 
 		// Add transactions that would be in the blocks being moved back
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *conflictTx1Hash,
 			Fee:         300,
 			SizeInBytes: 400,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *conflictTx2Hash,
 			Fee:         400,
 			SizeInBytes: 500,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *uniqueTxHash,
 			Fee:         500,
 			SizeInBytes: 600,
@@ -419,13 +419,13 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		moveBackSubtree1, err := subtree.NewTreeByLeafCount(64)
 		require.NoError(t, err)
 		_ = moveBackSubtree1.AddCoinbaseNode()
-		err = moveBackSubtree1.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveBackSubtree1.AddSubtreeNode(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
 		})
 		require.NoError(t, err)
-		err = moveBackSubtree1.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveBackSubtree1.AddSubtreeNode(subtree.Node{
 			Hash:        *moveBackOnlyTxHash,
 			Fee:         700,
 			SizeInBytes: 800,
@@ -436,13 +436,13 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		moveBackSubtree2, err := subtree.NewTreeByLeafCount(64)
 		require.NoError(t, err)
 		_ = moveBackSubtree2.AddCoinbaseNode()
-		err = moveBackSubtree2.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveBackSubtree2.AddSubtreeNode(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
 		})
 		require.NoError(t, err)
-		err = moveBackSubtree2.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveBackSubtree2.AddSubtreeNode(subtree.Node{
 			Hash:        *moveBackOnlyTxHash,
 			Fee:         700,
 			SizeInBytes: 800,
@@ -475,13 +475,13 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		moveForwardSubtree1, err := subtree.NewTreeByLeafCount(64)
 		require.NoError(t, err)
 		_ = moveForwardSubtree1.AddCoinbaseNode()
-		err = moveForwardSubtree1.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveForwardSubtree1.AddSubtreeNode(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
 		})
 		require.NoError(t, err)
-		err = moveForwardSubtree1.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveForwardSubtree1.AddSubtreeNode(subtree.Node{
 			Hash:        *moveForwardOnlyTxHash,
 			Fee:         800,
 			SizeInBytes: 900,
@@ -492,13 +492,13 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		moveForwardSubtree2, err := subtree.NewTreeByLeafCount(64)
 		require.NoError(t, err)
 		_ = moveForwardSubtree2.AddCoinbaseNode()
-		err = moveForwardSubtree2.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveForwardSubtree2.AddSubtreeNode(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
 		})
 		require.NoError(t, err)
-		err = moveForwardSubtree2.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveForwardSubtree2.AddSubtreeNode(subtree.Node{
 			Hash:        *moveForwardOnlyTxHash,
 			Fee:         800,
 			SizeInBytes: 900,
@@ -533,13 +533,13 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		stp.InitCurrentBlockHeader(moveBackBlock.Header)
 
 		// Add initial transactions to simulate existing state
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *moveBackOnlyTxHash,
 			Fee:         700,
 			SizeInBytes: 800,
@@ -990,25 +990,25 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		// Add transactions to simulate they were processed up to block3
 		// tx1 and tx2 would have been processed in block2
 		// tx3 and tx4 would have been processed in block3
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *tx1Hash,
 			Fee:         100,
 			SizeInBytes: 250,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *tx2Hash,
 			Fee:         200,
 			SizeInBytes: 300,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *tx3Hash,
 			Fee:         300,
 			SizeInBytes: 400,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *tx4Hash,
 			Fee:         400,
 			SizeInBytes: 500,
@@ -1182,13 +1182,13 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		stp.InitCurrentBlockHeader(oldBlockHeader)
 
 		// Add transactions that would be in the old block
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *uniqueTxHash,
 			Fee:         100,
 			SizeInBytes: 250,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         200,
 			SizeInBytes: 300,
@@ -1219,7 +1219,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
 			// This simulates the duplicate transaction being processed in the new block
-			stp.Add(subtree.SubtreeNode{
+			stp.Add(subtree.Node{
 				Hash:        *duplicateTxHash, // Same transaction as before
 				Fee:         200,
 				SizeInBytes: 300,

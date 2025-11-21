@@ -44,7 +44,7 @@ type Interface interface {
 	// Parameters:
 	//   - node: The transaction node to add to processing
 	//   - txInpoints: Transaction input points for dependency tracking
-	Add(node subtree.SubtreeNode, txInpoints subtree.TxInpoints)
+	Add(node subtree.Node, txInpoints subtree.TxInpoints)
 
 	// AddDirectly adds a transaction node directly to the processor without
 	// using the queue. This is typically used for block assembly startup.
@@ -59,7 +59,7 @@ type Interface interface {
 	//   - error: Any error encountered during the addition
 	//
 	// Note: This method bypasses the normal queue processing and should be used
-	AddDirectly(node subtree.SubtreeNode, txInpoints subtree.TxInpoints, skipNotification bool) error
+	AddDirectly(node subtree.Node, txInpoints subtree.TxInpoints, skipNotification bool) error
 
 	// GetCurrentRunningState returns the current operational state of the processor.
 	// This provides visibility into whether the processor is running, stopped,
@@ -242,4 +242,10 @@ type Interface interface {
 	// Returns:
 	//   - error: Any error encountered while waiting
 	WaitForPendingBlocks(ctx context.Context) error
+
+	// Close gracefully shuts down the SubtreeProcessor.
+	// This method cancels the processor's internal context, which triggers the main
+	// processing goroutine to stop and clean up resources (such as the announcement ticker).
+	// It should be called when the processor is no longer needed to prevent resource leaks.
+	Close()
 }

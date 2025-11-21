@@ -146,11 +146,8 @@ services:
       - "15432:15432" # Proxied PostgreSQL port
     depends_on:
       - postgres
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8474/version"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+    # Note: No healthcheck - toxiproxy image is minimal (scratch-based) without curl/wget
+    # The test scripts validate connectivity before running tests
     command: -host=0.0.0.0 -config=/config/toxiproxy.json
     volumes:
       - ./scripts/toxiproxy-config.json:/config/toxiproxy.json
@@ -165,11 +162,8 @@ services:
       - "19092:19092" # Proxied Kafka port
     depends_on:
       - kafka-shared
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8474/version"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+    # Note: No healthcheck - toxiproxy image is minimal (scratch-based) without curl/wget
+    # The test scripts validate connectivity before running tests
     command: -host=0.0.0.0 -config=/config/toxiproxy.json
     volumes:
       - ./scripts/toxiproxy-config.json:/config/toxiproxy.json

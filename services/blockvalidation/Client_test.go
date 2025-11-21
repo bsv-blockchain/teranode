@@ -46,6 +46,13 @@ func (m *mockBlockValidationAPIClient) ProcessBlock(ctx context.Context, in *blo
 	}
 	return args.Get(0).(*blockvalidation_api.EmptyMessage), args.Error(1)
 }
+func (m *mockBlockValidationAPIClient) GetCatchupStatus(ctx context.Context, in *blockvalidation_api.EmptyMessage, opts ...grpc.CallOption) (*blockvalidation_api.CatchupStatusResponse, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockvalidation_api.CatchupStatusResponse), args.Error(1)
+}
 
 func (m *mockBlockValidationAPIClient) ValidateBlock(ctx context.Context, in *blockvalidation_api.ValidateBlockRequest, opts ...grpc.CallOption) (*blockvalidation_api.ValidateBlockResponse, error) {
 	args := m.Called(ctx, in, opts)
@@ -325,7 +332,7 @@ func TestClient_ProcessBlock(t *testing.T) {
 			return req.Height == 100 && len(req.Block) > 0
 		}), mock.Anything).Return(&blockvalidation_api.EmptyMessage{}, nil)
 
-		err := client.ProcessBlock(ctx, block, 100, "legacy", "")
+		err := client.ProcessBlock(ctx, block, 100, "", "legacy")
 		assert.NoError(t, err)
 		mockClient.AssertExpectations(t)
 	})
@@ -335,7 +342,7 @@ func TestClient_ProcessBlock(t *testing.T) {
 		mockClient.On("ProcessBlock", ctx, mock.Anything, mock.Anything).Return(
 			nil, status.Error(codes.Internal, "processing error"))
 
-		err := client.ProcessBlock(ctx, block, 100, "legacy", "")
+		err := client.ProcessBlock(ctx, block, 100, "", "legacy")
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
 	})
@@ -349,7 +356,7 @@ func TestClient_ProcessBlock(t *testing.T) {
 			Header: nil, // This should cause serialization to fail
 		}
 
-		err := client.ProcessBlock(ctx, invalidBlock, 100, "legacy", "")
+		err := client.ProcessBlock(ctx, invalidBlock, 100, "", "legacy")
 		assert.Error(t, err)
 		mockClient.AssertExpectations(t)
 	})

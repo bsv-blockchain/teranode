@@ -97,7 +97,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 		// Test with empty parent hashes - this will succeed
-		result, err := block.checkParentTransactions([]chainhash.Hash{}, 0, subtreepkg.SubtreeNode{Hash: *txHash}, txHash, 0, 0)
+		result, err := block.checkParentTransactions([]chainhash.Hash{}, 0, subtreepkg.Node{Hash: *txHash}, txHash, 0, 0)
 		assert.NoError(t, err)
 		assert.Len(t, result, 0)
 	})
@@ -212,7 +212,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		block := &Block{}
 
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{Hash: *txHash}
+		subtreeNode := subtreepkg.Node{Hash: *txHash}
 
 		deps := &validationDependencies{
 			txMetaStore:              createTestUTXOStore(t),
@@ -2295,7 +2295,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with no parent transactions
 		parentTxHashes := []chainhash.Hash{}
-		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.SubtreeNode{Hash: *hash1}, hash2, 0, 0)
+		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash1}, hash2, 0, 0)
 		require.NoError(t, err)
 		assert.Empty(t, missingParents)
 	})
@@ -2308,7 +2308,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with missing parent transaction
 		parentTxHashes := []chainhash.Hash{*hash1}
-		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.SubtreeNode{Hash: *hash2}, hash1, 0, 0)
+		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
 		require.NoError(t, err)
 		assert.Len(t, missingParents, 1)
 		assert.Equal(t, *hash1, missingParents[0].parentTxHash)
@@ -2327,7 +2327,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with parent in same block (valid order)
 		parentTxHashes := []chainhash.Hash{*hash1}
-		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.SubtreeNode{Hash: *hash2}, hash1, 0, 0)
+		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
 		require.NoError(t, err)
 		assert.Empty(t, missingParents) // Should be empty since parent is in same block
 	})
@@ -2344,7 +2344,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with parent in same block but invalid order
 		parentTxHashes := []chainhash.Hash{*hash1}
-		_, err = block.checkParentTransactions(parentTxHashes, 1, subtreepkg.SubtreeNode{Hash: *hash2}, hash1, 0, 0)
+		_, err = block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "comes before parent transaction")
 	})
@@ -2572,7 +2572,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 		}
 
 		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{Hash: *hash1}
+		subtreeNode := subtreepkg.Node{Hash: *hash1}
 
 		// Should succeed with empty bloom filters
 		err = block.checkTxInRecentBlocks(ctx, deps, validationCtx, subtreeNode, hash1, 0, 0)
@@ -2602,7 +2602,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 			subtreeHash:      hash1,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *hash1},
+			subtreeNode:      subtreepkg.Node{Hash: *hash1},
 		}
 
 		// Should error because transaction not in txMap
@@ -3249,7 +3249,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create subtree meta slice with valid inpoints
-		subtreeMetaSlice := &subtreepkg.SubtreeMeta{}
+		subtreeMetaSlice := &subtreepkg.Meta{}
 
 		// Create validation context with empty parent spends map
 		validationCtx := &validationContext{
@@ -3258,7 +3258,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create subtree hash and node
 		subtreeHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *subtreeHash,
 		}
 
@@ -3300,10 +3300,10 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create a mock subtree meta slice that would return the same inpoint
 		// This simulates the duplicate input scenario
-		subtreeMetaSlice := &subtreepkg.SubtreeMeta{}
+		subtreeMetaSlice := &subtreepkg.Meta{}
 
 		subtreeHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *subtreeHash,
 		}
 
@@ -3335,10 +3335,10 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 		}
 
 		// Create empty subtree meta slice (will likely cause GetTxInpoints to error)
-		subtreeMetaSlice := &subtreepkg.SubtreeMeta{}
+		subtreeMetaSlice := &subtreepkg.Meta{}
 
 		subtreeHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *subtreeHash,
 		}
 
@@ -3373,9 +3373,9 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 		}
 
 		// Test with various edge case values
-		subtreeMetaSlice := &subtreepkg.SubtreeMeta{}
+		subtreeMetaSlice := &subtreepkg.Meta{}
 		subtreeHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *subtreeHash,
 		}
 
@@ -3430,7 +3430,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 
 		// Create subtree node
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *txHash,
 		}
 		subtreeHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
@@ -3482,7 +3482,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 
 		// Create subtree node
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *txHash,
 		}
 		subtreeHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
@@ -3536,7 +3536,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 
 		// Create subtree node with hash that won't be in the empty bloom filter
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *txHash,
 		}
 		subtreeHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
@@ -3595,7 +3595,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 		}
 
 		// Create subtree node with the hash we added to bloom filter
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *txHash,
 		}
 		subtreeHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
@@ -4387,7 +4387,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Transaction not in txMap should return error
@@ -4431,7 +4431,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Should succeed with no missing parents
@@ -4475,7 +4475,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Should return missing parents for further validation
@@ -4521,7 +4521,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Should error due to invalid parent ordering
@@ -4570,7 +4570,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Test exercises duplicate input checking
@@ -4621,7 +4621,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Test exercises recent blocks checking logic

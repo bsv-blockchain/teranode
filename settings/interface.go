@@ -170,33 +170,34 @@ type AssetSettings struct {
 }
 
 type BlockSettings struct {
-	MinedCacheMaxMB                       int
-	PersisterStore                        *url.URL
-	PersisterHTTPListenAddress            string
-	StateFile                             string
-	CheckDuplicateTransactionsConcurrency int
-	GetAndValidateSubtreesConcurrency     int
-	KafkaWorkers                          int
-	ValidOrderAndBlessedConcurrency       int
-	MaxSize                               int
-	BlockStore                            *url.URL
-	FailFastValidation                    bool
-	FinalizeBlockValidationConcurrency    int
-	GetMissingTransactions                int
-	QuorumTimeout                         time.Duration
-	BlockPersisterConcurrency             int
-	BatchMissingTransactions              bool
-	ProcessTxMetaUsingStoreBatchSize      int
-	SkipUTXODelete                        bool
-	UTXOPersisterBufferSize               string
-	TxStore                               *url.URL
-	UTXOPersisterDirect                   bool
-	BlockPersisterPersistAge              uint32
-	BlockPersisterPersistSleep            time.Duration
-	UtxoStore                             *url.URL
-	FileStoreReadConcurrency              int
-	FileStoreWriteConcurrency             int
-	FileStoreUseSystemLimits              bool
+	MinedCacheMaxMB                         int
+	PersisterStore                          *url.URL
+	PersisterHTTPListenAddress              string
+	StateFile                               string
+	CheckDuplicateTransactionsConcurrency   int
+	GetAndValidateSubtreesConcurrency       int
+	KafkaWorkers                            int
+	ValidOrderAndBlessedConcurrency         int
+	MaxSize                                 int
+	BlockStore                              *url.URL
+	FailFastValidation                      bool
+	FinalizeBlockValidationConcurrency      int
+	GetMissingTransactions                  int
+	QuorumTimeout                           time.Duration
+	BlockPersisterConcurrency               int
+	BatchMissingTransactions                bool
+	ProcessTxMetaUsingStoreBatchSize        int
+	SkipUTXODelete                          bool
+	UTXOPersisterBufferSize                 string
+	TxStore                                 *url.URL
+	UTXOPersisterDirect                     bool
+	BlockPersisterPersistAge                uint32
+	BlockPersisterPersistSleep              time.Duration
+	BlockPersisterEnableDefensiveReorgCheck bool
+	UtxoStore                               *url.URL
+	FileStoreReadConcurrency                int
+	FileStoreWriteConcurrency               int
+	FileStoreUseSystemLimits                bool
 }
 
 type BlockChainSettings struct {
@@ -239,9 +240,14 @@ type BlockAssemblySettings struct {
 	DifficultyCache                     bool
 	UseDynamicSubtreeSize               bool
 	MiningCandidateCacheTimeout         time.Duration
+	MiningCandidateSmartCacheMaxAge     time.Duration
 	BlockchainSubscriptionTimeout       time.Duration
 	ValidateParentChainOnRestart        bool
 	ParentValidationBatchSize           int
+	// GetMiningCandidate timeouts
+	GetMiningCandidateSendTimeout     time.Duration // Timeout when sending request on internal channel (default: 1s)
+	GetMiningCandidateResponseTimeout time.Duration // Timeout waiting for mining candidate response (default: 10s)
+	SubtreeAnnouncementInterval       time.Duration
 }
 
 type BlockValidationSettings struct {
@@ -294,7 +300,7 @@ type BlockValidationSettings struct {
 	// Block fetching configuration
 	FetchLargeBatchSize     int // Large batches for maximum HTTP efficiency (default: 100, peer limit)
 	FetchNumWorkers         int // Number of worker goroutines for parallel processing (default: 16)
-	FetchBufferSize         int // Buffer size for channels (default: 500)
+	FetchBufferSize         int // Buffer size for channels (default: 50)
 	SubtreeFetchConcurrency int // Concurrent subtree fetches per block (default: 8)
 	// Transaction extension timeout
 	ExtendTransactionTimeout time.Duration // Timeout for extending transactions (default: 120s)
@@ -376,8 +382,6 @@ type UtxoStoreSettings struct {
 }
 
 type P2PSettings struct {
-	BootstrapAddresses []string
-
 	GRPCAddress       string
 	GRPCListenAddress string
 
@@ -398,8 +402,8 @@ type P2PSettings struct {
 	RejectedTxTopic string
 	SubtreeTopic    string
 
-	StaticPeers []string
-	RelayPeers  []string // Relay peers for NAT traversal (multiaddr strings)
+	StaticPeers    []string
+	BootstrapPeers []string // Bootstrap peers for DHT and relay (multiaddr strings)
 
 	// Peer persistence (from go-p2p improvements)
 	PeerCacheDir string // Directory for peer cache file (empty = binary directory)
@@ -420,19 +424,30 @@ type P2PSettings struct {
 	PeerMapTTL             time.Duration // Time-to-live for peer map entries (default: 30m)
 	PeerMapCleanupInterval time.Duration // Cleanup interval (default: 5m)
 
-	// Peer health checker configuration
-	PeerHealthCheckInterval       time.Duration // Interval between health checks (default: 30s)
-	PeerHealthHTTPTimeout         time.Duration // HTTP timeout for DataHub checks (default: 5s)
-	PeerHealthRemoveAfterFailures int           // Consecutive failures before removing a peer (default: 3)
-
 	// DHT configuration
 	DHTMode            string        // DHT mode: "server" (default, advertises on DHT) or "client" (query-only, no provider storage)
 	DHTCleanupInterval time.Duration // Interval for DHT provider record cleanup (default: 24h, only applies to server mode)
 
-	// DisableNAT disables NAT traversal features (UPnP/NAT-PMP port mapping, NAT service, hole punching).
-	// Set to true in test environments where NAT traversal is not needed.
-	// Default: false (NAT features enabled)
-	DisableNAT bool
+	// EnableNAT enables UPnP/NAT-PMP automatic port mapping features.
+	// When enabled, scans the local gateway (e.g., 10.0.0.1) to configure port forwarding.
+	// IMPORTANT: Triggers network scanning alerts on shared hosting (Hetzner, AWS).
+	// Only enable for local development behind a home router/NAT.
+	// Default: false (NAT features disabled for production safety)
+	EnableNAT bool
+
+	// EnableMDNS enables multicast DNS peer discovery on the local network.
+	// IMPORTANT: Only enable on isolated local networks. On shared hosting (e.g., Hetzner, AWS)
+	// without VLANs, mDNS broadcasts appear as network scanning and may result in abuse reports.
+	// Default: false (mDNS disabled for production safety)
+	// Set to true only for local development networks with proper isolation
+	EnableMDNS bool
+
+	// AllowPrivateIPs allows connections to private/local IP addresses during peer discovery.
+	// When true, allows connections to RFC1918 private networks (10.x, 172.16.x, 192.168.x).
+	// IMPORTANT: Only enable on private networks. On shared hosting, this may trigger network scanning alerts.
+	// Default: false (private IPs filtered for production safety)
+	// Set to true only for local development or private network deployments
+	AllowPrivateIPs bool
 
 	// Node mode configuration (full vs pruned)
 	AllowPrunedNodeFallback bool // If true, fall back to pruned nodes when no full nodes available (default: true). Selects youngest pruned node (smallest height) to minimize UTXO pruning risk.

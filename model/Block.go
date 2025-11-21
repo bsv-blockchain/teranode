@@ -698,13 +698,13 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	defer deferFn()
 
 	var (
-		subtreeMetaSlice    *subtreepkg.SubtreeMeta
+		subtreeMetaSlice    *subtreepkg.Meta
 		subtreeHash         = subtree.RootHash()
 		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes))
 		err                 error
 	)
 
-	subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*subtreepkg.SubtreeMeta, error) {
+	subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*subtreepkg.Meta, error) {
 		return b.getSubtreeMetaSlice(ctx, deps.subtreeStore, *subtreeHash, subtree)
 	}, retry.WithMessage(fmt.Sprintf("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice", b.String(), subtreeHash.String(), sIdx)))
 
@@ -806,7 +806,7 @@ func (b *Block) getValidationConcurrency(validOrderAndBlessedConcurrency int) in
 }
 
 func (b *Block) checkTxInRecentBlocks(ctx context.Context, deps *validationDependencies, validationCtx *validationContext,
-	subtreeNode subtreepkg.SubtreeNode, subtreeHash *chainhash.Hash, sIdx, snIdx int) error {
+	subtreeNode subtreepkg.Node, subtreeHash *chainhash.Hash, sIdx, snIdx int) error {
 	// get first 8 bytes of the subtreeNode hash
 	n64 := binary.BigEndian.Uint64(subtreeNode.Hash[:])
 
@@ -923,10 +923,10 @@ func ErrCheckParentExistsOnChain(gCtx context.Context, currentBlockHeaderIDsMap 
 }
 
 type transactionValidationParams struct {
-	subtreeMetaSlice *subtreepkg.SubtreeMeta
+	subtreeMetaSlice *subtreepkg.Meta
 	subtreeHash      *chainhash.Hash
 	sIdx, snIdx      int
-	subtreeNode      subtreepkg.SubtreeNode
+	subtreeNode      subtreepkg.Node
 }
 
 func (b *Block) validateTransaction(ctx context.Context, deps *validationDependencies, validationCtx *validationContext,
@@ -964,8 +964,8 @@ func (b *Block) validateTransaction(ctx context.Context, deps *validationDepende
 	return b.checkParentTransactions(parentTxHashes, txIdx, params.subtreeNode, params.subtreeHash, params.sIdx, params.snIdx)
 }
 
-func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.SubtreeMeta, validationCtx *validationContext,
-	subtreeHash *chainhash.Hash, sIdx, snIdx int, subtreeNode subtreepkg.SubtreeNode) error {
+func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validationCtx *validationContext,
+	subtreeHash *chainhash.Hash, sIdx, snIdx int, subtreeNode subtreepkg.Node) error {
 	txInpoints, err := subtreeMetaSlice.GetTxInpoints(snIdx)
 	if err != nil {
 		return errors.NewStorageError("[validOrderAndBlessed][%s][%s:%d]:%d error getting tx inpoints from subtree meta slice",
@@ -983,7 +983,7 @@ func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.SubtreeMeta, v
 }
 
 func (b *Block) checkParentTransactions(parentTxHashes []chainhash.Hash, txIdx uint64,
-	subtreeNode subtreepkg.SubtreeNode, subtreeHash *chainhash.Hash, sIdx, snIdx int) ([]missingParentTx, error) {
+	subtreeNode subtreepkg.Node, subtreeHash *chainhash.Hash, sIdx, snIdx int) ([]missingParentTx, error) {
 	checkParentTxHashes := make([]missingParentTx, 0, len(parentTxHashes))
 
 	for _, parentTxHash := range parentTxHashes {
@@ -1204,7 +1204,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	return nil
 }
 
-func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree) (*subtreepkg.SubtreeMeta, error) {
+func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree) (*subtreepkg.Meta, error) {
 	// get subtree meta
 	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 	if err != nil {

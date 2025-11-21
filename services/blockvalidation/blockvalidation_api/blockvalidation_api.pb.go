@@ -126,7 +126,7 @@ type BlockFoundRequest struct {
 	Hash           []byte                 `protobuf:"bytes,1,opt,name=hash,proto3" json:"hash,omitempty"`
 	BaseUrl        string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
 	WaitToComplete bool                   `protobuf:"varint,3,opt,name=wait_to_complete,json=waitToComplete,proto3" json:"wait_to_complete,omitempty"`
-	PeerId         string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peerMetrics tracking
+	PeerId         string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peer tracking via P2P service
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -195,7 +195,7 @@ type ProcessBlockRequest struct {
 	Block         []byte                 `protobuf:"bytes,1,opt,name=block,proto3" json:"block,omitempty"`
 	Height        uint32                 `protobuf:"varint,2,opt,name=height,proto3" json:"height,omitempty"`
 	BaseUrl       string                 `protobuf:"bytes,3,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
-	PeerId        string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peerMetrics tracking
+	PeerId        string                 `protobuf:"bytes,4,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"` // P2P peer identifier for peer tracking via P2P service
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -417,6 +417,272 @@ func (x *RevalidateBlockRequest) GetHash() []byte {
 	return nil
 }
 
+// swagger:model PreviousCatchupAttempt
+type PreviousCatchupAttempt struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	PeerId            string                 `protobuf:"bytes,1,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	PeerUrl           string                 `protobuf:"bytes,2,opt,name=peer_url,json=peerUrl,proto3" json:"peer_url,omitempty"`
+	TargetBlockHash   string                 `protobuf:"bytes,3,opt,name=target_block_hash,json=targetBlockHash,proto3" json:"target_block_hash,omitempty"`
+	TargetBlockHeight uint32                 `protobuf:"varint,4,opt,name=target_block_height,json=targetBlockHeight,proto3" json:"target_block_height,omitempty"`
+	ErrorMessage      string                 `protobuf:"bytes,5,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	ErrorType         string                 `protobuf:"bytes,6,opt,name=error_type,json=errorType,proto3" json:"error_type,omitempty"`
+	AttemptTime       int64                  `protobuf:"varint,7,opt,name=attempt_time,json=attemptTime,proto3" json:"attempt_time,omitempty"`
+	DurationMs        int64                  `protobuf:"varint,8,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	BlocksValidated   int64                  `protobuf:"varint,9,opt,name=blocks_validated,json=blocksValidated,proto3" json:"blocks_validated,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *PreviousCatchupAttempt) Reset() {
+	*x = PreviousCatchupAttempt{}
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PreviousCatchupAttempt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PreviousCatchupAttempt) ProtoMessage() {}
+
+func (x *PreviousCatchupAttempt) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PreviousCatchupAttempt.ProtoReflect.Descriptor instead.
+func (*PreviousCatchupAttempt) Descriptor() ([]byte, []int) {
+	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *PreviousCatchupAttempt) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
+	}
+	return ""
+}
+
+func (x *PreviousCatchupAttempt) GetPeerUrl() string {
+	if x != nil {
+		return x.PeerUrl
+	}
+	return ""
+}
+
+func (x *PreviousCatchupAttempt) GetTargetBlockHash() string {
+	if x != nil {
+		return x.TargetBlockHash
+	}
+	return ""
+}
+
+func (x *PreviousCatchupAttempt) GetTargetBlockHeight() uint32 {
+	if x != nil {
+		return x.TargetBlockHeight
+	}
+	return 0
+}
+
+func (x *PreviousCatchupAttempt) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
+func (x *PreviousCatchupAttempt) GetErrorType() string {
+	if x != nil {
+		return x.ErrorType
+	}
+	return ""
+}
+
+func (x *PreviousCatchupAttempt) GetAttemptTime() int64 {
+	if x != nil {
+		return x.AttemptTime
+	}
+	return 0
+}
+
+func (x *PreviousCatchupAttempt) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *PreviousCatchupAttempt) GetBlocksValidated() int64 {
+	if x != nil {
+		return x.BlocksValidated
+	}
+	return 0
+}
+
+// swagger:model CatchupStatusResponse
+type CatchupStatusResponse struct {
+	state                protoimpl.MessageState  `protogen:"open.v1"`
+	IsCatchingUp         bool                    `protobuf:"varint,1,opt,name=is_catching_up,json=isCatchingUp,proto3" json:"is_catching_up,omitempty"`
+	PeerId               string                  `protobuf:"bytes,2,opt,name=peer_id,json=peerId,proto3" json:"peer_id,omitempty"`
+	PeerUrl              string                  `protobuf:"bytes,3,opt,name=peer_url,json=peerUrl,proto3" json:"peer_url,omitempty"`
+	TargetBlockHash      string                  `protobuf:"bytes,4,opt,name=target_block_hash,json=targetBlockHash,proto3" json:"target_block_hash,omitempty"`
+	TargetBlockHeight    uint32                  `protobuf:"varint,5,opt,name=target_block_height,json=targetBlockHeight,proto3" json:"target_block_height,omitempty"`
+	CurrentHeight        uint32                  `protobuf:"varint,6,opt,name=current_height,json=currentHeight,proto3" json:"current_height,omitempty"`
+	TotalBlocks          int32                   `protobuf:"varint,7,opt,name=total_blocks,json=totalBlocks,proto3" json:"total_blocks,omitempty"`
+	BlocksFetched        int64                   `protobuf:"varint,8,opt,name=blocks_fetched,json=blocksFetched,proto3" json:"blocks_fetched,omitempty"`
+	BlocksValidated      int64                   `protobuf:"varint,9,opt,name=blocks_validated,json=blocksValidated,proto3" json:"blocks_validated,omitempty"`
+	StartTime            int64                   `protobuf:"varint,10,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
+	DurationMs           int64                   `protobuf:"varint,11,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	ForkDepth            uint32                  `protobuf:"varint,12,opt,name=fork_depth,json=forkDepth,proto3" json:"fork_depth,omitempty"`
+	CommonAncestorHash   string                  `protobuf:"bytes,13,opt,name=common_ancestor_hash,json=commonAncestorHash,proto3" json:"common_ancestor_hash,omitempty"`
+	CommonAncestorHeight uint32                  `protobuf:"varint,14,opt,name=common_ancestor_height,json=commonAncestorHeight,proto3" json:"common_ancestor_height,omitempty"`
+	PreviousAttempt      *PreviousCatchupAttempt `protobuf:"bytes,15,opt,name=previous_attempt,json=previousAttempt,proto3" json:"previous_attempt,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *CatchupStatusResponse) Reset() {
+	*x = CatchupStatusResponse{}
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CatchupStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CatchupStatusResponse) ProtoMessage() {}
+
+func (x *CatchupStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CatchupStatusResponse.ProtoReflect.Descriptor instead.
+func (*CatchupStatusResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *CatchupStatusResponse) GetIsCatchingUp() bool {
+	if x != nil {
+		return x.IsCatchingUp
+	}
+	return false
+}
+
+func (x *CatchupStatusResponse) GetPeerId() string {
+	if x != nil {
+		return x.PeerId
+	}
+	return ""
+}
+
+func (x *CatchupStatusResponse) GetPeerUrl() string {
+	if x != nil {
+		return x.PeerUrl
+	}
+	return ""
+}
+
+func (x *CatchupStatusResponse) GetTargetBlockHash() string {
+	if x != nil {
+		return x.TargetBlockHash
+	}
+	return ""
+}
+
+func (x *CatchupStatusResponse) GetTargetBlockHeight() uint32 {
+	if x != nil {
+		return x.TargetBlockHeight
+	}
+	return 0
+}
+
+func (x *CatchupStatusResponse) GetCurrentHeight() uint32 {
+	if x != nil {
+		return x.CurrentHeight
+	}
+	return 0
+}
+
+func (x *CatchupStatusResponse) GetTotalBlocks() int32 {
+	if x != nil {
+		return x.TotalBlocks
+	}
+	return 0
+}
+
+func (x *CatchupStatusResponse) GetBlocksFetched() int64 {
+	if x != nil {
+		return x.BlocksFetched
+	}
+	return 0
+}
+
+func (x *CatchupStatusResponse) GetBlocksValidated() int64 {
+	if x != nil {
+		return x.BlocksValidated
+	}
+	return 0
+}
+
+func (x *CatchupStatusResponse) GetStartTime() int64 {
+	if x != nil {
+		return x.StartTime
+	}
+	return 0
+}
+
+func (x *CatchupStatusResponse) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *CatchupStatusResponse) GetForkDepth() uint32 {
+	if x != nil {
+		return x.ForkDepth
+	}
+	return 0
+}
+
+func (x *CatchupStatusResponse) GetCommonAncestorHash() string {
+	if x != nil {
+		return x.CommonAncestorHash
+	}
+	return ""
+}
+
+func (x *CatchupStatusResponse) GetCommonAncestorHeight() uint32 {
+	if x != nil {
+		return x.CommonAncestorHeight
+	}
+	return 0
+}
+
+func (x *CatchupStatusResponse) GetPreviousAttempt() *PreviousCatchupAttempt {
+	if x != nil {
+		return x.PreviousAttempt
+	}
+	return nil
+}
+
 var File_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto protoreflect.FileDescriptor
 
 const file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDesc = "" +
@@ -445,7 +711,39 @@ const file_services_blockvalidation_blockvalidation_api_blockvalidation_api_prot
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\",\n" +
 	"\x16RevalidateBlockRequest\x12\x12\n" +
-	"\x04hash\x18\x01 \x01(\fR\x04hash2\xf5\x03\n" +
+	"\x04hash\x18\x01 \x01(\fR\x04hash\"\xdb\x02\n" +
+	"\x16PreviousCatchupAttempt\x12\x17\n" +
+	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12\x19\n" +
+	"\bpeer_url\x18\x02 \x01(\tR\apeerUrl\x12*\n" +
+	"\x11target_block_hash\x18\x03 \x01(\tR\x0ftargetBlockHash\x12.\n" +
+	"\x13target_block_height\x18\x04 \x01(\rR\x11targetBlockHeight\x12#\n" +
+	"\rerror_message\x18\x05 \x01(\tR\ferrorMessage\x12\x1d\n" +
+	"\n" +
+	"error_type\x18\x06 \x01(\tR\terrorType\x12!\n" +
+	"\fattempt_time\x18\a \x01(\x03R\vattemptTime\x12\x1f\n" +
+	"\vduration_ms\x18\b \x01(\x03R\n" +
+	"durationMs\x12)\n" +
+	"\x10blocks_validated\x18\t \x01(\x03R\x0fblocksValidated\"\x88\x05\n" +
+	"\x15CatchupStatusResponse\x12$\n" +
+	"\x0eis_catching_up\x18\x01 \x01(\bR\fisCatchingUp\x12\x17\n" +
+	"\apeer_id\x18\x02 \x01(\tR\x06peerId\x12\x19\n" +
+	"\bpeer_url\x18\x03 \x01(\tR\apeerUrl\x12*\n" +
+	"\x11target_block_hash\x18\x04 \x01(\tR\x0ftargetBlockHash\x12.\n" +
+	"\x13target_block_height\x18\x05 \x01(\rR\x11targetBlockHeight\x12%\n" +
+	"\x0ecurrent_height\x18\x06 \x01(\rR\rcurrentHeight\x12!\n" +
+	"\ftotal_blocks\x18\a \x01(\x05R\vtotalBlocks\x12%\n" +
+	"\x0eblocks_fetched\x18\b \x01(\x03R\rblocksFetched\x12)\n" +
+	"\x10blocks_validated\x18\t \x01(\x03R\x0fblocksValidated\x12\x1d\n" +
+	"\n" +
+	"start_time\x18\n" +
+	" \x01(\x03R\tstartTime\x12\x1f\n" +
+	"\vduration_ms\x18\v \x01(\x03R\n" +
+	"durationMs\x12\x1d\n" +
+	"\n" +
+	"fork_depth\x18\f \x01(\rR\tforkDepth\x120\n" +
+	"\x14common_ancestor_hash\x18\r \x01(\tR\x12commonAncestorHash\x124\n" +
+	"\x16common_ancestor_height\x18\x0e \x01(\rR\x14commonAncestorHeight\x12V\n" +
+	"\x10previous_attempt\x18\x0f \x01(\v2+.blockvalidation_api.PreviousCatchupAttemptR\x0fpreviousAttempt2\xda\x04\n" +
 	"\x12BlockValidationAPI\x12V\n" +
 	"\n" +
 	"HealthGRPC\x12!.blockvalidation_api.EmptyMessage\x1a#.blockvalidation_api.HealthResponse\"\x00\x12Y\n" +
@@ -453,7 +751,8 @@ const file_services_blockvalidation_blockvalidation_api_blockvalidation_api_prot
 	"BlockFound\x12&.blockvalidation_api.BlockFoundRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12]\n" +
 	"\fProcessBlock\x12(.blockvalidation_api.ProcessBlockRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12h\n" +
 	"\rValidateBlock\x12).blockvalidation_api.ValidateBlockRequest\x1a*.blockvalidation_api.ValidateBlockResponse\"\x00\x12c\n" +
-	"\x0fRevalidateBlock\x12+.blockvalidation_api.RevalidateBlockRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00B\x18Z\x16./;blockvalidation_apib\x06proto3"
+	"\x0fRevalidateBlock\x12+.blockvalidation_api.RevalidateBlockRequest\x1a!.blockvalidation_api.EmptyMessage\"\x00\x12c\n" +
+	"\x10GetCatchupStatus\x12!.blockvalidation_api.EmptyMessage\x1a*.blockvalidation_api.CatchupStatusResponse\"\x00B\x18Z\x16./;blockvalidation_apib\x06proto3"
 
 var (
 	file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescOnce sync.Once
@@ -467,7 +766,7 @@ func file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto
 	return file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDescData
 }
 
-var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_goTypes = []any{
 	(*EmptyMessage)(nil),           // 0: blockvalidation_api.EmptyMessage
 	(*HealthResponse)(nil),         // 1: blockvalidation_api.HealthResponse
@@ -476,25 +775,30 @@ var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_
 	(*ValidateBlockRequest)(nil),   // 4: blockvalidation_api.ValidateBlockRequest
 	(*ValidateBlockResponse)(nil),  // 5: blockvalidation_api.ValidateBlockResponse
 	(*RevalidateBlockRequest)(nil), // 6: blockvalidation_api.RevalidateBlockRequest
-	(*timestamppb.Timestamp)(nil),  // 7: google.protobuf.Timestamp
+	(*PreviousCatchupAttempt)(nil), // 7: blockvalidation_api.PreviousCatchupAttempt
+	(*CatchupStatusResponse)(nil),  // 8: blockvalidation_api.CatchupStatusResponse
+	(*timestamppb.Timestamp)(nil),  // 9: google.protobuf.Timestamp
 }
 var file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_depIdxs = []int32{
-	7, // 0: blockvalidation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	0, // 1: blockvalidation_api.BlockValidationAPI.HealthGRPC:input_type -> blockvalidation_api.EmptyMessage
-	2, // 2: blockvalidation_api.BlockValidationAPI.BlockFound:input_type -> blockvalidation_api.BlockFoundRequest
-	3, // 3: blockvalidation_api.BlockValidationAPI.ProcessBlock:input_type -> blockvalidation_api.ProcessBlockRequest
-	4, // 4: blockvalidation_api.BlockValidationAPI.ValidateBlock:input_type -> blockvalidation_api.ValidateBlockRequest
-	6, // 5: blockvalidation_api.BlockValidationAPI.RevalidateBlock:input_type -> blockvalidation_api.RevalidateBlockRequest
-	1, // 6: blockvalidation_api.BlockValidationAPI.HealthGRPC:output_type -> blockvalidation_api.HealthResponse
-	0, // 7: blockvalidation_api.BlockValidationAPI.BlockFound:output_type -> blockvalidation_api.EmptyMessage
-	0, // 8: blockvalidation_api.BlockValidationAPI.ProcessBlock:output_type -> blockvalidation_api.EmptyMessage
-	5, // 9: blockvalidation_api.BlockValidationAPI.ValidateBlock:output_type -> blockvalidation_api.ValidateBlockResponse
-	0, // 10: blockvalidation_api.BlockValidationAPI.RevalidateBlock:output_type -> blockvalidation_api.EmptyMessage
-	6, // [6:11] is the sub-list for method output_type
-	1, // [1:6] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	9, // 0: blockvalidation_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	7, // 1: blockvalidation_api.CatchupStatusResponse.previous_attempt:type_name -> blockvalidation_api.PreviousCatchupAttempt
+	0, // 2: blockvalidation_api.BlockValidationAPI.HealthGRPC:input_type -> blockvalidation_api.EmptyMessage
+	2, // 3: blockvalidation_api.BlockValidationAPI.BlockFound:input_type -> blockvalidation_api.BlockFoundRequest
+	3, // 4: blockvalidation_api.BlockValidationAPI.ProcessBlock:input_type -> blockvalidation_api.ProcessBlockRequest
+	4, // 5: blockvalidation_api.BlockValidationAPI.ValidateBlock:input_type -> blockvalidation_api.ValidateBlockRequest
+	6, // 6: blockvalidation_api.BlockValidationAPI.RevalidateBlock:input_type -> blockvalidation_api.RevalidateBlockRequest
+	0, // 7: blockvalidation_api.BlockValidationAPI.GetCatchupStatus:input_type -> blockvalidation_api.EmptyMessage
+	1, // 8: blockvalidation_api.BlockValidationAPI.HealthGRPC:output_type -> blockvalidation_api.HealthResponse
+	0, // 9: blockvalidation_api.BlockValidationAPI.BlockFound:output_type -> blockvalidation_api.EmptyMessage
+	0, // 10: blockvalidation_api.BlockValidationAPI.ProcessBlock:output_type -> blockvalidation_api.EmptyMessage
+	5, // 11: blockvalidation_api.BlockValidationAPI.ValidateBlock:output_type -> blockvalidation_api.ValidateBlockResponse
+	0, // 12: blockvalidation_api.BlockValidationAPI.RevalidateBlock:output_type -> blockvalidation_api.EmptyMessage
+	8, // 13: blockvalidation_api.BlockValidationAPI.GetCatchupStatus:output_type -> blockvalidation_api.CatchupStatusResponse
+	8, // [8:14] is the sub-list for method output_type
+	2, // [2:8] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_init() }
@@ -508,7 +812,7 @@ func file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDesc), len(file_services_blockvalidation_blockvalidation_api_blockvalidation_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

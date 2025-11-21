@@ -80,7 +80,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 		}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{
 						Hash: *subtree.CoinbasePlaceholderHash,
 					},
@@ -96,7 +96,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 				},
 			},
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{
 						Hash: *tx4.TxIDChainHash(),
 					},
@@ -243,7 +243,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 	block.Subtrees = []*chainhash.Hash{testTx1.TxIDChainHash()}
 	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *testTx1.TxIDChainHash()},
 				{Hash: *testTx2.TxIDChainHash()},
 			},
@@ -385,7 +385,7 @@ func TestUpdateTxMinedStatus_ContextCancellation(t *testing.T) {
 	block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *testTx.TxIDChainHash()},
 			},
 		},
@@ -420,7 +420,7 @@ func TestUpdateTxMinedStatus_ConfigurationDisabled(t *testing.T) {
 	block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *testTx.TxIDChainHash()},
 			},
 		},
@@ -467,7 +467,7 @@ func TestUpdateTxMinedStatus_DifferentBatchSizes(t *testing.T) {
 	multiTxBlock.Subtrees = []*chainhash.Hash{multiTxHash}
 	multiTxBlock.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *newTx(1).TxIDChainHash()},
 				{Hash: *newTx(2).TxIDChainHash()},
 				{Hash: *newTx(3).TxIDChainHash()},
@@ -514,7 +514,7 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 	block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *subtree.CoinbasePlaceholderHash}, // Coinbase placeholder (should be skipped)
 				{Hash: *testTx.TxIDChainHash()},          // Regular transaction
 			},
@@ -551,7 +551,7 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 		wrongPosBlock.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 		wrongPosBlock.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *testTx.TxIDChainHash()},          // Regular transaction first
 					{Hash: *subtree.CoinbasePlaceholderHash}, // Coinbase placeholder in wrong position
 				},
@@ -597,19 +597,19 @@ func TestUpdateTxMinedStatus_ConcurrentProcessing(t *testing.T) {
 	}
 	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *newTx(1).TxIDChainHash()},
 				{Hash: *newTx(2).TxIDChainHash()},
 			},
 		},
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *newTx(3).TxIDChainHash()},
 				{Hash: *newTx(4).TxIDChainHash()},
 			},
 		},
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *newTx(5).TxIDChainHash()},
 			},
 		},
@@ -680,7 +680,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{subtreeHash}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *newTx(1).TxIDChainHash()},
 					{Hash: *newTx(2).TxIDChainHash()},
 					{Hash: *newTx(3).TxIDChainHash()},
@@ -723,7 +723,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *testTx.TxIDChainHash()},
 				},
 			},
@@ -762,7 +762,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *testTx.TxIDChainHash()},
 				},
 			},
@@ -789,7 +789,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{subtreeHash}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *tx1.TxIDChainHash()},
 					{Hash: *tx2.TxIDChainHash()},
 					{Hash: *tx3.TxIDChainHash()},
@@ -829,7 +829,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *testTx.TxIDChainHash()},
 				},
 			},
@@ -874,7 +874,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{emptyHash}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{}, // Empty subtree
+				Nodes: []subtree.Node{}, // Empty subtree
 			},
 		}
 
@@ -896,7 +896,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{placeholderHash}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *subtree.CoinbasePlaceholderHash}, // All placeholders
 					{Hash: *subtree.CoinbasePlaceholderHash},
 					{Hash: *subtree.CoinbasePlaceholderHash},
@@ -925,9 +925,9 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		}
 
 		// Create subtree with many transactions
-		nodes := make([]subtree.SubtreeNode, 500)
+		nodes := make([]subtree.Node, 500)
 		for i := 0; i < 500; i++ {
-			nodes[i] = subtree.SubtreeNode{Hash: *newTx(uint32(i + 1)).TxIDChainHash()}
+			nodes[i] = subtree.Node{Hash: *newTx(uint32(i + 1)).TxIDChainHash()}
 		}
 
 		block := &Block{}
@@ -971,7 +971,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{boundaryHash}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *newTx(1).TxIDChainHash()},
 					{Hash: *newTx(2).TxIDChainHash()},
 					{Hash: *newTx(3).TxIDChainHash()},
@@ -1010,7 +1010,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{tx1.TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *tx1.TxIDChainHash()},
 					{Hash: *tx2.TxIDChainHash()},
 					{Hash: *tx3.TxIDChainHash()},
@@ -1048,7 +1048,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *testTx.TxIDChainHash()},
 				},
 			},

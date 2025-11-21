@@ -304,8 +304,10 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 
 				startKafka := time.Now()
 
+				txID := tx.TxIDChainHash().String()
+
 				m := &kafkamessage.KafkaRejectedTxTopicMessage{
-					TxHash: tx.TxIDChainHash().String(),
+					TxHash: txID,
 					Reason: err.Error(),
 					PeerId: "", // Empty peer_id indicates internal rejection
 				}
@@ -316,6 +318,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 				}
 
 				v.rejectedTxKafkaProducerClient.Publish(&kafka.Message{
+					Key:   []byte(txID),
 					Value: value,
 				})
 

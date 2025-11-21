@@ -75,6 +75,10 @@ type HTTP struct {
 //	- GET /rest/block/{hash}.bin: Get block in legacy format
 //	- GET /api/v1/block_legacy/{hash}: Get block in legacy format
 //
+//	Network and P2P:
+//	- GET /api/v1/catchup/status: Get blockchain catchup status
+//	- GET /api/v1/peers: Get peer registry data
+//
 // Configuration:
 //   - ECHO_DEBUG: Enable debug logging
 //   - http_sign_response: Enable response signing
@@ -267,6 +271,17 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
 		apiGroup.Use(authHandler.PostAuthMiddleware)
 
+		// Register dashboard-compatible API routes that need auth protection
+		// The dashboard's SvelteKit +server.ts endpoints don't work in production (adapter-static)
+		// so we need to provide the same endpoints directly in the Go backend
+		apiP2PGroup := e.Group("/api/p2p")
+		apiP2PGroup.Use(authHandler.PostAuthMiddleware) // Protect POST endpoints
+		apiP2PGroup.GET("/peers", h.GetPeers)
+		apiP2PGroup.POST("/reset-reputation", h.ResetReputation)
+
+		apiCatchupGroup := e.Group("/api/catchup")
+		apiCatchupGroup.GET("/status", h.GetCatchupStatus)
+
 		dashboardConfig := middleware.CORSConfig{
 			// Use AllowOriginFunc instead of AllowOrigins to dynamically approve origins
 			AllowOriginFunc: func(origin string) (bool, error) {
@@ -326,6 +341,12 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.POST("/block/invalidate", blockHandler.InvalidateBlock)
 	apiGroup.POST("/block/revalidate", blockHandler.RevalidateBlock)
 	apiGroup.GET("/blocks/invalid", blockHandler.GetLastNInvalidBlocks)
+
+	// Register catchup status endpoint
+	apiGroup.GET("/catchup/status", h.GetCatchupStatus)
+
+	// Register peers endpoint
+	apiGroup.GET("/peers", h.GetPeers)
 
 	// Add OPTIONS handlers for block operations
 	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {

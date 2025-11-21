@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -49,7 +50,7 @@ type Interface interface {
 	GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error)
 	GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error)
-	GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.SubtreeData, error)
+	GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error)
 	GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error)
 	GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error)
 	GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, int, error)
@@ -59,6 +60,9 @@ type Interface interface {
 	GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
 	GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, height uint32) ([]*chainhash.Hash, error)
 	GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
+	GetBlockchainClient() blockchain.ClientI
+	GetBlockvalidationClient() blockvalidation.Interface
+	GetP2PClient() p2p.ClientI
 }
 
 // Repository implements blockchain data access across multiple storage backends.
@@ -71,6 +75,7 @@ type Repository struct {
 	BlockPersisterStore   blob.Store
 	BlockchainClient      blockchain.ClientI
 	BlockvalidationClient blockvalidation.Interface
+	P2PClient             p2p.ClientI
 }
 
 // NewRepository creates a new Repository instance with the provided dependencies.
@@ -89,7 +94,8 @@ type Repository struct {
 //   - *Repository: Newly created repository instance
 //   - error: Any error encountered during creation
 func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
-	blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error) {
+	blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store,
+	blockPersisterStore blob.Store, p2pClient p2p.ClientI) (*Repository, error) {
 
 	return &Repository{
 		logger:                logger,
@@ -100,6 +106,7 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 		TxStore:               txStore,
 		SubtreeStore:          subtreeStore,
 		BlockPersisterStore:   blockPersisterStore,
+		P2PClient:             p2pClient,
 	}, nil
 }
 
@@ -606,7 +613,7 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 // Returns:
 //   - *util.SubtreeData: Deserialized subtree data structure
 //   - error: Any error encountered during retrieval
-func (repo *Repository) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.SubtreeData, error) {
+func (repo *Repository) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeData",
 		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeData: %s", hash.String()),
 	)
@@ -806,4 +813,28 @@ func (repo *Repository) GetBlockLocator(ctx context.Context, blockHeaderHash *ch
 	}
 
 	return locator, nil
+}
+
+// GetBlockchainClient returns the blockchain client interface used by the repository.
+//
+// Returns:
+//   - *blockchain.ClientI: Blockchain client interface
+func (repo *Repository) GetBlockchainClient() blockchain.ClientI {
+	return repo.BlockchainClient
+}
+
+// GetBlockvalidationClient returns the block validation client interface used by the repository.
+//
+// Returns:
+//   - blockvalidation.Interface: Block validation client interface
+func (repo *Repository) GetBlockvalidationClient() blockvalidation.Interface {
+	return repo.BlockvalidationClient
+}
+
+// GetP2PClient returns the P2P client interface used by the repository.
+//
+// Returns:
+//   - p2p.ClientI: P2P client interface
+func (repo *Repository) GetP2PClient() p2p.ClientI {
+	return repo.P2PClient
 }
