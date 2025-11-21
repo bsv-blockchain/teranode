@@ -20,7 +20,6 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"reflect"
@@ -46,7 +45,6 @@ var (
 	healthRegistered  atomic.Bool
 	metricsRegistered atomic.Bool
 	pprofRegistered   atomic.Bool
-	traceCloser       io.Closer
 )
 
 const (

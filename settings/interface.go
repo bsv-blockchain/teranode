@@ -402,8 +402,8 @@ type P2PSettings struct {
 	RejectedTxTopic string
 	SubtreeTopic    string
 
-	StaticPeers []string
-	RelayPeers  []string // Relay peers for NAT traversal (multiaddr strings)
+	StaticPeers    []string
+	BootstrapPeers []string // Bootstrap peers for DHT and relay (multiaddr strings)
 
 	// Peer persistence (from go-p2p improvements)
 	PeerCacheDir string // Directory for peer cache file (empty = binary directory)
@@ -451,9 +451,6 @@ type P2PSettings struct {
 
 	// Node mode configuration (full vs pruned)
 	AllowPrunedNodeFallback bool // If true, fall back to pruned nodes when no full nodes available (default: true). Selects youngest pruned node (smallest height) to minimize UTXO pruning risk.
-
-	// This is the time we trigger a periodic evaluation in the sync coordinator
-	SyncCoordinatorPeriodicEvaluationInterval time.Duration
 }
 
 type CoinbaseSettings struct {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
@@ -103,11 +104,16 @@ func (pr *PeerRegistry) SavePeerRegistryCache(cacheDir string) error {
 				SubtreesReceived:       info.SubtreesReceived,
 				TransactionsReceived:   info.TransactionsReceived,
 				CatchupBlocks:          info.CatchupBlocks,
-				Height:                 info.Height,
-				BlockHash:              info.BlockHash,
-				DataHubURL:             info.DataHubURL,
-				ClientName:             info.ClientName,
-				Storage:                info.Storage,
+				Height:                 int32(info.Height),
+				BlockHash: func() string {
+					if info.BlockHash != nil {
+						return info.BlockHash.String()
+					}
+					return ""
+				}(),
+				DataHubURL: info.DataHubURL,
+				ClientName: info.ClientName,
+				Storage:    info.Storage,
 			}
 		}
 	}
@@ -189,8 +195,8 @@ func (pr *PeerRegistry) LoadPeerRegistryCache(cacheDir string) error {
 			// Create new peer entry with cached data
 			info = &PeerInfo{
 				ID:              peerID,
-				Height:          metrics.Height,
-				BlockHash:       metrics.BlockHash,
+				Height:          uint32(metrics.Height),
+				BlockHash:       func() *chainhash.Hash { h, _ := chainhash.NewHashFromStr(metrics.BlockHash); return h }(),
 				DataHubURL:      metrics.DataHubURL,
 				Storage:         metrics.Storage,
 				ReputationScore: 50.0, // Start with neutral reputation
@@ -244,8 +250,9 @@ func (pr *PeerRegistry) LoadPeerRegistryCache(cacheDir string) error {
 			info.DataHubURL = metrics.DataHubURL
 		}
 		if info.Height == 0 && metrics.Height > 0 {
-			info.Height = metrics.Height
-			info.BlockHash = metrics.BlockHash
+			info.Height = uint32(metrics.Height)
+			hash, _ := chainhash.NewHashFromStr(metrics.BlockHash)
+			info.BlockHash = hash
 		}
 	}
 

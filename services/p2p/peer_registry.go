@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -21,36 +22,57 @@ func NewPeerRegistry() *PeerRegistry {
 	}
 }
 
-// AddPeer adds or updates a peer
-func (pr *PeerRegistry) AddPeer(id peer.ID, clientName string) {
+// Put adds or updates a peer atomically
+func (pr *PeerRegistry) Put(id peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 
+	now := time.Now()
+
 	if _, exists := pr.peers[id]; !exists {
-		now := time.Now()
 		pr.peers[id] = &PeerInfo{
 			ID:              id,
 			ClientName:      clientName,
+			Height:          height,
+			BlockHash:       blockHash,
+			DataHubURL:      dataHubURL,
 			ConnectedAt:     now,
 			LastMessageTime: now,  // Initialize to connection time
 			ReputationScore: 50.0, // Start with neutral reputation
 		}
-	} else if clientName != "" {
-		// Update client name if provided for existing peer
-		pr.peers[id].ClientName = clientName
+	} else {
+		info := pr.peers[id]
+
+		if clientName != "" {
+			info.ClientName = clientName
+		}
+
+		if height > 0 {
+			info.Height = height
+		}
+
+		if blockHash != nil {
+			info.BlockHash = blockHash
+		}
+
+		if dataHubURL != "" {
+			info.DataHubURL = dataHubURL
+		}
+
+		info.LastMessageTime = now
 	}
 }
 
-// RemovePeer removes a peer
-func (pr *PeerRegistry) RemovePeer(id peer.ID) {
+// Remove removes a peer
+func (pr *PeerRegistry) Remove(id peer.ID) {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 
 	delete(pr.peers, id)
 }
 
-// GetPeer returns peer info
-func (pr *PeerRegistry) GetPeer(id peer.ID) (*PeerInfo, bool) {
+// Get returns peer info
+func (pr *PeerRegistry) Get(id peer.ID) (*PeerInfo, bool) {
 	pr.mu.RLock()
 	defer pr.mu.RUnlock()
 
@@ -64,48 +86,19 @@ func (pr *PeerRegistry) GetPeer(id peer.ID) (*PeerInfo, bool) {
 	return &copy, true
 }
 
-// GetAllPeers returns all peer information
-func (pr *PeerRegistry) GetAllPeers() []*PeerInfo {
+// GetAll returns all peer information
+func (pr *PeerRegistry) GetAll() []*PeerInfo {
 	pr.mu.RLock()
 	defer pr.mu.RUnlock()
 
 	result := make([]*PeerInfo, 0, len(pr.peers))
+
 	for _, info := range pr.peers {
 		copy := *info
 		result = append(result, &copy)
 	}
+
 	return result
-}
-
-// UpdateHeight updates a peer's height
-func (pr *PeerRegistry) UpdateHeight(id peer.ID, height int32, blockHash string) {
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-
-	if info, exists := pr.peers[id]; exists {
-		info.Height = height
-		info.BlockHash = blockHash
-	}
-}
-
-// UpdateBlockHash updates only the peer's block hash
-func (pr *PeerRegistry) UpdateBlockHash(id peer.ID, blockHash string) {
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-
-	if info, exists := pr.peers[id]; exists {
-		info.BlockHash = blockHash
-	}
-}
-
-// UpdateDataHubURL updates a peer's DataHub URL
-func (pr *PeerRegistry) UpdateDataHubURL(id peer.ID, url string) {
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-
-	if info, exists := pr.peers[id]; exists {
-		info.DataHubURL = url
-	}
 }
 
 // UpdateBanStatus updates a peer's ban status
@@ -127,17 +120,6 @@ func (pr *PeerRegistry) UpdateNetworkStats(id peer.ID, bytesReceived uint64) {
 	if info, exists := pr.peers[id]; exists {
 		info.BytesReceived = bytesReceived
 		info.LastBlockTime = time.Now()
-	}
-}
-
-// UpdateURLResponsiveness updates whether a peer's DataHub URL is responsive
-func (pr *PeerRegistry) UpdateURLResponsiveness(id peer.ID, responsive bool) {
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-
-	if info, exists := pr.peers[id]; exists {
-		info.URLResponsive = responsive
-		info.LastURLCheck = time.Now()
 	}
 }
 
@@ -353,12 +335,12 @@ func (pr *PeerRegistry) UpdateCatchupReputation(id peer.ID, score float64) {
 // - Final score is clamped to 0-100 range
 func (pr *PeerRegistry) calculateAndUpdateReputation(info *PeerInfo) {
 	const (
-		baseScore        = 50.0
-		successWeight    = 0.6
-		maliciousPenalty = 20.0
-		maliciousCap     = 50.0
-		recencyBonus     = 10.0
-		recencyWindow    = 1 * time.Hour
+		baseScore     = 50.0
+		successWeight = 0.6
+		// maliciousPenalty = 20.0
+		// maliciousCap     = 50.0
+		recencyBonus  = 10.0
+		recencyWindow = 1 * time.Hour
 	)
 
 	// If peer has been marked malicious, keep reputation very low
@@ -370,7 +352,9 @@ func (pr *PeerRegistry) calculateAndUpdateReputation(info *PeerInfo) {
 
 	// Calculate success rate (0-100)
 	totalAttempts := info.InteractionSuccesses + info.InteractionFailures
-	successRate := 0.0
+
+	var successRate float64
+
 	if totalAttempts > 0 {
 		successRate = (float64(info.InteractionSuccesses) / float64(totalAttempts)) * 100.0
 	} else {
