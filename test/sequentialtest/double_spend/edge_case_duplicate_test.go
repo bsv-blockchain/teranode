@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	postgres "github.com/bsv-blockchain/teranode/test/longtest/util/postgres"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,6 +104,18 @@ func TestDuplicateAcrossSubtreeBoundary(t *testing.T) {
 	})
 }
 
+func TestDuplicateAcrossSubtreeBoundaryPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "dup_subtree_boundary_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		testDuplicateAcrossSubtreeBoundary(t, pg.ConnectionString())
+	})
+}
+
 func testDuplicateAcrossSubtreeBoundary(t *testing.T, utxoStore string) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		SettingsContext: "dev.system.test",
@@ -189,6 +202,18 @@ func TestDuplicateInLastIncompleteSubtree(t *testing.T) {
 	})
 }
 
+func TestDuplicateInLastIncompleteSubtreePostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "dup_incomplete_subtree_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		testDuplicateInLastIncompleteSubtree(t, pg.ConnectionString())
+	})
+}
+
 func testDuplicateInLastIncompleteSubtree(t *testing.T, utxoStore string) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		SettingsContext: "dev.system.test",
@@ -249,36 +274,6 @@ func testDuplicateInLastIncompleteSubtree(t *testing.T, utxoStore string) {
 	}
 
 	t.Logf("Successfully rejected block with duplicate in incomplete last subtree")
-}
-
-// TestKnownDuplicateCoinbaseBlocks tests that pre-BIP34 blocks with duplicate
-// coinbase transactions are accepted according to consensus rules.
-//
-// Bitcoin consensus history:
-// - BIP34 activated at height 227,836 on mainnet (21,111 on testnet, 100 on regtest)
-// - Before BIP34, duplicate coinbase transactions were possible and did occur
-// - Historical examples: Block 91722 and 92038 contain duplicate coinbase
-//
-// The fix should:
-// 1. Pass chainParams to checkDuplicateTransactions()
-// 2. Use chainParams.BIP0034Height to determine when to allow duplicate coinbase
-// 3. For blocks before BIP34, skip duplicate check for coinbase transactions
-// 4. For blocks after BIP34, reject duplicate coinbase (height enforcement prevents this)
-//
-// NOTE: This test is currently SKIPPED because:
-// 1. The current implementation does NOT have exception handling for pre-BIP34 blocks
-// 2. Creating these exact historical blocks in a test environment is complex
-// 3. This documents a known consensus issue that needs to be fixed
-//
-// TODO: Implement BIP34-aware exception handling in model/Block.go checkDuplicateTransactions()
-// using chainParams.BIP0034Height, then enable this test.
-func TestKnownDuplicateCoinbaseBlocks(t *testing.T) {
-	t.Skip("Skipped: Current implementation lacks BIP34-aware exception handling for pre-BIP34 duplicate coinbase. Fix requires passing chainParams.BIP0034Height to checkDuplicateTransactions().")
-
-	// When implemented, this test should:
-	// 1. Test pre-BIP34 blocks (height < chainParams.BIP0034Height) with duplicate coinbase - should ACCEPT
-	// 2. Test post-BIP34 blocks (height >= chainParams.BIP0034Height) with duplicate coinbase - should REJECT
-	// 3. Verify the fix works correctly across different networks (mainnet, testnet, regtest)
 }
 
 // TestConcurrentDuplicateDetection tests that parallel subtree validation correctly

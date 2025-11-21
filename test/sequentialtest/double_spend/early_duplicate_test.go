@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	postgres "github.com/bsv-blockchain/teranode/test/longtest/util/postgres"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,6 +47,18 @@ func TestEarlyDuplicateFullySpentAndPruned(t *testing.T) {
 func TestEarlyDuplicatePartiallySpentAndPruned(t *testing.T) {
 	t.Run("sqlite", func(t *testing.T) {
 		testEarlyDuplicatePartiallySpentAndPruned(t, "sqlite:///test")
+	})
+}
+
+func TestEarlyDuplicatePartiallySpentAndPrunedPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "early_dup_partial_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		testEarlyDuplicatePartiallySpentAndPruned(t, pg.ConnectionString())
 	})
 }
 
@@ -103,6 +116,18 @@ func testEarlyDuplicatePartiallySpentAndPruned(t *testing.T, utxoStore string) {
 func TestEarlyDuplicateNotSpent(t *testing.T) {
 	t.Run("sqlite", func(t *testing.T) {
 		testEarlyDuplicateNotSpent(t, "sqlite:///test")
+	})
+}
+
+func TestEarlyDuplicateNotSpentPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "early_dup_notspent_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		testEarlyDuplicateNotSpent(t, pg.ConnectionString())
 	})
 }
 
@@ -199,6 +224,18 @@ func TestValidBlockWithSpentAndUnrelated(t *testing.T) {
 func TestDuplicateWithZeroTransactions(t *testing.T) {
 	t.Run("sqlite", func(t *testing.T) {
 		testDuplicateWithZeroTransactions(t, "sqlite:///test")
+	})
+}
+
+func TestDuplicateWithZeroTransactionsPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "dup_zero_txs_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		testDuplicateWithZeroTransactions(t, pg.ConnectionString())
 	})
 }
 

@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	postgres "github.com/bsv-blockchain/teranode/test/longtest/util/postgres"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,6 +40,18 @@ import (
 func TestNilSubtreeStoreBypass(t *testing.T) {
 	t.Run("sqlite", func(t *testing.T) {
 		testNilSubtreeStoreBypass(t, "sqlite:///test")
+	})
+}
+
+func TestNilSubtreeStoreBypassPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "nil_subtree_bypass_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		testNilSubtreeStoreBypass(t, pg.ConnectionString())
 	})
 }
 
@@ -109,6 +122,18 @@ func TestEmptySubtreeSlices(t *testing.T) {
 	})
 }
 
+func TestEmptySubtreeSlicesPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "empty_subtrees_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		testEmptySubtreeSlices(t, pg.ConnectionString())
+	})
+}
+
 func testEmptySubtreeSlices(t *testing.T, utxoStore string) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		SettingsContext: "dev.system.test",
@@ -156,6 +181,18 @@ func testEmptySubtreeSlices(t *testing.T, utxoStore string) {
 func TestConcurrencyConfigurationEdgeCases(t *testing.T) {
 	t.Run("sqlite", func(t *testing.T) {
 		testConcurrencyConfigurationEdgeCases(t, "sqlite:///test")
+	})
+}
+
+func TestConcurrencyConfigurationEdgeCasesPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "concurrency_config_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		testConcurrencyConfigurationEdgeCases(t, pg.ConnectionString())
 	})
 }
 
@@ -212,6 +249,18 @@ func testConcurrencyConfigurationEdgeCases(t *testing.T, utxoStore string) {
 func TestRaceDetectorDuplicateDetection(t *testing.T) {
 	t.Run("sqlite", func(t *testing.T) {
 		testRaceDetectorDuplicateDetection(t, "sqlite:///test")
+	})
+}
+
+func TestRaceDetectorDuplicateDetectionPostgres(t *testing.T) {
+	pg, err := postgres.RunPostgresTestContainer(t.Context(), "race_detector_"+t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = pg.Terminate(t.Context())
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		testRaceDetectorDuplicateDetection(t, pg.ConnectionString())
 	})
 }
 
