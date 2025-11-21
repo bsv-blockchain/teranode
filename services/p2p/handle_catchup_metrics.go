@@ -117,15 +117,21 @@ func (s *Server) GetPeersForCatchup(_ context.Context, _ *p2p_api.GetPeersForCat
 
 	// Convert to proto format
 	protoPeers := make([]*p2p_api.PeerInfoForCatchup, 0, len(peers))
+
 	for _, p := range peers {
 		// Calculate total attempts as sum of successes and failures
 		// InteractionAttempts is a separate counter that may not match
 		totalAttempts := p.InteractionSuccesses + p.InteractionFailures
 
+		blockHashStr := ""
+		if p.BlockHash != nil {
+			blockHashStr = p.BlockHash.String()
+		}
+
 		protoPeers = append(protoPeers, &p2p_api.PeerInfoForCatchup{
 			Id:                     p.ID.String(),
 			Height:                 p.Height,
-			BlockHash:              p.BlockHash,
+			BlockHash:              blockHashStr,
 			DataHubUrl:             p.DataHubURL,
 			CatchupReputationScore: p.ReputationScore,
 			CatchupAttempts:        totalAttempts,          // Use calculated total, not InteractionAttempts
@@ -249,7 +255,7 @@ func (s *Server) IsPeerMalicious(_ context.Context, req *p2p_api.IsPeerMalicious
 				Reason:      "invalid peer ID",
 			}, nil
 		}
-		peerInfo, exists := s.peerRegistry.GetPeer(peerId)
+		peerInfo, exists := s.peerRegistry.Get(peerId)
 		if exists {
 			// A peer is considered malicious if:
 			// 1. They have a very low reputation score (below 20)
@@ -289,7 +295,7 @@ func (s *Server) IsPeerUnhealthy(_ context.Context, req *p2p_api.IsPeerUnhealthy
 				ReputationScore: 0,
 			}, nil
 		}
-		peerInfo, exists := s.peerRegistry.GetPeer(peerId)
+		peerInfo, exists := s.peerRegistry.Get(peerId)
 		if !exists {
 			// Unknown peer - consider unhealthy
 			return &p2p_api.IsPeerUnhealthyResponse{

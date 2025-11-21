@@ -824,7 +824,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		var allTransactions []*bt.Tx
 		blockIds := make(map[uint32]bool)
 
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
 		require.NoError(t, err)
 	})
 
@@ -848,7 +848,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
 		require.NoError(t, err)
 	})
 
@@ -875,7 +875,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should fail with validation errors (errors are logged but not returned)
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
 		require.Error(t, err)
 	})
 
@@ -902,7 +902,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should fail because transaction has missing parent
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "processTransactionsInLevels")
 
@@ -932,7 +932,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(false, nil)
 
 		// Should fail because transaction has validation errors and blockchain not running
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "processTransactionsInLevels")
 
@@ -962,7 +962,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(false, errors.NewServiceError("blockchain client error"))
 
 		// Should fail because transaction has validation errors and blockchain client error
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "processTransactionsInLevels")
 
@@ -979,7 +979,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 		blockIds := make(map[uint32]bool)
 
 		// Should fail with nil transaction
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "transaction is nil")
 	})
@@ -1014,7 +1014,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			mock.Anything, blockchain.FSMStateRUNNING).
 			Return(true, nil)
 
-		err = server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
+		err = server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
 		require.NoError(t, err)
 	})
 
@@ -1047,7 +1047,7 @@ func TestProcessTransactionsInLevels(t *testing.T) {
 			Return(true, nil)
 
 		// Should return error even some validation failures
-		err := server.processTransactionsInLevels(context.Background(), allTransactions, 100, blockIds)
+		err := server.processTransactionsInLevels(context.Background(), allTransactions, chainhash.Hash{}, chainhash.Hash{}, 100, blockIds)
 		require.Error(t, err)
 	})
 }
@@ -1125,7 +1125,7 @@ func TestBlessMissingTransaction(t *testing.T) {
 
 		// Call blessMissingTransaction
 		validatorOptions := validator.ProcessOptions()
-		_, _ = server.blessMissingTransaction(context.Background(), blockHash, tx, 100, blockIds, validatorOptions)
+		_, _ = server.blessMissingTransaction(context.Background(), blockHash, blockHash, tx, 100, blockIds, validatorOptions)
 	})
 }
 

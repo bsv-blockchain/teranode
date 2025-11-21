@@ -381,7 +381,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PrivateKey:         getString("p2p_private_key", "", alternativeContext...),
 			RejectedTxTopic:    getString("p2p_rejected_tx_topic", "", alternativeContext...),
 			StaticPeers:        getMultiString("p2p_static_peers", "|", []string{}, alternativeContext...),
-			RelayPeers:         getMultiString("p2p_relay_peers", "|", []string{}, alternativeContext...),
+			BootstrapPeers:     getMultiString("p2p_bootstrap_peers", "|", []string{}, alternativeContext...),
 			// Peer persistence
 			PeerCacheDir: getString("p2p_peer_cache_dir", "", alternativeContext...), // Empty = binary directory
 			BanThreshold: getInt("p2p_ban_threshold", 100, alternativeContext...),
@@ -400,7 +400,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			AllowPrivateIPs: getBool("p2p_allow_private_ips", false, alternativeContext...), // Default false for production safety
 			// Full/pruned node selection configuration
 			AllowPrunedNodeFallback: getBool("p2p_allow_pruned_node_fallback", true, alternativeContext...),
-			SyncCoordinatorPeriodicEvaluationInterval: getDuration("p2p_sync_coordinator_periodic_evaluation_interval", 30*time.Second, alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                    getString("coinbaseDB", "", alternativeContext...),
