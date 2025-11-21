@@ -164,33 +164,34 @@ func NewSettings(alternativeContext ...string) *Settings {
 			EchoDebug:               getBool("ECHO_DEBUG", false, alternativeContext...),
 		},
 		Block: BlockSettings{
-			MinedCacheMaxMB:                       getInt("blockMinedCacheMaxMB", 256, alternativeContext...),
-			PersisterStore:                        getURL("blockPersisterStore", "file://./data/blockstore", alternativeContext...),
-			StateFile:                             getString("blockPersister_stateFile", "file://./data/blockpersister_state.txt", alternativeContext...),
-			PersisterHTTPListenAddress:            getString("blockPersister_httpListenAddress", ":8083", alternativeContext...),
-			CheckDuplicateTransactionsConcurrency: getInt("block_checkDuplicateTransactionsConcurrency", -1, alternativeContext...),
-			GetAndValidateSubtreesConcurrency:     getInt("block_getAndValidateSubtreesConcurrency", -1, alternativeContext...),
-			KafkaWorkers:                          getInt("block_kafkaWorkers", 0, alternativeContext...),
-			ValidOrderAndBlessedConcurrency:       getInt("block_validOrderAndBlessedConcurrency", -1, alternativeContext...),
-			MaxSize:                               getInt("blockmaxsize", 4294967296, alternativeContext...),
-			BlockStore:                            getURL("blockstore", "file://./data/blockstore", alternativeContext...),
-			FailFastValidation:                    getBool("blockvalidation_fail_fast_validation", true, alternativeContext...),
-			FinalizeBlockValidationConcurrency:    getInt("blockvalidation_finalizeBlockValidationConcurrency", 8, alternativeContext...),
-			GetMissingTransactions:                getInt("blockvalidation_getMissingTransactions", 32, alternativeContext...),
-			QuorumTimeout:                         getDuration("block_quorum_timeout", 10*time.Second, alternativeContext...),
-			BlockPersisterConcurrency:             getInt("blockpersister_concurrency", 8, alternativeContext...),
-			BatchMissingTransactions:              getBool("blockpersister_batchMissingTransactions", true, alternativeContext...),
-			ProcessTxMetaUsingStoreBatchSize:      getInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024, alternativeContext...),
-			SkipUTXODelete:                        getBool("blockpersister_skipUTXODelete", false, alternativeContext...),
-			UTXOPersisterBufferSize:               getString("utxoPersister_buffer_size", "4KB", alternativeContext...),
-			UTXOPersisterDirect:                   getBool("direct", true, alternativeContext...),
-			TxStore:                               getURL("txstore", "", alternativeContext...),
-			BlockPersisterPersistAge:              uint32(getInt("blockpersister_persistAge", 2, alternativeContext...)), //nolint:gosec // G115: integer overflow conversion int -> uint32 (gosec)
-			BlockPersisterPersistSleep:            getDuration("blockPersister_persistSleep", time.Minute, alternativeContext...),
-			UtxoStore:                             getURL("txmeta_store", "", alternativeContext...),
-			FileStoreReadConcurrency:              getInt("filestore_read_concurrency", 768, alternativeContext...),
-			FileStoreWriteConcurrency:             getInt("filestore_write_concurrency", 256, alternativeContext...),
-			FileStoreUseSystemLimits:              getBool("filestore_use_system_limits", true, alternativeContext...),
+			MinedCacheMaxMB:                         getInt("blockMinedCacheMaxMB", 256, alternativeContext...),
+			PersisterStore:                          getURL("blockPersisterStore", "file://./data/blockstore", alternativeContext...),
+			StateFile:                               getString("blockPersister_stateFile", "file://./data/blockpersister_state.txt", alternativeContext...),
+			PersisterHTTPListenAddress:              getString("blockPersister_httpListenAddress", ":8083", alternativeContext...),
+			CheckDuplicateTransactionsConcurrency:   getInt("block_checkDuplicateTransactionsConcurrency", -1, alternativeContext...),
+			GetAndValidateSubtreesConcurrency:       getInt("block_getAndValidateSubtreesConcurrency", -1, alternativeContext...),
+			KafkaWorkers:                            getInt("block_kafkaWorkers", 0, alternativeContext...),
+			ValidOrderAndBlessedConcurrency:         getInt("block_validOrderAndBlessedConcurrency", -1, alternativeContext...),
+			MaxSize:                                 getInt("blockmaxsize", 4294967296, alternativeContext...),
+			BlockStore:                              getURL("blockstore", "file://./data/blockstore", alternativeContext...),
+			FailFastValidation:                      getBool("blockvalidation_fail_fast_validation", true, alternativeContext...),
+			FinalizeBlockValidationConcurrency:      getInt("blockvalidation_finalizeBlockValidationConcurrency", 8, alternativeContext...),
+			GetMissingTransactions:                  getInt("blockvalidation_getMissingTransactions", 32, alternativeContext...),
+			QuorumTimeout:                           getDuration("block_quorum_timeout", 10*time.Second, alternativeContext...),
+			BlockPersisterConcurrency:               getInt("blockpersister_concurrency", 8, alternativeContext...),
+			BatchMissingTransactions:                getBool("blockpersister_batchMissingTransactions", true, alternativeContext...),
+			ProcessTxMetaUsingStoreBatchSize:        getInt("blockvalidation_processTxMetaUsingStore_BatchSize", 1024, alternativeContext...),
+			SkipUTXODelete:                          getBool("blockpersister_skipUTXODelete", false, alternativeContext...),
+			UTXOPersisterBufferSize:                 getString("utxoPersister_buffer_size", "4KB", alternativeContext...),
+			UTXOPersisterDirect:                     getBool("direct", true, alternativeContext...),
+			TxStore:                                 getURL("txstore", "", alternativeContext...),
+			BlockPersisterPersistAge:                uint32(getInt("blockpersister_persistAge", 2, alternativeContext...)), //nolint:gosec // G115: integer overflow conversion int -> uint32 (gosec)
+			BlockPersisterPersistSleep:              getDuration("blockPersister_persistSleep", time.Minute, alternativeContext...),
+			BlockPersisterEnableDefensiveReorgCheck: getBool("blockpersister_enableDefensiveReorgCheck", true, alternativeContext...),
+			UtxoStore:                               getURL("txmeta_store", "", alternativeContext...),
+			FileStoreReadConcurrency:                getInt("filestore_read_concurrency", 768, alternativeContext...),
+			FileStoreWriteConcurrency:               getInt("filestore_write_concurrency", 256, alternativeContext...),
+			FileStoreUseSystemLimits:                getBool("filestore_use_system_limits", true, alternativeContext...),
 		},
 		BlockAssembly: BlockAssemblySettings{
 			Disabled:                            getBool("blockassembly_disabled", false, alternativeContext...),
@@ -226,7 +227,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			// getMiningCandidate timeout settings
 			GetMiningCandidateSendTimeout:     getDuration("blockassembly_getMiningCandidate_send_timeout", 1*time.Second, alternativeContext...),
 			GetMiningCandidateResponseTimeout: getDuration("blockassembly_getMiningCandidate_response_timeout", 10*time.Second, alternativeContext...),
+			SubtreeAnnouncementInterval:       getDuration("blockassembly_subtreeAnnouncementInterval", 10*time.Second, alternativeContext...),
 		},
+
 		BlockChain: BlockChainSettings{
 			GRPCAddress:           getString("blockchain_grpcAddress", "localhost:8087", alternativeContext...),
 			GRPCListenAddress:     getString("blockchain_grpcListenAddress", ":8087", alternativeContext...),
@@ -366,7 +369,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 		P2P: P2PSettings{
 			BlockTopic:         getString("p2p_block_topic", "", alternativeContext...),
 			SubtreeTopic:       getString("p2p_subtree_topic", "", alternativeContext...),
-			BootstrapAddresses: getMultiString("p2p_bootstrapAddresses", "|", []string{}, alternativeContext...),
 			GRPCAddress:        getString("p2p_grpcAddress", "", alternativeContext...),
 			GRPCListenAddress:  getString("p2p_grpcListenAddress", ":9906", alternativeContext...),
 			HTTPAddress:        getString("p2p_httpAddress", "localhost:9906", alternativeContext...),
@@ -379,7 +381,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PrivateKey:         getString("p2p_private_key", "", alternativeContext...),
 			RejectedTxTopic:    getString("p2p_rejected_tx_topic", "", alternativeContext...),
 			StaticPeers:        getMultiString("p2p_static_peers", "|", []string{}, alternativeContext...),
-			RelayPeers:         getMultiString("p2p_relay_peers", "|", []string{}, alternativeContext...),
+			BootstrapPeers:     getMultiString("p2p_bootstrap_peers", "|", []string{}, alternativeContext...),
 			// Peer persistence
 			PeerCacheDir: getString("p2p_peer_cache_dir", "", alternativeContext...), // Empty = binary directory
 			BanThreshold: getInt("p2p_ban_threshold", 100, alternativeContext...),
@@ -392,12 +394,12 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DHTMode:            getString("p2p_dht_mode", "server", alternativeContext...),
 			DHTCleanupInterval: getDuration("p2p_dht_cleanup_interval", 24*time.Hour, alternativeContext...),
 			// Network scanning prevention (important for shared hosting/cloud)
-			// Safe defaults: mDNS disabled, private IPs filtered
-			EnableMDNS:      getBool("p2p_enable_mdns", false, alternativeContext...),       // Default false to prevent LAN scanning alerts
+			// Safe defaults: NAT disabled, mDNS disabled, private IPs filtered, DHT discovery disabled
+			EnableNAT:       getBool("p2p_enable_nat", false, alternativeContext...),        // Default false - UPnP scans gateway
+			EnableMDNS:      getBool("p2p_enable_mdns", false, alternativeContext...),       // Default false to prevent LAN scanning
 			AllowPrivateIPs: getBool("p2p_allow_private_ips", false, alternativeContext...), // Default false for production safety
 			// Full/pruned node selection configuration
 			AllowPrunedNodeFallback: getBool("p2p_allow_pruned_node_fallback", true, alternativeContext...),
-			DisableNAT:              getBool("p2p_disable_nat", false, alternativeContext...),
 		},
 		Coinbase: CoinbaseSettings{
 			DB:                    getString("coinbaseDB", "", alternativeContext...),

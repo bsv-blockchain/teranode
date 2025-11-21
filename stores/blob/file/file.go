@@ -300,7 +300,7 @@ func acquireWritePermit(ctx context.Context) error {
 			return errors.NewServiceUnavailableError("[File] write operation timed out waiting for semaphore permit")
 		}
 
-		return errors.NewProcessingError("[File] failed to acquire write permit: %w", err)
+		return errors.NewStorageError("[File] failed to acquire write permit: %w", err)
 	}
 
 	return nil

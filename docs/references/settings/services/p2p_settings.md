@@ -43,7 +43,6 @@
 
 ### Peer Connection Management
 - `StaticPeers` ensures persistent connections
-- `BootstrapAddresses` for initial network discovery
 - `RelayPeers` for NAT traversal
 - `PeerCacheDir` for peer persistence
 

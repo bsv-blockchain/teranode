@@ -39,6 +39,9 @@
   let revalidatingBlock = false
   let revalidatingBlockHash = ''
 
+  // Reset peer reputations
+  let resettingReputations = false
+
   // Subscribe to the API base URL
   const unsubscribe = api.assetHTTPAddress.subscribe((value) => {
     apiBaseUrl = value
@@ -495,6 +498,35 @@
     }
   }
 
+  async function resetPeerReputations() {
+    resettingReputations = true
+
+    try {
+      const response = await fetch('/api/p2p/reset-reputation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ peer_id: '' }) // Empty peer_id means reset all
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const result = await response.json()
+
+      if (result.error) {
+        throw new Error(result.error)
+      }
+
+      success(`Reset reputation for ${result.peers_reset} peers`)
+    } catch (error: unknown) {
+      console.error('Failed to reset peer reputations:', error)
+      failure(`Failed to reset peer reputations: ${getErrorMessage(error)}`)
+    } finally {
+      resettingReputations = false
+    }
+  }
+
   onMount(async () => {
     // Fetch FSM state and related data
     await fetchFSMState()
@@ -773,6 +805,33 @@
         </div>
       </div>
     </div>
+
+    <!-- Reset Peer Reputations Section -->
+    <div class="admin-section">
+      <div class="section-header">
+        <h2>Reset Peer Reputations</h2>
+      </div>
+      <div class="admin-card">
+        <p class="section-description">
+          Reset reputation scores for all peers in the peer registry. This will clear all interaction metrics and set reputation scores back to neutral (50.0).
+        </p>
+        <div class="action-buttons">
+          <button
+            class="action-button neutral"
+            on:click={resetPeerReputations}
+            disabled={resettingReputations}
+          >
+            {#if resettingReputations}
+              <i class="fas fa-spinner fa-spin"></i>
+              <span>Resetting...</span>
+            {:else}
+              <i class="fas fa-undo"></i>
+              <span>Reset All Peer Reputations</span>
+            {/if}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </PageWithMenu>
 
@@ -1001,6 +1060,14 @@
 
   .action-button[data-event='legacysync']:hover {
     background-color: #7c3aed;
+  }
+
+  .action-button.neutral {
+    background-color: #6c757d;
+  }
+
+  .action-button.neutral:hover {
+    background-color: #5a6268;
   }
 
   .action-button i {

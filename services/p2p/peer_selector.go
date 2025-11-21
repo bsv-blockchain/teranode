@@ -87,7 +87,7 @@ func (ps *PeerSelector) SelectSyncPeer(peers []*PeerInfo, criteria SelectionCrit
 func (ps *PeerSelector) getFullNodeCandidates(peers []*PeerInfo, criteria SelectionCriteria) []*PeerInfo {
 	var candidates []*PeerInfo
 	for _, p := range peers {
-		if ps.isEligibleFullNode(p, criteria) && p.Height > criteria.LocalHeight {
+		if ps.isEligibleFullNode(p, criteria) && int32(p.Height) > criteria.LocalHeight {
 			candidates = append(candidates, p)
 			ps.logger.Debugf("[PeerSelector] Full node candidate: %s at height %d (mode: %s)", p.ID, p.Height, p.Storage)
 		}
@@ -100,7 +100,7 @@ func (ps *PeerSelector) getPrunedNodeCandidates(peers []*PeerInfo, criteria Sele
 	var candidates []*PeerInfo
 	for _, p := range peers {
 		// Only include if eligible but NOT a full node
-		if ps.isEligible(p, criteria) && p.Storage != "full" && p.Height > criteria.LocalHeight {
+		if ps.isEligible(p, criteria) && p.Storage != "full" && int32(p.Height) > criteria.LocalHeight {
 			candidates = append(candidates, p)
 			ps.logger.Debugf("[PeerSelector] Pruned node candidate: %s at height %d (mode: %s)", p.ID, p.Height, p.Storage)
 		}
@@ -188,12 +188,6 @@ func (ps *PeerSelector) isEligible(p *PeerInfo, criteria SelectionCriteria) bool
 	// Check DataHub URL requirement - this protects against listen-only nodes
 	if p.DataHubURL == "" {
 		ps.logger.Debugf("[PeerSelector] Peer %s has no DataHub URL (listen-only node)", p.ID)
-		return false
-	}
-
-	// Check URL responsiveness
-	if p.DataHubURL != "" && !p.URLResponsive {
-		ps.logger.Debugf("[PeerSelector] Peer %s URL is not responsive", p.ID)
 		return false
 	}
 

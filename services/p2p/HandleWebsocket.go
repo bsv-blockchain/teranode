@@ -47,7 +47,7 @@ type notificationMsg struct {
 	ChainWork     string  `json:"chain_work,omitempty"`      // Chain work as hex string
 	// Sync peer fields
 	SyncPeerID        string `json:"sync_peer_id,omitempty"`         // ID of the peer we're syncing from
-	SyncPeerHeight    int32  `json:"sync_peer_height,omitempty"`     // Height of the sync peer
+	SyncPeerHeight    uint32 `json:"sync_peer_height,omitempty"`     // Height of the sync peer
 	SyncPeerBlockHash string `json:"sync_peer_block_hash,omitempty"` // Best block hash of the sync peer
 	SyncConnectedAt   int64  `json:"sync_connected_at,omitempty"`    // Unix timestamp when we first connected to this sync peer
 	// New fields for enhanced node status
@@ -248,7 +248,7 @@ func (s *Server) sendInitialNodeStatuses(clientCh chan []byte) {
 	}
 }
 
-func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg, baseURL string) func(c echo.Context) error {
+func (s *Server) HandleWebSocket(notificationCh chan *notificationMsg) func(c echo.Context) error {
 	clientChannels := newClientChannelMap()
 	newClientCh := make(chan chan []byte, 1_000)
 	deadClientCh := make(chan chan []byte, 1_000)

@@ -107,6 +107,9 @@ type BlockAssembly struct {
 
 	// skipWaitForPendingBlocks stores the flag value for tests
 	skipWaitForPendingBlocks bool
+
+	// stopOnce ensures Stop() is only executed once
+	stopOnce sync.Once
 }
 
 // subtreeRetrySend encapsulates the data needed for retrying subtree storage operations
@@ -699,6 +702,7 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 }
 
 // Stop gracefully shuts down the BlockAssembly service.
+// This method is idempotent and safe to call multiple times.
 //
 // Parameters:
 //   - ctx: Context for cancellation (currently unused)
@@ -706,7 +710,15 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 // Returns:
 //   - error: Any error encountered during shutdown
 func (ba *BlockAssembly) Stop(_ context.Context) error {
-	ba.jobStore.Stop()
+	ba.stopOnce.Do(func() {
+		ba.jobStore.Stop()
+
+		// Close the subtree processor to stop the announcement ticker and cleanup resources
+		if ba.blockAssembler != nil && ba.blockAssembler.subtreeProcessor != nil {
+			ba.blockAssembler.subtreeProcessor.Close()
+		}
+	})
+
 	return nil
 }
 
@@ -1375,7 +1387,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 
 	subtreeCountUint32, err := safeconversion.IntToUint32(ba.blockAssembler.SubtreeCount())
 	if err != nil {
-		return nil, errors.NewProcessingError("error converting subtree count", err)
+		return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting subtree count", err)
 	}
 
 	subtreeHashes := ba.blockAssembler.subtreeProcessor.GetSubtreeHashes()
@@ -1387,15 +1399,25 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 	removeMap := ba.blockAssembler.subtreeProcessor.GetRemoveMap()
 	removeMapLen32, err := safeconversion.IntToUint32(removeMap.Length())
 	if err != nil {
-		return nil, errors.NewProcessingError("error converting remove map length", err)
+		return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting remove map length", err)
 	}
 
 	currentHeader, currentHeight := ba.blockAssembler.CurrentBlock()
+
+	subtreeSize := uint32(0)
+	if currentSubtree := ba.blockAssembler.subtreeProcessor.GetCurrentSubtree(); currentSubtree != nil {
+		// convert to uint32, safe as subtree size cannot exceed uint32
+		subtreeSize, err = safeconversion.IntToUint32(currentSubtree.Size())
+		if err != nil {
+			return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting current subtree size", err)
+		}
+	}
 
 	return &blockassembly_api.StateMessage{
 		BlockAssemblyState:    StateStrings[ba.blockAssembler.GetCurrentRunningState()],
 		SubtreeProcessorState: subtreeprocessor.StateStrings[ba.blockAssembler.subtreeProcessor.GetCurrentRunningState()],
 		SubtreeCount:          subtreeCountUint32,
+		SubtreeSize:           subtreeSize,
 		TxCount:               ba.blockAssembler.TxCount(),
 		QueueCount:            ba.blockAssembler.QueueLength(),
 		CurrentHeight:         currentHeight,

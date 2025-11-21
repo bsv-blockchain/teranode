@@ -349,7 +349,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // Returns:
 //   - *meta.Data: Transaction metadata structure if validation succeeds, nil otherwise
 //   - error: Detailed error information if validation fails for any reason
-func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
+func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhash.Hash, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions *validator.Options) (txMeta *meta.Data, err error) {
 	start := time.Now()
 
@@ -358,11 +358,11 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainh
 	}()
 
 	if tx == nil {
-		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s] tx is nil", subtreeHash.String())
+		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s] tx is nil", blockHash.String(), subtreeHash.String())
 	}
 
 	if tx.IsCoinbase() {
-		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s][%s] transaction is coinbase", subtreeHash.String(), tx.TxID())
+		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is coinbase", blockHash.String(), subtreeHash.String(), tx.TxID())
 	}
 
 	// validate the transaction in the validation service
@@ -371,29 +371,29 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainh
 	if err != nil {
 		if errors.Is(err, errors.ErrTxConflicting) {
 			// conflicting transaction, which has been saved, but not spent
-			u.logger.Warnf("[blessMissingTransaction][%s][%s] transaction is conflicting", subtreeHash.String(), tx.TxID())
+			u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] transaction is conflicting", blockHash.String(), subtreeHash.String(), tx.TxID())
 		} else {
-			return nil, errors.NewProcessingError("[blessMissingTransaction][%s][%s] failed to validate transaction", subtreeHash.String(), tx.TxID(), err)
+			return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to validate transaction", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
 		}
 	}
 
 	// Not recoverable, returning processing error
 	if txMeta == nil {
-		return nil, errors.NewProcessingError("[blessMissingTransaction][%s][%s] tx meta is nil", subtreeHash.String(), tx.TxID())
+		return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] tx meta is nil", blockHash.String(), subtreeHash.String(), tx.TxID())
 	}
 
 	// check whether this transaction was already mined on our chain by comparing the block ids
 	if len(txMeta.BlockIDs) > 0 && len(blockIds) > 0 {
 		for _, blockID := range txMeta.BlockIDs {
 			if blockIds[blockID] {
-				return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s][%s] transaction is already mined on our chain, in block %d", subtreeHash.String(), tx.TxID(), blockID)
+				return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is already mined on our chain, in block %d", blockHash.String(), subtreeHash.String(), tx.TxID(), blockID)
 			}
 		}
 	}
 
 	if txMeta.Conflicting {
 		if err = u.checkCounterConflictingOnCurrentChain(ctx, *tx.TxIDChainHash(), blockIds); err != nil {
-			return nil, errors.NewProcessingError("[blessMissingTransaction][%s][%s] failed to check counter conflicting tx on current chain", subtreeHash.String(), tx.TxID(), err)
+			return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to check counter conflicting tx on current chain", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
 		}
 	}
 
@@ -1039,7 +1039,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 			// process each transaction in the background, since the transactions are all batched into the utxo store
 			g.Go(func() error {
-				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, tx, blockHeight, blockIds, processedValidatorOptions)
+				txMeta, err := u.blessMissingTransaction(gCtx, chainhash.Hash{}, subtreeHash, tx, blockHeight, blockIds, processedValidatorOptions)
 				if err != nil {
 					// Log the error, but do not return it, since we want to process all transactions in the subtree
 					u.logger.Debugf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
