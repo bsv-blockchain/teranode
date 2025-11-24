@@ -178,9 +178,10 @@ func TestUnmined(t *testing.T) {
 
 		_, err = store.Create(store.ctx, txMined, currentBlockHeight, utxo.WithMinedBlockInfo(
 			utxo.MinedBlockInfo{
-				BlockID:     1,
-				BlockHeight: currentBlockHeight,
-				SubtreeIdx:  1,
+				BlockID:        1,
+				BlockHeight:    currentBlockHeight,
+				SubtreeIdx:     1,
+				OnLongestChain: true,
 			},
 		))
 		require.NoError(t, err)
@@ -404,9 +405,10 @@ func TestLargeTxStoresExternally(t *testing.T) {
 
 	// Now mark as mined
 	blockIDsMap, err := store.SetMinedMulti(context.Background(), []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
-		BlockID:     1,
-		BlockHeight: 1,
-		SubtreeIdx:  1,
+		BlockID:        1,
+		BlockHeight:    1,
+		SubtreeIdx:     1,
+		OnLongestChain: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, blockIDsMap, 1)

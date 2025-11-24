@@ -106,6 +106,7 @@ func TestCheckBlockAssembly(t *testing.T) {
 
 		mockSubtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
 		mockSubtreeProcessor.On("CheckSubtreeProcessor").Return(errors.NewProcessingError("test error"))
+		mockSubtreeProcessor.On("Close").Return() // Expect Close() to be called during cleanup
 
 		server.blockAssembler.subtreeProcessor = mockSubtreeProcessor
 
@@ -245,6 +246,11 @@ func setupServer(t *testing.T) (*BlockAssembly, *memory.Memory) {
 	s.SetSkipWaitForPendingBlocks(true)
 
 	require.NoError(t, s.Init(common.Ctx))
+
+	// Ensure proper cleanup when test ends
+	t.Cleanup(func() {
+		_ = s.Stop(context.Background())
+	})
 
 	return s, subtreeStore
 }

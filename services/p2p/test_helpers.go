@@ -48,7 +48,7 @@ func CreateTestSettings() *settings.Settings {
 		P2P: settings.P2PSettings{
 			BanThreshold: 100,
 			BanDuration:  24 * time.Hour,
-			DisableNAT:   true, // Disable NAT in tests to prevent data races in libp2p
+			EnableNAT:    false, // Disable NAT in tests to prevent data races in libp2p
 		},
 	}
 	return s
@@ -62,8 +62,8 @@ func CreateTestPeerInfo(id peer.ID, height int32, healthy bool, banned bool, dat
 	}
 	return &PeerInfo{
 		ID:              id,
-		Height:          height,
-		BlockHash:       "test-hash",
+		Height:          uint32(height),
+		BlockHash:       nil, // test-hash
 		DataHubURL:      dataHubURL,
 		IsBanned:        banned,
 		BanScore:        0,
@@ -72,8 +72,6 @@ func CreateTestPeerInfo(id peer.ID, height int32, healthy bool, banned bool, dat
 		BytesReceived:   0,
 		LastBlockTime:   time.Now(),
 		LastMessageTime: time.Now(),
-		URLResponsive:   dataHubURL != "",
-		LastURLCheck:    time.Now(),
 		Storage:         "full", // Default test peers to full nodes
 	}
 }
@@ -111,8 +109,8 @@ func CreateTestPeerInfoList(count int) []*PeerInfo {
 		}
 		peers[i] = &PeerInfo{
 			ID:              ids[i],
-			Height:          int32(100 + i*10),
-			BlockHash:       "test-hash",
+			Height:          uint32(100 + i*10),
+			BlockHash:       nil, // test-hash
 			DataHubURL:      "",
 			IsBanned:        i >= count-2, // Last two peers are banned
 			BanScore:        i * 10,
@@ -121,8 +119,6 @@ func CreateTestPeerInfoList(count int) []*PeerInfo {
 			BytesReceived:   uint64(i * 1000),
 			LastBlockTime:   time.Now(),
 			LastMessageTime: time.Now(),
-			URLResponsive:   false,
-			LastURLCheck:    time.Now(),
 			Storage:         "full", // Default test peers to full nodes
 		}
 	}
@@ -130,11 +126,9 @@ func CreateTestPeerInfoList(count int) []*PeerInfo {
 	// Give some peers DataHub URLs
 	if count > 2 {
 		peers[0].DataHubURL = "http://peer0.test"
-		peers[0].URLResponsive = true
 	}
 	if count > 3 {
 		peers[1].DataHubURL = "http://peer1.test"
-		peers[1].URLResponsive = false // Has URL but not responsive
 	}
 
 	return peers
@@ -163,7 +157,7 @@ func SetupTestBlockchain(t *testing.T) *TestBlockchainSetup {
 		P2P: settings.P2PSettings{
 			BanThreshold: 100,
 			BanDuration:  24 * time.Hour,
-			DisableNAT:   true, // Disable NAT in tests to prevent data races in libp2p
+			EnableNAT:    false, // Disable NAT in tests to prevent data races in libp2p
 		},
 	}
 
@@ -217,7 +211,7 @@ func CreatePeerWithReputation(id peer.ID, reputation float64, successes, failure
 	return &PeerInfo{
 		ID:                     id,
 		Height:                 100,
-		BlockHash:              "test-hash",
+		BlockHash:              nil, // test-hash
 		DataHubURL:             "http://test.com",
 		IsBanned:               false,
 		BanScore:               0,
@@ -229,8 +223,6 @@ func CreatePeerWithReputation(id peer.ID, reputation float64, successes, failure
 		BytesReceived:          0,
 		LastBlockTime:          time.Now(),
 		LastMessageTime:        time.Now(),
-		URLResponsive:          true,
-		LastURLCheck:           time.Now(),
 		Storage:                "full",
 		LastInteractionAttempt: time.Now(),
 		LastInteractionSuccess: time.Now(),

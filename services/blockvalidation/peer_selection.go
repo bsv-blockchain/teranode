@@ -2,6 +2,8 @@ package blockvalidation
 
 import (
 	"context"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 )
 
 // PeerForCatchup represents a peer suitable for catchup operations with its metadata
@@ -9,8 +11,8 @@ type PeerForCatchup struct {
 	ID                     string
 	Storage                string
 	DataHubURL             string
-	Height                 int32
-	BlockHash              string
+	Height                 uint32
+	BlockHash              *chainhash.Hash
 	CatchupReputationScore float64
 	CatchupAttempts        int64
 	CatchupSuccesses       int64
@@ -27,7 +29,7 @@ type PeerForCatchup struct {
 // Returns:
 //   - []PeerForCatchup: List of peers sorted by reputation (best first)
 //   - error: If the query fails
-func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight int32) ([]PeerForCatchup, error) {
+func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uint32) ([]PeerForCatchup, error) {
 	// If P2P client is not available, return empty list
 	if u.p2pClient == nil {
 		u.logger.Debugf("[peer_selection] P2P client not available, using fallback peer selection")
@@ -87,28 +89,4 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight int
 	}
 
 	return peers, nil
-}
-
-// selectBestPeerForBlock selects the best peer to fetch a specific block from.
-// This is a convenience wrapper around selectBestPeersForCatchup that returns
-// the single best peer.
-//
-// Parameters:
-//   - ctx: Context for the gRPC call
-//   - targetHeight: The height of the block we're trying to fetch
-//
-// Returns:
-//   - *PeerForCatchup: The best peer, or nil if none available
-//   - error: If the query fails
-func (u *Server) selectBestPeerForBlock(ctx context.Context, targetHeight int32) (*PeerForCatchup, error) {
-	peers, err := u.selectBestPeersForCatchup(ctx, targetHeight)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(peers) == 0 {
-		return nil, nil
-	}
-
-	return &peers[0], nil
 }
