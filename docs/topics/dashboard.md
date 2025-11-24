@@ -205,7 +205,7 @@ The network page (`/network`) shows connected nodes with real-time WebSocket upd
 
 **Connected Nodes Table:**
 
-| Column | Description |![img.png](img.png)
+| Column | Description |
 |--------|-------------|
 | Client Name | Node identifier (current node highlighted) |
 | Best Height | Node's chain tip height |
