@@ -47,6 +47,12 @@ go test -v ./test/chaos/...
 
 # Scenario 4: Intermittent Connection Drops
 ./test/chaos/run_scenario_04.sh
+
+# Scenario 5: Bandwidth Constraints
+./test/chaos/run_scenario_05.sh
+
+# Scenario 6: Slow Close Connections (Slicer)
+./test/chaos/run_scenario_06.sh
 ```
 
 The helper scripts will:
@@ -70,6 +76,12 @@ go test -v ./test/chaos -run TestScenario03_NetworkPartition
 
 # Scenario 4: Intermittent Connection Drops
 go test -v ./test/chaos -run TestScenario04_IntermittentDrops
+
+# Scenario 5: Bandwidth Constraints
+go test -v ./test/chaos -run TestScenario05
+
+# Scenario 6: Slow Close Connections (Slicer)
+go test -v ./test/chaos -run TestScenario06
 ```
 
 ### Run in Verbose Mode
@@ -297,6 +309,106 @@ go test -v ./test/chaos -run TestScenario04_LoadUnderFailures
 
 **Test duration:** ~28 seconds
 
+### Scenario 5: Bandwidth Constraints (2 variants)
+**File:** `scenario_05_bandwidth_constraints_test.go`
+
+Tests system behavior under network bandwidth limitations using toxiproxy's bandwidth toxic.
+
+#### Variant A: Database Bandwidth (`TestScenario05_DatabaseBandwidth`)
+- Simulates datacenter network congestion (500 KB/s moderate, 100 KB/s heavy)
+- Tests PostgreSQL query performance under bandwidth constraints
+- Validates connection pooling behavior with slow data transfer
+- **Duration:** ~2.1 seconds
+
+#### Variant B: Kafka Bandwidth (`TestScenario05_KafkaBandwidth`)
+- Tests Kafka producer/consumer under bandwidth constraints
+- Validates message throughput and backpressure handling
+- Ensures no message loss despite slow network
+- **Duration:** ~2.1 seconds
+
+**Combined duration:** ~4.4 seconds
+
+### Scenario 6: Slow Close Connections (2 variants)
+**File:** `scenario_06_slow_close_connections_test.go`
+
+Tests system behavior with slicer toxic, which transmits data in small chunks with delays between each chunk. This simulates slow/unstable connections typical of congested networks or graceful connection draining.
+
+#### Variant A: Database Slow Close
+**Test:** `TestScenario06_DatabaseSlowClose`
+
+**What it tests:**
+- PostgreSQL queries with chunked result transmission
+- Connection behavior during slow data transfer
+- Database timeout handling with delayed responses
+- System resilience to unstable/slow connections
+
+**How to run:**
+```bash
+# Using helper script
+./test/chaos/run_scenario_06.sh
+
+# Using go test directly
+go test -v ./test/chaos -run TestScenario06_DatabaseSlowClose
+```
+
+**Test phases:**
+1. Establish baseline query performance
+2. Apply moderate slicer (1KB chunks, 10ms delay)
+3. Test database operations with moderate chunking
+4. Apply aggressive slicer (256 byte chunks, 50ms delay)
+5. Test database operations with aggressive chunking
+6. Remove slicer and verify recovery
+7. Verify data consistency
+
+**Expected results:**
+- ✅ Baseline queries complete quickly
+- ✅ Moderate slicer: Queries slower but complete successfully
+- ✅ Aggressive slicer: Significant slowdown but no failures
+- ✅ Connection pool handles chunked transmission gracefully
+- ✅ Full recovery after slicer removed
+- ✅ No data corruption
+
+**Test duration:** ~25 seconds
+
+#### Variant B: Kafka Slow Close
+**Test:** `TestScenario06_KafkaSlowClose`
+
+**What it tests:**
+- Kafka message transmission with chunked data transfer
+- Producer behavior during slow sends
+- Consumer behavior during slow fetches
+- Message consistency with unstable connections
+
+**How to run:**
+```bash
+# Using helper script
+./test/chaos/run_scenario_06.sh
+
+# Using go test directly
+go test -v ./test/chaos -run TestScenario06_KafkaSlowClose
+```
+
+**Test phases:**
+1. Establish baseline Kafka throughput
+2. Apply moderate slicer (1KB chunks, 10ms delay)
+3. Test message production/consumption with moderate chunking
+4. Apply aggressive slicer (256 byte chunks, 50ms delay)
+5. Test message production/consumption with aggressive chunking
+6. Remove slicer and verify recovery
+7. Verify message consistency (no loss)
+
+**Expected results:**
+- ✅ Baseline: Fast message throughput
+- ✅ Moderate slicer: Reduced throughput but 80%+ success rate
+- ✅ Aggressive slicer: Significant slowdown, at least 60% success
+- ✅ No message loss (all published messages eventually consumed)
+- ✅ Producer/consumer handle slow transmission gracefully
+- ✅ Full recovery after slicer removed
+
+**Test duration:** ~30 seconds
+
+**Combined scenario duration:** ~55 seconds
+
 ## Test Structure
 
 Each chaos test follows this pattern:
@@ -467,7 +579,9 @@ Chaos tests take longer than unit tests:
 - Scenario 4A (Intermittent Drops): ~8 minutes (includes retry logic with delays)
 - Scenario 4B (Cascading Effects): ~2 seconds (fast failure detection test)
 - Scenario 4C (Load Under Failures): ~28 seconds (load testing under failures)
-- Full suite: ~12-15 minutes (with all Scenario 4 variants)
+- Scenario 5 (Bandwidth Constraints): ~4.4 seconds (database + Kafka bandwidth tests)
+- Scenario 6 (Slow Close Connections): ~55 seconds (slicer toxic tests)
+- Full suite: ~12-13 minutes (with all scenarios)
 
 ## Troubleshooting
 
@@ -539,6 +653,6 @@ curl -X POST http://localhost:8474/reset
 - [x] Scenario 4A: Intermittent Connection Drops ✅ **Implemented**
 - [x] Scenario 4B: Cascading Effects ✅ **Implemented**
 - [x] Scenario 4C: Load Under Failures ✅ **Implemented**
-- [ ] Scenario 5: Bandwidth Constraints
-- [ ] Scenario 6: Slow Close Connections (Slicer toxic)
+- [x] Scenario 5: Bandwidth Constraints ✅ **Implemented**
+- [x] Scenario 6: Slow Close Connections (Slicer toxic) ✅ **Implemented**
 - [ ] Scenario 7: Combined Failures (DB + Kafka simultaneously)

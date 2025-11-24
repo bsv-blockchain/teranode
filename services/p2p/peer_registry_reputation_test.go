@@ -18,8 +18,8 @@ func TestPeerRegistry_ReputationIncrease_ValidSubtreeReceived(t *testing.T) {
 	peerID := peer.ID("test-peer-subtree")
 
 	// Add peer with neutral reputation
-	pr.AddPeer(peerID, "")
-	initialInfo, _ := pr.GetPeer(peerID)
+	pr.Put(peerID, "", 0, nil, "")
+	initialInfo, _ := pr.Get(peerID)
 	initialReputation := initialInfo.ReputationScore
 	assert.Equal(t, 50.0, initialReputation, "Should start with neutral reputation")
 
@@ -27,7 +27,7 @@ func TestPeerRegistry_ReputationIncrease_ValidSubtreeReceived(t *testing.T) {
 	pr.RecordSubtreeReceived(peerID, 100*time.Millisecond)
 
 	// Verify reputation increased
-	info, exists := pr.GetPeer(peerID)
+	info, exists := pr.Get(peerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.SubtreesReceived)
 	assert.Equal(t, int64(1), info.InteractionSuccesses)
@@ -41,15 +41,15 @@ func TestPeerRegistry_ReputationIncrease_ValidBlockReceived(t *testing.T) {
 	peerID := peer.ID("test-peer-block")
 
 	// Add peer with neutral reputation
-	pr.AddPeer(peerID, "")
-	initialInfo, _ := pr.GetPeer(peerID)
+	pr.Put(peerID, "", 0, nil, "")
+	initialInfo, _ := pr.Get(peerID)
 	initialReputation := initialInfo.ReputationScore
 
 	// Record successful block received
 	pr.RecordBlockReceived(peerID, 200*time.Millisecond)
 
 	// Verify reputation increased
-	info, exists := pr.GetPeer(peerID)
+	info, exists := pr.Get(peerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.BlocksReceived)
 	assert.Equal(t, int64(1), info.InteractionSuccesses)
@@ -63,16 +63,15 @@ func TestPeerRegistry_ReputationIncrease_SuccessfulCatchup(t *testing.T) {
 	peerID := peer.ID("test-peer-catchup")
 
 	// Add peer with neutral reputation
-	pr.AddPeer(peerID, "")
-	pr.UpdateDataHubURL(peerID, "http://test.com")
-	initialInfo, _ := pr.GetPeer(peerID)
+	pr.Put(peerID, "", 0, nil, "http://test.com")
+	initialInfo, _ := pr.Get(peerID)
 	initialReputation := initialInfo.ReputationScore
 
 	// Simulate successful catchup of 10 blocks
 	SimulateSuccessfulCatchup(pr, peerID, 10)
 
 	// Verify reputation increased substantially
-	info, exists := pr.GetPeer(peerID)
+	info, exists := pr.Get(peerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(10), info.InteractionAttempts)
 	assert.Equal(t, int64(10), info.InteractionSuccesses)
@@ -91,9 +90,8 @@ func TestPeerRegistry_ReputationIncrease_MultipleSuccessfulInteractions(t *testi
 	peerID := peer.ID("test-peer-multiple")
 
 	// Add peer with low reputation
-	pr.AddPeer(peerID, "")
+	pr.Put(peerID, "", 0, nil, "http://test.com")
 	pr.UpdateReputation(peerID, 30.0)
-	pr.UpdateDataHubURL(peerID, "http://test.com")
 
 	// Record multiple successful interactions of different types
 	pr.RecordBlockReceived(peerID, 100*time.Millisecond)
@@ -108,7 +106,7 @@ func TestPeerRegistry_ReputationIncrease_MultipleSuccessfulInteractions(t *testi
 	pr.RecordInteractionSuccess(peerID, 140*time.Millisecond)
 
 	// Verify reputation gradually increased
-	info, exists := pr.GetPeer(peerID)
+	info, exists := pr.Get(peerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(10), info.InteractionSuccesses)
 	assert.Equal(t, int64(2), info.BlocksReceived)
@@ -137,9 +135,9 @@ func TestPeerRegistry_ReputationDecrease_InvalidBlockReceived(t *testing.T) {
 	peerID := peer.ID("test-peer-invalid-block")
 
 	// Add peer with good reputation
-	pr.AddPeer(peerID, "")
+	pr.Put(peerID, "", 0, nil, "")
 	pr.UpdateReputation(peerID, 80.0)
-	initialInfo, _ := pr.GetPeer(peerID)
+	initialInfo, _ := pr.Get(peerID)
 	initialReputation := initialInfo.ReputationScore
 
 	// Record failed interaction (invalid block)
@@ -147,7 +145,7 @@ func TestPeerRegistry_ReputationDecrease_InvalidBlockReceived(t *testing.T) {
 	pr.RecordInteractionFailure(peerID)
 
 	// Verify reputation decreased
-	info, exists := pr.GetPeer(peerID)
+	info, exists := pr.Get(peerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.InteractionAttempts)
 	assert.Equal(t, int64(1), info.InteractionFailures)
@@ -160,15 +158,14 @@ func TestPeerRegistry_ReputationDecrease_InvalidForkDetected(t *testing.T) {
 	peerID := peer.ID("test-peer-invalid-fork")
 
 	// Add peer with excellent reputation
-	pr.AddPeer(peerID, "")
+	pr.Put(peerID, "", 0, nil, "http://test.com")
 	pr.UpdateReputation(peerID, 90.0)
-	pr.UpdateDataHubURL(peerID, "http://test.com")
 
 	// Record malicious behavior (invalid fork / secret mining)
 	SimulateInvalidFork(pr, peerID)
 
 	// Verify reputation dropped to floor
-	info, exists := pr.GetPeer(peerID)
+	info, exists := pr.Get(peerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.MaliciousCount)
 	assert.Equal(t, int64(1), info.InteractionFailures)
@@ -191,7 +188,7 @@ func TestPeerRegistry_ReputationDecrease_MultipleFailures(t *testing.T) {
 	peerID := peer.ID("test-peer-multiple-failures")
 
 	// Add peer with good reputation
-	pr.AddPeer(peerID, "")
+	pr.Put(peerID, "", 0, nil, "")
 	pr.UpdateReputation(peerID, 75.0)
 
 	// Record 1 success to establish a baseline
@@ -209,7 +206,7 @@ func TestPeerRegistry_ReputationDecrease_MultipleFailures(t *testing.T) {
 	pr.RecordInteractionFailure(peerID)
 
 	// Verify harsh penalty for repeated recent failures
-	info, exists := pr.GetPeer(peerID)
+	info, exists := pr.Get(peerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.InteractionSuccesses)
 	assert.Equal(t, int64(4), info.InteractionFailures)
@@ -223,8 +220,8 @@ func TestPeerRegistry_ReputationDecrease_CatchupFailure(t *testing.T) {
 	peerID := peer.ID("test-peer-catchup-failure")
 
 	// Add peer with neutral reputation
-	pr.AddPeer(peerID, "")
-	initialInfo, _ := pr.GetPeer(peerID)
+	pr.Put(peerID, "", 0, nil, "")
+	initialInfo, _ := pr.Get(peerID)
 	initialReputation := initialInfo.ReputationScore
 
 	// Record catchup failure
@@ -233,7 +230,7 @@ func TestPeerRegistry_ReputationDecrease_CatchupFailure(t *testing.T) {
 	pr.UpdateCatchupError(peerID, "validation failed: invalid merkle root")
 
 	// Verify reputation decreased and error is recorded
-	info, exists := pr.GetPeer(peerID)
+	info, exists := pr.Get(peerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.InteractionFailures)
 	assert.Less(t, info.ReputationScore, initialReputation, "Reputation should decrease after catchup failure")
@@ -295,7 +292,7 @@ func TestPeerRegistry_ReputationCalculation_SuccessRate(t *testing.T) {
 			pr := NewPeerRegistry()
 			peerID := peer.ID("test-peer-" + tt.name)
 
-			pr.AddPeer(peerID, "")
+			pr.Put(peerID, "", 0, nil, "")
 
 			// Record interactions
 			for i := int64(0); i < tt.successes; i++ {
@@ -308,7 +305,7 @@ func TestPeerRegistry_ReputationCalculation_SuccessRate(t *testing.T) {
 			}
 
 			// Verify reputation is in expected range
-			info, exists := pr.GetPeer(peerID)
+			info, exists := pr.Get(peerID)
 			require.True(t, exists)
 			assert.GreaterOrEqual(t, info.ReputationScore, tt.expectedMinRep, "Reputation should be above minimum")
 			assert.LessOrEqual(t, info.ReputationScore, tt.expectedMaxRep, "Reputation should be below maximum")
@@ -320,7 +317,7 @@ func TestPeerRegistry_ReputationCalculation_RecencyBonus(t *testing.T) {
 	pr := NewPeerRegistry()
 	peerID := peer.ID("test-peer-recency-bonus")
 
-	pr.AddPeer(peerID, "")
+	pr.Put(peerID, "", 0, nil, "")
 
 	// Establish 50% success rate (5 successes, 5 failures)
 	for i := 0; i < 5; i++ {
@@ -352,7 +349,7 @@ func TestPeerRegistry_ReputationCalculation_RecencyPenalty(t *testing.T) {
 	pr := NewPeerRegistry()
 	peerID := peer.ID("test-peer-recency-penalty")
 
-	pr.AddPeer(peerID, "")
+	pr.Put(peerID, "", 0, nil, "")
 
 	// Establish 75% success rate (6 successes, 2 failures)
 	for i := 0; i < 6; i++ {
@@ -384,13 +381,13 @@ func TestPeerRegistry_ReputationCalculation_MaliciousCap(t *testing.T) {
 	pr := NewPeerRegistry()
 	peerID := peer.ID("test-peer-malicious-cap")
 
-	pr.AddPeer(peerID, "")
+	pr.Put(peerID, "", 0, nil, "")
 	pr.UpdateReputation(peerID, 90.0)
 
 	// Record malicious behavior
 	pr.RecordMaliciousInteraction(peerID)
 
-	info, _ := pr.GetPeer(peerID)
+	info, _ := pr.Get(peerID)
 	assert.Equal(t, 5.0, info.ReputationScore, "Reputation should be capped at 5.0 for malicious peers")
 
 	// Try to increase reputation with multiple successes
@@ -400,7 +397,7 @@ func TestPeerRegistry_ReputationCalculation_MaliciousCap(t *testing.T) {
 	}
 
 	// Reputation should stay at 5.0 while malicious count is > 0
-	info, _ = pr.GetPeer(peerID)
+	info, _ = pr.Get(peerID)
 	assert.Equal(t, 5.0, info.ReputationScore, "Reputation should remain at 5.0 while malicious count is set")
 	assert.Greater(t, info.MaliciousCount, int64(0))
 }
@@ -413,7 +410,7 @@ func TestPeerRegistry_ReconsiderBadPeers_ReputationRecovery(t *testing.T) {
 	pr := NewPeerRegistry()
 	peerID := peer.ID("test-peer-recovery")
 
-	pr.AddPeer(peerID, "")
+	pr.Put(peerID, "", 0, nil, "")
 
 	// Create peer with very low reputation due to failures (90% failure rate)
 	// Record 1 success first, then 9 failures (so last interaction is a failure)
@@ -424,7 +421,7 @@ func TestPeerRegistry_ReconsiderBadPeers_ReputationRecovery(t *testing.T) {
 		pr.RecordInteractionFailure(peerID)
 	}
 
-	info, _ := pr.GetPeer(peerID)
+	info, _ := pr.Get(peerID)
 	t.Logf("Initial reputation: %.2f (should be < 20 with 90%% failure and recent failure penalty)", info.ReputationScore)
 	assert.Less(t, info.ReputationScore, 20.0, "Reputation should be very low")
 
@@ -436,7 +433,7 @@ func TestPeerRegistry_ReconsiderBadPeers_ReputationRecovery(t *testing.T) {
 
 	// Verify reputation was recovered
 	assert.Equal(t, 1, recovered, "Should recover one peer")
-	info, _ = pr.GetPeer(peerID)
+	info, _ = pr.Get(peerID)
 	assert.Equal(t, 30.0, info.ReputationScore, "Reputation should be reset to 30.0")
 	assert.Equal(t, int64(0), info.MaliciousCount, "Malicious count should be cleared")
 	assert.False(t, info.LastReputationReset.IsZero())
@@ -447,7 +444,7 @@ func TestPeerRegistry_ReconsiderBadPeers_ExponentialCooldown(t *testing.T) {
 	pr := NewPeerRegistry()
 	peerID := peer.ID("test-peer-exponential")
 
-	pr.AddPeer(peerID, "")
+	pr.Put(peerID, "", 0, nil, "")
 
 	// Create peer with low reputation (90% failure rate, last interaction is failure)
 	pr.RecordInteractionAttempt(peerID)
@@ -457,7 +454,7 @@ func TestPeerRegistry_ReconsiderBadPeers_ExponentialCooldown(t *testing.T) {
 		pr.RecordInteractionFailure(peerID)
 	}
 
-	info, _ := pr.GetPeer(peerID)
+	info, _ := pr.Get(peerID)
 	t.Logf("Initial reputation: %.2f (should be < 20)", info.ReputationScore)
 
 	// First reset
@@ -482,7 +479,7 @@ func TestPeerRegistry_ReconsiderBadPeers_ExponentialCooldown(t *testing.T) {
 	recovered = pr.ReconsiderBadPeers(24 * time.Hour)
 	assert.Equal(t, 1, recovered, "Should recover after 3x cooldown period")
 
-	info, _ = pr.GetPeer(peerID)
+	info, _ = pr.Get(peerID)
 	assert.Equal(t, 2, info.ReputationResetCount, "Reset count should be 2")
 }
 
@@ -491,12 +488,11 @@ func TestPeerRegistry_ReputationRecovery_AfterInvalidBlock(t *testing.T) {
 	peerID := peer.ID("test-peer-recovery-after-invalid")
 
 	// Add peer with good reputation
-	pr.AddPeer(peerID, "")
+	pr.Put(peerID, "", 0, nil, "http://test.com")
 	pr.UpdateReputation(peerID, 80.0)
-	pr.UpdateDataHubURL(peerID, "http://test.com")
 
 	// Verify initial state
-	initialInfo, exists := pr.GetPeer(peerID)
+	initialInfo, exists := pr.Get(peerID)
 	require.True(t, exists)
 	assert.Equal(t, 80.0, initialInfo.ReputationScore, "Should start with good reputation")
 
@@ -505,7 +501,7 @@ func TestPeerRegistry_ReputationRecovery_AfterInvalidBlock(t *testing.T) {
 	// ========================================================================
 	pr.RecordMaliciousInteraction(peerID)
 
-	info, exists := pr.GetPeer(peerID)
+	info, exists := pr.Get(peerID)
 	require.True(t, exists)
 	assert.Equal(t, 5.0, info.ReputationScore, "Reputation should drop to 5.0 for malicious behavior (invalid block)")
 	assert.Equal(t, int64(1), info.MaliciousCount, "Malicious count should be 1")
@@ -519,7 +515,7 @@ func TestPeerRegistry_ReputationRecovery_AfterInvalidBlock(t *testing.T) {
 		pr.RecordBlockReceived(peerID, 100*time.Millisecond)
 	}
 
-	info, _ = pr.GetPeer(peerID)
+	info, _ = pr.Get(peerID)
 	assert.Equal(t, 5.0, info.ReputationScore, "Reputation should remain at 5.0 while malicious count is set")
 	assert.Equal(t, int64(5), info.BlocksReceived, "Should still track blocks received")
 	assert.Equal(t, int64(5), info.InteractionSuccesses, "Should still track successes")
@@ -534,7 +530,7 @@ func TestPeerRegistry_ReputationRecovery_AfterInvalidBlock(t *testing.T) {
 	recovered := pr.ReconsiderBadPeers(24 * time.Hour)
 
 	assert.Equal(t, 1, recovered, "Should recover one peer")
-	info, _ = pr.GetPeer(peerID)
+	info, _ = pr.Get(peerID)
 	assert.Equal(t, 30.0, info.ReputationScore, "Reputation should be reset to 30.0 (second chance)")
 	assert.Equal(t, int64(0), info.MaliciousCount, "Malicious count should be cleared")
 	assert.False(t, info.LastReputationReset.IsZero(), "Should record reputation reset time")
@@ -545,12 +541,12 @@ func TestPeerRegistry_ReputationRecovery_AfterInvalidBlock(t *testing.T) {
 	// ========================================================================
 	// Record multiple successful interactions
 	pr.RecordBlockReceived(peerID, 150*time.Millisecond)
-	info, _ = pr.GetPeer(peerID)
+	info, _ = pr.Get(peerID)
 	reputationAfterFirstBlock := info.ReputationScore
 	assert.Greater(t, reputationAfterFirstBlock, 30.0, "Reputation should increase after valid block")
 
 	pr.RecordSubtreeReceived(peerID, 100*time.Millisecond)
-	info, _ = pr.GetPeer(peerID)
+	info, _ = pr.Get(peerID)
 	reputationAfterFirstSubtree := info.ReputationScore
 	assert.Greater(t, reputationAfterFirstSubtree, reputationAfterFirstBlock, "Reputation should continue to increase")
 
@@ -560,7 +556,7 @@ func TestPeerRegistry_ReputationRecovery_AfterInvalidBlock(t *testing.T) {
 	}
 
 	// Verify final reputation
-	info, _ = pr.GetPeer(peerID)
+	info, _ = pr.Get(peerID)
 	assert.Greater(t, info.ReputationScore, 60.0, "Reputation should recover significantly with consistent success")
 	assert.Equal(t, int64(14), info.BlocksReceived, "Should have 14 blocks received total (5 during malicious + 9 after)")
 	assert.Equal(t, int64(1), info.SubtreesReceived, "Should have 1 subtree received")

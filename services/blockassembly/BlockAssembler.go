@@ -2290,7 +2290,8 @@ func (b *BlockAssembler) shouldInvalidateCache(newTxCount uint32, newSizeInBytes
 
 	// Transaction count changed by >10%
 	if lastTxCount > 0 {
-		txDelta := uint32(0)
+		var txDelta uint32
+
 		if newTxCount > lastTxCount {
 			txDelta = newTxCount - lastTxCount
 		} else {
@@ -2306,7 +2307,8 @@ func (b *BlockAssembler) shouldInvalidateCache(newTxCount uint32, newSizeInBytes
 	// Block size changed by >1MB (1048576 bytes)
 	const oneMB uint64 = 1048576
 	if lastSizeInBytes > 0 {
-		sizeDelta := uint64(0)
+		var sizeDelta uint64
+
 		if newSizeInBytes > lastSizeInBytes {
 			sizeDelta = newSizeInBytes - lastSizeInBytes
 		} else {

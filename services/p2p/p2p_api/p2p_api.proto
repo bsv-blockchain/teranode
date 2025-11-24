@@ -28,8 +28,8 @@ message Peer {
   int64 timeOffset = 20;
   uint32 version = 21;
   string subVer = 22;
-  int32 startingHeight = 23;
-  int32 currentHeight = 24;
+  uint32 startingHeight = 23;
+  uint32 currentHeight = 24;
   int32 banscore = 25;
   bool whitelisted = 26;
   int64 feeFilter = 27;
@@ -168,7 +168,7 @@ message AddBanScoreRequest {
 
   message PeerInfoForCatchup {
     string id = 1;
-    int32 height = 2;
+    uint32 height = 2;
     string block_hash = 3;
     string data_hub_url = 4;
     double catchup_reputation_score = 5;
@@ -226,7 +226,7 @@ message AddBanScoreRequest {
   // Comprehensive peer information with all registry metadata
   message PeerRegistryInfo {
     string id = 1;
-    int32 height = 2;
+    uint32 height = 2;
     string block_hash = 3;
     string data_hub_url = 4;
     int32 ban_score = 5;
@@ -236,8 +236,6 @@ message AddBanScoreRequest {
     uint64 bytes_received = 9;
     int64 last_block_time = 10;  // Unix timestamp
     int64 last_message_time = 11;  // Unix timestamp
-    bool url_responsive = 12;
-    int64 last_url_check = 13;  // Unix timestamp
 
     // Interaction/catchup metrics
     int64 interaction_attempts = 14;
