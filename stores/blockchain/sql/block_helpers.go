@@ -1,3 +1,10 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file contains helper functions for processing block-related database operations.
+// These utilities handle common tasks such as scanning database rows, converting between
+// database representations and model objects, and processing query results efficiently.
 package sql
 
 import (
@@ -104,4 +111,93 @@ func (s *SQL) scanBlockRow(rows *sql.Rows) (*model.BlockInfo, error) {
 	info.SeenAt = timestamppb.New(seenAt.Time)
 
 	return info, nil
+}
+
+// processFullBlockRows processes SQL query results and converts them to model.Block objects.
+// It iterates through all rows and constructs complete Block objects with all fields populated.
+func (s *SQL) processFullBlockRows(rows *sql.Rows) ([]*model.Block, error) {
+	blocks := make([]*model.Block, 0)
+
+	for rows.Next() {
+		block, err := s.scanFullBlockRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, block)
+	}
+
+	return blocks, nil
+}
+
+// scanFullBlockRow scans a single row and constructs a complete Block object.
+// Expects columns in order: ID, version, block_time, n_bits, nonce, previous_hash, merkle_root,
+//
+//	tx_count, size_in_bytes, coinbase_tx, subtree_count, subtrees, height
+func (s *SQL) scanFullBlockRow(rows *sql.Rows) (*model.Block, error) {
+	var (
+		subtreeCount     uint64
+		transactionCount uint64
+		sizeInBytes      uint64
+		subtreeBytes     []byte
+		hashPrevBlock    []byte
+		hashMerkleRoot   []byte
+		coinbaseTx       []byte
+		height           uint32
+		nBits            []byte
+	)
+
+	block := &model.Block{
+		Header: &model.BlockHeader{},
+	}
+
+	err := rows.Scan(
+		&block.ID,
+		&block.Header.Version,
+		&block.Header.Timestamp,
+		&nBits,
+		&block.Header.Nonce,
+		&hashPrevBlock,
+		&hashMerkleRoot,
+		&transactionCount,
+		&sizeInBytes,
+		&coinbaseTx,
+		&subtreeCount,
+		&subtreeBytes,
+		&height,
+	)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to scan row", err)
+	}
+
+	bits, _ := model.NewNBitFromSlice(nBits)
+	block.Header.Bits = *bits
+
+	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to convert hashPrevBlock", err)
+	}
+
+	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to convert hashMerkleRoot", err)
+	}
+
+	block.TransactionCount = transactionCount
+	block.SizeInBytes = sizeInBytes
+
+	if len(coinbaseTx) > 0 {
+		block.CoinbaseTx, err = bt.NewTxFromBytes(coinbaseTx)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+		}
+	}
+
+	err = block.SubTreesFromBytes(subtreeBytes)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to convert subtrees", err)
+	}
+
+	block.Height = height
+
+	return block, nil
 }

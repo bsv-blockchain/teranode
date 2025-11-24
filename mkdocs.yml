@@ -15,6 +15,7 @@ theme:
 nav:
   - Home: index.md
   - Tutorials:
+      - Fork and Pull Request Guidelines: tutorials/developers/forkAndPullRequestGuidelines.md
       - Developer Setup: tutorials/developers/developerSetup.md
       - Miners Getting Started: tutorials/miners/minersGettingStarted.md
   - How-To Guides:
@@ -53,14 +54,18 @@ nav:
           - Troubleshooting:
               - Docker: howto/miners/docker/minersHowToTroubleshooting.md
               - Kubernetes: howto/miners/kubernetes/minersHowToTroubleshooting.md
+          - Reset Teranode:
+              - Docker: howto/miners/docker/minersHowToResetTeranode.md
+              - Kubernetes: howto/miners/kubernetes/minersHowToResetTeranode.md
+          - Sync the Node:
+              - Docker: howto/miners/docker/minersHowToSyncTheNode.md
+              - Kubernetes: howto/miners/kubernetes/minersHowToSyncTheNode.md
           - Additional:
+              - Backup Teranode: howto/miners/minersHowToBackup.md
               - CPU Mining Setup: howto/miners/minersHowToCPUMiner.md
-              - Reset Teranode: howto/miners/minersHowToResetTeranode.md
-              - Sync the Node: howto/miners/minersHowToSyncTheNode.md
               - Teranode CLI: howto/miners/minersHowToTeranodeCLI.md
               - Managing Disk Space: howto/miners/minersManagingDiskSpace.md
               - Using Listen Mode: howto/miners/minersHowToUseListenMode.md
-              - Backup (Kubernetes): howto/miners/kubernetes/minersHowToBackup.md
   - Key Topics:
       - Teranode Introduction: topics/teranodeIntro.md
       - Architecture Overview: topics/architecture/teranode-overall-system-design.md
@@ -141,6 +146,8 @@ nav:
       - Configuration:
           - Settings Overview: references/settings.md
           - Settings Reference: references/settings_reference.md
+          - Global Settings: references/settings/global_settings.md
+          - Policy Settings: references/settings/policy_settings.md
           - Kafka Settings: references/settings/kafka_settings.md
           - Service Settings:
               - Alert: references/settings/services/alert_settings.md
@@ -157,6 +164,7 @@ nav:
               - UTXO Persister: references/settings/services/utxopersister_settings.md
               - Validator: references/settings/services/validator_settings.md
           - Store Settings:
+              - Aerospike Store: references/settings/stores/aerospike_settings.md
               - Blob Store: references/settings/stores/blob_settings.md
               - UTXO Store: references/settings/stores/utxo_settings.md
       - Miscellaneous:

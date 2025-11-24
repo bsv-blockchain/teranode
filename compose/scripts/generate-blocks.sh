@@ -135,8 +135,8 @@ while true; do
     exit 0
   fi
   
-  # Random delay between 2s and 4s
-  DELAY_MS=$(( (RANDOM % 2000) + 2000 ))
+  # Random delay between 10s and 15s
+  DELAY_MS=$(( (RANDOM % 5000) + 10000 ))
   DELAY_S=$(awk -v delay_ms="$DELAY_MS" 'BEGIN { printf "%.3f", delay_ms / 1000 }')
   
   if [ "$STOP_HEIGHT" -ne -1 ]; then

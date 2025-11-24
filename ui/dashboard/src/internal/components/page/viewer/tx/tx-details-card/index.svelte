@@ -26,6 +26,7 @@
 
   $: isOverview = display === DetailTab.overview
   $: isJson = display === DetailTab.json
+  $: isMerkleProof = display === DetailTab.merkleproof
 
   function onDisplay(value) {
     dispatch('display', { value })
@@ -80,6 +81,15 @@
         variant={isJson ? 'tertiary' : 'primary'}
         on:click={() => onDisplay('json')}>{t(`${baseKey}.tab.json`)}</Button
       >
+      {#if (data?.blockHashes && data?.blockHashes.length > 0) || (data?.blockIDs && data?.blockIDs.length > 0)}
+        <Button
+          size="medium"
+          hasFocusRect={false}
+          selected={isMerkleProof}
+          variant={isMerkleProof ? 'tertiary' : 'primary'}
+          on:click={() => onDisplay('merkleproof')}>Merkle Proof</Button
+        >
+      {/if}
     </div>
     {#if isOverview}
       <div class="fields" class:collapse>
@@ -204,6 +214,10 @@
       <div class="json">
         <div><JSONTree {data} /></div>
       </div>
+    {:else if isMerkleProof}
+      <div class="merkle-proof">
+        <slot name="merkle-proof" />
+      </div>
     {/if}
   </div>
 </Card>
@@ -234,6 +248,12 @@
 
     width: 100%;
     overflow-x: auto;
+  }
+
+  .merkle-proof {
+    box-sizing: var(--box-sizing);
+    margin-top: 32px;
+    width: 100%;
   }
 
   .fields {

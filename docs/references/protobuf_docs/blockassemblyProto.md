@@ -13,7 +13,6 @@
     - [GetCurrentDifficultyResponse](#getcurrentdifficultyresponse)
     - [GetMiningCandidateRequest](#getminingcandidaterequest)
     - [HealthResponse](#healthresponse)
-    - [NewChaintipAndHeightRequest](#newchaintipandheightrequest)
     - [RemoveTxRequest](#removetxrequest)
     - [StateMessage](#statemessage)
     - [SubmitMiningSolutionRequest](#submitminingsolutionrequest)
@@ -171,19 +170,6 @@ Contains the health status of the service. Includes an 'ok' flag indicating heal
 
 
 
-<a name="NewChaintipAndHeightRequest"></a>
-
-### NewChaintipAndHeightRequest
-Request for adding a new chaintip and height information.
-
-
-| Field | Type | Label | Description |
-| ----- | ---- | ----- | ----------- |
-| chaintip | [bytes](#bytes) |  | the chaintip hash |
-| height | [uint32](#uint32) |  | the height of the chaintip in the blockchain |
-
-
-
 
 
 
@@ -212,8 +198,6 @@ Message containing the state of the block assembly service.
 | ----- | ---- | ----- | ----------- |
 | blockAssemblyState | [string](#string) |  | the state of the block assembly service |
 | subtreeProcessorState | [string](#string) |  | the state of the block assembly subtree processor |
-| resetWaitCount | [uint32](#uint32) |  | the number of blocks the reset has to wait for |
-| resetWaitTime | [uint32](#uint32) |  | the time in seconds the reset has to wait for |
 | subtreeCount | [uint32](#uint32) |  | the number of subtrees |
 | txCount | [uint64](#uint64) |  | the number of transactions |
 | queueCount | [int64](#int64) |  | the size of the queue |
@@ -310,6 +294,7 @@ Responsible for assembling new blocks and managing the blockchain's block creati
 | GetCurrentDifficulty | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetCurrentDifficultyResponse](#blockassembly_api-GetCurrentDifficultyResponse) | Retrieves the current network mining difficulty. Used by miners to understand the current mining requirements. |
 | SubmitMiningSolution | [SubmitMiningSolutionRequest](#blockassembly_api-SubmitMiningSolutionRequest) | [OKResponse](#blockassembly_api-OKResponse) | Submits a solved block to the network. Includes the proof-of-work solution and block details. |
 | ResetBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Resets the block assembly state. Useful for handling reorgs or recovering from errors. |
+| ResetBlockAssemblyFully | [EmptyMessage](#blockassembly_api-EmptyMessage) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Performs a complete reset of the block assembly state. This includes clearing all transactions and resetting internal structures. This will traverse the whole UTXO set and is more intensive than a standard reset. |
 | GetBlockAssemblyState | [EmptyMessage](#blockassembly_api-EmptyMessage) | [StateMessage](#blockassembly_api-StateMessage) | Retrieves the current state of block assembly. Provides detailed information about the assembly process status. |
 | GenerateBlocks | [GenerateBlocksRequest](#blockassembly_api-GenerateBlocksRequest) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Creates new blocks (typically for testing purposes). Allows specification of block count and recipient address. |
 | CheckBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [OKResponse](#blockassembly_api-OKResponse) | Checks the current state of block assembly. This verifies that the block assembly and subtree processor are functioning correctly. |

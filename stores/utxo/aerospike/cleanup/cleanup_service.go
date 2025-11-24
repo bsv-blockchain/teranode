@@ -79,6 +79,10 @@ type Options struct {
 
 	// MaxJobsHistory is the maximum number of jobs to keep in history
 	MaxJobsHistory int
+
+	// GetPersistedHeight returns the last block height processed by block persister
+	// Used to coordinate cleanup with block persister progress (can be nil)
+	GetPersistedHeight func() uint32
 }
 
 // Service manages background jobs for cleaning up records based on block height
@@ -101,6 +105,14 @@ type Service struct {
 	// separate batchers for background batch processing
 	parentUpdateBatcher batcherIfc[batchParentUpdate]
 	deleteBatcher       batcherIfc[batchDelete]
+
+	// getPersistedHeight returns the last block height processed by block persister
+	// Used to coordinate cleanup with block persister progress (can be nil)
+	getPersistedHeight func() uint32
+
+	// maxConcurrentOperations limits concurrent operations during cleanup processing
+	// Auto-detected from Aerospike client connection queue size
+	maxConcurrentOperations int
 }
 
 // batchParentUpdate represents a parent record update operation in a batch
@@ -166,18 +178,32 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 	batchWritePolicy := aerospike.NewBatchWritePolicy()
 	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
+	// Determine max concurrent operations:
+	// - Use connection queue size as the upper bound (to prevent connection exhaustion)
+	// - If setting is configured (non-zero), use the minimum of setting and connection queue size
+	// - If setting is 0 or unset, use connection queue size
+	connectionQueueSize := opts.Client.GetConnectionQueueSize()
+	maxConcurrentOps := connectionQueueSize
+	if tSettings.UtxoStore.CleanupMaxConcurrentOperations > 0 {
+		if tSettings.UtxoStore.CleanupMaxConcurrentOperations < maxConcurrentOps {
+			maxConcurrentOps = tSettings.UtxoStore.CleanupMaxConcurrentOperations
+		}
+	}
+
 	service := &Service{
-		logger:           opts.Logger,
-		settings:         tSettings,
-		client:           opts.Client,
-		external:         opts.ExternalStore,
-		namespace:        opts.Namespace,
-		set:              opts.Set,
-		ctx:              opts.Ctx,
-		indexWaiter:      opts.IndexWaiter,
-		queryPolicy:      queryPolicy,
-		writePolicy:      writePolicy,
-		batchWritePolicy: batchWritePolicy,
+		logger:                  opts.Logger,
+		settings:                tSettings,
+		client:                  opts.Client,
+		external:                opts.ExternalStore,
+		namespace:               opts.Namespace,
+		set:                     opts.Set,
+		ctx:                     opts.Ctx,
+		indexWaiter:             opts.IndexWaiter,
+		queryPolicy:             queryPolicy,
+		writePolicy:             writePolicy,
+		batchWritePolicy:        batchWritePolicy,
+		getPersistedHeight:      opts.GetPersistedHeight,
+		maxConcurrentOperations: maxConcurrentOps,
 	}
 
 	// Create the job processor function
@@ -248,6 +274,12 @@ func (s *Service) Stop(ctx context.Context) error {
 	return nil
 }
 
+// SetPersistedHeightGetter sets the function used to get block persister progress.
+// This should be called after service creation to wire up coordination with block persister.
+func (s *Service) SetPersistedHeightGetter(getter func() uint32) {
+	s.getPersistedHeight = getter
+}
+
 // UpdateBlockHeight updates the block height and triggers a cleanup job
 func (s *Service) UpdateBlockHeight(blockHeight uint32, done ...chan string) error {
 	if blockHeight == 0 {
@@ -274,13 +306,56 @@ func (s *Service) processCleanupJob(job *cleanup.Job, workerID int) {
 
 	s.logger.Infof("Worker %d starting cleanup job for block height %d", workerID, job.BlockHeight)
 
+	// BLOCK PERSISTER COORDINATION: Calculate safe cleanup height
+	//
+	// PROBLEM: Block persister creates .subtree_data files after a delay (BlockPersisterPersistAge blocks).
+	// If we delete transactions before block persister creates these files, catchup will fail with
+	// "subtree length does not match tx data length" (actually missing transactions).
+	//
+	// SOLUTION: Limit cleanup to transactions that block persister has already processed:
+	//   safe_height = min(requested_cleanup_height, persisted_height + retention)
+	//
+	// EXAMPLE with retention=288, persisted=100, requested=200:
+	//   - Block persister has processed blocks up to height 100
+	//   - Those blocks' transactions are in .subtree_data files (safe to delete after retention)
+	//   - Safe deletion height = 100 + 288 = 388... but wait, we want to clean height 200
+	//   - Since 200 < 388, we can safely proceed with cleaning up to 200
+	//
+	// EXAMPLE where cleanup would be limited (persisted=50, requested=200, retention=100):
+	//   - Block persister only processed up to height 50
+	//   - Safe deletion = 50 + 100 = 150
+	//   - Requested cleanup of 200 is LIMITED to 150 to protect unpersisted blocks 51-200
+	//
+	// HEIGHT=0 SPECIAL CASE: If persistedHeight=0, block persister isn't running or hasn't
+	// processed any blocks yet. Proceed with normal cleanup without coordination.
+	safeCleanupHeight := job.BlockHeight
+
+	if s.getPersistedHeight != nil {
+		persistedHeight := s.getPersistedHeight()
+
+		// Only apply limitation if block persister has actually processed blocks (height > 0)
+		if persistedHeight > 0 {
+			retention := s.settings.GetUtxoStoreBlockHeightRetention()
+
+			// Calculate max safe height: persisted_height + retention
+			// Block persister at height N means blocks 0 to N are persisted in .subtree_data files.
+			// Those transactions can be safely deleted after retention blocks.
+			maxSafeHeight := persistedHeight + retention
+			if maxSafeHeight < safeCleanupHeight {
+				s.logger.Infof("Worker %d: Limiting cleanup from height %d to %d (persisted: %d, retention: %d)",
+					workerID, job.BlockHeight, maxSafeHeight, persistedHeight, retention)
+				safeCleanupHeight = maxSafeHeight
+			}
+		}
+	}
+
 	// Create a query statement
 	stmt := aerospike.NewStatement(s.namespace, s.set)
 	stmt.BinNames = []string{fields.TxID.String(), fields.DeleteAtHeight.String(), fields.Inputs.String(), fields.External.String()}
 
-	// Set the filter to find records with a delete_at_height less than or equal to the current block height
+	// Set the filter to find records with a delete_at_height less than or equal to the safe cleanup height
 	// This will automatically use the index since the filter is on the indexed bin
-	err := stmt.SetFilter(aerospike.NewRangeFilter(fields.DeleteAtHeight.String(), 1, int64(job.BlockHeight)))
+	err := stmt.SetFilter(aerospike.NewRangeFilter(fields.DeleteAtHeight.String(), 1, int64(safeCleanupHeight)))
 	if err != nil {
 		job.SetStatus(cleanup.JobStatusFailed)
 		job.Error = err
@@ -305,7 +380,7 @@ func (s *Service) processCleanupJob(job *cleanup.Job, workerID int) {
 	recordCount := atomic.Int64{}
 
 	g := &errgroup.Group{}
-	util.SafeSetLimit(g, s.settings.UtxoStore.CleanupMaxConcurrentOperations)
+	util.SafeSetLimit(g, s.maxConcurrentOperations)
 
 	for {
 		rec, ok := <-result

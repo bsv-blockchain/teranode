@@ -91,7 +91,7 @@ func TestDuplicateSpendLargeTx(t *testing.T) {
 	require.NoError(t, err)
 
 	// First spend attempt - should succeed
-	spends, err := store.Spend(ctx, spendingTx)
+	spends, err := store.Spend(ctx, spendingTx, store.GetBlockHeight()+1)
 	require.NoError(t, err, "Failed on first spend attempt")
 	require.NotNil(t, spends)
 	require.Len(t, spends, numOutputs)
@@ -108,7 +108,7 @@ func TestDuplicateSpendLargeTx(t *testing.T) {
 
 	// CRITICAL TEST: Attempt to spend the same outputs again with the same spending transaction
 	// This should NOT increment spentExtraRecs beyond totalExtraRecs
-	spends2, err := store.Spend(ctx, spendingTx)
+	spends2, err := store.Spend(ctx, spendingTx, store.GetBlockHeight()+1)
 	// Should succeed (idempotent behavior - already spent with same data is OK)
 	require.NoError(t, err, "Failed on duplicate spend attempt")
 	require.NotNil(t, spends2)
@@ -133,7 +133,7 @@ func TestDuplicateSpendLargeTx(t *testing.T) {
 		spentExtraRecsAfterFirst, spentExtraRecsAfterDuplicate)
 
 	// Try a third time to be really sure
-	spends3, err := store.Spend(ctx, spendingTx)
+	spends3, err := store.Spend(ctx, spendingTx, store.GetBlockHeight()+1)
 	require.NoError(t, err, "Failed on third spend attempt")
 	require.NotNil(t, spends3)
 	require.Len(t, spends3, numOutputs)

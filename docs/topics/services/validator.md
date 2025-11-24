@@ -71,7 +71,9 @@ Also, the `Validator` will accept subscriptions from the P2P Service, where reje
 
 ### Detailed Component Diagram
 
-The detailed component diagram below shows the internal architecture of the Validator Service:
+The detailed component diagram below shows the internal architecture of the Validator when deployed as a **Remote Validator Service** (with gRPC and HTTP servers).
+
+> **Important**: This diagram represents the Remote Validator Service deployment model. In the recommended **Local Validator** deployment (see section 1.1), the gRPC and HTTP servers are not present, and the validator is instantiated directly within calling services for better performance.
 
 ![Validator_Component](img/plantuml/validator/Validator_Component.svg)
 
@@ -690,7 +692,7 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 To run the Validator locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Validator=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -Validator=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Validator locally.

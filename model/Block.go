@@ -1,6 +1,7 @@
 package model
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -34,6 +35,15 @@ import (
 	"github.com/greatroar/blobloom"
 	"golang.org/x/sync/errgroup"
 )
+
+// bufioReaderPool reduces GC pressure by reusing bufio.Reader instances for subtree deserialization.
+// Using 32KB buffers provides excellent I/O performance for sequential reads
+// while dramatically reducing memory pressure and GC overhead (16x reduction from previous 512KB).
+var bufioReaderPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewReaderSize(nil, 32*1024) // 32KB buffer - optimized for sequential I/O
+	},
+}
 
 const GenesisBlockID = 0
 
@@ -459,10 +469,15 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			return false, err
 		}
 
+		// Verify that we have at least one subtree and that it has at least one node
+		if len(b.SubtreeSlices) == 0 || len(b.SubtreeSlices[0].Nodes) == 0 {
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
+		}
+
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
-		// if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(CoinbasePlaceholder) {
-		// 	return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
-		// }
+		if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
+		}
 
 		// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
 		//    making sure to replace the coinbase placeholder with the coinbase tx hash in the first subtree
@@ -683,13 +698,13 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	defer deferFn()
 
 	var (
-		subtreeMetaSlice    *subtreepkg.SubtreeMeta
+		subtreeMetaSlice    *subtreepkg.Meta
 		subtreeHash         = subtree.RootHash()
 		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes))
 		err                 error
 	)
 
-	subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*subtreepkg.SubtreeMeta, error) {
+	subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*subtreepkg.Meta, error) {
 		return b.getSubtreeMetaSlice(ctx, deps.subtreeStore, *subtreeHash, subtree)
 	}, retry.WithMessage(fmt.Sprintf("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice", b.String(), subtreeHash.String(), sIdx)))
 
@@ -791,7 +806,7 @@ func (b *Block) getValidationConcurrency(validOrderAndBlessedConcurrency int) in
 }
 
 func (b *Block) checkTxInRecentBlocks(ctx context.Context, deps *validationDependencies, validationCtx *validationContext,
-	subtreeNode subtreepkg.SubtreeNode, subtreeHash *chainhash.Hash, sIdx, snIdx int) error {
+	subtreeNode subtreepkg.Node, subtreeHash *chainhash.Hash, sIdx, snIdx int) error {
 	// get first 8 bytes of the subtreeNode hash
 	n64 := binary.BigEndian.Uint64(subtreeNode.Hash[:])
 
@@ -843,15 +858,14 @@ func (b *Block) checkTxInRecentBlocks(ctx context.Context, deps *validationDepen
 }
 
 func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) ([]uint32, error) {
+	var oldBlockIDs []uint32
+
 	// check whether the parent transaction has already been mined in a block on our chain
 	// we need to get back to the txMetaStore for this, to make sure we have the latest data
 	// two options: 1- parent is currently under validation, 2- parent is from forked chain.
 	// for the first situation we don't start validating the current block until the parent is validated.
 	// parent tx meta was not found, must be old, ignore | it is a coinbase, which obviously is mined in a block
 	parentTxMeta, err := getParentTxMetaBlockIDs(gCtx, txMetaStore, parentTxStruct)
-
-	var oldBlockIDs []uint32
-
 	if err != nil {
 		return oldBlockIDs, err
 	}
@@ -909,10 +923,10 @@ func ErrCheckParentExistsOnChain(gCtx context.Context, currentBlockHeaderIDsMap 
 }
 
 type transactionValidationParams struct {
-	subtreeMetaSlice *subtreepkg.SubtreeMeta
+	subtreeMetaSlice *subtreepkg.Meta
 	subtreeHash      *chainhash.Hash
 	sIdx, snIdx      int
-	subtreeNode      subtreepkg.SubtreeNode
+	subtreeNode      subtreepkg.Node
 }
 
 func (b *Block) validateTransaction(ctx context.Context, deps *validationDependencies, validationCtx *validationContext,
@@ -950,8 +964,8 @@ func (b *Block) validateTransaction(ctx context.Context, deps *validationDepende
 	return b.checkParentTransactions(parentTxHashes, txIdx, params.subtreeNode, params.subtreeHash, params.sIdx, params.snIdx)
 }
 
-func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.SubtreeMeta, validationCtx *validationContext,
-	subtreeHash *chainhash.Hash, sIdx, snIdx int, subtreeNode subtreepkg.SubtreeNode) error {
+func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validationCtx *validationContext,
+	subtreeHash *chainhash.Hash, sIdx, snIdx int, subtreeNode subtreepkg.Node) error {
 	txInpoints, err := subtreeMetaSlice.GetTxInpoints(snIdx)
 	if err != nil {
 		return errors.NewStorageError("[validOrderAndBlessed][%s][%s:%d]:%d error getting tx inpoints from subtree meta slice",
@@ -969,7 +983,7 @@ func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.SubtreeMeta, v
 }
 
 func (b *Block) checkParentTransactions(parentTxHashes []chainhash.Hash, txIdx uint64,
-	subtreeNode subtreepkg.SubtreeNode, subtreeHash *chainhash.Hash, sIdx, snIdx int) ([]missingParentTx, error) {
+	subtreeNode subtreepkg.Node, subtreeHash *chainhash.Hash, sIdx, snIdx int) ([]missingParentTx, error) {
 	checkParentTxHashes := make([]missingParentTx, 0, len(parentTxHashes))
 
 	for _, parentTxHash := range parentTxHashes {
@@ -1013,7 +1027,7 @@ func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, paren
 	parentTxMeta, err := txMetaStore.Get(gCtx, &parentTxStruct.parentTxHash, fields.BlockIDs)
 	if err != nil {
 		if errors.Is(err, errors.ErrTxNotFound) {
-			return nil, nil
+			return nil, errors.NewBlockInvalidError("parent transaction %s of tx %s not found in txMetaStore", parentTxStruct.parentTxHash.String(), parentTxStruct.txHash.String())
 		}
 
 		return nil, errors.NewStorageError("error getting parent transaction %s from txMetaStore", parentTxStruct.parentTxHash.String(), err)
@@ -1127,10 +1141,18 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 					return errors.NewStorageError("[BLOCK][%s][ID %d] failed to get subtree %s", blockHash, blockID, subtreeHash, err)
 				}
 
-				err = subtree.DeserializeFromReader(subtreeReader)
+				// Use pooled bufio.Reader to reduce GC pressure
+				bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+				bufferedReader.Reset(subtreeReader)
+				defer func() {
+					bufferedReader.Reset(nil)
+					bufioReaderPool.Put(bufferedReader)
+				}()
+
+				err = subtree.DeserializeFromReader(bufferedReader)
 				if err != nil {
 					_, err = retry.Retry(gCtx, logger, func() (struct{}, error) {
-						return struct{}{}, subtree.DeserializeFromReader(subtreeReader)
+						return struct{}{}, subtree.DeserializeFromReader(bufferedReader)
 					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][ID %d] failed to deserialize subtree %s", blockHash, blockID, subtreeHash)))
 
 					if err != nil {
@@ -1182,7 +1204,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	return nil
 }
 
-func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree) (*subtreepkg.SubtreeMeta, error) {
+func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree) (*subtreepkg.Meta, error) {
 	// get subtree meta
 	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
 	if err != nil {

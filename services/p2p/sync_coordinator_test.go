@@ -2,12 +2,11 @@ package p2p
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -20,9 +19,8 @@ func TestSyncCoordinator_NewSyncCoordinator(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -31,7 +29,6 @@ func TestSyncCoordinator_NewSyncCoordinator(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -42,7 +39,6 @@ func TestSyncCoordinator_NewSyncCoordinator(t *testing.T) {
 	assert.Equal(t, settings, sc.settings)
 	assert.Equal(t, registry, sc.registry)
 	assert.Equal(t, selector, sc.selector)
-	assert.Equal(t, healthChecker, sc.healthChecker)
 	assert.Equal(t, banManager, sc.banManager)
 	assert.Equal(t, blockchainSetup.Client, sc.blockchainClient)
 	assert.NotNil(t, sc.stopCh)
@@ -52,9 +48,8 @@ func TestSyncCoordinator_SetGetLocalHeightCallback(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -63,7 +58,6 @@ func TestSyncCoordinator_SetGetLocalHeightCallback(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -88,9 +82,8 @@ func TestSyncCoordinator_StartAndStop(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -99,7 +92,6 @@ func TestSyncCoordinator_StartAndStop(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -125,9 +117,8 @@ func TestSyncCoordinator_GetCurrentSyncPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -136,7 +127,6 @@ func TestSyncCoordinator_GetCurrentSyncPeer(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -161,9 +151,8 @@ func TestSyncCoordinator_ClearSyncPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -172,7 +161,6 @@ func TestSyncCoordinator_ClearSyncPeer(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -196,9 +184,8 @@ func TestSyncCoordinator_TriggerSync(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -207,7 +194,6 @@ func TestSyncCoordinator_TriggerSync(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -220,10 +206,8 @@ func TestSyncCoordinator_TriggerSync(t *testing.T) {
 
 	// Add a peer that is ahead
 	peerID := peer.ID("test-peer")
-	registry.AddPeer(peerID)
-	registry.UpdateHeight(peerID, 110, "hash")
-	registry.UpdateDataHubURL(peerID, "http://test.com")
-	registry.UpdateURLResponsiveness(peerID, true)
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(peerID, "", 110, peerHash, "http://test.com")
 
 	// Trigger sync
 	err := sc.TriggerSync()
@@ -238,9 +222,8 @@ func TestSyncCoordinator_TriggerSync_NoPeersAvailable(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -249,7 +232,6 @@ func TestSyncCoordinator_TriggerSync_NoPeersAvailable(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -272,9 +254,8 @@ func TestSyncCoordinator_HandlePeerDisconnected(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -283,7 +264,6 @@ func TestSyncCoordinator_HandlePeerDisconnected(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -291,7 +271,7 @@ func TestSyncCoordinator_HandlePeerDisconnected(t *testing.T) {
 
 	// Add a peer and set as sync peer
 	peerID := peer.ID("test-peer")
-	registry.AddPeer(peerID)
+	registry.Put(peerID, "", 0, nil, "")
 
 	sc.mu.Lock()
 	sc.currentSyncPeer = peerID
@@ -304,7 +284,7 @@ func TestSyncCoordinator_HandlePeerDisconnected(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Verify peer was removed from registry
-	_, exists := registry.GetPeer(peerID)
+	_, exists := registry.Get(peerID)
 	assert.False(t, exists)
 
 	// Sync peer should be cleared
@@ -316,9 +296,8 @@ func TestSyncCoordinator_HandlePeerDisconnected_NotSyncPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -327,7 +306,6 @@ func TestSyncCoordinator_HandlePeerDisconnected_NotSyncPeer(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -336,8 +314,8 @@ func TestSyncCoordinator_HandlePeerDisconnected_NotSyncPeer(t *testing.T) {
 	// Add two peers
 	syncPeer := peer.ID("sync-peer")
 	otherPeer := peer.ID("other-peer")
-	registry.AddPeer(syncPeer)
-	registry.AddPeer(otherPeer)
+	registry.Put(syncPeer, "", 0, nil, "")
+	registry.Put(otherPeer, "", 0, nil, "")
 
 	// Set sync peer
 	sc.mu.Lock()
@@ -348,7 +326,7 @@ func TestSyncCoordinator_HandlePeerDisconnected_NotSyncPeer(t *testing.T) {
 	sc.HandlePeerDisconnected(otherPeer)
 
 	// Verify peer was removed
-	_, exists := registry.GetPeer(otherPeer)
+	_, exists := registry.Get(otherPeer)
 	assert.False(t, exists)
 
 	// Sync peer should remain
@@ -360,9 +338,8 @@ func TestSyncCoordinator_HandleCatchupFailure(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -371,7 +348,6 @@ func TestSyncCoordinator_HandleCatchupFailure(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -385,10 +361,8 @@ func TestSyncCoordinator_HandleCatchupFailure(t *testing.T) {
 
 	// Add new peer for recovery
 	newPeer := peer.ID("new-peer")
-	registry.AddPeer(newPeer)
-	registry.UpdateHeight(newPeer, 110, "hash")
-	registry.UpdateDataHubURL(newPeer, "http://test.com")
-	registry.UpdateURLResponsiveness(newPeer, true)
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(newPeer, "", 110, peerHash, "http://test.com")
 
 	sc.SetGetLocalHeightCallback(func() uint32 {
 		return 100
@@ -406,9 +380,8 @@ func TestSyncCoordinator_selectNewSyncPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -417,7 +390,6 @@ func TestSyncCoordinator_selectNewSyncPeer(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -431,20 +403,18 @@ func TestSyncCoordinator_selectNewSyncPeer(t *testing.T) {
 	peer1 := peer.ID("peer1")
 	peer2 := peer.ID("peer2")
 
-	registry.AddPeer(peer1)
-	registry.UpdateHeight(peer1, 105, "hash1")
-	registry.UpdateDataHubURL(peer1, "http://peer1.com")
-	registry.UpdateURLResponsiveness(peer1, false) // Not responsive
+	peerHash1, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(peer1, "", 105, peerHash1, "http://peer1.com")
 
-	registry.AddPeer(peer2)
-	registry.UpdateHeight(peer2, 110, "hash2")
-	registry.UpdateDataHubURL(peer2, "http://peer2.com")
-	registry.UpdateURLResponsiveness(peer2, true) // Responsive
+	peerHash2, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(peer2, "", 110, peerHash2, "http://peer2.com")
+	// Give peer2 better reputation to ensure it's selected
+	registry.UpdateReputation(peer2, 80.0)
 
 	// Select new sync peer
 	selected := sc.selectNewSyncPeer()
 
-	// Should select peer2 (responsive and higher)
+	// Should select peer2 (higher reputation and higher height)
 	assert.Equal(t, peer2, selected)
 }
 
@@ -454,9 +424,8 @@ func TestSyncCoordinator_selectNewSyncPeer_ForcedPeer(t *testing.T) {
 	settings.P2P.ForceSyncPeer = "forced-peer"
 
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -465,7 +434,6 @@ func TestSyncCoordinator_selectNewSyncPeer_ForcedPeer(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -478,66 +446,25 @@ func TestSyncCoordinator_selectNewSyncPeer_ForcedPeer(t *testing.T) {
 	// Add forced peer
 	forcedPeer := peer.ID("forced-peer")
 	settings.P2P.ForceSyncPeer = string(forcedPeer) // Set the forced peer in settings
-	registry.AddPeer(forcedPeer)
-	registry.UpdateHeight(forcedPeer, 110, "hash")
-	registry.UpdateDataHubURL(forcedPeer, "http://forced.com")
-	registry.UpdateURLResponsiveness(forcedPeer, true)
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(forcedPeer, "", 110, peerHash, "http://forced.com")
 
 	// Add another better peer
 	betterPeer := peer.ID("better-peer")
-	registry.AddPeer(betterPeer)
-	registry.UpdateHeight(betterPeer, 120, "hash2")
-	registry.UpdateDataHubURL(betterPeer, "http://better.com")
-	registry.UpdateURLResponsiveness(betterPeer, true)
+	betterHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(betterPeer, "", 120, betterHash, "http://better.com")
 
 	// Should select forced peer
 	selected := sc.selectNewSyncPeer()
 	assert.Equal(t, forcedPeer, selected)
 }
 
-func TestSyncCoordinator_UpdatePeerInfo(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		healthChecker,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Add peer first
-	peerID := peer.ID("test-peer")
-	registry.AddPeer(peerID)
-
-	// Update peer info
-	sc.UpdatePeerInfo(peerID, 150, "block-hash", "http://datahub.com")
-
-	// Verify peer was updated
-	info, exists := registry.GetPeer(peerID)
-	require.True(t, exists)
-	assert.Equal(t, int32(150), info.Height)
-	assert.Equal(t, "block-hash", info.BlockHash)
-	assert.Equal(t, "http://datahub.com", info.DataHubURL)
-}
-
 func TestSyncCoordinator_UpdateBanStatus(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -546,7 +473,6 @@ func TestSyncCoordinator_UpdateBanStatus(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -554,7 +480,7 @@ func TestSyncCoordinator_UpdateBanStatus(t *testing.T) {
 
 	// Add peer and ban it
 	peerID := peer.ID("test-peer")
-	registry.AddPeer(peerID)
+	registry.Put(peerID, "", 0, nil, "")
 
 	// Add ban score - use raw string conversion to match UpdateBanStatus
 	banManager.AddScore(string(peerID), ReasonSpam)
@@ -564,124 +490,18 @@ func TestSyncCoordinator_UpdateBanStatus(t *testing.T) {
 	sc.UpdateBanStatus(peerID)
 
 	// Verify ban status was updated
-	info, exists := registry.GetPeer(peerID)
+	info, exists := registry.Get(peerID)
 	require.True(t, exists)
 	assert.True(t, info.IsBanned)
 	assert.Equal(t, 100, info.BanScore)
-}
-
-func TestSyncCoordinator_checkURLResponsiveness(t *testing.T) {
-	// Create test HTTP server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		healthChecker,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Test responsive URL
-	responsive := sc.checkURLResponsiveness(server.URL)
-	assert.True(t, responsive)
-
-	// Test unresponsive URL
-	responsive = sc.checkURLResponsiveness("http://localhost:99999")
-	assert.False(t, responsive)
-
-	// Test empty URL
-	responsive = sc.checkURLResponsiveness("")
-	assert.False(t, responsive)
-}
-
-func TestSyncCoordinator_checkAndUpdateURLResponsiveness(t *testing.T) {
-	// Create test HTTP servers
-	successServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer successServer.Close()
-
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		healthChecker,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Create test peers
-	peers := []*PeerInfo{
-		{
-			ID:         peer.ID("peer1"),
-			DataHubURL: successServer.URL,
-		},
-		{
-			ID:         peer.ID("peer2"),
-			DataHubURL: "http://localhost:99999",
-		},
-		{
-			ID:         peer.ID("peer3"),
-			DataHubURL: "",
-		},
-	}
-
-	// Add peers to registry
-	for _, p := range peers {
-		registry.AddPeer(p.ID)
-		if p.DataHubURL != "" {
-			registry.UpdateDataHubURL(p.ID, p.DataHubURL)
-		}
-	}
-
-	// Check and update responsiveness
-	sc.checkAndUpdateURLResponsiveness(peers)
-
-	// Verify updates
-	info1, _ := registry.GetPeer(peer.ID("peer1"))
-	assert.True(t, info1.URLResponsive)
-
-	info2, _ := registry.GetPeer(peer.ID("peer2"))
-	assert.False(t, info2.URLResponsive)
-
-	info3, _ := registry.GetPeer(peer.ID("peer3"))
-	assert.False(t, info3.URLResponsive)
 }
 
 func TestSyncCoordinator_checkFSMState(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -690,7 +510,6 @@ func TestSyncCoordinator_checkFSMState(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -703,10 +522,8 @@ func TestSyncCoordinator_checkFSMState(t *testing.T) {
 
 	// Add peer
 	peerID := peer.ID("test-peer")
-	registry.AddPeer(peerID)
-	registry.UpdateHeight(peerID, 110, "hash")
-	registry.UpdateDataHubURL(peerID, "http://test.com")
-	registry.UpdateURLResponsiveness(peerID, true)
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(peerID, "", 110, peerHash, "http://test.com")
 
 	// Check FSM state (LocalClient returns RUNNING by default)
 	sc.checkFSMState(blockchainSetup.Ctx)
@@ -728,9 +545,8 @@ func TestSyncCoordinator_evaluateSyncPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -739,7 +555,6 @@ func TestSyncCoordinator_evaluateSyncPeer(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -752,15 +567,13 @@ func TestSyncCoordinator_evaluateSyncPeer(t *testing.T) {
 
 	// Add current sync peer
 	syncPeer := peer.ID("sync-peer")
-	registry.AddPeer(syncPeer)
-	registry.UpdateHeight(syncPeer, 105, "hash")
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(syncPeer, "", 105, peerHash, "")
 
 	// Add better peer
 	betterPeer := peer.ID("better-peer")
-	registry.AddPeer(betterPeer)
-	registry.UpdateHeight(betterPeer, 120, "hash")
-	registry.UpdateDataHubURL(betterPeer, "http://better.com")
-	registry.UpdateURLResponsiveness(betterPeer, true)
+	betterHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(betterPeer, "", 120, betterHash, "http://better.com")
 
 	// Set current sync peer
 	sc.mu.Lock()
@@ -786,16 +599,14 @@ func TestSyncCoordinator_evaluateSyncPeer_StuckAtHeight(t *testing.T) {
 	defer blockchainSetup.Cleanup()
 
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 
 	sc := NewSyncCoordinator(
 		logger,
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -808,10 +619,8 @@ func TestSyncCoordinator_evaluateSyncPeer_StuckAtHeight(t *testing.T) {
 
 	// Add sync peer
 	syncPeer := peer.ID("sync-peer")
-	registry.AddPeer(syncPeer)
-	registry.UpdateHeight(syncPeer, 110, "hash")
-	registry.UpdateDataHubURL(syncPeer, "http://test.com")
-	registry.UpdateURLResponsiveness(syncPeer, true)
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(syncPeer, "", 110, peerHash, "http://test.com")
 
 	// Set sync peer and simulate being stuck for too long
 	sc.mu.Lock()
@@ -830,10 +639,8 @@ func TestSyncCoordinator_evaluateSyncPeer_StuckAtHeight(t *testing.T) {
 
 	// Add alternative peer
 	altPeer := peer.ID("alt-peer")
-	registry.AddPeer(altPeer)
-	registry.UpdateHeight(altPeer, 115, "hash2")
-	registry.UpdateDataHubURL(altPeer, "http://alt.com")
-	registry.UpdateURLResponsiveness(altPeer, true)
+	altHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(altPeer, "", 115, altHash, "http://alt.com")
 
 	// Evaluate - should clear peer due to long sync without progress and select new one
 	sc.evaluateSyncPeer()
@@ -847,9 +654,8 @@ func TestSyncCoordinator_LogPeerList(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -858,7 +664,6 @@ func TestSyncCoordinator_LogPeerList(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -874,12 +679,14 @@ func TestSyncCoordinator_LogPeerList(t *testing.T) {
 			DataHubURL: "http://example1.com",
 			Height:     100,
 			BanScore:   5,
+			Storage:    "full",
 		},
 		{
 			ID:         peer.ID("peer2"),
 			DataHubURL: "http://example2.com",
 			Height:     200,
 			BanScore:   10,
+			Storage:    "full",
 		},
 	}
 
@@ -891,9 +698,8 @@ func TestSyncCoordinator_LogCandidateList(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -902,7 +708,6 @@ func TestSyncCoordinator_LogCandidateList(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // blocksKafkaProducerClient
@@ -918,12 +723,14 @@ func TestSyncCoordinator_LogCandidateList(t *testing.T) {
 			DataHubURL: "http://candidate1.com",
 			Height:     150,
 			BanScore:   3,
+			Storage:    "full",
 		},
 		{
 			ID:         peer.ID("candidate2"),
 			DataHubURL: "http://candidate2.com",
 			Height:     250,
 			BanScore:   7,
+			Storage:    "full",
 		},
 	}
 
@@ -931,244 +738,12 @@ func TestSyncCoordinator_LogCandidateList(t *testing.T) {
 	sc.logCandidateList(candidates)
 }
 
-func TestSyncCoordinator_CheckURLResponsiveness(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		healthChecker,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Test with empty URL
-	assert.False(t, sc.checkURLResponsiveness(""))
-
-	// Test with mock server that responds OK
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	assert.True(t, sc.checkURLResponsiveness(server.URL))
-
-	// Test with mock server that returns server error
-	errorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer errorServer.Close()
-
-	assert.False(t, sc.checkURLResponsiveness(errorServer.URL))
-
-	// Test with invalid URL
-	assert.False(t, sc.checkURLResponsiveness("http://invalid.localhost.test:99999"))
-}
-
-func TestSyncCoordinator_CheckAndUpdateURLResponsiveness(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		healthChecker,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Create test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	// Test with peers
-	peerID1 := peer.ID("peer1")
-	peerID2 := peer.ID("peer2")
-
-	// Add peers to registry first
-	registry.AddPeer(peerID1)
-	registry.UpdateDataHubURL(peerID1, server.URL)
-
-	registry.AddPeer(peerID2)
-	registry.UpdateDataHubURL(peerID2, "http://invalid.localhost.test:99999")
-
-	// Get peers and set old check times
-	peer1Info, _ := registry.GetPeer(peerID1)
-	peer1Info.LastURLCheck = time.Now().Add(-1 * time.Minute)
-
-	peer2Info, _ := registry.GetPeer(peerID2)
-	peer2Info.LastURLCheck = time.Now().Add(-1 * time.Minute)
-
-	peers := []*PeerInfo{peer1Info, peer2Info}
-
-	// Check and update responsiveness
-	sc.checkAndUpdateURLResponsiveness(peers)
-
-	// Verify results in registry
-	peer1InfoUpdated, _ := registry.GetPeer(peerID1)
-	assert.True(t, peer1InfoUpdated.URLResponsive, "Peer1 URL should be responsive")
-
-	peer2InfoUpdated, _ := registry.GetPeer(peerID2)
-	assert.False(t, peer2InfoUpdated.URLResponsive, "Peer2 URL should not be responsive")
-
-	// Test with peer that was checked recently (should skip)
-	peerID3 := peer.ID("peer3")
-	registry.AddPeer(peerID3)
-	registry.UpdateDataHubURL(peerID3, server.URL)
-
-	peer3Info, _ := registry.GetPeer(peerID3)
-	peer3Info.LastURLCheck = time.Now() // Just checked
-
-	peers3 := []*PeerInfo{peer3Info}
-	sc.checkAndUpdateURLResponsiveness(peers3)
-	// Should not update since it was checked recently
-	peer3InfoUpdated, _ := registry.GetPeer(peerID3)
-	assert.False(t, peer3InfoUpdated.URLResponsive, "Peer3 URL should not be updated (checked recently)")
-}
-
-func TestSyncCoordinator_EvaluateSyncPeer_Coverage(t *testing.T) {
-	logger := ulogger.New("test")
-	settings := CreateTestSettings()
-	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
-	blockchainSetup := SetupTestBlockchain(t)
-	defer blockchainSetup.Cleanup()
-
-	sc := NewSyncCoordinator(
-		logger,
-		settings,
-		registry,
-		selector,
-		healthChecker,
-		banManager,
-		blockchainSetup.Client,
-		nil, // blocksKafkaProducerClient
-	)
-
-	// Set local height callback
-	sc.SetGetLocalHeightCallback(func() uint32 {
-		return 1000
-	})
-
-	// Test with no current sync peer
-	sc.evaluateSyncPeer()
-	assert.Equal(t, peer.ID(""), sc.currentSyncPeer)
-
-	// Add and set a sync peer
-	peerID := peer.ID("test-peer")
-	registry.AddPeer(peerID)
-	registry.UpdateHeight(peerID, 2000, "hash")
-	registry.UpdateHealth(peerID, true)
-
-	// Directly modify registry since GetPeer returns a copy
-	registry.mu.Lock()
-	if info, exists := registry.peers[peerID]; exists {
-		info.LastMessageTime = time.Now()
-	}
-	registry.mu.Unlock()
-
-	sc.mu.Lock()
-	sc.currentSyncPeer = peerID
-	sc.syncStartTime = time.Now().Add(-1 * time.Minute)
-	sc.mu.Unlock()
-
-	// Evaluate - should keep peer (healthy and recent blocks)
-	sc.evaluateSyncPeer()
-	sc.mu.RLock()
-	currentPeer := sc.currentSyncPeer
-	sc.mu.RUnlock()
-	assert.Equal(t, peerID, currentPeer, "Should keep healthy peer")
-
-	// Mark peer as unhealthy
-	registry.UpdateHealth(peerID, false)
-	sc.evaluateSyncPeer()
-	sc.mu.RLock()
-	currentPeer = sc.currentSyncPeer
-	sc.mu.RUnlock()
-	assert.Equal(t, peer.ID(""), currentPeer, "Should clear unhealthy peer")
-
-	// Test with peer that no longer exists
-	sc.mu.Lock()
-	sc.currentSyncPeer = peer.ID("non-existent")
-	sc.mu.Unlock()
-	sc.evaluateSyncPeer()
-	sc.mu.RLock()
-	currentPeer = sc.currentSyncPeer
-	sc.mu.RUnlock()
-	assert.Equal(t, peer.ID(""), currentPeer, "Should clear non-existent peer")
-
-	// Test with peer that has been inactive too long
-	registry.UpdateHealth(peerID, true) // Make healthy again
-	// Directly modify registry since GetPeer returns a copy
-	registry.mu.Lock()
-	if info, exists := registry.peers[peerID]; exists {
-		info.LastMessageTime = time.Now().Add(-10 * time.Minute) // Old message time
-	}
-	registry.mu.Unlock()
-
-	sc.mu.Lock()
-	sc.currentSyncPeer = peerID
-	sc.syncStartTime = time.Now().Add(-6 * time.Minute) // Been syncing for 6 minutes
-	sc.mu.Unlock()
-
-	sc.evaluateSyncPeer()
-	sc.mu.RLock()
-	currentPeer = sc.currentSyncPeer
-	sc.mu.RUnlock()
-	assert.Equal(t, peer.ID(""), currentPeer, "Should clear inactive peer")
-
-	// Test when caught up to peer
-	registry.UpdateHealth(peerID, true)
-	registry.mu.Lock()
-	if info, exists := registry.peers[peerID]; exists {
-		info.Height = 1000 // Same as local height
-		info.LastMessageTime = time.Now()
-	}
-	registry.mu.Unlock()
-
-	sc.mu.Lock()
-	sc.currentSyncPeer = peerID
-	sc.syncStartTime = time.Now()
-	sc.mu.Unlock()
-
-	sc.evaluateSyncPeer()
-	// Should keep peer but look for better one (we just test it doesn't clear)
-	sc.mu.RLock()
-	currentPeer = sc.currentSyncPeer
-	sc.mu.RUnlock()
-	assert.Equal(t, peerID, currentPeer, "Should keep peer when caught up")
-}
-
 func TestSyncCoordinator_IsCaughtUp(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1177,7 +752,6 @@ func TestSyncCoordinator_IsCaughtUp(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil,
@@ -1193,20 +767,20 @@ func TestSyncCoordinator_IsCaughtUp(t *testing.T) {
 
 	// Add peer at same height - should be caught up
 	peer1 := peer.ID("peer1")
-	registry.AddPeer(peer1)
-	registry.UpdateHeight(peer1, 100, "hash1")
+	peerHash1, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(peer1, "", 100, peerHash1, "")
 	assert.True(t, sc.isCaughtUp(), "Should be caught up when at same height")
 
 	// Add peer behind us - should still be caught up
 	peer2 := peer.ID("peer2")
-	registry.AddPeer(peer2)
-	registry.UpdateHeight(peer2, 90, "hash2")
+	peerHash2, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(peer2, "", 90, peerHash2, "")
 	assert.True(t, sc.isCaughtUp(), "Should be caught up when peers are behind")
 
 	// Add peer ahead of us - should NOT be caught up
 	peer3 := peer.ID("peer3")
-	registry.AddPeer(peer3)
-	registry.UpdateHeight(peer3, 110, "hash3")
+	peerHash3, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(peer3, "", 110, peerHash3, "")
 	assert.False(t, sc.isCaughtUp(), "Should NOT be caught up when a peer is ahead")
 }
 
@@ -1214,9 +788,8 @@ func TestSyncCoordinator_SendSyncTriggerToKafka(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1228,7 +801,6 @@ func TestSyncCoordinator_SendSyncTriggerToKafka(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		mockProducer,
@@ -1236,8 +808,7 @@ func TestSyncCoordinator_SendSyncTriggerToKafka(t *testing.T) {
 
 	// Add peer with DataHub URL
 	peerID := peer.ID("test-peer")
-	registry.AddPeer(peerID)
-	registry.UpdateDataHubURL(peerID, "http://datahub.example.com")
+	registry.Put(peerID, "", 0, nil, "http://datahub.example.com")
 
 	// Start monitoring the publish channel
 	publishCount := int32(0)
@@ -1268,9 +839,8 @@ func TestSyncCoordinator_SendSyncMessage(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1281,7 +851,6 @@ func TestSyncCoordinator_SendSyncMessage(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		mockProducer,
@@ -1295,16 +864,15 @@ func TestSyncCoordinator_SendSyncMessage(t *testing.T) {
 
 	// Add peer without block hash
 	peerNoHash := peer.ID("peer-no-hash")
-	registry.AddPeer(peerNoHash)
+	registry.Put(peerNoHash, "", 0, nil, "")
 	err = sc.sendSyncMessage(peerNoHash)
 	assert.Error(t, err, "Should error when peer has no block hash")
 	assert.Contains(t, err.Error(), "no block hash available")
 
 	// Add peer with block hash
 	peerWithHash := peer.ID("peer-with-hash")
-	registry.AddPeer(peerWithHash)
-	registry.UpdateHeight(peerWithHash, 100, "blockhash123")
-	registry.UpdateDataHubURL(peerWithHash, "http://datahub.example.com")
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(peerWithHash, "", 100, peerHash, "http://datahub.example.com")
 
 	// Start monitoring the publish channel
 	done := make(chan bool)
@@ -1328,9 +896,8 @@ func TestSyncCoordinator_MonitorFSM(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1339,7 +906,6 @@ func TestSyncCoordinator_MonitorFSM(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil,
@@ -1380,7 +946,6 @@ func TestSyncCoordinator_MonitorFSM(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil,
@@ -1419,9 +984,8 @@ func TestSyncCoordinator_MonitorFSM_AdaptiveIntervals(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1430,7 +994,6 @@ func TestSyncCoordinator_MonitorFSM_AdaptiveIntervals(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil,
@@ -1453,14 +1016,14 @@ func TestSyncCoordinator_MonitorFSM_AdaptiveIntervals(t *testing.T) {
 
 	// Add a peer ahead of us - should switch to fast monitoring
 	peerID := peer.ID("test-peer")
-	registry.AddPeer(peerID)
-	registry.UpdateHeight(peerID, 110, "hash")
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(peerID, "", 110, peerHash, "")
 
 	// Let it detect we're not caught up and switch to fast interval
 	time.Sleep(3 * time.Second) // Wait for timer to fire with fast interval
 
 	// Now remove the peer so we're caught up again
-	registry.RemovePeer(peerID)
+	registry.Remove(peerID)
 
 	// Let it detect we're caught up and switch back to slow interval
 	time.Sleep(3 * time.Second)
@@ -1488,9 +1051,8 @@ func TestSyncCoordinator_HandleFSMTransition_Simplified(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1499,7 +1061,6 @@ func TestSyncCoordinator_HandleFSMTransition_Simplified(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil,
@@ -1511,15 +1072,13 @@ func TestSyncCoordinator_HandleFSMTransition_Simplified(t *testing.T) {
 
 	// Test RUNNING state with current sync peer - should handle catchup failure
 	syncPeer := peer.ID("sync-peer")
-	registry.AddPeer(syncPeer)
-	registry.UpdateHeight(syncPeer, 110, "hash") // Set peer height higher than local
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(syncPeer, "", 110, peerHash, "") // Set peer height higher than local
 
 	// Add another peer for selection after the failure
 	altPeer := peer.ID("alt-peer")
-	registry.AddPeer(altPeer)
-	registry.UpdateHeight(altPeer, 120, "hash2")
-	registry.UpdateDataHubURL(altPeer, "http://alt.com")
-	registry.UpdateURLResponsiveness(altPeer, true)
+	altHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(altPeer, "", 120, altHash, "http://alt.com")
 
 	sc.mu.Lock()
 	sc.currentSyncPeer = syncPeer
@@ -1530,7 +1089,7 @@ func TestSyncCoordinator_HandleFSMTransition_Simplified(t *testing.T) {
 	assert.True(t, transitioned, "Should return true for RUNNING state with sync peer")
 
 	// Verify ban score was increased
-	info, exists := registry.GetPeer(syncPeer)
+	info, exists := registry.Get(syncPeer)
 	assert.True(t, exists)
 	assert.True(t, info.BanScore > 0, "Peer should have increased ban score")
 
@@ -1564,9 +1123,8 @@ func TestSyncCoordinator_FilterEligiblePeers(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1575,21 +1133,20 @@ func TestSyncCoordinator_FilterEligiblePeers(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil,
 	)
 
 	oldPeer := peer.ID("old-peer")
-	localHeight := int32(100)
+	localHeight := uint32(100)
 
 	peers := []*PeerInfo{
-		{ID: oldPeer, Height: 110},          // Old peer, should be skipped
-		{ID: peer.ID("peer1"), Height: 90},  // Below local height, should be skipped
-		{ID: peer.ID("peer2"), Height: 100}, // At local height, should be skipped
-		{ID: peer.ID("peer3"), Height: 120}, // Above local height, should be included
-		{ID: peer.ID("peer4"), Height: 115}, // Above local height, should be included
+		{ID: oldPeer, Height: 110, Storage: "full"},          // Old peer, should be skipped
+		{ID: peer.ID("peer1"), Height: 90, Storage: "full"},  // Below local height, should be skipped
+		{ID: peer.ID("peer2"), Height: 100, Storage: "full"}, // At local height, should be skipped
+		{ID: peer.ID("peer3"), Height: 120, Storage: "full"}, // Above local height, should be included
+		{ID: peer.ID("peer4"), Height: 115, Storage: "full"}, // Above local height, should be included
 	}
 
 	eligible := sc.filterEligiblePeers(peers, oldPeer, localHeight)
@@ -1603,9 +1160,8 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1614,19 +1170,18 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil,
 	)
 
 	oldPeer := peer.ID("old-peer-to-skip")
-	localHeight := int32(100)
+	localHeight := uint32(100)
 
 	// Test case 1: Old peer is ahead of local height (should log that it's being skipped)
 	peers1 := []*PeerInfo{
-		{ID: oldPeer, Height: 110},          // Old peer ahead - should be skipped with logging
-		{ID: peer.ID("peer1"), Height: 120}, // New peer ahead - should be included
+		{ID: oldPeer, Height: 110, Storage: "full"},          // Old peer ahead - should be skipped with logging
+		{ID: peer.ID("peer1"), Height: 120, Storage: "full"}, // New peer ahead - should be included
 	}
 
 	eligible1 := sc.filterEligiblePeers(peers1, oldPeer, localHeight)
@@ -1635,8 +1190,8 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 2: Peer at same height as local (not old peer) - should be skipped but not logged
 	peers2 := []*PeerInfo{
-		{ID: peer.ID("peer2"), Height: 100}, // At local height, not old peer - skipped without special logging
-		{ID: peer.ID("peer3"), Height: 110}, // Above local height - included
+		{ID: peer.ID("peer2"), Height: 100, Storage: "full"}, // At local height, not old peer - skipped without special logging
+		{ID: peer.ID("peer3"), Height: 110, Storage: "full"}, // Above local height - included
 	}
 
 	eligible2 := sc.filterEligiblePeers(peers2, oldPeer, localHeight)
@@ -1645,8 +1200,8 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 3: Old peer behind local height - should be skipped
 	peers3 := []*PeerInfo{
-		{ID: oldPeer, Height: 90},           // Old peer behind - should be skipped
-		{ID: peer.ID("peer4"), Height: 105}, // New peer ahead - should be included
+		{ID: oldPeer, Height: 90, Storage: "full"},           // Old peer behind - should be skipped
+		{ID: peer.ID("peer4"), Height: 105, Storage: "full"}, // New peer ahead - should be included
 	}
 
 	eligible3 := sc.filterEligiblePeers(peers3, oldPeer, localHeight)
@@ -1655,11 +1210,11 @@ func TestSyncCoordinator_FilterEligiblePeers_OldPeerLogging(t *testing.T) {
 
 	// Test case 4: Mix of peers to test all branches
 	peers4 := []*PeerInfo{
-		{ID: oldPeer, Height: 110},          // Old peer ahead - skipped with logging
-		{ID: peer.ID("peer5"), Height: 95},  // Below local - skipped
-		{ID: peer.ID("peer6"), Height: 100}, // At local - skipped
-		{ID: peer.ID("peer7"), Height: 115}, // Above local - included
-		{ID: peer.ID("peer8"), Height: 120}, // Above local - included
+		{ID: oldPeer, Height: 110, Storage: "full"},          // Old peer ahead - skipped with logging
+		{ID: peer.ID("peer5"), Height: 95, Storage: "full"},  // Below local - skipped
+		{ID: peer.ID("peer6"), Height: 100, Storage: "full"}, // At local - skipped
+		{ID: peer.ID("peer7"), Height: 115, Storage: "full"}, // Above local - included
+		{ID: peer.ID("peer8"), Height: 120, Storage: "full"}, // Above local - included
 	}
 
 	eligible4 := sc.filterEligiblePeers(peers4, oldPeer, localHeight)
@@ -1672,9 +1227,8 @@ func TestSyncCoordinator_SelectAndActivateNewPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1685,13 +1239,12 @@ func TestSyncCoordinator_SelectAndActivateNewPeer(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		mockProducer,
 	)
 
-	localHeight := int32(100)
+	localHeight := uint32(100)
 	oldPeer := peer.ID("old-peer")
 
 	// Test with no eligible peers
@@ -1700,10 +1253,8 @@ func TestSyncCoordinator_SelectAndActivateNewPeer(t *testing.T) {
 
 	// Add eligible peer
 	newPeer := peer.ID("new-peer")
-	registry.AddPeer(newPeer)
-	registry.UpdateHeight(newPeer, 110, "blockhash123")
-	registry.UpdateDataHubURL(newPeer, "http://datahub.example.com")
-	registry.UpdateURLResponsiveness(newPeer, true)
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(newPeer, "", 110, peerHash, "http://datahub.example.com")
 
 	// Start monitoring the publish channel
 	done := make(chan bool)
@@ -1731,9 +1282,8 @@ func TestSyncCoordinator_UpdateBanStatus_SyncPeerBanned(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1744,7 +1294,6 @@ func TestSyncCoordinator_UpdateBanStatus_SyncPeerBanned(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		mockProducer,
@@ -1756,8 +1305,8 @@ func TestSyncCoordinator_UpdateBanStatus_SyncPeerBanned(t *testing.T) {
 
 	// Add and set sync peer
 	syncPeer := peer.ID("sync-peer")
-	registry.AddPeer(syncPeer)
-	registry.UpdateHeight(syncPeer, 110, "hash")
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(syncPeer, "", 110, peerHash, "")
 
 	sc.mu.Lock()
 	sc.currentSyncPeer = syncPeer
@@ -1765,10 +1314,8 @@ func TestSyncCoordinator_UpdateBanStatus_SyncPeerBanned(t *testing.T) {
 
 	// Add alternative peer
 	altPeer := peer.ID("alt-peer")
-	registry.AddPeer(altPeer)
-	registry.UpdateHeight(altPeer, 115, "hash2")
-	registry.UpdateDataHubURL(altPeer, "http://alt.example.com")
-	registry.UpdateURLResponsiveness(altPeer, true)
+	altHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(altPeer, "", 115, altHash, "http://alt.example.com")
 
 	// Start monitoring the publish channel
 	done := make(chan bool)
@@ -1802,9 +1349,8 @@ func TestSyncCoordinator_TriggerSync_SendMessageError(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1813,7 +1359,6 @@ func TestSyncCoordinator_TriggerSync_SendMessageError(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil, // No Kafka producer
@@ -1825,10 +1370,7 @@ func TestSyncCoordinator_TriggerSync_SendMessageError(t *testing.T) {
 
 	// Add peer without block hash (will cause sendSyncMessage to fail)
 	peerID := peer.ID("test-peer")
-	registry.AddPeer(peerID)
-	registry.UpdateHeight(peerID, 110, "") // No block hash
-	registry.UpdateDataHubURL(peerID, "http://test.com")
-	registry.UpdateURLResponsiveness(peerID, true)
+	registry.Put(peerID, "", 110, nil, "http://test.com")
 
 	// Trigger sync - should fail to send message but not panic
 	err := sc.TriggerSync()
@@ -1839,9 +1381,8 @@ func TestSyncCoordinator_HandleCatchupFailure_NoNewPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1850,7 +1391,6 @@ func TestSyncCoordinator_HandleCatchupFailure_NoNewPeer(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil,
@@ -1877,9 +1417,8 @@ func TestSyncCoordinator_PeriodicEvaluation(t *testing.T) {
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
-	selector := NewPeerSelector(logger)
-	healthChecker := NewPeerHealthChecker(logger, registry, settings)
-	banManager := NewPeerBanManager(context.Background(), nil, settings)
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
 	blockchainSetup := SetupTestBlockchain(t)
 	defer blockchainSetup.Cleanup()
 
@@ -1888,7 +1427,6 @@ func TestSyncCoordinator_PeriodicEvaluation(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil,
@@ -1925,7 +1463,6 @@ func TestSyncCoordinator_PeriodicEvaluation(t *testing.T) {
 		settings,
 		registry,
 		selector,
-		healthChecker,
 		banManager,
 		blockchainSetup.Client,
 		nil,

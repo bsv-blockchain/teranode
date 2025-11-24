@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"math/big"
+	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
@@ -29,6 +30,7 @@ type Difficulty struct {
 	logger            ulogger.Logger
 	store             blockchain_store.Store
 	settings          *settings.Settings
+	mu                sync.RWMutex
 	lastBlockHash     *chainhash.Hash
 	lastComputednBits *model.NBit
 }
@@ -88,13 +90,17 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 	if !d.settings.ChainCfgParams.ReduceMinDifficulty && d.settings.BlockAssembly.DifficultyCache {
 		// if bestBlockHash is set and it's the same as the blockHeader.Hash(), we don't need to recalculate the difficulty,
 		// just send the one we have if it's set
+		d.mu.RLock()
 		if d.lastBlockHash != nil && d.lastBlockHash.IsEqual(blockHeader.Hash()) {
 			d.logger.Debugf("[Difficulty] blockHash is the same as last calculation, returning cached difficulty")
 
 			if d.lastComputednBits != nil {
-				return d.lastComputednBits, nil
+				cachedBits := d.lastComputednBits
+				d.mu.RUnlock()
+				return cachedBits, nil
 			}
 		}
+		d.mu.RUnlock()
 	}
 
 	d.logger.Debugf("[Difficulty] blockHeader.Hash: %s, blockHeight: %d, blockHeader.Time: %d", blockHeader.Hash().String(), blockHeight, blockHeader.Timestamp)
@@ -136,8 +142,10 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 		return nil, errors.NewProcessingError("[Difficulty] error calculating next required difficulty", err)
 	}
 
+	d.mu.Lock()
 	d.lastComputednBits = nBits
 	d.lastBlockHash = blockHeader.Hash()
+	d.mu.Unlock()
 
 	return nBits, nil
 }
@@ -396,6 +404,8 @@ func (d *Difficulty) ValidateBlockHeaderDifficulty(ctx context.Context, newBlock
 // changed due to invalidation, revalidation, or reorgs to avoid returning
 // stale results from CalcNextWorkRequired.
 func (d *Difficulty) ResetCache() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.lastBlockHash = nil
 	d.lastComputednBits = nil
 }

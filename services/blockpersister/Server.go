@@ -17,6 +17,8 @@ package blockpersister
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -25,6 +27,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockpersister/state"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -216,6 +219,9 @@ func (u *Server) Init(ctx context.Context) (err error) {
 // and respects the configured persistence age policy to control how far behind persistence
 // can lag.
 //
+// The method includes reorg detection by verifying that the last persisted block is still
+// on the current chain, and validates parent hash continuity when retrieving the next block.
+//
 // Parameters:
 //   - ctx: Context for coordinating the block retrieval operation
 //
@@ -224,14 +230,43 @@ func (u *Server) Init(ctx context.Context) (err error) {
 //   - error: Any error encountered during the operation
 //
 // The method follows these steps:
-//  1. Get the last persisted block height from the state
-//  2. Get the current best block from the blockchain
-//  3. If the difference between them exceeds BlockPersisterPersistAge, return the next block
-//  4. Otherwise, return nil to indicate no blocks need processing yet
+//  1. Get the last persisted block height and hash from the state
+//  2. If we have a persisted block, check if it's still on the current chain (reorg detection)
+//  3. Get the current best block from the blockchain
+//  4. If the difference between them exceeds BlockPersisterPersistAge, return the next block
+//  5. Validate that the retrieved block's parent hash matches the last persisted block hash
+//  6. Otherwise, return nil to indicate no blocks need processing yet
 func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error) {
-	lastPersistedHeight, err := u.state.GetLastPersistedBlockHeight()
+	lastPersistedHeight, lastPersistedHash, err := u.state.GetLastPersistedBlock()
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to get last persisted block height", err)
+		return nil, errors.NewProcessingError("failed to get last persisted block", err)
+	}
+
+	// REORG DETECTION: Check if the last persisted block is still on the current chain
+	// This detects blockchain reorganizations that may have occurred since the last persistence
+	// This check can be disabled via settings for testing or special scenarios
+	if u.settings.Block.BlockPersisterEnableDefensiveReorgCheck && lastPersistedHeight > 0 && lastPersistedHash != nil {
+		// Get the block to obtain its ID
+		lastBlock, err := u.blockchainClient.GetBlock(ctx, lastPersistedHash)
+		if err != nil {
+			u.logger.Warnf("[BlockPersister] Could not retrieve last persisted block %s for reorg check: %v. Continuing with next block.", lastPersistedHash.String(), err)
+		} else {
+			// Check if this block is still on the current chain using its ID
+			onCurrentChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{lastBlock.ID})
+			if err != nil {
+				return nil, errors.NewProcessingError("failed to check if block is on current chain", err)
+			}
+
+			if !onCurrentChain {
+				// Reorg detected - last persisted block is no longer on the current chain
+				// We must return nil to trigger recovery logic - continuing would cause an infinite loop
+				// because the parent hash validation will fail (new chain block's parent != orphaned block)
+				u.logger.Infof("[BlockPersister] Detected reorg: last persisted block %s at height %d is no longer on current chain. Returning nil to trigger recovery.",
+					lastPersistedHash.String(), lastPersistedHeight)
+				// Return nil to prevent infinite loop - manual intervention or proper reorg recovery needed
+				return nil, nil
+			}
+		}
 	}
 
 	_, blockMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
@@ -243,6 +278,22 @@ func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error
 		block, err := u.blockchainClient.GetBlockByHeight(ctx, lastPersistedHeight+1)
 		if err != nil {
 			return nil, errors.NewProcessingError("failed to get block headers by height", err)
+		}
+
+		// PARENT HASH VALIDATION: Verify chain continuity
+		// This provides early detection of chain inconsistencies or reorgs that occurred
+		// between the reorg check above and this block retrieval
+		// This check can be disabled via settings for testing or special scenarios
+		if u.settings.Block.BlockPersisterEnableDefensiveReorgCheck && lastPersistedHeight > 0 && lastPersistedHash != nil {
+			// Get the parent hash from the retrieved block's header
+			parentHash := block.Header.HashPrevBlock
+			if !parentHash.IsEqual(lastPersistedHash) {
+				u.logger.Infof("[BlockPersister] Chain discontinuity detected: block %s at height %d has parent %s, expected %s. Reorg likely occurred during processing. Will retry and recover on next iteration.",
+					block.Hash().String(), block.Height, parentHash.String(), lastPersistedHash.String())
+				// Return nil to skip this block and retry on next iteration
+				// GetBlockByHeight will return the correct block from the current chain on the next attempt
+				return nil, nil
+			}
 		}
 
 		return block, nil
@@ -329,6 +380,34 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		}()
 	}
 
+	// STARTUP COORDINATION: Publish last persisted height for cleanup coordination
+	//
+	// PROBLEM: BlockAssembler's cleanup service may start before block persister and begin
+	// deleting transactions. Without knowing how far block persister has progressed, cleanup
+	// could delete transactions that block persister still needs to create .subtree_data files.
+	//
+	// SOLUTION: Publish our last persisted height to blockchain state on startup. BlockAssembler
+	// reads this state during its startup initialization, ensuring it knows the persisted height
+	// before cleanup runs for the first time.
+	//
+	// This prevents the startup race condition where:
+	//   1. BlockAssembler starts and begins cleanup
+	//   2. Block persister starts later
+	//   3. Cleanup deletes transactions before first BlockPersisted notification arrives
+	//
+	// By publishing state on startup, BlockAssembler can initialize immediately from this state.
+	// During runtime, BlockPersisted notifications keep the height current.
+	if lastHeight, err := u.state.GetLastPersistedBlockHeight(); err == nil && lastHeight > 0 {
+		if u.blockchainClient != nil {
+			heightBytes := binary.LittleEndian.AppendUint32(nil, lastHeight)
+			if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
+				u.logger.Warnf("[BlockPersister] Failed to publish initial state: %v", err)
+			} else {
+				u.logger.Infof("[BlockPersister] Published initial state: height %d", lastHeight)
+			}
+		}
+	}
+
 	// Start the processing loop in a goroutine
 	go func() {
 		for {
@@ -383,6 +462,40 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 					time.Sleep(time.Minute)
 
 					continue
+				}
+
+				// RUNTIME COORDINATION: Notify subscribers that block has been persisted
+				//
+				// After successfully creating .subtree_data file, notify BlockAssembler of our progress.
+				// BlockAssembler's cleanup service uses this to track how far we've progressed and
+				// ensure it doesn't delete transactions we still need.
+				//
+				// This notification includes the block height in metadata. BlockAssembler's notification
+				// handler updates its lastPersistedHeight, which cleanup queries via GetLastPersistedHeight()
+				// to calculate safe deletion bounds: min(requested_height, persisted_height + retention)
+				//
+				// See BlockAssembler.startChannelListeners for the notification handler.
+				if u.blockchainClient != nil {
+					notification := &blockchain_api.Notification{
+						Type: model.NotificationType_BlockPersisted,
+						Hash: block.Hash().CloneBytes(),
+						Metadata: &blockchain_api.NotificationMetadata{
+							Metadata: map[string]string{
+								"height": fmt.Sprintf("%d", block.Height),
+							},
+						},
+					}
+					if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
+						u.logger.Warnf("[BlockPersister] Failed to send persisted notification for block %s at height %d: %v",
+							block.Hash().String(), block.Height, err)
+					}
+
+					// Update BlockPersisterHeight state for P2P storage mode determination
+					heightBytes := binary.LittleEndian.AppendUint32(nil, block.Height)
+					if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
+						u.logger.Warnf("[BlockPersister] Failed to update BlockPersisterHeight state for block %s at height %d: %v",
+							block.Hash().String(), block.Height, err)
+					}
 				}
 
 				u.logger.Infof("Successfully processed block %s", block.Hash())

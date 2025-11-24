@@ -22,11 +22,13 @@
     - [5.1. Language and Libraries](#51-language-and-libraries)
     - [5.2. Data Stores](#52-data-stores)
     - [5.3. Data Purging](#53-data-purging)
-6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
-7. [Running the Store Locally](#7-running-the-store-locally)
+6. [Performance Optimizations](#6-performance-optimizations)
+    - [6.1. Shared Buffer Optimization](#61-shared-buffer-optimization)
+7. [Directory Structure and Main Files](#7-directory-structure-and-main-files)
+8. [Running the Store Locally](#8-running-the-store-locally)
     - [How to run](#how-to-run)
-8. [Configuration and Settings](#8-configuration-and-settings)
-9. [Other Resources](#9-other-resources)
+9. [Configuration and Settings](#9-configuration-and-settings)
+10. [Other Resources](#10-other-resources)
 
 ## 1. Description
 
@@ -101,6 +103,8 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interfac
 ```
 
 The following diagram provides a deeper level of detail into the UTXO Store's internal components and their interactions:
+
+> **Note**: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Cleanup Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.
 
 ![utxo_store_detailed_component.svg](../services/img/plantuml/utxo/utxo_store_detailed_component.svg)
 
@@ -339,7 +343,17 @@ If a transaction is too large to fit in a single Aerospike record (indicated by 
 
 In such cases, the full transaction data is stored externally, while metadata and UTXOs are still stored in Aerospike, potentially across multiple records. The Aerospike record will have an `external` flag set to true, indicating that the full transaction data is stored externally.
 
-When the UTXO data is needed, the system will first check the Aerospike record. If the `external flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.
+When the UTXO data is needed, the system will first check the Aerospike record. If the `external` flag is true, it will then retrieve the full transaction data from the external storage using the transaction hash as a key.
+
+#### External Transaction Cache
+
+To optimize performance when reading externally stored transactions, the UTXO store implements an optional external transaction cache (configured via `utxostore_useExternalTxCache`, enabled by default). This short-lived cache (10-second expiration) is particularly beneficial for:
+
+- Transactions with many outputs being spent concurrently
+- Scenarios where multiple inputs reference the same large transaction
+- Reducing redundant external storage reads during high-throughput validation
+
+The cache handles concurrent reads efficiently, preventing multiple simultaneous fetches of the same external transaction data.
 
 ### 4.8. Alert System and UTXO Management
 
@@ -361,8 +375,9 @@ The UTXO Store supports advanced UTXO management features, which can be utilized
 3. **Reassigning UTXOs**: UTXOs can be reassigned to a new transaction output, but only if they are frozen first.
     - Verifies the UTXO exists and is frozen
     - Updates the UTXO hash to the new value
-    - Sets spendable block height to current + ReAssignedUtxoSpendableAfterBlocks
+    - Sets spendable block height to current + 1,000 blocks (defined by `ReAssignedUtxoSpendableAfterBlocks` constant)
     - Logs the reassignment for audit purposes
+    - **Important**: Reassigned UTXOs cannot be spent until 1,000 blocks have passed after the reassignment to ensure network consensus and prevent disputes
 
 ### 4.9. Unmined Transaction Management
 
@@ -442,7 +457,48 @@ The following datastores are supported (either in development / experimental or 
 
 Stored data is automatically purged a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.
 
-## 6. Directory Structure and Main Files
+## 6. Performance Optimizations
+
+### 6.1. Shared Buffer Optimization
+
+To improve performance when reading large batches of UTXOs, Teranode implements a shared buffer optimization that significantly reduces memory allocations and garbage collection pressure.
+
+#### How It Works
+
+The shared buffer optimization is implemented in the Aerospike UTXO store's batch operations:
+
+1. **Single Buffer Allocation**: Instead of allocating individual buffers for each UTXO read operation, the system allocates a single large shared buffer
+2. **Buffer Reuse**: This buffer is reused across multiple UTXO reads within the same batch operation
+3. **Slice References**: Each UTXO's data is referenced as a slice of the shared buffer, avoiding data copying
+
+#### Performance Benefits
+
+- **Reduced Memory Allocations**: Decreases the number of memory allocations from O(n) to O(1) for batch operations
+- **Lower GC Pressure**: Fewer allocations mean less work for the garbage collector
+- **Improved Throughput**: Particularly beneficial when reading UTXO sets for block validation or subtree processing
+- **Better Cache Locality**: Contiguous memory access patterns improve CPU cache utilization
+
+#### Implementation Details
+
+The optimization is automatically applied when:
+
+- Batch reading operations are performed through `GetMetaBatch` or similar methods
+- Multiple UTXOs are requested in a single operation
+- The Aerospike store implementation is being used
+
+Example of the optimization in action:
+
+- Without optimization: Reading 10,000 UTXOs requires 10,000 separate buffer allocations
+- With optimization: Reading 10,000 UTXOs requires 1 shared buffer allocation plus slice operations
+
+This optimization is particularly effective for:
+
+- Block validation (reading all UTXOs referenced in a block)
+- Subtree validation (processing millions of transactions)
+- UTXO set snapshots and exports
+- High-throughput transaction validation
+
+## 7. Directory Structure and Main Files
 
 ```text
 UTXO Store Package Structure (stores/utxo)
@@ -501,22 +557,22 @@ UTXO Store Package Structure (stores/utxo)
 └── utils_test.go                   # Tests for utility functions
 ```
 
-## 7. Running the Store Locally
+## 8. Running the Store Locally
 
 ### How to run
 
 To run the UTXO Store locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -UtxoStore=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -UtxoStore=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
 
-## 8. Configuration and Settings
+## 9. Configuration and Settings
 
 For comprehensive configuration documentation including all settings, defaults, and interactions, see the [UTXO Store Settings Reference](../../references/settings/stores/utxo_settings.md).
 
-## 9. Other Resources
+## 10. Other Resources
 
 [UTXO Store Reference](../../references/stores/utxo_reference.md)

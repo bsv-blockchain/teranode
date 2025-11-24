@@ -1,12 +1,15 @@
 package aerospike
 
 import (
+	"context"
 	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/cleanup"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCleanupProviderInterface(t *testing.T) {
@@ -78,4 +81,34 @@ func TestCleanupServiceEnabled(t *testing.T) {
 	// but the important thing is that it didn't return early due to disabled setting
 	assert.NotNil(t, err)
 	assert.Nil(t, service)
+}
+
+func TestCleanupServiceWithContext(t *testing.T) {
+	// Reset singleton state for testing
+	ResetCleanupServiceForTests()
+
+	ctx := context.Background()
+	testLogger := ulogger.NewErrorTestLogger(t)
+
+	// Test that context is properly passed to cleanup service
+	store := &Store{
+		ctx:    ctx,
+		logger: testLogger,
+		settings: &settings.Settings{
+			UtxoStore: settings.UtxoStoreSettings{
+				DisableDAHCleaner: false,
+			},
+		},
+	}
+
+	// Verify that the store context is not nil
+	require.NotNil(t, store.ctx, "Store context should not be nil")
+
+	service, err := store.GetCleanupService()
+	// Should return an error because we don't have a valid aerospike client,
+	// but the important thing is that it didn't panic due to nil context
+	assert.NotNil(t, err)
+	assert.Nil(t, service)
+	// The error should be about missing client, not nil context panic
+	assert.Contains(t, err.Error(), "client is required")
 }

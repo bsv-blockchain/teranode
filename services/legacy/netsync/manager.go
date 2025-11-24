@@ -2,6 +2,8 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
+// Package netsync provides network synchronization functionality for the legacy Bitcoin protocol.
+// It handles peer coordination, block synchronization, and transaction relay operations.
 package netsync
 
 import (
@@ -21,7 +23,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	"github.com/bsv-blockchain/go-subtree"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -649,16 +651,21 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	validNetworkSpeed := sm.syncPeerState.validNetworkSpeed(sm.minSyncPeerNetworkSpeed)
 	lastBlockSince := time.Since(sm.syncPeerState.getLastBlockTime())
 
-	sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v)", sm.syncPeer.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime)
+	sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v), headers-first mode: %v", sm.syncPeer.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime, sm.headersFirstMode)
+
+	// Don't check network speed during headers-first mode, as we're intentionally
+	// downloading small headers (80 bytes each) rather than full blocks. The peer
+	// may appear slow because we're not requesting much data, not because it's actually slow.
+	isNetworkSpeedViolation := !sm.headersFirstMode && (validNetworkSpeed >= maxNetworkViolations)
 
 	// Check network speed of the sync peer and its last block time. If we're currently
 	// flushing the cache skip this round.
-	if (validNetworkSpeed < maxNetworkViolations) && (lastBlockSince <= maxLastBlockTime) {
+	if !isNetworkSpeedViolation && (lastBlockSince <= maxLastBlockTime) {
 		return
 	}
 
 	var reason string
-	if validNetworkSpeed >= maxNetworkViolations {
+	if isNetworkSpeedViolation {
 		reason = "network speed violation"
 	} else if lastBlockSince > maxLastBlockTime {
 		reason = "last block time out of range"
@@ -1129,8 +1136,6 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			// TODO TEMPORARY: we should not panic here, but return the error
 			panic(err)
 		}
-	} else {
-		sm.logger.Infof("accepted block %v", bmsg.blockHash)
 	}
 
 	// Meta-data about the new block this peer is reporting. We use this
@@ -1176,6 +1181,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			heightUpdate = blockHeightInt32
 		}
 	}
+
+	sm.logger.Infof("accepted block %v at height %d", bmsg.blockHash, heightUpdate)
 
 	// Clear the rejected transactions.
 	sm.rejectedTxns.Clear()
@@ -2108,34 +2115,44 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 }
 
 func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
-	kafkaControlChan := make(chan bool) // true = start, false = stop
+	blockControlChan := make(chan bool, 1) // control channel for block-related listeners (buffered to prevent blocking)
+	txControlChan := make(chan bool, 1)    // control channel for transaction-related listeners (buffered to prevent blocking)
 
-	// start a go routine to control the kafka listener, using the FSM state of the node
+	// start a go routine to control the kafka listeners based on FSM state
+	// Block-related listeners (INV, blocks final): enabled when NOT in LEGACYSYNCING state
+	// Transaction-related listeners (txmeta): enabled only when in RUNNING state
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			default:
-				// get the FSM state, only turn on the listener if we are in RUN mode
-				// TODO it would be better to be able to listen somehow to state changes in the FSM
-				isState, _ := sm.blockchainClient.IsFSMCurrentState(sm.ctx, teranodeblockchain.FSMStateRUNNING)
+			case <-time.After(1 * time.Second):
+				// Block-related listeners: enable when NOT in LEGACYSYNCING
+				isLegacySyncing, _ := sm.blockchainClient.IsFSMCurrentState(sm.ctx, teranodeblockchain.FSMStateLEGACYSYNCING)
+				blockEnabled := !isLegacySyncing
 
-				if isState {
-					kafkaControlChan <- true // start or continue the listener
-				} else {
-					kafkaControlChan <- false // stop the listener
+				// Non-blocking send to avoid deadlock if no one is reading
+				select {
+				case blockControlChan <- blockEnabled:
+				default:
 				}
 
-				// wait 1 second before checking again
-				time.Sleep(1 * time.Second)
+				// Transaction-related listeners: enable only when RUNNING
+				isRunning, _ := sm.blockchainClient.IsFSMCurrentState(sm.ctx, teranodeblockchain.FSMStateRUNNING)
+
+				// Non-blocking send to avoid deadlock if no one is reading
+				select {
+				case txControlChan <- isRunning:
+				default:
+				}
 			}
 		}
 	}()
 
-	var kafkaControlListenersCh []chan bool
+	var blockListenersCh []chan bool // channels for block-related listeners
+	var txListenersCh []chan bool    // channels for tx-related listeners
 
-	// Kafka for INV messages
+	// Kafka for INV messages (responds to requests from other nodes)
 	legacyInvConfigURL := sm.settings.Kafka.LegacyInvConfig
 	if legacyInvConfigURL != nil {
 		sm.legacyKafkaInvCh = make(chan *kafka.Message, 10_000)
@@ -2151,25 +2168,29 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 			producer.Start(sm.ctx, sm.legacyKafkaInvCh)
 		}()
 
+		// INV listener receives inventory messages from other nodes
+		// Disabled during LEGACYSYNCING to reduce processing load during catch-up
 		controlCh := make(chan bool)
-		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
+		blockListenersCh = append(blockListenersCh, controlCh)
 
 		go kafka.StartKafkaControlledListener(ctx, sm.logger, "inv.legacy"+"."+sm.settings.ClientName, controlCh, legacyInvConfigURL, sm.kafkaINVListener)
 	}
 
+	// Kafka for blocks final messages (announces blocks to peers)
 	blocksFinalConfigURL := sm.settings.Kafka.BlocksFinalConfig
 	if blocksFinalConfigURL != nil {
 		controlCh := make(chan bool)
-		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
+		blockListenersCh = append(blockListenersCh, controlCh)
 
 		go kafka.StartKafkaControlledListener(ctx, sm.logger, "blocksfinal.legacy"+"."+sm.settings.ClientName, controlCh, blocksFinalConfigURL, sm.kafkaBlocksFinalListener)
 	}
 
+	// Kafka for txmeta messages (announces transactions to peers)
 	txmetaKafkaURL := sm.settings.Kafka.TxMetaConfig
 
 	if txmetaKafkaURL != nil {
 		controlCh := make(chan bool)
-		kafkaControlListenersCh = append(kafkaControlListenersCh, controlCh)
+		txListenersCh = append(txListenersCh, controlCh)
 
 		// disable replay for txmeta in the legacy service, we do not have to replay anything, ever
 		values := txmetaKafkaURL.Query()
@@ -2180,6 +2201,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		go kafka.StartKafkaControlledListener(ctx, sm.logger, "txmeta.legacy"+"."+sm.settings.ClientName, controlCh, txmetaKafkaURL, sm.kafkaTXmetaListener)
 	}
 
+	// Listen to blockchain notifications for subtree announcements
 	go func() {
 		// will never return an error
 		blockchainSubscription, _ := sm.blockchainClient.Subscribe(ctx, "legacy/manager")
@@ -2204,7 +2226,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 						continue
 					}
 
-					subtree, err := subtree.NewSubtreeFromReader(subtreeReader)
+					subtree, err := subtreepkg.NewSubtreeFromReader(subtreeReader)
 					_ = subtreeReader.Close()
 					if err != nil {
 						sm.logger.Errorf("[Legacy Manager] failed to create subtree from bytes: %v", err)
@@ -2214,6 +2236,10 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 					// announce all the transactions in the subtree
 					// the batcher should de-duplicate the transactions that have already been sent in the last minute
 					for _, subtreeNode := range subtree.Nodes {
+						if subtreeNode.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+							continue
+						}
+
 						sm.txAnnounceBatcher.Put(&TxHashAndFee{
 							TxHash: subtreeNode.Hash,
 							Fee:    subtreeNode.Fee,
@@ -2225,14 +2251,28 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 		}
 	}()
 
+	// Control block listeners based on blockControlChan
 	go func() {
-		// listen to the control channel and send the control signal to all listeners
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case control := <-kafkaControlChan:
-				for _, ch := range kafkaControlListenersCh {
+			case control := <-blockControlChan:
+				for _, ch := range blockListenersCh {
+					ch <- control
+				}
+			}
+		}
+	}()
+
+	// Control transaction listeners based on txControlChan
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case control := <-txControlChan:
+				for _, ch := range txListenersCh {
 					ch <- control
 				}
 			}
@@ -2273,7 +2313,7 @@ func (sm *SyncManager) kafkaBlocksFinalListener(ctx context.Context, kafkaURL *u
 			return nil
 		}
 
-		hash, err := chainhash.NewHash(msg.Key)
+		hash, err := chainhash.NewHashFromStr(string(msg.Key))
 		if err != nil {
 			sm.logger.Errorf("[kafkaBlocksFinalListener][%s] failed to create hash from Kafka message key: %v", hash, err)
 			// not going to retry, if we cannot parse the message

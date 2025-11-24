@@ -1,0 +1,20 @@
+name: Teranode PR init
+
+# Minimal workflow that always runs for every PR.
+# Used as a trigger point for workflow_run workflows (Claude Code review, SonarQube)
+# that need to run even for docs-only PRs.
+# External contributors require manual approval for workflow runs.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  init:
+    name: Initialize PR checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Complete
+        run: echo "PR workflow initialized"

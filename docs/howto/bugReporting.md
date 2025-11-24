@@ -1,11 +1,10 @@
 # Bug Reporting
 
-
 When you encounter issues, please follow these guidelines to report bugs to the Teranode support team:
 
 ## Before Reporting
 
-1. Check the documentation and FAQ to ensure the behavior is indeed a bug.
+1. Check the [troubleshooting documentation](miners/kubernetes/minersHowToTroubleshooting.md) ([Docker](miners/docker/minersHowToTroubleshooting.md)) to ensure the behavior is indeed a bug.
 2. Search existing GitHub issues to see if the bug has already been reported.
 
 ## Collecting Information
@@ -26,7 +25,8 @@ Before submitting a bug report, gather the following information:
     - CPU usage
     - Memory usage
     - Disk space and I/O statistics
-4. **Network Information:**
+4. **Network Information**
+
     - Firewall configuration
     - Any relevant network errors
 5. **Steps to Reproduce**:
@@ -46,41 +46,60 @@ Before submitting a bug report, gather the following information:
 2. Click on "Issues" and then "New Issue"
 3. Select the "Bug Report" template
 4. Fill out the template with the information you've gathered
-5. Attach the compressed file from the log collection tool
-6. Submit the issue
+5. Submit the issue
 
 ## Bug Report Template
 
-When creating a new issue, use the following template:
+When creating a new issue, GitHub will automatically load a template. The template includes the following sections:
 
 ```markdown
-## Bug Description
-[Provide a clear and concise description of the bug]
+## Describe the bug
+A clear and concise description of what the bug is.
 
-## Teranode Version
-[e.g., 1.2.3]
+## To Reproduce
+Steps to reproduce the behavior:
+1. Go to '...'
+2. Click on '...'
+3. Scroll down to '...'
+4. See error
 
-## Environment
-- OS: [e.g., Ubuntu 20.04]
-- Docker Version: [e.g., 20.10.7]
-- Docker Compose Version: [e.g., 1.29.2]
-- Kubectl version
+## Expected behavior
+A clear and concise description of what you expected to happen.
 
-## Steps to Reproduce
-1. [First Step]
-2. [Second Step]
-3. [and so on...]
+## Screenshots
+If applicable, add screenshots to help explain your problem.
 
-## Expected Behavior
-[What you expected to happen]
+## Timeline
+When did the bug first occur, or when did you first notice it?
 
-## Actual Behavior
-[What actually happened]
+## Desktop (please complete the following information):
 
-## Additional Context
-[Any other information that might be relevant]
+- OS: [e.g. iOS]
+- Browser [e.g. chrome, safari]
+- Version [e.g. 22]
 
-## Logs and Configuration
+## TERANODE Env
+You can get that at the start of your program and looks something like:
+
+SETTINGS_CONTEXT
+----------------
+scaling.m1
+
+SETTINGS
+--------
+SERVICE_NAME=validation-service
+advertisingInterval=10s
+advertisingURL=
+clientName=M1
+asset_grpcAddress=blob-service.blob-service.svc.cluster.local:8091
+asset_grpcListenAddress=:8091
+asset_httpAddress=https://m1.scaling.teranode.network
+asset_httpListenAddress=:8090
+...
+
+## Additional context
+
+Add any other context about the problem here.
 ```
 
 ## After Submitting

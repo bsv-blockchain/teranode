@@ -7,6 +7,8 @@
     - [2.1. Receiving UTXOs and warming up the TXMeta Cache](#21-receiving-utxos-and-warming-up-the-txmeta-cache)
     - [2.2. Receiving subtrees for validation](#22-receiving-subtrees-for-validation)
     - [2.3. Validating the Subtrees](#23-validating-the-subtrees)
+    - [2.4. Subtree Locking Mechanism](#24-subtree-locking-mechanism)
+    - [2.5. Distributed Pause Mechanism](#25-distributed-pause-mechanism)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -41,7 +43,9 @@ The P2P Service communicates with the Block Validation over either gRPC protocol
 
 ![Subtree_Validation_Service_Component_Diagram.png](img/Subtree_Validation_Service_Component_Diagram.png)
 
-The detailed component diagram below shows the internal architecture of the Subtree Validation Service with code-verified connections:
+The detailed component diagram below shows the internal architecture of the Subtree Validation Service:
+
+> **Note**: This diagram represents a simplified component view showing the main architectural elements. The gRPC Server routes requests to handlers (`subtreeHandler.go`, `txmetaHandler.go`) which orchestrate validation logic, file-based locking, transaction fetching via HTTP, and interactions with external services. Kafka consumers process notifications and route them to the appropriate handlers for processing.
 
 ![Subtree_Validation_Component](img/plantuml/subtreevalidation/Subtree_Validation_Component.svg)
 
@@ -145,9 +149,45 @@ To prevent concurrent validation of the same subtree, the service implements a f
 
 The locking implementation is designed to be resilient across distributed systems by leveraging the shared filesystem.
 
+### 2.5. Distributed Pause Mechanism
+
+The Subtree Validation service implements a distributed pause mechanism that coordinates pausing across multiple pods in a Kubernetes cluster. This mechanism is essential for preventing UTXO state conflicts during block validation.
+
+![subtree_validation_distributed_pause.svg](img/plantuml/subtreevalidation/subtree_validation_distributed_pause.svg)
+
+**Key Features:**
+
+1. **Distributed Lock**: Uses a special lock file `__SUBTREE_PAUSE__.lock` in shared storage (quorum path)
+2. **Heartbeat Updates**: The lock file timestamp is updated every `timeout/2` seconds (default: 5 seconds) to indicate the pause is still active
+3. **Automatic Crash Recovery**: Stale locks (older than the configured timeout) are automatically detected and cleaned up
+4. **Two-Level Checking**:
+
+    - Fast local atomic boolean check (no I/O)
+    - Reliable distributed lock check when local flag is false
+5. **Graceful Fallback**: Falls back to local-only pause if quorum is not initialized (for tests)
+
+**How It Works:**
+
+1. When block validation starts on any pod, it calls `setPauseProcessing(ctx)`
+2. A distributed lock is created in the shared storage with automatic heartbeat
+3. All other pods check `isPauseActive()` before processing subtrees:
+
+   - First checks local atomic flag (fast path)
+   - If local flag is false, checks for distributed lock
+4. If pause is active, subtree processing is skipped
+5. When block validation completes, the lock is released
+6. If a pod crashes during validation, the lock becomes stale after the timeout period and is automatically cleaned up by other pods
+
+**Configuration:**
+
+The distributed pause mechanism uses existing subtree validation settings:
+
+- `subtree_quorum_path`: Path to shared storage for lock files
+- `subtree_quorum_absolute_timeout`: Timeout for lock staleness (default: 30 seconds)
+
 ## 3. gRPC Protobuf Definitions
 
-The Subtree Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/subtreevalidationProto.md).
+The Subtree Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the [Subtree Validation Protobuf Reference](../../references/protobuf_docs/subtreevalidationProto.md).
 
 ## 4. Data Model
 
@@ -163,23 +203,23 @@ The Subtree Validation Service uses gRPC for communication between nodes. The pr
 
     - Used for implementing server-client communication. gRPC is a high-performance, open-source framework that supports efficient communication between services.
 
-4. **Data Stores**:
+3. **Data Stores**:
 
     - Integration with various stores: blob store, and UTXO store.
 
-5. **Caching Mechanisms (ttlcache)**:
+4. **Caching Mechanisms (ttlcache)**:
 
     - Uses `ttlcache`, a Go library for in-memory caching with time-to-live settings, to avoid redundant processing and improve performance.
 
-6. **Configuration Management (gocore)**:
+5. **Configuration Management (gocore)**:
 
     - Uses `gocore` for configuration management, allowing dynamic configuration of service parameters.
 
-7. **Networking and Protocol Buffers**:
+6. **Networking and Protocol Buffers**:
 
     - Handles network communications and serializes structured data using Protocol Buffers, a language-neutral, platform-neutral, extensible mechanism for serializing structured data.
 
-8. **Synchronization Primitives (sync)**:
+7. **Synchronization Primitives (sync)**:
 
     - Utilizes Go's `sync` package for synchronization primitives like mutexes, aiding in managing concurrent access to shared resources.
 
@@ -213,14 +253,14 @@ The Subtree Validation Service uses gRPC for communication between nodes. The pr
 To run the Subtree Validation Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -SubtreeValidation=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -SubtreeValidation=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Subtree Validation Service locally.
 
 ## 8. Configuration Settings
 
-For comprehensive configuration documentation including all settings, defaults, and interactions, see the [subtree Validation Settings Reference](../../references/settings/services/subtreevalidation_settings.md).
+For comprehensive configuration documentation including all settings, defaults, and interactions, see the [subtree Validation Settings Reference](../../references/settings/services/subtreeValidation_settings.md).
 
 ## 9. Other Resources
 

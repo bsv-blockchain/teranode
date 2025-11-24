@@ -783,7 +783,18 @@ func (m *MockBlockchainClient) SendNotification(ctx context.Context, notificatio
 	return nil
 }
 func (m *MockBlockchainClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-	return nil, nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Return a basic block with ID matching the hash
+	// This is a simple implementation for testing purposes
+	return &model.Block{
+		ID:     100, // Default ID
+		Height: 100,
+		Header: &model.BlockHeader{
+			HashPrevBlock: blockHash,
+		},
+	}, nil
 }
 func (m *MockBlockchainClient) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
 	return nil, nil
@@ -842,6 +853,12 @@ func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, he
 func (m *MockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
+func (m *MockBlockchainClient) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error) {
+	return nil, nil
+}
 func (m *MockBlockchainClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 	return nil, nil
 }
@@ -882,7 +899,8 @@ func (m *MockBlockchainClient) GetBestHeightAndTime(ctx context.Context) (uint32
 	return 0, 0, nil
 }
 func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
-	return false, nil
+	// Default to true - blocks are on the current chain unless specifically testing reorg scenarios
+	return true, nil
 }
 func (m *MockBlockchainClient) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 	return nil, nil
@@ -1023,7 +1041,7 @@ func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.
 func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil
 }
 func (m *MockUTXOStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
@@ -1075,6 +1093,13 @@ func (m *MockUTXOStore) GetBlockHeight() uint32                 { return 0 }
 func (m *MockUTXOStore) SetMedianBlockTime(height uint32) error { return nil }
 func (m *MockUTXOStore) GetMedianBlockTime() uint32             { return 0 }
 
+func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     m.GetBlockHeight(),
+		MedianTime: m.GetMedianBlockTime(),
+	}
+}
+
 // Comprehensive tests for getNextBlockToProcess method
 
 // TestGetNextBlockToProcess_NormalFlow tests successful block retrieval
@@ -1096,10 +1121,27 @@ func TestGetNextBlockToProcess_NormalFlow(t *testing.T) {
 		Height: 110,
 	}
 
-	// Create mock block
-	mockBlock := &model.Block{}
-	mockBlock.Height = 101
+	// Create mock block for the last persisted block (height 100)
+	lastPersistedHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000064") // block-100-hash
+	lastPersistedBlock := &model.Block{
+		Height: 100,
+		ID:     100,
+	}
 
+	// Create mock block for next block (height 101)
+	mockBlock := &model.Block{
+		Height: 101,
+		Header: &model.BlockHeader{
+			HashPrevBlock: lastPersistedHash,
+		},
+	}
+
+	// Mock the GetBlock call for reorg detection
+	mockClient.On("GetBlock", ctx, lastPersistedHash).Return(
+		lastPersistedBlock, nil)
+	// Mock the CheckBlockIsInCurrentChain call for reorg detection
+	mockClient.On("CheckBlockIsInCurrentChain", ctx, []uint32{uint32(100)}).Return(
+		true, nil)
 	mockClient.On("GetBestBlockHeader", ctx).Return(
 		&model.BlockHeader{}, blockHeaderMeta, nil)
 	mockClient.On("GetBlockByHeight", ctx, uint32(101)).Return(
@@ -1107,8 +1149,8 @@ func TestGetNextBlockToProcess_NormalFlow(t *testing.T) {
 
 	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
 
-	// Set initial persisted height
-	err := server.state.AddBlock(100, "block-100-hash")
+	// Set initial persisted height with the correct hash
+	err := server.state.AddBlock(100, lastPersistedHash.String())
 	require.NoError(t, err)
 
 	// Call getNextBlockToProcess
@@ -1142,13 +1184,26 @@ func TestGetNextBlockToProcess_NoBlocksToProcess(t *testing.T) {
 		Height: 105,
 	}
 
+	// Create mock block for the last persisted block (height 100)
+	lastPersistedHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000064")
+	lastPersistedBlock := &model.Block{
+		Height: 100,
+		ID:     100,
+	}
+
+	// Mock the GetBlock call for reorg detection
+	mockClient.On("GetBlock", ctx, lastPersistedHash).Return(
+		lastPersistedBlock, nil)
+	// Mock the CheckBlockIsInCurrentChain call for reorg detection
+	mockClient.On("CheckBlockIsInCurrentChain", ctx, []uint32{uint32(100)}).Return(
+		true, nil)
 	mockClient.On("GetBestBlockHeader", ctx).Return(
 		&model.BlockHeader{}, blockHeaderMeta, nil)
 
 	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
 
 	// Set initial persisted height
-	err := server.state.AddBlock(100, "block-100-hash")
+	err := server.state.AddBlock(100, lastPersistedHash.String())
 	require.NoError(t, err)
 
 	// Call getNextBlockToProcess
@@ -1159,6 +1214,112 @@ func TestGetNextBlockToProcess_NoBlocksToProcess(t *testing.T) {
 	assert.Nil(t, block)
 
 	// Verify mock expectations
+	mockClient.AssertExpectations(t)
+}
+
+// TestGetNextBlockToProcess_ReorgDetected tests when a reorg is detected
+func TestGetNextBlockToProcess_ReorgDetected(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Create temp directory for state file
+	tempDir := t.TempDir()
+	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	tSettings.Block.BlockPersisterPersistAge = 2
+
+	// Create mock blockchain client
+	mockClient := &blockchain.Mock{}
+
+	// Create mock block for the last persisted block (height 100)
+	lastPersistedHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000064")
+	lastPersistedBlock := &model.Block{
+		Height: 100,
+		ID:     100,
+	}
+
+	// Mock the GetBlock call for reorg detection
+	mockClient.On("GetBlock", ctx, lastPersistedHash).Return(
+		lastPersistedBlock, nil)
+	// Mock the CheckBlockIsInCurrentChain call - returning false to simulate reorg
+	mockClient.On("CheckBlockIsInCurrentChain", ctx, []uint32{uint32(100)}).Return(
+		false, nil) // false indicates block is NOT on current chain (reorg detected)
+	// GetBestBlockHeader should NOT be called because we return early
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+
+	// Set initial persisted height with the orphaned hash
+	err := server.state.AddBlock(100, lastPersistedHash.String())
+	require.NoError(t, err)
+
+	// Call getNextBlockToProcess
+	block, err := server.getNextBlockToProcess(ctx)
+
+	// Verify that we return nil block and nil error (triggering recovery)
+	require.NoError(t, err)
+	assert.Nil(t, block, "Should return nil block when reorg is detected")
+
+	// Verify mock expectations
+	mockClient.AssertExpectations(t)
+}
+
+// TestGetNextBlockToProcess_ReorgDetected_DefensiveCheckDisabled tests when defensive check is disabled
+func TestGetNextBlockToProcess_ReorgDetected_DefensiveCheckDisabled(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Create temp directory for state file
+	tempDir := t.TempDir()
+	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	tSettings.Block.BlockPersisterPersistAge = 2
+	// DISABLE the defensive reorg check
+	tSettings.Block.BlockPersisterEnableDefensiveReorgCheck = false
+
+	// Create mock blockchain client
+	mockClient := &blockchain.Mock{}
+
+	// Create mock block header meta with 10 blocks ahead
+	blockHeaderMeta := &model.BlockHeaderMeta{
+		Height: 110,
+	}
+
+	// Create mock block for the last persisted block (height 100) - on old chain
+	lastPersistedHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000064")
+
+	// Create mock block for next block (height 101) - from new chain with different parent
+	differentParentHash, _ := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
+	mockBlock := &model.Block{
+		Height: 101,
+		Header: &model.BlockHeader{
+			HashPrevBlock: differentParentHash, // Different parent - would normally fail validation
+		},
+	}
+
+	// With defensive check disabled, these reorg detection calls should NOT happen
+	// GetBlock and CheckBlockIsInCurrentChain should NOT be called
+
+	// Only GetBestBlockHeader and GetBlockByHeight should be called
+	mockClient.On("GetBestBlockHeader", ctx).Return(
+		&model.BlockHeader{}, blockHeaderMeta, nil)
+	mockClient.On("GetBlockByHeight", ctx, uint32(101)).Return(
+		mockBlock, nil)
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+
+	// Set initial persisted height with an orphaned hash
+	err := server.state.AddBlock(100, lastPersistedHash.String())
+	require.NoError(t, err)
+
+	// Call getNextBlockToProcess
+	block, err := server.getNextBlockToProcess(ctx)
+
+	// With defensive check disabled, it should return the block even with mismatched parent
+	require.NoError(t, err)
+	require.NotNil(t, block, "Should return the block when defensive check is disabled")
+	assert.Equal(t, uint32(101), block.Height)
+
+	// Verify mock expectations - GetBlock and CheckBlockIsInCurrentChain should NOT have been called
 	mockClient.AssertExpectations(t)
 }
 
@@ -1210,6 +1371,19 @@ func TestGetNextBlockToProcess_GetBlockByHeightFailure(t *testing.T) {
 		Height: 110,
 	}
 
+	// Create mock block for the last persisted block (height 100)
+	lastPersistedHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000064")
+	lastPersistedBlock := &model.Block{
+		Height: 100,
+		ID:     100,
+	}
+
+	// Mock the GetBlock call for reorg detection
+	mockClient.On("GetBlock", ctx, lastPersistedHash).Return(
+		lastPersistedBlock, nil)
+	// Mock the CheckBlockIsInCurrentChain call for reorg detection
+	mockClient.On("CheckBlockIsInCurrentChain", ctx, []uint32{uint32(100)}).Return(
+		true, nil)
 	mockClient.On("GetBestBlockHeader", ctx).Return(
 		&model.BlockHeader{}, blockHeaderMeta, nil)
 	mockClient.On("GetBlockByHeight", ctx, uint32(101)).Return(
@@ -1218,7 +1392,7 @@ func TestGetNextBlockToProcess_GetBlockByHeightFailure(t *testing.T) {
 	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
 
 	// Set initial persisted height
-	err := server.state.AddBlock(100, "block-100-hash")
+	err := server.state.AddBlock(100, lastPersistedHash.String())
 	require.NoError(t, err)
 
 	// Call getNextBlockToProcess
@@ -1297,8 +1471,8 @@ func TestGetNextBlockToProcess_EdgeCasePersistAge(t *testing.T) {
 	err := server.state.AddBlock(89, hash.String())
 	require.NoError(t, err)
 
-	// Create expected block
-	prevHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
+	// Create expected block with correct parent hash for validation
+	prevHash := hash // Parent hash should match the last persisted block hash
 	expectedBlockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  prevHash,

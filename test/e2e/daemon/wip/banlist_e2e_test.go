@@ -7,11 +7,9 @@ import (
 
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/services/p2p"
-	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestBanListGRPCE2E(t *testing.T) {
@@ -44,17 +42,17 @@ func TestBanListGRPCE2E(t *testing.T) {
 		until := time.Now().Add(1 * time.Hour).Unix()
 
 		// Ban an IP
-		_, err = client.BanPeer(ctx, &p2p_api.BanPeerRequest{Addr: ip, Until: until})
+		err = client.BanPeer(ctx, ip, until)
 		require.NoError(t, err)
 
 		// Check ban status
-		resp, err := client.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: ip})
+		isBanned, err := client.IsBanned(ctx, ip)
 		require.NoError(t, err)
-		require.True(t, resp.IsBanned)
+		require.True(t, isBanned)
 
-		listResp, err := client.ListBanned(ctx, &emptypb.Empty{})
+		bannedList, err := client.ListBanned(ctx)
 		require.NoError(t, err)
-		require.Contains(t, listResp.Banned, ip)
+		require.Contains(t, bannedList, ip)
 
 		// Restart node to check persistence
 		daemonNode.Stop(t)
@@ -77,62 +75,62 @@ func TestBanListGRPCE2E(t *testing.T) {
 
 		client = clientI.(*p2p.Client)
 
-		resp, err = client.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: ip})
+		isBanned, err = client.IsBanned(ctx, ip)
 		require.NoError(t, err)
-		require.True(t, resp.IsBanned)
+		require.True(t, isBanned)
 
 		// Unban the IP
-		_, err = client.UnbanPeer(ctx, &p2p_api.UnbanPeerRequest{Addr: ip})
+		err = client.UnbanPeer(ctx, ip)
 		require.NoError(t, err)
 
-		resp, err = client.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: ip})
+		isBanned, err = client.IsBanned(ctx, ip)
 		require.NoError(t, err)
-		require.False(t, resp.IsBanned)
+		require.False(t, isBanned)
 
 		// Ban a subnet and check an IP in the subnet
 		subnet := "10.0.0.0/24"
-		_, err = client.BanPeer(ctx, &p2p_api.BanPeerRequest{Addr: subnet, Until: until})
+		err = client.BanPeer(ctx, subnet, until)
 		require.NoError(t, err)
-		resp, err = client.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: "10.0.0.5"})
+		isBanned, err = client.IsBanned(ctx, "10.0.0.5")
 		require.NoError(t, err)
-		require.True(t, resp.IsBanned)
+		require.True(t, isBanned)
 
 		// --- IPv6 Ban Test ---
 		ipv6 := "2406:da18:1f7:353a:b079:da22:c7d5:e166"
 		until = time.Now().Add(1 * time.Hour).Unix()
 
 		// Ban the IPv6 address
-		_, err = client.BanPeer(ctx, &p2p_api.BanPeerRequest{Addr: ipv6, Until: until})
+		err = client.BanPeer(ctx, ipv6, until)
 		require.NoError(t, err)
 
 		// Check ban status for the exact IPv6 address
-		resp, err = client.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: ipv6})
+		isBanned, err = client.IsBanned(ctx, ipv6)
 		require.NoError(t, err)
-		require.True(t, resp.IsBanned)
+		require.True(t, isBanned)
 
 		// Check ban status for the IPv6 address with port
 		ipv6WithPort := "[" + ipv6 + "]:8333"
-		resp, err = client.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: ipv6WithPort})
+		isBanned, err = client.IsBanned(ctx, ipv6WithPort)
 		require.NoError(t, err)
-		require.True(t, resp.IsBanned)
+		require.True(t, isBanned)
 
 		// Unban the IPv6 address
-		_, err = client.UnbanPeer(ctx, &p2p_api.UnbanPeerRequest{Addr: ipv6})
+		err = client.UnbanPeer(ctx, ipv6)
 		require.NoError(t, err)
 
 		// Check that the IPv6 address is no longer banned
-		resp, err = client.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: ipv6})
+		isBanned, err = client.IsBanned(ctx, ipv6)
 		require.NoError(t, err)
-		require.False(t, resp.IsBanned)
+		require.False(t, isBanned)
 
 		// --- IPv6 Subnet Ban Test ---
 		ipv6Subnet := "2406:da18:1f7:353a::/64"
-		_, err = client.BanPeer(ctx, &p2p_api.BanPeerRequest{Addr: ipv6Subnet, Until: until})
+		err = client.BanPeer(ctx, ipv6Subnet, until)
 		require.NoError(t, err)
 
 		// Check an address within the subnet
-		resp, err = client.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: ipv6})
+		isBanned, err = client.IsBanned(ctx, ipv6)
 		require.NoError(t, err)
-		require.True(t, resp.IsBanned)
+		require.True(t, isBanned)
 	})
 }

@@ -379,7 +379,7 @@ Internal implementation of subtree validation logic. This method contains the co
 
 ```go
 func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32,
-    blockIds map[uint32]bool, validationOptions ...validator.Option) (err error)
+    blockIds map[uint32]bool, validationOptions ...validator.Option) (subtree *subtreepkg.Subtree, err error)
 ```
 
 Performs the actual validation of a subtree. This is the core method of the subtree validation service, responsible for the complete validation process of a transaction subtree. It handles the complex task of verifying that all transactions in a subtree are valid both individually and collectively, ensuring they can be safely added to the blockchain.

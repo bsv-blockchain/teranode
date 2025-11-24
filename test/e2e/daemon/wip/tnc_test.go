@@ -91,7 +91,7 @@ func TestCheckPrevBlockHash(t *testing.T) {
 	)
 
 	// Send transaction
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, tx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, tx)
 	require.NoError(t, err)
 
 	// Mine the block with the new transaction
@@ -161,7 +161,7 @@ func TestPrevBlockHashAfterReorg(t *testing.T) {
 	)
 
 	// Send transaction
-	_, err = node1.DistributorClient.SendTransaction(node1.Ctx, tx)
+	err = node1.PropagationClient.ProcessTransaction(node1.Ctx, tx)
 	require.NoError(t, err, "Failed to send transactions")
 
 	// Generate blocks on node1 and node2

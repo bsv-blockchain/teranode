@@ -64,7 +64,7 @@ func TestValidatedTxShouldSpendInputsWithPostgres(t *testing.T) {
 	// Sign and send the transaction
 	err = tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: coinbaseTxPrivateKey})
 	require.NoError(t, err)
-	_, err = td.DistributorClient.SendTransaction(ctx, tx)
+	err = td.PropagationClient.ProcessTransaction(ctx, tx)
 	require.NoError(t, err, "Failed to send transaction")
 
 	// Check if the tx is into the UTXOStore

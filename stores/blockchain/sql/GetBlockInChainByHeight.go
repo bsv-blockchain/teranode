@@ -57,7 +57,8 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockInChainByHeightHash-%d-%s", height, startHash.String())))
 
-	cached := s.responseCache.Get(cacheID)
+	cacheOp := s.responseCache.Begin(cacheID)
+	cached := cacheOp.Get()
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*model.Block); ok && cacheData != nil {
 			s.logger.Debugf("[GetBlockInChainByHeightHash][%s:%d] cache hit", startHash.String(), height)
@@ -168,7 +169,7 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 		return nil, false, errors.NewInvalidArgumentError("[GetBlockInChainByHeightHash][%s:%d] failed to convert subtrees", startHash.String(), height, err)
 	}
 
-	s.responseCache.Set(cacheID, block, s.cacheTTL)
+	cacheOp.Set(block, s.cacheTTL)
 
 	return block, invalid, nil
 }
