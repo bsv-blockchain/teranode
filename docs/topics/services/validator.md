@@ -692,7 +692,7 @@ The code snippet you've provided utilizes a variety of technologies and librarie
 To run the Validator locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -Validator=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -validator=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Validator locally.

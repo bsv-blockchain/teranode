@@ -588,13 +588,13 @@ UTXO Store Package Structure (stores/utxo)
 
 ### How to run
 
-To run the UTXO Store locally, you can execute the following command:
+The UTXO Store is a data store component that is used by various services. It is not run independently. To use the UTXO Store locally, run services that depend on it, such as the Validator or UTXO Persister:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -UtxoStore=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -validator=1 -utxopersister=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running services locally.
 
 ## 9. Configuration and Settings
 
