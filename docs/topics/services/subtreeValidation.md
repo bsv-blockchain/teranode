@@ -9,6 +9,8 @@
     - [2.3. Validating the Subtrees](#23-validating-the-subtrees)
     - [2.4. Subtree Locking Mechanism](#24-subtree-locking-mechanism)
     - [2.5. Distributed Pause Mechanism](#25-distributed-pause-mechanism)
+    - [2.6. Orphanage Management](#26-orphanage-management)
+    - [2.7. Level Calculation for Merkle Trees](#27-level-calculation-for-merkle-trees)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -184,6 +186,71 @@ The distributed pause mechanism uses existing subtree validation settings:
 
 - `subtree_quorum_path`: Path to shared storage for lock files
 - `subtree_quorum_absolute_timeout`: Timeout for lock staleness (default: 30 seconds)
+
+### 2.6. Orphanage Management
+
+The Subtree Validation service implements an orphanage mechanism to handle transactions that arrive before their parent transactions are available. This is essential for maintaining processing continuity when transactions arrive out of order.
+
+**What are Orphaned Transactions?**
+
+A transaction becomes "orphaned" when:
+
+- It references inputs from parent transactions that are not yet in the UTXO store
+- The parent transactions are expected to arrive shortly (e.g., in the same subtree or recent subtrees)
+
+**Orphanage Workflow:**
+
+1. **Detection**: During subtree validation, if a transaction's inputs cannot be found, it's placed in the orphanage
+2. **Tracking**: The orphanage tracks which parent transaction IDs are needed
+3. **Resolution**: When parent transactions are processed, orphaned children are automatically resolved
+4. **Timeout**: Orphaned transactions that remain unresolved after the timeout period are cleaned up
+
+**Configuration:**
+
+- `subtreevalidation_orphanageTimeout`: Duration before orphaned transactions are cleaned up (default: 30 seconds)
+
+**Benefits:**
+
+- Handles out-of-order transaction arrival gracefully
+- Prevents transaction validation failures due to timing issues
+- Maintains high throughput during burst traffic
+- Automatically recovers when parent transactions arrive
+
+### 2.7. Level Calculation for Merkle Trees
+
+The Subtree Validation service performs level calculation to optimize merkle tree processing. This feature improves performance by pre-calculating the hierarchical structure of subtrees.
+
+**What is Level Calculation?**
+
+Each subtree contains transactions organized in a merkle tree structure. Level calculation determines:
+
+- The number of levels in the merkle tree
+- The number of transactions at each level
+- Memory allocation requirements for processing
+
+**How It Works:**
+
+1. **Tree Analysis**: The service analyzes the subtree structure to determine the total number of transactions
+2. **Level Computation**: Calculates the number of levels needed based on transaction count
+3. **Pre-allocation**: Allocates memory slices based on calculated level sizes
+4. **Optimized Processing**: Processes the subtree level by level for optimal memory usage
+
+**Benefits:**
+
+- **Memory Efficiency**: Pre-allocates exact memory needed, reducing allocations
+- **Performance**: Avoids repeated slice growth during processing
+- **Predictability**: Known memory requirements before processing begins
+
+**Example:**
+
+For a subtree with 1,000 transactions:
+
+- Level 0 (leaves): 1,000 transaction hashes
+- Level 1: 500 intermediate nodes
+- Level 2: 250 nodes
+- ... and so on until the root
+
+The level calculation pre-determines this structure, allowing optimal memory allocation.
 
 ## 3. gRPC Protobuf Definitions
 

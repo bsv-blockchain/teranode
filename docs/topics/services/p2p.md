@@ -18,6 +18,13 @@
         - [2.7.2. Ban Operations](#272-ban-operations)
         - [2.7.3. Ban Event Handling](#273-ban-event-handling)
         - [2.7.4. Configuration](#274-configuration)
+    - [2.8. Peer Registry and Reputation System](#28-peer-registry-and-reputation-system)
+        - [2.8.1. Overview](#281-overview)
+        - [2.8.2. Peer Information Tracking](#282-peer-information-tracking)
+        - [2.8.3. Reputation Algorithm](#283-reputation-algorithm)
+        - [2.8.4. Peer Selection](#284-peer-selection)
+        - [2.8.5. Persistence](#285-persistence)
+        - [2.8.6. Recovery Mechanisms](#286-recovery-mechanisms)
     - [3. Technology](#3-technology)
     - [4. Data Model](#4-data-model)
     - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
@@ -365,6 +372,78 @@ Ban-related settings in the configuration:
 - `banlist_db`: Database connection string for ban storage
 - `ban_default_duration`: Default duration for bans (24 hours if not specified)
 - `ban_max_entries`: Maximum number of banned entries to maintain
+
+### 2.8. Peer Registry and Reputation System
+
+The P2P service includes a comprehensive peer management system that tracks peer behavior, calculates reputation scores, and selects optimal peers for network operations.
+
+#### 2.8.1. Overview
+
+The system consists of three main components:
+
+- **Peer Registry**: A thread-safe data store maintaining all peer information and interaction history
+- **Peer Selector**: A stateless component that selects optimal peers based on reputation and criteria
+- **Reputation Scoring**: An algorithm calculating peer reliability scores (0-100)
+
+#### 2.8.2. Peer Information Tracking
+
+The peer registry tracks comprehensive information for each peer:
+
+- **Identity**: Peer ID, client name, connection status
+- **Blockchain State**: Height, block hash, storage mode (full/pruned)
+- **Network Info**: DataHub URL, URL responsiveness, bytes received
+- **Reputation Metrics**: Interaction successes/failures, malicious behavior count, average response time
+- **Interaction History**: Blocks received, subtrees received, transactions received
+
+#### 2.8.3. Reputation Algorithm
+
+Peers are assigned reputation scores from 0 to 100:
+
+- **50**: Default neutral score for new peers
+- **20**: Minimum threshold for peer selection eligibility
+- **5**: Score assigned to peers exhibiting malicious behavior
+
+The reputation calculation considers:
+
+- Success rate of interactions (60% weight)
+- Base score component (40% weight)
+- Recent failure penalties (-15 for failures within 1 hour)
+- Recent success bonuses (+10 for successes within 1 hour)
+- Malicious behavior (immediate drop to 5.0)
+
+#### 2.8.4. Peer Selection
+
+The peer selector uses a two-phase approach:
+
+1. **Phase 1 - Full Nodes**: Filter for peers announcing "full" storage mode, sort by reputation
+2. **Phase 2 - Pruned Fallback**: If no full nodes available, select youngest pruned node
+
+Selection criteria include:
+
+- Not banned
+- Has DataHub URL (excludes listen-only nodes)
+- URL is responsive
+- Valid blockchain height
+- Reputation score >= 20.0
+- Passes cooldown period
+
+#### 2.8.5. Persistence
+
+The peer registry persists to `teranode_peer_registry.json`:
+
+- Saves on shutdown and periodically during operation
+- Restores peer metrics on startup
+- Maintains version compatibility
+
+#### 2.8.6. Recovery Mechanisms
+
+Peers can recover from low reputation through:
+
+- **Automatic Recovery**: `ReconsiderBadPeers` resets reputation after cooldown period
+- **Manual Reset**: Via gRPC API or dashboard UI
+- **Exponential Cooldown**: Reset cooldown triples for each subsequent reset
+
+For detailed documentation on the peer registry and reputation system, see [Peer Registry and Reputation System](../features/peer_registry_reputation.md).
 
 ## 3. Technology
 

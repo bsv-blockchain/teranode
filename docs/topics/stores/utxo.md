@@ -355,6 +355,33 @@ To optimize performance when reading externally stored transactions, the UTXO st
 
 The cache handles concurrent reads efficiently, preventing multiple simultaneous fetches of the same external transaction data.
 
+#### Lock Record Pattern for Multi-Record Transactions
+
+When a transaction has more than 20,000 outputs (configurable via `utxo_store_batch_size`), it must be split across multiple Aerospike records. The lock record pattern ensures these multi-record operations complete atomically, preventing data corruption from partial writes or concurrent access.
+
+**Key Components:**
+
+1. **Lock Records**: Temporary Aerospike records that prevent concurrent creation attempts for the same transaction. They use a special index (`0xFFFFFFFF`) that cannot conflict with actual sub-records.
+
+2. **Creating Flag**: A per-record boolean flag that prevents UTXO spending until all records are fully committed. When `creating=true`, the UTXO's outputs cannot be spent.
+
+**Two-Phase Commit Protocol:**
+
+- **Phase 1**: Acquire lock, store external data, create all Aerospike records with `creating=true`
+- **Phase 2**: Clear `creating` flag from children first, then master (master's flag absence indicates completion)
+
+**Error Handling and Recovery:**
+
+The system automatically recovers from partial failures through multiple paths:
+
+- Retry attempts complete Phase 2 via existing record detection
+- Re-encounter during block/subtree processing triggers completion
+- Mining operations clear flags as part of `SetMined`
+
+Lock records have dynamic TTL (30-300 seconds based on record count) to prevent permanent locks on process crashes.
+
+For detailed documentation, see [UTXO Lock Record Pattern for Multi-Record Transactions](../features/utxo_lock_records.md).
+
 ### 4.8. Alert System and UTXO Management
 
 The UTXO Store supports advanced UTXO management features, which can be utilized by an alert system.
