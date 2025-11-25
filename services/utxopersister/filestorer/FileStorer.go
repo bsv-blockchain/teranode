@@ -86,7 +86,7 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		bufferSize = 1024 * 128 // default to 128KB
 	}
 
-	logger.Infof("Using %s buffer for file storer", bufferSize)
+	logger.Debugf("Using %s buffer for file storer", bufferSize)
 
 	// Create pipe for streaming data to blob storage
 	reader, writer := io.Pipe()

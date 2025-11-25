@@ -140,6 +140,9 @@
 - [QA Guide & Instructions for Functional Requirement Tests](./topics/functionalRequirementTests.md)
 - [Double Spends](./topics/architecture/understandingDoubleSpends.md)
 - [Two Phase Commit](./topics/features/two_phase_commit.md)
+- [Peer Registry and Reputation System](./topics/features/peer_registry_reputation.md)
+- [UTXO Lock Records](./topics/features/utxo_lock_records.md)
+- [Dashboard](./topics/dashboard.md)
 
 -----
 
