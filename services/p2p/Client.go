@@ -526,6 +526,33 @@ func (c *Client) ReportValidSubtree(ctx context.Context, peerID string, subtreeH
 	return nil
 }
 
+// ReportInvalidSubtree reports that a subtree was unsuccessfully fetched and validated from a peer.
+// Parameters:
+//   - ctx: Context for the operation
+//   - peerID: Peer ID that provided the subtree
+//   - subtreeHash: Hash of the validated subtree
+//
+// Returns:
+//   - error: Any error encountered during the operation
+func (c *Client) ReportInvalidSubtree(ctx context.Context, peerID string, subtreeHash string, reason string) error {
+	req := &p2p_api.ReportInvalidSubtreeRequest{
+		PeerId:      peerID,
+		SubtreeHash: subtreeHash,
+		Reason:      reason,
+	}
+
+	resp, err := c.client.ReportInvalidSubtree(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	if resp != nil && !resp.Success {
+		return errors.NewServiceError("failed to report valid subtree: %s", resp.Message)
+	}
+
+	return nil
+}
+
 // ReportValidBlock reports that a block was successfully received and validated from a peer.
 // Parameters:
 //   - ctx: Context for the operation

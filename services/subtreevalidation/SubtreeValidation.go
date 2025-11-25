@@ -929,10 +929,10 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	u.logger.Debugf("[getSubtreeTxHashes][%s] done with subtree response", subtreeHash.String())
 
 	// TODO: Report successful subtree fetch to improve peer reputation
-	// Cannot call ReportValidSubtree here because we don't have peer ID, only baseURL (HTTP URL)
+	// Cannot call ReportValidSubtreeHandler here because we don't have peer ID, only baseURL (HTTP URL)
 	// Need to track peer ID through the call chain if we want to enable this
 	// if u.p2pClient != nil {
-	// 	if err := u.p2pClient.ReportValidSubtree(spanCtx, peerID, subtreeHash.String()); err != nil {
+	// 	if err := u.p2pClient.ReportValidSubtreeHandler(spanCtx, peerID, subtreeHash.String()); err != nil {
 	// 		u.logger.Warnf("[getSubtreeTxHashes][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
 	// 	}
 	// }
@@ -1232,10 +1232,10 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 									subtreeDataExists = true
 
 									// TODO: Report successful subtree data fetch to improve peer reputation
-									// Cannot call ReportValidSubtree here because we don't have peer ID, only baseURL (HTTP URL)
+									// Cannot call ReportValidSubtreeHandler here because we don't have peer ID, only baseURL (HTTP URL)
 									// Need to track peer ID through the call chain if we want to enable this
 									// if u.p2pClient != nil {
-									// 	if err := u.p2pClient.ReportValidSubtree(ctx, peerID, subtreeHash.String()); err != nil {
+									// 	if err := u.p2pClient.ReportValidSubtreeHandler(ctx, peerID, subtreeHash.String()); err != nil {
 									// 		u.logger.Warnf("[validateSubtree][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
 									// 	}
 									// }

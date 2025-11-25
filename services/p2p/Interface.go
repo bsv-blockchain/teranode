@@ -186,6 +186,10 @@ type ClientI interface {
 	// This increases the peer's reputation score for providing valid data.
 	ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error
 
+	// ReportInvalidSubtree reports that a subtree was unsuccessfully fetched and validated from a peer.
+	// This decreases the peer's reputation score for providing valid data.
+	ReportInvalidSubtree(ctx context.Context, peerID string, subtreeHash string, reason string) error
+
 	// ReportValidBlock reports that a block was successfully received and validated from a peer.
 	// This increases the peer's reputation score for providing valid blocks.
 	ReportValidBlock(ctx context.Context, peerID string, blockHash string) error

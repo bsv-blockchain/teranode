@@ -3391,16 +3391,16 @@ func TestReportInvalidSubtreeCoverage(t *testing.T) {
 	server := createTestServer(t)
 
 	// Test with empty hash and required parameters
-	err := server.ReportInvalidSubtree(ctx, "", "http://test-peer:8080", "test reason")
+	err := server.reportInvalidSubtree(ctx, "", "http://test-peer:8080", "test reason")
 	if err != nil {
-		t.Logf("ReportInvalidSubtree with empty hash failed as expected: %v", err)
+		t.Logf("reportInvalidSubtree with empty hash failed as expected: %v", err)
 	}
 
 	// Test with valid hash format and all required parameters
 	testHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	err = server.ReportInvalidSubtree(ctx, testHash, "http://peer:8080", "invalid subtree")
+	err = server.reportInvalidSubtree(ctx, testHash, "http://peer:8080", "invalid subtree")
 	if err != nil {
-		t.Logf("ReportInvalidSubtree may fail in test environment: %v", err)
+		t.Logf("reportInvalidSubtree may fail in test environment: %v", err)
 	}
 
 	// The function should execute the main logic path regardless of result

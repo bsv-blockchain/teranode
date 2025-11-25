@@ -531,7 +531,7 @@ func TestReportValidSubtree_GRPCEndpoint(t *testing.T) {
 		PeerId:      testPeerID.String(),
 		SubtreeHash: "test_subtree_hash_123",
 	}
-	resp, err := p2pServer.ReportValidSubtree(ctx, req)
+	resp, err := p2pServer.ReportValidSubtreeHandler(ctx, req)
 	require.NoError(t, err)
 	assert.True(t, resp.Success)
 	assert.Equal(t, "subtree validation recorded", resp.Message)
@@ -559,7 +559,7 @@ func TestReportValidSubtree_MissingHash(t *testing.T) {
 		PeerId:      "",
 		SubtreeHash: "test_hash",
 	}
-	resp1, err1 := p2pServer.ReportValidSubtree(ctx, req1)
+	resp1, err1 := p2pServer.ReportValidSubtreeHandler(ctx, req1)
 	assert.Error(t, err1)
 	assert.False(t, resp1.Success)
 	assert.Contains(t, resp1.Message, "peer ID is required")
@@ -569,7 +569,7 @@ func TestReportValidSubtree_MissingHash(t *testing.T) {
 		PeerId:      "12D3KooWBPqTBhshqRZMKZtqb5sfgckM9JYkWDR7eW5kSPEKwKCW",
 		SubtreeHash: "",
 	}
-	resp2, err2 := p2pServer.ReportValidSubtree(ctx, req2)
+	resp2, err2 := p2pServer.ReportValidSubtreeHandler(ctx, req2)
 	assert.Error(t, err2)
 	assert.False(t, resp2.Success)
 	assert.Contains(t, resp2.Message, "subtree hash is required")

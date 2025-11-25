@@ -78,6 +78,7 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 	}
 }
 
+// subtreesHandler processes a Kafka message for subtree validation.
 func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 	if msg != nil {
 		blockIDsMap := u.currentBlockIDsMap.Load()
@@ -151,6 +152,11 @@ func (u *Server) subtreesHandler(msg *kafka.KafkaMessage) error {
 		// validate the subtree as if it is for the next block height
 		// this is because subtrees are always validated ahead of time before they are needed for a block
 		if subtree, err = u.ValidateSubtreeInternal(ctx, v, bestBlockHeaderMeta.Height+1, *blockIDsMap); err != nil {
+			// if subtree validation fails, report invalid subtree to p2p client
+			p2pErr := u.p2pClient.ReportInvalidSubtree(ctx, kafkaMsg.PeerId, kafkaMsg.Hash, err.Error())
+			if p2pErr != nil {
+				u.logger.Errorf("failed to report invalid subtree to p2p client: %v", p2pErr)
+			}
 			return err
 		}
 

@@ -192,6 +192,18 @@ message AddBanScoreRequest {
     string message = 2;
   }
 
+// Report invalid subtree reception
+message ReportInvalidSubtreeRequest {
+  string peer_id = 1;      // Peer ID that provided the subtree
+  string subtree_hash = 2;
+  string reason = 3;        // Reason why the subtree is considered invalid
+}
+
+message ReportInvalidSubtreeResponse {
+  bool success = 1;
+  string message = 2;
+}
+
   // Report valid block reception
   message ReportValidBlockRequest {
     string peer_id = 1;      // Peer ID that provided the block
@@ -300,6 +312,7 @@ message AddBanScoreRequest {
 
     // Subtree and block validation reporting
     rpc ReportValidSubtree(ReportValidSubtreeRequest) returns (ReportValidSubtreeResponse) {}
+    rpc ReportInvalidSubtree(ReportInvalidSubtreeRequest) returns (ReportInvalidSubtreeResponse) {}
     rpc ReportValidBlock(ReportValidBlockRequest) returns (ReportValidBlockResponse) {}
 
     // Peer status checking

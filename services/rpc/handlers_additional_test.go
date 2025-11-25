@@ -5230,6 +5230,11 @@ type mockP2PClient struct {
 	getPeerRegistryFunc    func(ctx context.Context) ([]*p2p.PeerInfo, error)
 }
 
+func (m *mockP2PClient) ReportInvalidSubtree(ctx context.context.Context, peerID string, subtreeHash string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (m *mockP2PClient) GetPeers(ctx context.Context) ([]*p2p.PeerInfo, error) {
 	if m.getPeersFunc != nil {
 		return m.getPeersFunc(ctx)

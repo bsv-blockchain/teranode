@@ -143,49 +143,6 @@ func (s *Server) GetPeersForCatchup(_ context.Context, _ *p2p_api.GetPeersForCat
 	return &p2p_api.GetPeersForCatchupResponse{Peers: protoPeers}, nil
 }
 
-// ReportValidSubtree is a gRPC handler for reporting valid subtree reception
-func (s *Server) ReportValidSubtree(_ context.Context, req *p2p_api.ReportValidSubtreeRequest) (*p2p_api.ReportValidSubtreeResponse, error) {
-	if s.peerRegistry == nil {
-		return &p2p_api.ReportValidSubtreeResponse{
-			Success: false,
-			Message: "peer registry not initialized",
-		}, errors.WrapGRPC(errors.NewServiceError("peer registry not initialized"))
-	}
-
-	if req.PeerId == "" {
-		return &p2p_api.ReportValidSubtreeResponse{
-			Success: false,
-			Message: "peer ID is required",
-		}, errors.WrapGRPC(errors.NewInvalidArgumentError("peer ID is required"))
-	}
-
-	if req.SubtreeHash == "" {
-		return &p2p_api.ReportValidSubtreeResponse{
-			Success: false,
-			Message: "subtree hash is required",
-		}, errors.WrapGRPC(errors.NewInvalidArgumentError("subtree hash is required"))
-	}
-
-	// Decode peer ID
-	peerID, err := peer.Decode(req.PeerId)
-	if err != nil {
-		return &p2p_api.ReportValidSubtreeResponse{
-			Success: false,
-			Message: "invalid peer ID",
-		}, errors.WrapGRPC(errors.NewProcessingError("invalid peer ID: %v", err))
-	}
-
-	// Record successful subtree reception directly with peer ID
-	// Use a nominal duration since we don't have timing info at this level
-	s.peerRegistry.RecordSubtreeReceived(peerID, 0)
-	s.logger.Debugf("[ReportValidSubtree] Recorded successful subtree %s from peer %s", req.SubtreeHash, req.PeerId)
-
-	return &p2p_api.ReportValidSubtreeResponse{
-		Success: true,
-		Message: "subtree validation recorded",
-	}, nil
-}
-
 // ReportValidBlock is a gRPC handler for reporting valid block reception
 func (s *Server) ReportValidBlock(_ context.Context, req *p2p_api.ReportValidBlockRequest) (*p2p_api.ReportValidBlockResponse, error) {
 	if s.peerRegistry == nil {

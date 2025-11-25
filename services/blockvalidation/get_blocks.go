@@ -425,7 +425,7 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 	// Only report success after the entire block is validated
 	// This prevents inflating reputation for peers providing invalid chains
 	// if u.p2pClient != nil {
-	// 	if err := u.p2pClient.ReportValidSubtree(ctx, peerID, subtreeHash.String()); err != nil {
+	// 	if err := u.p2pClient.ReportValidSubtreeHandler(ctx, peerID, subtreeHash.String()); err != nil {
 	// 		u.logger.Warnf("[fetchAndStoreSubtree][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
 	// 	}
 	// }
