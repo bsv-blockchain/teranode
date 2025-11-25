@@ -1,4 +1,6 @@
 SHELL=/bin/bash
+# Temp disabled for now until all tests are green
+.SHELLFLAGS=-o pipefail -c
 
 DEBUG_FLAGS=
 TXMETA_TAG=
@@ -144,12 +146,12 @@ build-dashboard:
 .PHONY: install-tools
 install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
+	go install gotest.tools/gotestsum@latest
 
-# make test will run all tests in the project except for the ones in the test directory
 .PHONY: test
 test:
-	@mkdir -p /tmp/teranode-test-results
-	set -o pipefail && go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | SETTINGS_CONTEXT=test xargs go test -v -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out 2>&1 | tee /tmp/teranode-test-results/test-results.txt | grep -v "ld: warning:"
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 
 # run tests in the test/longtest directory
 .PHONY: longtest
@@ -161,6 +163,22 @@ longtest:
 sequentialtest:
 	@mkdir -p /tmp/teranode-test-results
 	logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
+
+# run sequential tests for specific database backends
+.PHONY: sequentialtest-sqlite
+sequentialtest-sqlite:
+	@mkdir -p /tmp/teranode-test-results
+	logLevel=INFO test/scripts/run_tests_sequentially.sh --db sqlite 2>&1 | tee /tmp/teranode-test-results/sequentialtest-sqlite-results.txt
+
+.PHONY: sequentialtest-postgres
+sequentialtest-postgres:
+	@mkdir -p /tmp/teranode-test-results
+	logLevel=INFO test/scripts/run_tests_sequentially.sh --db postgres 2>&1 | tee /tmp/teranode-test-results/sequentialtest-postgres-results.txt
+
+.PHONY: sequentialtest-aerospike
+sequentialtest-aerospike:
+	@mkdir -p /tmp/teranode-test-results
+	logLevel=INFO test/scripts/run_tests_sequentially.sh --db aerospike 2>&1 | tee /tmp/teranode-test-results/sequentialtest-aerospike-results.txt
 
 .PHONY: testall
 testall: test longtest sequentialtest

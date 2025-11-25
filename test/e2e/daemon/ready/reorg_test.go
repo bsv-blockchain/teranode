@@ -1,6 +1,7 @@
 package smoke
 
 import (
+	"net/url"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
+	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/stretchr/testify/require"
 )
 
@@ -352,13 +354,25 @@ func TestDynamicSubtreeSize(t *testing.T) {
 }
 
 func TestInvalidateBlock(t *testing.T) {
+	// aerospike
+	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
+	require.NoError(t, err, "Failed to setup Aerospike container")
+	parsedURL, err := url.Parse(utxoStoreURL)
+	require.NoError(t, err, "Failed to parse UTXO store URL")
+	t.Cleanup(func() {
+		_ = teardown()
+	})
+
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "docker.host.teranode1.daemon",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.UtxoStore.UtxoStore = parsedURL
+		},
 	})
 	defer node1.Stop(t, true)
 
-	_, err := node1.CallRPC(node1.Ctx, "generate", []any{3})
+	_, err = node1.CallRPC(node1.Ctx, "generate", []any{3})
 	require.NoError(t, err)
 
 	node1BestBlockHeader, node1BestBlockHeaderMeta, err := node1.BlockchainClient.GetBestBlockHeader(t.Context())

@@ -19,6 +19,7 @@ import (
 // MockBlobStore implements blob.Store interface for testing
 type MockBlobStore struct {
 	mock.Mock
+	setFromReaderHandler func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error
 }
 
 func (m *MockBlobStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -47,7 +48,10 @@ func (m *MockBlobStore) Set(ctx context.Context, key []byte, fileType fileformat
 }
 
 func (m *MockBlobStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
-	args := m.Called(ctx, key, fileType, reader, fileOptions)
+	if m.setFromReaderHandler != nil {
+		return m.setFromReaderHandler(ctx, key, fileType, reader, fileOptions...)
+	}
+	args := m.Called(ctx, key, fileType, "reader", fileOptions)
 	return args.Error(0)
 }
 
@@ -79,13 +83,13 @@ func (m *MockBlobStore) SetCurrentBlockHeight(height uint32) {
 func setupMockForSuccess(mockStore *MockBlobStore, ctx context.Context, key []byte, fileType fileformat.FileType) {
 	// File doesn't exist initially
 	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
-	// SetFromReader succeeds and properly handles the reader
-	mockStore.On("SetFromReader", ctx, key, fileType, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-		reader := args.Get(3).(io.ReadCloser)
+	// SetFromReader succeeds and properly handles the reader - use custom handler to avoid reflection race
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
 		// Read all data from the reader to simulate normal behavior
 		_, _ = io.ReadAll(reader)
 		_ = reader.Close()
-	}).Return(nil)
+		return nil
+	}
 	// SetDAH is called during Close() if Close() succeeds
 	mockStore.On("SetDAH", ctx, key, fileType, uint32(0), mock.Anything).Return(nil).Maybe()
 	// waitUntilFileIsAvailable calls Exists repeatedly until file exists
@@ -95,8 +99,12 @@ func setupMockForSuccess(mockStore *MockBlobStore, ctx context.Context, key []by
 func setupMockForBasicOperation(mockStore *MockBlobStore, ctx context.Context, key []byte, fileType fileformat.FileType) {
 	// File doesn't exist initially
 	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
-	// SetFromReader succeeds
-	mockStore.On("SetFromReader", ctx, key, fileType, mock.Anything, mock.Anything).Return(nil)
+	// SetFromReader succeeds - use custom handler to avoid reflection race
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+		_, _ = io.ReadAll(reader)
+		_ = reader.Close()
+		return nil
+	}
 	// No SetDAH or waitUntilFileIsAvailable expectations for tests that don't call Close()
 }
 
@@ -219,7 +227,12 @@ func TestNewFileStorer_SetFromReaderError(t *testing.T) {
 
 	// Setup expectations - file doesn't exist, but SetFromReader fails
 	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
-	mockStore.On("SetFromReader", ctx, key, fileType, mock.Anything, mock.Anything).Return(expectedError)
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+		// Drain the pipe to prevent blocking, even though we're returning an error
+		_, _ = io.ReadAll(reader)
+		_ = reader.Close()
+		return expectedError
+	}
 	mockStore.On("SetDAH", ctx, key, fileType, uint32(0), mock.Anything).Return(nil).Maybe()
 	mockStore.On("Exists", ctx, key, fileType).Return(true, nil).Maybe()
 
@@ -275,42 +288,55 @@ func TestWrite_Success(t *testing.T) {
 func TestWrite_WithReaderError(t *testing.T) {
 	ctx := createTestContext()
 	logger := ulogger.TestLogger{}
-	tSettings := createTestSettings()
+	// Use a very small buffer (1 byte) to force immediate flushing
+	tSettings := &settings.Settings{
+		Block: settings.BlockSettings{
+			UTXOPersisterBufferSize: "1",
+		},
+	}
 	mockStore := &MockBlobStore{}
 	key := createTestKey()
 	fileType := fileformat.FileTypeUtxoSet
 	expectedError := errors.NewError("reader error")
 
-	// Setup expectations - file doesn't exist, but reader fails
+	// Setup expectations - file doesn't exist, but reader fails during reading
 	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
-	mockStore.On("SetFromReader", ctx, key, fileType, mock.Anything, mock.Anything).Return(expectedError)
-	mockStore.On("SetDAH", ctx, key, fileType, uint32(0), mock.Anything).Return(nil).Maybe()
-	mockStore.On("Exists", ctx, key, fileType).Return(true, nil).Maybe()
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+		// Read only a small amount before returning error to simulate failure during read
+		buf := make([]byte, 5)
+		_, _ = reader.Read(buf)
+		_ = reader.Close()
+		return expectedError
+	}
 
 	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
 	require.NoError(t, err)
 
-	// First write may succeed or fail depending on race conditions with the background goroutine
-	// On fast systems (CI), the error may be set before the first write
-	// On slow systems, the error may be set after the first write
+	// First write may succeed, partially succeed with pipe error, or fail with reader error
+	// depending on race conditions with the background goroutine
 	testData := []byte("test data")
 	n, writeErr := fs.Write(testData)
 
-	// Either the write succeeded (n == len(testData)) or it failed with the reader error (n == 0)
-	// Both are valid outcomes due to the race between write and background error
-	if writeErr == nil {
-		assert.Equal(t, len(testData), n, "If write succeeds, it should write all bytes")
+	// Three possible outcomes due to the race between write and background error:
+	// 1. Write fully succeeds (n == len(testData), err == nil)
+	// 2. Write partially succeeds with pipe error (0 < n < len(testData), err != nil)
+	// 3. Write fails with reader error already set (n == 0, err == readerError)
+	if writeErr != nil {
+		// Either a partial write with pipe error, or reader error already set
+		assert.GreaterOrEqual(t, n, 0, "Bytes written should be non-negative")
+		assert.LessOrEqual(t, n, len(testData), "Bytes written should not exceed data length")
 	} else {
-		assert.Equal(t, 0, n, "If write fails, it should write 0 bytes")
-		assert.True(t, errors.Is(writeErr, expectedError), "Write error should be the reader error")
+		assert.Equal(t, len(testData), n, "If write succeeds, it should write all bytes")
 	}
 
 	// Wait for background error to be set (if not already set)
 	time.Sleep(100 * time.Millisecond)
 
 	// Subsequent write should definitely return the reader error now
+	// The reader error should be set after the background goroutine completes
 	n2, err2 := fs.Write([]byte("more data"))
 	assert.Equal(t, 0, n2, "Subsequent write should return 0 bytes")
+	assert.True(t, err2 != nil, "Subsequent write should return an error")
 	assert.True(t, errors.Is(err2, expectedError), "Subsequent write should return the reader error")
 
 	// Clean up
@@ -391,11 +417,11 @@ func TestClose_FlushError(t *testing.T) {
 
 	// Setup basic mocks for flush error test - don't read from reader to simulate timing issues
 	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
-	mockStore.On("SetFromReader", ctx, key, fileType, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
 		// Don't consume the reader data to simulate the flush error scenario
-		reader := args.Get(3).(io.ReadCloser)
 		_ = reader.Close()
-	}).Return(nil)
+		return nil
+	}
 	mockStore.On("SetDAH", ctx, key, fileType, uint32(0), mock.Anything).Return(nil).Maybe()
 	mockStore.On("Exists", ctx, key, fileType).Return(true, nil).Maybe()
 
@@ -430,7 +456,11 @@ func TestClose_ReaderError(t *testing.T) {
 
 	// Setup expectations - reader fails
 	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
-	mockStore.On("SetFromReader", ctx, key, fileType, mock.Anything, mock.Anything).Return(readerError)
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+		_, _ = io.ReadAll(reader)
+		_ = reader.Close()
+		return readerError
+	}
 
 	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
 	require.NoError(t, err)
@@ -457,11 +487,11 @@ func TestClose_SetDAHError(t *testing.T) {
 
 	// Setup mocks for SetDAH error test - expect SetDAH to fail
 	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
-	mockStore.On("SetFromReader", ctx, key, fileType, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-		reader := args.Get(3).(io.ReadCloser)
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
 		_, _ = io.ReadAll(reader)
 		_ = reader.Close()
-	}).Return(nil)
+		return nil
+	}
 	mockStore.On("SetDAH", ctx, key, fileType, uint32(0), mock.Anything).Return(dahError)
 	mockStore.On("Exists", ctx, key, fileType).Return(true, nil).Maybe()
 

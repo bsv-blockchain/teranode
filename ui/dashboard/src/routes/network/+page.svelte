@@ -196,9 +196,11 @@
     if (a.best_block_hash !== b.best_block_hash) return false
     if (a.version !== b.version) return false
     if (a.fsm_state !== b.fsm_state) return false
-    if (a.tx_count_in_assembly !== b.tx_count_in_assembly) return false
+    if (a.tx_count !== b.tx_count) return false
+    if (a.subtree_count !== b.subtree_count) return false
     if (a.uptime !== b.uptime) return false
     if (a.listen_mode !== b.listen_mode) return false
+    if (a.storage !== b.storage) return false
     if (a.client_name !== b.client_name) return false
     if (a.miner_name !== b.miner_name) return false
     if (a.start_time !== b.start_time) return false

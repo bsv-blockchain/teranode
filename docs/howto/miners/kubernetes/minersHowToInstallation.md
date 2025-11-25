@@ -1,6 +1,6 @@
 # How to Install Teranode with Kubernetes Helm
 
-Last modified: 28-Jul-2025
+Last modified: 29-October-2025
 
 ## Index
 
@@ -30,11 +30,18 @@ Before you begin, ensure you have the following tools installed and configured:
 - [Minikube](https://minikube.sigs.k8s.io/docs/start/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [Helm](https://helm.sh/docs/intro/install/)
-- [AWS CLI](https://aws.amazon.com/cli/)
 
 Additionally, ensure you have a storage provider capable of providing ReadWriteMany (RWX) storage. As an example, this guide includes setting up an NFS server via Docker for this purpose.
 
 ![miniKubeOperatorPrerequisites.svg](img/mermaid/miniKubeOperatorPrerequisites.svg)
+
+## Download the Teranode source code
+
+```bash
+cd $YOUR_WORKING_DIR
+git clone git@github.com:bsv-blockchain/teranode.git
+cd teranode
+```
 
 ## Deployment with Minikube
 
@@ -102,34 +109,6 @@ docker network connect minikube nfs-server
 kubectl apply -f deploy/kubernetes/nfs/
 ```
 
-#### ARM-based Systems
-
-For arm based systems, you can use this variant:
-
-```bash
-docker volume create nfs-volume
-
-docker run -d --name nfs-server --privileged \
-    -v nfs-volume:/minikube-storage \
-    alpine:latest \
-    sh -c "apk add --no-cache nfs-utils && \
-        mkdir -p /minikube-storage && \
-        chmod 777 /minikube-storage && \
-        echo '/minikube-storage *(rw,sync,no_subtree_check,no_root_squash,insecure,fsid=0)' > /etc/exports && \
-        exportfs -r && \
-        rpcbind && \
-        rpc.statd && \
-        rpc.nfsd 8 && \
-        rpc.mountd && \
-        tail -f /dev/null"
-
-# connect the nfs-server to the minikube network
-docker network connect minikube nfs-server
-
-# create the PersistentVolume
-kubectl apply -f deploy/kubernetes/nfs/
-```
-
 ### Load Teranode Images
 
 Pull and load the required Teranode images into Minikube:
@@ -145,21 +124,21 @@ You can find the latest available version published on GitHub Container Registry
 
 ```bash
 # Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)
-export OPERATOR_VERSION=v0.5.5
-export TERANODE_VERSION=v0.10.8
-export ECR_REGISTRY=ghcr.io/bsv-blockchain
+export OPERATOR_VERSION=v0.1.3
+export TERANODE_VERSION=v0.12.4
+export GHCR_REGISTRY=ghcr.io/bsv-blockchain
 ```
 
 #### Load Images into Minikube
 
 ```bash
 # Load Teranode Operator
-docker pull $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
-minikube image load $ECR_REGISTRY/teranode-operator:$OPERATOR_VERSION
+docker pull $GHCR_REGISTRY/teranode-operator:$OPERATOR_VERSION
+minikube image load $GHCR_REGISTRY/teranode-operator:$OPERATOR_VERSION
 
 # Load Teranode Public
-docker pull $ECR_REGISTRY/teranode:$TERANODE_VERSION
-minikube image load $ECR_REGISTRY/teranode:$TERANODE_VERSION
+docker pull $GHCR_REGISTRY/teranode:$TERANODE_VERSION
+minikube image load $GHCR_REGISTRY/teranode:$TERANODE_VERSION
 ```
 
 ### Deploy Teranode
@@ -169,8 +148,10 @@ The Teranode Operator manages the lifecycle of Teranode instances:
 #### Install Teranode Operator
 
 ```bash
+# Install CRDs first
+kubectl apply --server-side -f https://raw.githubusercontent.com/bsv-blockchain/teranode-operator/$OPERATOR_VERSION/deploy/crds.yaml
 # Install operator
-helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/teranode-operator \
+helm upgrade --install teranode-operator oci://ghcr.io/bsv-blockchain/helm/teranode-operator \
     -n teranode-operator \
     -f deploy/kubernetes/teranode/teranode-operator.yaml
 ```
@@ -184,15 +165,46 @@ kubectl apply -f deploy/kubernetes/teranode/teranode-configmap.yaml -n teranode-
 kubectl apply -f deploy/kubernetes/teranode/teranode-cr.yaml -n teranode-operator
 ```
 
+**Network Configuration:**
+
+By default, this configuration deploys Teranode to connect to the **teratestnet** network. To connect to a different network:
+
+1. Edit `deploy/kubernetes/teranode/teranode-configmap.yaml` and change the `network` setting:
+
+    - For BSV testnet: `network: "testnet"`
+    - For BSV mainnet: `network: "mainnet"`
+
+2. For **testnet** or **mainnet**, you must enable the legacy service in `deploy/kubernetes/teranode/teranode-cr.yaml`:
+
+    ```yaml
+    legacy:
+      enabled: true
+      spec:
+        deploymentOverrides:
+          imagePullPolicy: Never
+          replicas: 1
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+    ```
+
+3. Apply the updated configuration:
+
+    ```bash
+    kubectl apply -f deploy/kubernetes/teranode/teranode-configmap.yaml -n teranode-operator
+    kubectl apply -f deploy/kubernetes/teranode/teranode-cr.yaml -n teranode-operator
+    ```
+
 #### Start Syncing Process
 
-A fresh Teranode starts up in IDLE state by default. To start syncing from the legacy network, you can run:
+A fresh Teranode starts up in IDLE state by default. To start syncing from the network, you can run:
 
 ```bash
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate running
 ```
 
-To know more about the syncing process, please refer to the [Teranode Sync Guide](../../../howto/miners/minersHowToSyncTheNode.md)
+To know more about the syncing process, please refer to the [Teranode Sync Guide](minersHowToSyncTheNode.md)
 
 ## Verifying the Deployment
 
@@ -223,8 +235,13 @@ For production deployments, consider:
 
 An example CR for a mainnet deployment is available in [kubernetes/teranode/teranode-cr-mainnet.yaml](https://github.com/bsv-blockchain/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml).
 
+## Resetting Teranode
+
+If you need to reset your Teranode deployment, see the [How to Reset Teranode](minersHowToResetTeranode.md) guide for complete instructions on cleaning up Aerospike, PostgreSQL, and persistent volumes.
+
 ## Other Resources
 
 - [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
-- [Teranode Sync Guide](../../../howto/miners/minersHowToSyncTheNode.md)
-- [How-To Configure the Node.md](minersHowToConfigureTheNode.md)
+- [Teranode Sync Guide](minersHowToSyncTheNode.md)
+- [How to Reset Teranode](minersHowToResetTeranode.md)
+- [How-To Configure the Node](minersHowToConfigureTheNode.md)

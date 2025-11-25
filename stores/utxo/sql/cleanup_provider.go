@@ -31,7 +31,7 @@ func (s *Store) GetCleanupService() (cleanup.Service, error) {
 	maxJobHistory := 10
 
 	// Create a new cleanup service
-	cleanupService, err := sqlcleanup.NewService(sqlcleanup.Options{
+	cleanupService, err := sqlcleanup.NewService(s.settings, sqlcleanup.Options{
 		Logger:         s.logger,
 		DB:             s.db,
 		MaxJobsHistory: maxJobHistory,

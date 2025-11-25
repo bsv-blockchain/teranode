@@ -138,7 +138,7 @@ URL /rpc
     Params
       []
     Result
-      "Teranode server stopping" // A message indicating the node is stopping
+      "bsvd stopping." // A message indicating the node is stopping
 
   Method version // Returns version information about the server.
     Params
@@ -275,6 +275,18 @@ URL /rpc
       "0200000001a0962f8bb905715ddb0b3232c7f82f5ef9f2311b900ba1443c6edbdb0769e60a0000000000ffffffff0140420f00000000001976a914ae56cbe296ec9035fc4a284b6a42555abb27cb5a88ac00000000" // When verbose=false
     // Note: Retrieves transactions from both mempool and blockchain. Returns error if transaction not found.
 
+  Method getrawmempool // Returns transaction IDs being processed for block assembly.
+    Params
+      [
+        true // Verbose output (true=detailed info, false=array of txids), default=false
+      ]
+    Result
+      [
+        "a08e6907dbdb6e3c44a10b901b31f2f95e2ff8c732320bdb5d7105b98b2f96a0",
+        "b19f7805dbcd4e809887ecfd6e93f482c875fe849c6766f83f574679ef2bbef1"
+      ]
+    // Note: Returns transactions from Teranode's subtree-based block assembly system, not a traditional mempool
+    // The method name is kept for Bitcoin Core compatibility but operates on Teranode's subtree architecture
 
   # Mining Commands
 
@@ -288,7 +300,8 @@ URL /rpc
         "currentblocktx": 100, // The last block transaction
         "difficulty": 21865558044610.55, // The current difficulty
         "networkhashps": 185700706053323, // The network hashes per second
-        "pooledtx": 10 // The size of the mempool
+        "errors": "", // Current errors
+        "chain": "main" // Current network name (main, test, regtest)
       }
 
   Method getminingcandidate // Returns data needed to construct a block to work on.

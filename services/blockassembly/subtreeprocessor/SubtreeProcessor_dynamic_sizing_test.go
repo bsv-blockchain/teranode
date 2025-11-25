@@ -402,7 +402,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			hash := chainhash.Hash{}
 			copy(hash[:], []byte{byte(i)})
-			node := subtreepkg.SubtreeNode{
+			node := subtreepkg.Node{
 				Hash:        hash,
 				Fee:         100,
 				SizeInBytes: 250,
@@ -448,7 +448,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			hash := chainhash.Hash{}
 			copy(hash[:], []byte{byte(i + 10)})
-			node := subtreepkg.SubtreeNode{
+			node := subtreepkg.Node{
 				Hash:        hash,
 				Fee:         100,
 				SizeInBytes: 250,
@@ -478,7 +478,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 
 		hash := chainhash.Hash{}
 		copy(hash[:], []byte{byte(20)})
-		node := subtreepkg.SubtreeNode{
+		node := subtreepkg.Node{
 			Hash:        hash,
 			Fee:         100,
 			SizeInBytes: 250,

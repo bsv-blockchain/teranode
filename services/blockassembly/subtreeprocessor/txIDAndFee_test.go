@@ -15,7 +15,7 @@ import (
 func TestNewTxIDAndFee(t *testing.T) {
 	// Create a test node
 	hash := chainhash.HashH([]byte("test-tx"))
-	node := subtreepkg.SubtreeNode{
+	node := subtreepkg.Node{
 		Hash:        hash,
 		Fee:         1000,
 		SizeInBytes: 500,
@@ -39,17 +39,17 @@ func TestTxIDAndFeeBatch(t *testing.T) {
 	assert.Equal(t, 3, cap(batch.txs), "Batch capacity should be 3")
 
 	// Create test transactions
-	tx1 := NewTxIDAndFee(subtreepkg.SubtreeNode{
+	tx1 := NewTxIDAndFee(subtreepkg.Node{
 		Hash:        chainhash.HashH([]byte("tx1")),
 		Fee:         100,
 		SizeInBytes: 200,
 	})
-	tx2 := NewTxIDAndFee(subtreepkg.SubtreeNode{
+	tx2 := NewTxIDAndFee(subtreepkg.Node{
 		Hash:        chainhash.HashH([]byte("tx2")),
 		Fee:         200,
 		SizeInBytes: 300,
 	})
-	tx3 := NewTxIDAndFee(subtreepkg.SubtreeNode{
+	tx3 := NewTxIDAndFee(subtreepkg.Node{
 		Hash:        chainhash.HashH([]byte("tx3")),
 		Fee:         300,
 		SizeInBytes: 400,
@@ -94,7 +94,7 @@ func TestTxIDAndFeeBatchConcurrency(t *testing.T) {
 			defer wg.Done()
 
 			// Create a unique transaction
-			tx := NewTxIDAndFee(subtreepkg.SubtreeNode{
+			tx := NewTxIDAndFee(subtreepkg.Node{
 				Hash:        chainhash.HashH([]byte("tx-concurrent-" + strconv.Itoa(id))),
 				Fee:         uint64(id * 100),
 				SizeInBytes: uint64(id * 200),

@@ -37,6 +37,7 @@ swagger:model CheckBlockSubtreesRequest
 | ----- | ---- | ----- | ----------- |
 | block | [bytes](#bytes) |  | Block containing the subtrees to be checked |
 | base_url | [string](#string) |  | Endpoint for retrieving missing transaction data |
+| peer_id | [string](#string) |  | P2P peer identifier used for peer reputation tracking |
 
 
 
@@ -112,7 +113,7 @@ swagger:model HealthResponse
 | ----- | ---- | ----- | ----------- |
 | ok | [bool](#bool) |  | Indicates if the service is operating normally |
 | details | [string](#string) |  | Provides additional context about the service health status |
-| timestamp | [google.protobuf.Timestamp](#google.protobuf.Timestamp) |  | Records when the health check was performed |
+| timestamp | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Records when the health check was performed |
 
 
 
@@ -132,7 +133,7 @@ Provides gRPC services for validating blockchain subtrees. The service exposes e
 | ----------- | ------------ | ------------- | ------------|
 | HealthGRPC | [EmptyMessage](#EmptyMessage) | [HealthResponse](#HealthResponse) | Checks the service's health status. It takes an empty request message and returns a response indicating the service's health. |
 | CheckSubtreeFromBlock | [CheckSubtreeFromBlockRequest](#CheckSubtreeFromBlockRequest) | [CheckSubtreeFromBlockResponse](#CheckSubtreeFromBlockResponse) | Validates a subtree within a specified block in the blockchain. It takes a request containing the subtree's merkle root hash and block details, returning a response indicating the subtree's validity status. |
-| CheckBlockSubtrees | [CheckBlockSubtreesRequest](#CheckBlockSubtreesRequest) | [CheckBlockSubtreesResponse](#CheckBlockSubtreesResponse) | Validates all subtrees within a block. Takes a request containing the block data and returns validation results for all subtrees. |
+| CheckBlockSubtrees | [CheckBlockSubtreesRequest](#CheckBlockSubtreesRequest) | [CheckBlockSubtreesResponse](#CheckBlockSubtreesResponse) | Validates all subtrees within a block. |
 
  <!-- end services -->
 

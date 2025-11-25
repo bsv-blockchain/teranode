@@ -37,6 +37,18 @@ func (s *SQL) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetChainTips")
 	defer deferFn()
 
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to be consistent with other operations
+	cacheID := chainhash.HashH([]byte("GetChainTips"))
+	cacheOp := s.responseCache.Begin(cacheID)
+
+	cached := cacheOp.Get()
+	if cached != nil {
+		if tips, ok := cached.Value().([]*model.ChainTip); ok {
+			return tips, nil
+		}
+	}
+
 	// First, get the best block (main chain tip) to determine which is active
 	bestHeader, _, err := s.GetBestBlockHeader(ctx)
 	if err != nil {
@@ -136,6 +148,9 @@ func (s *SQL) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 	if err := rows.Err(); err != nil {
 		return nil, errors.NewStorageError("error iterating chain tip rows", err)
 	}
+
+	// Cache the result in response cache
+	cacheOp.Set(chainTips, s.cacheTTL)
 
 	return chainTips, nil
 }

@@ -2,7 +2,7 @@
 
 The Subtrees are an innovation aimed at improving the scalability and real-time processing capabilities of the blockchain system.
 
-### Structure
+## Structure
 
 The concept of subtrees is a distinct feature not found in the BTC design.
 
@@ -17,20 +17,20 @@ Here's a table documenting the structure of the `Subtree` type:
 
 | Field            | Type                  | Description                                                                              |
 |------------------|-----------------------|------------------------------------------------------------------------------------------|
-| Height           | int                   | The height of the subtree within the blockchain.                                         |
+| Height           | int                   | The height of the Merkle tree (number of levels). Calculated as ceil(log2(number of nodes)). For 1,048,576 nodes, height = 20. |
 | Fees             | uint64                | Total fees associated with the transactions in the subtree.                              |
 | SizeInBytes      | uint64                | The size of the subtree in bytes.                                                        |
-| FeeHash          | chainhash.Hash        | Hash representing the combined fees of the subtree.                                      |
+| FeeHash          | chainhash.Hash        | Hash representing the combined fees of the subtree. **Note:** This field is currently unused. |
 | Nodes            | []SubtreeNode         | An array of `SubtreeNode` objects, representing individual "nodes" within the subtree.   |
-| ConflictingNodes | []chainhash.Hash      | List of hashes representing nodes that conflict, requiring checks during block assembly. |
+| ConflictingNodes | []chainhash.Hash      | List of transaction hashes that have UTXO conflicts (double-spend attempts). These transactions are flagged during validation and require special handling during block assembly to ensure only one conflicting transaction is included. |
 
-Here, a `SubtreeNode is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
+Here, a `SubtreeNode` is a data structure representing a transaction hash, a fee, and the size in bytes of said TX.
 
-Note - For subtree files in the `subtree-store` S3 buckets, each subtree has a size of 48MB.
+### Subtree Storage and Transfer
 
-##### Subtree Composition
+#### Storage Format (48 MB per subtree)
 
-Each subtree consists of:
+Each subtree file stored in the `subtree-store` buckets contains full node data. The structure consists of:
 
 - root hash: 32 bytes
 - fees: 8 bytes (uint64)
@@ -40,31 +40,40 @@ Each subtree consists of:
 - numberOfConflictingNodes: 8 bytes (uint64)
 - conflictingNodes: 32 bytes per conflicting node
 
-##### Calculation:
-```
+**Size Calculation:**
 
+```text
 Fixed header: 32 + 8 + 8 + 8 + 8 = 64 bytes
+Per transaction node: 48 bytes (hash:32 + fee:8 + size:8)
 
-Additional - Per transaction node: 48 bytes
+For 1,048,576 transactions:
+  Header: 64 bytes
+  Nodes: 1,048,576 × 48 = 50,331,648 bytes
+  Total: ≈ 48 MB
 ```
 
+#### Network Transfer Format (32 MB per subtree)
 
+When nodes request subtrees during catchup operations via the `/subtree/{hash}` endpoint, only transaction hashes are transferred to minimize bandwidth usage:
 
-##### Data Transfer Between Nodes
+- Transaction hash only: 32 bytes per node
 
-However - only 32MB is transferred between the nodes. Each subtree transfer includes:
+**Transfer Size Calculation:**
 
-- hash: 32 bytes
+```text
+For 1,048,576 transactions:
+  1,048,576 × 32 bytes = 33,554,432 bytes = 32 MB exactly
 ```
-1024 * 1024 * (32) = 32MB
-```
 
+This optimization reduces network transfer by 33% compared to sending full node data. The receiving node reconstructs the full subtree structure by setting fees and sizes to zero initially, which are later populated during validation.
 
 ### Efficiency
 
-Subtrees are broadcast every second (assuming a baseline throughput of 1M transactions per second), making data propagation more continuous rather than batched every 10 minutes. Although blocks are still created every 10 minutes, subtrees are broadcast every second.
+Subtrees are created and broadcast when they reach their configured size (default: 1,048,576 transactions via the `InitialMerkleItemsPerSubtree` setting in `settings/settings.go`). The size dynamically adjusts based on transaction volume and utilization patterns. At a baseline throughput of 1 million transactions per second, this results in approximately one subtree per second, though actual timing varies with network load.
 
-1. Broadcasting subtrees at this high frequency allows receiving nodes to validate batches quickly and continuously, essentially "pre-approving" them for inclusion in a block.
+This approach makes data propagation more continuous rather than batched every 10 minutes. Although blocks are still created every 10 minutes, subtrees are created and broadcast as soon as they are full.
+
+1. Creating subtrees at this high frequency allows receiving nodes to validate batches quickly and continuously, essentially "pre-approving" them for inclusion in a block.
 
 2. This contrasts with the BTC design, where a new block and its transactions are broadcast approximately every 10 minutes after being confirmed by miners.
 

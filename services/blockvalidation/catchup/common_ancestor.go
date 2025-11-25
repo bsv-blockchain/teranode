@@ -168,7 +168,6 @@ func (caf *CommonAncestorFinder) FindBestCommonAncestor(
 	remoteHeaders []*model.BlockHeader,
 	maxDepth int,
 ) (*CommonAncestorResult, error) {
-
 	if len(remoteHeaders) == 0 {
 		return nil, ErrNoCommonAncestor
 	}

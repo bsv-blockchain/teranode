@@ -13,7 +13,7 @@ import (
 // containing all necessary information for fee-based transaction prioritization and
 // queue management. It serves as both a data container and a node in the lock-free queue.
 type TxIDAndFee struct {
-	node       subtree.SubtreeNode        // The transaction node containing hash and fee information
+	node       subtree.Node               // The transaction node containing hash and fee information
 	txInpoints subtree.TxInpoints         // Slice of parent transaction hashes and their indices
 	time       int64                      // Timestamp of when the transaction was added
 	next       atomic.Pointer[TxIDAndFee] // Pointer to the next transaction in the queue
@@ -36,7 +36,7 @@ type TxIDAndFeeBatch struct {
 //
 // Returns:
 //   - *TxIDAndFee: A new transaction wrapper
-func NewTxIDAndFee(n subtree.SubtreeNode) *TxIDAndFee {
+func NewTxIDAndFee(n subtree.Node) *TxIDAndFee {
 	return &TxIDAndFee{
 		node: n,
 	}

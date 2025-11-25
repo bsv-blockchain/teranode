@@ -1,18 +1,49 @@
 services:
   postgres:
     container_name: postgres
-    image: postgres:latest
+    image: postgres:17
     networks:
       - teranode-network
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: really_strong_password_change_me
       POSTGRES_DB: postgres
+      PGDATA: /var/lib/postgresql/data
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
       - ${DATA_PATH}/postgres:/var/lib/postgresql/data
+    entrypoint: [ "/bin/bash", "-c" ]
+    command: |
+      "
+      cat > /docker-entrypoint-initdb.d/init.sql <<'EOF'
+      CREATE ROLE teranode LOGIN
+        PASSWORD 'teranode'
+        SUPERUSER INHERIT NOCREATEDB NOCREATEROLE NOREPLICATION;
+      GRANT teranode TO postgres;
+      CREATE DATABASE teranode
+        WITH OWNER = teranode
+        ENCODING = 'UTF8'
+        CONNECTION LIMIT = -1;
+      EOF
+      cat > /refresh-collation.sh <<'EOF'
+      #!/bin/bash
+      set -e
+      # Wait for postgres to be ready
+      until pg_isready -U postgres > /dev/null 2>&1; do
+        sleep 1
+      done
+      # Refresh collation version to prevent warnings/errors after postgres image updates
+      # When postgres updates to a newer glibc version, the collation version changes
+      # and existing databases need to be refreshed to avoid index corruption
+      psql -U postgres -d postgres -c 'ALTER DATABASE postgres REFRESH COLLATION VERSION;' 2>/dev/null || true
+      psql -U postgres -d teranode -c 'ALTER DATABASE teranode REFRESH COLLATION VERSION;' 2>/dev/null || true
+      EOF
+      chmod +x /refresh-collation.sh
+      # Run collation refresh in background after postgres starts
+      /refresh-collation.sh &
+      exec /usr/local/bin/docker-entrypoint.sh postgres
+      "
     restart: on-failure
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
@@ -43,22 +74,20 @@ services:
 
   kafka-console-shared:
     container_name: kafka-console-shared
-    image: docker.redpanda.com/redpandadata/console:latest
+    image: docker.redpanda.com/redpandadata/console:v3.2.2
     networks:
       - teranode-network
     restart: on-failure
-    entrypoint: /bin/sh
-    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
     environment:
-      CONFIG_FILEPATH: /tmp/config.yml
-      CONSOLE_CONFIG_FILE: |
-        kafka:
-          brokers: ["kafka-shared:9092"]
-          schemaRegistry:
-            enabled: true
-            urls: ["http://kafka-shared:8081"]
+      CONFIG_FILEPATH: /etc/console/config.yml
+    volumes:
+      - ../../../errors/error.proto:/etc/protos/errors/error.proto:ro
+      - ../../../util/kafka/kafka_message/kafka_messages.proto:/etc/protos/kafka_messages.proto:ro
+      - ../../../model/model.proto:/etc/protos/model.proto:ro
+      - ../../../services/propagation/propagation_api/propagation_api.proto:/etc/protos/propagation_api.proto:ro
+      - ../base/kafka-console-config.yml:/etc/console/config.yml:ro
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8082:8080"
     depends_on:
       - kafka-shared
 

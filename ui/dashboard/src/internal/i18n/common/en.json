@@ -114,6 +114,7 @@
           "uptime": "Uptime",
           "miner_name": "Miner",
           "listen_mode": "Mode",
+          "storage": "Storage",
           "receivedAt": "Received at",
           "peer_id": "Peer"
         }
@@ -266,7 +267,8 @@
         "title": "Subtree Details #{{ height }}",
         "tab": {
           "overview": "Overview",
-          "json": "JSON"
+          "json": "JSON",
+          "merkleproof": "Merkle Proof"
         },
         "fields": {
           "block": "Block",
@@ -372,6 +374,7 @@
           "height": "Height",
           "chainwork_score": "Chain Rank",
           "tx_assembly": "TX Assembly",
+          "subtree_assembly": "Subtree Assembly",
           "min_mining_fee": "Min Fee",
           "connected_peers": "Peers",
           "uptime": "Uptime",
@@ -379,6 +382,7 @@
           "size_in_bytes": "Size",
           "miner": "Miner",
           "listen_mode": "Mode",
+          "storage": "Storage",
           "hash": "Latest hash",
           "hash_and_miner": "Latest Block",
           "previousblockhash": "Previous hash",

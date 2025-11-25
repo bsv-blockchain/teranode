@@ -262,6 +262,14 @@ func (c *LocalClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, 
 	return c.store.GetBlockHeadersByHeight(ctx, startHeight, endHeight)
 }
 
+func (c *LocalClient) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
+	return c.store.GetBlocksByHeight(ctx, startHeight, endHeight)
+}
+
+func (c *LocalClient) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error) {
+	return c.store.FindBlocksContainingSubtree(ctx, subtreeHash, maxBlocks)
+}
+
 func (c *LocalClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 	return c.store.InvalidateBlock(ctx, blockHash)
 }

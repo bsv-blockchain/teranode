@@ -242,7 +242,7 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 
 			for i := 0; i < iter; i++ {
 				u := (n * iter) + i
-				q.enqueue(subtree.SubtreeNode{
+				q.enqueue(subtree.Node{
 					Hash:        chainhash.Hash{},
 					Fee:         uint64(u),
 					SizeInBytes: 0,
@@ -273,7 +273,7 @@ func BenchmarkQueue(b *testing.B) {
 	}()
 
 	for i := 0; i < b.N; i++ {
-		q.enqueue(subtree.SubtreeNode{
+		q.enqueue(subtree.Node{
 			Hash:        chainhash.Hash{},
 			Fee:         uint64(i),
 			SizeInBytes: 0,
@@ -286,14 +286,14 @@ func BenchmarkAtomicPointer(b *testing.B) {
 	var v atomic.Pointer[TxIDAndFee]
 
 	t1 := &TxIDAndFee{
-		node: subtree.SubtreeNode{
+		node: subtree.Node{
 			Hash:        chainhash.Hash{},
 			Fee:         1,
 			SizeInBytes: 0,
 		},
 	}
 	t2 := &TxIDAndFee{
-		node: subtree.SubtreeNode{
+		node: subtree.Node{
 			Hash:        chainhash.Hash{},
 			Fee:         1,
 			SizeInBytes: 0,

@@ -548,3 +548,46 @@ export function legacySyncFSM(): Promise<ApiResponse<FSMState>> {
     })
     .catch((error) => handleApiError<FSMState>(error, '/fsm/legacysync'))
 }
+
+// BUMP (BSV Unified Merkle Path) format interfaces
+// Based on BRC-74: https://github.com/bitcoin-sv/BRCs/blob/master/transactions/0074.md
+export interface BUMPNode {
+  offset: number
+  hash?: string
+  txid?: boolean
+  duplicate?: boolean
+}
+
+export type BUMPLevel = BUMPNode[]
+
+export interface MerkleProofData {
+  blockHeight: number
+  path: BUMPLevel[]
+}
+
+// Legacy interface kept for backward compatibility
+export interface LegacyMerkleProofData {
+  txid: string
+  blockHash: string
+  blockHeight: number
+  merkleRoot: string
+  subtreeIndex: number
+  txIndexInSubtree: number
+  subtreeRoot: string
+  subtreeProof: string[]
+  blockProof: string[]
+  completePath: string[]
+  flags: string[]
+}
+
+// Get merkle proof for a transaction
+export function getMerkleProof(txHash: string): Promise<ApiResponse<MerkleProofData>> {
+  return get<MerkleProofData>(`${baseUrl}/merkle_proof/${txHash}/json`)
+    .then((response) => {
+      if (response.ok) {
+        return { ok: true, data: response.data } as ApiResponse<MerkleProofData>
+      }
+      return handleApiError<MerkleProofData>(response.error, `/merkle_proof/${txHash}/json`)
+    })
+    .catch((error) => handleApiError<MerkleProofData>(error, `/merkle_proof/${txHash}/json`))
+}

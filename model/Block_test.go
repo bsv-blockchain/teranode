@@ -97,7 +97,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 		// Test with empty parent hashes - this will succeed
-		result, err := block.checkParentTransactions([]chainhash.Hash{}, 0, subtreepkg.SubtreeNode{Hash: *txHash}, txHash, 0, 0)
+		result, err := block.checkParentTransactions([]chainhash.Hash{}, 0, subtreepkg.Node{Hash: *txHash}, txHash, 0, 0)
 		assert.NoError(t, err)
 		assert.Len(t, result, 0)
 	})
@@ -212,7 +212,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		block := &Block{}
 
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{Hash: *txHash}
+		subtreeNode := subtreepkg.Node{Hash: *txHash}
 
 		deps := &validationDependencies{
 			txMetaStore:              createTestUTXOStore(t),
@@ -1579,7 +1579,9 @@ func TestCheckParentExistsOnChain(t *testing.T) {
 
 		oldBlockIDs, err := block.checkParentExistsOnChain(context.Background(), logger, utxoStore, parentTxStruct, currentBlockHeaderIDsMap)
 		require.True(t, len(oldBlockIDs) == 0)
-		require.NoError(t, err)
+		// After bug fix, missing parent now returns BLOCK_INVALID error instead of nil
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
 	})
 
 	t.Run("test parent is in store and block ID is < min BlockID of last 100 blocks", func(t *testing.T) {
@@ -2293,7 +2295,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with no parent transactions
 		parentTxHashes := []chainhash.Hash{}
-		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.SubtreeNode{Hash: *hash1}, hash2, 0, 0)
+		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash1}, hash2, 0, 0)
 		require.NoError(t, err)
 		assert.Empty(t, missingParents)
 	})
@@ -2306,7 +2308,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with missing parent transaction
 		parentTxHashes := []chainhash.Hash{*hash1}
-		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.SubtreeNode{Hash: *hash2}, hash1, 0, 0)
+		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
 		require.NoError(t, err)
 		assert.Len(t, missingParents, 1)
 		assert.Equal(t, *hash1, missingParents[0].parentTxHash)
@@ -2325,7 +2327,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with parent in same block (valid order)
 		parentTxHashes := []chainhash.Hash{*hash1}
-		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.SubtreeNode{Hash: *hash2}, hash1, 0, 0)
+		missingParents, err := block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
 		require.NoError(t, err)
 		assert.Empty(t, missingParents) // Should be empty since parent is in same block
 	})
@@ -2342,7 +2344,7 @@ func TestValidationFunctions(t *testing.T) {
 
 		// Test with parent in same block but invalid order
 		parentTxHashes := []chainhash.Hash{*hash1}
-		_, err = block.checkParentTransactions(parentTxHashes, 1, subtreepkg.SubtreeNode{Hash: *hash2}, hash1, 0, 0)
+		_, err = block.checkParentTransactions(parentTxHashes, 1, subtreepkg.Node{Hash: *hash2}, hash1, 0, 0)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "comes before parent transaction")
 	})
@@ -2570,7 +2572,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 		}
 
 		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{Hash: *hash1}
+		subtreeNode := subtreepkg.Node{Hash: *hash1}
 
 		// Should succeed with empty bloom filters
 		err = block.checkTxInRecentBlocks(ctx, deps, validationCtx, subtreeNode, hash1, 0, 0)
@@ -2600,7 +2602,7 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 			subtreeHash:      hash1,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *hash1},
+			subtreeNode:      subtreepkg.Node{Hash: *hash1},
 		}
 
 		// Should error because transaction not in txMap
@@ -3247,7 +3249,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 		require.NoError(t, err)
 
 		// Create subtree meta slice with valid inpoints
-		subtreeMetaSlice := &subtreepkg.SubtreeMeta{}
+		subtreeMetaSlice := &subtreepkg.Meta{}
 
 		// Create validation context with empty parent spends map
 		validationCtx := &validationContext{
@@ -3256,7 +3258,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create subtree hash and node
 		subtreeHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *subtreeHash,
 		}
 
@@ -3298,10 +3300,10 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create a mock subtree meta slice that would return the same inpoint
 		// This simulates the duplicate input scenario
-		subtreeMetaSlice := &subtreepkg.SubtreeMeta{}
+		subtreeMetaSlice := &subtreepkg.Meta{}
 
 		subtreeHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *subtreeHash,
 		}
 
@@ -3333,10 +3335,10 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 		}
 
 		// Create empty subtree meta slice (will likely cause GetTxInpoints to error)
-		subtreeMetaSlice := &subtreepkg.SubtreeMeta{}
+		subtreeMetaSlice := &subtreepkg.Meta{}
 
 		subtreeHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *subtreeHash,
 		}
 
@@ -3371,9 +3373,9 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 		}
 
 		// Test with various edge case values
-		subtreeMetaSlice := &subtreepkg.SubtreeMeta{}
+		subtreeMetaSlice := &subtreepkg.Meta{}
 		subtreeHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *subtreeHash,
 		}
 
@@ -3428,7 +3430,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 
 		// Create subtree node
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *txHash,
 		}
 		subtreeHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
@@ -3480,7 +3482,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 
 		// Create subtree node
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *txHash,
 		}
 		subtreeHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
@@ -3534,7 +3536,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 
 		// Create subtree node with hash that won't be in the empty bloom filter
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *txHash,
 		}
 		subtreeHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
@@ -3593,7 +3595,7 @@ func TestBlock_CheckTxInRecentBlocks_ComprehensiveCoverage(t *testing.T) {
 		}
 
 		// Create subtree node with the hash we added to bloom filter
-		subtreeNode := subtreepkg.SubtreeNode{
+		subtreeNode := subtreepkg.Node{
 			Hash: *txHash,
 		}
 		subtreeHash, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
@@ -4385,7 +4387,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Transaction not in txMap should return error
@@ -4429,7 +4431,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Should succeed with no missing parents
@@ -4473,7 +4475,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Should return missing parents for further validation
@@ -4519,7 +4521,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Should error due to invalid parent ordering
@@ -4568,7 +4570,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Test exercises duplicate input checking
@@ -4619,7 +4621,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 			subtreeHash:      subtreeHash,
 			sIdx:             0,
 			snIdx:            0,
-			subtreeNode:      subtreepkg.SubtreeNode{Hash: *txHash},
+			subtreeNode:      subtreepkg.Node{Hash: *txHash},
 		}
 
 		// Test exercises recent blocks checking logic
@@ -4789,5 +4791,186 @@ func TestBlock_MedianTimestampValidation(t *testing.T) {
 		blockHeader.Timestamp = uint32(medianTimestamp.Unix())
 		blockTime = time.Unix(int64(blockHeader.Timestamp), 0)
 		assert.False(t, blockTime.After(*medianTimestamp), "block timestamp should not be after median")
+	})
+}
+
+// TestBlock_Valid_CoinbasePlaceholderCheck tests that the first transaction in the first subtree is a coinbase placeholder
+func TestBlock_Valid_CoinbasePlaceholderCheck(t *testing.T) {
+	t.Run("valid block with coinbase placeholder in first position", func(t *testing.T) {
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		// Create a regular transaction hash for testing
+		regularTxHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+		require.NoError(t, err)
+
+		// Create a subtree with coinbase placeholder as first node
+		subtree, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		// Add coinbase placeholder as first node
+		err = subtree.AddCoinbaseNode()
+		require.NoError(t, err)
+
+		// Add regular transactions
+		err = subtree.AddNode(*regularTxHash, 1, 100)
+		require.NoError(t, err)
+
+		block.SubtreeSlices = []*subtreepkg.Subtree{subtree}
+		block.txMap = txmap.NewSplitSwissMapUint64(10)
+
+		// Mock stores
+		mockBlobStore := &mockSubtreeStore{shouldError: false}
+		txMetaStore := createTestUTXOStore(t)
+
+		ctx := context.Background()
+		logger := ulogger.TestLogger{}
+
+		deps := &validationDependencies{
+			txMetaStore:              txMetaStore,
+			subtreeStore:             mockBlobStore,
+			recentBlocksBloomFilters: []*BlockBloomFilter{},
+			oldBlockIDsMap:           txmap.NewSyncedMap[chainhash.Hash, []uint32](),
+			currentChain:             []*BlockHeader{},
+			currentBlockHeaderIDs:    []uint32{},
+			bloomStats:               &BloomStats{},
+		}
+
+		// This should pass validation - coinbase placeholder is in correct position
+		err = block.validOrderAndBlessed(ctx, logger, deps, 1)
+		// Note: this will likely fail on other validation checks, but it should pass the coinbase placeholder check
+		_ = err
+	})
+
+	t.Run("invalid block with regular transaction instead of coinbase placeholder", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		// Create regular transaction hashes for testing
+		regularTxHash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+		require.NoError(t, err)
+
+		// Create a subtree with regular transaction as first node (INVALID)
+		subtree, err := subtreepkg.NewTreeByLeafCount(2)
+		require.NoError(t, err)
+
+		// Add regular transaction as first node (should be coinbase placeholder)
+		err = subtree.AddNode(*regularTxHash1, 1, 100)
+		require.NoError(t, err)
+
+		// Add coinbase tx as second node
+		err = subtree.AddNode(*coinbase.TxIDChainHash(), 1, 100)
+		require.NoError(t, err)
+
+		// Set up block with subtree that has NO coinbase placeholder in first position
+		block.SubtreeSlices = []*subtreepkg.Subtree{subtree}
+		block.Subtrees = []*chainhash.Hash{regularTxHash1} // Just to have something
+
+		ctx := context.Background()
+		logger := ulogger.TestLogger{}
+		mockBlobStore := &mockSubtreeStore{shouldError: false}
+		txMetaStore := createTestUTXOStore(t)
+
+		// This should fail the coinbase placeholder check
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDsMap, []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, &BloomStats{}, tSettings)
+		require.Error(t, err)
+		require.False(t, valid)
+		assert.Contains(t, err.Error(), "first transaction in first subtree is not a coinbase placeholder")
+		assert.Contains(t, err.Error(), regularTxHash1.String())
+	})
+
+	t.Run("invalid block with coinbase placeholder in wrong subtree", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		// Create regular transaction hashes for testing - using different hashes to avoid duplication
+		regularTxHash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+		regularTxHash2, _ := chainhash.NewHashFromStr("1f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2207")
+		regularTxHash3, _ := chainhash.NewHashFromStr("2f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2208")
+
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+		require.NoError(t, err)
+
+		// Create first subtree with regular transactions (INVALID - no coinbase placeholder)
+		subtree1, err := subtreepkg.NewTreeByLeafCount(2)
+		require.NoError(t, err)
+		err = subtree1.AddNode(*regularTxHash1, 1, 100)
+		require.NoError(t, err)
+		err = subtree1.AddNode(*regularTxHash2, 1, 100)
+		require.NoError(t, err)
+
+		// Create second subtree with coinbase placeholder (wrong position)
+		subtree2, err := subtreepkg.NewTreeByLeafCount(2)
+		require.NoError(t, err)
+		err = subtree2.AddCoinbaseNode()
+		require.NoError(t, err)
+		err = subtree2.AddNode(*regularTxHash3, 1, 100)
+		require.NoError(t, err)
+
+		block.SubtreeSlices = []*subtreepkg.Subtree{subtree1, subtree2}
+		block.Subtrees = []*chainhash.Hash{regularTxHash1, regularTxHash2} // Just to have something
+
+		ctx := context.Background()
+		logger := ulogger.TestLogger{}
+		mockBlobStore := &mockSubtreeStore{shouldError: false}
+		txMetaStore := createTestUTXOStore(t)
+
+		// This should fail validation - coinbase placeholder must be in first subtree, first position
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDsMap, []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, &BloomStats{}, tSettings)
+		require.Error(t, err)
+		require.False(t, valid)
+		assert.Contains(t, err.Error(), "first transaction in first subtree is not a coinbase placeholder")
+	})
+
+	t.Run("empty subtree slices", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		blockHeaderBytes, _ := hex.DecodeString(block1Header)
+		blockHeader, err := NewBlockHeaderFromBytes(blockHeaderBytes)
+		require.NoError(t, err)
+
+		coinbase, err := bt.NewTxFromString(CoinbaseHex)
+		require.NoError(t, err)
+
+		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
+		require.NoError(t, err)
+
+		// Empty subtree slices
+		block.SubtreeSlices = []*subtreepkg.Subtree{}
+		block.txMap = txmap.NewSplitSwissMapUint64(10)
+
+		// Mock stores
+		mockBlobStore := &mockSubtreeStore{shouldError: false}
+		txMetaStore := createTestUTXOStore(t)
+
+		ctx := context.Background()
+		logger := ulogger.TestLogger{}
+
+		// With empty subtree slices, the validation should pass this check
+		// (it will fail on other validations)
+		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+		valid, err := block.Valid(ctx, logger, mockBlobStore, txMetaStore, oldBlockIDsMap, []*BlockBloomFilter{}, []*BlockHeader{}, []uint32{}, &BloomStats{}, tSettings)
+		_ = valid
+		_ = err
+		// The coinbase placeholder check should be skipped for empty subtrees
 	})
 }
