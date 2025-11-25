@@ -543,6 +543,41 @@ func TestReportValidSubtree_GRPCEndpoint(t *testing.T) {
 	assert.Equal(t, int64(1), info.InteractionSuccesses)
 }
 
+// TestReportInvalidSubtree_GRPCEndpoint tests the gRPC endpoint validation
+func TestReportInvalidSubtree_GRPCEndpoint(t *testing.T) {
+	ctx := context.Background()
+
+	// Create P2P service
+	p2pRegistry := NewPeerRegistry()
+	p2pServer := &Server{
+		peerRegistry: p2pRegistry,
+		logger:       ulogger.TestLogger{},
+	}
+
+	// Create a test peer
+	testPeerID, err := peer.Decode("12D3KooWBPqTBhshqRZMKZtqb5sfgckM9JYkWDR7eW5kSPEKwKCW")
+	require.NoError(t, err)
+
+	// Add peer to registry
+	p2pRegistry.Put(testPeerID, "", 0, nil, "")
+
+	// Test valid request returns success
+	req := &p2p_api.ReportInvalidSubtreeRequest{
+		PeerId:      testPeerID.String(),
+		SubtreeHash: "test_subtree_hash_123",
+		Reason:      "reason",
+	}
+	resp, err := p2pServer.ReportInvalidSubtreeHandler(ctx, req)
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+	assert.Equal(t, "invalid subtree reported", resp.Message)
+
+	// Verify peer metrics were updated
+	info, exists := p2pRegistry.Get(testPeerID)
+	require.True(t, exists)
+	assert.Equal(t, int64(1), info.InteractionFailures)
+}
+
 // TestReportValidSubtree_MissingHash tests error handling when subtree hash is missing
 func TestReportValidSubtree_MissingHash(t *testing.T) {
 	ctx := context.Background()

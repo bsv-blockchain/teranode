@@ -53,16 +53,16 @@ func (s *Server) ReportValidSubtreeHandler(_ context.Context, req *p2p_api.Repor
 }
 
 // ReportInvalidSubtreeHandler is a gRPC handler for reporting invalid subtree reception
-func (s *Server) ReportInvalidSubtreeHandler(ctx context.Context, req *p2p_api.ReportInvalidSubtreeRequest) (*p2p_api.ReportValidSubtreeResponse, error) {
+func (s *Server) ReportInvalidSubtreeHandler(ctx context.Context, req *p2p_api.ReportInvalidSubtreeRequest) (*p2p_api.ReportInvalidSubtreeResponse, error) {
 	err := s.reportInvalidSubtree(ctx, req.SubtreeHash, req.PeerId, req.Reason)
 	if err != nil {
-		return &p2p_api.ReportValidSubtreeResponse{
+		return &p2p_api.ReportInvalidSubtreeResponse{
 			Success: false,
 			Message: fmt.Sprintf("failed to report invalid subtree: %v", err),
 		}, errors.WrapGRPC(err)
 	}
 
-	return &p2p_api.ReportValidSubtreeResponse{
+	return &p2p_api.ReportInvalidSubtreeResponse{
 		Success: true,
 		Message: "invalid subtree reported",
 	}, nil

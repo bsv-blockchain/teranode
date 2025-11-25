@@ -1808,48 +1808,19 @@ func (s *Server) ReportInvalidBlock(ctx context.Context, blockHash string, reaso
 }
 
 // reportInvalidSubtree handles invalid subtree reports with explicit peer URL
-func (s *Server) reportInvalidSubtree(ctx context.Context, subtreeHash string, peerURL string, reason string) error {
-	var peerID string
-
-	// First try to get peer ID from the subtreePeerMap (for subtrees received via P2P)
-	peerID, err := s.getPeerFromMap(&s.subtreePeerMap, subtreeHash, "subtree")
-	if err != nil && peerURL != "" {
-		// If not found in map and we have a peer URL, look up the peer ID from the URL
-		peerID = s.getPeerIDFromDataHubURL(peerURL)
-		if peerID == "" {
-			s.logger.Warnf("[reportInvalidSubtree] could not find peer ID for URL %s, subtree %s, reason: %s",
-				peerURL, subtreeHash, reason)
-			return nil // Don't return error, just log and continue
-		}
-		s.logger.Debugf("[reportInvalidSubtree] found peer %s from URL %s for subtree %s",
-			peerID, peerURL, subtreeHash)
-	}
-
-	if peerID == "" {
-		s.logger.Warnf("[reportInvalidSubtree] could not determine peer for subtree %s, reason: %s",
-			subtreeHash, reason)
-		return nil
-	}
-
+func (s *Server) reportInvalidSubtree(ctx context.Context, subtreeHash string, peerID string, reason string) error {
 	// Add ban score to the peer
 	s.logger.Infof("[reportInvalidSubtree] adding ban score to peer %s for invalid subtree %s: %s",
 		peerID, subtreeHash, reason)
 
-	// Record as malicious interaction for reputation tracking
-	s.peerRegistry.RecordMaliciousInteraction(peer.ID(peerID))
-
-	// Create the request to add ban score
-	req := &p2p_api.AddBanScoreRequest{
-		PeerId: peerID,
-		Reason: "invalid_subtree",
-	}
-
-	// Call the AddBanScore method
-	_, err = s.AddBanScore(ctx, req)
+	peerDecoded, err := peer.Decode(peerID)
 	if err != nil {
-		s.logger.Errorf("[reportInvalidSubtree] error adding ban score to peer %s: %v", peerID, err)
-		return errors.NewServiceError("error adding ban score to peer %s", peerID, err)
+		s.logger.Errorf("[reportInvalidSubtree] error decoding peer ID %s: %v", peerID, err)
+		return errors.NewServiceError("error decoding peer ID %s", peerID, err)
 	}
+
+	// Record as malicious interaction for reputation tracking
+	s.peerRegistry.RecordMaliciousInteraction(peerDecoded)
 
 	// Remove the subtree from the map to avoid memory leaks
 	s.subtreePeerMap.Delete(subtreeHash)
