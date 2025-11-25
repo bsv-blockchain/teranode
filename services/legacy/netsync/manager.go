@@ -51,10 +51,11 @@ import (
 )
 
 const (
-	// minInFlightBlocks is the minimum number of blocks that should be
-	// in the request queue for headers-first mode before requesting
-	// more.
-	minInFlightBlocks = 10
+	// defaultMaxInFlightBlocks is the default maximum number of blocks that
+	// should be in the request queue for headers-first mode. This is the
+	// starting value for small blocks, and will be dynamically adjusted down
+	// based on observed block sizes to avoid memory issues with large blocks.
+	defaultMaxInFlightBlocks = 20
 
 	// maxNetworkViolations is the max number of network violations a
 	// sync peer can have before a new sync peer is found.
@@ -251,6 +252,77 @@ type TxHashAndFee struct {
 	Size   uint64
 }
 
+// blockSizeTracker tracks recent block sizes and dynamically adjusts the
+// maximum number of in-flight blocks to avoid memory issues with large blocks.
+type blockSizeTracker struct {
+	mu          sync.RWMutex
+	recentSizes []int64 // last N block sizes in bytes
+	avgSize     int64   // rolling average block size
+	maxSamples  int     // number of samples to track
+}
+
+// newBlockSizeTracker creates a new block size tracker.
+func newBlockSizeTracker(maxSamples int) *blockSizeTracker {
+	return &blockSizeTracker{
+		recentSizes: make([]int64, 0, maxSamples),
+		maxSamples:  maxSamples,
+		avgSize:     0,
+	}
+}
+
+// addBlockSize records a new block size and updates the rolling average.
+func (bst *blockSizeTracker) addBlockSize(size int64) {
+	bst.mu.Lock()
+	defer bst.mu.Unlock()
+
+	bst.recentSizes = append(bst.recentSizes, size)
+	if len(bst.recentSizes) > bst.maxSamples {
+		bst.recentSizes = bst.recentSizes[1:] // keep last maxSamples
+	}
+
+	// Calculate rolling average
+	var sum int64
+	for _, s := range bst.recentSizes {
+		sum += s
+	}
+	if len(bst.recentSizes) > 0 {
+		bst.avgSize = sum / int64(len(bst.recentSizes))
+	}
+}
+
+// getAverageSize returns the current rolling average block size.
+func (bst *blockSizeTracker) getAverageSize() int64 {
+	bst.mu.RLock()
+	defer bst.mu.RUnlock()
+	return bst.avgSize
+}
+
+// calculateMaxInFlightBlocks returns the recommended max in-flight blocks
+// based on average block size. Scales from 20 (small blocks) down to 1 (huge blocks).
+func (bst *blockSizeTracker) calculateMaxInFlightBlocks() int {
+	avgSize := bst.getAverageSize()
+
+	const (
+		MB = 1024 * 1024
+		GB = 1024 * MB
+	)
+
+	switch {
+	case avgSize >= 2*GB:
+		return 1 // huge blocks: only 1 in flight
+	case avgSize >= 1*GB:
+		return 2 // very large blocks
+	case avgSize >= 500*MB:
+		return 3 // large blocks
+	case avgSize >= 200*MB:
+		return 5 // medium blocks
+	case avgSize >= 100*MB:
+		return 10 // smallish blocks
+	default:
+		return 20 // small blocks: default aggressive
+	}
+}
+
 // SyncManager is used to communicate block related messages with peers. The
 // SyncManager is started as by executing Start() in a goroutine. Once started,
 // it selects peers to sync from and starts the initial block download. Once the
@@ -289,10 +361,11 @@ type SyncManager struct {
 	peerStates      *txmap.SyncedMap[*peerpkg.Peer, *peerSyncState]
 
 	// The following fields are used for headers-first mode.
-	headersFirstMode bool
+	headersFirstMode atomic.Bool // accessed from multiple goroutines, must be atomic
 	headerList       *list.List
 	startHeader      *list.Element
 	nextCheckpoint   *chaincfg.Checkpoint
+	blockSizeTracker *blockSizeTracker // tracks block sizes for dynamic in-flight adjustment
 
 	// An optional fee estimator.
 	// feeEstimator *mempool.FeeEstimator
@@ -306,7 +379,7 @@ type SyncManager struct {
 // resetHeaderState sets the headers-first mode state to values appropriate for
 // syncing from a new peer.
 func (sm *SyncManager) resetHeaderState(newestHash *chainhash.Hash, newestHeight int32) {
-	sm.headersFirstMode = false
+	sm.headersFirstMode.Store(false)
 	sm.headerList.Init()
 	sm.startHeader = nil
 
@@ -503,7 +576,7 @@ func (sm *SyncManager) startSync() {
 			return
 		}
 
-		sm.headersFirstMode = true
+		sm.headersFirstMode.Store(true)
 
 		sm.logger.Infof("[startSync] Downloading headers for blocks %d to %d from peer %s", bestBlockHeaderMeta.Height+1, sm.nextCheckpoint.Height, bestPeer.String())
 	} else {
@@ -550,6 +623,13 @@ func (sm *SyncManager) SyncHeight() uint64 {
 	}
 
 	return uint64(sm.topBlock())
+}
+
+// IsHeadersFirstMode returns whether the sync manager is currently in headers-first mode.
+// This is used to avoid serving headers to other peers during checkpoint sync, which
+// can cause significant delays (18s+ per batch) due to database query contention.
+func (sm *SyncManager) IsHeadersFirstMode() bool {
+	return sm.headersFirstMode.Load()
 }
 
 // isSyncCandidate returns whether or not the peer is a candidate to consider
@@ -651,12 +731,12 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	validNetworkSpeed := sm.syncPeerState.validNetworkSpeed(sm.minSyncPeerNetworkSpeed)
 	lastBlockSince := time.Since(sm.syncPeerState.getLastBlockTime())
 
-	sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v), headers-first mode: %v", sm.syncPeer.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime, sm.headersFirstMode)
+	sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v), headers-first mode: %v", sm.syncPeer.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime, sm.headersFirstMode.Load())
 
 	// Don't check network speed during headers-first mode, as we're intentionally
 	// downloading small headers (80 bytes each) rather than full blocks. The peer
 	// may appear slow because we're not requesting much data, not because it's actually slow.
-	isNetworkSpeedViolation := !sm.headersFirstMode && (validNetworkSpeed >= maxNetworkViolations)
+	isNetworkSpeedViolation := !sm.headersFirstMode.Load() && (validNetworkSpeed >= maxNetworkViolations)
 
 	// Check network speed of the sync peer and its last block time. If we're currently
 	// flushing the cache skip this round.
@@ -740,12 +820,12 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 	sm.logger.Infof("Updating sync peer, last block: %v, violations: %v, headers-first mode: %v",
 		sm.syncPeerState.getLastBlockTime(),
 		sm.syncPeerState.getViolations(),
-		sm.headersFirstMode)
+		sm.headersFirstMode.Load())
 
 	// Only disconnect if we have a valid sync peer
 	if sm.syncPeer != nil {
 		// Log current sync state before disconnecting
-		if sm.headersFirstMode {
+		if sm.headersFirstMode.Load() {
 			sm.logger.Debugf("Current header sync state - headerList length: %d, startHeader exists: %v",
 				sm.headerList.Len(), sm.startHeader != nil)
 		}
@@ -771,7 +851,7 @@ func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
 		return // add return to prevent continuing with invalid height
 	}
 
-	if sm.headersFirstMode {
+	if sm.headersFirstMode.Load() {
 		sm.logger.Infof("Resetting header sync state at height %d with hash %v",
 			bestBlockHeightInt32, bestBlockHeader.Hash())
 
@@ -1064,7 +1144,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// properly.
 	isCheckpointBlock := false
 
-	if sm.headersFirstMode {
+	if sm.headersFirstMode.Load() {
 		sm.logger.Debugf("[handleBlockMsg][%s] headers-first mode, checking block", bmsg.blockHash)
 
 		firstNodeEl := sm.headerList.Front()
@@ -1086,6 +1166,19 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// will fail the insert, and thus we'll retry next time we get an inv.
 	state.requestedBlocks.Delete(bmsg.blockHash)
 	sm.requestedBlocks.Delete(bmsg.blockHash)
+
+	// Track block size for dynamic in-flight adjustment during headers-first mode.
+	// This allows us to start aggressive (20 blocks) and automatically reduce
+	// to 1 block when encountering large (>2GB) blocks on mainnet.
+	if sm.headersFirstMode.Load() && bmsg.block != nil {
+		blockSize := int64(bmsg.block.SerializeSize())
+		sm.blockSizeTracker.addBlockSize(blockSize)
+
+		dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
+		avgSize := sm.blockSizeTracker.getAverageSize()
+		sm.logger.Debugf("[handleBlockMsg][%s] Block size: %d bytes, avg: %d bytes, dynamic max in-flight: %d",
+			bmsg.blockHash, blockSize, avgSize, dynamicMax)
+	}
 
 	sm.logger.Debugf("[handleBlockMsg][%s] calling HandleBlockDirect", bmsg.blockHash)
 
@@ -1209,10 +1302,11 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	}
 
 	// This is headers-first mode, so if the block is not a checkpoint
-	// request more blocks using the header list when the request queue is
-	// getting short.
+	// request more blocks using the header list to maintain the pipeline
+	// at the dynamic max limit (adjusts based on block size).
 	if !isCheckpointBlock {
-		if sm.startHeader != nil && state.requestedBlocks.Len() < minInFlightBlocks {
+		dynamicMax := sm.blockSizeTracker.calculateMaxInFlightBlocks()
+		if sm.startHeader != nil && state.requestedBlocks.Len() < dynamicMax {
 			sm.fetchHeaderBlocks()
 		} else if !sm.current() && state.requestedBlocks.Len() == 0 {
 			sm.logger.Debugf("Not current, and no headers to sync to, fetching more headers")
@@ -1262,7 +1356,7 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 	// This is headers-first mode, the block is a checkpoint, and there are
 	// no more checkpoints, so switch to normal mode by requesting blocks
 	// from the block after this one up to the end of the chain (zero hash).
-	sm.headersFirstMode = false
+	sm.headersFirstMode.Store(false)
 	sm.headerList.Init()
 	sm.logger.Infof("Reached the final checkpoint -- switching to normal mode")
 
@@ -1289,15 +1383,26 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		return
 	}
 
-	// Limit batch size to avoid peer processing timeouts during checkpoint sync.
-	// Large checkpoint gaps (e.g., 50k blocks) can cause timeouts when downloading
-	// and processing all blocks at once. Chunk requests to manageable sizes.
-	maxBlocks := maxRequestedBlocks
-	headerListLen := sm.headerList.Len()
-	if headerListLen > 10000 {
-		maxBlocks = 10000
-		sm.logger.Infof("[fetchHeaderBlocks] Header list contains %d blocks, limiting batch to %d blocks to avoid timeout", headerListLen, maxBlocks)
+	// Calculate how many blocks to request to reach the dynamic max limit.
+	// The limit adjusts based on observed block sizes (20 for small, down to 1 for >2GB).
+	peerState, exists := sm.peerStates.Get(sm.syncPeer)
+	if !exists {
+		sm.logger.Warnf("[fetchHeaderBlocks] sync peer state not found")
+		return
 	}
+
+	currentInFlight := peerState.requestedBlocks.Len()
+	dynamicMaxInFlight := sm.blockSizeTracker.calculateMaxInFlightBlocks()
+	maxBlocks := dynamicMaxInFlight - currentInFlight
+	if maxBlocks <= 0 {
+		sm.logger.Debugf("[fetchHeaderBlocks] Already at max in-flight blocks (%d/%d), not requesting more", currentInFlight, dynamicMaxInFlight)
+		return
+	}
+
+	headerListLen := sm.headerList.Len()
+	avgBlockSize := sm.blockSizeTracker.getAverageSize()
+	sm.logger.Debugf("[fetchHeaderBlocks] Header list: %d blocks, in-flight: %d/%d, avg size: %d bytes, requesting: %d more",
+		headerListLen, currentInFlight, dynamicMaxInFlight, avgBlockSize, maxBlocks)
 
 	// Build up a getdata request for the list of blocks the headers
 	// describe.  The size hint will be limited to wire.MaxInvPerMsg by
@@ -1363,7 +1468,7 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 	msg := hmsg.headers
 	numHeaders := len(msg.Headers)
 
-	if !sm.headersFirstMode {
+	if !sm.headersFirstMode.Load() {
 		reason := fmt.Sprintf("Got %d unrequested headers from %s", numHeaders, peer.String())
 		peer.DisconnectWithWarning(reason)
 
@@ -1678,7 +1783,7 @@ func (sm *SyncManager) processInvMsg(i int, iv *wire.InvVect, processInvs bool, 
 	peer.AddKnownInventory(iv)
 
 	// Ignore inventory when we're in headers-first mode.
-	if sm.headersFirstMode {
+	if sm.headersFirstMode.Load() {
 		return
 	}
 
@@ -2043,9 +2148,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		requestedBlocks: expiringmap.New[chainhash.Hash, struct{}](60 * time.Second),   // give peers 60 seconds to respond
 		peerStates:      txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		// progressLogger:  newBlockProgressLogger("Processed", log),
-		msgChan:    make(chan interface{}, maxMsgQueueSize),
-		headerList: list.New(),
-		quit:       make(chan struct{}),
+		msgChan:          make(chan interface{}, maxMsgQueueSize),
+		headerList:       list.New(),
+		blockSizeTracker: newBlockSizeTracker(10), // track last 10 blocks for rolling average
+		quit:             make(chan struct{}),
 		// feeEstimator:            config.FeeEstimator,
 		minSyncPeerNetworkSpeed: config.MinSyncPeerNetworkSpeed,
 		handlerDone:             make(chan struct{}),
