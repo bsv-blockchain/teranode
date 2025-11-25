@@ -105,6 +105,40 @@ Notice that, when catching up, the Block Validator will set the machine state of
 
 During the catchup process, the system tracks invalid blocks. If a block fails validation during catchup, it is marked as invalid in the blockchain store. This prevents invalid blocks from corrupting the chain state and allows the system to avoid reprocessing known invalid blocks. The system also maintains metrics on peer quality to identify and avoid peers that provide invalid blocks.
 
+**Sync Coordination and Peer Selection:**
+
+The catchup process integrates with the P2P service's peer registry and reputation system to select optimal peers for block retrieval:
+
+1. **Peer Selection**: The sync coordinator uses `SelectSyncPeer` to choose the best peer based on:
+    - Reputation score (minimum 20.0 threshold)
+    - Storage mode (full nodes preferred over pruned)
+    - Blockchain height (must be ahead of local node)
+    - Response time history
+    - Recent interaction success rate
+
+2. **Reputation Updates**: Peer reputation is updated based on catchup results:
+    - Successful block retrieval increases reputation
+    - Invalid blocks result in severe reputation penalty (malicious marking)
+    - Timeouts and failures decrease reputation
+
+3. **Peer Rotation**: If a peer consistently fails during catchup:
+    - System automatically rotates to the next best peer
+    - Failed peer enters cooldown period before retry
+    - Exponential backoff for repeated failures
+
+**Performance Optimizations:**
+
+The catchup process includes several performance optimizations:
+
+- **Concurrent Header Fetching**: Block headers are fetched in parallel before full block retrieval
+- **Batch Block Processing**: Multiple blocks are processed in configurable batch sizes
+- **Adaptive Concurrency**: Processing parallelism adjusts based on system load
+- **Smart Peer Selection**: Preferentially uses peers with lowest latency and highest success rates
+
+For configuration of catchup performance settings, see the [Block Validation Settings Reference](../../references/settings/services/blockvalidation_settings.md).
+
+For details on the peer reputation system, see [Peer Registry and Reputation System](../features/peer_registry_reputation.md).
+
 #### 2.2.3. Quick Validation for Checkpointed Blocks
 
 For blocks that are below known checkpoints in the blockchain, the Block Validation service employs an optimized quick validation path that significantly improves synchronization performance. This mechanism is particularly effective during initial blockchain synchronization.
