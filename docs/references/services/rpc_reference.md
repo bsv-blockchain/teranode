@@ -157,6 +157,14 @@ type RPCServer struct {
     // utxoStore provides access to the UTXO (Unspent Transaction Output) database
     // Used for transaction validation and UTXO queries
     utxoStore utxo.Store
+
+    // txStore provides access to the transaction blob store for persisting transactions
+    // Used for storing raw transaction data before validation
+    txStore blob.Store
+
+    // validatorClient provides access to the transaction validator service
+    // Used for synchronous transaction validation in sendrawtransaction RPC
+    validatorClient validator.Interface
 }
 ```
 
@@ -171,10 +179,10 @@ The RPCServer is designed for concurrent operation, employing synchronization me
 ### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI) (*RPCServer, error)
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI, txStore blob.Store, validatorClient validator.Interface) (*RPCServer, error)
 ```
 
-Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, block validation client, UTXO store, and service clients.
+Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, block validation client, UTXO store, transaction store, validator client, and service clients.
 
 This factory function creates a fully configured RPCServer instance, setting up:
 

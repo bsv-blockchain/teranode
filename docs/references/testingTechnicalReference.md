@@ -28,7 +28,7 @@ type TeranodeTestClient struct {
     SettingsContext     string                  // Configuration context
     BlockchainClient    bc.ClientI              // Blockchain service client
     BlockassemblyClient ba.Client               // Block assembly client
-    DistributorClient   distributor.Distributor // Distribution service client
+    PropagationClient   *propagation.Client     // Propagation service client
     ClientBlockstore    *bhttp.HTTPStore        // HTTP client for block storage
     ClientSubtreestore  *bhttp.HTTPStore        // HTTP client for subtree storage
     UtxoStore           *utxostore.Store        // UTXO storage
@@ -94,7 +94,7 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
     // Set up blob stores for block and subtree data
     // Retrieve IP addresses for containers
     // Set up RPC and Asset service URLs
-    // Initialize blockchain, blockassembly and distributor clients
+    // Initialize blockchain, blockassembly and propagation clients
     // Configure UTXO stores and other required connections
     // Connect to necessary services for testing
 }
@@ -298,10 +298,10 @@ func (t *TeranodeTestEnv) setupBlockassemblyClient(node *TeranodeTestClient) err
     // Create and configure block assembly client
 }
 
-// Sets up distributor client for a node
-func (t *TeranodeTestEnv) setupDistributorClient(node *TeranodeTestClient) error {
-    // Initialize gRPC connection to distributor service
-    // Create and configure distributor client
+// Sets up propagation client for a node
+func (t *TeranodeTestEnv) setupPropagationClient(node *TeranodeTestClient) error {
+    // Initialize gRPC connection to propagation service
+    // Create and configure propagation client
 }
 
 // GetMappedPort retrieves the mapped port for a service running in Docker Compose
