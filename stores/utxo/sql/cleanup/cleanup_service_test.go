@@ -8,17 +8,25 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/cleanup"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// createTestSettings creates default settings for testing
+func createTestSettings() *settings.Settings {
+	return &settings.Settings{
+		GlobalBlockHeightRetention: 288, // Default retention
+	}
+}
 
 func TestNewService(t *testing.T) {
 	t.Run("ValidService", func(t *testing.T) {
 		logger := &MockLogger{}
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger:         logger,
 			DB:             db.DB,
 			WorkerCount:    2,
@@ -36,7 +44,7 @@ func TestNewService(t *testing.T) {
 	t.Run("NilLogger", func(t *testing.T) {
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: nil,
 			DB:     db.DB,
 		})
@@ -46,10 +54,24 @@ func TestNewService(t *testing.T) {
 		assert.Contains(t, err.Error(), "logger is required")
 	})
 
+	t.Run("NilSettings", func(t *testing.T) {
+		logger := &MockLogger{}
+		db := NewMockDB()
+
+		service, err := NewService(nil, Options{
+			Logger: logger,
+			DB:     db.DB,
+		})
+
+		assert.Error(t, err)
+		assert.Nil(t, service)
+		assert.Contains(t, err.Error(), "settings is required")
+	})
+
 	t.Run("NilDB", func(t *testing.T) {
 		logger := &MockLogger{}
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     nil,
 		})
@@ -63,7 +85,7 @@ func TestNewService(t *testing.T) {
 		logger := &MockLogger{}
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger:         logger,
 			DB:             db.DB,
 			WorkerCount:    0,  // Should use default
@@ -85,7 +107,7 @@ func TestService_Start(t *testing.T) {
 		}
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -113,7 +135,7 @@ func TestService_UpdateBlockHeight(t *testing.T) {
 		logger := &MockLogger{}
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -127,7 +149,7 @@ func TestService_UpdateBlockHeight(t *testing.T) {
 		logger := &MockLogger{}
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -142,7 +164,7 @@ func TestService_UpdateBlockHeight(t *testing.T) {
 		logger := &MockLogger{}
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -159,7 +181,7 @@ func TestService_GetJobs(t *testing.T) {
 		logger := &MockLogger{}
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -174,7 +196,7 @@ func TestService_GetJobs(t *testing.T) {
 		logger := &MockLogger{}
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -206,7 +228,7 @@ func TestService_processCleanupJob(t *testing.T) {
 			return &MockResult{rowsAffected: 5}, nil
 		}
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -242,7 +264,7 @@ func TestService_processCleanupJob(t *testing.T) {
 		// the error case by testing the logic paths that we know exist in the code
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -281,7 +303,7 @@ func TestService_processCleanupJob(t *testing.T) {
 			return &MockResult{rowsAffected: 1}, nil
 		}
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -307,7 +329,7 @@ func TestDeleteTombstoned(t *testing.T) {
 			return &MockResult{rowsAffected: 5}, nil
 		}
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -326,7 +348,7 @@ func TestDeleteTombstoned(t *testing.T) {
 		}
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -349,7 +371,7 @@ func TestDeleteTombstoned(t *testing.T) {
 			return &MockResult{rowsAffected: 0}, nil
 		}
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -370,7 +392,7 @@ func TestDeleteTombstoned(t *testing.T) {
 			return &MockResult{rowsAffected: 100}, nil
 		}
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -393,7 +415,7 @@ func TestService_IntegrationTests(t *testing.T) {
 
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger:         logger,
 			DB:             db.DB,
 			WorkerCount:    1,
@@ -440,7 +462,7 @@ func TestService_IntegrationTests(t *testing.T) {
 		logger := &MockLogger{}
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -463,7 +485,7 @@ func TestService_EdgeCases(t *testing.T) {
 			return &MockResult{rowsAffected: 1}, nil
 		}
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -489,7 +511,7 @@ func TestService_EdgeCases(t *testing.T) {
 			return &MockResult{rowsAffected: 1}, nil
 		}
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -508,7 +530,7 @@ func TestService_EdgeCases(t *testing.T) {
 
 		db := NewMockDB()
 
-		service, err := NewService(Options{
+		service, err := NewService(createTestSettings(), Options{
 			Logger: logger,
 			DB:     db.DB,
 		})
@@ -534,6 +556,128 @@ func TestService_EdgeCases(t *testing.T) {
 		assert.GreaterOrEqual(t, len(jobs), 1)
 		if len(jobs) > 0 {
 			assert.Equal(t, cleanup.JobStatusCompleted, jobs[0].GetStatus())
+		}
+	})
+}
+
+// TestSQLCleanupWithBlockPersisterCoordination tests SQL cleanup coordination with block persister
+func TestSQLCleanupWithBlockPersisterCoordination(t *testing.T) {
+	t.Run("BlockPersisterBehind_LimitsCleanup", func(t *testing.T) {
+		logger := &MockLogger{}
+		db := NewMockDB()
+
+		// Mock expects query with limited height (not full height)
+		db.ExecFunc = func(query string, args ...interface{}) (sql.Result, error) {
+			assert.Contains(t, query, "DELETE FROM transactions WHERE delete_at_height")
+			// With default retention=288, persister at 50, max safe = 50 + 288 = 338
+			// Cleanup requested 200, since 200 < 338, cleanup proceeds to 200 (no limitation)
+			// To test limitation, persister needs to be far behind. Let's use persister=10, requested=500
+			// Then max safe = 10 + 288 = 298, so 500 would be limited to 298
+			if len(args) > 0 {
+				height := args[0].(uint32)
+				assert.LessOrEqual(t, height, uint32(298), "Cleanup should be limited by persister progress")
+			}
+			return &MockResult{rowsAffected: 5}, nil
+		}
+
+		// Block persister at height 10 (far behind)
+		getPersistedHeight := func() uint32 {
+			return uint32(10)
+		}
+
+		service, err := NewService(createTestSettings(), Options{
+			Logger: logger,
+			DB:     db.DB,
+		})
+		require.NoError(t, err)
+
+		// Set the persisted height getter
+		service.SetPersistedHeightGetter(getPersistedHeight)
+		service.Start(context.Background())
+
+		// Trigger cleanup at 500 - should be limited to 298 (10 + 288)
+		doneCh := make(chan string, 1)
+		err = service.UpdateBlockHeight(500, doneCh)
+		require.NoError(t, err)
+
+		select {
+		case <-doneCh:
+			// Success
+		case <-time.After(2 * time.Second):
+			t.Fatal("Cleanup should complete")
+		}
+	})
+
+	t.Run("BlockPersisterNotRunning_NormalCleanup", func(t *testing.T) {
+		logger := &MockLogger{}
+		db := NewMockDB()
+
+		db.ExecFunc = func(query string, args ...interface{}) (sql.Result, error) {
+			// When persister height = 0, no limitation
+			if len(args) > 0 {
+				height := args[0].(uint32)
+				assert.Equal(t, uint32(100), height, "Should use full cleanup height when persister not running")
+			}
+			return &MockResult{rowsAffected: 5}, nil
+		}
+
+		// Block persister not running
+		getPersistedHeight := func() uint32 {
+			return uint32(0)
+		}
+
+		service, err := NewService(createTestSettings(), Options{
+			Logger: logger,
+			DB:     db.DB,
+		})
+		require.NoError(t, err)
+
+		service.SetPersistedHeightGetter(getPersistedHeight)
+		service.Start(context.Background())
+
+		doneCh := make(chan string, 1)
+		err = service.UpdateBlockHeight(100, doneCh)
+		require.NoError(t, err)
+
+		select {
+		case <-doneCh:
+			// Success
+		case <-time.After(2 * time.Second):
+			t.Fatal("Cleanup should complete")
+		}
+	})
+
+	t.Run("NoGetPersistedHeightSet_NormalCleanup", func(t *testing.T) {
+		logger := &MockLogger{}
+		db := NewMockDB()
+
+		db.ExecFunc = func(query string, args ...interface{}) (sql.Result, error) {
+			// When no getter set, proceed normally
+			if len(args) > 0 {
+				height := args[0].(uint32)
+				assert.Equal(t, uint32(150), height)
+			}
+			return &MockResult{rowsAffected: 5}, nil
+		}
+
+		service, err := NewService(createTestSettings(), Options{
+			Logger: logger,
+			DB:     db.DB,
+		})
+		require.NoError(t, err)
+
+		// Don't set getPersistedHeight - should work normally
+		service.Start(context.Background())
+
+		doneCh := make(chan string, 1)
+		err = service.UpdateBlockHeight(150, doneCh)
+		require.NoError(t, err)
+
+		select {
+		case <-doneCh:
+			// Success
+		case <-time.After(2 * time.Second):
+			t.Fatal("Cleanup should complete")
 		}
 	})
 }

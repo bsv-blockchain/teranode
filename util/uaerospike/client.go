@@ -267,6 +267,12 @@ func (c *Client) BatchOperate(policy *aerospike.BatchPolicy, records []aerospike
 	return c.Client.BatchOperate(policy, records)
 }
 
+// GetConnectionQueueSize returns the size of the connection semaphore.
+// This represents the maximum number of concurrent Aerospike operations allowed.
+func (c *Client) GetConnectionQueueSize() int {
+	return cap(c.connSemaphore)
+}
+
 // CalculateKeySource generates a key source based on the transaction hash, vout, and batch size.
 func CalculateKeySource(hash *chainhash.Hash, vout uint32, batchSize int) []byte {
 	if batchSize <= 0 {

@@ -48,6 +48,7 @@ func CreateTestSettings() *settings.Settings {
 		P2P: settings.P2PSettings{
 			BanThreshold: 100,
 			BanDuration:  24 * time.Hour,
+			EnableNAT:    false, // Disable NAT in tests to prevent data races in libp2p
 		},
 	}
 	return s
@@ -55,21 +56,23 @@ func CreateTestSettings() *settings.Settings {
 
 // CreateTestPeerInfo creates a test peer with specified attributes
 func CreateTestPeerInfo(id peer.ID, height int32, healthy bool, banned bool, dataHubURL string) *PeerInfo {
+	reputationScore := 50.0
+	if !healthy {
+		reputationScore = 15.0 // Low reputation for unhealthy peers
+	}
 	return &PeerInfo{
 		ID:              id,
-		Height:          height,
-		BlockHash:       "test-hash",
+		Height:          uint32(height),
+		BlockHash:       nil, // test-hash
 		DataHubURL:      dataHubURL,
-		IsHealthy:       healthy,
 		IsBanned:        banned,
 		BanScore:        0,
+		ReputationScore: reputationScore,
 		ConnectedAt:     time.Now(),
 		BytesReceived:   0,
 		LastBlockTime:   time.Now(),
 		LastMessageTime: time.Now(),
-		URLResponsive:   dataHubURL != "",
-		LastURLCheck:    time.Now(),
-		LastHealthCheck: time.Now(),
+		Storage:         "full", // Default test peers to full nodes
 	}
 }
 
@@ -100,32 +103,32 @@ func CreateTestPeerInfoList(count int) []*PeerInfo {
 	ids := GenerateTestPeerIDs(count)
 
 	for i := 0; i < count; i++ {
+		reputationScore := 50.0
+		if i%2 != 0 {
+			reputationScore = 15.0 // Low reputation for every other peer
+		}
 		peers[i] = &PeerInfo{
 			ID:              ids[i],
-			Height:          int32(100 + i*10),
-			BlockHash:       "test-hash",
+			Height:          uint32(100 + i*10),
+			BlockHash:       nil, // test-hash
 			DataHubURL:      "",
-			IsHealthy:       i%2 == 0,     // Every other peer is healthy
 			IsBanned:        i >= count-2, // Last two peers are banned
 			BanScore:        i * 10,
+			ReputationScore: reputationScore,
 			ConnectedAt:     time.Now().Add(-time.Duration(i) * time.Minute),
 			BytesReceived:   uint64(i * 1000),
 			LastBlockTime:   time.Now(),
 			LastMessageTime: time.Now(),
-			URLResponsive:   false,
-			LastURLCheck:    time.Now(),
-			LastHealthCheck: time.Now(),
+			Storage:         "full", // Default test peers to full nodes
 		}
 	}
 
 	// Give some peers DataHub URLs
 	if count > 2 {
 		peers[0].DataHubURL = "http://peer0.test"
-		peers[0].URLResponsive = true
 	}
 	if count > 3 {
 		peers[1].DataHubURL = "http://peer1.test"
-		peers[1].URLResponsive = false // Has URL but not responsive
 	}
 
 	return peers
@@ -154,6 +157,7 @@ func SetupTestBlockchain(t *testing.T) *TestBlockchainSetup {
 		P2P: settings.P2PSettings{
 			BanThreshold: 100,
 			BanDuration:  24 * time.Hour,
+			EnableNAT:    false, // Disable NAT in tests to prevent data races in libp2p
 		},
 	}
 
@@ -200,4 +204,42 @@ func (tbs *TestBlockchainSetup) Cleanup() {
 	if tbs.Cancel != nil {
 		tbs.Cancel()
 	}
+}
+
+// CreatePeerWithReputation creates a test peer with specific reputation metrics
+func CreatePeerWithReputation(id peer.ID, reputation float64, successes, failures int64) *PeerInfo {
+	return &PeerInfo{
+		ID:                     id,
+		Height:                 100,
+		BlockHash:              nil, // test-hash
+		DataHubURL:             "http://test.com",
+		IsBanned:               false,
+		BanScore:               0,
+		ReputationScore:        reputation,
+		InteractionAttempts:    successes + failures,
+		InteractionSuccesses:   successes,
+		InteractionFailures:    failures,
+		ConnectedAt:            time.Now(),
+		BytesReceived:          0,
+		LastBlockTime:          time.Now(),
+		LastMessageTime:        time.Now(),
+		Storage:                "full",
+		LastInteractionAttempt: time.Now(),
+		LastInteractionSuccess: time.Now(),
+		AvgResponseTime:        100 * time.Millisecond,
+	}
+}
+
+// SimulateSuccessfulCatchup records multiple successful catchup interactions
+func SimulateSuccessfulCatchup(pr *PeerRegistry, peerID peer.ID, blockCount int) {
+	for i := 0; i < blockCount; i++ {
+		pr.RecordInteractionAttempt(peerID)
+		pr.RecordInteractionSuccess(peerID, time.Duration(50+i)*time.Millisecond)
+	}
+}
+
+// SimulateInvalidFork records malicious behavior from invalid fork
+func SimulateInvalidFork(pr *PeerRegistry, peerID peer.ID) {
+	pr.RecordInteractionAttempt(peerID)
+	pr.RecordMaliciousInteraction(peerID)
 }

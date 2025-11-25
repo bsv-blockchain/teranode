@@ -49,35 +49,35 @@ memory://test_blocks?partitions=2&consumer_ratio=1
 
 ### Consumer Configuration Parameters
 
-When configuring Kafka consumers via URL, the following query parameters are supported:
-
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `partitions` | int | 1 | Number of topic partitions to consume from |
-| `consumer_ratio` | int | 1 | Ratio for scaling consumer count (partitions/consumer_ratio) |
-| `replay` | int | 1 | Whether to replay messages from beginning (1=true, 0=false) |
-| `group_id` | string | - | Consumer group identifier for coordination |
+| `partitions` | int | 1 | Number of topic partitions |
+| `replay` | int | 1 | Start from beginning (1) or latest (0) |
+| `maxProcessingTime` | int | 100 | Max message processing time (ms) |
+| `sessionTimeout` | int | 10000 | Session timeout (ms) |
+| `heartbeatInterval` | int | 3000 | Heartbeat interval (ms) |
+| `rebalanceTimeout` | int | 60000 | Rebalance timeout (ms) |
+| `channelBufferSize` | int | 256 | Internal buffer size |
+| `consumerTimeout` | int | 90000 | Watchdog timeout (ms) |
+| `offsetReset` | string | "latest" | "latest", "earliest", or "" |
 
 **Example Consumer URL:**
 
 ```text
-kafka://localhost:9092/transactions?partitions=4&consumer_ratio=2&replay=0&group_id=validator-group
+kafka://localhost:9092/transactions?partitions=4&replay=0&sessionTimeout=15000
 ```
 
 ### Producer Configuration Parameters
 
-When configuring Kafka producers via URL, the following query parameters are supported:
-
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `partitions` | int | 1 | Number of topic partitions to create |
-| `replication` | int | 1 | Replication factor for topic |
-| `retention` | string | "600000" | Message retention period (ms) |
-| `segment_bytes` | string | "1073741824" | Segment size in bytes (1GB) |
-| `flush_bytes` | int | varies | Flush threshold in bytes (1MB async, 1KB sync) |
-| `flush_messages` | int | 50000 | Number of messages before flush |
-| `flush_frequency` | string | "10s" | Time-based flush frequency |
-| `flush_timeout` | Duration | 10s | Maximum time to wait before flushing pending messages |
+| `partitions` | int | 1 | Number of topic partitions |
+| `replication` | int | 1 | Replication factor |
+| `retention` | string | "600000" | Retention period (ms) |
+| `segment_bytes` | string | "1073741824" | Segment size in bytes |
+| `flush_bytes` | int | 1048576 | Flush threshold in bytes |
+| `flush_messages` | int | 50000 | Messages before flush |
+| `flush_frequency` | string | "10s" | Flush frequency |
 
 **Example Producer URL:**
 
@@ -85,163 +85,105 @@ When configuring Kafka producers via URL, the following query parameters are sup
 kafka://localhost:9092/blocks?partitions=2&replication=3&retention=3600000&flush_frequency=5s
 ```
 
-## Parameter Details
+## Individual Settings
 
-### partitions
+### Topic Names
 
-- **Type**: Integer
-- **Default**: 1
-- **Description**: Number of partitions for the topic
-- **Impact**: Higher values increase parallelism but also resource usage
+| Setting | Default | Environment Variable | Usage |
+|---------|---------|---------------------|-------|
+| Blocks | "blocks" | KAFKA_BLOCKS | Block data messages |
+| BlocksFinal | "blocks-final" | KAFKA_BLOCKS_FINAL | Finalized block announcements |
+| InvalidBlocks | "invalid-blocks" | KAFKA_INVALID_BLOCKS | Invalid block notifications |
+| InvalidSubtrees | "invalid-subtrees" | KAFKA_INVALID_SUBTREES | Invalid subtree notifications |
+| LegacyInv | "legacy-inv" | KAFKA_LEGACY_INV | Legacy inventory messages |
+| RejectedTx | "rejectedtx" | KAFKA_REJECTEDTX | Rejected transaction notifications |
+| Subtrees | "subtrees" | KAFKA_SUBTREES | Subtree data messages |
+| TxMeta | "txmeta" | KAFKA_TXMETA | Transaction metadata |
+| UnitTest | "unittest" | KAFKA_UNITTEST | Unit testing |
 
-### replication
+### Connection Settings
 
-- **Type**: Integer
-- **Default**: 1
-- **Description**: Replication factor for the topic
-- **Impact**: Higher values improve fault tolerance but increase storage requirements
+| Setting | Default | Environment Variable | Usage |
+|---------|---------|---------------------|-------|
+| Hosts | "localhost:9092" | KAFKA_HOSTS | Comma-separated broker addresses |
+| Port | 9092 | KAFKA_PORT | Default port when not in hosts |
+| Partitions | 1 | KAFKA_PARTITIONS | Default partition count |
+| ReplicationFactor | 1 | KAFKA_REPLICATION_FACTOR | Default replication factor |
 
-### consumer_ratio
+### TLS Settings
 
-- **Type**: Integer
-- **Default**: 1
-- **Description**: Ratio of consumers to partitions for load balancing
-- **Formula**: `consumers = partitions / consumer_ratio`
-- **Impact**: Higher values reduce concurrency, lower values increase consumer count
-- **Example**: `kafka://localhost:9092/blocks?consumer_ratio=2` creates half as many consumers as partitions
+| Setting | Default | Environment Variable | Usage |
+|---------|---------|---------------------|-------|
+| EnableTLS | false | KAFKA_ENABLE_TLS | Enable TLS encryption |
+| TLSSkipVerify | false | KAFKA_TLS_SKIP_VERIFY | Skip certificate verification |
+| TLSCAFile | "" | KAFKA_TLS_CA_FILE | CA certificate file path |
+| TLSCertFile | "" | KAFKA_TLS_CERT_FILE | Client certificate file path |
+| TLSKeyFile | "" | KAFKA_TLS_KEY_FILE | Client key file path |
 
-### retention
+### Debug Settings
 
-- **Type**: String (milliseconds)
-- **Default**: "600000" (10 minutes)
-- **Description**: How long messages are retained
-- **Impact**: Longer retention increases storage requirements
+| Setting | Default | Environment Variable | Usage |
+|---------|---------|---------------------|-------|
+| EnableDebugLogging | false | kafka_enable_debug_logging | Verbose Sarama logging |
 
-### segment_bytes
+## URL-Based Configuration
 
-- **Type**: String/Integer
-- **Default**: "1073741824" (1GB)
-- **Description**: Maximum size of a single log segment file
-- **Impact**: Smaller values create more files but allow more granular cleanup
-- **Example**: `kafka://localhost:9092/blocks?segment_bytes=536870912` (512MB)
+### Config URL Settings
 
-### flush_bytes
+| Setting | Environment Variable | Usage |
+|---------|---------------------|-------|
+| ValidatorTxsConfig | kafka_validatortxsConfig | Validator transaction messages |
+| TxMetaConfig | kafka_txmetaConfig | Transaction metadata |
+| LegacyInvConfig | kafka_legacyInvConfig | Legacy inventory messages |
+| BlocksFinalConfig | kafka_blocksFinalConfig | Finalized blocks |
+| RejectedTxConfig | kafka_rejectedTxConfig | Rejected transactions |
+| InvalidBlocksConfig | kafka_invalidBlocksConfig | Invalid blocks |
+| InvalidSubtreesConfig | kafka_invalidSubtreesConfig | Invalid subtrees |
+| SubtreesConfig | kafka_subtreesConfig | Subtrees |
+| BlocksConfig | kafka_blocksConfig | Blocks |
 
-- **Type**: Integer
-- **Default**: 1024
-- **Description**: Number of bytes to accumulate before forcing a flush
-- **Impact**: Larger values improve throughput but increase risk of data loss
+## Configuration Priority
 
-### flush_messages
+URL-based configuration overrides individual settings when provided:
 
-- **Type**: Integer
-- **Default**: 50000
-- **Description**: Number of messages to accumulate before forcing a flush
-- **Impact**: Larger values improve throughput but increase risk of data loss
+1. **URL Config** (e.g., `InvalidBlocksConfig`) - highest priority
+2. **Individual Settings** (e.g., `InvalidBlocks`, `Hosts`, `Port`) - fallback
 
-### flush_frequency
+## Timeout Validation
 
-- **Type**: Duration (e.g., "5s")
-- **Default**: "10s" (10 seconds)
-- **Description**: Maximum time between flushes
-- **Impact**: Longer durations improve throughput but increase risk of data loss
+Consumer timeout parameters must satisfy: `sessionTimeout >= 3 * heartbeatInterval`
 
-### flush_timeout
+## Service Usage
 
-- **Type**: Duration
-- **Default**: 10s
-- **Description**: Maximum time to wait before flushing pending messages
-- **Usage**: Producer timeout configuration
-- **Impact**: Ensures messages are sent even with low throughput
+### P2P Service
+- Uses `InvalidBlocksConfig` or constructs URL from `InvalidBlocks`, `Hosts`, `Port`
+- Applies TLS settings from KafkaSettings
+- Consumer group: `{topic}-consumer`
 
-### replay
+### Legacy Service  
+- Uses `LegacyInvConfig`, `BlocksFinalConfig`, `TxMetaConfig`
+- Applies TLS settings from KafkaSettings
 
-- **Type**: Integer (boolean: 0 or 1)
-- **Default**: 1 (true)
-- **Description**: Whether to replay messages from the beginning for new consumer groups
-- **Impact**: Controls initial behavior of new consumers
-
-## Auto-Commit Behavior by Topic
-
-Teranode implements different auto-commit strategies based on message criticality and service requirements.
-
-### Critical Topics (Auto-Commit: false)
-
-These topics require guaranteed message processing and cannot tolerate message loss:
-
-- **`kafka_blocksConfig`**: Block distribution for validation
-  - **Reason**: Missing blocks would break blockchain validation
-  - **Consumer Behavior**: Manual commit after successful processing
-  - **Failure Handling**: Message redelivery on processing failure
-
-- **`kafka_blocksFinalConfig`**: Finalized blocks for storage
-  - **Reason**: Missing finalized blocks would corrupt blockchain state
-  - **Consumer Behavior**: Manual commit after successful storage
-  - **Failure Handling**: Message redelivery on storage failure
-
-### Non-Critical Topics (Auto-Commit: true)
-
-These topics can tolerate occasional message loss for performance:
-
-- **TxMeta Cache (Subtree Validation)**: `autoCommit=true`
-  - Rationale: Metadata can be regenerated if lost
-  - Performance priority over strict delivery guarantees
-
-- **Rejected Transactions (P2P)**: `autoCommit=true`
-  - Rationale: Rejection notifications are not critical for consistency
-  - Network efficiency prioritized
-
-## Service-Specific Kafka Settings
-
-### Kafka Consumer Concurrency
-
-**Important**: Kafka consumer concurrency in Teranode is controlled through the `consumer_ratio` URL parameter for each topic. The actual number of consumers is calculated as:
-
-```text
-consumerCount = partitions / consumer_ratio
-```
-
-Common consumer ratios in use:
-
-- `consumer_ratio=1`: One consumer per partition (maximum parallelism)
-- `consumer_ratio=4`: One consumer per 4 partitions (balanced approach)
-
-### Propagation Service Settings
-
-- **`validator_kafka_maxMessageBytes`**: Size threshold for routing decisions
-  - **Purpose**: Determines when to use HTTP fallback vs Kafka
-  - **Default**: 1048576 (1MB)
-  - **Usage**: Large transactions routed via HTTP to avoid Kafka message size limits
-
-### Validator Service Settings
-
-- **`validator_kafkaWorkers`**: Number of concurrent Kafka processing workers
-  - **Purpose**: Controls parallel transaction processing capacity
-  - **Tuning**: Should match CPU cores and expected transaction volume
-  - **Integration**: Works with Block Assembly via direct gRPC (not Kafka)
+### Blockchain Service
+- Uses async producer for block notifications
+- Applies TLS settings from KafkaSettings
 
 ## Configuration Examples
 
-### High-Throughput Service (Propagation)
+### Producer Configuration
 
 ```text
-kafka_validatortxsConfig=kafka://localhost:9092/validator-txs?partitions=8&consumer_ratio=2&flush_frequency=1s
+kafka://localhost:9092/blocks?partitions=4&replication=3&retention=3600000&flush_frequency=5s
 ```
 
-This configuration creates 4 consumers (8 partitions / 2 ratio) with aggressive flushing for low latency.
-
-### Critical Service (Block Validation)
+### Consumer Configuration
 
 ```text
-kafka_blocksConfig=kafka://localhost:9092/blocks?partitions=4&consumer_ratio=1&retention=3600000
+kafka://localhost:9092/subtrees?partitions=8&sessionTimeout=15000&heartbeatInterval=5000
 ```
 
-This configuration creates 4 consumers (maximum parallelism) with 1-hour retention for reliability.
-
-### Development/Testing
+### Memory Testing
 
 ```text
-memory://test_blocks?partitions=2&consumer_ratio=1
+memory://test_blocks?partitions=2&replay=1
 ```
-
-This configuration uses in-memory Kafka simulation for testing without infrastructure dependencies.

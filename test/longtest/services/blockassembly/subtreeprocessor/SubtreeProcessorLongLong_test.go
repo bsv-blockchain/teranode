@@ -118,7 +118,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 		if i == 0 {
 			stp.GetCurrentSubtree().ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+			stp.Add(subtreepkg.Node{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
 		}
 	}
 
@@ -186,7 +186,7 @@ func Test_TxIDAndFeeBatch(t *testing.T) {
 			for j := 0; j < 1_000; j++ {
 				batch := batcher.Add(
 					st.NewTxIDAndFee(
-						subtreepkg.SubtreeNode{
+						subtreepkg.Node{
 							Hash:        chainhash.Hash{},
 							Fee:         1,
 							SizeInBytes: 2,

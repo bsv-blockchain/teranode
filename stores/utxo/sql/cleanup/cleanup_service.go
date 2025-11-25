@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/cleanup"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/usql"
@@ -24,10 +25,12 @@ const (
 
 // Service implements the utxo.CleanupService interface for SQL-based UTXO stores
 type Service struct {
-	logger     ulogger.Logger
-	db         *usql.DB
-	jobManager *cleanup.JobManager
-	ctx        context.Context
+	logger             ulogger.Logger
+	settings           *settings.Settings
+	db                 *usql.DB
+	jobManager         *cleanup.JobManager
+	ctx                context.Context
+	getPersistedHeight func() uint32
 }
 
 // Options contains configuration options for the cleanup service
@@ -49,9 +52,13 @@ type Options struct {
 }
 
 // NewService creates a new cleanup service for the SQL store
-func NewService(opts Options) (*Service, error) {
+func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 	if opts.Logger == nil {
 		return nil, errors.NewProcessingError("logger is required")
+	}
+
+	if tSettings == nil {
+		return nil, errors.NewProcessingError("settings is required")
 	}
 
 	if opts.DB == nil {
@@ -69,9 +76,10 @@ func NewService(opts Options) (*Service, error) {
 	}
 
 	service := &Service{
-		logger: opts.Logger,
-		db:     opts.DB,
-		ctx:    opts.Ctx,
+		logger:   opts.Logger,
+		settings: tSettings,
+		db:       opts.DB,
+		ctx:      opts.Ctx,
 	}
 
 	// Create the job processor function
@@ -110,6 +118,12 @@ func (s *Service) UpdateBlockHeight(blockHeight uint32, doneCh ...chan string) e
 	return s.jobManager.TriggerCleanup(blockHeight, doneCh...)
 }
 
+// SetPersistedHeightGetter sets the function used to get block persister progress.
+// This allows cleanup to coordinate with block persister to avoid premature deletion.
+func (s *Service) SetPersistedHeightGetter(getter func() uint32) {
+	s.getPersistedHeight = getter
+}
+
 // GetJobs returns a copy of the current jobs list (primarily for testing)
 func (s *Service) GetJobs() []*cleanup.Job {
 	return s.jobManager.GetJobs()
@@ -121,8 +135,51 @@ func (s *Service) processCleanupJob(job *cleanup.Job, workerID int) {
 
 	job.Started = time.Now()
 
-	// Execute the cleanup
-	err := deleteTombstoned(s.db, job.BlockHeight)
+	// BLOCK PERSISTER COORDINATION: Calculate safe cleanup height
+	//
+	// PROBLEM: Block persister creates .subtree_data files after a delay (BlockPersisterPersistAge blocks).
+	// If we delete transactions before block persister creates these files, catchup will fail with
+	// "subtree length does not match tx data length" (actually missing transactions).
+	//
+	// SOLUTION: Limit cleanup to transactions that block persister has already processed:
+	//   safe_height = min(requested_cleanup_height, persisted_height + retention)
+	//
+	// EXAMPLE with retention=288, persisted=100, requested=200:
+	//   - Block persister has processed blocks up to height 100
+	//   - Those blocks' transactions are in .subtree_data files (safe to delete after retention)
+	//   - Safe deletion height = 100 + 288 = 388... but wait, we want to clean height 200
+	//   - Since 200 < 388, we can safely proceed with cleaning up to 200
+	//
+	// EXAMPLE where cleanup would be limited (persisted=50, requested=200, retention=100):
+	//   - Block persister only processed up to height 50
+	//   - Safe deletion = 50 + 100 = 150
+	//   - Requested cleanup of 200 is LIMITED to 150 to protect unpersisted blocks 51-200
+	//
+	// HEIGHT=0 SPECIAL CASE: If persistedHeight=0, block persister isn't running or hasn't
+	// processed any blocks yet. Proceed with normal cleanup without coordination.
+	safeCleanupHeight := job.BlockHeight
+
+	if s.getPersistedHeight != nil {
+		persistedHeight := s.getPersistedHeight()
+
+		// Only apply limitation if block persister has actually processed blocks (height > 0)
+		if persistedHeight > 0 {
+			retention := s.settings.GetUtxoStoreBlockHeightRetention()
+
+			// Calculate max safe height: persisted_height + retention
+			// Block persister at height N means blocks 0 to N are persisted in .subtree_data files.
+			// Those transactions can be safely deleted after retention blocks.
+			maxSafeHeight := persistedHeight + retention
+			if maxSafeHeight < safeCleanupHeight {
+				s.logger.Infof("[SQLCleanupService %d] Limiting cleanup from height %d to %d (persisted: %d, retention: %d)",
+					workerID, job.BlockHeight, maxSafeHeight, persistedHeight, retention)
+				safeCleanupHeight = maxSafeHeight
+			}
+		}
+	}
+
+	// Execute the cleanup with safe height
+	err := deleteTombstoned(s.db, safeCleanupHeight)
 
 	if err != nil {
 		job.SetStatus(cleanup.JobStatusFailed)

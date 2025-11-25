@@ -101,3 +101,5 @@ teranode_peers.json
 logs/
 teranode.logrotate
 teranode
+
+settings_local.conf

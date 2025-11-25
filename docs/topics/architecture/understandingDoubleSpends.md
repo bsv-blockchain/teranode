@@ -1,6 +1,5 @@
 # Understanding Double Spend Handling and Conflict Resolution in Teranode
 
-
 ## Index
 
 1. [Introduction](#1-introduction)
@@ -23,11 +22,11 @@
     - [2.3.2 Subtree Storage](#232-subtree-storage)
     - [2.3.3 Parent-Child Relationship](#233-parent-child-relationship)
 3. [Chain Reorganization Handling](#3-chain-reorganization-handling)
-    - [Phase 1: Mark Original as Conflicting](#phase-1-mark-original-as-conflicting)
-    - [Phase 2: Unspend Original](#phase-2-unspend-original)
-    - [Phase 3: Process Double Spend](#phase-3-process-double-spend)
-    - [Phase 4: Update Double Spend Status](#phase-4-update-double-spend-status)
-    - [Phase 5: Cleanup](#phase-5-cleanup)
+    - [3.1 Phase 1: Mark Original as Conflicting](#phase-1-mark-original-as-conflicting)
+    - [3.2 Phase 2: Unspend Original](#phase-2-unspend-original)
+    - [3.3 Phase 3: Process Double Spend](#phase-3-process-double-spend)
+    - [3.4 Phase 4: Update Double Spend Status](#phase-4-update-double-spend-status)
+    - [3.5 Phase 5: Cleanup](#phase-5-cleanup)
 4. [Other Resources](#4-other-resources)
 
 ---
@@ -89,7 +88,7 @@ Teranode's double spend handling involves several important concepts:
 3. **Processing Phases**:
 
     - Detection during transaction validation (double spends outright rejected)
-    - Special handling during block processing (third party blocks with conflicting transactions are processed, and the conflicting transactions stored and marked as such)
+    - Special handling during block processing (blocks from other nodes with conflicting transactions are processed, and the conflicting transactions stored and marked as such)
     - Chain reorganization handling - should a reorganization occur, conflicting transactions are reprocessed, with the original ones now marked as "conflicting"
     - Five-phase commit process for resolving conflicts:
 
@@ -105,7 +104,6 @@ The following services are key to Teranode's double spend handling:
 - **Block Validation**: Handles double spends in blocks with proof of work, storing the transaction in the UTXO store and marking it as "conflicting"
 - **UTXO Store**: Stores conflict status and relationships
 - **Block Assembly**: Handles chain reorganizations
-
 
 ## 2. Core Concepts
 
@@ -153,14 +151,13 @@ In this scenario, Teranode understands that the conflicting transaction has been
 
     - All transactions that spend outputs from a conflicting transaction are also marked as conflicting
     - This creates a chain of conflicts that must be tracked
-    - The conflict status is stored in the first "common" parent (the first parent transaction that is not conflicting) using the `conflictingChildren` field
+    - The conflict status is stored in the first non-conflicting parent transaction using the `conflictingChildren` field
 
 3. **Conflict Tracking**:
 
     - For conflicting transactions, a UTXO Store TTL is set - conflicting transactions are removed from the store once the TTL expires (indicating that a reorganization is no longer possible and the data is no longer needed)
 
 ![double_spend_detection_block_validation.svg](img/plantuml/double_spend_detection_block_validation.svg)
-
 
 #### 2.1.4 Subtree Validation Handling
 
@@ -202,7 +199,6 @@ The outcome of double spend detection varies based on the context:
     - Cannot be processed by validator or subtree validation
     - Are tracked for potential chain reorganization
 
-
 ### 2.2 Transaction States
 
 #### 2.2.1 Non-conflicting Transactions
@@ -221,15 +217,14 @@ The outcome of double spend detection varies based on the context:
 - Have an associated TTL (Time To Live), after which they are removed from the store
 
 #### 2.2.3 Child Transactions
+
 - Transactions that spend outputs from other transactions
 - Inherit conflict status from their parents
 - If a parent transaction is marked as conflicting:
 
     - All child transactions are automatically marked as conflicting
 
-
 ### 2.3 Conflict Storage and Tracking
-
 
 #### 2.3.1 UTXO Store
 
@@ -253,7 +248,6 @@ The outcome of double spend detection varies based on the context:
    1. Parent transactions are updated first
    2. Parent's `conflictingChildren` list is updated
 
-
 ## 3. Chain Reorganization Handling
 
 During chain reorganization, when a block containing a double spend becomes part of the longest chain, Teranode must transition the UTXO set from the original transaction to the double spend (the "conflicting" transaction).
@@ -262,11 +256,11 @@ This is handled through a **five-phase commit process**:
 
 ![double_spend_five_phase_commit_process.svg](img/plantuml/double_spend_five_phase_commit_process.svg)
 
-#### Phase 1: Mark Original as Conflicting
+### Phase 1: Mark Original as Conflicting
 
 - The original transaction and all its children are marked as conflicting. This is done recursively through the transaction chain, ensuring all dependent transactions are properly marked.
 
-```
+```text
 Technical changes:
 
 - UTXO Store:
@@ -281,14 +275,13 @@ Technical changes:
     - Persists updated subtree
 ```
 
-
-#### Phase 2: Unspend Original
+### Phase 2: Unspend Original
 
 - The original transaction is unspent, releasing its parent UTXOs
 - All child transactions are also unspent
-- Parent UTXOs are marked as "not spendable" to prevent other transactions from spending them during the reorganization process (this is a temporariry measure, remove the last step of the process)
+- Parent UTXOs are marked as "not spendable" to prevent other transactions from spending them during the reorganization process (this is a temporary measure, removed in the last step of the process)
 
-```
+```text
 Technical changes:
 
 - UTXO Store:
@@ -299,12 +292,11 @@ Technical changes:
     - Maintains conflict flags and TTLs
 ```
 
-#### Phase 3: Process Double Spend
+### Phase 3: Process Double Spend
 
 - The double spend transaction is processed, spending its inputs even though some UTXOs are marked as not spendable. This is allowed specifically for this phase of the reorg process.
 
-
-```
+```text
 Technical changes:
 
 - UTXO Store:
@@ -315,11 +307,11 @@ Technical changes:
     - No TTL set on double spend transaction
 ```
 
-#### Phase 4: Update Double Spend Status
+### Phase 4: Update Double Spend Status
 
 - The double spend transaction is marked as non-conflicting, establishing it as the valid transaction in the new chain.
 
-```
+```text
 Technical changes:
 
 - UTXO Store:
@@ -331,11 +323,11 @@ Technical changes:
     - Removes hash from `ConflictingNodes[]` if present
 ```
 
-#### Phase 5: Cleanup
+### Phase 5: Cleanup
 
 - Parent UTXOs are made "spendable" again, removing the temporary restriction.
 
-```
+```text
 Technical changes:
 
 - UTXO Store:

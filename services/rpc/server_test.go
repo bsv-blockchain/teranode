@@ -909,7 +909,7 @@ func TestNewServer(t *testing.T) {
 			},
 		}
 
-		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil)
+		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil, nil, nil)
 
 		require.Error(t, err)
 		assert.Nil(t, server)
@@ -921,9 +921,13 @@ func TestNewServer(t *testing.T) {
 			Asset: settings.AssetSettings{
 				HTTPAddress: "not a valid url",
 			},
+			Propagation: settings.PropagationSettings{
+				GRPCAddresses: []string{"localhost:9090"},
+				HTTPAddresses: []string{"http://localhost:9091"},
+			},
 		}
 
-		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil)
+		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil, nil, nil)
 
 		require.Error(t, err)
 		assert.Nil(t, server)
@@ -935,12 +939,16 @@ func TestNewServer(t *testing.T) {
 			Asset: settings.AssetSettings{
 				HTTPAddress: "http://localhost:8090",
 			},
+			Propagation: settings.PropagationSettings{
+				GRPCAddresses: []string{"localhost:9090"},
+				HTTPAddresses: []string{"http://localhost:9091"},
+			},
 			RPC: settings.RPCSettings{
 				RPCListenerURL: nil, // Missing listener URL
 			},
 		}
 
-		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil)
+		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil, nil, nil)
 
 		require.Error(t, err)
 		assert.Nil(t, server)

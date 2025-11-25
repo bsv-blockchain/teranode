@@ -30,13 +30,13 @@ func (suite *SanityTestSuite) TestShouldAllowFairTx() {
 	logger := testEnv.Logger
 	url := "http://" + testEnv.Nodes[0].AssetURL
 
-	txDistributor := testEnv.Nodes[0].DistributorClient
+	txDistributor := testEnv.Nodes[0].PropagationClient
 	block1, err := testEnv.Nodes[0].BlockchainClient.GetBlockByHeight(ctx, 1)
 	require.NoError(t, err)
 
 	tx, err := testEnv.Nodes[0].CreateAndSendTx(t, ctx, block1.CoinbaseTx)
 	require.NoError(t, err)
-	_, err = txDistributor.SendTransaction(ctx, tx)
+	err = txDistributor.ProcessTransaction(ctx, tx)
 	require.NoError(t, err)
 
 	teranode1RPCEndpoint := testEnv.Nodes[0].RPCURL

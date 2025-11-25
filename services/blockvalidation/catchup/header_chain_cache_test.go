@@ -209,6 +209,48 @@ func TestHeaderChainCache_VerifyChainConnection_InvalidPrevious(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found in chain")
 }
 
+func TestHeaderChainCache_VerifyChainConnection_NilHeader(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	cache := NewHeaderChainCache(logger)
+
+	headers := createValidChain(t, 10)
+	err := cache.BuildFromHeaders(headers, 5)
+	require.NoError(t, err)
+
+	// Test with nil header - should return error, not panic
+	err = cache.VerifyChainConnection(nil)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "header cannot be nil")
+}
+
+func TestHeaderChainCache_VerifyChainConnection_NilHashPrevBlock(t *testing.T) {
+	logger := ulogger.TestLogger{}
+	cache := NewHeaderChainCache(logger)
+
+	headers := createValidChain(t, 10)
+	err := cache.BuildFromHeaders(headers, 5)
+	require.NoError(t, err)
+
+	// Create NBit from bytes
+	nBits, err := model.NewNBitFromSlice([]byte{0x1d, 0x00, 0xff, 0xff})
+	require.NoError(t, err)
+
+	// Create a header with nil HashPrevBlock
+	newHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  nil, // Nil previous block pointer
+		HashMerkleRoot: randomHash(),
+		Timestamp:      2000,
+		Bits:           *nBits,
+		Nonce:          999,
+	}
+
+	// Test with nil HashPrevBlock - should return error, not panic
+	err = cache.VerifyChainConnection(newHeader)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "HashPrevBlock cannot be nil")
+}
+
 func TestHeaderChainCache_ChainWithReorg(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	cache := NewHeaderChainCache(logger)

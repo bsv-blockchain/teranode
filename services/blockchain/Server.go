@@ -775,8 +775,27 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 
 	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blocksFinalKafkaAsyncProducer != nil)
 
+	// Only publish to Kafka if the block is valid. Invalid blocks (marked with OptionInvalid)
+	// should not be propagated to downstream consumers via the blocks_final topic.
+	if !request.OptionInvalid {
+		if err = b.sendKafkaBlockFinalNotification(block); err != nil {
+			b.logger.Errorf("[AddBlock] error sending Kafka notification for new block %s: %v", block.Hash(), err)
+		}
+	}
+
+	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: model.NotificationType_Block,
+		Hash: block.Hash().CloneBytes(),
+	}); err != nil {
+		b.logger.Errorf("[AddBlock] error sending notification for new block %s: %v", block.Hash(), err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) sendKafkaBlockFinalNotification(block *model.Block) error {
 	if b.blocksFinalKafkaAsyncProducer != nil {
-		key := block.Header.Hash().CloneBytes()
+		key := block.Header.Hash().String()
 
 		subtreeHashes := make([][]byte, len(block.Subtrees))
 		for i, subtreeHash := range block.Subtrees {
@@ -795,7 +814,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		value, err := proto.Marshal(message)
 		if err != nil {
 			b.logger.Errorf("[AddBlock] error creating block bytes: %v", err)
-			return nil, errors.WrapGRPC(err)
+			return err
 		}
 
 		if len(value) >= 500_000 { // kafka default limit is actually 1MB and we don't ever expecta block to be even close to that
@@ -803,19 +822,12 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		}
 
 		b.kafkaChan <- &kafka.Message{
-			Key:   key,
+			Key:   []byte(key),
 			Value: value,
 		}
 	}
 
-	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
-		Type: model.NotificationType_Block,
-		Hash: block.Hash().CloneBytes(),
-	}); err != nil {
-		b.logger.Errorf("[AddBlock] error sending notification for new block %s: %v", block.Hash(), err)
-	}
-
-	return &emptypb.Empty{}, nil
+	return nil
 }
 
 // GetBlock retrieves a block by its hash.
@@ -1512,6 +1524,73 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 	}, nil
 }
 
+// GetBlocksByHeight retrieves full blocks within a specified height range.
+// This method implements the gRPC service endpoint for fetching complete blocks
+// between two heights in a single efficient operation. It delegates to the
+// blockchain store's GetBlocksByHeight method and serializes the results
+// for gRPC transmission.
+//
+// Parameters:
+//   - ctx: Request context for timeout and cancellation
+//   - req: GetBlocksByHeightRequest containing startHeight and endHeight
+//
+// Returns:
+//   - GetBlocksByHeightResponse containing serialized full blocks
+//   - error: Any error encountered during block retrieval
+func (b *Blockchain) GetBlocksByHeight(ctx context.Context, req *blockchain_api.GetBlocksByHeightRequest) (*blockchain_api.GetBlocksByHeightResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocksByHeight",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlocksByHeight),
+	)
+	defer deferFn()
+
+	blocks, err := b.store.GetBlocksByHeight(ctx, req.StartHeight, req.EndHeight)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockBytes := make([][]byte, len(blocks))
+	for i, block := range blocks {
+		blockBytes[i], err = block.Bytes()
+		if err != nil {
+			return nil, errors.WrapGRPC(err)
+		}
+	}
+
+	return &blockchain_api.GetBlocksByHeightResponse{
+		Blocks: blockBytes,
+	}, nil
+}
+
+func (b *Blockchain) FindBlocksContainingSubtree(ctx context.Context, req *blockchain_api.FindBlocksContainingSubtreeRequest) (*blockchain_api.FindBlocksContainingSubtreeResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "FindBlocksContainingSubtree",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	subtreeHash, err := chainhash.NewHash(req.SubtreeHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("invalid subtree hash"))
+	}
+
+	blocks, err := b.store.FindBlocksContainingSubtree(ctx, subtreeHash, req.MaxBlocks)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockBytes := make([][]byte, len(blocks))
+	for i, block := range blocks {
+		blockBytes[i], err = block.Bytes()
+		if err != nil {
+			return nil, errors.WrapGRPC(err)
+		}
+	}
+
+	return &blockchain_api.FindBlocksContainingSubtreeResponse{
+		Blocks: blockBytes,
+	}, nil
+}
+
 // Subscribe handles subscription requests to blockchain notifications.
 // This method establishes a persistent gRPC streaming connection that allows
 // clients to receive real-time notifications about blockchain events. It serves
@@ -1831,17 +1910,12 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
 
-	// send notifications about the new latest block, so subscribers can update their state
-	bestBlock, _, err := b.store.GetBestBlockHeader(ctx)
-	if err != nil {
-		b.logger.Errorf("[Blockchain] Error getting best block header: %v", err)
-	} else {
-		if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
-			Type: model.NotificationType_Block,
-			Hash: bestBlock.Hash().CloneBytes(),
-		}); err != nil {
-			b.logger.Errorf("[Blockchain] Error sending notification for best block %s: %v", bestBlock.Hash(), err)
-		}
+	// send notification about the block being invalidated, this will trigger all listeners to reconsider best block
+	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: model.NotificationType_Block,
+		Hash: blockHash.CloneBytes(),
+	}); err != nil {
+		b.logger.Errorf("[Blockchain] Error sending notification for best block %s: %v", blockHash, err)
 	}
 
 	return &blockchain_api.InvalidateBlockResponse{
@@ -1907,6 +1981,15 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 	err = b.store.RevalidateBlock(ctx, blockHash)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
+	}
+
+	block, _, err := b.store.GetBlock(ctx, blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	if err = b.sendKafkaBlockFinalNotification(block); err != nil {
+		b.logger.Errorf("[AddBlock] error sending Kafka notification for new block %s: %v", block.Hash(), err)
 	}
 
 	// send notification about the revalidated block

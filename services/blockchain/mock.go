@@ -282,6 +282,27 @@ func (m *Mock) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeig
 	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
 }
 
+// GetBlocksByHeight mocks the GetBlocksByHeight method
+func (m *Mock) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
+	args := m.Called(ctx, startHeight, endHeight)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.Block), args.Error(1)
+}
+
+func (m *Mock) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error) {
+	args := m.Called(ctx, subtreeHash, maxBlocks)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.Block), args.Error(1)
+}
+
 // InvalidateBlock mocks the InvalidateBlock method
 func (m *Mock) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
 	args := m.Called(ctx, blockHash)

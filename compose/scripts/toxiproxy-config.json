@@ -1,0 +1,14 @@
+[
+  {
+    "name": "postgres",
+    "listen": "0.0.0.0:15432",
+    "upstream": "postgres:5432",
+    "enabled": true
+  },
+  {
+    "name": "kafka",
+    "listen": "0.0.0.0:19092",
+    "upstream": "kafka-shared:9092",
+    "enabled": true
+  }
+]

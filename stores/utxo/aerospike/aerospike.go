@@ -124,6 +124,9 @@ type Store struct {
 	storeBatcher        batcherIfc[BatchStoreItem]
 	getBatcher          batcherIfc[batchGetItem]
 	spendBatcher        batcherIfc[batchSpend]
+	spendQueueSem       chan struct{}
+	spendEnqueueTimeout time.Duration
+	spendCircuitBreaker *circuitBreaker
 	outpointBatcher     batcherIfc[batchOutpoint]
 	incrementBatcher    batcherIfc[batchIncrement]
 	setDAHBatcher       batcherIfc[batchDAH]
@@ -266,6 +269,26 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
 	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, true)
 
+	s.spendEnqueueTimeout = tSettings.UtxoStore.SpendEnqueueTimeout
+	if s.spendEnqueueTimeout <= 0 {
+		s.spendEnqueueTimeout = tSettings.UtxoStore.SpendWaitTimeout
+	}
+	if s.spendEnqueueTimeout <= 0 {
+		s.spendEnqueueTimeout = 30 * time.Second
+	}
+
+	if queueLimit := tSettings.UtxoStore.SpendQueueLimit; queueLimit > 0 {
+		s.spendQueueSem = make(chan struct{}, queueLimit)
+	}
+
+	if failureThreshold := tSettings.UtxoStore.SpendCircuitBreakerFailureCount; failureThreshold > 0 {
+		s.spendCircuitBreaker = newCircuitBreaker(
+			failureThreshold,
+			tSettings.UtxoStore.SpendCircuitBreakerHalfOpenMax,
+			tSettings.UtxoStore.SpendCircuitBreakerCooldown,
+		)
+	}
+
 	outpointBatchSize := s.settings.UtxoStore.OutpointBatcherSize
 	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
 	outpointBatchDuration := time.Duration(outpointBatchDurationStr) * time.Millisecond
@@ -347,6 +370,13 @@ func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 
 func (s *Store) GetMedianBlockTime() uint32 {
 	return s.medianBlockTime.Load()
+}
+
+func (s *Store) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     s.blockHeight.Load(),
+		MedianTime: s.medianBlockTime.Load(),
+	}
 }
 
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -754,7 +784,9 @@ func (s *Store) setPreserveUntilForExternalFile(ctx context.Context, key []byte,
 	// Create .preserveUntil file with the preserveUntilHeight value
 	preserveUntilData := []byte(fmt.Sprintf("%d", preserveUntilHeight))
 
-	if err := s.externalStore.Set(ctx, key, fileformat.FileTypePreserveUntil, preserveUntilData, options.WithSkipHeader(true)); err != nil {
+	if err := s.externalStore.Set(ctx, key, fileformat.FileTypePreserveUntil, preserveUntilData,
+		options.WithSkipHeader(true),
+		options.WithAllowOverwrite(true)); err != nil {
 		return errors.NewStorageError("failed to create .preserveUntil file", err)
 	}
 

@@ -88,15 +88,40 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 	require.NoError(t, err)
 
 	readyCh := make(chan struct{}, 1)
+	startErrCh := make(chan error, 1)
 	go func() {
-		if err := ba.Start(ctx, readyCh); err != nil {
-			t.Errorf("Error starting block assembly service: %v", err)
-		}
+		defer func() {
+			// Recover from any panic that might occur when the test has already completed
+			if r := recover(); r != nil {
+				// Log to stderr instead of using t.Logf since test may be done
+				fmt.Fprintf(os.Stderr, "Recovered from panic in ba.Start goroutine: %v\n", r)
+			}
+		}()
+
+		err := ba.Start(ctx, readyCh)
+		// Send error to channel instead of calling t.Errorf directly
+		// This avoids calling test methods after the test completes
+		startErrCh <- err
 	}()
 
 	<-readyCh // Wait for service to be ready
 
+	// Check for startup errors in cleanup, not in the goroutine
 	cleanup := func() {
+		// First cancel the context to stop ba.Start
+		cancel()
+
+		// Then check if there was a startup error
+		select {
+		case err := <-startErrCh:
+			// Only report errors if context wasn't cancelled
+			if err != nil && ctx.Err() == nil {
+				t.Errorf("Error starting block assembly service: %v", err)
+			}
+		case <-time.After(100 * time.Millisecond):
+			// ba.Start is still running, that's okay
+		}
+
 		if err := ba.Stop(ctx); err != nil {
 			t.Logf("Error stopping block assembly service: %v", err)
 		}
@@ -173,9 +198,9 @@ func Test_CoinbaseSubsidyHeight(t *testing.T) {
 	assert.NotNil(t, m, "Best block metadata should not be nil")
 	t.Logf("Best block header: %v", h)
 
-	ba.blockAssembler.bestBlockHeader.Store(h)
-	ba.blockAssembler.bestBlockHeight.Store(m.Height)
-	ba.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(ba.blockAssembler.bestBlockHeader.Load())
+	ba.blockAssembler.setBestBlockHeader(h, m.Height)
+	baBestBlockHeader, _ := ba.blockAssembler.CurrentBlock()
+	ba.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(baBestBlockHeader)
 	mc, st, err := ba.blockAssembler.getMiningCandidate()
 	require.NoError(t, err, "Failed to get mining candidate")
 	assert.NotNil(t, mc, "Mining candidate should not be nil")
@@ -401,7 +426,7 @@ func TestShouldFollowLongerChain(t *testing.T) {
 
 	WaitForBlock(t, blockA, 10*time.Second, ba.blockchainClient, ba.blockAssembler)
 
-	baBestBlock := ba.blockAssembler.bestBlockHeader.Load()
+	baBestBlock, _ := ba.blockAssembler.CurrentBlock()
 	require.NotNil(t, baBestBlock)
 	assert.Equal(t, chainAHeader1.Hash(), baBestBlock.Hash(), "Block assembler should follow the chain with higher difficulty")
 }
@@ -435,7 +460,7 @@ finished:
 	}
 
 	for currentHash.String() != expectedBlock.Header.Hash().String() {
-		currentBlockHeader := blockassembly.bestBlockHeader.Load()
+		currentBlockHeader, _ := blockassembly.CurrentBlock()
 		if currentBlockHeader != nil {
 			currentHash = *currentBlockHeader.Hash()
 		}
@@ -696,17 +721,17 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.SubtreeNode{Hash: *testHash1, Fee: 111}, parents1)
+	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash1, Fee: 111}, parents1)
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.SubtreeNode{Hash: *testHash2, Fee: 222}, parents2)
+	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash2, Fee: 222}, parents2)
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.SubtreeNode{Hash: *testHash3, Fee: 333}, parents3)
+	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash3, Fee: 333}, parents3)
 
 	t.Log("Waiting for transactions to be processed...")
 
@@ -813,15 +838,15 @@ func TestShouldHandleReorg(t *testing.T) {
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.SubtreeNode{Hash: *testHash1, Fee: 111}, parents1)
+	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash1, Fee: 111}, parents1)
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.SubtreeNode{Hash: *testHash2, Fee: 222}, parents2)
+	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash2, Fee: 222}, parents2)
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.SubtreeNode{Hash: *testHash3, Fee: 333}, parents3)
+	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash3, Fee: 333}, parents3)
 
 	// Add Chain A block (lower difficulty)
 	t.Log("Adding Chain A block...")
@@ -1027,15 +1052,15 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.SubtreeNode{Hash: *testHash1, Fee: 111}, parents1)
+	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash1, Fee: 111}, parents1)
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.SubtreeNode{Hash: *testHash2, Fee: 222}, parents2)
+	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash2, Fee: 222}, parents2)
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.SubtreeNode{Hash: *testHash3, Fee: 333}, parents3)
+	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash3, Fee: 333}, parents3)
 
 	// Add Chain A blocks (lower difficulty)
 	t.Log("Adding Chain A blocks...")

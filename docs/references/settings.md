@@ -12,8 +12,8 @@ Please review the following documents for more information on how to deploy the 
 
 The settings are stored in 2 files:
 
-* `settings.conf` - Global settings with sensible defaults for all environments (local/dev/operator)
-* `settings_local.conf` - Developer-specific and deployment-specific settings, local overrides (not tracked in source control)
+- `settings.conf` - Global settings with sensible defaults for all environments (local/dev/operator)
+- `settings_local.conf` - Developer-specific and deployment-specific settings, local overrides (not tracked in source control)
 
 When developing locally, you should:
 
@@ -35,17 +35,20 @@ Here's how it prioritizes:
 Suppose we have a base setting named `DATABASE_URL` to define the database connection URL for our application.
 
 The base setting might be:
-```
+
+```text
 DATABASE_URL = "database-url-default.com"
 ```
 
 As an example, we might have a `newenvironment1` database for development purposes. So, for the context `dev.newenvironment1`, there might be an override:
-```
+
+```text
 DATABASE_URL.dev.newenvironment1 = "database-url-environment1"
 ```
 
 There might also be a generic development database URL, defined as:
-```
+
+```text
 DATABASE_URL.dev = "database-url-dev.com"
 ```
 
@@ -113,24 +116,26 @@ Each group contains related configuration values specific to that component of t
 ### Best Practices
 
 1. Always pass the Settings object as a dependency to services that need configuration:
-```go
-func NewService(logger ulogger.Logger, settings *settings.Settings) *Service {
-    return &Service{
-        logger: logger,
-        settings: settings,
-        // ...
+
+    ```go
+    func NewService(logger ulogger.Logger, settings *settings.Settings) *Service {
+        return &Service{
+            logger: logger,
+            settings: settings,
+            // ...
+        }
     }
-}
-```
+    ```
 
 2. Access settings through the appropriate group rather than using direct key access:
-```go
-// Good
-maxRetries := settings.BlockChain.MaxRetries
 
-// Avoid (historical style, now deprecated)
-maxRetries, _ := gocore.Config().GetInt("blockchain_maxRetries")
-```
+    ```go
+    // Good
+    maxRetries := settings.BlockChain.MaxRetries
+
+    // Avoid (historical style, now deprecated)
+    maxRetries, _ := gocore.Config().GetInt("blockchain_maxRetries")
+    ```
 
 3. Use the type system to your advantage - settings are strongly typed within their respective groups.
 
@@ -139,6 +144,11 @@ maxRetries, _ := gocore.Config().GetInt("blockchain_maxRetries")
 ## Detailed Settings Reference
 
 For comprehensive documentation of all available settings, see the following references organized by component:
+
+### Global Settings
+
+- [Global Settings](settings/global_settings.md) - System-wide settings (tracing, logging, security, gRPC, monitoring)
+- [Policy Settings](settings/policy_settings.md) - BSV Blockchain consensus rules and transaction validation policies
 
 ### Services
 
@@ -158,8 +168,9 @@ For comprehensive documentation of all available settings, see the following ref
 
 ### Stores
 
-- [UTXO Store Settings](settings/stores/utxo_settings.md)
+- [Aerospike Store Settings](settings/stores/aerospike_settings.md)
 - [Blob Store Settings](settings/stores/blob_settings.md)
+- [UTXO Store Settings](settings/stores/utxo_settings.md)
 
 ### Messaging
 

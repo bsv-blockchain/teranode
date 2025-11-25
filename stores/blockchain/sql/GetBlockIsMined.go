@@ -14,6 +14,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -47,6 +48,18 @@ func (s *SQL) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (b
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockIsMined")
 	defer deferFn()
 
+	// Try to get from response cache
+	// Use a derived cache key to avoid conflicts with other cached data
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockIsMined-%s", blockHash.String())))
+
+	cacheOp := s.responseCache.Begin(cacheID)
+	cached := cacheOp.Get()
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().(bool); ok {
+			return cacheData, nil
+		}
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -67,6 +80,9 @@ func (s *SQL) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (b
 
 		return false, err
 	}
+
+	// Cache the mining status result
+	cacheOp.Set(isMined, s.cacheTTL)
 
 	return isMined, nil
 }
