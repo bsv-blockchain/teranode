@@ -10,6 +10,9 @@ import (
 func (s *SQL) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
 	s.logger.Debugf("SetBlockMinedSet %s", blockHash.String())
 
+	// Invalidate response cache to ensure cached blocks reflect updated mined_set field
+	defer s.ResetResponseCache()
+
 	q := `
 		UPDATE blocks
 		SET mined_set = true
@@ -24,13 +27,6 @@ func (s *SQL) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) e
 	// check if the block was updated
 	if rows, _ := res.RowsAffected(); rows <= 0 {
 		return errors.NewStorageError("block %s mined_set was not updated", blockHash.String())
-	}
-
-	// Invalidate response cache to ensure cached blocks reflect updated processed_at timestamp
-	s.ResetResponseCache()
-
-	if err = s.ResetBlocksCache(ctx); err != nil {
-		return errors.NewStorageError("error clearing caches", err)
 	}
 
 	return nil

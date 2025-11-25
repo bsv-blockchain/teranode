@@ -62,7 +62,7 @@ func (q *LockFreeQueue) length() int64 {
 //
 // Parameters:
 //   - v: The transaction to add to the queue
-func (q *LockFreeQueue) enqueue(node subtree.SubtreeNode, txInpoints subtree.TxInpoints) {
+func (q *LockFreeQueue) enqueue(node subtree.Node, txInpoints subtree.TxInpoints) {
 	v := txIDAndFeePool.Get().(*TxIDAndFee)
 
 	v.node = node
@@ -90,15 +90,15 @@ func (q *LockFreeQueue) enqueue(node subtree.SubtreeNode, txInpoints subtree.TxI
 //
 // Returns:
 //   - *TxIDAndFee: The next transaction in the queue, or nil if empty
-func (q *LockFreeQueue) dequeue(validFromMillis int64) (subtree.SubtreeNode, subtree.TxInpoints, int64, bool) {
+func (q *LockFreeQueue) dequeue(validFromMillis int64) (subtree.Node, subtree.TxInpoints, int64, bool) {
 	next := q.head.next.Load()
 
 	if next == nil {
-		return subtree.SubtreeNode{}, subtree.TxInpoints{}, 0, false
+		return subtree.Node{}, subtree.TxInpoints{}, 0, false
 	}
 
 	if validFromMillis > 0 && next.time >= validFromMillis {
-		return subtree.SubtreeNode{}, subtree.TxInpoints{}, 0, false
+		return subtree.Node{}, subtree.TxInpoints{}, 0, false
 	}
 
 	oldItem := q.head

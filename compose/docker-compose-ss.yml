@@ -25,6 +25,7 @@ x-teranode-base-1: &teranode-base-1
     JAEGER_AGENT_HOST: jaeger
     JAEGER_AGENT_PORT: 6831
   volumes:
+    - ./wait.sh:/app/wait.sh
     - ./settings_local.conf:/app/settings_local.conf
     - ./data/teranode1/txstore:/app/data/txstore
     - ./data/teranode1/subtreestore:/app/data/subtreestore
@@ -40,6 +41,10 @@ x-teranode-coinbase-base: &teranode-coinbase-base
 networks:
   teranode-network:
     name: my-teranode-network
+
+volumes:
+  postgres-data:
+  grafana-data:
 
 services:
   teranode-builder:
@@ -72,7 +77,7 @@ services:
 
   postgres:
     container_name: postgres
-    image: postgres:latest
+    image: postgres:16
     networks:
       - teranode-network
     environment:
@@ -84,8 +89,8 @@ services:
     expose:
       - 5432
     volumes:
-      - ./compose/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ./data/postgres:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres-data:/var/lib/postgresql/data
     restart: on-failure
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -105,13 +110,12 @@ services:
       - --overprovisioned
       - --node-id 0
       - --kafka-addr PLAINTEXT://0.0.0.0:9092
-      - --advertise-kafka-addr PLAINTEXT://kafka-shared:9092
+      - --advertise-kafka-addr PLAINTEXT://localhost:9092
       - --pandaproxy-addr 0.0.0.0:9093
       - --advertise-pandaproxy-addr localhost:9093
-    # ports:
-    #   - 18181:8081
-    #   - 19092:9092
-    #   - 19093:9093
+    ports:
+      - "9092:9092"   # Kafka broker (for chaos tests)
+      - "9093:9093"   # Pandaproxy
 
   kafka-console-shared:
     container_name: kafka-console-shared
@@ -130,6 +134,39 @@ services:
       - "18080:8080"
     depends_on:
       - kafka-shared
+
+  # Toxiproxy for chaos testing
+  toxiproxy-postgres:
+    container_name: toxiproxy-postgres
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    networks:
+      - teranode-network
+    ports:
+      - "8474:8474"   # Toxiproxy API
+      - "15432:15432" # Proxied PostgreSQL port
+    depends_on:
+      - postgres
+    # Note: No healthcheck - toxiproxy image is minimal (scratch-based) without curl/wget
+    # The test scripts validate connectivity before running tests
+    command: -host=0.0.0.0 -config=/config/toxiproxy.json
+    volumes:
+      - ./scripts/toxiproxy-config.json:/config/toxiproxy.json
+
+  toxiproxy-kafka:
+    container_name: toxiproxy-kafka
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    networks:
+      - teranode-network
+    ports:
+      - "8475:8474"   # Toxiproxy API
+      - "19092:19092" # Proxied Kafka port
+    depends_on:
+      - kafka-shared
+    # Note: No healthcheck - toxiproxy image is minimal (scratch-based) without curl/wget
+    # The test scripts validate connectivity before running tests
+    command: -host=0.0.0.0 -config=/config/toxiproxy.json
+    volumes:
+      - ./scripts/toxiproxy-config.json:/config/toxiproxy.json
 
   blockchain-1:
     <<: *teranode-base-1
@@ -433,7 +470,7 @@ services:
     networks:
       - teranode-network
     volumes:
-      - ./deploy/dev/prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/prometheus-1.yml:/etc/prometheus/prometheus.yml
 
   grafana:
     container_name: grafana
@@ -443,9 +480,9 @@ services:
     networks:
       - teranode-network
     volumes:
-      - ./compose/grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
-      - ./compose/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
-      - ./compose/grafana/dashboards:/var/lib/grafana/dashboards
-      - ./compose/grafana/grafana.db:/var/lib/grafana
+      - ./grafana/datasources/main.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ./grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus-1

@@ -47,7 +47,7 @@ import (
  - 4: mark tx_double_spend as not conflicting
  - 5: mark tx_parent1 & tx_parent2 & tx_parent4 as spendable again
 */
-func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chainhash.Hash,
+func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, conflictingTxHashes []chainhash.Hash,
 	processedConflictingHashesMap map[chainhash.Hash]bool) (losingTxHashesMap txmap.TxMap, err error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "ProcessConflicting")
 
@@ -143,7 +143,7 @@ func ProcessConflicting(ctx context.Context, s Store, conflictingTxHashes []chai
 	var tErr *errors.Error
 
 	for _, tx := range winningTxs {
-		spends, err := s.Spend(ctx, tx, IgnoreFlags{
+		spends, err := s.Spend(ctx, tx, blockHeight, IgnoreFlags{
 			IgnoreConflicting: true,
 			IgnoreLocked:      true,
 		})

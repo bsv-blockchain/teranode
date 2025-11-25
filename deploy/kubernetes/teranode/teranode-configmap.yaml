@@ -5,8 +5,9 @@ metadata:
 data:
   # overwrite defaults from the main config: https://github.com/bsv-blockchain/teranode/blob/master/settings.conf
   SETTINGS_CONTEXT: "operator"
-  network: "testnet"
+  network: "teratestnet"
   clientName: "teranode-operator"
+  listen_mode: "listen_only"
   KAFKA_HOSTS: "kafka-shared:9092"
   KAFKA_REPLICATION_FACTOR: "1"
   KAFKA_PARTITIONS_HIGH: "1"

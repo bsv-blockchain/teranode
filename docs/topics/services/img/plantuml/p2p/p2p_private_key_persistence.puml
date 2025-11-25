@@ -8,7 +8,7 @@ title P2P Private Key Persistence
 
 actor "Node Operator" as operator
 participant "P2P Service" as p2p
-participant "NewP2PNode" as newp2p
+participant "NewP2PClient" as newp2p
 box "Key Management" #LightBlue
     participant "readPrivateKey()" as readkey
     participant "generatePrivateKey()" as genkey
@@ -23,7 +23,7 @@ autonumber
 operator -> p2p: Start P2P service
 activate p2p
 
-p2p -> newp2p: Create new P2P node
+p2p -> newp2p: Create new P2P client
 activate newp2p
 
 newp2p -> newp2p: Check if private key\nis specified in config
@@ -46,7 +46,7 @@ deactivate blockchain
 alt Key found in blockchain store
     readkey -> readkey: crypto.UnmarshalPrivateKey(privBytes)
     readkey --> newp2p: Return unmarshaled private key
-    newp2p -> newp2p: Use existing key for node identity
+    newp2p -> newp2p: Use existing key for client identity
 else Key not found
     readkey --> newp2p: Return error (not found)
 
@@ -70,7 +70,7 @@ else Key not found
     genkey --> newp2p: Return new private key
     deactivate genkey
 
-    newp2p -> newp2p: Use new key for node identity
+    newp2p -> newp2p: Use new key for client identity
 end
 
 deactivate readkey
@@ -80,21 +80,21 @@ deactivate readkey
 operator -> p2p: Start P2P service with config.PrivateKey
 activate p2p
 
-p2p -> newp2p: Create new P2P node
+p2p -> newp2p: Create new P2P client
 activate newp2p
 
 newp2p -> newp2p: Check if private key\nis specified in config
 note right: config.PrivateKey != ""
 
 newp2p -> newp2p: decodeHexEd25519PrivateKey(config.PrivateKey)
-newp2p -> newp2p: Use decoded key for node identity
+newp2p -> newp2p: Use decoded key for client identity
 
 == Node Restart (Container Destroyed and Recreated) ==
 
 operator -> p2p: Start P2P service in new container
 activate p2p
 
-p2p -> newp2p: Create new P2P node
+p2p -> newp2p: Create new P2P client
 activate newp2p
 
 newp2p -> newp2p: Check if private key\nis specified in config
@@ -119,7 +119,7 @@ readkey -> readkey: crypto.UnmarshalPrivateKey(privBytes)
 readkey --> newp2p: Return unmarshaled private key
 deactivate readkey
 
-newp2p -> newp2p: Use existing key from blockchain store\npreserving node identity despite container recreation
+newp2p -> newp2p: Use existing key from blockchain store\npreserving client identity despite container recreation
 
 deactivate newp2p
 deactivate p2p

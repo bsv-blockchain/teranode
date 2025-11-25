@@ -23,7 +23,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer_api"
 	"github.com/bsv-blockchain/teranode/services/p2p"
-	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -56,7 +55,7 @@ type Node struct {
 
 	// blockassemblyClient handles block assembly operations, allowing the
 	// alert system to interact with block creation processes
-	blockassemblyClient *blockassembly.Client
+	blockassemblyClient blockassembly.ClientI
 
 	// peerClient handles peer operations such as banning and unbanning peers
 	// based on alert system decisions
@@ -86,7 +85,7 @@ type Node struct {
 // Returns:
 //   - config.NodeInterface: A fully initialized Node instance that satisfies the required interface
 func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store,
-	blockassemblyClient *blockassembly.Client, peerClient peer.ClientI, p2pClient p2p.ClientI, tSettings *settings.Settings) config.NodeInterface {
+	blockassemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI, tSettings *settings.Settings) config.NodeInterface {
 	return &Node{
 		logger:              logger,
 		blockchainClient:    blockchainClient,
@@ -187,15 +186,15 @@ func (n *Node) InvalidateBlock(ctx context.Context, blockHashStr string) error {
 // Returns:
 //   - error: Any error encountered during the ban process, or if the ban failed on all systems
 func (n *Node) BanPeer(ctx context.Context, peer string) error {
-	banned := false
-	// ban p2p peer for 100 years
-	resp, err := n.p2pClient.BanPeer(ctx, &p2p_api.BanPeerRequest{Addr: peer, Until: time.Now().Add(24 * 365 * 100 * time.Hour).Unix()})
-	if err != nil {
-		return err
-	}
+	var banned bool
 
-	if resp.Ok {
+	// ban p2p peer for 100 years
+	until := time.Now().Add(24 * 365 * 100 * time.Hour).Unix()
+	err := n.p2pClient.BanPeer(ctx, peer, until)
+	if err == nil {
 		banned = true
+	} else {
+		return err
 	}
 
 	// ban legacy peer
@@ -227,16 +226,14 @@ func (n *Node) BanPeer(ctx context.Context, peer string) error {
 // Returns:
 //   - error: Any error encountered during the unban process, or if the unban failed on all systems
 func (n *Node) UnbanPeer(ctx context.Context, peer string) error {
-	unbanned := false
+	var unbanned bool
 
 	// unban p2p peer
-	resp, err := n.p2pClient.UnbanPeer(ctx, &p2p_api.UnbanPeerRequest{Addr: peer})
-	if err != nil {
-		return err
-	}
-
-	if resp.Ok {
+	err := n.p2pClient.UnbanPeer(ctx, peer)
+	if err == nil {
 		unbanned = true
+	} else {
+		return err
 	}
 
 	// unban legacy peer

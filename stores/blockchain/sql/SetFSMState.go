@@ -64,13 +64,9 @@ func (s *SQL) SetFSMState(ctx context.Context, fsmState string) error {
 		return errors.NewStorageError("failed to set FSM state", err)
 	}
 
-	// Reset the blocks cache.
+	// Reset the response cache to invalidate any cached block headers.
 	// A seeder, legacy service or similar may have put blocks directly into the DB
 	// the assumption is they need set FSM to IDLE or similar, do their work, and then set the FSM back to RUNNING
-	if err = s.ResetBlocksCache(ctx); err != nil {
-		return errors.NewStorageError("error clearing caches", err)
-	}
-
 	s.ResetResponseCache()
 
 	return nil

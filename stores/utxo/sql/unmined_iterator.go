@@ -34,6 +34,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 		,t.inserted_at
 		,t.locked
 		,t.coinbase
+		,t.unmined_since
 		FROM transactions t
 		WHERE t.unmined_since IS NOT NULL
 		  AND t.conflicting = false
@@ -65,16 +66,17 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 	}
 
 	var (
-		id          uint64
-		txID        *chainhash.Hash
-		fee         uint64
-		sizeInBytes uint64
-		insertedAt  time.CustomTime
-		locked      bool
-		isCoinbase  bool
+		id           uint64
+		txID         *chainhash.Hash
+		fee          uint64
+		sizeInBytes  uint64
+		insertedAt   time.CustomTime
+		locked       bool
+		isCoinbase   bool
+		unminedSince uint32
 	)
 
-	if err := it.rows.Scan(&id, &txID, &fee, &sizeInBytes, &insertedAt, &locked, &isCoinbase); err != nil {
+	if err := it.rows.Scan(&id, &txID, &fee, &sizeInBytes, &insertedAt, &locked, &isCoinbase, &unminedSince); err != nil {
 		if err := it.Close(); err != nil {
 			it.store.logger.Warnf("failed to close iterator: %v", err)
 		}
@@ -202,13 +204,14 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 	}
 
 	return &utxo.UnminedTransaction{
-		Hash:       txID,
-		Fee:        fee,
-		Size:       sizeInBytes,
-		TxInpoints: txInpoints,
-		CreatedAt:  int(insertedAt.UnixMilli()),
-		Locked:     locked,
-		BlockIDs:   blockIds,
+		Hash:         txID,
+		Fee:          fee,
+		Size:         sizeInBytes,
+		TxInpoints:   txInpoints,
+		CreatedAt:    int(insertedAt.UnixMilli()),
+		Locked:       locked,
+		BlockIDs:     blockIds,
+		UnminedSince: int(unminedSince),
 	}, nil
 }
 

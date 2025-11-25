@@ -1071,6 +1071,7 @@ func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
 
 	ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
 	ps.validatorKafkaProducerClient.Publish(&kafka.Message{
+		Key:   []byte(btTx.TxID()),
 		Value: value,
 	})
 

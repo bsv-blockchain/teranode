@@ -84,7 +84,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					}
 				}
 
-				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs); err != nil {
+				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs, fields.Creating); err != nil {
 					return errors.NewStorageError("error running batch decorate on utxo store for missing transactions", err)
 				}
 
@@ -104,6 +104,18 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 
 							if failFast && missingTxThresholdInt32 > 0 && newMissed > missingTxThresholdInt32 {
 								return errors.NewThresholdExceededError("threshold exceeded for missing txs: %d > %d", newMissed, missingTxThreshold)
+							}
+
+							continue
+						}
+
+						// Auto-recovery: if transaction is still being created (incomplete multi-record creation),
+						// treat it as missing to trigger re-processing
+						if data.Data.Creating {
+							newMissed := missed.Add(1)
+
+							if failFast && missingTxThresholdInt32 > 0 && newMissed > missingTxThresholdInt32 {
+								return errors.NewThresholdExceededError("threshold exceeded for missing txs (incomplete): %d > %d", newMissed, missingTxThreshold)
 							}
 
 							continue
@@ -170,7 +182,9 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 								return errors.NewStorageError("error getting tx meta from utxo store", err)
 							}
 
-							if txMeta != nil {
+							// Auto-recovery: only use txMeta if it's not in the "creating" state
+							// If Creating is true, treat as missing to trigger re-processing
+							if txMeta != nil && !txMeta.Creating {
 								txMetaSlice[i+j] = txMeta
 								continue
 							}

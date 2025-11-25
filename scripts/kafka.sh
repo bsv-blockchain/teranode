@@ -1,17 +1,32 @@
-#!/bin/sh
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Create network only if it doesn't exist
-if ! docker network ls | grep -q app-tier; then
-    docker network create app-tier --driver bridge
+# Source common helper functions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/docker-service-helper.sh"
+
+# Initialize (DATA_PATH needed to suppress warnings from base docker-services.yml)
+docker_service_init
+
+# Check if /etc/hosts entry exists
+if ! grep -q "kafka-shared" /etc/hosts 2>/dev/null; then
+    echo ""
+    echo "❌ ERROR: Missing required /etc/hosts entry!"
+    echo ""
+    echo "IMPORTANT: Add this to /etc/hosts (required for all developers):"
+    echo "127.0.0.1	kafka-shared"
+    echo ""
+    echo "Run this command to add it:"
+    echo "sudo sh -c 'echo \"127.0.0.1\tkafka-shared\" >> /etc/hosts'"
+    echo ""
+    echo "Why: Kafka advertises itself as 'kafka-shared:9092'. Docker containers can"
+    echo "resolve this via internal DNS, but your host machine needs this /etc/hosts"
+    echo "entry to connect. Without it, Kafka clients will fail to connect."
+    echo ""
+    exit 1
 fi
 
-docker run --rm -d -p 9092-9093:9092-9093 --name kafka-server --hostname localhost \
-    --network app-tier \
-    -e ALLOW_PLAINTEXT_LISTENER=yes \
-    -e KAFKA_CFG_NODE_ID=0 \
-    -e KAFKA_CFG_PROCESS_ROLES=controller,broker \
-    -e KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093 \
-    -e KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT \
-    -e KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=0@kafka-server:9093 \
-    -e KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER \
-    bitnami/kafka:latest
+# Run docker compose with service-specific info
+docker_service_run "${1:-up}" "deploy/docker/kafka" "Kafka and Kafka Console (ephemeral - no persistent data)" \
+    "Kafka broker: kafka-shared:9092" \
+    "Kafka Console UI: http://localhost:8082"

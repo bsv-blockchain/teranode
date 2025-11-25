@@ -2,158 +2,106 @@
 
 **Related Topic**: [UTXO Store](../../../topics/stores/utxo.md)
 
-The UTXO Store can be configured using various connection URLs and configuration parameters. This section provides a comprehensive reference of all available configuration options.
+## Configuration Settings
 
-## Connection URL Format
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| UtxoStore | *url.URL | "" | utxostore | **CRITICAL** - UTXO store backend URL |
+| BlockHeightRetention | uint32 | globalBlockHeightRetention | utxostore_blockHeightRetention | Block height retention period |
+| UnminedTxRetention | uint32 | globalBlockHeightRetention/2 | utxostore_unminedTxRetention | Unmined transaction retention |
+| ParentPreservationBlocks | uint32 | blocksInADayOnAverage*10 | utxostore_parentPreservationBlocks | Parent preservation period |
+| OutpointBatcherSize | int | 100 | utxostore_outpointBatcherSize | Outpoint operation batch size |
+| OutpointBatcherDurationMillis | int | 10 | utxostore_outpointBatcherDurationMillis | Outpoint batch duration |
+| SpendBatcherDurationMillis | int | 100 | utxostore_spendBatcherDurationMillis | Spend batch duration |
+| SpendBatcherSize | int | 100 | utxostore_spendBatcherSize | Spend operation batch size |
+| SpendBatcherConcurrency | int | 32 | utxostore_spendBatcherConcurrency | Spend batch concurrency |
+| StoreBatcherDurationMillis | int | 100 | utxostore_storeBatcherDurationMillis | Store batch duration |
+| StoreBatcherSize | int | 100 | utxostore_storeBatcherSize | Store operation batch size |
+| UtxoBatchSize | int | 128 | utxostore_utxoBatchSize | UTXO operation batch size |
+| DBTimeout | time.Duration | 30s | utxostore_dbTimeout | **CRITICAL** - Database operation timeout |
+| UseExternalTxCache | bool | false | utxostore_useExternalTxCache | External transaction cache usage |
+| ExternalizeAllTransactions | bool | false | utxostore_externalizeAllTransactions | Transaction externalization control |
+| PostgresMaxIdleConns | int | 10 | utxostore_postgresMaxIdleConns | PostgreSQL idle connection pool |
+| PostgresMaxOpenConns | int | 100 | utxostore_postgresMaxOpenConns | PostgreSQL max open connections |
+| VerboseDebug | bool | false | utxostore_verboseDebug | Verbose debug logging |
+| UpdateTxMinedStatus | bool | true | utxostore_updateTxMinedStatus | Transaction mined status updates |
+| MaxMinedRoutines | int | 10 | utxostore_maxMinedRoutines | Max mined transaction routines |
+| MaxMinedBatchSize | int | 1000 | utxostore_maxMinedBatchSize | Max mined transaction batch size |
+| BlockHeightRetentionAdjustment | int32 | 0 | utxostore_blockHeightRetentionAdjustment | **CRITICAL** - Retention adjustment |
+| DisableDAHCleaner | bool | false | utxostore_disableDAHCleaner | **CRITICAL** - DAH cleaner process control |
 
-The `utxostore` setting determines which datastore implementation to use. The connection URL format varies depending on the selected backend:
+## URL Query Parameters
 
-### Aerospike
+| Parameter | Type | Default | Usage | Impact |
+|-----------|------|---------|-------|--------|
+| logging | bool | false | `storeURL.Query().Get("logging") == "true"` | **CRITICAL** - Enables operation logging wrapper |
 
-```text
-aerospike://host:port/namespace?param1=value1&param2=value2
-```
+## Configuration Dependencies
 
-Example:
+### Block Height Retention
+- Effective retention = `GlobalBlockHeightRetention + BlockHeightRetentionAdjustment`
+- Used in `sql/sql.go` for DAH calculations and cleanup operations
+- Bounds checking prevents negative results
 
-```text
-utxostore=aerospike://aerospikeserver.teranode.dev:3000/teranode-store?set=txmeta&externalStore=blob://blobserver:8080/utxo
-```
+### Database Operations
+- `DBTimeout` controls all SQL operation timeouts in `sql/sql.go`
+- PostgreSQL connection settings control connection pooling
+- Used across Create, Get, Spend, Delete, and batch operations
 
-**URL Parameters:**
+### Batch Processing
+- Size and duration settings work together for different operation types
+- Controls memory usage and performance for bulk operations
+- Separate batchers for outpoint, spend, store, increment, DAH, and locked operations
 
-- `set`: Aerospike set name (default: "txmeta")
-- `externalStore`: URL for storing large transactions (required)
-- `ConnectionQueueSize`: Connection queue size for Aerospike client
-- `LimitConnectionsToQueueSize`: Whether to limit connections to queue size
+### DAH Functionality
+- When `DisableDAHCleaner = false`, uses retention settings for cleanup
+- DAH calculations use block height retention values
+- Cleanup operations respect retention adjustment settings
 
-### SQL (PostgreSQL/SQLite)
+### Debug Logging
+- URL `logging` parameter enables operation wrapper in `factory/utxo.go`
+- `VerboseDebug` controls detailed logging output
+- Logs all store operations with parameters and duration
 
-**PostgreSQL:**
+## Backend Support
 
-```text
-postgres://username:password@host:port/dbname?param1=value1&param2=value2
-```
+| Backend | Scheme | Parameters Supported |
+|---------|--------|---------------------|
+| aerospike | aerospike:// | All settings, logging parameter |
+| postgres | postgres:// | All settings, logging parameter |
+| sqlite | sqlite:// | All settings, logging parameter |
+| sqlitememory | sqlitememory:// | All settings, logging parameter |
+| memory | memory:// | All settings, logging parameter |
+| null | null:// | All settings, logging parameter |
 
-Example:
+## Validation Rules
 
-```text
-utxostore=postgres://miner1:miner1@postgresserver.teranode.dev:5432/teranode-store?expiration=24h
-```
+| Setting | Validation | Impact |
+|---------|------------|--------|
+| UtxoStore | Must be valid URL | Store initialization |
+| DBTimeout | Used for context timeout | Operation reliability |
+| BlockHeightRetentionAdjustment | Bounds checking applied | Retention calculation |
+| logging | Boolean string check | Logging wrapper creation |
 
-**SQLite:**
+## Configuration Examples
 
-```text
-sqlite:///path/to/file.sqlite?param1=value1&param2=value2
-```
-
-Example:
-
-```text
-utxostore=sqlite:///data/utxo.sqlite?expiration=24h
-```
-
-**In-memory SQLite:**
-
-```text
-sqlitememory:///name?param1=value1&param2=value2
-```
-
-Example:
-
-```text
-utxostore=sqlitememory:///utxo?expiration=24h
-```
-
-**URL Parameters:**
-
-- `expiration`: Duration after which spent UTXOs are cleaned up (e.g., "24h", "7d")
-- `logging`: Enable SQL query logging (true/false)
-
-### Memory
-
-```text
-memory://host:port/mode
-```
-
-Example:
-
-```text
-utxostore=memory://localhost:${UTXO_STORE_GRPC_PORT}/splitbyhash
-```
-
-**Modes:**
-
-- `splitbyhash`: Distributes UTXOs based on hash
-- `all`: Stores all UTXOs in memory
-
-### Nullstore
+### PostgreSQL Store
 
 ```text
-null:///
+utxostore = "postgres://user:pass@host:5432/db?logging=true"
+utxostore_dbTimeout = "60s"
 ```
 
-Example:
+### Aerospike Store
 
 ```text
-utxostore=null:///
+utxostore = "aerospike://host:3000/namespace"
+utxostore_spendBatcherSize = 200
 ```
 
-## Configuration Parameters
+### SQLite Store
 
-The UTXO Store can be configured through the `UtxoStoreSettings` struct which contains various parameters to control the behavior of the store.
-
-### General Settings
-
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|--------|
-| `UtxoStore` | *url.URL | Connection URL for the UTXO store | "" (must be configured) |
-| `BlockHeightRetention` | uint32 | Number of blocks to retain data for | globalBlockHeightRetention |
-| `BlockHeightRetentionAdjustment` | int32 | Adjustment to global block height retention (can be positive or negative) | 0 |
-| `UnminedTxRetention` | uint32 | Retention period for unmined transactions in blocks | 1008 blocks (~7 days) |
-| `ParentPreservationBlocks` | uint32 | Parent transaction preservation period in blocks | 1440 blocks (~10 days) |
-| `UtxoBatchSize` | int | Batch size for UTXOs (critical - do not change after initial setup) | 128 |
-| `DBTimeout` | time.Duration | Timeout for database operations | 5s |
-| `UseExternalTxCache` | bool | Whether to use external transaction cache | true |
-| `ExternalizeAllTransactions` | bool | Whether to externalize all transactions | false |
-| `VerboseDebug` | bool | Enable verbose debugging | false |
-| `UpdateTxMinedStatus` | bool | Whether to update transaction mined status | true |
-| `DisableDAHCleaner` | bool | Disable Delete-At-Height cleaner process | false |
-
-### SQL-specific Settings
-
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|--------|
-| `PostgresMaxIdleConns` | int | Maximum number of idle connections to the PostgreSQL database | 10 |
-| `PostgresMaxOpenConns` | int | Maximum number of open connections to the PostgreSQL database | 80 |
-
-### Batch Processing Settings
-
-The UTXO Store uses batch processing to improve performance. The following settings control the behavior of various batchers:
-
-| Parameter | Type | Description | Default |
-|-----------|------|-------------|--------|
-| `StoreBatcherSize` | int | Batch size for store operations | 100 |
-| `StoreBatcherDurationMillis` | int | Maximum duration in milliseconds for store batching | 100 |
-| `SpendBatcherSize` | int | Batch size for spend operations | 100 |
-| `SpendBatcherDurationMillis` | int | Maximum duration in milliseconds for spend batching | 100 |
-| `OutpointBatcherSize` | int | Batch size for outpoint operations | 100 |
-| `OutpointBatcherDurationMillis` | int | Maximum duration in milliseconds for outpoint batching | 10 |
-| `IncrementBatcherSize` | int | Batch size for increment operations | 256 |
-| `IncrementBatcherDurationMillis` | int | Maximum duration in milliseconds for increment batching | 10 |
-| `SetDAHBatcherSize` | int | Batch size for Delete-At-Height operations | 256 |
-| `SetDAHBatcherDurationMillis` | int | Maximum duration in milliseconds for DAH batching | 10 |
-| `LockedBatcherSize` | int | Batch size for locked operations | 256 |
-| `LockedBatcherDurationMillis` | int | Maximum duration in milliseconds for locked batching | 10 |
-| `GetBatcherSize` | int | Batch size for get operations | 1 |
-| `GetBatcherDurationMillis` | int | Maximum duration in milliseconds for get batching | 10 |
-| `MaxMinedRoutines` | int | Maximum number of concurrent goroutines for processing mined transactions | 128 |
-| `MaxMinedBatchSize` | int | Maximum number of mined transactions processed in a batch | 1024 |
-
-## Important Notes
-
-**Critical Setting Warning:** The `UtxoBatchSize` setting must not be changed after the UTXO store has been running with Aerospike backend. It determines record organization and changing it would break store integrity.
-
-**Block Height Retention:** The effective retention is calculated as `GlobalBlockHeightRetention + BlockHeightRetentionAdjustment`. The global value varies by deployment, and the adjustment can be positive or negative to fine-tune retention per store.
-
-**URL Query Parameters:** The UTXO store URL supports a `logging=true` query parameter to enable detailed operation logging for debugging purposes.
+```text
+utxostore = "sqlite:///data/utxo.db?logging=true"
+utxostore_blockHeightRetentionAdjustment = 100
+```

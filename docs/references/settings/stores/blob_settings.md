@@ -2,98 +2,85 @@
 
 **Related Topic**: [Blob Store](../../../topics/stores/blob.md)
 
-The Blob Server can be configured through URL-based settings and option parameters. This section provides a comprehensive reference for all configuration options.
+## URL Configuration Parameters
 
-## URL Format
+| Parameter | Type | Default | Usage | Impact |
+|-----------|------|---------|-------|--------|
+| batch | bool | false | `storeURL.Query().Get("batch") == "true"` | **CRITICAL** - Enables batch wrapper for performance |
+| sizeInBytes | int64 | 4194304 | `storeURL.Query().Get("sizeInBytes")` | **CRITICAL** - Controls batch memory usage |
+| writeKeys | bool | false | `storeURL.Query().Get("writeKeys") == "true"` | Enables key-based retrieval from batches |
+| localDAHStore | string | "" | `storeURL.Query().Get("localDAHStore") != ""` | **CRITICAL** - Enables Delete-At-Height functionality |
+| localDAHStorePath | string | "/tmp/localDAH" | `storeURL.Query().Get("localDAHStorePath")` | DAH metadata storage directory |
+| logger | bool | false | `storeURL.Query().Get("logger") == "true"` | **CRITICAL** - Enables debug logging wrapper |
+| hashPrefix | int | 0 | `storeURL.Query().Get("hashPrefix")` | **CRITICAL** - Hash-based directory structure (first N chars) |
+| hashSuffix | int | 0 | `storeURL.Query().Get("hashSuffix")` | **CRITICAL** - Hash-based directory structure (last N chars) |
+| checksum | bool | false | File backend parameter | **CRITICAL** - SHA256 checksumming for data integrity |
+| header | string | "" | File backend parameter | Custom header prepended to blobs |
 
-Blob store configurations use URLs that follow this general structure:
+## Configuration Dependencies
+
+### Batch Processing
+- When `batch = true`, uses `sizeInBytes` for memory control
+- `writeKeys` enables key indexing when batching enabled
+- Creates batcher wrapper with configured size and key options
+
+### Delete-At-Height (DAH)
+- When `localDAHStore` is set, enables DAH functionality
+- Uses `localDAHStorePath` for metadata storage location
+- Creates DAH wrapper with file-based cache store
+
+### Hash-based Directory Organization
+- `hashPrefix` uses first N characters of hash for directories
+- `hashSuffix` uses last N characters of hash for directories
+- Negative hashPrefix value uses suffix behavior
+
+### Data Integrity
+- When `checksum = true`, creates .sha256 files alongside blobs
+- Validates checksums during read operations
+- Removes checksum files during deletion
+
+### Debug Logging
+- When `logger = true`, wraps store with logging functionality
+- Logs all store operations at DEBUG level
+- Enables detailed operation debugging
+
+## Backend Support
+
+| Backend | Scheme | Parameters Supported |
+|---------|--------|---------------------|
+| null | null:// | logger (localDAHStore blocked) |
+| memory | memory:// | All common parameters |
+| file | file:// | All parameters including checksum, header |
+| http | http:// | All common parameters |
+| s3 | s3:// | All common parameters |
+
+## Validation Rules
+
+| Parameter | Validation | Impact |
+|-----------|------------|--------|
+| batch | Boolean string check | Batch wrapper creation |
+| sizeInBytes | ParseInt validation | Batch memory allocation |
+| writeKeys | Boolean string check | Key indexing behavior |
+| localDAHStore | Non-empty string check | DAH functionality |
+| hashPrefix | ParseInt validation | Directory structure |
+| hashSuffix | ParseInt validation | Directory structure |
+
+## Configuration Examples
+
+### Basic File Store
 
 ```text
-<scheme>://<path>[?<parameter1>=<value1>&<parameter2>=<value2>...]
+file:///data/store
 ```
 
-Components:
+### Batched Store with DAH
 
-- **Scheme**: Determines the storage backend type (file, memory, s3, http, null)
-- **Path**: Specifies the storage location or identifier
-- **Parameters**: Optional query parameters that modify behavior
+```text
+file:///data/store?batch=true&sizeInBytes=8388608&localDAHStore=memory://
+```
 
-## Store URL Settings
+### Hash-organized Store
 
-### Common URL Parameters
-
-| Parameter | Type | Default | Description | Impact |
-|-----------|------|---------|-------------|--------|
-| `hashPrefix` | Integer | 2 | Number of characters from start of hash for directory organization | Improves file organization and lookup performance |
-| `hashSuffix` | Integer | - | Number of characters from end of hash for directory organization | Alternative to hashPrefix; uses end of hash |
-| `batch` | Boolean | false | Enables batch wrapper for improved performance | Aggregates operations into larger batches |
-| `sizeInBytes` | Integer | 4194304 | Maximum batch size in bytes when batching enabled | Controls memory usage and batch efficiency |
-| `writeKeys` | Boolean | false | Store key index alongside batch data | Enables key-based retrieval from batches |
-| `localDAHStore` | String | "" | Enable Delete-At-Height functionality | Requires value like "memory://" to enable DAH |
-| `localDAHStorePath` | String | "/tmp/localDAH" | Path for DAH metadata storage | Directory for blockchain height tracking |
-| `logger` | Boolean | false | Enable debug logging wrapper | Adds detailed operation logging |
-
-### File Backend Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| Path component | String | None (required) | Base directory for file storage |
-| `checksum` | Boolean | false | Enable SHA256 checksumming of stored blobs |
-| `header` | String | `(empty)` | Custom header prepended to stored blobs (hex or plain text) |
-| `eofmarker` | String | `(empty)` | Custom footer appended to stored blobs (hex or plain text) |
-
-### S3 Backend Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| Path component | String | None (required) | S3 bucket name |
-| `region` | String | None (required) | AWS region for S3 bucket |
-| `endpoint` | String | AWS S3 endpoint | Custom endpoint for S3-compatible storage |
-| `forcePathStyle` | Boolean | false | Force path-style addressing |
-| `subDirectory` | String | `(none)` | S3 object key prefix for organization |
-| `MaxIdleConns` | Integer | 100 | Maximum number of idle HTTP connections |
-| `MaxIdleConnsPerHost` | Integer | 100 | Maximum idle connections per host |
-| `IdleConnTimeoutSeconds` | Integer | 100 | Idle connection timeout in seconds |
-| `TimeoutSeconds` | Integer | 30 | Request timeout for S3 operations |
-| `KeepAliveSeconds` | Integer | 300 | Connection keep-alive duration |
-
-### HTTP Backend Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| Host+Path | String | None (required) | Remote HTTP blob server endpoint |
-| Timeout | Duration | 30s | HTTP client timeout (hardcoded, not configurable via URL) |
-
-## Store Options (options.Options)
-
-Additional configuration is provided through Store Options when creating a store:
-
-| Option | Type | Default | Description | Impact |
-|--------|------|---------|-------------|--------|
-| `BlockHeightRetention` | uint32 | 0 | Default block height retention for all files | Controls automatic deletion after specified blockchain height |
-| `DAH` | uint32 | 0 | Default Delete-At-Height value for individual files | Sets blockchain height for automatic file deletion |
-| `Filename` | string | `(hash-based)` | Custom filename override | Overrides default hash-based file naming |
-| `SubDirectory` | string | `(none)` | Subdirectory within main path | Organizes data in storage hierarchy |
-| `HashPrefix` | int | 2 | Number of hash characters for directory organization | Improves file organization and lookup performance |
-| `AllowOverwrite` | bool | false | Allow overwriting existing files | Controls file replacement behavior |
-| `SkipHeader` | bool | false | Skip file headers for CLI readability | Enables CLI-friendly file formats |
-| `PersistSubDir` | string | `(none)` | Subdirectory for persistent storage | Directory for persistent data organization |
-| `LongtermStoreURL` | *url.URL | nil | URL for longterm storage backend | Enables three-tier storage (memory, local, longterm) |
-| `BlockHeightCh` | chan uint32 | nil | Block height tracking channel for DAH functionality | **Required for DAH-enabled stores** |
-
-## File Operation Options (Functional Options)
-
-These options can be specified per operation using functional option pattern:
-
-| Option | Type | Description | Impact |
-|--------|------|-------------|--------|
-| `WithBlockHeightRetention(uint32)` | uint32 | Sets block height retention for this file | Controls per-file automatic deletion |
-| `WithDAH(uint32)` | uint32 | Sets Delete-At-Height value for this file | Controls per-file data retention based on blockchain height |
-| `WithFilename(string)` | string | Sets specific filename | Overrides default hash-based naming |
-| `WithSubDirectory(string)` | string | Sets subdirectory for this file | Organizes individual files in storage hierarchy |
-| `WithHashPrefix(int)` | int | Sets hash prefix for this file | Controls directory organization for this file |
-| `WithAllowOverwrite(bool)` | bool | Controls overwriting of existing files | Prevents accidental data loss when false |
-| `WithSkipHeader(bool)` | bool | Skip file headers for this operation | Enables CLI-friendly file formats |
-| `WithPersistSubDir(string)` | string | Sets persistent subdirectory | Directory for persistent storage of this file |
-| `WithLongtermStoreURL(*url.URL)` | *url.URL | Sets longterm storage URL for this file | Enables per-file longterm storage configuration |
-| `WithBlockHeightCh(chan uint32)` | chan uint32 | Sets block height channel for DAH | **Required for DAH functionality** |
+```text
+file:///data/store?hashPrefix=2&checksum=true&logger=true
+```

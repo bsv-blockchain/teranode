@@ -61,6 +61,8 @@ message CheckBlockSubtreesRequest {
   bytes block = 1;
   // base_url specifies the endpoint for retrieving missing transaction data
   string base_url = 2;
+  // peer_id is the P2P peer identifier used for peer reputation tracking
+  string peer_id = 3;
 }
 
 // CheckBlockSubtreesResponse contains the validation results for subtrees in a block.

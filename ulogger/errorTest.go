@@ -20,6 +20,7 @@ type ErrorTestLogger struct {
 	t                TestingT
 	skipCancelOnFail atomic.Bool
 	cancelFn         func()
+	shutdown         atomic.Bool // Prevents logging after test cleanup
 }
 
 func NewErrorTestLogger(t TestingT, cancelFn ...func()) *ErrorTestLogger {
@@ -48,6 +49,12 @@ func (l *ErrorTestLogger) SkipCancelOnFail(skip bool) {
 	}
 
 	l.skipCancelOnFail.Store(skip)
+}
+
+// Shutdown marks the logger as shutdown, preventing further access to testing.T
+// This should be called before test cleanup to avoid race conditions
+func (l *ErrorTestLogger) Shutdown() {
+	l.shutdown.Store(true)
 }
 
 func (l *ErrorTestLogger) LogLevel() int {
@@ -85,6 +92,11 @@ func (l *ErrorTestLogger) Warnf(format string, args ...interface{}) {
 }
 
 func (l *ErrorTestLogger) Errorf(format string, args ...interface{}) {
+	// Don't access testing.T if logger is shutdown (test is cleaning up)
+	if l.shutdown.Load() {
+		return
+	}
+
 	if h, ok := l.t.(tHelper); ok {
 		h.Helper()
 	}
@@ -107,6 +119,11 @@ func (l *ErrorTestLogger) Errorf(format string, args ...interface{}) {
 }
 
 func (l *ErrorTestLogger) Fatalf(format string, args ...interface{}) {
+	// Don't access testing.T if logger is shutdown (test is cleaning up)
+	if l.shutdown.Load() {
+		return
+	}
+
 	if h, ok := l.t.(tHelper); ok {
 		h.Helper()
 	}

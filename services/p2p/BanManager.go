@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 // BanReason is an enum for ban reasons.
@@ -114,6 +115,7 @@ type PeerBanManager struct {
 	decayInterval time.Duration        // How often scores are reduced (decay period)
 	decayAmount   int                  // How many points are removed during each decay
 	handler       BanEventHandler      // Handler for ban events to notify other components
+	peerRegistry  *PeerRegistry        // Peer registry to sync ban status with
 }
 
 // NewPeerBanManager creates a new ban manager with sensible defaults.
@@ -128,9 +130,10 @@ type PeerBanManager struct {
 // - ctx: Context for lifecycle management and cancellation
 // - handler: Handler that will be notified when ban events occur
 // - tSettings: Application settings containing ban-related configuration
+// - peerRegistry: Optional peer registry to sync ban status with (can be nil)
 //
 // Returns a fully configured PeerBanManager ready for use
-func NewPeerBanManager(ctx context.Context, handler BanEventHandler, tSettings *settings.Settings) *PeerBanManager {
+func NewPeerBanManager(ctx context.Context, handler BanEventHandler, tSettings *settings.Settings, peerRegistry *PeerRegistry) *PeerBanManager {
 	m := &PeerBanManager{
 		ctx:           ctx,
 		peerBanScores: make(map[string]*BanScore),
@@ -146,6 +149,7 @@ func NewPeerBanManager(ctx context.Context, handler BanEventHandler, tSettings *
 		decayInterval: time.Minute,
 		decayAmount:   1,
 		handler:       handler,
+		peerRegistry:  peerRegistry,
 	}
 	// Start background cleanup loop
 	interval := m.decayInterval
@@ -234,6 +238,13 @@ func (m *PeerBanManager) AddScore(peerID string, reason BanReason) (score int, b
 		}
 	}
 
+	// Sync ban status with peer registry
+	if m.peerRegistry != nil {
+		if pID, err := peer.Decode(peerID); err == nil {
+			m.peerRegistry.UpdateBanStatus(pID, entry.Score, entry.Banned)
+		}
+	}
+
 	return entry.Score, entry.Banned
 }
 
@@ -255,6 +266,13 @@ func (m *PeerBanManager) ResetBanScore(peerID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.peerBanScores, peerID)
+
+	// Sync with peer registry
+	if m.peerRegistry != nil {
+		if pID, err := peer.Decode(peerID); err == nil {
+			m.peerRegistry.UpdateBanStatus(pID, 0, false)
+		}
+	}
 }
 
 // IsBanned returns true if the peer is currently banned, and unbans if expired.
@@ -270,6 +288,14 @@ func (m *PeerBanManager) IsBanned(peerID string) bool {
 	if time.Now().After(entry.BanUntil) {
 		// Ban expired, reset
 		delete(m.peerBanScores, peerID)
+
+		// Sync with peer registry
+		if m.peerRegistry != nil {
+			if pID, err := peer.Decode(peerID); err == nil {
+				m.peerRegistry.UpdateBanStatus(pID, 0, false)
+			}
+		}
+
 		return false
 	}
 

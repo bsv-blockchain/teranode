@@ -741,6 +741,12 @@ NEXT_BATCH_RECORD:
 					items[idx].Data.Conflicting = conflictingBool
 				}
 
+			case fields.Creating:
+				creatingBool, ok := bins[key.String()].(bool)
+				if ok {
+					items[idx].Data.Creating = creatingBool
+				}
+
 			case fields.ConflictingChildren:
 				res, err := processConflictingChildren(bins)
 				if err != nil {

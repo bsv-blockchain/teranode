@@ -324,7 +324,7 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 
 		// Test that system handles competing catchup attempts correctly
 		// First, try catchup with the initial chain
-		err1 := server.catchup(ctx, initialTarget, "http://peer1", "peer-fork-001")
+		err1 := server.catchup(ctx, initialTarget, "peer-fork-001", "http://peer1")
 
 		// The first catchup might fail due to bloom filter issues in test setup
 		// but that's OK - we're testing the catchup mechanism, not bloom filters
@@ -333,7 +333,7 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 		// Now try catchup with the stronger chain
 		// This should either succeed or fail with "another catchup in progress"
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, strongerTarget.Hash()).Return(false, nil).Maybe()
-		err2 := server.catchup(ctx, strongerTarget, "http://peer2", "peer-fork-002")
+		err2 := server.catchup(ctx, strongerTarget, "peer-fork-002", "http://peer2")
 		t.Logf("Second catchup result: %v", err2)
 
 		// Verify the system properly handles concurrent catchup attempts
@@ -433,7 +433,7 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 			},
 		)
 
-		err := server.catchup(ctx, targetBlock, "http://peer", "peer-fork-003")
+		err := server.catchup(ctx, targetBlock, "peer-fork-003", "http://peer")
 
 		// Should reject chain that violates checkpoint
 		assert.Error(t, err)
@@ -521,7 +521,7 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 			httpmock.NewBytesResponder(200, testhelpers.BlocksToHeaderBytes(forkChain)),
 		)
 
-		err := server.catchup(ctx, targetBlock, "http://peer", "peer-fork-003")
+		err := server.catchup(ctx, targetBlock, "peer-fork-003", "http://peer")
 
 		// Fork depth is 1050 - 999 = 51 blocks
 		// This is within coinbase maturity (100), so should be allowed
@@ -606,7 +606,7 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 			httpmock.NewBytesResponder(200, testhelpers.BlocksToHeaderBytes(forkChain)),
 		)
 
-		err = server.catchup(ctx, targetBlock, "http://peer", "peer-fork-003")
+		err = server.catchup(ctx, targetBlock, "peer-fork-003", "http://peer")
 
 		// Fork depth is 1020 - 1015 = 5 blocks (within maturity of 10)
 		if err != nil {
@@ -885,12 +885,12 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			err1 = server.catchup(ctx, target1, "http://peer1", "peer-fork-004")
+			err1 = server.catchup(ctx, target1, "peer-fork-004", "http://peer1")
 		}()
 
 		go func() {
 			defer wg.Done()
-			err2 = server.catchup(ctx, target2, "http://peer2", "peer-fork-005")
+			err2 = server.catchup(ctx, target2, "peer-fork-005", "http://peer2")
 		}()
 
 		wg.Wait()
@@ -990,7 +990,7 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 			},
 		)
 
-		err := server.catchup(ctx, target, "http://peer", "peer-fork-006")
+		err := server.catchup(ctx, target, "peer-fork-006", "http://peer")
 
 		// Should accept chain with more transactions (in theory)
 		if err != nil {
@@ -1070,7 +1070,7 @@ func TestCatchup_ForkBattleSimulation(t *testing.T) {
 
 			peerURL := fmt.Sprintf("http://peer%d", i)
 			peerID := fmt.Sprintf("peer-fork-%03d", i)
-			err := server.catchup(ctx, target, peerURL, peerID)
+			err := server.catchup(ctx, target, peerID, peerURL)
 
 			t.Logf("Chain %d (work=%d) result: %v",
 				i, 1000000+i*100000, err)
@@ -1145,7 +1145,7 @@ func TestCatchup_ReorgMetrics(t *testing.T) {
 		)
 
 		// Execute catchup
-		err := server.catchup(ctx, targetBlock, "http://peer", "peer-fork-003")
+		err := server.catchup(ctx, targetBlock, "peer-fork-003", "http://peer")
 
 		// Check if reorg metrics were recorded
 		if server.stats != nil {
@@ -1155,13 +1155,6 @@ func TestCatchup_ReorgMetrics(t *testing.T) {
 
 		if err != nil {
 			t.Logf("Reorg result: %v", err)
-		}
-
-		// Verify peer metrics tracked the reorg
-		if server.peerMetrics != nil {
-			if metric, exists := server.peerMetrics.PeerMetrics["http://peer"]; exists {
-				t.Logf("Peer reorg metrics: %+v", metric)
-			}
 		}
 	})
 }
@@ -1222,7 +1215,7 @@ func TestCatchup_TimestampValidationDuringFork(t *testing.T) {
 			httpmock.NewBytesResponder(200, testhelpers.BlocksToHeaderBytes(forkChain)),
 		)
 
-		err := server.catchup(ctx, targetBlock, "http://peer", "peer-fork-003")
+		err := server.catchup(ctx, targetBlock, "peer-fork-003", "http://peer")
 
 		// Should detect invalid timestamps
 		assert.Error(t, err)
@@ -1347,7 +1340,7 @@ func TestCatchup_CoinbaseMaturityCheckFixed(t *testing.T) {
 		)
 
 		ctx := context.Background()
-		err := server.catchup(ctx, targetBlock, "http://test-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://test-peer")
 
 		// Should fail because fork depth (1000 - 850 = 150) exceeds coinbase maturity (100)
 		assert.Error(t, err)
@@ -1363,14 +1356,6 @@ func TestCatchup_CoinbaseMaturityCheckFixed(t *testing.T) {
 			if contains(errStr, "fork depth") || contains(errStr, "coinbase maturity") {
 				assert.Contains(t, errStr, "exceeds coinbase maturity",
 					"Fork depth should exceed coinbase maturity limit")
-			}
-		}
-
-		// Verify malicious attempt was recorded if we got that far
-		if server.peerMetrics != nil && server.peerMetrics.PeerMetrics != nil {
-			if peerMetric, exists := server.peerMetrics.PeerMetrics["http://test-peer"]; exists {
-				assert.Greater(t, peerMetric.MaliciousAttempts, int64(0),
-					"Should record malicious attempt for deep fork")
 			}
 		}
 	})
@@ -1480,7 +1465,7 @@ func TestCatchup_CoinbaseMaturityCheckFixed(t *testing.T) {
 		)
 
 		ctx := context.Background()
-		err := server.catchup(ctx, targetBlock, "http://test-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://test-peer")
 
 		// Fork depth (1000 - 950 = 50) is within coinbase maturity (100)
 		// So it should NOT fail due to coinbase maturity

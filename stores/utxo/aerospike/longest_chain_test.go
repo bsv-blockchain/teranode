@@ -3,12 +3,14 @@ package aerospike_test
 import (
 	"testing"
 
+	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -287,5 +289,100 @@ func TestMarkTransactionsOnLongestChain_Integration(t *testing.T) {
 		meta, err = store.Get(ctx, minedTxHash, fields.UnminedSince)
 		require.NoError(t, err)
 		assert.Equal(t, uint32(0), meta.UnminedSince)
+	})
+}
+
+func TestDeleteAtHeight_ForkTransactionNotOnLongestChain(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.GlobalBlockHeightRetention = 100 // Set retention period
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	defer deferFn()
+
+	// Clean database before starting
+	cleanDB(t, client)
+
+	t.Run("Transaction mined on fork should NOT be marked for deletion when fully spent", func(t *testing.T) {
+		// Test that transactions mined on forks (not on longest chain) are NOT marked for deletion
+		// even when all outputs are spent. Only transactions on the main chain should be pruned.
+
+		const blockHeight = uint32(100)
+		err := store.SetBlockHeight(blockHeight)
+		require.NoError(t, err)
+
+		// Create a transaction with 6 outputs
+		forkTx, err := bt.NewTxFromString("010000000000000000ef0152a9231baa4e4b05dc30c8fbb7787bab5f460d4d33b039c39dd8cc006f3363e4020000006b483045022100ce3605307dd1633d3c14de4a0cf0df1439f392994e561b648897c4e540baa9ad02207af74878a7575a95c9599e9cdc7e6d73308608ee59abcd90af3ea1a5c0cca41541210275f8390df62d1e951920b623b8ef9c2a67c4d2574d408e422fb334dd1f3ee5b6ffffffff706b9600000000001976a914a32f7eaae3afd5f73a2d6009b93f91aa11d16eef88ac05404b4c00000000001976a914aabb8c2f08567e2d29e3a64f1f833eee85aaf74d88ac80841e00000000001976a914a4aff400bef2fa074169453e703c611c6b9df51588ac204e0000000000001976a9144669d92d46393c38594b2f07587f01b3e5289f6088ac204e0000000000001976a914a461497034343a91683e86b568c8945fb73aca0288ac99fe2a00000000001976a914de7850e419719258077abd37d4fcccdb0a659b9388ac00000000")
+		require.NoError(t, err)
+		forkTxHash := forkTx.TxIDChainHash()
+
+		// Step 1: Create the transaction
+		_, err = store.Create(ctx, forkTx, blockHeight)
+		require.NoError(t, err)
+
+		// Step 2: Mine the transaction on a FORK block (onLongestChain=false)
+		minedInfo := utxo.MinedBlockInfo{
+			BlockID:        999, // Fork block ID
+			BlockHeight:    blockHeight,
+			SubtreeIdx:     1,
+			OnLongestChain: false, // <-- This is the key: transaction is on a fork!
+			UnsetMined:     false,
+		}
+		_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{forkTxHash}, minedInfo)
+		require.NoError(t, err)
+
+		// Step 3: Verify the transaction has blockIDs (it's in a block)
+		meta, err := store.Get(ctx, forkTxHash, fields.BlockIDs, fields.UnminedSince)
+		require.NoError(t, err)
+		assert.Len(t, meta.BlockIDs, 1, "Transaction should have one blockID")
+		assert.Equal(t, uint32(999), meta.BlockIDs[0], "BlockID should be 999 (fork block)")
+
+		// Verify unminedSince is set (because it's not on longest chain)
+		// UnminedSince = 0 means on longest chain, != 0 means not on longest chain
+		assert.NotEqual(t, uint32(0), meta.UnminedSince, "unminedSince should be non-zero for fork transactions")
+		assert.Equal(t, blockHeight, meta.UnminedSince, "unminedSince should equal current block height")
+
+		// Get the Aerospike key for the main record
+		keySource := uaerospike.CalculateKeySource(forkTxHash, uint32(0), store.GetUtxoBatchSize())
+		mainRecordKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
+		require.NoError(t, err)
+
+		// Read the record directly from Aerospike to check deleteAtHeight
+		resp, err := client.Get(nil, mainRecordKey)
+		require.NoError(t, err)
+
+		// Verify deleteAtHeight is NOT set yet (outputs not spent)
+		assert.Nil(t, resp.Bins[fields.DeleteAtHeight.String()], "deleteAtHeight should not be set before spending")
+
+		// Step 4: Create a transaction that spends all 6 outputs
+		spendingTx := bt.NewTx()
+		var utxos []*bt.UTXO
+		for vout := 0; vout < len(forkTx.Outputs); vout++ {
+			utxos = append(utxos, &bt.UTXO{
+				TxIDHash:      forkTxHash,
+				Vout:          uint32(vout),
+				Satoshis:      forkTx.Outputs[vout].Satoshis,
+				LockingScript: forkTx.Outputs[vout].LockingScript,
+			})
+		}
+		err = spendingTx.FromUTXOs(utxos...)
+		require.NoError(t, err)
+
+		// Step 5: Spend all outputs
+		_, err = store.Spend(ctx, spendingTx, blockHeight+1)
+		require.NoError(t, err)
+
+		// Step 6: Assert CORRECT behavior - deleteAtHeight should NOT be set for fork transactions
+		resp, err = client.Get(nil, mainRecordKey)
+		require.NoError(t, err)
+
+		// CORRECT BEHAVIOR: deleteAtHeight should be nil for fork transactions
+		// This will FAIL with current bug, PASS after fix
+		assert.Nil(t, resp.Bins[fields.DeleteAtHeight.String()], "deleteAtHeight should NOT be set for transactions on forks")
+
+		// Verify unminedSince is still set (confirms it's on a fork)
+		meta, err = store.Get(ctx, forkTxHash, fields.UnminedSince)
+		require.NoError(t, err)
+		assert.NotEqual(t, uint32(0), meta.UnminedSince, "unminedSince should be set (transaction on fork)")
 	})
 }

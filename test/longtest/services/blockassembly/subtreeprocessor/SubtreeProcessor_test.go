@@ -40,12 +40,12 @@ var (
 	hash1 = chainhash.HashH([]byte("tx1"))
 	hash2 = chainhash.HashH([]byte("tx2"))
 
-	node1 = subtreepkg.SubtreeNode{
+	node1 = subtreepkg.Node{
 		Hash:        hash1,
 		Fee:         1,
 		SizeInBytes: 1,
 	}
-	node2 = subtreepkg.SubtreeNode{
+	node2 = subtreepkg.Node{
 		Hash:        hash2,
 		Fee:         1,
 		SizeInBytes: 1,
@@ -268,7 +268,7 @@ func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Me
 
 		hashes[hash] = i
 
-		node := subtreepkg.SubtreeNode{
+		node := subtreepkg.Node{
 			Hash:        hash,
 			Fee:         1,
 			SizeInBytes: 1,

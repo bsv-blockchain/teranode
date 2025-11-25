@@ -2,6 +2,8 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
+// Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
+// and blockchain synchronization using the traditional Bitcoin network protocol.
 package legacy
 
 import (
@@ -132,9 +134,8 @@ func maxUint64(a, b uint64) uint64 {
 	return b
 }
 
-// config defines the configuration options for bsvd.
-//
-// See loadConfig for details on the configuration load process.
+// config defines the configuration options for the legacy Bitcoin SV protocol server.
+// Configuration values can be set via command-line flags, configuration files, or environment variables.
 type config struct {
 	ShowVersion             bool          `short:"V" long:"version" description:"Display version information and exit"`
 	DataDir                 string        `short:"b" long:"datadir" description:"Directory to store data"`
@@ -158,6 +159,7 @@ type config struct {
 	ProxyPass               string        `long:"proxypass" default-mask:"-" description:"Password for proxy server"`
 	TestNet                 bool          `long:"testnet" description:"Use the test network"`
 	RegressionTest          bool          `long:"regtest" description:"Use the regression test network"`
+	TeraTestNet             bool          `long:"teratestnet" description:"Use the Teranode test network"`
 	AddCheckpoints          []string      `long:"addcheckpoint" description:"Add a custom checkpoint.  Format: '<height>:<hash>'"`
 	DisableCheckpoints      bool          `long:"nocheckpoints" description:"Disable built-in checkpoints.  Don't do this unless you know what you're doing."`
 	Profile                 string        `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65536"`
@@ -195,8 +197,8 @@ type config struct {
 	whitelists              []*net.IPNet
 }
 
-// serviceOptions defines the configuration options for the daemon as a service on
-// Windows.
+// serviceOptions defines the configuration options for managing the legacy daemon as a Windows service.
+// This is used exclusively on Windows platforms to control service lifecycle operations.
 type serviceOptions struct {
 	ServiceCommand string `short:"s" long:"service" description:"Service command {install, remove, start, stop}"`
 }
@@ -219,6 +221,21 @@ func removeDuplicateAddresses(addrs []string) []string {
 
 // normalizeAddress returns addr with the passed default port appended if
 // there is not already a port specified.
+//
+// This function ensures that network addresses have a port component for proper
+// network connection establishment. If the address already contains a port,
+// it is returned unchanged.
+//
+// Parameters:
+//   - addr: Network address that may or may not include a port (e.g., "192.168.1.1" or "192.168.1.1:8333")
+//   - defaultPort: Port number to append if addr doesn't have one (e.g., "8333")
+//
+// Returns the normalized address with port guaranteed to be present.
+//
+// Examples:
+//   - normalizeAddress("192.168.1.1", "8333") returns "192.168.1.1:8333"
+//   - normalizeAddress("192.168.1.1:9333", "8333") returns "192.168.1.1:9333"
+//   - normalizeAddress("localhost", "8333") returns "localhost:8333"
 func normalizeAddress(addr, defaultPort string) string {
 	_, _, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -239,6 +256,22 @@ func normalizeAddresses(addrs []string, defaultPort string) []string {
 }
 
 // newCheckpointFromStr parses checkpoints in the '<height>:<hash>' format.
+//
+// This function converts a string representation of a blockchain checkpoint into
+// a chaincfg.Checkpoint structure for use in blockchain validation and synchronization.
+//
+// Parameters:
+//   - checkpoint: String in format "<height>:<hash>" where height is a decimal number
+//     and hash is a hexadecimal block hash (e.g., "12345:000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+//
+// Returns:
+//   - chaincfg.Checkpoint: Parsed checkpoint structure on success
+//   - error: Parsing error if format is invalid or height is malformed
+//
+// Possible errors:
+//   - Invalid format (not exactly one colon separator)
+//   - Malformed height (not a valid 32-bit integer)
+//   - Invalid hash format (handled by chainhash.NewHashFromStr)
 func newCheckpointFromStr(checkpoint string) (chaincfg.Checkpoint, error) {
 	parts := strings.Split(checkpoint, ":")
 	if len(parts) != 2 {
@@ -413,9 +446,14 @@ func loadConfig(logger ulogger.Logger) (*config, []string, error) {
 		activeNetParams = &regressionNetParams
 	}
 
+	if cfg.TeraTestNet {
+		numNets++
+		activeNetParams = &teraTestNetParams
+	}
+
 	if numNets > 1 {
-		str := "%s: The testnet, regtest and segnet params " +
-			"can't be used together -- choose one of the four"
+		str := "%s: The testnet, regtest, and teratestnet params " +
+			"can't be used together -- choose one"
 		err := fmt.Errorf(str, funcName)
 		logger.Errorf("%v", err)
 		logger.Errorf("%s", usageMessage)
