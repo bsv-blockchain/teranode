@@ -3024,6 +3024,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="2.2.1. Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optimistic-mining-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optimistic Mining Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -3034,6 +3051,89 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="2.2.2. Catching up after a parent block is not found">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-process-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catchup Process Overview
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fsm-state-transitions-during-catchup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FSM State Transitions During Catchup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#header-chain-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Header Chain Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-quality-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Quality Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#error-handling-and-peer-quality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling and Peer Quality
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#concurrent-fetch-sequential-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Concurrent Fetch + Sequential Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -3159,6 +3259,333 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#227-fork-management-and-chain-reorganization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2.7. Fork Management and Chain Reorganization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.2.7. Fork Management and Chain Reorganization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fork-states-and-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork States and Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fork-registration-and-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork Registration and Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parallel-fork-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parallel Fork Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fork-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork Resolution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fork-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-with-block-priority-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration with Block Priority Queue
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#228-block-processing-queue-and-priority-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2.8. Block Processing Queue and Priority System
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.2.8. Block Processing Queue and Priority System">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#priority-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Priority Levels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#queue-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Queue Operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retry-mechanism" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retry Mechanism
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alternative-source-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alternative Source Handling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coordination-with-fork-manager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordination with Fork Manager
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#229-malicious-peer-detection-and-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2.9. Malicious Peer Detection and Tracking
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.2.9. Malicious Peer Detection and Tracking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#detection-mechanisms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Detection Mechanisms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-quality-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Quality Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#circuit-breaker-pattern" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circuit Breaker Pattern
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-banning-future-feature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Banning (Future Feature)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2210-invalid-block-tracking-and-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2.10. Invalid Block Tracking and Notifications
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.2.10. Invalid Block Tracking and Notifications">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#invalid-block-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Invalid Block Classification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kafka-notification-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kafka Notification System
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-revalidation-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Revalidation Process
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-with-block-invalidation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration with Block Invalidation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2211-subtree-deduplication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2.11. Subtree Deduplication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.2.11. Subtree Deduplication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#purpose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Purpose
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-with-subtree-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration with Subtree Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3172,6 +3599,56 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="2.3. Marking Txs as mined">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#trigger-points-and-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trigger Points and Sequence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-with-two-phase-commit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration with Two-Phase Commit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#responsibility-and-exclusivity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Responsibility and Exclusivity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Optimization
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -6434,6 +6911,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="2.2.1. Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#optimistic-mining-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optimistic Mining Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -6444,6 +6938,89 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="2.2.2. Catching up after a parent block is not found">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-process-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catchup Process Overview
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fsm-state-transitions-during-catchup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FSM State Transitions During Catchup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#header-chain-cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Header Chain Cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#checkpoint-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Checkpoint Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-quality-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Quality Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#error-handling-and-peer-quality" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling and Peer Quality
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#concurrent-fetch-sequential-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Concurrent Fetch + Sequential Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -6569,6 +7146,333 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#227-fork-management-and-chain-reorganization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2.7. Fork Management and Chain Reorganization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.2.7. Fork Management and Chain Reorganization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fork-states-and-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork States and Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fork-registration-and-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork Registration and Tracking
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#parallel-fork-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parallel Fork Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fork-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork Resolution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fork-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fork Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-with-block-priority-queue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration with Block Priority Queue
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#228-block-processing-queue-and-priority-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2.8. Block Processing Queue and Priority System
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.2.8. Block Processing Queue and Priority System">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#priority-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Priority Levels
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#queue-operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Queue Operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#retry-mechanism" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Retry Mechanism
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alternative-source-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alternative Source Handling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#coordination-with-fork-manager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Coordination with Fork Manager
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#229-malicious-peer-detection-and-tracking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2.9. Malicious Peer Detection and Tracking
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.2.9. Malicious Peer Detection and Tracking">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#detection-mechanisms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Detection Mechanisms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-quality-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Quality Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#circuit-breaker-pattern" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circuit Breaker Pattern
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-banning-future-feature" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Banning (Future Feature)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2210-invalid-block-tracking-and-notifications" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2.10. Invalid Block Tracking and Notifications
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.2.10. Invalid Block Tracking and Notifications">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#invalid-block-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Invalid Block Classification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kafka-notification-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kafka Notification System
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-revalidation-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Revalidation Process
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-with-block-invalidation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration with Block Invalidation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2211-subtree-deduplication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2.11. Subtree Deduplication
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2.2.11. Subtree Deduplication">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#purpose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Purpose
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#implementation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Implementation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-with-subtree-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration with Subtree Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6582,6 +7486,56 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="2.3. Marking Txs as mined">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#trigger-points-and-sequence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trigger Points and Sequence
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#integration-with-two-phase-commit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Integration with Two-Phase Commit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#responsibility-and-exclusivity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Responsibility and Exclusivity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#performance-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Optimization
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -6770,17 +7724,258 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </ul>
 </li>
 </ul>
-<p>Note - there is a <code>optimisticMining</code> setting that allows to reverse the block validation and block addition to the blockchain steps.</p>
+<h5 id="optimistic-mining-mode">Optimistic Mining Mode</h5>
+<p>The <code>optimisticMining</code> setting provides an alternative validation strategy that prioritizes block propagation speed over immediate validation completion. This experimental feature reverses the normal validate-then-add sequence.</p>
+<p><strong>Normal Mode (Default):</strong></p>
+<div class="highlight"><pre><span></span><code>1. Validate block (subtrees, transactions, proof of work)
+2. If valid → Add to blockchain
+3. Update stores and caches
+4. Notify other services
+</code></pre></div>
+<p><strong>Optimistic Mining Mode:</strong></p>
+<div class="highlight"><pre><span></span><code>1. Add block to blockchain immediately (before full validation)
+2. Mark block as existing in cache
+3. Validate in background goroutine:
+   a. Fetch block headers for validation context
+   b. Validate subtrees and transactions
+   c. Update stores (subtree DAH, tx metadata)
+   d. Mark transactions as mined
+4. If validation fails → Queue for revalidation
+</code></pre></div>
+<p><strong>Technical Implementation:</strong></p>
+<p>The optimistic path is implemented in <code>ValidateBlock()</code> (services/blockvalidation/BlockValidation.go:1187-1220):</p>
+<ol>
+<li><strong>Immediate Block Addition</strong>: Calls <code>blockchainClient.AddBlock()</code> before subtree validation completes</li>
+<li><strong>Block Exists Cache</strong>: Sets block as existing to prevent reprocessing</li>
+<li><strong>Background Validation</strong>: Spawns goroutine with <code>optimisticMiningWg.Add(1)</code></li>
+<li><strong>Decoupled Context</strong>: Uses <code>tracing.DecoupleTracingSpan()</code> to prevent context cancellation from blocking background work</li>
+<li><strong>Rollback on Failure</strong>: Calls <code>ReValidateBlock()</code> if background validation fails</li>
+</ol>
+<p><strong>Configuration:</strong></p>
 <ul>
-<li>In the regular mode, the block is validated first, and, if valid, added to the block.</li>
-<li>If <code>optimisticMining</code> is on, the block is optimistically added to the blockchain right away, and then validated in the background next. If it was to be found invalid after validation, it would be removed from the blockchain. This mode is not recommended for production use, as it can lead to a temporary fork in the blockchain. It however can be useful for performance testing purposes.</li>
+<li><strong>Setting</strong>: <code>blockvalidation_optimisticMining</code> (default: <code>false</code>)</li>
+<li><strong>Runtime Override</strong>: Can be disabled per-block via <code>ValidateBlockOptions.DisableOptimisticMining</code></li>
+<li><strong>Automatic Disable</strong>: Always disabled during catchup mode for better reliability</li>
 </ul>
+<p><strong>Performance Benefits:</strong></p>
+<ul>
+<li><strong>Faster Block Propagation</strong>: Block becomes available to Block Assembly ~100-200ms sooner</li>
+<li><strong>Reduced Latency</strong>: Miners can build on new blocks before validation completes</li>
+<li><strong>Higher Throughput</strong>: Decouples block acceptance from validation time</li>
+</ul>
+<p><strong>Risks and Tradeoffs:</strong></p>
+<ol>
+<li>
+<p><strong>Temporary Invalid Chain State</strong>:</p>
+<ul>
+<li>Node may temporarily have an invalid block in its chain</li>
+<li>If validation fails in background, chain state becomes inconsistent until revalidation</li>
+<li>Other services (Block Assembly, Validator) may work with temporarily invalid state</li>
+</ul>
+</li>
+<li>
+<p><strong>Fork Risk</strong>:</p>
+<ul>
+<li>If optimistic block turns out invalid, creates temporary fork</li>
+<li>Miners building on invalid block waste hash power</li>
+<li>Requires chain reorganization to remove invalid block</li>
+</ul>
+</li>
+<li>
+<p><strong>Resource Waste</strong>:</p>
+<ul>
+<li>Background goroutines consume memory and CPU</li>
+<li>May process transactions that will later be rejected</li>
+<li>Stores updated with data that may need rollback</li>
+</ul>
+</li>
+<li>
+<p><strong>Revalidation Complexity</strong>:</p>
+<ul>
+<li>Failed blocks queued to <code>revalidateBlockChan</code></li>
+<li>Revalidation retries up to 3 times</li>
+<li>After retries exhausted, block marked permanently invalid</li>
+</ul>
+</li>
+</ol>
+<p><strong>When to Use Optimistic Mining:</strong></p>
+<ul>
+<li><strong>Performance Testing</strong>: Measure maximum throughput without validation bottleneck</li>
+<li><strong>Low-Risk Environments</strong>: Test networks where temporary forks acceptable</li>
+<li><strong>High-Trust Scenarios</strong>: When block sources are highly trusted (e.g., own miners)</li>
+</ul>
+<p><strong>NOT Recommended For:</strong></p>
+<ul>
+<li><strong>Production Networks</strong>: Risk of temporary chain corruption unacceptable</li>
+<li><strong>Public Nodes</strong>: May propagate invalid blocks to network</li>
+<li><strong>Financial Applications</strong>: Temporary invalid state could affect transaction processing</li>
+</ul>
+<p><strong>Future Improvements:</strong></p>
+<p>The optimistic mining feature is experimental and currently disabled by default. Future enhancements may include:</p>
+<ul>
+<li>Better rollback mechanisms</li>
+<li>Invalid block notifications to dependent services</li>
+<li>Configurable risk levels (optimistic vs pessimistic thresholds)</li>
+</ul>
+<p>For implementation details, see <code>BlockValidation.go:ValidateBlock()</code> (lines 1146-1220).</p>
 <h4 id="222-catching-up-after-a-parent-block-is-not-found">2.2.2. Catching up after a parent block is not found</h4>
 <p><img alt="block_validation_p2p_block_catchup.svg" src="../img/plantuml/blockvalidation/block_validation_p2p_block_catchup.svg" /></p>
-<p>When a block parent is not found in the local blockchain, the node will start a catchup process. The catchup process will iterate through the parent blocks until it finds a known block in the blockchain.</p>
-<p>When a block is not known, it will be requested from the remote node. Once received, it will be queued for validation (effectively starting the process of validation for the parent block from the beginning, as seen in 2.3.1).</p>
-<p>Notice that, when catching up, the Block Validator will set the machine state of the node to <code>CATCHING_UP</code>. This is done to prevent the node from processing new blocks while it is still catching up. The node will only assemble or process new blocks once it has caught up with the blockchain. For more information on this, please refer to the <a href="../../architecture/stateManagement/">State Management</a>  documentation.</p>
-<p>During the catchup process, the system tracks invalid blocks. If a block fails validation during catchup, it is marked as invalid in the blockchain store. This prevents invalid blocks from corrupting the chain state and allows the system to avoid reprocessing known invalid blocks. The system also maintains metrics on peer quality to identify and avoid peers that provide invalid blocks.</p>
+<p>When a block parent is not found in the local blockchain, the node initiates a comprehensive catchup process to synchronize with the peer's chain. This process is orchestrated through 11 distinct steps to ensure safe and validated synchronization while protecting against malicious peers.</p>
+<h5 id="catchup-process-overview">Catchup Process Overview</h5>
+<p>The catchup orchestration follows this step-by-step sequence (implemented in <code>catchup()</code> in <code>services/blockvalidation/catchup.go</code>):</p>
+<ol>
+<li><strong>Acquire catchup lock</strong> - Prevents concurrent catchups using atomic <code>isCatchingUp</code> flag</li>
+<li><strong>Fetch headers from peer</strong> - Retrieves block headers using block locator pattern (<code>headers_from_common_ancestor</code> endpoint)</li>
+<li><strong>Find and validate common ancestor</strong> - Locates the newest block that exists in both chains using O(log n) search</li>
+<li><strong>Check coinbase maturity constraints</strong> - Validates fork depth doesn't exceed coinbase maturity (default: 100 blocks)</li>
+<li><strong>Detect secret mining attempts</strong> - Checks if common ancestor is too far behind (threshold: default 10 blocks)</li>
+<li><strong>Filter headers to process</strong> - Extracts only headers after the common ancestor</li>
+<li><strong>Build header chain cache</strong> - Pre-computes validation headers to reduce database queries during validation</li>
+<li><strong>Verify chain continuity</strong> - Ensures first block properly connects to local chain</li>
+<li><strong>Verify checkpoints</strong> - Validates checkpoint hashes to confirm correct chain before proceeding</li>
+<li><strong>Fetch and validate blocks</strong> - Coordinates concurrent fetching with sequential validation</li>
+<li><strong>Clean up resources</strong> - Clears header chain cache and releases locks</li>
+</ol>
+<h5 id="fsm-state-transitions-during-catchup">FSM State Transitions During Catchup</h5>
+<p>The Block Validation service manages FSM (Finite State Machine) state transitions during catchup to coordinate with other services:</p>
+<p><strong>State Transition Flow:</strong></p>
+<div class="highlight"><pre><span></span><code>RUNNING → CATCHINGBLOCKS → RUNNING
+</code></pre></div>
+<p><strong>When State Changes:</strong></p>
+<ul>
+<li><strong>Transition to CATCHINGBLOCKS</strong>: Triggered when new blocks extend the current main chain<ul>
+<li>Calls <code>blockchainClient.CatchUpBlocks(ctx)</code> before fetching blocks</li>
+<li>Prevents Block Assembly from mining during catchup</li>
+<li>Disables transaction propagation to conserve resources</li>
+</ul>
+</li>
+<li><strong>Transition back to RUNNING</strong>: Triggered after catchup completes (success or failure)<ul>
+<li>Calls <code>blockchainClient.Run(ctx)</code> to restore normal operations</li>
+<li>Re-enables Block Assembly and transaction processing</li>
+</ul>
+</li>
+</ul>
+<p>For more information on FSM states and their effects on services, see the <a href="../../architecture/stateManagement/">State Management</a> documentation.</p>
+<h5 id="header-chain-cache">Header Chain Cache</h5>
+<p>To optimize block validation performance during catchup, the service builds a header chain cache before fetching full blocks:</p>
+<p><strong>Cache Building Process:</strong></p>
+<ol>
+<li>Takes all headers that need to be processed (headers after common ancestor)</li>
+<li>Calls <code>headerChainCache.BuildFromHeaders(blockHeaders, previousBlockHeaderCount)</code></li>
+<li>Pre-computes validation headers for each block (typically last 11 headers for MTP calculation)</li>
+<li>Stores in memory for O(1) lookup during validation</li>
+</ol>
+<p><strong>Performance Benefits:</strong></p>
+<ul>
+<li>Eliminates repeated database queries for previous headers during validation</li>
+<li>Reduces validation latency during catchup</li>
+<li>Particularly effective when catching up on hundreds or thousands of blocks</li>
+</ul>
+<h5 id="checkpoint-verification">Checkpoint Verification</h5>
+<p>Before fetching full block data, the catchup process verifies checkpoints to ensure the peer is on the correct chain:</p>
+<p><strong>Verification Steps:</strong></p>
+<ol>
+<li><strong>Get Configured Checkpoints</strong>: Reads checkpoints from <code>ChainCfgParams.Checkpoints</code></li>
+<li><strong>Determine Header Range</strong>: Calculates which checkpoints fall within the headers to be processed</li>
+<li>
+<p><strong>Verify Each Checkpoint</strong>: For each checkpoint in range:</p>
+<ul>
+<li>Maps checkpoint height to header index</li>
+<li>Compares checkpoint hash with actual header hash</li>
+<li>Fails catchup immediately if any checkpoint doesn't match</li>
+<li><strong>Record Results</strong>: Logs number of checkpoints verified</li>
+</ul>
+</li>
+</ol>
+<p><strong>Checkpoint-Based Quick Validation:</strong></p>
+<ul>
+<li>If all checkpoints verify and blocks are below highest checkpoint, quick validation can be used</li>
+<li>Quick validation creates UTXOs and spends transactions in parallel (2-phase process)</li>
+<li>Approximately 10x faster than full validation for historical blocks</li>
+<li>Currently disabled pending additional testing (<code>useQuickValidation = false</code>)</li>
+</ul>
+<p><strong>Safety Guarantees:</strong></p>
+<p>Checkpoint verification ensures:</p>
+<ul>
+<li>Cannot be tricked onto a fake chain with valid proof of work</li>
+<li>Detects chain forks before downloading gigabytes of block data</li>
+<li>Provides early exit for catchup from malicious peers</li>
+</ul>
+<h5 id="peer-quality-tracking">Peer Quality Tracking</h5>
+<p>The catchup process maintains detailed metrics on peer behavior to detect and mitigate malicious activity:</p>
+<p><strong>Metrics Tracked Per Peer:</strong></p>
+<ul>
+<li><strong>Malicious Attempts</strong>: Count of detected malicious behaviors (secret mining, invalid blocks)</li>
+<li><strong>Catchup Successes/Failures</strong>: Success rate for catchup operations from this peer</li>
+<li><strong>Validation Failures</strong>: Number of blocks from peer that failed consensus validation</li>
+<li><strong>Response Times</strong>: How quickly peer responds to header/block requests</li>
+</ul>
+<p><strong>Malicious Behavior Detection:</strong></p>
+<p>The system detects and records:</p>
+<ol>
+<li><strong>Secret Mining</strong>: Common ancestor more than <code>secret_mining_threshold</code> blocks behind (default: 10)</li>
+<li><strong>Coinbase Maturity Violation</strong>: Fork depth exceeds coinbase maturity (default: 100 blocks)</li>
+<li><strong>Invalid Block Propagation</strong>: Blocks that fail consensus validation (PoW, merkle root, timestamps)</li>
+<li><strong>Checkpoint Mismatch</strong>: Peer provides chain with incorrect checkpoint hashes</li>
+</ol>
+<p><strong>Metrics Recording:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="nx">peerMetric</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">u</span><span class="p">.</span><span class="nx">peerMetrics</span><span class="p">.</span><span class="nx">GetOrCreatePeerMetrics</span><span class="p">(</span><span class="nx">peerID</span><span class="p">)</span>
+<span class="nx">peerMetric</span><span class="p">.</span><span class="nx">RecordMaliciousAttempt</span><span class="p">()</span>
+</code></pre></div>
+<p>These metrics feed into the circuit breaker pattern (see Section 2.2.9) to temporarily or permanently avoid problematic peers.</p>
+<h5 id="error-handling-and-peer-quality">Error Handling and Peer Quality</h5>
+<p><strong>Invalid Block Classification:</strong></p>
+<p>During catchup, blocks are only marked as invalid (<code>invalid=true</code>) for consensus violations:</p>
+<ul>
+<li>Proof of work failures (hash doesn't meet target)</li>
+<li>Merkle root mismatches</li>
+<li>Timestamp violations</li>
+<li>Transaction ordering or uniqueness violations</li>
+</ul>
+<p><strong>Recoverable Errors:</strong></p>
+<p>Blocks are NOT marked invalid for:</p>
+<ul>
+<li>Missing subtrees or transaction data (can be recovered)</li>
+<li>Network timeouts or temporary storage failures</li>
+<li>Processing errors that may succeed on retry</li>
+</ul>
+<p><strong>Peer Banning (Logged, Not Implemented):</strong></p>
+<p>When malicious behavior is detected, the system logs:</p>
+<div class="highlight"><pre><span></span><code>SECURITY: Peer &lt;peerID&gt; attempted secret mining - should be banned (banning not yet implemented)
+</code></pre></div>
+<p>This provides an audit trail for operators and prepares for future automatic banning.</p>
+<h5 id="concurrent-fetch-sequential-validation">Concurrent Fetch + Sequential Validation</h5>
+<p>The catchup process optimizes performance by fetching blocks concurrently while validating them sequentially:</p>
+<p><strong>Coordination Pattern:</strong></p>
+<ol>
+<li><strong>Error Group</strong>: Creates <code>errgroup.WithContext()</code> to manage two concurrent goroutines</li>
+<li><strong>Fetch Goroutine</strong>: Fetches blocks from peer and sends to <code>validateBlocksChan</code><ul>
+<li>Fetches blocks concurrently (respects rate limits)</li>
+<li>Sends blocks to channel in order</li>
+<li>Closes channel when all blocks fetched</li>
+</ul>
+</li>
+<li><strong>Validation Goroutine</strong>: Reads from channel and validates blocks sequentially<ul>
+<li>Maintains chain order by validating in sequence</li>
+<li>Uses cached headers for performance</li>
+<li>Updates atomic counter after each block</li>
+</ul>
+</li>
+<li><strong>Error Handling</strong>: Either goroutine error terminates both via shared context</li>
+</ol>
+<p><strong>Benefits:</strong></p>
+<ul>
+<li>Maximizes network and CPU utilization</li>
+<li>Reduces total catchup time by ~50-60%</li>
+<li>Maintains chain integrity through sequential validation</li>
+<li>Provides early termination on first error</li>
+</ul>
+<p><strong>Progress Tracking:</strong></p>
+<p>The system logs progress every 100 blocks:</p>
+<div class="highlight"><pre><span></span><code>[catchup] validating block &lt;hash&gt; 100/1000
+[catchup] 900 blocks remaining
+</code></pre></div>
+<p>For implementation details, see <code>catchup.go:fetchAndValidateBlocks()</code> (lines 554-612).</p>
 <p><strong>Sync Coordination and Peer Selection:</strong></p>
 <p>The catchup process integrates with the P2P service's peer registry and reputation system to select optimal peers for block retrieval:</p>
 <ol>
@@ -6825,54 +8020,113 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <p>For blocks that are below known checkpoints in the blockchain, the Block Validation service employs an optimized quick validation path that significantly improves synchronization performance. This mechanism is particularly effective during initial blockchain synchronization.</p>
 <p><img alt="quick_validation.svg" src="../img/plantuml/blockvalidation/quick_validation.svg" /></p>
 <h5 id="quick-validation-process">Quick Validation Process</h5>
-<p>The quick validation system operates in two distinct phases:</p>
+<p>The quick validation system operates in two distinct phases implemented in <code>quickValidateBlock()</code> in <code>services/blockvalidation/quick_validate.go</code>:</p>
+<p><strong>Phase 1: UTXO Creation (<code>createAllUTXOs()</code>)</strong></p>
+<p>All UTXOs for the block's transactions are created in parallel before validation:</p>
 <ol>
-<li>
-<p><strong>UTXO Creation Phase</strong>: All UTXOs for the block's transactions are created in parallel. The system:</p>
-<ul>
-<li>Processes transactions concurrently using configurable parallelism (<code>blockvalidation_concurrency_createAllUTXOs</code>)</li>
-<li>Creates UTXOs with the block's ID and mined status pre-set</li>
-<li>Handles existing UTXO conflicts gracefully for recovery scenarios</li>
+<li><strong>BlockID Stability</strong>: Before creating UTXOs, checks if first transaction already exists with a BlockID<ul>
+<li>On retry scenarios, reuses existing BlockID to maintain consistency</li>
+<li>Prevents BlockID conflicts when recovering from failures</li>
 </ul>
 </li>
-<li>
-<p><strong>Transaction Spending Phase</strong>: Validates transactions by spending their inputs in parallel. The system:</p>
-<ul>
-<li>Uses optimized validator options that skip expensive policy checks for mined blocks</li>
-<li>Processes transactions with configurable concurrency (<code>blockvalidation_concurrency_spendAllTransactions</code>)</li>
-<li>Validates transaction relationships and dependencies efficiently</li>
+<li><strong>Synchronous First Transaction</strong>: Creates first transaction synchronously to establish BlockID anchor<ul>
+<li>Ensures BlockID is committed before parallel operations</li>
+<li>Provides stable reference point for retry detection</li>
 </ul>
 </li>
+<li><strong>Parallel UTXO Creation</strong>: Remaining transactions processed concurrently<ul>
+<li>Concurrency limited by <code>UtxoStore.StoreBatcherSize * 2</code></li>
+<li>Each UTXO created with <code>locked=true</code> flag (two-phase commit)</li>
+<li>UTXOs created with block ID and mined status pre-set</li>
+<li>Gracefully handles <code>ErrTxExists</code> for recovery scenarios</li>
+</ul>
+</li>
+</ol>
+<p><strong>Phase 2: Transaction Spending (<code>spendAllTransactions()</code>)</strong></p>
+<p>Validates transactions by spending their inputs in parallel:</p>
+<ol>
+<li><strong>Parallel Spending</strong>: All transactions validated concurrently<ul>
+<li>Concurrency limited by <code>SpendBatcherSize * SpendBatcherConcurrency</code></li>
+<li>Uses <code>IgnoreLocked: true</code> flag to spend from UTXOs created in Phase 1</li>
+</ul>
+</li>
+<li><strong>Validation Optimization</strong>: Skips expensive script validation for checkpointed blocks<ul>
+<li>Checkpoints guarantee these blocks are valid</li>
+<li>Focuses on UTXO state consistency rather than script execution</li>
+</ul>
+</li>
+</ol>
+<p><strong>Final Steps:</strong></p>
+<ol>
+<li><strong>Add Block to Blockchain</strong>: Block added with <code>SubtreesSet=true</code> and <code>MinedSet=true</code></li>
+<li><strong>Unlock UTXOs</strong>: Calls <code>SetLocked(txHashes, false)</code> to complete two-phase commit</li>
+<li><strong>Mark Block Exists</strong>: Updates local cache to prevent reprocessing</li>
 </ol>
 <h5 id="checkpoint-based-optimization">Checkpoint-Based Optimization</h5>
 <p>The quick validation path is only applied to blocks below verified checkpoints:</p>
 <ul>
-<li>Checkpoints are known valid block heights that serve as trust anchors</li>
-<li>Blocks below checkpoints skip full script validation since they are known to be valid</li>
-<li>The checkpoint height is configurable via <code>blockvalidation_quickValidationCheckpointHeight</code></li>
+<li><strong>Checkpoint Verification</strong>: During catchup, checkpoints are verified in header chain (see Section 2.2.2)</li>
+<li><strong>Eligibility Check</strong>: <code>block.Height &lt;= highestCheckpointHeight</code> determines if quick validation can be used</li>
+<li><strong>Trust Assumption</strong>: Blocks below checkpoints are known to be valid, allowing optimized processing</li>
+<li><strong>Current Status</strong>: Quick validation currently disabled (<code>useQuickValidation = false</code>) pending additional testing</li>
 </ul>
 <h5 id="performance-benefits">Performance Benefits</h5>
 <p>Quick validation provides substantial performance improvements:</p>
 <ul>
-<li>Approximately 10x faster processing for historical blocks below checkpoints</li>
-<li>Parallel UTXO operations maximize throughput</li>
-<li>Elimination of redundant policy checks for known valid blocks</li>
-<li>Reduced memory footprint through on-demand transaction extension</li>
+<li><strong>10x Faster</strong>: Approximately 10x faster processing for historical blocks below checkpoints</li>
+<li><strong>Parallel Operations</strong>: UTXO creation and spending both use maximum concurrency</li>
+<li><strong>Skip Script Validation</strong>: Eliminates most expensive validation step for known-valid blocks</li>
+<li><strong>Reduced Memory</strong>: On-demand transaction extension minimizes memory footprint</li>
 </ul>
 <h5 id="subtree-and-transaction-processing">Subtree and Transaction Processing</h5>
-<p>During quick validation, the system also:</p>
-<ul>
-<li>Creates subtree metadata files (<code>.subtreeMeta</code>) automatically</li>
-<li>Reconstructs full subtree data (<code>.subtree</code>) with proper fee and size information</li>
-<li>Stores transactions in non-extended format to reduce storage overhead</li>
-<li>Extends transaction data on-demand only when needed for validation<ul>
-<li>Transactions received in standard Bitcoin format are automatically extended in-memory</li>
-<li>Parent transaction data is retrieved from the UTXO store as needed</li>
-<li>Extension is transparent and does not affect storage format</li>
+<p>During quick validation, the system reconstructs subtree files and extends transactions on-demand (implemented in <code>getBlockTransactions()</code>):</p>
+<p><strong>Subtree File Generation:</strong></p>
+<p>For each subtree in the block, the system:</p>
+<ol>
+<li><strong>Reads <code>.subtreeToCheck</code></strong>: Fetches subtree structure with transaction IDs</li>
+<li><strong>Reads <code>.subtreeData</code></strong>: Fetches raw transaction data</li>
+<li><strong>Validates Coinbase</strong>: Ensures first transaction in first subtree is coinbase</li>
+<li><strong>Reconstructs <code>.subtree</code></strong>: If missing, creates full subtree with fee and size information<ul>
+<li>Adds each transaction node with metadata from transaction</li>
+<li>Stores complete subtree for future use</li>
 </ul>
 </li>
+<li><strong>Generates <code>.subtreeMeta</code></strong>: If missing, creates metadata file with transaction inpoints<ul>
+<li>Stores input relationships for efficient lookups</li>
+<li>Used by subtree validation service</li>
 </ul>
-<p>If quick validation encounters any errors, the system automatically falls back to normal validation to ensure correctness.</p>
+</li>
+</ol>
+<p><strong>Transaction Extension:</strong></p>
+<p>Transactions in standard Bitcoin format are extended in-memory for validation:</p>
+<ol>
+<li><strong>Extension Detection</strong>: Checks each transaction with <code>tx.IsExtended()</code></li>
+<li>
+<p><strong>Parent Lookup</strong>: For non-extended transactions:</p>
+<ul>
+<li>Searches for parent transactions within same block first</li>
+<li>Falls back to UTXO store for external parents</li>
+<li>Waits for parent extension if it's being processed concurrently</li>
+<li><strong>Input Population</strong>: Sets <code>PreviousTxSatoshis</code> and <code>PreviousTxScript</code> for each input</li>
+<li><strong>Concurrency Control</strong>: Uses errgroup with configurable limits (<code>GetBlockTransactionsConcurrency</code>)</li>
+</ul>
+</li>
+</ol>
+<p><strong>Merkle Root Verification:</strong></p>
+<p>After processing all transactions, the system verifies:</p>
+<div class="highlight"><pre><span></span><code><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">block</span><span class="p">.</span><span class="nx">CheckMerkleRoot</span><span class="p">(</span><span class="nx">ctx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewProcessingError</span><span class="p">(</span><span class="s">&quot;merkle root mismatch&quot;</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>This ensures the transactions match the block header before proceeding.</p>
+<p><strong>Error Handling:</strong></p>
+<p>If quick validation encounters any errors:</p>
+<ul>
+<li>Removes <code>.subtree</code> files to force reprocessing</li>
+<li>Falls back to normal validation automatically</li>
+<li>Normal validation re-creates UTXOs and validates with full script execution</li>
+</ul>
+<p>For implementation details, see <code>quick_validate.go</code> in <code>services/blockvalidation/</code>.</p>
 <h4 id="224-validating-the-subtrees">2.2.4. Validating the Subtrees</h4>
 <p>Should the validation process for a block encounter a subtree it does not know about, it can request its processing off the Subtree Validation service.</p>
 <p><img alt="block_validation_subtree_validation_request.svg" src="../img/plantuml/subtreevalidation/block_validation_subtree_validation_request.svg" /></p>
@@ -6963,25 +8217,382 @@ Teranode microservices make use of the Lustre file system in order to share subt
 </li>
 </ol>
 <p>This comprehensive validation mechanism operates with high concurrency (configurable via <code>block_validOrderAndBlessedConcurrency</code>) to maintain performance while ensuring the integrity of the blockchain by preventing double-spends and transaction re-presentations.</p>
-<h3 id="23-marking-txs-as-mined">2.3. Marking Txs as mined</h3>
-<p>When a block is validated, the transactions in the block are marked as mined in the UTXO store. This process includes:</p>
+<h4 id="227-fork-management-and-chain-reorganization">2.2.7. Fork Management and Chain Reorganization</h4>
+<p>The Block Validation service implements a sophisticated fork manager to track and manage parallel chain branches that may occur during blockchain operation. This system is critical for handling chain reorganizations and ensuring the node selects and maintains the correct chain.</p>
+<h5 id="fork-states-and-lifecycle">Fork States and Lifecycle</h5>
+<p>The fork manager tracks forks through four distinct states:</p>
+<ul>
+<li><strong>Active</strong>: Fork is currently being processed and built upon</li>
+<li><strong>Stale</strong>: Fork has had no activity for an extended period (default: 1 hour)</li>
+<li><strong>Resolved</strong>: Fork has been resolved to the main chain or abandoned</li>
+<li><strong>Orphaned</strong>: Fork is too far behind the main chain (beyond coinbase maturity)</li>
+</ul>
+<h5 id="fork-registration-and-tracking">Fork Registration and Tracking</h5>
+<p>When a block arrives whose parent is not on the current chain tip, the fork manager:</p>
 <ol>
+<li><strong>Determines Fork ID</strong>: Uses <code>DetermineForkID()</code> to check if the block belongs to an existing fork or creates a new one</li>
+<li><strong>Registers Fork</strong>: Creates a new <code>ForkBranch</code> with base hash (common ancestor), base height, and creation timestamp</li>
+<li><strong>Adds Blocks</strong>: Tracks all blocks belonging to each fork in sequential order</li>
+<li><strong>Updates Metrics</strong>: Records fork creation, depth, and lifetime metrics</li>
+</ol>
+<h5 id="parallel-fork-processing">Parallel Fork Processing</h5>
+<p>The fork manager enforces limits on concurrent fork processing to prevent resource exhaustion:</p>
+<ul>
+<li><strong>maxParallelForks</strong>: Maximum number of forks that can be processed simultaneously (default: 4, configurable via <code>blockvalidation_maxParallelForks</code>)</li>
+<li><strong>maxTrackedForks</strong>: Maximum total number of forks to track (default: 1000, configurable via <code>blockvalidation_maxTrackedForks</code>)</li>
+<li><strong>BlockProcessingGuard</strong>: Automatic cleanup mechanism using Go finalizers to ensure processing locks are always released</li>
+</ul>
+<p>The guard pattern ensures that even if a panic occurs, the processing lock is released:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">guard</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">forkManager</span><span class="p">.</span><span class="nx">MarkBlockProcessing</span><span class="p">(</span><span class="nx">blockHash</span><span class="p">)</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Handle error</span>
+<span class="p">}</span>
+<span class="k">defer</span><span class="w"> </span><span class="nx">guard</span><span class="p">.</span><span class="nx">Release</span><span class="p">()</span>
+<span class="c1">// Process block</span>
+</code></pre></div>
+<h5 id="fork-resolution">Fork Resolution</h5>
+<p>Forks are resolved when:</p>
+<ol>
+<li><strong>Main Chain Updated</strong>: A fork block becomes the new main chain tip</li>
+<li><strong>Checkpoint Verification</strong>: Fork passes through a known checkpoint</li>
+<li><strong>Manual Resolution</strong>: Operator triggers reconsideration</li>
+</ol>
+<p>When a fork is resolved, the fork manager:</p>
+<ul>
+<li>Marks fork state as <code>Resolved</code></li>
+<li>Notifies registered callbacks with resolution details</li>
+<li>Records resolution metrics (depth, lifetime, outcome)</li>
+<li>Schedules cleanup after grace period (5 minutes)</li>
+</ul>
+<h5 id="fork-cleanup">Fork Cleanup</h5>
+<p>The fork manager runs an automatic cleanup routine (configurable interval, default: 5 minutes) that:</p>
+<ul>
+<li>Removes resolved forks after grace period</li>
+<li>Abandons stale forks with no activity</li>
+<li>Orphans forks too far behind main chain</li>
+<li>Applies retention policy to limit memory usage</li>
+<li>Updates aggregate metrics (average depth, longest fork, etc.)</li>
+</ul>
+<h5 id="integration-with-block-priority-queue">Integration with Block Priority Queue</h5>
+<p>The fork manager coordinates with the block priority queue to:</p>
+<ul>
+<li>Signal when processing slots become available (<code>priorityQueue.Signal()</code>)</li>
+<li>Track which blocks are currently being processed per fork</li>
+<li>Prevent concurrent processing of blocks from the same fork</li>
+<li>Requeue blocks from abandoned forks for retry with alternative sources</li>
+</ul>
+<p>For implementation details, see <code>fork_manager.go</code> in <code>services/blockvalidation/</code>.</p>
+<h4 id="228-block-processing-queue-and-priority-system">2.2.8. Block Processing Queue and Priority System</h4>
+<p>The Block Validation service uses a sophisticated priority queue system to manage the order in which blocks are validated. This ensures that blocks are processed efficiently while handling retries and alternative sources when validation fails.</p>
+<h5 id="priority-levels">Priority Levels</h5>
+<p>Blocks are assigned one of three priority levels:</p>
+<ul>
+<li><strong>PriorityHigh</strong>: Blocks on the current main chain or from trusted sources</li>
+<li><strong>PriorityMedium</strong>: Blocks that are 1-2 blocks ahead of current tip</li>
+<li><strong>PriorityLow</strong>: Blocks further ahead or on side chains</li>
+</ul>
+<p>The priority determines the order in which blocks are selected for validation when multiple blocks are waiting.</p>
+<h5 id="queue-operations">Queue Operations</h5>
+<p><strong>Adding Blocks:</strong></p>
+<p>When a new block is discovered via <code>BlockFound()</code>:</p>
+<ol>
+<li>Block is assigned a priority based on its height and relationship to current chain</li>
+<li>Added to the priority queue with retry count initialized to 0</li>
+<li>If queue is full or limits exceeded, block may be rejected</li>
+</ol>
+<p><strong>Retrieving Blocks:</strong></p>
+<p>The <code>WaitForBlock()</code> method:</p>
+<ol>
+<li>Checks fork manager to ensure processing limits not exceeded</li>
+<li>Selects highest priority block that can be processed</li>
+<li>Returns block to worker for validation</li>
+<li>Blocks waiting if no blocks available (with timeout)</li>
+</ol>
+<h5 id="retry-mechanism">Retry Mechanism</h5>
+<p>When block validation fails due to transient errors:</p>
+<ol>
+<li><strong>RequeueForRetry()</strong>: Adds block back to queue with incremented retry count</li>
+<li><strong>Exponential Backoff</strong>: Each retry waits longer before reprocessing</li>
+<li><strong>Retry Limits</strong>: Maximum retries configurable (default: 3)</li>
+<li><strong>Alternative Sources</strong>: After failures, attempts to fetch from different peers</li>
+</ol>
+<h5 id="alternative-source-handling">Alternative Source Handling</h5>
+<p>The <code>GetAlternativeSource()</code> method:</p>
+<ul>
+<li>Tracks which peer provided the block</li>
+<li>On validation failure, marks peer as potentially problematic</li>
+<li>Searches for alternative peers that may have the same block</li>
+<li>Fetches block data from alternative source if available</li>
+<li>Updates peer quality metrics via circuit breaker</li>
+</ul>
+<h5 id="coordination-with-fork-manager">Coordination with Fork Manager</h5>
+<p>The priority queue integrates tightly with the fork manager:</p>
+<ul>
+<li>Checks <code>CanProcessBlock()</code> before returning blocks to workers</li>
+<li>Respects parallel fork processing limits</li>
+<li>Receives signals when processing slots become available</li>
+<li>Maintains block-to-fork mappings for efficient lookups</li>
+</ul>
+<p>For implementation details, see <code>block_priority.go</code> in <code>services/blockvalidation/</code>.</p>
+<h4 id="229-malicious-peer-detection-and-tracking">2.2.9. Malicious Peer Detection and Tracking</h4>
+<p>The Block Validation service implements comprehensive peer quality tracking to detect and mitigate malicious behavior during block synchronization and catchup operations.</p>
+<h5 id="detection-mechanisms">Detection Mechanisms</h5>
+<p><strong>Secret Mining Detection:</strong></p>
+<p>The service detects potential secret mining attacks during catchup by checking if:</p>
+<ul>
+<li>Common ancestor is more than <code>blockvalidation_secret_mining_threshold</code> blocks behind current tip (default: 10)</li>
+<li>Peer withheld blocks to build a secret chain</li>
+<li>Fork depth exceeds expected values for honest mining</li>
+</ul>
+<p>When detected:</p>
+<div class="highlight"><pre><span></span><code>1. Log security warning with peer ID and reason
+2. Record malicious attempt in peer metrics
+3. Update circuit breaker for that peer
+4. Reject the catchup operation
+5. Ban peer (when banning implemented)
+</code></pre></div>
+<p><strong>Coinbase Maturity Violation:</strong></p>
+<p>During catchup, the service validates that:</p>
+<ul>
+<li>Fork depth does not exceed coinbase maturity (default: 100 blocks)</li>
+<li>Prevents chain reorganizations that could invalidate spent coinbase outputs</li>
+<li>Protects against attacks attempting to reverse deep transactions</li>
+</ul>
+<p><strong>Invalid Block Propagation:</strong></p>
+<p>The service tracks peers that provide:</p>
+<ul>
+<li>Blocks that fail consensus validation</li>
+<li>Blocks with invalid proof of work</li>
+<li>Blocks that violate checkpoint hashes</li>
+<li>Blocks that fail merkle root verification</li>
+</ul>
+<h5 id="peer-quality-metrics">Peer Quality Metrics</h5>
+<p>The <code>PeerCircuitBreakers</code> and <code>CatchupMetrics</code> systems track:</p>
+<ul>
+<li><strong>Malicious Attempts</strong>: Count of detected malicious behaviors</li>
+<li><strong>Invalid Blocks</strong>: Number of invalid blocks from this peer</li>
+<li><strong>Failed Validations</strong>: Transient failures vs consensus violations</li>
+<li><strong>Response Times</strong>: How quickly peer responds to requests</li>
+<li><strong>Success Rate</strong>: Percentage of successful validations from this peer</li>
+</ul>
+<h5 id="circuit-breaker-pattern">Circuit Breaker Pattern</h5>
+<p>When a peer's quality score falls below threshold:</p>
+<ol>
+<li><strong>Circuit Opens</strong>: Requests to this peer are temporarily blocked</li>
+<li><strong>Retry Delay</strong>: Exponential backoff before retrying the peer</li>
+<li><strong>Alternative Sources</strong>: System uses other peers for block fetching</li>
+<li><strong>Circuit Half-Open</strong>: After delay, allows limited test requests</li>
+<li><strong>Circuit Closes</strong>: If peer recovers, full access restored</li>
+</ol>
+<h5 id="peer-banning-future-feature">Peer Banning (Future Feature)</h5>
+<p>The system logs when peers should be banned but doesn't yet implement automatic banning:</p>
+<div class="highlight"><pre><span></span><code>SECURITY: Peer &lt;ID&gt; attempted secret mining - should be banned (banning not yet implemented)
+</code></pre></div>
+<p>This provides an audit trail for operators to manually ban malicious peers and prepares for future automatic banning implementation.</p>
+<p>For implementation details, see <code>malicious_peer_handling_test.go</code> and peer tracking code in <code>catchup.go</code>.</p>
+<h4 id="2210-invalid-block-tracking-and-notifications">2.2.10. Invalid Block Tracking and Notifications</h4>
+<p>The Block Validation service provides comprehensive tracking and notification when blocks fail validation, distinguishing between consensus violations and recoverable errors.</p>
+<h5 id="invalid-block-classification">Invalid Block Classification</h5>
+<p><strong>Consensus Violations (Marked Invalid):</strong></p>
+<p>Blocks are marked as invalid and stored in the blockchain with <code>invalid=true</code> when they violate:</p>
+<ul>
+<li>Proof of work requirements (nBits incorrect or hash doesn't meet target)</li>
+<li>Merkle root mismatch</li>
+<li>Timestamp constraints (too far in past/future, MTP violation)</li>
+<li>Coinbase structure rules</li>
+<li>Block size limits</li>
+<li>Transaction ordering or uniqueness rules</li>
+<li>Re-presentation of already-mined transactions</li>
+</ul>
+<p><strong>Recoverable Errors (Not Marked Invalid):</strong></p>
+<p>Blocks are NOT marked invalid for:</p>
+<ul>
+<li>Missing subtrees or transaction data (can be recovered)</li>
+<li>Temporary storage failures</li>
+<li>Network timeouts</li>
+<li>Processing errors that may succeed on retry</li>
+<li>Missing parent blocks (catchup can resolve)</li>
+</ul>
+<h5 id="kafka-notification-system">Kafka Notification System</h5>
+<p>When a block is marked invalid due to consensus violation:</p>
+<ol>
+<li><strong>Create Message</strong>: <code>KafkaInvalidBlockTopicMessage</code> with block hash and reason</li>
+<li><strong>Async Publishing</strong>: Message published to Kafka topic in background</li>
+<li><strong>Topic Configuration</strong>: Controlled by <code>kafka_InvalidBlocks</code> setting</li>
 <li>
-<p><strong>Updating Transaction Status</strong>: The Block Validation service marks each transaction as mined by setting its block information.</p>
+<p><strong>Message Format</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">message</span><span class="w"> </span><span class="nc">KafkaInvalidBlockTopicMessage</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">block_hash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">    </span><span class="kt">string</span><span class="w"> </span><span class="na">reason</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
 </li>
 <li>
-<p><strong>Unsetting the Locked Flag</strong>: For any transaction that still has the "locked" flag set, the flag is unset during the mined transaction update process.</p>
-</li>
-<li>
-<p><strong>Storing Subtree Information</strong>: The service also stores the subtree index in the block where the transaction was located, enabling more efficient transaction lookups.</p>
+<p><strong>Subscribers</strong>: Other services or monitoring systems can subscribe to track invalid blocks</p>
 </li>
 </ol>
-<p>The Block Validation service is exclusively responsible for marking block transactions as mined and ensuring their flags are properly updated, regardless of whether the transaction was mined by the local Block Assembly service or by another node in the network.</p>
-<p>As a first step, either the <code>Block Validation</code> (after a remotely mined block is validated) or the <code>Block Assembly</code> (if a block is locally mined) marks the block subtrees as "set", by invoking the <code>Blockchain</code> <code>SetBlockSubtreesSet</code> gRPC call, as shown in the diagram below.</p>
+<p>The Kafka producer is initialized at service startup if the topic is configured:</p>
+<ul>
+<li>Non-blocking async publishing ensures validation performance not impacted</li>
+<li>Producer has message buffer (default: 100 messages)</li>
+<li>Failed publishes are logged but don't block validation</li>
+</ul>
+<h5 id="block-revalidation-process">Block Revalidation Process</h5>
+<p>For blocks that fail validation due to recoverable errors, the service queues them for revalidation:</p>
+<p><strong>Revalidation Trigger:</strong></p>
+<p>When <code>ValidateBlock()</code> encounters non-consensus errors:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">u</span><span class="p">.</span><span class="nx">ReValidateBlock</span><span class="p">(</span><span class="nx">block</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="p">)</span>
+</code></pre></div>
+<p>This queues the block to the <code>revalidateBlockChan</code> channel.</p>
+<p><strong>Revalidation Worker:</strong></p>
+<p>A background goroutine processes the revalidation queue:</p>
+<ol>
+<li><strong>Fetch Fresh Headers</strong>: Gets latest block headers (may have changed)</li>
+<li><strong>Re-validate Subtrees</strong>: Attempts subtree validation again</li>
+<li><strong>Full Validation</strong>: Runs complete block validation with fresh state</li>
+<li><strong>Retry Logic</strong>: Up to 3 retry attempts with increasing delays</li>
+<li>
+<p><strong>Final Outcome</strong>:</p>
+<ul>
+<li>Success: Block accepted into blockchain</li>
+<li>Failure after retries: Block marked invalid</li>
+</ul>
+</li>
+</ol>
+<p><strong>Retry Limits:</strong></p>
+<ul>
+<li>Maximum retries: 3 (hardcoded in revalidation worker)</li>
+<li>Delay between retries: Managed by revalidation channel</li>
+<li>After exhausting retries: Block marked invalid to prevent infinite retry loops</li>
+</ul>
+<h5 id="integration-with-block-invalidation">Integration with Block Invalidation</h5>
+<p>The <code>markBlockAsInvalid()</code> function:</p>
+<ol>
+<li>Logs invalidation event with block hash and reason</li>
+<li>Calls <code>kafkaNotifyBlockInvalid()</code> to publish event</li>
+<li>Calls <code>blockchainClient.InvalidateBlock()</code> to mark in database</li>
+<li>Updates metrics for tracking</li>
+</ol>
+<p>For implementation details, see <code>InvalidBlocksKafkaProducer_test.go</code> and <code>BlockValidation.go</code> (<code>markBlockAsInvalid()</code>, <code>kafkaNotifyBlockInvalid()</code>, <code>reValidateBlock()</code>).</p>
+<h4 id="2211-subtree-deduplication">2.2.11. Subtree Deduplication</h4>
+<p>The Block Validation service implements a deduplication system to prevent redundant processing of subtrees that may arrive from multiple sources simultaneously.</p>
+<h5 id="purpose">Purpose</h5>
+<p>During block propagation and validation:</p>
+<ul>
+<li>Multiple peers may send the same subtree</li>
+<li>Subtree validation requests may be duplicated</li>
+<li>Parallel block processing may request same subtrees</li>
+<li>Network retries may resend subtree data</li>
+</ul>
+<p>The <code>DeDuplicator</code> prevents wasted processing by ensuring each subtree is validated only once.</p>
+<h5 id="implementation">Implementation</h5>
+<p><strong>TTL-Based Tracking:</strong></p>
+<p>The deduplicator maintains a time-based cache of recently processed subtrees:</p>
+<ul>
+<li>Each subtree hash is recorded when processing begins</li>
+<li>Entries expire after <code>blockHeightRetention</code> period</li>
+<li>Memory automatically cleaned up as entries age out</li>
+</ul>
+<p><strong>Concurrency Safety:</strong></p>
+<p>The deduplicator is thread-safe for concurrent access:</p>
+<ul>
+<li>Multiple validation workers can query simultaneously</li>
+<li>Lock-free reads for checking if subtree is being processed</li>
+<li>Atomic operations for adding new subtree entries</li>
+</ul>
+<h5 id="integration-with-subtree-validation">Integration with Subtree Validation</h5>
+<p>When the Block Validation service needs to validate a subtree:</p>
+<ol>
+<li><strong>Check Deduplicator</strong>: Query if subtree is already being processed</li>
+<li><strong>If Already Processing</strong>: Skip validation, wait for result from first processor</li>
+<li><strong>If New Subtree</strong>: Mark as processing in deduplicator, proceed with validation</li>
+<li><strong>After Completion</strong>: Entry remains in cache with TTL to prevent duplicate work</li>
+</ol>
+<p>This coordination ensures:</p>
+<ul>
+<li>No redundant subtree validation computations</li>
+<li>Reduced load on UTXO store and transaction validators</li>
+<li>Lower memory and CPU usage during high block arrival rates</li>
+</ul>
+<p>For implementation details, see <code>deduplicator.go</code> in <code>services/blockvalidation/</code>.</p>
+<h3 id="23-marking-txs-as-mined">2.3. Marking Txs as mined</h3>
+<p>When a block is validated and added to the blockchain, the transactions within that block must be marked as mined in the UTXO store. This process is the second phase of the two-phase transaction commit system and is triggered through an event-driven notification mechanism.</p>
+<h4 id="trigger-points-and-sequence">Trigger Points and Sequence</h4>
+<p>The process to mark transactions as mined follows a two-step sequence with specific trigger points:</p>
+<p><strong>Step 1: Setting Block Subtrees as Ready (<code>SetBlockSubtreesSet</code>)</strong></p>
+<p>This step is triggered at different points depending on who mined the block:</p>
+<ul>
+<li><strong>Remotely Mined Blocks</strong>: <code>Block Validation</code> service triggers this AFTER successfully validating the block<ul>
+<li>Trigger point: Immediately after <code>blockchainClient.AddBlock()</code> succeeds in <code>ValidateBlock()</code></li>
+<li>This ensures the block is fully validated before marking subtrees as set</li>
+</ul>
+</li>
+<li><strong>Locally Mined Blocks</strong>: <code>Block Assembly</code> service triggers this AFTER successfully assembling and mining a block<ul>
+<li>Trigger point: Immediately after mining the block and adding it to the blockchain</li>
+<li>Allows local transactions to be marked as mined without waiting for validation</li>
+</ul>
+</li>
+</ul>
+<p>When triggered, the service calls <code>blockchainClient.SetBlockSubtreesSet(blockHash)</code> which:</p>
+<ol>
+<li>Marks the block's subtrees as "set" in the blockchain store</li>
+<li>Publishes <code>NotificationType_BlockSubtreesSet</code> event to all subscribers</li>
+<li>Allows the system to proceed with marking transactions as mined</li>
+</ol>
 <p><img alt="blockchain_setblocksubtreesset.svg" src="../img/plantuml/blockchain/blockchain_setblocksubtreesset.svg" /></p>
-<p>The <code>Blockchain</code> client then notifies subscribers (in this case, the <code>BlockValidation</code> service) of a new <code>NotificationType_BlockSubtreesSet</code> event.
-The <code>BlockValidation</code> proceeds to mark all transactions within the block as "mined" in the <code>UTXOStore</code>. This allows to identify in which block a given tx was mined. See diagram below:</p>
+<p><strong>Step 2: Marking Transactions as Mined (<code>SetMinedMulti</code>)</strong></p>
+<p>This step is triggered automatically via event subscription:</p>
+<ul>
+<li><strong>Trigger</strong>: <code>NotificationType_BlockSubtreesSet</code> event from Blockchain service</li>
+<li><strong>Subscriber</strong>: Block Validation service subscribes to blockchain notifications during initialization</li>
+<li><strong>Handler</strong>: <code>OnBlockchainNotification()</code> receives the event and processes it</li>
+</ul>
+<p>When the event is received, Block Validation:</p>
+<ol>
+<li>Extracts all transaction hashes from the block's subtrees</li>
+<li>Calls <code>utxoStore.SetMinedMulti(txHashes, blockInfo)</code> to batch-update all transactions</li>
+<li>
+<p>Each transaction is updated with:</p>
+<ul>
+<li><code>blockID</code>: The internal block identifier</li>
+<li><code>blockHeight</code>: The block's height in the chain</li>
+<li><code>subtreeIdx</code>: Index of the subtree containing the transaction</li>
+<li><code>locked=false</code>: Completes the two-phase commit by unsetting the locked flag</li>
+</ul>
+</li>
+</ol>
 <p><img alt="block_validation_set_tx_mined.svg" src="../img/plantuml/blockvalidation/block_validation_set_tx_mined.svg" /></p>
+<h4 id="integration-with-two-phase-commit">Integration with Two-Phase Commit</h4>
+<p>The marking of transactions as mined serves as the <strong>second phase</strong> of the two-phase commit process:</p>
+<p><strong>Phase 1 (Transaction Validation):</strong></p>
+<ul>
+<li>Validator service creates UTXOs with <code>locked=true</code></li>
+<li>Transactions forwarded to Block Assembly for inclusion in blocks</li>
+<li>Locked flag prevents double-spending before block confirmation</li>
+</ul>
+<p><strong>Phase 2 (Block Validation):</strong></p>
+<ul>
+<li>Block Validation marks transactions as mined</li>
+<li><code>SetMinedMulti</code> automatically unsets <code>locked=false</code> for all transactions</li>
+<li>Transactions now permanently associated with their mined block</li>
+<li>UTXOs become fully spendable in subsequent transactions</li>
+</ul>
+<h4 id="responsibility-and-exclusivity">Responsibility and Exclusivity</h4>
+<p>The Block Validation service has <strong>exclusive responsibility</strong> for marking transactions as mined, regardless of block source:</p>
+<ul>
+<li><strong>Remotely Mined Blocks</strong>: Block Validation validates and marks transactions as mined</li>
+<li><strong>Locally Mined Blocks</strong>: Block Assembly triggers the event, but Block Validation still performs the actual marking</li>
+<li><strong>Quick Validated Blocks</strong>: During catchup, quick validation calls <code>SetLocked(txHashes, false)</code> directly as a batch operation (see Section 2.2.3)</li>
+</ul>
+<p>This centralized responsibility ensures consistency in how transactions are marked across all scenarios.</p>
+<h4 id="performance-optimization">Performance Optimization</h4>
+<p>The <code>SetMinedMulti</code> operation is highly optimized for batch processing:</p>
+<ul>
+<li><strong>Batch Updates</strong>: All transactions in a block updated in single database operation</li>
+<li><strong>Parallel Processing</strong>: For blocks with many subtrees, subtree processing can be parallelized</li>
+<li><strong>Lua Script Execution</strong>: Aerospike UTXO store uses atomic Lua scripts for metadata updates</li>
+<li><strong>Automatic Unlocking</strong>: Locked flag automatically unset as part of mined metadata update</li>
+</ul>
 <blockquote>
 <p><strong>For a comprehensive explanation of the two-phase commit process across the entire system, including how Block Validation plays a role in the second phase, see the <a href="../../features/two_phase_commit/">Two-Phase Transaction Commit Process</a> documentation.</strong>
 </p>
@@ -7040,20 +8651,59 @@ The <code>BlockValidation</code> proceeds to mark all transactions within the bl
 <h2 id="6-directory-structure-and-main-files">6. Directory Structure and Main Files</h2>
 <div class="highlight"><pre><span></span><code>./services/blockvalidation
 │
-├── BlockValidation.go             - Contains the core logic for block validation.
-├── BlockValidation_test.go        - Unit tests for the `BlockValidation.go` functionalities.
-├── Client.go                      - Client-side logic or API for interacting with the block validation service.
-├── Interface.go                   - Defines an interface for the block validation service, outlining the methods that any implementation of the service should provide.
-├── Server.go                      - Contains the server-side implementation for the block validation service, handling incoming requests and providing validation services.
-├── Server_test.go                 - Unit tests for the `Server.go` functionalities,
-├── blockvalidation_api
-│   ├── blockvalidation_api.pb.go         - Auto-generated file from protobuf definitions, containing Go bindings for the API.
-│   ├── blockvalidation_api.proto         - Protocol Buffers definition file for the block validation API.
-│   └── blockvalidation_api_grpc.pb.go    - gRPC (Google&#39;s RPC framework) specific implementation file for the block validation API.
-├── metrics.go                     - Metrics collection and monitoring of the block validation service&#39;s performance.
-├── ttl_queue.go                   - Implements a time-to-live (TTL) queue, for managing caching within the service.
-├── txmetacache.go                 - Transaction metadata cache, used to improve performance and efficiency in transaction data access.
-└── txmetacache_test.go            - Unit tests for the `txmetacache.go` functionalities.
+├── BlockValidation.go                      - Core block validation logic and state management.
+├── BlockValidation_test.go                 - Unit tests for BlockValidation core logic.
+├── BlockValidation_difficulty_test.go      - Difficulty validation tests.
+├── BlockValidation_error_test.go           - Error handling tests for block validation.
+├── block_priority.go                       - Block priority queue management with retry logic.
+├── block_priority_test.go                  - Tests for priority queue functionality.
+├── block_priority_get_test.go              - Tests for priority queue retrieval operations.
+├── block_priority_coverage_test.go         - Coverage tests for priority queue.
+├── block_processing_retry_test.go          - Tests for block processing retry mechanisms.
+├── catchup.go                              - Main catchup orchestration with 11-step process.
+├── catchup_test.go                         - Comprehensive catchup tests.
+├── catchup_consolidated_test.go            - Consolidated catchup scenario tests.
+├── catchup_fork_handling_test.go           - Fork handling during catchup tests.
+├── catchup_get_block_headers.go            - Block header fetching for catchup.
+├── catchup_helpers_test.go                 - Helper functions for catchup tests.
+├── catchup_malicious_peer_test.go          - Malicious peer detection tests.
+├── catchup_network_resilience_test.go      - Network resilience during catchup tests.
+├── catchup_quickvalidation_test.go         - Quick validation during catchup tests.
+├── catchup_resource_exhaustion_test.go     - Resource exhaustion scenario tests.
+├── catchup_test_suite.go                   - Catchup test suite infrastructure.
+├── catchup.md                              - Catchup process documentation.
+├── catchup/                                - Catchup implementation package.
+│   └── (catchup helper functions)
+├── Client.go                               - Client-side API for block validation service.
+├── Client_test.go                          - Client tests.
+├── deduplicator.go                         - Subtree deduplication to prevent redundant processing.
+├── deduplicator_test.go                    - Deduplication tests.
+├── fork_manager.go                         - Fork tracking and chain reorganization management.
+├── fork_manager_test.go                    - Fork manager tests.
+├── fork_manager_atomic_counter_test.go     - Atomic counter tests for fork tracking.
+├── fork_manager_coverage_test.go           - Coverage tests for fork manager.
+├── fork_manager_metrics_test.go            - Fork manager metrics tests.
+├── get_blocks.go                           - Block retrieval and fetching logic.
+├── get_blocks_test.go                      - Block retrieval tests.
+├── integration_retry_test.go               - Integration tests for retry logic.
+├── Interface.go                            - Block validation service interface definition.
+├── InvalidBlocksKafkaProducer_test.go      - Tests for Kafka invalid block notifications.
+├── malicious_peer_handling_test.go         - Malicious peer tracking and banning tests.
+├── metrics.go                              - Prometheus metrics for monitoring.
+├── mock.go                                 - Mock implementations for testing.
+├── quick_validate.go                       - Optimized validation for checkpointed blocks.
+├── quick_validate_test.go                  - Quick validation tests.
+├── Server.go                               - Server-side implementation of block validation.
+├── Server_test.go                          - Server tests.
+├── blockvalidation_api/
+│   ├── blockvalidation_api.pb.go           - Auto-generated protobuf Go bindings.
+│   ├── blockvalidation_api.proto           - Protocol Buffers API definition.
+│   └── blockvalidation_api_grpc.pb.go      - gRPC-specific generated code.
+├── testdata/                               - Test fixtures and data.
+├── testhelpers/                            - Test helper utilities.
+├── ttl_queue.go                            - TTL queue for caching with time-based expiration.
+├── txmetacache.go                          - Transaction metadata cache for performance.
+└── txmetacache_test.go                     - Transaction metadata cache tests.
 </code></pre></div>
 <h2 id="7-how-to-run">7. How to run</h2>
 <p>To run the Block Validation Service locally, you can execute the following command:</p>
