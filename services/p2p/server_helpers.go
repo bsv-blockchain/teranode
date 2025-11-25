@@ -39,7 +39,7 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 		return
 	}
 
-	// Check that fromID does matches the subtree peer ID
+	// Check that fromID matches the block peer ID
 	if fromID != blockMessage.PeerID {
 		// For now, log an error. In the future, we might want to take banning action against peers spoofing other IDs
 		s.logger.Errorf("[handleBlockTopic] mismatch between fromID (%s) and blockMessage.PeerID (%s)", fromID, blockMessage.PeerID)
@@ -141,7 +141,7 @@ func (s *Server) handleSubtreeTopic(_ context.Context, m []byte, fromID string) 
 		return
 	}
 
-	// Check that fromID does matches the subtree peer ID
+	// Check that fromID matches the subtree peer ID
 	if fromID != subtreeMessage.PeerID {
 		// For now, log an error. In the future, we might want to take banning action against peers spoofing other IDs
 		s.logger.Errorf("[handleSubtreeTopic] mismatch between fromID (%s) and subtreeMessage.PeerID (%s)", fromID, subtreeMessage.PeerID)
@@ -285,7 +285,7 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 		return
 	}
 
-	// Check that fromID does matches the rejected tx peer ID
+	// Check that fromID matches the rejected tx peer ID
 	if fromID != rejectedTxMessage.PeerID {
 		s.logger.Errorf("[handleRejectedTxTopic] peerID does not match fromID: peerID=%s fromID=%s", rejectedTxMessage.PeerID, fromID)
 		return
