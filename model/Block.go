@@ -1128,6 +1128,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 
 					return readCloser, err
 				}
+
 				subtreeReader, err := retry.Retry(
 					gCtx,
 					logger,
@@ -1136,10 +1137,13 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 					retry.WithRetryCount(3),
 					retry.WithBackoffDurationType(100*time.Millisecond),
 				)
-
 				if err != nil {
 					return errors.NewStorageError("[BLOCK][%s][ID %d] failed to get subtree %s", blockHash, blockID, subtreeHash, err)
 				}
+
+				defer func() {
+					_ = subtreeReader.Close()
+				}()
 
 				// Use pooled bufio.Reader to reduce GC pressure
 				bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
@@ -1149,8 +1153,7 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 					bufioReaderPool.Put(bufferedReader)
 				}()
 
-				err = subtree.DeserializeFromReader(bufferedReader)
-				if err != nil {
+				if err = subtree.DeserializeFromReader(bufferedReader); err != nil {
 					_, err = retry.Retry(gCtx, logger, func() (struct{}, error) {
 						return struct{}{}, subtree.DeserializeFromReader(bufferedReader)
 					}, retry.WithMessage(fmt.Sprintf("[BLOCK][%s][ID %d] failed to deserialize subtree %s", blockHash, blockID, subtreeHash)))
@@ -1164,8 +1167,6 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 
 				sizeInBytes.Add(subtree.SizeInBytes)
 				txCount.Add(uint64(subtree.Length())) // nolint: gosec
-
-				_ = subtreeReader.Close()
 
 				return nil
 			})
