@@ -1289,6 +1289,16 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		return
 	}
 
+	// Limit batch size to avoid peer processing timeouts during checkpoint sync.
+	// Large checkpoint gaps (e.g., 50k blocks) can cause timeouts when downloading
+	// and processing all blocks at once. Chunk requests to manageable sizes.
+	maxBlocks := maxRequestedBlocks
+	headerListLen := sm.headerList.Len()
+	if headerListLen > 10000 {
+		maxBlocks = 10000
+		sm.logger.Infof("[fetchHeaderBlocks] Header list contains %d blocks, limiting batch to %d blocks to avoid timeout", headerListLen, maxBlocks)
+	}
+
 	// Build up a getdata request for the list of blocks the headers
 	// describe.  The size hint will be limited to wire.MaxInvPerMsg by
 	// the function, so no need to double check it here.
@@ -1326,7 +1336,7 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 
 		sm.startHeader = e.Next()
 
-		if numRequested >= maxRequestedBlocks {
+		if numRequested >= maxBlocks {
 			sm.logger.Debugf("[fetchHeaderBlocks] Limiting to %d block(s) from %s", numRequested, sm.syncPeer)
 			break
 		}

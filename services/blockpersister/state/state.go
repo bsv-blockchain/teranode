@@ -23,6 +23,7 @@
 package state
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -226,6 +227,125 @@ func (s *State) AddBlock(height uint32, hash string) error {
 		return errors.NewProcessingError("failed to sync blocks file", err)
 	}
 
+	return nil
+}
+
+// RollbackToHash truncates the state file to the specified block hash
+// This removes all blocks after the first occurrence of the target hash
+// Uses streaming to minimize memory usage - only one line in memory at a time
+// Parameters:
+//   - targetHash: the hash of the block to rollback to
+//
+// Returns:
+//   - error: any error encountered (including if hash is not found)
+func (s *State) RollbackToHash(targetHash *chainhash.Hash) (err error) {
+	s.fileLock.Lock()
+	defer s.fileLock.Unlock()
+
+	// Open source file for reading
+	srcFile, err := os.Open(s.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.NewProcessingError("cannot rollback to hash %s: state file does not exist", targetHash.String())
+		}
+		return errors.NewProcessingError("failed to open blocks file", err)
+	}
+	defer srcFile.Close()
+
+	srcDeferFn, err := s.lockFile(srcFile, syscall.LOCK_SH)
+	if err != nil {
+		return errors.NewProcessingError("could not lock file for reading", err)
+	}
+	defer srcDeferFn()
+
+	// Create temporary file for writing
+	dir := filepath.Dir(s.filePath)
+	tmpFile, err := os.CreateTemp(dir, "blocks.*.tmp")
+	if err != nil {
+		return errors.NewProcessingError("failed to create temporary file", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // Always cleanup temp file (fails silently if renamed)
+
+	// Defer tmpFile.Close() - will be skipped on success via tmpFileClosed flag
+	tmpFileClosed := false
+	defer func() {
+		if !tmpFileClosed {
+			tmpFile.Close()
+		}
+	}()
+
+	tmpDeferFn, err := s.lockFile(tmpFile, syscall.LOCK_EX)
+	if err != nil {
+		return errors.NewProcessingError("could not lock temporary file", err)
+	}
+	defer tmpDeferFn()
+
+	// Stream copy line by line until we hit the target hash
+	scanner := bufio.NewScanner(srcFile)
+	linesWritten := 0
+	hashFound := false
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+
+		if len(line) == 0 {
+			continue
+		}
+
+		// Parse hash from the line (format: height,hash)
+		commaIndex := bytes.IndexByte(line, ',')
+		if commaIndex != -1 {
+			// Extract and check hash
+			hashStr := string(bytes.TrimSpace(line[commaIndex+1:]))
+			hash, err := chainhash.NewHashFromStr(hashStr)
+			if err == nil && hash.IsEqual(targetHash) {
+				// Found target hash - write this line and stop
+				if _, err := tmpFile.Write(line); err != nil {
+					return errors.NewProcessingError("failed to write to temporary file", err)
+				}
+				if _, err := tmpFile.WriteString("\n"); err != nil {
+					return errors.NewProcessingError("failed to write newline to temporary file", err)
+				}
+				linesWritten++
+				hashFound = true
+				break
+			}
+		}
+
+		// Write line and continue
+		if _, err := tmpFile.Write(line); err != nil {
+			return errors.NewProcessingError("failed to write to temporary file", err)
+		}
+		if _, err := tmpFile.WriteString("\n"); err != nil {
+			return errors.NewProcessingError("failed to write newline to temporary file", err)
+		}
+		linesWritten++
+	}
+
+	if err = scanner.Err(); err != nil {
+		return errors.NewProcessingError("failed to read blocks file", err)
+	}
+
+	if !hashFound {
+		return errors.NewProcessingError("cannot rollback to hash %s: hash not found in state file", targetHash.String())
+	}
+
+	// Sync temp file to disk
+	if err = tmpFile.Sync(); err != nil {
+		return errors.NewProcessingError("failed to sync temporary file", err)
+	}
+
+	// Close temp file before rename (locks will be released by defers)
+	tmpFile.Close()
+	tmpFileClosed = true
+
+	// Atomically replace the original file
+	if err = os.Rename(tmpPath, s.filePath); err != nil {
+		return errors.NewProcessingError("failed to rename temporary file", err)
+	}
+
+	s.logger.Infof("[BlockPersister State] Rolled back to hash %s (%d blocks in final state)", targetHash.String(), linesWritten)
 	return nil
 }
 

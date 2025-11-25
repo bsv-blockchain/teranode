@@ -1,5 +1,7 @@
 name: nightly-test-runs
 on:
+  schedule:
+    - cron: '0 2 * * *'  # Runs at 2:00 AM UTC every day
   workflow_dispatch:
 
 env:
@@ -482,6 +484,22 @@ jobs:
           go test -v ./test/chaos -run TestScenario05 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-05-results.txt
         continue-on-error: false
         timeout-minutes: 6
+
+      - name: Run Chaos Test Scenario 06 (Slow Close Connections)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario06 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-06-results.txt
+        continue-on-error: false
+        timeout-minutes: 2
+
+      - name: Run Chaos Test Scenario 07 (Combined Failures)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario07 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-07-results.txt
+        continue-on-error: false
+        timeout-minutes: 2
 
       - name: Upload chaostest results
         if: always()
