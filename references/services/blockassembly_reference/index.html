@@ -7480,6 +7480,9 @@
 
 <span class="w">    </span><span class="c1">// skipWaitForPendingBlocks stores the flag value for tests</span>
 <span class="w">    </span><span class="nx">skipWaitForPendingBlocks</span><span class="w"> </span><span class="kt">bool</span>
+
+<span class="w">    </span><span class="c1">// stopOnce ensures Stop() is only executed once</span>
+<span class="w">    </span><span class="nx">stopOnce</span><span class="w"> </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Once</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>The <code>BlockAssembly</code> type is the main structure for the block assembly service. It implements the <code>UnimplementedBlockAssemblyAPIServer</code> and contains various components for managing block assembly, storage, and communication with other services.</p>
@@ -7509,11 +7512,17 @@
 <span class="w">    </span><span class="c1">// miningCandidateCh coordinates requests for mining candidates</span>
 <span class="w">    </span><span class="nx">miningCandidateCh</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">miningCandidateResponse</span>
 
-<span class="w">    </span><span class="c1">// bestBlockHeader atomically stores the current best block header</span>
-<span class="w">    </span><span class="nx">bestBlockHeader</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">model</span><span class="p">.</span><span class="nx">BlockHeader</span><span class="p">]</span>
+<span class="w">    </span><span class="c1">// bestBlock atomically stores the current best block header and height together</span>
+<span class="w">    </span><span class="nx">bestBlock</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">BestBlockInfo</span><span class="p">]</span>
 
-<span class="w">    </span><span class="c1">// bestBlockHeight atomically stores the current best block height</span>
-<span class="w">    </span><span class="nx">bestBlockHeight</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Uint32</span>
+<span class="w">    </span><span class="c1">// stateChangeCh notifies listeners of state changes</span>
+<span class="w">    </span><span class="c1">// Protected by stateChangeMu to prevent race conditions</span>
+<span class="w">    </span><span class="nx">stateChangeMu</span><span class="w"> </span><span class="nx">sync</span><span class="p">.</span><span class="nx">RWMutex</span>
+<span class="w">    </span><span class="nx">stateChangeCh</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="nx">BestBlockInfo</span>
+
+<span class="w">    </span><span class="c1">// lastPersistedHeight tracks the last block height processed by block persister</span>
+<span class="w">    </span><span class="c1">// This is updated via BlockPersisted notifications and used to coordinate with cleanup</span>
+<span class="w">    </span><span class="nx">lastPersistedHeight</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Uint32</span>
 
 <span class="w">    </span><span class="c1">// currentChainMap maps block hashes to their heights</span>
 <span class="w">    </span><span class="nx">currentChainMap</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">]</span><span class="kt">uint32</span>
@@ -7527,20 +7536,11 @@
 <span class="w">    </span><span class="c1">// blockchainSubscriptionCh receives blockchain notifications</span>
 <span class="w">    </span><span class="nx">blockchainSubscriptionCh</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">Notification</span>
 
-<span class="w">    </span><span class="c1">// currentDifficulty stores the current mining difficulty target</span>
-<span class="w">    </span><span class="nx">currentDifficulty</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="nx">model</span><span class="p">.</span><span class="nx">NBit</span><span class="p">]</span>
-
 <span class="w">    </span><span class="c1">// defaultMiningNBits stores the default mining difficulty</span>
 <span class="w">    </span><span class="nx">defaultMiningNBits</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">NBit</span>
 
 <span class="w">    </span><span class="c1">// resetCh handles reset requests for the assembler</span>
-<span class="w">    </span><span class="nx">resetCh</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}</span>
-
-<span class="w">    </span><span class="c1">// resetWaitCount tracks the number of blocks to wait after reset</span>
-<span class="w">    </span><span class="nx">resetWaitCount</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Int32</span>
-
-<span class="w">    </span><span class="c1">// resetWaitDuration tracks the time to wait after reset</span>
-<span class="w">    </span><span class="nx">resetWaitDuration</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Int32</span>
+<span class="w">    </span><span class="nx">resetCh</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="nx">resetRequest</span>
 
 <span class="w">    </span><span class="c1">// currentRunningState tracks the current operational state</span>
 <span class="w">    </span><span class="nx">currentRunningState</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Value</span>
@@ -7550,6 +7550,12 @@
 
 <span class="w">    </span><span class="c1">// cleanupServiceLoaded indicates if the cleanup service has been loaded</span>
 <span class="w">    </span><span class="nx">cleanupServiceLoaded</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Bool</span>
+
+<span class="w">    </span><span class="c1">// cleanupQueueCh queues cleanup operations (parent preserve + DAH cleanup) to prevent flooding during catchup</span>
+<span class="w">    </span><span class="nx">cleanupQueueCh</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="kt">uint32</span>
+
+<span class="w">    </span><span class="c1">// cleanupQueueWorkerStarted tracks if the cleanup queue worker is running</span>
+<span class="w">    </span><span class="nx">cleanupQueueWorkerStarted</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Bool</span>
 
 <span class="w">    </span><span class="c1">// unminedCleanupTicker manages periodic cleanup of old unmined transactions</span>
 <span class="w">    </span><span class="nx">unminedCleanupTicker</span><span class="w"> </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Ticker</span>

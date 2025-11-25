@@ -6759,8 +6759,7 @@
 <span class="w">    </span><span class="nx">logger</span><span class="w">                            </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="w">            </span><span class="c1">// Logger instance for the server</span>
 <span class="w">    </span><span class="nx">settings</span><span class="w">                          </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="w">       </span><span class="c1">// Configuration settings</span>
 <span class="w">    </span><span class="nx">bitcoinProtocolVersion</span><span class="w">            </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// Bitcoin protocol version identifier</span>
-<span class="w">    </span><span class="nx">blockchainClient</span><span class="w">                  </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">       </span><span class="c1">// Client for blockchain interactions</span>
-<span class="w">    </span><span class="nx">blockValidationClient</span><span class="w">             </span><span class="nx">blockvalidation</span><span class="p">.</span><span class="nx">Interface</span>
+<span class="w">    </span><span class="nx">blockchainClient</span><span class="w">                  </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">        </span><span class="c1">// Client for blockchain interactions</span>
 <span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w">               </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">     </span><span class="c1">// Client for block assembly operations</span>
 <span class="w">    </span><span class="nx">AssetHTTPAddressURL</span><span class="w">               </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// HTTP address URL for assets</span>
 <span class="w">    </span><span class="nx">e</span><span class="w">                                 </span><span class="o">*</span><span class="nx">echo</span><span class="p">.</span><span class="nx">Echo</span><span class="w">                </span><span class="c1">// Echo server instance</span>
@@ -6786,7 +6785,6 @@
 <span class="w">    </span><span class="nx">startTime</span><span class="w">                         </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span><span class="w">          </span><span class="c1">// Server start time for uptime calculation</span>
 <span class="w">    </span><span class="nx">peerRegistry</span><span class="w">                      </span><span class="o">*</span><span class="nx">PeerRegistry</span><span class="w">      </span><span class="c1">// Central registry for all peer information</span>
 <span class="w">    </span><span class="nx">peerSelector</span><span class="w">                      </span><span class="o">*</span><span class="nx">PeerSelector</span><span class="w">      </span><span class="c1">// Stateless peer selection logic</span>
-<span class="w">    </span><span class="nx">peerHealthChecker</span><span class="w">                 </span><span class="o">*</span><span class="nx">PeerHealthChecker</span><span class="w"> </span><span class="c1">// Async health monitoring</span>
 <span class="w">    </span><span class="nx">syncCoordinator</span><span class="w">                   </span><span class="o">*</span><span class="nx">SyncCoordinator</span><span class="w">   </span><span class="c1">// Orchestrates sync operations</span>
 <span class="w">    </span><span class="nx">syncConnectionTimes</span><span class="w">               </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Map</span><span class="w">           </span><span class="c1">// Map to track when we first connected to each sync peer (peerID -&gt; timestamp)</span>
 
@@ -6794,6 +6792,7 @@
 <span class="w">    </span><span class="nx">peerMapCleanupTicker</span><span class="w">              </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Ticker</span><span class="w">       </span><span class="c1">// Ticker for periodic cleanup of peer maps</span>
 <span class="w">    </span><span class="nx">peerMapMaxSize</span><span class="w">                    </span><span class="kt">int</span><span class="w">                </span><span class="c1">// Maximum number of entries in peer maps</span>
 <span class="w">    </span><span class="nx">peerMapTTL</span><span class="w">                        </span><span class="nx">time</span><span class="p">.</span><span class="nx">Duration</span><span class="w">      </span><span class="c1">// Time-to-live for peer map entries</span>
+<span class="w">    </span><span class="nx">registryCacheSaveTicker</span><span class="w">           </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Ticker</span><span class="w">       </span><span class="c1">// Ticker for periodic saving of peer registry cache</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>The server manages several key components, each serving a specific purpose in the P2P network:</p>
@@ -6803,7 +6802,7 @@
 <li>The various Kafka clients manage message distribution across the network</li>
 <li>The ban system maintains network security by managing peer access through BanListI and PeerBanManager</li>
 <li>The notification channel handles real-time event propagation</li>
-<li>The peerRegistry, peerSelector, peerHealthChecker, and syncCoordinator provide comprehensive peer management and synchronization capabilities</li>
+<li>The peerRegistry, peerSelector, and syncCoordinator provide comprehensive peer management and synchronization capabilities</li>
 </ul>
 <h3 id="p2p-client-interface">P2P Client Interface</h3>
 <p>The P2P Server uses the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package. This interface-based design enables better testability and allows external developers to create custom P2P implementations that integrate with Teranode's messaging system.</p>

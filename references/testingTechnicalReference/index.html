@@ -6861,7 +6861,7 @@
 <span class="w">    </span><span class="nx">SettingsContext</span><span class="w">     </span><span class="kt">string</span><span class="w">                  </span><span class="c1">// Configuration context</span>
 <span class="w">    </span><span class="nx">BlockchainClient</span><span class="w">    </span><span class="nx">bc</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">              </span><span class="c1">// Blockchain service client</span>
 <span class="w">    </span><span class="nx">BlockassemblyClient</span><span class="w"> </span><span class="nx">ba</span><span class="p">.</span><span class="nx">Client</span><span class="w">               </span><span class="c1">// Block assembly client</span>
-<span class="w">    </span><span class="nx">DistributorClient</span><span class="w">   </span><span class="nx">distributor</span><span class="p">.</span><span class="nx">Distributor</span><span class="w"> </span><span class="c1">// Distribution service client</span>
+<span class="w">    </span><span class="nx">PropagationClient</span><span class="w">   </span><span class="o">*</span><span class="nx">propagation</span><span class="p">.</span><span class="nx">Client</span><span class="w">     </span><span class="c1">// Propagation service client</span>
 <span class="w">    </span><span class="nx">ClientBlockstore</span><span class="w">    </span><span class="o">*</span><span class="nx">bhttp</span><span class="p">.</span><span class="nx">HTTPStore</span><span class="w">        </span><span class="c1">// HTTP client for block storage</span>
 <span class="w">    </span><span class="nx">ClientSubtreestore</span><span class="w">  </span><span class="o">*</span><span class="nx">bhttp</span><span class="p">.</span><span class="nx">HTTPStore</span><span class="w">        </span><span class="c1">// HTTP client for subtree storage</span>
 <span class="w">    </span><span class="nx">UtxoStore</span><span class="w">           </span><span class="o">*</span><span class="nx">utxostore</span><span class="p">.</span><span class="nx">Store</span><span class="w">        </span><span class="c1">// UTXO storage</span>
@@ -6911,7 +6911,7 @@
 <span class="w">    </span><span class="c1">// Set up blob stores for block and subtree data</span>
 <span class="w">    </span><span class="c1">// Retrieve IP addresses for containers</span>
 <span class="w">    </span><span class="c1">// Set up RPC and Asset service URLs</span>
-<span class="w">    </span><span class="c1">// Initialize blockchain, blockassembly and distributor clients</span>
+<span class="w">    </span><span class="c1">// Initialize blockchain, blockassembly and propagation clients</span>
 <span class="w">    </span><span class="c1">// Configure UTXO stores and other required connections</span>
 <span class="w">    </span><span class="c1">// Connect to necessary services for testing</span>
 <span class="p">}</span>
@@ -7144,10 +7144,10 @@ SETTINGS_CONTEXT_3<span class="w">   </span><span class="c1"># Configuration for
 <span class="w">    </span><span class="c1">// Create and configure block assembly client</span>
 <span class="p">}</span>
 
-<span class="c1">// Sets up distributor client for a node</span>
-<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">TeranodeTestEnv</span><span class="p">)</span><span class="w"> </span><span class="nx">setupDistributorClient</span><span class="p">(</span><span class="nx">node</span><span class="w"> </span><span class="o">*</span><span class="nx">TeranodeTestClient</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// Initialize gRPC connection to distributor service</span>
-<span class="w">    </span><span class="c1">// Create and configure distributor client</span>
+<span class="c1">// Sets up propagation client for a node</span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">TeranodeTestEnv</span><span class="p">)</span><span class="w"> </span><span class="nx">setupPropagationClient</span><span class="p">(</span><span class="nx">node</span><span class="w"> </span><span class="o">*</span><span class="nx">TeranodeTestClient</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Initialize gRPC connection to propagation service</span>
+<span class="w">    </span><span class="c1">// Create and configure propagation client</span>
 <span class="p">}</span>
 
 <span class="c1">// GetMappedPort retrieves the mapped port for a service running in Docker Compose</span>

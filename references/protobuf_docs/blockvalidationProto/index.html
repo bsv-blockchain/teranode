@@ -4272,6 +4272,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#catchupstatusresponse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CatchupStatusResponse
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#emptymessage" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4294,10 +4305,32 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#previouscatchupattempt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PreviousCatchupAttempt
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#processblockrequest" class="md-nav__link">
     <span class="md-ellipsis">
       
         ProcessBlockRequest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revalidateblockrequest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RevalidateBlockRequest
       
     </span>
   </a>
@@ -6183,6 +6216,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#catchupstatusresponse" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CatchupStatusResponse
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#emptymessage" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6205,10 +6249,32 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#previouscatchupattempt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PreviousCatchupAttempt
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#processblockrequest" class="md-nav__link">
     <span class="md-ellipsis">
       
         ProcessBlockRequest
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#revalidateblockrequest" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RevalidateBlockRequest
       
     </span>
   </a>
@@ -6289,9 +6355,12 @@
 <p><a href="#blockvalidation_api.proto">blockvalidation_api.proto</a></p>
 <ul>
 <li><a href="#BlockFoundRequest">BlockFoundRequest</a></li>
+<li><a href="#CatchupStatusResponse">CatchupStatusResponse</a></li>
 <li><a href="#EmptyMessage">EmptyMessage</a></li>
 <li><a href="#HealthResponse">HealthResponse</a></li>
+<li><a href="#PreviousCatchupAttempt">PreviousCatchupAttempt</a></li>
 <li><a href="#ProcessBlockRequest">ProcessBlockRequest</a></li>
+<li><a href="#RevalidateBlockRequest">RevalidateBlockRequest</a></li>
 <li><a href="#ValidateBlockRequest">ValidateBlockRequest</a></li>
 <li>
 <p><a href="#ValidateBlockResponse">ValidateBlockResponse</a></p>
@@ -6348,6 +6417,111 @@
 </tr>
 </tbody>
 </table>
+<p><a name="CatchupStatusResponse"></a></p>
+<h3 id="catchupstatusresponse">CatchupStatusResponse</h3>
+<p>swagger:model CatchupStatusResponse</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Label</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>is_catching_up</td>
+<td><a href="#bool">bool</a></td>
+<td></td>
+<td>Indicates if the node is currently catching up</td>
+</tr>
+<tr>
+<td>peer_id</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>P2P peer identifier for the catchup source</td>
+</tr>
+<tr>
+<td>peer_url</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>URL of the peer being used for catchup</td>
+</tr>
+<tr>
+<td>target_block_hash</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>Hash of the target block to catch up to</td>
+</tr>
+<tr>
+<td>target_block_height</td>
+<td><a href="#uint32">uint32</a></td>
+<td></td>
+<td>Height of the target block</td>
+</tr>
+<tr>
+<td>current_height</td>
+<td><a href="#uint32">uint32</a></td>
+<td></td>
+<td>Current block height during catchup</td>
+</tr>
+<tr>
+<td>total_blocks</td>
+<td><a href="#int32">int32</a></td>
+<td></td>
+<td>Total number of blocks to process</td>
+</tr>
+<tr>
+<td>blocks_fetched</td>
+<td><a href="#int64">int64</a></td>
+<td></td>
+<td>Number of blocks fetched so far</td>
+</tr>
+<tr>
+<td>blocks_validated</td>
+<td><a href="#int64">int64</a></td>
+<td></td>
+<td>Number of blocks validated so far</td>
+</tr>
+<tr>
+<td>start_time</td>
+<td><a href="#int64">int64</a></td>
+<td></td>
+<td>Unix timestamp when catchup started</td>
+</tr>
+<tr>
+<td>duration_ms</td>
+<td><a href="#int64">int64</a></td>
+<td></td>
+<td>Duration of catchup in milliseconds</td>
+</tr>
+<tr>
+<td>fork_depth</td>
+<td><a href="#uint32">uint32</a></td>
+<td></td>
+<td>Depth of the fork being resolved</td>
+</tr>
+<tr>
+<td>common_ancestor_hash</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>Hash of the common ancestor block</td>
+</tr>
+<tr>
+<td>common_ancestor_height</td>
+<td><a href="#uint32">uint32</a></td>
+<td></td>
+<td>Height of the common ancestor block</td>
+</tr>
+<tr>
+<td>previous_attempt</td>
+<td><a href="#PreviousCatchupAttempt">PreviousCatchupAttempt</a></td>
+<td></td>
+<td>Information about the previous catchup attempt if any</td>
+</tr>
+</tbody>
+</table>
 <p><a name="EmptyMessage"></a></p>
 <h3 id="emptymessage">EmptyMessage</h3>
 <p>Represents an empty request or response message. Used for endpoints that don't require input parameters or return data.</p>
@@ -6382,6 +6556,75 @@
 <td><a href="#google-protobuf-Timestamp">google.protobuf.Timestamp</a></td>
 <td></td>
 <td>Timestamp when the health check was performed</td>
+</tr>
+</tbody>
+</table>
+<p><a name="PreviousCatchupAttempt"></a></p>
+<h3 id="previouscatchupattempt">PreviousCatchupAttempt</h3>
+<p>swagger:model PreviousCatchupAttempt</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Label</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>peer_id</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>P2P peer identifier for the previous attempt</td>
+</tr>
+<tr>
+<td>peer_url</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>URL of the peer used in the previous attempt</td>
+</tr>
+<tr>
+<td>target_block_hash</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>Hash of the target block in the previous attempt</td>
+</tr>
+<tr>
+<td>target_block_height</td>
+<td><a href="#uint32">uint32</a></td>
+<td></td>
+<td>Height of the target block in the previous attempt</td>
+</tr>
+<tr>
+<td>error_message</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>Error message from the previous attempt</td>
+</tr>
+<tr>
+<td>error_type</td>
+<td><a href="#string">string</a></td>
+<td></td>
+<td>Type of error encountered</td>
+</tr>
+<tr>
+<td>attempt_time</td>
+<td><a href="#int64">int64</a></td>
+<td></td>
+<td>Unix timestamp when the attempt was made</td>
+</tr>
+<tr>
+<td>duration_ms</td>
+<td><a href="#int64">int64</a></td>
+<td></td>
+<td>Duration of the attempt in milliseconds</td>
+</tr>
+<tr>
+<td>blocks_validated</td>
+<td><a href="#int64">int64</a></td>
+<td></td>
+<td>Number of blocks validated before failure</td>
 </tr>
 </tbody>
 </table>
@@ -6421,6 +6664,27 @@
 <td><a href="#string">string</a></td>
 <td></td>
 <td>P2P peer identifier for peerMetrics tracking</td>
+</tr>
+</tbody>
+</table>
+<p><a name="RevalidateBlockRequest"></a></p>
+<h3 id="revalidateblockrequest">RevalidateBlockRequest</h3>
+<p>swagger:model RevalidateBlockRequest</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Label</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>hash</td>
+<td><a href="#bytes">bytes</a></td>
+<td></td>
+<td>The hash of the block to revalidate</td>
 </tr>
 </tbody>
 </table>
@@ -6525,6 +6789,18 @@
 <td><a href="#ValidateBlockRequest">ValidateBlockRequest</a></td>
 <td><a href="#ValidateBlockResponse">ValidateBlockResponse</a></td>
 <td>Validates a block without processing it, returning validation results.</td>
+</tr>
+<tr>
+<td>RevalidateBlock</td>
+<td><a href="#RevalidateBlockRequest">RevalidateBlockRequest</a></td>
+<td><a href="#EmptyMessage">EmptyMessage</a></td>
+<td>Revalidates a previously validated block by its hash.</td>
+</tr>
+<tr>
+<td>GetCatchupStatus</td>
+<td><a href="#EmptyMessage">EmptyMessage</a></td>
+<td><a href="#CatchupStatusResponse">CatchupStatusResponse</a></td>
+<td>Returns the current catchup status including progress and peer information.</td>
 </tr>
 </tbody>
 </table>

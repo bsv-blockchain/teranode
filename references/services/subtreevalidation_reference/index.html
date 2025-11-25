@@ -7203,11 +7203,8 @@
 <span class="w">    </span><span class="c1">// invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages</span>
 <span class="w">    </span><span class="nx">invalidSubtreeDeDuplicateMap</span><span class="w"> </span><span class="o">*</span><span class="nx">expiringmap</span><span class="p">.</span><span class="nx">ExpiringMap</span><span class="p">[</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="kd">struct</span><span class="p">{}]</span>
 
-<span class="w">    </span><span class="c1">// orphanage is used to store transactions that are missing parents that can be validated later</span>
-<span class="w">    </span><span class="nx">orphanage</span><span class="w"> </span><span class="o">*</span><span class="nx">expiringmap</span><span class="p">.</span><span class="nx">ExpiringMap</span><span class="p">[</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">]</span>
-
-<span class="w">    </span><span class="c1">// orphanageLock is used to make sure we only process the orphanage once at a time</span>
-<span class="w">    </span><span class="nx">orphanageLock</span><span class="w"> </span><span class="nx">sync</span><span class="p">.</span><span class="nx">Mutex</span>
+<span class="w">    </span><span class="c1">// orphanage manages orphaned transactions that are missing their parent transactions</span>
+<span class="w">    </span><span class="nx">orphanage</span><span class="w"> </span><span class="o">*</span><span class="nx">Orphanage</span>
 
 <span class="w">    </span><span class="c1">// pauseSubtreeProcessing is used to pause subtree processing while a block is being processed</span>
 <span class="w">    </span><span class="nx">pauseSubtreeProcessing</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Bool</span>
@@ -7220,6 +7217,10 @@
 
 <span class="w">    </span><span class="c1">// currentBlockIDsMap is used to store the current block IDs for the current best block height</span>
 <span class="w">    </span><span class="nx">currentBlockIDsMap</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Pointer</span><span class="p">[</span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">]</span>
+
+<span class="w">    </span><span class="c1">// p2pClient interfaces with the P2P service</span>
+<span class="w">    </span><span class="c1">// Used to report successful subtree fetches to improve peer reputation</span>
+<span class="w">    </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">P2PClientI</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="validatesubtree">ValidateSubtree</h3>
@@ -7263,6 +7264,7 @@
 <span class="w">    </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">subtreeConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
 <span class="w">    </span><span class="nx">txmetaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span>
+<span class="w">    </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">P2PClientI</span><span class="p">,</span>
 <span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">Server</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
 <p>Creates a new <code>Server</code> instance with the provided dependencies. This factory function constructs and initializes a fully configured subtree validation service, injecting all required dependencies. It follows the dependency injection pattern to ensure testability and proper separation of concerns.</p>

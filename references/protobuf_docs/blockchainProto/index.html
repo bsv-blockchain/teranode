@@ -7683,15 +7683,12 @@
 <li><a href="#GetNextBlockIDResponse">GetNextBlockIDResponse</a></li>
 <li><a href="#GetNextWorkRequiredRequest">GetNextWorkRequiredRequest</a></li>
 <li><a href="#GetNextWorkRequiredResponse">GetNextWorkRequiredResponse</a></li>
-<li><a href="#GetNextBlockIDResponse">GetNextBlockIDResponse</a></li>
 <li><a href="#GetStateRequest">GetStateRequest</a></li>
 <li><a href="#GetSuitableBlockRequest">GetSuitableBlockRequest</a></li>
 <li><a href="#GetSuitableBlockResponse">GetSuitableBlockResponse</a></li>
 <li><a href="#HealthResponse">HealthResponse</a></li>
 <li><a href="#InvalidateBlockRequest">InvalidateBlockRequest</a></li>
 <li><a href="#InvalidateBlockResponse">InvalidateBlockResponse</a></li>
-<li><a href="#FindBlocksContainingSubtreeRequest">FindBlocksContainingSubtreeRequest</a></li>
-<li><a href="#FindBlocksContainingSubtreeResponse">FindBlocksContainingSubtreeResponse</a></li>
 <li><a href="#ReportPeerFailureRequest">ReportPeerFailureRequest</a></li>
 <li><a href="#LocateBlockHeadersRequest">LocateBlockHeadersRequest</a></li>
 <li><a href="#LocateBlockHeadersResponse">LocateBlockHeadersResponse</a></li>
@@ -9516,7 +9513,7 @@
 <tr>
 <td>RUNNING</td>
 <td>1</td>
-<td>Service is running</td>
+<td>Service is running normally</td>
 </tr>
 <tr>
 <td>CATCHINGBLOCKS</td>
@@ -9526,7 +9523,7 @@
 <tr>
 <td>LEGACYSYNCING</td>
 <td>3</td>
-<td>Service is performing legacy sync</td>
+<td>Service is in legacy sync mode</td>
 </tr>
 </tbody>
 </table>
@@ -9647,7 +9644,7 @@
 <td>GetBlockHeadersToCommonAncestor</td>
 <td><a href="#blockchain_api-GetBlockHeadersToCommonAncestorRequest">GetBlockHeadersToCommonAncestorRequest</a></td>
 <td><a href="#blockchain_api-GetBlockHeadersResponse">GetBlockHeadersResponse</a></td>
-<td>Retrieves block headers up to a common ancestor point between chains.</td>
+<td>Retrieves headers from a block to its common ancestor.</td>
 </tr>
 <tr>
 <td>GetBlockHeadersFromCommonAncestor</td>
