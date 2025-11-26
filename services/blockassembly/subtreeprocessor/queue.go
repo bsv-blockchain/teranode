@@ -2,7 +2,6 @@
 package subtreeprocessor
 
 import (
-	"sync"
 	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-subtree"
@@ -27,12 +26,6 @@ type LockFreeQueue struct {
 	head        *TxIDAndFee                // Points to the head of the queue
 	tail        atomic.Pointer[TxIDAndFee] // Atomic pointer to the tail
 	queueLength atomic.Int64               // Tracks the current length of the queue
-}
-
-var txIDAndFeePool = sync.Pool{
-	New: func() any {
-		return &TxIDAndFee{}
-	},
 }
 
 // NewLockFreeQueue creates and initializes a new LockFreeQueue instance.
@@ -63,12 +56,11 @@ func (q *LockFreeQueue) length() int64 {
 // Parameters:
 //   - v: The transaction to add to the queue
 func (q *LockFreeQueue) enqueue(node subtree.Node, txInpoints subtree.TxInpoints) {
-	v := txIDAndFeePool.Get().(*TxIDAndFee)
-
-	v.node = node
-	v.txInpoints = txInpoints
-	v.time = fastime.Now().UnixMilli()
-	v.next.Store(nil)
+	v := &TxIDAndFee{
+		node:       node,
+		txInpoints: txInpoints,
+		time:       fastime.Now().UnixMilli(),
+	}
 
 	prev := q.tail.Swap(v)
 	if prev == nil {
@@ -101,12 +93,7 @@ func (q *LockFreeQueue) dequeue(validFromMillis int64) (subtree.Node, subtree.Tx
 		return subtree.Node{}, subtree.TxInpoints{}, 0, false
 	}
 
-	oldItem := q.head
 	q.head = next
-
-	// return the dequeued to the pool for reuse
-	txIDAndFeePool.Put(oldItem)
-
 	q.queueLength.Add(-1)
 
 	return next.node, next.txInpoints, next.time, true
