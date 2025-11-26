@@ -89,8 +89,12 @@ local FIELD_SPENDING_DATA = "spendingData"
 -- local FIELD_DEBUG = "debug"
 
 -- Helper functions
-
-
+local bytes_size = bytes.size
+local bytes_get_bytes = bytes.get_bytes
+local string_format = string.format
+local table_concat = table.concat
+local list_append = list.append
+local list_iterator = list.iterator
 
 -- Function to get error with stack trace
 local function errorWithTrace(msg)
@@ -99,11 +103,12 @@ end
 
 -- Function to compare two byte arrays for equality
 local function bytes_equal(a, b)
-    if bytes.size(a) ~= bytes.size(b) then
+    local size_a = bytes_size(a)
+    if size_a ~= bytes_size(b) then
         return false
     end
 
-    for i = 1, bytes.size(a) do
+    for i = 1, size_a do
         if a[i] ~= b[i] then
             return false
         end
@@ -114,32 +119,32 @@ end
 
 -- Function to convert a byte array to a hexadecimal string
 local function spendingDataBytesToHex(b)
-    local hex = ""
+    local t = {}
 
     -- The first 32 bytes are the txID
     -- And we want to reverse it
     for i = 32, 1, -1 do
-        hex = hex .. string.format("%02x", b[i])
+        t[#t+1] = string_format("%02x", b[i])
     end
 
     -- The next 4 bytes are the vin in little-endian
     for i = 33, 36, 1 do
-        hex = hex .. string.format("%02x", b[i])
+        t[#t+1] = string_format("%02x", b[i])
     end
-    return hex
+    return table_concat(t)
 end
 
 -- Function to convert a spending byte array to a reverse tx hexadecimal string
 local function spendingDataBytesToTxHex(b)
-    local hex = ""
+    local t = {}
 
     -- The first 32 bytes are the txID
     -- And we want to reverse it
     for i = 32, 1, -1 do
-        hex = hex .. string.format("%02x", b[i])
+        t[#t+1] = string_format("%02x", b[i])
     end
 
-    return hex
+    return table_concat(t)
 end
 
 -- Creates a new UTXO with spending data
@@ -177,10 +182,10 @@ end
 -- @return string|nil spendingData The spending data if present
 -- @return table|nil errorInfo A map containing errorCode and message if an error occurs
 local function getUTXOAndSpendingData(utxos, offset, expectedHash)
-    assert(utxos ~= nil, "utxos must be non-nil")
-    assert(type(offset) == "number" and offset >= 0, "offset must be a non-negative number")
-    assert(expectedHash, "expectedHash is required")
-    assert(bytes.size(expectedHash) == UTXO_HASH_SIZE, "expectedHash must be " .. UTXO_HASH_SIZE .. " bytes long")
+    -- assert(utxos ~= nil, "utxos must be non-nil") -- Removed for performance, caller ensures
+    -- assert(type(offset) == "number" and offset >= 0, "offset must be a non-negative number")
+    -- assert(expectedHash, "expectedHash is required")
+    -- assert(bytes_size(expectedHash) == UTXO_HASH_SIZE, "expectedHash must be " .. UTXO_HASH_SIZE .. " bytes long")
 
     local utxo = utxos[offset + 1] -- Lua arrays are 1-based
     if utxo == nil then
@@ -193,22 +198,23 @@ local function getUTXOAndSpendingData(utxos, offset, expectedHash)
         return nil, nil, response
     end
 
-    local existingHash = bytes.get_bytes(utxo, 1, UTXO_HASH_SIZE)
+    -- Inline hash comparison to avoid allocation of existingHash
+    for i = 1, UTXO_HASH_SIZE do
+        if utxo[i] ~= expectedHash[i] then
+            local response = map()
 
-    if not bytes_equal(existingHash, expectedHash) then
-        local response = map()
+            response[FIELD_STATUS] = STATUS_ERROR
+            response[FIELD_ERROR_CODE] = ERROR_CODE_UTXO_HASH_MISMATCH
+            response[FIELD_MESSAGE] = ERR_UTXO_HASH_MISMATCH
 
-        response[FIELD_STATUS] = STATUS_ERROR
-        response[FIELD_ERROR_CODE] = ERROR_CODE_UTXO_HASH_MISMATCH
-        response[FIELD_MESSAGE] = ERR_UTXO_HASH_MISMATCH
-
-        return nil, nil, response
+            return nil, nil, response
+        end
     end
 
     local spendingData = nil
 
-    if bytes.size(utxo) == FULL_UTXO_SIZE then
-        spendingData = bytes.get_bytes(utxo, UTXO_HASH_SIZE + 1, SPENDING_DATA_SIZE)
+    if bytes_size(utxo) == FULL_UTXO_SIZE then
+        spendingData = bytes_get_bytes(utxo, UTXO_HASH_SIZE + 1, SPENDING_DATA_SIZE)
     end
 
     return utxo, spendingData, nil
@@ -335,9 +341,10 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
     local errors = map()
     local deletedChildren = rec[BIN_DELETED_CHILDREN]
+    local spendableIn = rec[BIN_UTXO_SPENDABLE_IN]
 
     -- loop through the spends
-    for spend in list.iterator(spends) do
+    for spend in list_iterator(spends) do
         local offset = spend['offset']
         local utxoHash = spend['utxoHash']
         local spendingData = spend['spendingData']
@@ -356,12 +363,13 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
             goto continue
         end
 
-        if rec[BIN_UTXO_SPENDABLE_IN] then
-            if rec[BIN_UTXO_SPENDABLE_IN][offset] and rec[BIN_UTXO_SPENDABLE_IN][offset] >= currentBlockHeight then
+        if spendableIn then
+            local spendableHeight = spendableIn[offset]
+            if spendableHeight and spendableHeight >= currentBlockHeight then
                 local error = map()
 
                 error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN_UNTIL
-                error[FIELD_MESSAGE] = MSG_FROZEN_UNTIL .. rec[BIN_UTXO_SPENDABLE_IN][offset]
+                error[FIELD_MESSAGE] = MSG_FROZEN_UNTIL .. spendableHeight
 
                 errors[idx] = error
 
