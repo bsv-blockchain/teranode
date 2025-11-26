@@ -336,8 +336,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SpendBatcherSize:                  getInt("utxostore_spendBatcherSize", 100, alternativeContext...),
 			SpendBatcherConcurrency:           getInt("utxostore_spendBatcherConcurrency", 32, alternativeContext...),
 			SpendWaitTimeout:                  getDuration("utxostore_spendWaitTimeout", 30*time.Second, alternativeContext...),
-			SpendQueueLimit:                   getInt("utxostore_spendQueueLimit", 10000, alternativeContext...),
-			SpendEnqueueTimeout:               getDuration("utxostore_spendEnqueueTimeout", 5*time.Second, alternativeContext...),
 			SpendCircuitBreakerFailureCount:   getInt("utxostore_spendCircuitBreakerFailureCount", 10, alternativeContext...),
 			SpendCircuitBreakerCooldown:       getDuration("utxostore_spendCircuitBreakerCooldown", 30*time.Second, alternativeContext...),
 			SpendCircuitBreakerHalfOpenMax:    getInt("utxostore_spendCircuitBreakerHalfOpenMax", 4, alternativeContext...),

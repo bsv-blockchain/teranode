@@ -350,8 +350,6 @@ type UtxoStoreSettings struct {
 	SpendBatcherSize                  int
 	SpendBatcherConcurrency           int
 	SpendWaitTimeout                  time.Duration
-	SpendQueueLimit                   int
-	SpendEnqueueTimeout               time.Duration
 	SpendCircuitBreakerFailureCount   int
 	SpendCircuitBreakerCooldown       time.Duration
 	SpendCircuitBreakerHalfOpenMax    int

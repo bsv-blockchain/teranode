@@ -1,3 +1,57 @@
+// Package aerospike provides circuit breaker functionality for spend operations.
+//
+// # Circuit Breaker Purpose
+//
+// The circuit breaker provides fail-fast behavior to prevent cascading failures when
+// Aerospike infrastructure is unhealthy. It tracks infrastructure-level failures and
+// temporarily rejects all spend requests during cooldown periods to give the system
+// time to recover.
+//
+// # Circuit Breaker vs Semaphore - Different Purposes
+//
+// Protection Layer     | Purpose                        | When It Acts
+// -------------------- | ------------------------------ | --------------------------------------------
+// Semaphore (client.go)| Limits concurrency             | Always - controls how many operations run simultaneously
+// Circuit Breaker      | Prevents cascading failures    | Only when Aerospike is failing - stops all requests when system is unhealthy
+//
+// # When Circuit Breaker Triggers
+//
+// The circuit breaker only tracks REAL infrastructure failures from Aerospike batch operations,
+// not business logic errors. It will NOT trigger on:
+//   - UTXO already spent errors
+//   - Frozen UTXO errors
+//   - Conflicting transaction errors
+//   - Other business validation errors
+//
+// It WILL trigger on:
+//   - Aerospike connection failures
+//   - Batch operation errors
+//   - Timeout errors at the database level
+//
+// # Circuit Breaker States
+//
+// 1. CLOSED: Normal operation, requests flow through
+// 2. OPEN: After N consecutive failures, all requests are rejected immediately
+// 3. HALF-OPEN: After cooldown period, limited requests are allowed to probe recovery
+//
+// # Configuration
+//
+// The circuit breaker is configurable and optional:
+//   - SpendCircuitBreakerFailureCount: Number of consecutive failures before opening (0 = disabled)
+//   - SpendCircuitBreakerHalfOpenMax: Number of successful probes required to fully recover
+//   - SpendCircuitBreakerCooldown: Time to wait before attempting recovery
+//
+// # When to Use
+//
+// Keep it if:
+//   - You've experienced Aerospike cascading failures in production
+//   - You need aggressive fail-fast behavior during infrastructure issues
+//   - You want to give the database time to recover without request hammering
+//
+// Remove it if:
+//   - You prefer to let the semaphore + Aerospike's own resilience handle failures
+//   - It's causing false positives or being too aggressive
+//   - You need the spend system to remain available even during partial Aerospike issues
 package aerospike
 
 import (

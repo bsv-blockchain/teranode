@@ -332,23 +332,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		spend := spend
 
 		g.Go(func() error {
-			// Fast-fail check: if circuit breaker is already open, don't waste time acquiring permit
+			// Fast-fail check: if circuit breaker is already open, reject immediately
 			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
 				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request")
-				return nil
-			}
-
-			if err := s.acquireSpendPermit(ctx); err != nil {
-				spends[idx].Err = err
-				return nil
-			}
-			defer s.releaseSpendPermit()
-
-			// Critical: Re-check circuit breaker after acquiring permit to prevent race condition.
-			// During the (potentially long) wait for permit, the circuit breaker state may have changed.
-			// This second check ensures we see the most recent state before submitting work.
-			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
-				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker opened during permit acquisition, rejecting request")
 				return nil
 			}
 
@@ -1121,49 +1107,5 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 		}
 
 		batch[batchIdx].errCh <- nil
-	}
-}
-
-func (s *Store) acquireSpendPermit(ctx context.Context) error {
-	if s == nil || s.spendQueueSem == nil {
-		return nil
-	}
-	timeout := s.spendEnqueueTimeout
-	if timeout <= 0 {
-		select {
-		case s.spendQueueSem <- struct{}{}:
-			return nil
-		case <-ctx.Done():
-			return errors.NewContextCanceledError("[SPEND] context canceled while waiting for spend queue slot: %v", ctx.Err())
-		}
-	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case s.spendQueueSem <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return errors.NewContextCanceledError("[SPEND] context canceled while waiting for spend queue slot: %v", ctx.Err())
-	case <-timer.C:
-		if prometheusUtxoMapErrors != nil {
-			prometheusUtxoMapErrors.WithLabelValues("Spend", "QueueTimeout").Inc()
-		}
-		return errors.NewServiceUnavailableError("[SPEND] timed out after %s waiting for spend queue slot", timeout)
-	}
-}
-func (s *Store) releaseSpendPermit() {
-	if s == nil || s.spendQueueSem == nil {
-		return
-	}
-	select {
-	case <-s.spendQueueSem:
-		// Successfully released permit
-	default:
-		// This should never happen - it means we're trying to release more permits than we acquired
-		// Log error to detect potential logic bugs in permit acquisition/release
-		s.logger.Errorf("[SPEND] Failed to release spend permit: semaphore buffer is full (potential permit leak)")
-		if prometheusUtxoMapErrors != nil {
-			prometheusUtxoMapErrors.WithLabelValues("Spend", "PermitLeakage").Inc()
-		}
 	}
 }

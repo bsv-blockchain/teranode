@@ -124,8 +124,6 @@ type Store struct {
 	storeBatcher        batcherIfc[BatchStoreItem]
 	getBatcher          batcherIfc[batchGetItem]
 	spendBatcher        batcherIfc[batchSpend]
-	spendQueueSem       chan struct{}
-	spendEnqueueTimeout time.Duration
 	spendCircuitBreaker *circuitBreaker
 	outpointBatcher     batcherIfc[batchOutpoint]
 	incrementBatcher    batcherIfc[batchIncrement]
@@ -268,18 +266,6 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
 	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, true)
-
-	s.spendEnqueueTimeout = tSettings.UtxoStore.SpendEnqueueTimeout
-	if s.spendEnqueueTimeout <= 0 {
-		s.spendEnqueueTimeout = tSettings.UtxoStore.SpendWaitTimeout
-	}
-	if s.spendEnqueueTimeout <= 0 {
-		s.spendEnqueueTimeout = 30 * time.Second
-	}
-
-	if queueLimit := tSettings.UtxoStore.SpendQueueLimit; queueLimit > 0 {
-		s.spendQueueSem = make(chan struct{}, queueLimit)
-	}
 
 	if failureThreshold := tSettings.UtxoStore.SpendCircuitBreakerFailureCount; failureThreshold > 0 {
 		s.spendCircuitBreaker = newCircuitBreaker(
