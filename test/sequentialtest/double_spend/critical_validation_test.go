@@ -136,6 +136,7 @@ func TestEmptySubtreeSlicesPostgres(t *testing.T) {
 
 func testEmptySubtreeSlices(t *testing.T, utxoStore string) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
 		SettingsOverrideFunc: func(tSettings *settings.Settings) {
 			parsedURL, err := url.Parse(utxoStore)
@@ -148,7 +149,7 @@ func testEmptySubtreeSlices(t *testing.T, utxoStore string) {
 	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err)
 
-	err = td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 101})
+	td.MineAndWait(t, 101)
 	require.NoError(t, err)
 
 	block101, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
@@ -229,10 +230,6 @@ func testConcurrencyConfigurationEdgeCases(t *testing.T, utxoStore string) {
 
 	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block102, block102.Height, "", "legacy")
 	require.Error(t, err, "Block with duplicates should be rejected even with concurrency=0")
-
-	t.Logf("✓ Duplicate detection works with concurrency=0 (uses default)")
-	t.Logf("NOTE: Testing concurrency=-1, 1, and 10000 requires settings override per test")
-	t.Logf("Current test verifies concurrency=0 falls back to default correctly")
 }
 
 // TestRaceDetectorDuplicateDetection is a documentation test that should be run
