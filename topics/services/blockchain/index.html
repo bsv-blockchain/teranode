@@ -7177,8 +7177,10 @@ Explanation of the sequences:</p>
 </li>
 <li>
 <p><strong>The <code>Block Assembly</code> service:</strong></p>
-</li>
+<ul>
 <li>The <code>Block Assembly</code> service calls the <code>GetBlock</code> method on the <code>Blockchain Service</code> to retrieve a block from the blockchain.</li>
+</ul>
+</li>
 </ol>
 <h3 id="25-getting-the-last-n-blocks-from-the-blockchain">2.5. Getting the last N blocks from the blockchain</h3>
 <p><img alt="blockchain_get_last_n_blocks.svg" src="../img/plantuml/blockchain/blockchain_get_last_n_blocks.svg" /></p>
@@ -7375,7 +7377,7 @@ Explanation of the sequences:</p>
 <p>For further detail, we show here the sequence for the <code>SetBlockSubtreesSet</code> call, not detailed in the diagram above.</p>
 <p><img alt="blockchain_setblocksubtreesset.svg" src="../img/plantuml/blockchain/blockchain_setblocksubtreesset.svg" /></p>
 <h2 id="3-grpc-protobuf-definitions">3. gRPC Protobuf Definitions</h2>
-<p>The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen <a href="../../../references/protobuf_docs/blockchainProto/">here</a>.</p>
+<p>The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the <a href="../../../references/protobuf_docs/blockchainProto/">Blockchain Protobuf API Reference</a>.</p>
 <h2 id="4-data-model">4. Data Model</h2>
 <p>The Blockchain works with the <a href="../../datamodel/block_data_model/">Block Data Model</a>.</p>
 <p>The blockchain database stores the block header, coinbase TX, and block merkle root. The following is the structure of the <code>blocks</code> data:</p>
@@ -7564,13 +7566,9 @@ Explanation of the sequences:</p>
 │   ├── blockchain_api_extra.go - Supplemental code extending or enhancing the auto-generated API code.
 │   ├── blockchain_api_grpc.pb.go - Auto-generated gRPC bindings from the `.proto` file, specifically for gRPC communication.
 │   └── fsm_extra.go - Additional logic related to the Finite State Machine (FSM) functionality.
-├── data
-|
-├── fsm.go
-│   - Implements the Finite State Machine logic for managing blockchain states.
-│
+├── fsm.go - Implements the Finite State Machine logic for managing blockchain states.
 ├── fsm_visualizer
-│   └── main.go  - A tool for visualizing the Finite State Machine structure.
+│   └── main.go - A tool for visualizing the Finite State Machine structure.
 │
 ├── metrics.go
 │   - Manages and implements functionality related to operational metrics of the Blockchain service.
