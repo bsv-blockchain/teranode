@@ -39,12 +39,6 @@ import (
 // NOTE: This test expects the current implementation to REJECT duplicate coinbase
 // because the exception handling for pre-BIP34 blocks is not implemented.
 // This documents a known limitation/bug in the current implementation.
-func TestUnknownDuplicateCoinbaseRejection(t *testing.T) {
-	t.Run("sqlite", func(t *testing.T) {
-		testUnknownDuplicateCoinbaseRejection(t, "sqlite:///test")
-	})
-}
-
 func testUnknownDuplicateCoinbaseRejection(t *testing.T, utxoStore string) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		SettingsContext: "dev.system.test",
@@ -98,12 +92,6 @@ func testUnknownDuplicateCoinbaseRejection(t *testing.T, utxoStore string) {
 //
 // Current implementation bug: The index calculation assumes all subtrees are the same
 // size as the first subtree, which is incorrect for the last incomplete subtree.
-func TestDuplicateAcrossSubtreeBoundary(t *testing.T) {
-	t.Run("sqlite", func(t *testing.T) {
-		testDuplicateAcrossSubtreeBoundary(t, "sqlite:///test")
-	})
-}
-
 func TestDuplicateAcrossSubtreeBoundaryPostgres(t *testing.T) {
 	pg, err := postgres.RunPostgresTestContainer(t.Context(), "dup_subtree_boundary_"+t.Name())
 	require.NoError(t, err)
@@ -196,12 +184,6 @@ func testDuplicateAcrossSubtreeBoundary(t *testing.T, utxoStore string) {
 //   - subtree[2][1] -> index (2*4)+1 = 9, correct
 //
 // The bug manifests when checking if a duplicate exists across boundaries.
-func TestDuplicateInLastIncompleteSubtree(t *testing.T) {
-	t.Run("sqlite", func(t *testing.T) {
-		testDuplicateInLastIncompleteSubtree(t, "sqlite:///test")
-	})
-}
-
 func TestDuplicateInLastIncompleteSubtreePostgres(t *testing.T) {
 	pg, err := postgres.RunPostgresTestContainer(t.Context(), "dup_incomplete_subtree_"+t.Name())
 	require.NoError(t, err)

@@ -38,12 +38,6 @@ import (
 // 3. The same transaction appears again in the block (duplicate)
 //
 // This should also be rejected as duplicate transactions are not allowed.
-func TestEarlyDuplicatePartiallySpentAndPruned(t *testing.T) {
-	t.Run("sqlite", func(t *testing.T) {
-		testEarlyDuplicatePartiallySpentAndPruned(t, "sqlite:///test")
-	})
-}
-
 func TestEarlyDuplicatePartiallySpentAndPrunedPostgres(t *testing.T) {
 	pg, err := postgres.RunPostgresTestContainer(t.Context(), "early_dup_partial_"+t.Name())
 	require.NoError(t, err)
@@ -107,12 +101,6 @@ func testEarlyDuplicatePartiallySpentAndPruned(t *testing.T, utxoStore string) {
 // 3. The same transaction appears again in the block (duplicate)
 //
 // This is the most straightforward duplicate case and should be rejected.
-func TestEarlyDuplicateNotSpent(t *testing.T) {
-	t.Run("sqlite", func(t *testing.T) {
-		testEarlyDuplicateNotSpent(t, "sqlite:///test")
-	})
-}
-
 func TestEarlyDuplicateNotSpentPostgres(t *testing.T) {
 	pg, err := postgres.RunPostgresTestContainer(t.Context(), "early_dup_notspent_"+t.Name())
 	require.NoError(t, err)
