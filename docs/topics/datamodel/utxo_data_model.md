@@ -750,3 +750,39 @@ key = aerospike.NewKey(namespace, setName, keySource)
 - Pagination automatically triggered at 20K output threshold
 - `RECORD_TOO_BIG` error triggers retry with external storage
 - No application-level size restrictions on individual transactions
+
+**Multi-Record Transaction Consistency**:
+
+When transactions require multiple Aerospike records (>20K outputs), the system uses a lock record pattern to ensure atomic creation:
+
+1. **Lock Record**: A temporary record prevents concurrent creation attempts for the same transaction
+2. **Creating Flag**: Each record has a `creating` flag that prevents UTXO spending until all records exist
+3. **Two-Phase Commit**: Records are created with `creating=true`, then flags are cleared after all records succeed
+4. **Auto-Recovery**: If creation fails partially, the system automatically recovers on next encounter
+
+**Record Layout for Large Transactions**:
+
+```text
+Transaction with N batches (>20K outputs):
+
+Master Record (index 0):
+
+  - Transaction metadata (TxID, version, fees, etc.)
+  - First 20,000 UTXOs
+  - TotalExtraRecs field indicating additional records
+  - Creating flag (cleared when complete)
+
+Child Records (indices 1 to N-1):
+
+  - Additional UTXOs in batches of 20,000
+  - Common metadata fields
+  - Creating flag (cleared when complete)
+
+Lock Record (index 0xFFFFFFFF):
+
+  - Temporary, TTL-based (30-300 seconds)
+  - Prevents concurrent creation
+  - Released after all records created
+```
+
+For detailed documentation on the lock record pattern, see [UTXO Lock Record Pattern](../features/utxo_lock_records.md).

@@ -80,6 +80,9 @@ nav:
       - Functional Requirement Tests: topics/functionalRequirementTests.md
       - Features:
           - Two Phase Commit: topics/features/two_phase_commit.md
+          - Peer Registry and Reputation: topics/features/peer_registry_reputation.md
+          - UTXO Lock Records: topics/features/utxo_lock_records.md
+      - Dashboard: topics/dashboard.md
       - Core Services:
           - Alert Service: topics/services/alert.md
           - Asset Server: topics/services/assetServer.md

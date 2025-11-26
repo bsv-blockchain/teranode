@@ -30,51 +30,6 @@ var (
 // NOTE: these tests cannot be run in parallel as they rely on the same blockchain instance. They have to be run sequentially.
 // All Double spend testcases are covering TNA-5: Teranode must only accept the block if all transactions in it are valid and not already spent
 
-func TestDoubleSpendSQLite(t *testing.T) {
-	utxoStore := "sqlite:///test"
-
-	t.Run("single_tx_with_one_conflicting_transaction", func(t *testing.T) {
-		testSingleDoubleSpend(t, utxoStore)
-	})
-	// t.Run("multiple conflicting txs in same block", func(t *testing.T) {
-	// 	testMarkAsConflictingMultipleSameBlock(t, utxoStore)
-	// })
-	t.Run("multiple_conflicting_txs_in_different_blocks", func(t *testing.T) {
-		testMarkAsConflictingMultiple(t, utxoStore)
-	})
-	t.Run("conflicting_transaction_chains", func(t *testing.T) {
-		testMarkAsConflictingChains(t, utxoStore)
-	})
-	t.Run("double_spend_fork", func(t *testing.T) {
-		testDoubleSpendFork(t, utxoStore)
-	})
-	t.Run("double spend in subsequent block", func(t *testing.T) {
-		testDoubleSpendInSubsequentBlock(t, utxoStore)
-	})
-	t.Run("triple_forked_chain", func(t *testing.T) {
-		testTripleForkedChain(t, utxoStore)
-	})
-	t.Run("test_non_conflicting_tx_after_reorg", func(t *testing.T) {
-		testNonConflictingTxReorg(t, utxoStore)
-	})
-	t.Run("test_conflicting_tx_processed_after_reorg", func(t *testing.T) {
-		testConflictingTxReorg(t, utxoStore)
-	})
-	t.Run("test_non_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
-		testNonConflictingTxBlockAssemblyReset(t, utxoStore)
-	})
-	t.Run("test_double_spend_fork_with_nested_txs", func(t *testing.T) {
-		testDoubleSpendForkWithNestedTXs(t, utxoStore)
-	})
-	t.Run("test_double_spend_with_frozen_tx", func(t *testing.T) {
-		testSingleDoubleSpendFrozenTx(t, utxoStore)
-	})
-	// this test is not working yet, waiting for #2853
-	// t.Run("test_double_spend_not_mined_for_long", func(t *testing.T) {
-	// 	testSingleDoubleSpendNotMinedForLong(t, utxoStore)
-	// })
-}
-
 func TestDoubleSpendPostgres(t *testing.T) {
 	// t.Skip()
 	// start a postgres container

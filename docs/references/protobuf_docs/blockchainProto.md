@@ -57,15 +57,12 @@
     - [GetNextBlockIDResponse](#GetNextBlockIDResponse)
     - [GetNextWorkRequiredRequest](#GetNextWorkRequiredRequest)
     - [GetNextWorkRequiredResponse](#GetNextWorkRequiredResponse)
-    - [GetNextBlockIDResponse](#GetNextBlockIDResponse)
     - [GetStateRequest](#GetStateRequest)
     - [GetSuitableBlockRequest](#GetSuitableBlockRequest)
     - [GetSuitableBlockResponse](#GetSuitableBlockResponse)
     - [HealthResponse](#HealthResponse)
     - [InvalidateBlockRequest](#InvalidateBlockRequest)
     - [InvalidateBlockResponse](#InvalidateBlockResponse)
-    - [FindBlocksContainingSubtreeRequest](#FindBlocksContainingSubtreeRequest)
-    - [FindBlocksContainingSubtreeResponse](#FindBlocksContainingSubtreeResponse)
     - [ReportPeerFailureRequest](#ReportPeerFailureRequest)
     - [LocateBlockHeadersRequest](#LocateBlockHeadersRequest)
     - [LocateBlockHeadersResponse](#LocateBlockHeadersResponse)
@@ -1132,9 +1129,9 @@ FSMStateType defines possible states of the blockchain FSM.
 | Name | Number | Description |
 | ---- | ------ | ----------- |
 | IDLE | 0 | Service is idle |
-| RUNNING | 1 | Service is running |
+| RUNNING | 1 | Service is running normally |
 | CATCHINGBLOCKS | 2 | Service is catching up blocks |
-| LEGACYSYNCING | 3 | Service is performing legacy sync |
+| LEGACYSYNCING | 3 | Service is in legacy sync mode |
 
 
  <!-- end enums -->
@@ -1165,7 +1162,7 @@ BlockchainAPI service provides comprehensive blockchain management functionality
 | GetNextWorkRequired | [GetNextWorkRequiredRequest](#blockchain_api-GetNextWorkRequiredRequest) | [GetNextWorkRequiredResponse](#blockchain_api-GetNextWorkRequiredResponse) | Calculates the required proof of work for the next block. |
 | GetBlockExists | [GetBlockRequest](#blockchain_api-GetBlockRequest) | [GetBlockExistsResponse](#blockchain_api-GetBlockExistsResponse) | Checks if a block exists in the blockchain. |
 | GetBlockHeaders | [GetBlockHeadersRequest](#blockchain_api-GetBlockHeadersRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers for multiple blocks. |
-| GetBlockHeadersToCommonAncestor | [GetBlockHeadersToCommonAncestorRequest](#blockchain_api-GetBlockHeadersToCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers up to a common ancestor point between chains. |
+| GetBlockHeadersToCommonAncestor | [GetBlockHeadersToCommonAncestorRequest](#blockchain_api-GetBlockHeadersToCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers from a block to its common ancestor. |
 | GetBlockHeadersFromCommonAncestor | [GetBlockHeadersFromCommonAncestorRequest](#blockchain_api-GetBlockHeadersFromCommonAncestorRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves headers from a common ancestor to a target block. |
 | GetBlockHeadersFromTill | [GetBlockHeadersFromTillRequest](#blockchain_api-GetBlockHeadersFromTillRequest) | [GetBlockHeadersResponse](#blockchain_api-GetBlockHeadersResponse) | Retrieves block headers between two specified blocks. |
 | GetBlockHeadersFromHeight | [GetBlockHeadersFromHeightRequest](#blockchain_api-GetBlockHeadersFromHeightRequest) | [GetBlockHeadersFromHeightResponse](#blockchain_api-GetBlockHeadersFromHeightResponse) | Retrieves block headers starting from a specific height. |
