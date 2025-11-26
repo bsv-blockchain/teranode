@@ -145,6 +145,21 @@ This recovery mechanism ensures that:
 - The server then checks if the subtree already exists in the Subtree Store. Otherwise, the server persists the new subtree in the store with a specified (and settings-driven) TTL (Time-To-Live).
 - Finally, the server sends a notification to the BlockchainClient to announce the new subtree. This will be propagated to other nodes via the P2P service.
 
+**Periodic Subtree Announcements:**
+
+To ensure mining candidates remain up-to-date, the Subtree Processor implements a timer-based announcement mechanism:
+
+- Current subtree is announced at a minimum every 10 seconds (configurable)
+- This ensures miners receive updates even during low transaction periods
+- The timer triggers announcements of the current subtree state, regardless of completion status
+- Prevents stale mining candidates when transaction volume is low
+
+This periodic announcement complements the size-based announcements, ensuring:
+
+- Consistent mining candidate freshness
+- Reduced latency for mining operations
+- Better network synchronization during varying load conditions
+
 ### 2.3.1 Dynamic Subtree Size Adjustment
 
 The Block Assembly service can dynamically adjust the subtree size based on real-time performance metrics when enabled via configuration:
@@ -171,6 +186,21 @@ This self-tuning mechanism helps maintain consistent processing rates and optima
 - The mining candidate, inclusive of the list of subtrees, a coinbase TX, a merkle proof, and associated fees, is returned back to the miner.
 - The Block Assembly Server makes status announcements, using the Status Client, about the mining candidate's height and previous hash.
 - Finally, the Server tracks the current candidate in the JobStore within a new "job" and its TTL. This information will be retrieved at a later stage, if and when the miner submits a solution to the mining challenge for this specific mining candidate.
+
+**Mining Candidate Caching:**
+
+To optimize performance for frequent GetMiningCandidate requests, the service implements a caching mechanism:
+
+- Mining candidates are cached for a configurable timeout period (default: a few seconds)
+- Subsequent requests within the timeout period return the cached candidate
+- Cache is invalidated when:
+
+    - New subtrees are completed
+    - A new block is received from the network
+    - The timeout expires
+- This reduces computation overhead for high-frequency mining requests
+
+The caching strategy balances freshness against performance, ensuring miners receive recent candidates without overloading the system during rapid polling.
 
 ### 2.5. Submit Mining Solution
 
@@ -543,7 +573,7 @@ The service integrates comprehensive Prometheus metrics for operational monitori
 To run the Block Assembly Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -BlockAssembly=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -blockassembly=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Block Assembly Service locally.

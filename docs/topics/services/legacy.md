@@ -11,11 +11,15 @@
 3. [Data Model](#3-data-model)
 4. [Functionality](#4-functionality)
     - [4.1. BSV to Teranode Communication](#41-bsv-to-teranode-communication)
-    - [4.1.1. Receiving Inventory Notifications](#411-receiving-inventory-notifications)
-
+        - [4.1.1. Receiving Inventory Notifications](#411-receiving-inventory-notifications)
+        - [4.1.2. Processing New Transactions](#412-processing-new-transactions)
+        - [4.1.3. Processing New Blocks](#413-processing-new-blocks)
+    - [4.2. Teranode to BSV Communication](#42-teranode-to-bsv-communication)
+        - [4.2.1. Processing New Subtrees from Teranode](#421-processing-new-subtrees-from-teranode)
 5. [Technology](#5-technology)
 6. [How to run](#6-how-to-run)
 7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
+8. [Other Resources](#8-other-resources)
 
 ## 1. Introduction
 
@@ -31,7 +35,7 @@ The core functionality of the Legacy Service revolves around managing and transl
 
 ### 1.2. Data Transformation for Compatibility
 
-The Legacy Service performs a major data transformation processes, designed to ensure full compatibility between the differing data structures of BSV and Teranode.
+The Legacy Service performs major data transformation processes, designed to ensure full compatibility between the differing data structures of BSV and Teranode.
 
 Legacy blocks and their transactions are encapsulated into subtrees, aligning with the Teranode model's approach to data management. In a similar way, the service can transparently convert blocks, subtrees, and transactions from the Teranode format back into the conventional block and transaction format used by BSV. This bidirectional conversion capability allows to maintain operational continuity across the network.
 
@@ -76,16 +80,16 @@ The Legacy service interacts with the Validator service to validate incoming tra
 1. **Local Validator**:
 
     - When `useLocalValidator=true` (recommended for production)
-   - The Validator is instantiated directly within the Legacy service
-   - Direct method calls are used without network overhead
-   - This provides the best performance and lowest latency
+    - The Validator is instantiated directly within the Legacy service
+    - Direct method calls are used without network overhead
+    - This provides the best performance and lowest latency
 
 2. **Remote Validator Service**:
 
     - When `useLocalValidator=false`
-   - The Legacy service connects to a separate Validator service via gRPC
-   - Useful for development, testing, or specialized deployment scenarios
-   - Has higher latency due to additional network calls
+    - The Legacy service connects to a separate Validator service via gRPC
+    - Useful for development, testing, or specialized deployment scenarios
+    - Has higher latency due to additional network calls
 
 This configuration is controlled by the settings passed to `GetValidatorClient()` in daemon.go.
 
@@ -265,9 +269,9 @@ The Legacy Service converts standard BSV blocks (which don't have subtrees) into
 2. **Transaction Processing:**
     - For each transaction, the service calculates:
 
-     - Transaction fee
-     - Transaction size
-   - It then adds the transaction hash to the subtree(s) at the appropriate position
+        - Transaction fee
+        - Transaction size
+    - It then adds the transaction hash to the subtree(s) at the appropriate position
 
 3. **Data Organization:**
     - **Subtree Data:** The service stores the full extended transaction data (inputs, outputs, scripts)
@@ -359,16 +363,16 @@ Technology highlights:
 
 - **Database Technologies** (ffldb, leveldb, sqlite): Used as block data stores. Each has its use cases:
 
-  - **ffldb**: Optimized for blockchain data storage and retrieval. Default and recommended choice.
-  - **leveldb**: A fast key-value storage library suitable for indexing blockchain data.
-  - **sqlite**: An embedded SQL database engine for simpler deployment and structured data queries.
+    - **ffldb**: Optimized for blockchain data storage and retrieval. Default and recommended choice.
+    - **leveldb**: A fast key-value storage library suitable for indexing blockchain data.
+    - **sqlite**: An embedded SQL database engine for simpler deployment and structured data queries.
 
 ## 6. How to run
 
 To run the Legacy Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -Legacy=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -legacy=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Legacy Service locally.

@@ -1231,33 +1231,165 @@ func TestGetNextBlockToProcess_ReorgDetected(t *testing.T) {
 	// Create mock blockchain client
 	mockClient := &blockchain.Mock{}
 
-	// Create mock block for the last persisted block (height 100)
-	lastPersistedHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000064")
+	// Create common ancestor header first so we can use its computed hash
+	dummyHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
+	nBits, _ := model.NewNBitFromString("1d00ffff")
+	commonAncestorHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  dummyHash,
+		HashMerkleRoot: dummyHash,
+		Timestamp:      1234567890,
+		Bits:           *nBits,
+		Nonce:          1,
+	}
+
+	// Use the computed hash as the last persisted hash
+	lastPersistedHash := commonAncestorHeader.Hash()
 	lastPersistedBlock := &model.Block{
 		Height: 100,
 		ID:     100,
 	}
 
-	// Mock the GetBlock call for reorg detection
+	// Mock the GetBlock call for reorg detection - using computed hash
 	mockClient.On("GetBlock", ctx, lastPersistedHash).Return(
 		lastPersistedBlock, nil)
 	// Mock the CheckBlockIsInCurrentChain call - returning false to simulate reorg
 	mockClient.On("CheckBlockIsInCurrentChain", ctx, []uint32{uint32(100)}).Return(
 		false, nil) // false indicates block is NOT on current chain (reorg detected)
-	// GetBestBlockHeader should NOT be called because we return early
+
+	// Mock recovery flow - new approach walks backward trying each height
+	// It will try to get the block at height 100 from current chain
+	// and that will match our state file, so recovery succeeds immediately
+	mockClient.On("GetBlockByHeight", ctx, uint32(100)).Return(
+		&model.Block{Height: 100, Header: commonAncestorHeader}, nil)
 
 	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
 
-	// Set initial persisted height with the orphaned hash
+	// Set initial persisted height with the computed hash
+	// This ensures the hash in the state file matches what we'll try to rollback to
 	err := server.state.AddBlock(100, lastPersistedHash.String())
 	require.NoError(t, err)
 
 	// Call getNextBlockToProcess
 	block, err := server.getNextBlockToProcess(ctx)
 
-	// Verify that we return nil block and nil error (triggering recovery)
+	// Verify that we return nil block and nil error after recovery
 	require.NoError(t, err)
-	assert.Nil(t, block, "Should return nil block when reorg is detected")
+	assert.Nil(t, block, "Should return nil block after recovery to trigger retry")
+
+	// Verify state wasn't changed since common ancestor is same as last persisted
+	height, hash, err := server.state.GetLastPersistedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint32(100), height)
+	require.Equal(t, commonAncestorHeader.Hash().String(), hash.String())
+
+	// Verify mock expectations
+	mockClient.AssertExpectations(t)
+}
+
+// TestGetNextBlockToProcess_ReorgRecovery tests the full reorg recovery flow using block locators
+func TestGetNextBlockToProcess_ReorgRecovery(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Create temp directory for state file
+	tempDir := t.TempDir()
+	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	tSettings.Block.BlockPersisterPersistAge = 2
+
+	// Create mock blockchain client
+	mockClient := &blockchain.Mock{}
+
+	// Simulate state with blocks up to height 105 (on old chain)
+	// Common ancestor is at height 100
+	// Reorg occurred at height 101
+
+	// Create common ancestor header first so we can use its computed hash everywhere
+	dummyHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
+	nBits, _ := model.NewNBitFromString("1d00ffff")
+	commonAncestorHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  dummyHash,
+		HashMerkleRoot: dummyHash,
+		Timestamp:      1234567890,
+		Bits:           *nBits,
+		Nonce:          1,
+	}
+	commonAncestorHash := commonAncestorHeader.Hash()
+
+	// Old chain hashes (blocks after the fork)
+	oldChainHash101, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000101")
+	oldChainHash102, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000102")
+	oldChainHash103, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000103")
+	oldChainHash104, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000104")
+	oldChainHash105, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000105")
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+
+	// Set up state with blocks from old chain using the computed common ancestor hash
+	require.NoError(t, server.state.AddBlock(100, commonAncestorHash.String()))
+	require.NoError(t, server.state.AddBlock(101, oldChainHash101.String()))
+	require.NoError(t, server.state.AddBlock(102, oldChainHash102.String()))
+	require.NoError(t, server.state.AddBlock(103, oldChainHash103.String()))
+	require.NoError(t, server.state.AddBlock(104, oldChainHash104.String()))
+	require.NoError(t, server.state.AddBlock(105, oldChainHash105.String()))
+
+	// Verify initial state
+	height, hash, err := server.state.GetLastPersistedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint32(105), height)
+	require.Equal(t, oldChainHash105.String(), hash.String())
+
+	// Mock the reorg detection sequence
+	lastPersistedBlock := &model.Block{
+		Height: 105,
+		ID:     105,
+	}
+
+	// 1. GetBlock call for last persisted block
+	mockClient.On("GetBlock", ctx, oldChainHash105).Return(lastPersistedBlock, nil)
+
+	// 2. CheckBlockIsInCurrentChain returns false (reorg detected)
+	mockClient.On("CheckBlockIsInCurrentChain", ctx, []uint32{uint32(105)}).Return(false, nil)
+
+	// 3. Mock recovery flow - new approach walks backward from height 105
+	// trying to find a block from current chain that exists in our state file
+	// Heights 105, 104, 103, 102, 101 won't match (different hashes)
+	// Height 100 will match (common ancestor)
+	newChainHash105, _ := chainhash.NewHashFromStr("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	newChainHash104, _ := chainhash.NewHashFromStr("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	newChainHash103, _ := chainhash.NewHashFromStr("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	newChainHash102, _ := chainhash.NewHashFromStr("dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	newChainHash101, _ := chainhash.NewHashFromStr("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+
+	// Mock GetBlockByHeight for each height during backward search
+	// Create proper block headers for each height on the new chain
+	mockClient.On("GetBlockByHeight", ctx, uint32(105)).Return(
+		&model.Block{Height: 105, Header: &model.BlockHeader{Version: 1, HashPrevBlock: oldChainHash104, HashMerkleRoot: newChainHash105, Timestamp: 1234567890, Bits: *nBits, Nonce: 1}}, nil)
+	mockClient.On("GetBlockByHeight", ctx, uint32(104)).Return(
+		&model.Block{Height: 104, Header: &model.BlockHeader{Version: 1, HashPrevBlock: oldChainHash103, HashMerkleRoot: newChainHash104, Timestamp: 1234567890, Bits: *nBits, Nonce: 1}}, nil)
+	mockClient.On("GetBlockByHeight", ctx, uint32(103)).Return(
+		&model.Block{Height: 103, Header: &model.BlockHeader{Version: 1, HashPrevBlock: oldChainHash102, HashMerkleRoot: newChainHash103, Timestamp: 1234567890, Bits: *nBits, Nonce: 1}}, nil)
+	mockClient.On("GetBlockByHeight", ctx, uint32(102)).Return(
+		&model.Block{Height: 102, Header: &model.BlockHeader{Version: 1, HashPrevBlock: oldChainHash101, HashMerkleRoot: newChainHash102, Timestamp: 1234567890, Bits: *nBits, Nonce: 1}}, nil)
+	mockClient.On("GetBlockByHeight", ctx, uint32(101)).Return(
+		&model.Block{Height: 101, Header: &model.BlockHeader{Version: 1, HashPrevBlock: commonAncestorHash, HashMerkleRoot: newChainHash101, Timestamp: 1234567890, Bits: *nBits, Nonce: 1}}, nil)
+	mockClient.On("GetBlockByHeight", ctx, uint32(100)).Return(
+		&model.Block{Height: 100, Header: commonAncestorHeader}, nil)
+
+	// Call getNextBlockToProcess - should trigger reorg recovery
+	block, err := server.getNextBlockToProcess(ctx)
+
+	// Should return nil (to retry on next iteration)
+	require.NoError(t, err)
+	assert.Nil(t, block, "Should return nil after recovery to trigger retry")
+
+	// Verify state was rolled back to common ancestor (height 100)
+	height, hash, err = server.state.GetLastPersistedBlock()
+	require.NoError(t, err)
+	require.Equal(t, uint32(100), height)
+	require.Equal(t, commonAncestorHeader.Hash().String(), hash.String())
 
 	// Verify mock expectations
 	mockClient.AssertExpectations(t)

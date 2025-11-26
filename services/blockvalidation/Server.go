@@ -635,7 +635,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 						// Clean up alternatives after processing (no defer in loop)
 
 						// First, try to get intelligent peer selection from P2P service
-						bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, int32(c.block.Height))
+						bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, c.block.Height)
 						if peerErr != nil {
 							u.logger.Warnf("[catchup] Failed to get best peers from P2P service: %v", peerErr)
 						}
