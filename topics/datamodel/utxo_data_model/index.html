@@ -7493,7 +7493,7 @@
 <tr>
 <td><strong>TTL</strong></td>
 <td><code>Integer</code></td>
-<td>Time-to-live value for the record. Set when:<br/>- All UTXOs in a record are spent or reassigned<br/>- Transaction is marked as conflicting</td>
+<td>Time-to-live value for the record. Set when:<br/>- All UTXOs in a record are spent or reassigned (for automatic pruning)<br/>- Transaction is marked as conflicting</td>
 </tr>
 </tbody>
 </table>
@@ -7782,7 +7782,7 @@ Idxs: [[0, 2], [1]]
 <td>Any</td>
 <td>Scheduled for Deletion</td>
 <td>All UTXOs spent or tx conflicting</td>
-<td>Lua script signals in <code>stores/utxo/aerospike/teranode.lua</code></td>
+<td>Lua script signals in <code>stores/utxo/aerospike/spend.go</code> and <code>set_mined.go</code></td>
 </tr>
 </tbody>
 </table>
@@ -7916,16 +7916,16 @@ Idxs: [[0, 2], [1]]
 <ul>
 <li>Cannot transition out of conflicting state (terminal state)</li>
 <li>Entire transaction tree marked as conflicting</li>
-<li>Cleanup occurs after TTL expiration</li>
+<li>Pruning occurs after TTL expiration</li>
 </ul>
 <h4 id="scheduled-for-deletion">Scheduled for Deletion</h4>
-<p>Record marked for automatic cleanup:</p>
+<p>Record marked for automatic pruning:</p>
 <ul>
 <li><code>deleteAtHeight</code> field set to specific block height</li>
 <li>Occurs when all UTXOs in record are spent or reassigned</li>
 <li>Occurs when transaction marked as conflicting</li>
 <li>Also set via <code>preserveUntil</code> field to protect parent transactions</li>
-<li>Aerospike TTL automatically deletes record when blockchain reaches specified height</li>
+<li>Aerospike TTL automatically prunes record when blockchain reaches specified height</li>
 <li>Child pagination records also have DAH set via <code>SetDAHForChildRecords()</code></li>
 <li>External blob storage has DAH set via <code>setDAHExternalTransaction()</code></li>
 </ul>

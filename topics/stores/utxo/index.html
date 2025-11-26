@@ -3686,10 +3686,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#53-data-purging" class="md-nav__link">
+  <a href="#53-data-pruning" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5.3. Data Purging
+        5.3. Data Pruning
       
     </span>
   </a>
@@ -6736,10 +6736,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#53-data-purging" class="md-nav__link">
+  <a href="#53-data-pruning" class="md-nav__link">
     <span class="md-ellipsis">
       
-        5.3. Data Purging
+        5.3. Data Pruning
       
     </span>
   </a>
@@ -6922,7 +6922,7 @@
 <li><a href="#5-technology">Technology</a><ul>
 <li><a href="#51-language-and-libraries">5.1. Language and Libraries</a></li>
 <li><a href="#52-data-stores">5.2. Data Stores</a></li>
-<li><a href="#53-data-purging">5.3. Data Purging</a></li>
+<li><a href="#53-data-pruning">5.3. Data Pruning</a></li>
 </ul>
 </li>
 <li><a href="#6-performance-optimizations">Performance Optimizations</a><ul>
@@ -6996,7 +6996,7 @@
 </code></pre></div>
 <p>The following diagram provides a deeper level of detail into the UTXO Store's internal components and their interactions:</p>
 <blockquote>
-<p><strong>Note</strong>: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Cleanup Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.</p>
+<p><strong>Note</strong>: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Pruner Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.</p>
 </blockquote>
 <p><img alt="utxo_store_detailed_component.svg" src="../../services/img/plantuml/utxo/utxo_store_detailed_component.svg" /></p>
 <p>The following datastores are supported (either in development / experimental or production mode):</p>
@@ -7361,8 +7361,8 @@ The primary language used for implementing the service's logic.</p>
 <li>Databases like Aerospike provide a balance of speed and persistence, suitable for larger, more complex systems.</li>
 <li>Nullstore is more appropriate for testing, development, or lightweight applications.</li>
 </ul>
-<h3 id="53-data-purging">5.3. Data Purging</h3>
-<p>Stored data is automatically purged a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.</p>
+<h3 id="53-data-pruning">5.3. Data Pruning</h3>
+<p>Stored data is automatically pruned a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.</p>
 <h2 id="6-performance-optimizations">6. Performance Optimizations</h2>
 <h3 id="61-shared-buffer-optimization">6.1. Shared Buffer Optimization</h3>
 <p>To improve performance when reading large batches of UTXOs, Teranode implements a shared buffer optimization that significantly reduces memory allocations and garbage collection pressure.</p>
