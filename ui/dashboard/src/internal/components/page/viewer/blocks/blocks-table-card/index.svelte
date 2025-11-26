@@ -5,6 +5,8 @@
   import Card from '$internal/components/card/index.svelte'
   import TableToggle from '$internal/components/table-toggle/index.svelte'
   import i18n from '$internal/i18n'
+  import { page as pageStore } from '$app/stores'
+  import { goto } from '$app/navigation'
 
   import { assetHTTPAddress } from '$internal/stores/nodeStore'
   import { failure } from '$lib/utils/notifications'
@@ -31,19 +33,53 @@
   let page = 1
   let pageSize = 20
   let totalItems = 0
+  let isInitialized = false
+
+  $: {
+    if ($pageStore.url.searchParams) {
+      const urlPage = $pageStore.url.searchParams.get('page')
+      const urlPageSize = $pageStore.url.searchParams.get('pageSize')
+
+      if (urlPage || urlPageSize) {
+        if (urlPage) {
+          const parsed = parseInt(urlPage)
+          if (!isNaN(parsed) && parsed > 0) {
+            page = parsed
+          }
+        }
+
+        if (urlPageSize) {
+          const parsed = parseInt(urlPageSize)
+          if (!isNaN(parsed) && parsed > 0) {
+            pageSize = parsed
+          }
+        }
+      } else if (isInitialized) {
+        page = 1
+        pageSize = 20
+      } else {
+        updateURL(page, pageSize)
+      }
+
+      isInitialized = true
+    }
+  }
+
+  function updateURL(page: number, pageSize: number) {
+    const url = new URL($pageStore.url)
+    url.searchParams.set('page', page.toString())
+    url.searchParams.set('pageSize', pageSize.toString())
+    goto(url.toString(), { replaceState: true, noScroll: true, keepFocus: true })
+  }
 
   function onPage(e) {
     const data = e.detail
     page = data.value.page
     pageSize = data.value.pageSize
+    updateURL(page, pageSize)
   }
 
-  let totalPages = 0
-
-  const onTotal = (e) => {
-    totalPages = e.detail.total
-  }
-
+  $: totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
   $: showPagerNav = totalPages > 1
   $: showPagerSize = showPagerNav || (totalPages === 1 && data.length > 5)
   $: showTableFooter = showPagerSize
@@ -103,8 +139,10 @@
     }
   }
 
-  // Fetch data when the selected node changes
-  $: $assetHTTPAddress && fetchData(page, pageSize)
+  // Fetch data when the selected node changes or pagination params change
+  $: if ($assetHTTPAddress && isInitialized) {
+    fetchData(page, pageSize)
+  }
 
   function onKeyDown(e) {
     if (!e) e = window.event
@@ -137,7 +175,6 @@
       }}
       hasBoundaryRight={true}
       on:change={onPage}
-      on:total={onTotal}
     />
     <div style="height: 24px; width: 12px;" />
     <TableToggle value={variant} on:change={onToggle} />
