@@ -2219,7 +2219,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNo
 	require.NotNil(t, items)
 
 	// Disable parent validation for this test as it tests edge cases with UTXO store states
-	items.blockAssembler.settings.BlockAssembly.ValidateParentChainOnRestart = false
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 	// Create a test tx and insert into UTXO store as unmined initially (unmined_since set)
 	tx := newTx(42)
@@ -2265,7 +2265,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStat
 	require.NotNil(t, items)
 
 	// Disable parent validation for this test as it tests edge cases with UTXO store states
-	items.blockAssembler.settings.BlockAssembly.ValidateParentChainOnRestart = false
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 	// Prepare a mined tx on the main chain
 	tx := newTx(43)
@@ -2314,7 +2314,7 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 	require.NotNil(t, items)
 
 	// Disable parent validation for this test as it tests transaction filtering logic independently
-	items.blockAssembler.settings.BlockAssembly.ValidateParentChainOnRestart = false
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 	// Create two test transactions
 	tx1 := newTx(100)

@@ -214,36 +214,37 @@ type BlockChainSettings struct {
 }
 
 type BlockAssemblySettings struct {
-	Disabled                            bool
-	GRPCAddress                         string
-	GRPCListenAddress                   string
-	GRPCMaxRetries                      int
-	GRPCRetryBackoff                    time.Duration
-	LocalDAHCache                       string
-	MaxBlockReorgCatchup                int
-	MaxBlockReorgRollback               int
-	MoveBackBlockConcurrency            int
-	ProcessRemainderTxHashesConcurrency int
-	SendBatchSize                       int
-	SendBatchTimeout                    int
-	SubtreeProcessorBatcherSize         int
-	SubtreeProcessorConcurrentReads     int
-	NewSubtreeChanBuffer                int
-	SubtreeRetryChanBuffer              int
-	SubmitMiningSolutionWaitForResponse bool
-	InitialMerkleItemsPerSubtree        int
-	MinimumMerkleItemsPerSubtree        int
-	MaximumMerkleItemsPerSubtree        int
-	DoubleSpendWindow                   time.Duration
-	MaxGetReorgHashes                   int
-	MinerWalletPrivateKeys              []string
-	DifficultyCache                     bool
-	UseDynamicSubtreeSize               bool
-	MiningCandidateCacheTimeout         time.Duration
-	MiningCandidateSmartCacheMaxAge     time.Duration
-	BlockchainSubscriptionTimeout       time.Duration
-	ValidateParentChainOnRestart        bool
-	ParentValidationBatchSize           int
+	Disabled                             bool
+	GRPCAddress                          string
+	GRPCListenAddress                    string
+	GRPCMaxRetries                       int
+	GRPCRetryBackoff                     time.Duration
+	LocalDAHCache                        string
+	MaxBlockReorgCatchup                 int
+	MaxBlockReorgRollback                int
+	MoveBackBlockConcurrency             int
+	ProcessRemainderTxHashesConcurrency  int
+	SendBatchSize                        int
+	SendBatchTimeout                     int
+	SubtreeProcessorBatcherSize          int
+	SubtreeProcessorConcurrentReads      int
+	NewSubtreeChanBuffer                 int
+	SubtreeRetryChanBuffer               int
+	SubmitMiningSolutionWaitForResponse  bool
+	InitialMerkleItemsPerSubtree         int
+	MinimumMerkleItemsPerSubtree         int
+	MaximumMerkleItemsPerSubtree         int
+	DoubleSpendWindow                    time.Duration
+	MaxGetReorgHashes                    int
+	MinerWalletPrivateKeys               []string
+	DifficultyCache                      bool
+	UseDynamicSubtreeSize                bool
+	MiningCandidateCacheTimeout          time.Duration
+	MiningCandidateSmartCacheMaxAge      time.Duration
+	BlockchainSubscriptionTimeout        time.Duration
+	OnRestartValidateParentChain         bool
+	ParentValidationBatchSize            int
+	OnRestartRemoveInvalidParentChainTxs bool
 	// GetMiningCandidate timeouts
 	GetMiningCandidateSendTimeout     time.Duration // Timeout when sending request on internal channel (default: 1s)
 	GetMiningCandidateResponseTimeout time.Duration // Timeout waiting for mining candidate response (default: 10s)
