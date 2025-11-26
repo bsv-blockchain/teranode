@@ -388,7 +388,6 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		chainedSubtrees:          make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees),
 		chainedSubtreeCount:      atomic.Int32{},
 		currentSubtree:           firstSubtree,
-		batcher:                  NewTxIDAndFeeBatch(tSettings.BlockAssembly.SubtreeProcessorBatcherSize),
 		queue:                    queue,
 		currentTxMap:             txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints](),
 		removeMap:                txmap.NewSwissMap(0),
@@ -639,57 +638,53 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 			default:
 				stp.setCurrentRunningState(StateDequeue)
 
+				batchSize := stp.settings.BlockAssembly.SubtreeProcessorBatcherSize
 				nrProcessed := 0
-				mapLength := stp.removeMap.Length()
-				// set the validFromMillis to the current time minus the double spend window - so in the past
-				validFromMillis := time.Now().Add(-1 * stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
 
-				for {
+				// Cache these — they are read on every single iteration
+				removeMap := stp.removeMap
+				mapLength := removeMap.Length()
+				currentTxMap := stp.currentTxMap
+				validFromMillis := time.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+
+				for nrProcessed < batchSize {
 					node, txInpoints, _, found := stp.queue.dequeue(validFromMillis)
 					if !found {
-						time.Sleep(1 * time.Millisecond)
+						// Queue is empty right now → be nice to the core
+						runtime.Gosched()
 						break
 					}
 
-					// check if the tx needs to be removed
-					if mapLength > 0 && stp.removeMap.Exists(node.Hash) {
-						// remove from the map
-						if err = stp.removeMap.Delete(node.Hash); err != nil {
-							stp.logger.Errorf("[SubtreeProcessor] error removing tx from remove map: %s", err.Error())
-						}
-
+					// Fast reject path first (most common in practice)
+					if mapLength > 0 && removeMap.Exists(node.Hash) {
+						// Fire-and-forget delete — we don't care about the error in the hot path
+						_ = removeMap.Delete(node.Hash)
 						continue
 					}
 
+					// Coinbase placeholder — extremely rare → check last
 					if node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
-						stp.logger.Errorf("[SubtreeProcessor] error adding node: skipping request to add coinbase tx placeholder")
+						stp.logger.Errorf("skipping coinbase placeholder")
 						continue
 					}
 
-					// check if the tx is already in the currentTxMap
-					if _, ok := stp.currentTxMap.Get(node.Hash); ok {
-						stp.logger.Warnf("[SubtreeProcessor] error adding node: tx %s already in currentTxMap", node.Hash.String())
+					if _, exists := currentTxMap.Get(node.Hash); exists {
+						stp.logger.Warnf("duplicate tx %s", node.Hash.String())
 						continue
 					}
 
-					// check txInpoints
-					// for _, parent := range txReq.txInpoints {
-					// 	if _, ok := stp.currentTxMap.Get(parent); !ok {
-					// 		stp.logger.Errorf("[SubtreeProcessor] error adding node: parent %s not found in currentTxMap", parent.String())
-					// 		continue
-					// 	}
-					// }
-
-					if err = stp.addNode(node, &txInpoints, false); err != nil {
-						stp.logger.Errorf("[SubtreeProcessor] error adding node: %s", err.Error())
+					if err := stp.addNode(node, &txInpoints, false); err != nil {
+						stp.logger.Errorf("addNode failed: %s", err)
 					} else {
 						stp.txCount.Add(1)
+						nrProcessed++
 					}
+				}
 
-					nrProcessed++
-					if nrProcessed > stp.settings.BlockAssembly.SubtreeProcessorBatcherSize {
-						break
-					}
+				// Only yield if we actually hit the batch limit (means queue still has work)
+				// If we exited because !found, we already Gosched'ed above
+				if nrProcessed == batchSize {
+					runtime.Gosched() // let sibling hyper-thread breathe while we go around again
 				}
 
 				stp.setCurrentRunningState(StateRunning)

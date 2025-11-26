@@ -662,7 +662,6 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 		items.blockchainClient,
 		nil,
 		items.newSubtreeChan,
-		subtreeprocessor.WithBatcherSize(1),
 	)
 	require.NoError(t, err)
 
