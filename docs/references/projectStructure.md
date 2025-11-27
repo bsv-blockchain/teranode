@@ -16,6 +16,7 @@ teranode/
 ├── Dockerfile                    # Main Dockerfile for containerization
 │
 ├── cmd/                          # Directory containing command-line tools and utilities
+│   ├── aerospikekafkaconnector/  # Aerospike Kafka connector utility
 │   ├── aerospikereader/          # Command related to Aerospike reader functionality
 │   ├── bitcointoutxoset/         # Bitcoin to UTXO set utility
 │   ├── checkblock/               # Tool to check individual blocks
@@ -52,7 +53,7 @@ teranode/
 ├── stores/                       # Data storage implementations
 │   ├── blob/                     # Blob storage implementation
 │   ├── blockchain/               # Blockchain storage implementation
-│   ├── cleanup/                  # Cleanup storage utilities
+│   ├── pruner/                   # Pruner storage utilities
 │   ├── txmetacache/             # Transaction metadata cache implementation
 │   └── utxo/                     # UTXO storage implementation
 │

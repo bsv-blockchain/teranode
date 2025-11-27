@@ -109,14 +109,14 @@ docker compose up -d
 
 Force the node to transition to Run mode:
 
-**Option 1: Using Admin Dashboard (Easiest)**
+#### Option 1: Using Admin Dashboard (Easiest)
 
 ```bash
-# Access the dashboard at http://localhost:8090/admin
+# Access the dashboard at http://localhost:8090/admin (default credentials bitcoin:bitcoin)
 # Navigate to FSM State section and select RUNNING or LEGACYSYNCING
 ```
 
-**Option 2: Using teranode-cli**
+#### Option 2: Using teranode-cli
 
 ```bash
 # Transition to Run mode
@@ -158,7 +158,7 @@ curl http://localhost:8090/health
 
 - Access monitoring dashboard:
 
-    - Open Grafana: http://localhost:3005
+    - Open Grafana: <http://localhost:3005>
     - Login with the default credentials: admin/admin
     - Navigate to the "Teranode - Service Overview" dashboard for key metrics
     - Explore other dashboards for detailed service metrics. For example, you can check the Legacy sync metrics in the "Teranode - Legacy Service" dashboard.
@@ -183,37 +183,37 @@ curl http://localhost:8090/health
 
 1. View all services status:
 
-```bash
-docker compose ps
-```
+    ```bash
+    docker compose ps
+    ```
 
 2. Check blockchain sync:
 
-```bash
-curl http://localhost:8090/api/v1/blockstats
-```
+    ```bash
+    curl http://localhost:8090/api/v1/blockstats
+    ```
 
 3. Monitor specific service logs:
 
-```bash
-docker compose logs -f legacy
-docker compose logs -f blockchain
-docker compose logs -f asset
-```
+    ```bash
+    docker compose logs -f legacy
+    docker compose logs -f blockchain
+    docker compose logs -f asset
+    ```
 
 ### Working with Transactions
 
 1. Get transaction details:
 
-```bash
-curl http://localhost:8090/api/v1/tx/<txid>
-```
+    ```bash
+    curl http://localhost:8090/api/v1/tx/<txid>
+    ```
 
 ### Monitoring Your Node
 
 1. Access Grafana dashboards:
 
-    - Open http://localhost:3005
+    - Open <http://localhost:3005>
     - Navigate to "TERANODE Service Overview"
 
 2. Key metrics to watch:
@@ -227,52 +227,52 @@ curl http://localhost:8090/api/v1/tx/<txid>
 
 1. View logs:
 
-```bash
-# All services
-docker compose logs
+    ```bash
+    # All services
+    docker compose logs
 
-# Specific service
-docker compose logs blockchain
-```
+    # Specific service
+    docker compose logs blockchain
+    ```
 
 2. Check disk usage:
 
-```bash
-df -h
-```
+    ```bash
+    df -h
+    ```
 
 3. Restart a specific service:
 
-```bash
-docker compose restart blockchain
-```
+    ```bash
+    docker compose restart blockchain
+    ```
 
 4. Restart all services:
 
-```bash
-docker compose down
-docker compose up -d
-```
+    ```bash
+    docker compose down
+    docker compose up -d
+    ```
 
 ### Common Operations
 
 1. Check current block height:
 
-```bash
-curl http://localhost:8090/api/v1/bestblockheader/json
-```
+    ```bash
+    curl http://localhost:8090/api/v1/bestblockheader/json
+    ```
 
 2. Get block information:
 
-```bash
-curl http://localhost:8090/api/v1/block/<blockhash>
-```
+    ```bash
+    curl http://localhost:8090/api/v1/block/<blockhash>
+    ```
 
 3. Check UTXO status:
 
-```bash
-curl http://localhost:8090/api/v1/utxo/<utxohash>
-```
+    ```bash
+    curl http://localhost:8090/api/v1/utxo/<utxohash>
+    ```
 
 ### Next Steps
 

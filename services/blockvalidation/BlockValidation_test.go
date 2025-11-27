@@ -3330,7 +3330,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(totalSize),        //nolint:gosec
-		100, 0,
+		1, 1,
 	)
 	require.NoError(t, err)
 
@@ -3354,7 +3354,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	require.NotEmpty(t, metaChildTx.BlockHeights)
 
 	require.Equal(t, metaChildTx.BlockIDs[0], uint32(0x1))
-	require.Equal(t, metaChildTx.BlockHeights[0], uint32(0x64))
+	require.Equal(t, metaChildTx.BlockHeights[0], uint32(0x1))
 	require.Equal(t, metaChildTx.SubtreeIdxs[0], 0)
 }
 

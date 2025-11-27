@@ -499,7 +499,7 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get the cleanup service (singleton)
-	cleanupService, err := utxoStore.GetCleanupService()
+	cleanupService, err := utxoStore.GetPrunerService()
 	require.NoError(t, err)
 
 	cleanupService.Start(ctx)

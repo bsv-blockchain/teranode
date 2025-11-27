@@ -16,7 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
-	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/cleanup"
+	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
@@ -2245,7 +2245,7 @@ func TestAerospikeCleanupService(t *testing.T) {
 	})
 
 	// start the cleanup service
-	cleanupService, err := cleanup.NewService(tSettings, cleanup.Options{
+	cleanupService, err := pruner.NewService(tSettings, pruner.Options{
 		Ctx:            ctx,
 		Logger:         logger,
 		ExternalStore:  memory.New(),
@@ -2355,7 +2355,8 @@ func TestDeletedChildren(t *testing.T) {
 
 	assert.Equal(t, 11, childResp.Bins[fields.DeleteAtHeight.String()])
 
-	opts := cleanup.Options{
+	opts := pruner.Options{
+		Ctx:            ctx,
 		Logger:         logger,
 		Client:         client,
 		ExternalStore:  memory.New(),
@@ -2365,7 +2366,7 @@ func TestDeletedChildren(t *testing.T) {
 		IndexWaiter:    &mockIndexWaiter{},
 	}
 
-	cleanupService, err := cleanup.NewService(tSettings, opts)
+	cleanupService, err := pruner.NewService(tSettings, opts)
 	require.NoError(t, err)
 
 	err = cleanupService.ProcessSingleRecord(childTx.TxIDChainHash(), childTx.Inputs)

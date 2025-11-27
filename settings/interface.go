@@ -67,6 +67,7 @@ type Settings struct {
 	RPC                          RPCSettings
 	Faucet                       FaucetSettings
 	Dashboard                    DashboardSettings
+	Pruner                       PrunerSettings
 	GlobalBlockHeightRetention   uint32
 }
 
@@ -139,6 +140,7 @@ type AerospikeSettings struct {
 	BatchPolicyURL         *url.URL
 	ReadPolicyURL          *url.URL
 	WritePolicyURL         *url.URL
+	QueryPolicyURL         *url.URL
 	Port                   int
 	UseDefaultBasePolicies bool
 	UseDefaultPolicies     bool
@@ -214,36 +216,37 @@ type BlockChainSettings struct {
 }
 
 type BlockAssemblySettings struct {
-	Disabled                            bool
-	GRPCAddress                         string
-	GRPCListenAddress                   string
-	GRPCMaxRetries                      int
-	GRPCRetryBackoff                    time.Duration
-	LocalDAHCache                       string
-	MaxBlockReorgCatchup                int
-	MaxBlockReorgRollback               int
-	MoveBackBlockConcurrency            int
-	ProcessRemainderTxHashesConcurrency int
-	SendBatchSize                       int
-	SendBatchTimeout                    int
-	SubtreeProcessorBatcherSize         int
-	SubtreeProcessorConcurrentReads     int
-	NewSubtreeChanBuffer                int
-	SubtreeRetryChanBuffer              int
-	SubmitMiningSolutionWaitForResponse bool
-	InitialMerkleItemsPerSubtree        int
-	MinimumMerkleItemsPerSubtree        int
-	MaximumMerkleItemsPerSubtree        int
-	DoubleSpendWindow                   time.Duration
-	MaxGetReorgHashes                   int
-	MinerWalletPrivateKeys              []string
-	DifficultyCache                     bool
-	UseDynamicSubtreeSize               bool
-	MiningCandidateCacheTimeout         time.Duration
-	MiningCandidateSmartCacheMaxAge     time.Duration
-	BlockchainSubscriptionTimeout       time.Duration
-	ValidateParentChainOnRestart        bool
-	ParentValidationBatchSize           int
+	Disabled                             bool
+	GRPCAddress                          string
+	GRPCListenAddress                    string
+	GRPCMaxRetries                       int
+	GRPCRetryBackoff                     time.Duration
+	LocalDAHCache                        string
+	MaxBlockReorgCatchup                 int
+	MaxBlockReorgRollback                int
+	MoveBackBlockConcurrency             int
+	ProcessRemainderTxHashesConcurrency  int
+	SendBatchSize                        int
+	SendBatchTimeout                     int
+	SubtreeProcessorBatcherSize          int
+	SubtreeProcessorConcurrentReads      int
+	NewSubtreeChanBuffer                 int
+	SubtreeRetryChanBuffer               int
+	SubmitMiningSolutionWaitForResponse  bool
+	InitialMerkleItemsPerSubtree         int
+	MinimumMerkleItemsPerSubtree         int
+	MaximumMerkleItemsPerSubtree         int
+	DoubleSpendWindow                    time.Duration
+	MaxGetReorgHashes                    int
+	MinerWalletPrivateKeys               []string
+	DifficultyCache                      bool
+	UseDynamicSubtreeSize                bool
+	MiningCandidateCacheTimeout          time.Duration
+	MiningCandidateSmartCacheMaxAge      time.Duration
+	BlockchainSubscriptionTimeout        time.Duration
+	OnRestartValidateParentChain         bool
+	ParentValidationBatchSize            int
+	OnRestartRemoveInvalidParentChainTxs bool
 	// GetMiningCandidate timeouts
 	GetMiningCandidateSendTimeout     time.Duration // Timeout when sending request on internal channel (default: 1s)
 	GetMiningCandidateResponseTimeout time.Duration // Timeout waiting for mining candidate response (default: 10s)
@@ -349,6 +352,10 @@ type UtxoStoreSettings struct {
 	SpendBatcherDurationMillis        int
 	SpendBatcherSize                  int
 	SpendBatcherConcurrency           int
+	SpendWaitTimeout                  time.Duration
+	SpendCircuitBreakerFailureCount   int
+	SpendCircuitBreakerCooldown       time.Duration
+	SpendCircuitBreakerHalfOpenMax    int
 	StoreBatcherDurationMillis        int
 	StoreBatcherSize                  int
 	UtxoBatchSize                     int
@@ -373,12 +380,12 @@ type UtxoStoreSettings struct {
 	MaxMinedBatchSize                 int
 	BlockHeightRetentionAdjustment    int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
 	DisableDAHCleaner                 bool  // Disable the DAH cleaner process completely
-	// Cleanup-specific settings
-	CleanupParentUpdateBatcherSize           int // Batch size for parent record updates during cleanup
-	CleanupParentUpdateBatcherDurationMillis int // Batch duration for parent record updates during cleanup (ms)
-	CleanupDeleteBatcherSize                 int // Batch size for record deletions during cleanup
-	CleanupDeleteBatcherDurationMillis       int // Batch duration for record deletions during cleanup (ms)
-	CleanupMaxConcurrentOperations           int // Maximum concurrent operations during cleanup (0 = use connection queue size)
+	// Pruner-specific settings
+	PrunerParentUpdateBatcherSize           int // Batch size for parent record updates during pruning
+	PrunerParentUpdateBatcherDurationMillis int // Batch duration for parent record updates during pruning (ms)
+	PrunerDeleteBatcherSize                 int // Batch size for record deletions during pruning
+	PrunerDeleteBatcherDurationMillis       int // Batch duration for record deletions during pruning (ms)
+	PrunerMaxConcurrentOperations           int // Maximum concurrent operations during pruning (0 = use connection queue size)
 }
 
 type P2PSettings struct {
@@ -451,28 +458,40 @@ type P2PSettings struct {
 
 	// Node mode configuration (full vs pruned)
 	AllowPrunedNodeFallback bool // If true, fall back to pruned nodes when no full nodes available (default: true). Selects youngest pruned node (smallest height) to minimize UTXO pruning risk.
+
+	// This is the time we trigger a periodic evaluation in the sync coordinator
+	SyncCoordinatorPeriodicEvaluationInterval time.Duration
 }
 
 type CoinbaseSettings struct {
-	DB                    string
-	UserPwd               string
-	ArbitraryText         string
-	GRPCAddress           string
-	GRPCListenAddress     string
-	NotificationThreshold int
-	P2PPeerID             string
-	P2PPrivateKey         string
-	P2PStaticPeers        []string
-	ShouldWait            bool
-	Store                 *url.URL
-	StoreDBTimeoutMillis  int
-	WaitForPeers          bool
-	WalletPrivateKey      string
-	PeerStatusTimeout     time.Duration
-	SlackChannel          string
-	SlackToken            string
-	TestMode              bool
-	P2PPort               int
+	DB                          string
+	UserPwd                     string
+	ArbitraryText               string
+	GRPCAddress                 string
+	GRPCListenAddress           string
+	NotificationThreshold       int
+	P2PPeerID                   string
+	P2PPrivateKey               string
+	P2PStaticPeers              []string
+	ShouldWait                  bool
+	Store                       *url.URL
+	StoreDBTimeoutMillis        int
+	WaitForPeers                bool
+	WalletPrivateKey            string
+	PeerStatusTimeout           time.Duration
+	SlackChannel                string
+	SlackToken                  string
+	TestMode                    bool
+	P2PPort                     int
+	DistributorFailureTolerance int
+	DistributorTimeout          time.Duration
+}
+
+type PrunerSettings struct {
+	GRPCListenAddress string
+	GRPCAddress       string
+	WorkerCount       int
+	JobTimeout        time.Duration // Timeout for waiting for pruner job completion
 }
 
 type SubtreeValidationSettings struct {

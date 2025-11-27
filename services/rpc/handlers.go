@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -1097,143 +1098,124 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		return cached, nil
 	}
 
-	peerCount := 0
+	// use a goroutine with select to handle timeouts more reliably
+	type legacyPeerResult struct {
+		resp *peer_api.GetPeersResponse
+		err  error
+	}
 
-	var legacyPeerInfo *peer_api.GetPeersResponse
+	legacyResultCh := make(chan legacyPeerResult, 1)
 
-	var newPeerInfo []*p2p.PeerInfo
+	type newPeerResult struct {
+		resp []*p2p.PeerInfo
+		err  error
+	}
+	newPeerResultCh := make(chan newPeerResult, 1)
+
+	// create a timeout context to prevent hanging if legacy peer service is not responding
+	peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
+	defer cancel()
+
+	wg := sync.WaitGroup{}
+
+	hasLegacyClient := s.legacyP2PClient != nil
+	hasP2PClient := s.p2pClient != nil
 
 	// get legacy peer info
-	if s.peerClient != nil {
-		// create a timeout context to prevent hanging if legacy peer service is not responding
-		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
-		defer cancel()
-
-		// use a goroutine with select to handle timeouts more reliably
-		type peerResult struct {
-			resp *peer_api.GetPeersResponse
-			err  error
-		}
-		resultCh := make(chan peerResult, 1)
-
+	if hasLegacyClient {
+		wg.Add(1)
 		go func() {
-			resp, err := s.peerClient.GetPeers(peerCtx)
-			resultCh <- peerResult{resp: resp, err: err}
+			defer wg.Done()
+			resp, err := s.legacyP2PClient.GetPeers(peerCtx)
+			legacyResultCh <- legacyPeerResult{resp: resp, err: err}
 		}()
-
-		select {
-		case result := <-resultCh:
-			if result.err != nil {
-				// not critical - legacy service may not be running, so log as info
-				s.logger.Infof("error getting legacy peer info: %v", result.err)
-			} else {
-				legacyPeerInfo = result.resp
-			}
-		case <-peerCtx.Done():
-			// timeout reached
-			s.logger.Infof("timeout getting legacy peer info from peer service")
-		}
-	}
-	if legacyPeerInfo != nil {
-		peerCount += len(legacyPeerInfo.Peers)
 	}
 
 	// get new peer info from p2p service
-	if s.p2pClient != nil {
-		// create a timeout context to prevent hanging if p2p service is not responding
-		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
-		defer cancel()
-
-		// use a goroutine with select to handle timeouts more reliably
-		type peerResult struct {
-			resp []*p2p.PeerInfo
-			err  error
-		}
-		resultCh := make(chan peerResult, 1)
-
+	if hasP2PClient {
+		wg.Add(1)
 		go func() {
-			resp, err := s.p2pClient.GetPeers(peerCtx)
-			resultCh <- peerResult{resp: resp, err: err}
+			defer wg.Done()
+			resp, err := s.p2pClient.GetPeerRegistry(peerCtx)
+			newPeerResultCh <- newPeerResult{resp: resp, err: err}
 		}()
-
-		select {
-		case result := <-resultCh:
-			if result.err != nil {
-				// not critical - p2p service may not be running, so log as warning
-				s.logger.Warnf("error getting new peer info: %v", result.err)
-			} else {
-				newPeerInfo = result.resp
-			}
-		case <-peerCtx.Done():
-			// timeout reached
-			s.logger.Warnf("timeout getting new peer info from p2p service")
-		}
-	}
-	if newPeerInfo != nil {
-		peerCount += len(newPeerInfo)
-
-		for _, np := range newPeerInfo {
-			s.logger.Debugf("new peer: %v", np)
-		}
 	}
 
-	infos := make([]*bsvjson.GetPeerInfoResult, 0, peerCount)
+	wg.Wait()
 
-	if legacyPeerInfo != nil {
-		for _, p := range legacyPeerInfo.Peers {
-			info := &bsvjson.GetPeerInfoResult{
-				ID:        p.Id,
-				Addr:      p.Addr,
-				AddrLocal: p.AddrLocal,
-				// Services:       fmt.Sprintf("%08d", uint64(statsSnap.Services)),
-				ServicesStr: p.Services,
-				// RelayTxes:      !p.IsTxRelayDisabled(),
-				LastSend:       p.LastSend,
-				LastRecv:       p.LastRecv,
-				BytesSent:      p.BytesSent,
-				BytesRecv:      p.BytesReceived,
-				ConnTime:       p.ConnTime,
-				PingTime:       float64(p.PingTime),
-				TimeOffset:     p.TimeOffset,
-				Version:        p.Version,
-				SubVer:         p.SubVer,
-				Inbound:        p.Inbound,
-				StartingHeight: p.StartingHeight,
-				CurrentHeight:  p.CurrentHeight,
-				BanScore:       p.Banscore,
-				Whitelisted:    p.Whitelisted,
-				FeeFilter:      p.FeeFilter,
-				// SyncNode:       p.ID == syncPeerID,
+	infos := make([]*bsvjson.GetPeerInfoResult, 0, 32)
+
+	if hasLegacyClient {
+		legacyResult := <-legacyResultCh
+		if legacyResult.err != nil {
+			// not critical - legacy service may not be running, so log as info
+			s.logger.Infof("error getting legacy peer info: %v", legacyResult.err)
+		} else {
+			for _, p := range legacyResult.resp.Peers {
+				info := &bsvjson.GetPeerInfoResult{
+					ID:        p.Id,
+					Addr:      p.Addr,
+					AddrLocal: p.AddrLocal,
+					// Services:       fmt.Sprintf("%08d", uint64(statsSnap.Services)),
+					ServicesStr: p.Services,
+					// RelayTxes:      !p.IsTxRelayDisabled(),
+					LastSend:       p.LastSend,
+					LastRecv:       p.LastRecv,
+					BytesSent:      p.BytesSent,
+					BytesRecv:      p.BytesReceived,
+					ConnTime:       p.ConnTime,
+					PingTime:       float64(p.PingTime),
+					TimeOffset:     p.TimeOffset,
+					Version:        p.Version,
+					SubVer:         p.SubVer,
+					Inbound:        p.Inbound,
+					StartingHeight: p.StartingHeight,
+					CurrentHeight:  p.CurrentHeight,
+					BanScore:       p.Banscore,
+					Whitelisted:    p.Whitelisted,
+					FeeFilter:      p.FeeFilter,
+					// SyncNode:       p.ID == syncPeerID,
+				}
+				// if p.ToPeer().LastPingNonce() != 0 {
+				// 	wait := float64(time.Since(p.LastPingTime).Nanoseconds())
+				// 	// We actually want microseconds.
+				// 	info.PingWait = wait / 1000
+				// }
+				infos = append(infos, info)
 			}
-			// if p.ToPeer().LastPingNonce() != 0 {
-			// 	wait := float64(time.Since(p.LastPingTime).Nanoseconds())
-			// 	// We actually want microseconds.
-			// 	info.PingWait = wait / 1000
-			// }
-			infos = append(infos, info)
 		}
 	}
 
-	if newPeerInfo != nil {
-		for _, p := range newPeerInfo {
-			info := &bsvjson.GetPeerInfoResult{
-				PeerID:         p.ID.String(),
-				Addr:           p.DataHubURL, // Use DataHub URL as address
-				SubVer:         p.ClientName,
-				CurrentHeight:  int32(p.Height),
-				StartingHeight: int32(p.Height), // Use current height as starting height
-				BanScore:       int32(p.BanScore),
-				BytesRecv:      p.BytesReceived,
-				BytesSent:      0, // P2P doesn't track bytes sent currently
-				ConnTime:       p.ConnectedAt.Unix(),
-				TimeOffset:     0, // P2P doesn't track time offset
-				PingTime:       p.AvgResponseTime.Seconds(),
-				Version:        0,                        // P2P doesn't track protocol version
-				LastSend:       p.LastMessageTime.Unix(), // Last time we sent/received any message
-				LastRecv:       p.LastBlockTime.Unix(),   // Last time we received a block
-				Inbound:        p.IsConnected,            // Whether peer is currently connected
+	if hasP2PClient {
+		newResult := <-newPeerResultCh
+		if newResult.err != nil {
+			// not critical - p2p service may not be running, so log as info
+			s.logger.Infof("error getting new peer info: %v", newResult.err)
+		} else {
+			for _, np := range newResult.resp {
+				s.logger.Debugf("new peer: %v", np)
 			}
-			infos = append(infos, info)
+
+			for _, p := range newResult.resp {
+				info := &bsvjson.GetPeerInfoResult{
+					PeerID:         p.ID.String(),
+					Addr:           p.DataHubURL, // Use DataHub URL as address
+					SubVer:         p.ClientName,
+					CurrentHeight:  int32(p.Height),
+					StartingHeight: int32(p.Height), // Use current height as starting height
+					BanScore:       int32(p.BanScore),
+					BytesRecv:      p.BytesReceived,
+					BytesSent:      0, // P2P doesn't track bytes sent currently
+					ConnTime:       p.ConnectedAt.Unix(),
+					TimeOffset:     0, // P2P doesn't track time offset
+					PingTime:       p.AvgResponseTime.Seconds(),
+					Version:        0,                        // P2P doesn't track protocol version
+					LastSend:       p.LastMessageTime.Unix(), // Last time we sent/received any message
+					LastRecv:       p.LastBlockTime.Unix(),   // Last time we received a block
+					Inbound:        p.IsConnected,            // Whether peer is currently connected
+				}
+				infos = append(infos, info)
+			}
 		}
 	}
 
@@ -1576,7 +1558,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	}
 
 	var legacyConnections *peer_api.GetPeersResponse
-	if s.peerClient != nil {
+	if s.legacyP2PClient != nil {
 		// create a timeout context to prevent hanging if legacy peer service is not responding
 		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 		defer cancel()
@@ -1589,7 +1571,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 		resultCh := make(chan peerResult, 1)
 
 		go func() {
-			resp, err := s.peerClient.GetPeers(peerCtx)
+			resp, err := s.legacyP2PClient.GetPeers(peerCtx)
 			resultCh <- peerResult{resp: resp, err: err}
 		}()
 
@@ -2020,8 +2002,8 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	// check if legacy peer service is available
 	var peerBanned bool
 
-	if s.peerClient != nil {
-		isBannedLegacy, err := s.peerClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
+	if s.legacyP2PClient != nil {
+		isBannedLegacy, err := s.legacyP2PClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
 		if err != nil {
 			s.logger.Warnf("Failed to check if banned in legacy peer service: %v", err)
 		} else {
@@ -2103,7 +2085,7 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 	}
 
 	// check if legacy peer service is available
-	if s.peerClient != nil {
+	if s.legacyP2PClient != nil {
 		// Create a timeout context for the legacy peer client call
 		legacyCtx, cancel := context.WithTimeout(ctx, clientCallTimeout)
 		defer cancel()
@@ -2116,7 +2098,7 @@ func handleListBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-ch
 		resultCh := make(chan legacyResult, 1)
 
 		go func() {
-			resp, err := s.peerClient.ListBanned(legacyCtx, &emptypb.Empty{})
+			resp, err := s.legacyP2PClient.ListBanned(legacyCtx, &emptypb.Empty{})
 			resultCh <- legacyResult{resp: resp, err: err}
 		}()
 
@@ -2180,8 +2162,8 @@ func handleClearBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 		}
 	}
 	// check if legacy peer service is available
-	if s.peerClient != nil {
-		_, err := s.peerClient.ClearBanned(ctx, &emptypb.Empty{})
+	if s.legacyP2PClient != nil {
+		_, err := s.legacyP2PClient.ClearBanned(ctx, &emptypb.Empty{})
 		if err != nil {
 			s.logger.Warnf("Failed to clear banned list in legacy peer service: %v", err)
 		}
@@ -2277,10 +2259,10 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		}
 
 		// and ban legacy peers
-		if s.peerClient != nil {
+		if s.legacyP2PClient != nil {
 			until := expirationTimeInt64
 
-			resp, err := s.peerClient.BanPeer(ctx, &peer_api.BanPeerRequest{
+			resp, err := s.legacyP2PClient.BanPeer(ctx, &peer_api.BanPeerRequest{
 				Addr:  c.IPOrSubnet,
 				Until: until,
 			})
@@ -2318,8 +2300,8 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		}
 
 		// unban legacy peer
-		if s.peerClient != nil {
-			resp, err := s.peerClient.UnbanPeer(ctx, &peer_api.UnbanPeerRequest{
+		if s.legacyP2PClient != nil {
+			resp, err := s.legacyP2PClient.UnbanPeer(ctx, &peer_api.UnbanPeerRequest{
 				Addr: c.IPOrSubnet,
 			})
 			if err != nil {

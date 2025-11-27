@@ -332,7 +332,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		spend := spend
 
 		g.Go(func() error {
-			errCh := make(chan error)
+			// Fast-fail check: if circuit breaker is already open, reject immediately
+			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
+				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request")
+				return nil
+			}
+
+			errCh := make(chan error, 1)
 			s.spendBatcher.Put(&batchSpend{
 				spend:             spend,
 				blockHeight:       blockHeight,
@@ -341,8 +347,29 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				ignoreLocked:      useIgnoreLocked,
 			})
 
-			// this waits for the batch to be sent and the response to be received from the batch operation
-			batchErr := <-errCh
+			// Wait for batch response with timeout to prevent indefinite blocking
+			var batchErr error
+			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+			if spendTimeout <= 0 {
+				spendTimeout = 30 * time.Second
+			}
+
+			timer := time.NewTimer(spendTimeout)
+			defer timer.Stop()
+
+			select {
+			case batchErr = <-errCh:
+				// Batch completed successfully or with error
+			case <-ctx.Done():
+				spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
+				return nil
+			case <-timer.C:
+				if prometheusUtxoMapErrors != nil {
+					prometheusUtxoMapErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
+				}
+				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
+				return nil
+			}
 
 			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) {
 				mu.Lock()
@@ -635,6 +662,10 @@ func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batch
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
 	}
+	// Record batch-level failure for circuit breaker
+	if s.spendCircuitBreaker != nil {
+		s.spendCircuitBreaker.RecordFailure()
+	}
 }
 
 // handleMissingResponse handles missing response from batch operation
@@ -686,6 +717,10 @@ func (s *Store) handleSuccessfulSpends(batchByKey []aerospike.MapValue, batch []
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- nil
+	}
+	// Record successful batch operation for circuit breaker
+	if s.spendCircuitBreaker != nil {
+		s.spendCircuitBreaker.RecordSuccess()
 	}
 }
 

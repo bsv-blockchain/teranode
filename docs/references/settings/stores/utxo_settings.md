@@ -39,26 +39,31 @@
 ## Configuration Dependencies
 
 ### Block Height Retention
+
 - Effective retention = `GlobalBlockHeightRetention + BlockHeightRetentionAdjustment`
 - Used in `sql/sql.go` for DAH calculations and cleanup operations
 - Bounds checking prevents negative results
 
 ### Database Operations
+
 - `DBTimeout` controls all SQL operation timeouts in `sql/sql.go`
 - PostgreSQL connection settings control connection pooling
 - Used across Create, Get, Spend, Delete, and batch operations
 
 ### Batch Processing
+
 - Size and duration settings work together for different operation types
 - Controls memory usage and performance for bulk operations
 - Separate batchers for outpoint, spend, store, increment, DAH, and locked operations
 
 ### DAH Functionality
+
 - When `DisableDAHCleaner = false`, uses retention settings for cleanup
 - DAH calculations use block height retention values
-- Cleanup operations respect retention adjustment settings
+- Pruning operations respect retention adjustment settings
 
 ### Debug Logging
+
 - URL `logging` parameter enables operation wrapper in `factory/utxo.go`
 - `VerboseDebug` controls detailed logging output
 - Logs all store operations with parameters and duration

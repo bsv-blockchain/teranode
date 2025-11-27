@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
+	"github.com/bsv-blockchain/teranode/services/pruner"
 	"github.com/bsv-blockchain/teranode/services/rpc"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
@@ -68,6 +69,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	startLegacy := d.shouldStart(serviceLegacyFormal, args)
 	startRPC := d.shouldStart(serviceRPCFormal, args)
 	startAlert := d.shouldStart(serviceAlertFormal, args)
+	startPruner := d.shouldStart(servicePrunerFormal, args)
 
 	// Create the application count based on the services that are going to be started
 	d.appCount += len(d.externalServices)
@@ -117,6 +119,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 		{startValidator, func() error { return d.startValidatorService(ctx, appSettings, createLogger) }},
 		{startPropagation, func() error { return d.startPropagationService(ctx, appSettings, createLogger) }},
 		{startLegacy, func() error { return d.startLegacyService(ctx, appSettings, createLogger) }},
+		{startPruner, func() error { return d.startPrunerService(ctx, appSettings, createLogger) }},
 	}
 
 	// Loop through and start each service if needed
@@ -444,12 +447,12 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
-	blockAssemblyClient, err := GetBlockAssemblyClient(ctx, createLogger("rpc"), appSettings)
+	blockAssemblyClient, err := d.daemonStores.GetBlockAssemblyClient(ctx, createLogger("rpc"), appSettings)
 	if err != nil {
 		return err
 	}
 
-	peerClient, err := peer.NewClient(ctx, createLogger("rpc"), appSettings)
+	legacyPeerClient, err := peer.NewClient(ctx, createLogger("rpc"), appSettings)
 	if err != nil {
 		return err
 	}
@@ -486,7 +489,7 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 	// Create the RPC server with the necessary parts
 	var rpcServer *rpc.RPCServer
 
-	rpcServer, err = rpc.NewServer(createLogger(loggerRPC), appSettings, blockchainClient, blockValidationClient, utxoStore, blockAssemblyClient, peerClient, p2pClient, txStore, validatorClient)
+	rpcServer, err = rpc.NewServer(createLogger(loggerRPC), appSettings, blockchainClient, blockValidationClient, utxoStore, blockAssemblyClient, legacyPeerClient, p2pClient, txStore, validatorClient)
 	if err != nil {
 		return err
 	}
@@ -525,7 +528,7 @@ func (d *Daemon) startAlertService(ctx context.Context, appSettings *settings.Se
 	}
 
 	// Create the block assembly client for the Alert service
-	blockAssemblyClient, err = GetBlockAssemblyClient(ctx, createLogger(loggerAlert), appSettings)
+	blockAssemblyClient, err = d.daemonStores.GetBlockAssemblyClient(ctx, createLogger(loggerAlert), appSettings)
 	if err != nil {
 		return err
 	}
@@ -1092,5 +1095,39 @@ func (d *Daemon) startLegacyService(
 		subtreeValidationClient,
 		blockValidationClient,
 		blockassemblyClient,
+	))
+}
+
+// startPrunerService initializes and adds the Pruner service to the ServiceManager.
+func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger) error {
+	// Create the UTXO store for the Pruner service
+	utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger(loggerUtxos), appSettings)
+	if err != nil {
+		return err
+	}
+
+	// Create the blockchain client for the Pruner service
+	blockchainClient, err := d.daemonStores.GetBlockchainClient(
+		ctx, createLogger(loggerBlockchainClient), appSettings, servicePruner,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Create the block assembly client for the Pruner service
+	blockAssemblyClient, err := d.daemonStores.GetBlockAssemblyClient(ctx, createLogger(loggerBlockAssembly), appSettings)
+	if err != nil {
+		return err
+	}
+
+	// Add the Pruner service to the ServiceManager
+	return d.ServiceManager.AddService(servicePrunerFormal, pruner.New(
+		ctx,
+		createLogger(loggerPruner),
+		appSettings,
+		utxoStore,
+		blockchainClient,
+		blockAssemblyClient,
 	))
 }

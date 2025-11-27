@@ -17,8 +17,7 @@ type Server struct {
     logger                            ulogger.Logger            // Logger instance for the server
     settings                          *settings.Settings       // Configuration settings
     bitcoinProtocolVersion            string                    // Bitcoin protocol version identifier
-    blockchainClient                  blockchain.ClientI       // Client for blockchain interactions
-    blockValidationClient             blockvalidation.Interface
+    blockchainClient                  blockchain.ClientI        // Client for blockchain interactions
     blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
     AssetHTTPAddressURL               string                    // HTTP address URL for assets
     e                                 *echo.Echo                // Echo server instance
@@ -44,7 +43,6 @@ type Server struct {
     startTime                         time.Time          // Server start time for uptime calculation
     peerRegistry                      *PeerRegistry      // Central registry for all peer information
     peerSelector                      *PeerSelector      // Stateless peer selection logic
-    peerHealthChecker                 *PeerHealthChecker // Async health monitoring
     syncCoordinator                   *SyncCoordinator   // Orchestrates sync operations
     syncConnectionTimes               sync.Map           // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
@@ -52,6 +50,7 @@ type Server struct {
     peerMapCleanupTicker              *time.Ticker       // Ticker for periodic cleanup of peer maps
     peerMapMaxSize                    int                // Maximum number of entries in peer maps
     peerMapTTL                        time.Duration      // Time-to-live for peer map entries
+    registryCacheSaveTicker           *time.Ticker       // Ticker for periodic saving of peer registry cache
 }
 ```
 
@@ -62,7 +61,7 @@ The server manages several key components, each serving a specific purpose in th
 - The various Kafka clients manage message distribution across the network
 - The ban system maintains network security by managing peer access through BanListI and PeerBanManager
 - The notification channel handles real-time event propagation
-- The peerRegistry, peerSelector, peerHealthChecker, and syncCoordinator provide comprehensive peer management and synchronization capabilities
+- The peerRegistry, peerSelector, and syncCoordinator provide comprehensive peer management and synchronization capabilities
 
 ### P2P Client Interface
 
