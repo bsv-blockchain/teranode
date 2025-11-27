@@ -33,35 +33,27 @@
   let page = 1
   let pageSize = 20
   let totalItems = 0
-  let isInitialized = false
 
+  // Get pagination from URL (read-only, no writing in reactive block)
   $: {
-    if ($pageStore.url.searchParams) {
-      const urlPage = $pageStore.url.searchParams.get('page')
-      const urlPageSize = $pageStore.url.searchParams.get('pageSize')
-
-      if (urlPage || urlPageSize) {
-        if (urlPage) {
-          const parsed = parseInt(urlPage)
-          if (!isNaN(parsed) && parsed > 0) {
-            page = parsed
-          }
-        }
-
-        if (urlPageSize) {
-          const parsed = parseInt(urlPageSize)
-          if (!isNaN(parsed) && parsed > 0) {
-            pageSize = parsed
-          }
-        }
-      } else if (isInitialized) {
-        page = 1
-        pageSize = 20
-      } else {
-        updateURL(page, pageSize)
+    const urlPageSize = $pageStore.url.searchParams.get('pageSize')
+    if (urlPageSize) {
+      const parsed = parseInt(urlPageSize, 10)
+      if (!isNaN(parsed) && parsed > 0) {
+        pageSize = parsed
       }
+    } else {
+      pageSize = 20 // Default
+    }
 
-      isInitialized = true
+    const urlPage = $pageStore.url.searchParams.get('page')
+    if (urlPage) {
+      const parsed = parseInt(urlPage, 10)
+      if (!isNaN(parsed) && parsed > 0) {
+        page = parsed
+      }
+    } else {
+      page = 1 // Always reset to page 1 if not in URL
     }
   }
 
@@ -140,7 +132,7 @@
   }
 
   // Fetch data when the selected node changes or pagination params change
-  $: if ($assetHTTPAddress && isInitialized) {
+  $: if ($assetHTTPAddress) {
     fetchData(page, pageSize)
   }
 
