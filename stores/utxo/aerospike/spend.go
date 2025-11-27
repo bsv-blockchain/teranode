@@ -332,7 +332,27 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		spend := spend
 
 		g.Go(func() error {
-			errCh := make(chan error)
+			// Fast-fail check: if circuit breaker is already open, don't waste time acquiring permit
+			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
+				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request")
+				return nil
+			}
+
+			if err := s.acquireSpendPermit(ctx); err != nil {
+				spends[idx].Err = err
+				return nil
+			}
+			defer s.releaseSpendPermit()
+
+			// Critical: Re-check circuit breaker after acquiring permit to prevent race condition.
+			// During the (potentially long) wait for permit, the circuit breaker state may have changed.
+			// This second check ensures we see the most recent state before submitting work.
+			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
+				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker opened during permit acquisition, rejecting request")
+				return nil
+			}
+
+			errCh := make(chan error, 1)
 			s.spendBatcher.Put(&batchSpend{
 				spend:             spend,
 				blockHeight:       blockHeight,
@@ -341,8 +361,29 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				ignoreLocked:      useIgnoreLocked,
 			})
 
-			// this waits for the batch to be sent and the response to be received from the batch operation
-			batchErr := <-errCh
+			// Wait for batch response with timeout to prevent indefinite blocking
+			var batchErr error
+			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+			if spendTimeout <= 0 {
+				spendTimeout = 30 * time.Second
+			}
+
+			timer := time.NewTimer(spendTimeout)
+			defer timer.Stop()
+
+			select {
+			case batchErr = <-errCh:
+				// Batch completed successfully or with error
+			case <-ctx.Done():
+				spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
+				return nil
+			case <-timer.C:
+				if prometheusUtxoMapErrors != nil {
+					prometheusUtxoMapErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
+				}
+				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
+				return nil
+			}
 
 			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) {
 				mu.Lock()
@@ -635,6 +676,10 @@ func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batch
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
 	}
+	// Record batch-level failure for circuit breaker
+	if s.spendCircuitBreaker != nil {
+		s.spendCircuitBreaker.RecordFailure()
+	}
 }
 
 // handleMissingResponse handles missing response from batch operation
@@ -686,6 +731,10 @@ func (s *Store) handleSuccessfulSpends(batchByKey []aerospike.MapValue, batch []
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- nil
+	}
+	// Record successful batch operation for circuit breaker
+	if s.spendCircuitBreaker != nil {
+		s.spendCircuitBreaker.RecordSuccess()
 	}
 }
 
@@ -1072,5 +1121,49 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 		}
 
 		batch[batchIdx].errCh <- nil
+	}
+}
+
+func (s *Store) acquireSpendPermit(ctx context.Context) error {
+	if s == nil || s.spendQueueSem == nil {
+		return nil
+	}
+	timeout := s.spendEnqueueTimeout
+	if timeout <= 0 {
+		select {
+		case s.spendQueueSem <- struct{}{}:
+			return nil
+		case <-ctx.Done():
+			return errors.NewContextCanceledError("[SPEND] context canceled while waiting for spend queue slot: %v", ctx.Err())
+		}
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case s.spendQueueSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return errors.NewContextCanceledError("[SPEND] context canceled while waiting for spend queue slot: %v", ctx.Err())
+	case <-timer.C:
+		if prometheusUtxoMapErrors != nil {
+			prometheusUtxoMapErrors.WithLabelValues("Spend", "QueueTimeout").Inc()
+		}
+		return errors.NewServiceUnavailableError("[SPEND] timed out after %s waiting for spend queue slot", timeout)
+	}
+}
+func (s *Store) releaseSpendPermit() {
+	if s == nil || s.spendQueueSem == nil {
+		return
+	}
+	select {
+	case <-s.spendQueueSem:
+		// Successfully released permit
+	default:
+		// This should never happen - it means we're trying to release more permits than we acquired
+		// Log error to detect potential logic bugs in permit acquisition/release
+		s.logger.Errorf("[SPEND] Failed to release spend permit: semaphore buffer is full (potential permit leak)")
+		if prometheusUtxoMapErrors != nil {
+			prometheusUtxoMapErrors.WithLabelValues("Spend", "PermitLeakage").Inc()
+		}
 	}
 }

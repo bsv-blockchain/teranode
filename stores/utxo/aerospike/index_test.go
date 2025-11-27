@@ -7,7 +7,7 @@ import (
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
-	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/cleanup"
+	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
@@ -158,7 +158,7 @@ func TestIndexWaiterAdapter(t *testing.T) {
 	}
 
 	// Verify the Store implements the IndexWaiter interface
-	var indexWaiter cleanup.IndexWaiter = store
+	var indexWaiter pruner.IndexWaiter = store
 
 	assert.NotNil(t, indexWaiter)
 

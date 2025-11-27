@@ -933,6 +933,17 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 		tracing.WithHistogram(peerServerMetrics["OnGetHeaders"]),
 	)
 
+	// Don't serve headers to other peers while we're actively syncing in headers-first mode.
+	// Serving headers during checkpoint sync causes significant delays (18s+ per batch) due to:
+	// - Database query contention (querying 2000 headers per peer)
+	// - Multiple peers requesting headers simultaneously
+	// - Competition with our own header processing
+	// This prevents the sync from timing out (3-minute lastBlockTime limit).
+	if sp.server.syncManager.IsHeadersFirstMode() {
+		sp.server.logger.Debugf("Ignoring getheaders request from %s: node is syncing in headers-first mode", sp)
+		return
+	}
+
 	// Find the most recent known block in the best chain based on the block
 	// locator and fetch all the headers after it until either
 	// wire.MaxBlockHeadersPerMsg have been fetched or the provided stop

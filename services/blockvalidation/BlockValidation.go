@@ -791,14 +791,14 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	if blockWasAlreadyCached && cachedBlock != nil {
 		// Verify the cached block has subtrees loaded
 		if u.hasValidSubtrees(cachedBlock) {
-			u.logger.Debugf("[setTxMined][%s] using cached block with %d subtrees", blockHash.String(), len(cachedBlock.SubtreeSlices))
+			u.logger.Debugf("[setTxMined][%s] using cached block with subtrees", blockHash.String())
 			block = cachedBlock
+
+			// Remove from cache immediately - we're about to use it and don't need it cached anymore
+			// This frees memory sooner than waiting for cache expiry or the delete at line 894
+			u.lastValidatedBlocks.Delete(*blockHash)
 		} else {
-			if len(cachedBlock.SubtreeSlices) != len(cachedBlock.Subtrees) || len(cachedBlock.SubtreeSlices) == 0 {
-				u.logger.Warnf("[setTxMined][%s] cached block missing subtrees, fetching from blockchain", blockHash.String())
-			} else {
-				u.logger.Warnf("[setTxMined][%s] cached block has invalid subtrees, fetching from blockchain", blockHash.String())
-			}
+			u.logger.Warnf("[setTxMined][%s] cached block has invalid subtrees, fetching from blockchain", blockHash.String())
 			blockWasAlreadyCached = false
 		}
 	}
@@ -884,10 +884,10 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		return errors.NewProcessingError("[setTxMined][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 
-	// delete the block from the cache, if it was there
-	if blockWasAlreadyCached {
-		u.lastValidatedBlocks.Delete(*blockHash)
-	}
+	// Clear subtrees to free memory - they're no longer needed after UpdateTxMinedStatus
+	// This prevents memory retention in the blockchain store cache if block came from there and was mutated
+	// Note: lastValidatedBlocks cache was already cleared at line 799 when we retrieved the block
+	block.SubtreeSlices = nil
 
 	// update block mined_set to true
 	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
@@ -1308,14 +1308,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					return
 				}
 
-				// Block validation succeeded - now cache it with subtrees loaded
-				u.logger.Debugf("[ValidateBlock][%s] background validation complete, caching block with subtrees", block.Hash().String())
-				u.lastValidatedBlocks.Set(*block.Hash(), block)
-
 				// Update subtrees DAH now that we know the block is valid
 				if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
 				}
+
+				// Block validation succeeded - now cache it with subtrees loaded
+				u.logger.Debugf("[ValidateBlock][%s] background validation complete, caching block", block.Hash().String())
+				u.lastValidatedBlocks.Set(*block.Hash(), block)
 			}()
 		} else {
 			// get all 100 previous block headers on the main chain
@@ -1366,18 +1366,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 
 			u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
-
-			// Cache the block only if subtrees are loaded (they should be from Valid() call)
-			if u.hasValidSubtrees(block) {
-				u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), len(block.SubtreeSlices))
-				u.lastValidatedBlocks.Set(*block.Hash(), block)
-			} else {
-				if len(block.SubtreeSlices) != len(block.Subtrees) || len(block.SubtreeSlices) == 0 {
-					u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), len(block.SubtreeSlices), len(block.Subtrees))
-				} else {
-					u.logger.Warnf("[ValidateBlock][%s] not caching block - some subtrees are nil", block.Hash().String())
-				}
-			}
 
 			// if valid, store the block (or update it if revalidating)
 			u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
@@ -1441,6 +1429,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// create bloom filter for the block and wait for it
 		if err = u.createAppendBloomFilter(decoupledCtx, block); err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to create bloom filter: %s", block.Hash().String(), err)
+		}
+
+		// Cache the block only if subtrees are loaded (they should be from Valid() call)
+		if u.hasValidSubtrees(block) {
+			u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), len(block.SubtreeSlices))
+			u.lastValidatedBlocks.Set(*block.Hash(), block)
+		} else {
+			if len(block.SubtreeSlices) != len(block.Subtrees) || len(block.SubtreeSlices) == 0 {
+				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), len(block.SubtreeSlices), len(block.Subtrees))
+			} else {
+				u.logger.Warnf("[ValidateBlock][%s] not caching block - some subtrees are nil", block.Hash().String())
+			}
 		}
 
 		return nil

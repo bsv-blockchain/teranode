@@ -9,22 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLongestChainSQLite(t *testing.T) {
-	utxoStore := "sqlite:///test"
-
-	t.Run("simple", func(t *testing.T) {
-		testLongestChainSimple(t, utxoStore)
-	})
-
-	t.Run("invalid block", func(t *testing.T) {
-		testLongestChainInvalidateBlock(t, utxoStore)
-	})
-
-	t.Run("invalid block with old tx", func(t *testing.T) {
-		testLongestChainInvalidateBlockWithOldTx(t, utxoStore)
-	})
-}
-
 func TestLongestChainPostgres(t *testing.T) {
 	// start a postgres container
 	utxoStore, teardown, err := postgres.SetupTestPostgresContainer()

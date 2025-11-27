@@ -53,6 +53,9 @@ go test -v ./test/chaos/...
 
 # Scenario 6: Slow Close Connections (Slicer)
 ./test/chaos/run_scenario_06.sh
+
+# Scenario 7: Combined Failures (DB + Kafka)
+./test/chaos/run_scenario_07.sh
 ```
 
 The helper scripts will:
@@ -82,6 +85,9 @@ go test -v ./test/chaos -run TestScenario05
 
 # Scenario 6: Slow Close Connections (Slicer)
 go test -v ./test/chaos -run TestScenario06
+
+# Scenario 7: Combined Failures (DB + Kafka)
+go test -v ./test/chaos -run TestScenario07
 ```
 
 ### Run in Verbose Mode
@@ -409,6 +415,116 @@ go test -v ./test/chaos -run TestScenario06_KafkaSlowClose
 
 **Combined scenario duration:** ~55 seconds
 
+### Scenario 7: Combined Failures (3 variants)
+**File:** `scenario_07_combined_failures_test.go`
+
+Tests system behavior when multiple dependencies fail simultaneously or in sequence. This simulates realistic infrastructure-wide issues like datacenter problems, network partitions, or cascading failures.
+
+#### Variant A: Simultaneous Complete Failure
+**Test:** `TestScenario07_SimultaneousFailure`
+
+**What it tests:**
+- System behavior when both PostgreSQL AND Kafka fail at the same time
+- Failure detection when multiple dependencies down
+- Graceful degradation (errors, not crashes)
+- Simultaneous recovery of both services
+- Data consistency after dual failure
+
+**How to run:**
+```bash
+# Using helper script
+./test/chaos/run_scenario_07.sh
+
+# Using go test directly
+go test -v ./test/chaos -run TestScenario07_SimultaneousFailure
+```
+
+**Test phases:**
+1. Establish baseline with both services healthy
+2. Disable both PostgreSQL and Kafka simultaneously (complete failure)
+3. Test behavior during simultaneous outage
+4. Restore both services simultaneously
+5. Verify recovery and data consistency
+
+**Expected results:**
+- ✅ Baseline: Both services healthy and functional
+- ✅ Simultaneous failure: Both fail quickly and cleanly (no hangs)
+- ✅ During outage: Errors returned promptly (not timeouts or crashes)
+- ✅ Recovery: Both services restored successfully
+- ✅ Consistency: No data corruption from dual failure
+
+**Test duration:** ~10 seconds
+
+#### Variant B: Simultaneous Latency
+**Test:** `TestScenario07_SimultaneousLatency`
+
+**What it tests:**
+- System behavior when both PostgreSQL AND Kafka become slow simultaneously
+- Performance degradation when multiple dependencies affected
+- System remains functional despite infrastructure-wide slowdown
+- Recovery when latency removed from both
+
+**How to run:**
+```bash
+# Using helper script
+./test/chaos/run_scenario_07.sh
+
+# Using go test directly
+go test -v ./test/chaos -run TestScenario07_SimultaneousLatency
+```
+
+**Test phases:**
+1. Measure baseline performance (both services fast)
+2. Inject 500ms latency to both services simultaneously
+3. Test performance under simultaneous latency
+4. Remove latency and verify recovery
+
+**Expected results:**
+- ✅ Baseline: Fast operations on both services
+- ✅ With latency: Both services slower but still functional
+- ✅ Operations complete successfully despite 500ms delay
+- ✅ No cascading timeouts or failures
+- ✅ Recovery: Performance returns to baseline levels
+
+**Test duration:** ~15 seconds
+
+#### Variant C: Staggered Recovery
+**Test:** `TestScenario07_StaggeredRecovery`
+
+**What it tests:**
+- System behavior when services recover at different times
+- Partial functionality when one service up, one down
+- No cascading failures during staggered recovery
+- Data consistency with asynchronous recovery
+
+**How to run:**
+```bash
+# Using helper script
+./test/chaos/run_scenario_07.sh
+
+# Using go test directly
+go test -v ./test/chaos -run TestScenario07_StaggeredRecovery
+```
+
+**Test phases:**
+1. Disable both PostgreSQL and Kafka simultaneously
+2. Restore PostgreSQL first (Kafka still down)
+3. Verify PostgreSQL works while Kafka remains down
+4. Wait 3 seconds, then restore Kafka
+5. Verify both services healthy
+6. Confirm data consistency after staggered recovery
+
+**Expected results:**
+- ✅ Both services fail cleanly when disabled
+- ✅ PostgreSQL recovers independently while Kafka down
+- ✅ System handles partial recovery gracefully
+- ✅ Kafka recovers after delay with no issues
+- ✅ No data corruption from staggered recovery pattern
+
+**Test duration:** ~10 seconds
+
+**Combined scenario duration:** ~35 seconds
+
 ## Test Structure
 
 Each chaos test follows this pattern:
@@ -581,7 +697,8 @@ Chaos tests take longer than unit tests:
 - Scenario 4C (Load Under Failures): ~28 seconds (load testing under failures)
 - Scenario 5 (Bandwidth Constraints): ~4.4 seconds (database + Kafka bandwidth tests)
 - Scenario 6 (Slow Close Connections): ~55 seconds (slicer toxic tests)
-- Full suite: ~12-13 minutes (with all scenarios)
+- Scenario 7 (Combined Failures): ~35 seconds (simultaneous and staggered failures)
+- Full suite: ~13-14 minutes (with all scenarios)
 
 ## Troubleshooting
 
@@ -655,4 +772,6 @@ curl -X POST http://localhost:8474/reset
 - [x] Scenario 4C: Load Under Failures ✅ **Implemented**
 - [x] Scenario 5: Bandwidth Constraints ✅ **Implemented**
 - [x] Scenario 6: Slow Close Connections (Slicer toxic) ✅ **Implemented**
-- [ ] Scenario 7: Combined Failures (DB + Kafka simultaneously)
+- [x] Scenario 7: Combined Failures (DB + Kafka simultaneously) ✅ **Implemented**
+
+All planned chaos test scenarios have been implemented!

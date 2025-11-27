@@ -6,17 +6,19 @@
 
 ```go
 type Server struct {
-    logger              ulogger.Logger
-    settings            *settings.Settings
-    utxoStore           utxo.Store
-    txStore             blob.Store
-    subtreeStore        blob.Store
-    blockPersisterStore blob.Store
-    httpAddr            string
-    httpServer          *httpimpl.HTTP
-    centrifugeAddr      string
-    centrifugeServer    *centrifuge_impl.Centrifuge
-    blockchainClient    blockchain.ClientI
+    logger                ulogger.Logger
+    settings              *settings.Settings
+    utxoStore             utxo.Store
+    txStore               blob.Store
+    subtreeStore          blob.Store
+    blockPersisterStore   blob.Store
+    httpAddr              string
+    httpServer            *httpimpl.HTTP
+    centrifugeAddr        string
+    centrifugeServer      *centrifuge_impl.Centrifuge
+    blockchainClient      blockchain.ClientI
+    blockvalidationClient blockvalidation.Interface
+    p2pClient             p2p.ClientI
 }
 ```
 
@@ -26,13 +28,15 @@ The `Server` type is the main structure for the Asset Service. It coordinates be
 
 ```go
 type Repository struct {
-    logger              ulogger.Logger
-    settings            *settings.Settings
-    UtxoStore           utxo.Store
-    TxStore             blob.Store
-    SubtreeStore        blob.Store
-    BlockPersisterStore blob.Store
-    BlockchainClient    blockchain.ClientI
+    logger                ulogger.Logger
+    settings              *settings.Settings
+    UtxoStore             utxo.Store
+    TxStore               blob.Store
+    SubtreeStore          blob.Store
+    BlockPersisterStore   blob.Store
+    BlockchainClient      blockchain.ClientI
+    BlockvalidationClient blockvalidation.Interface
+    P2PClient             p2p.ClientI
 }
 ```
 
@@ -60,7 +64,7 @@ The `HTTP` type represents the HTTP server for the Asset Service.
 #### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI) *Server
 ```
 
 Creates a new instance of the `Server` with the provided dependencies. It initializes the server with necessary stores and clients for handling blockchain data.
@@ -102,7 +106,7 @@ Gracefully shuts down the server and its components, including HTTP and Centrifu
 #### NewRepository
 
 ```go
-func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error)
+func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store, blockPersisterStore blob.Store, p2pClient p2p.ClientI) (*Repository, error)
 ```
 
 Creates a new instance of the `Repository` with the provided dependencies. It initializes connections to various data stores for blockchain data access.

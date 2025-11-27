@@ -21,7 +21,7 @@
 5. [Technology](#5-technology)
     - [5.1. Language and Libraries](#51-language-and-libraries)
     - [5.2. Data Stores](#52-data-stores)
-    - [5.3. Data Purging](#53-data-purging)
+    - [5.3. Data Pruning](#53-data-pruning)
 6. [Performance Optimizations](#6-performance-optimizations)
     - [6.1. Shared Buffer Optimization](#61-shared-buffer-optimization)
 7. [Directory Structure and Main Files](#7-directory-structure-and-main-files)
@@ -104,7 +104,7 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interfac
 
 The following diagram provides a deeper level of detail into the UTXO Store's internal components and their interactions:
 
-> **Note**: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Cleanup Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.
+> **Note**: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Pruner Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.
 
 ![utxo_store_detailed_component.svg](../services/img/plantuml/utxo/utxo_store_detailed_component.svg)
 
@@ -355,6 +355,33 @@ To optimize performance when reading externally stored transactions, the UTXO st
 
 The cache handles concurrent reads efficiently, preventing multiple simultaneous fetches of the same external transaction data.
 
+#### Lock Record Pattern for Multi-Record Transactions
+
+When a transaction has more than 20,000 outputs (configurable via `utxo_store_batch_size`), it must be split across multiple Aerospike records. The lock record pattern ensures these multi-record operations complete atomically, preventing data corruption from partial writes or concurrent access.
+
+**Key Components:**
+
+1. **Lock Records**: Temporary Aerospike records that prevent concurrent creation attempts for the same transaction. They use a special index (`0xFFFFFFFF`) that cannot conflict with actual sub-records.
+
+2. **Creating Flag**: A per-record boolean flag that prevents UTXO spending until all records are fully committed. When `creating=true`, the UTXO's outputs cannot be spent.
+
+**Two-Phase Commit Protocol:**
+
+- **Phase 1**: Acquire lock, store external data, create all Aerospike records with `creating=true`
+- **Phase 2**: Clear `creating` flag from children first, then master (master's flag absence indicates completion)
+
+**Error Handling and Recovery:**
+
+The system automatically recovers from partial failures through multiple paths:
+
+- Retry attempts complete Phase 2 via existing record detection
+- Re-encounter during block/subtree processing triggers completion
+- Mining operations clear flags as part of `SetMined`
+
+Lock records have dynamic TTL (30-300 seconds based on record count) to prevent permanent locks on process crashes.
+
+For detailed documentation, see [UTXO Lock Record Pattern for Multi-Record Transactions](../features/utxo_lock_records.md).
+
 ### 4.8. Alert System and UTXO Management
 
 The UTXO Store supports advanced UTXO management features, which can be utilized by an alert system.
@@ -453,9 +480,9 @@ The following datastores are supported (either in development / experimental or 
 - Databases like Aerospike provide a balance of speed and persistence, suitable for larger, more complex systems.
 - Nullstore is more appropriate for testing, development, or lightweight applications.
 
-### 5.3. Data Purging
+### 5.3. Data Pruning
 
-Stored data is automatically purged a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.
+Stored data is automatically pruned a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.
 
 ## 6. Performance Optimizations
 
@@ -561,13 +588,13 @@ UTXO Store Package Structure (stores/utxo)
 
 ### How to run
 
-To run the UTXO Store locally, you can execute the following command:
+The UTXO Store is a data store component that is used by various services. It is not run independently. To use the UTXO Store locally, run services that depend on it, such as the Validator or UTXO Persister:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -UtxoStore=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -validator=1 -utxopersister=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running services locally.
 
 ## 9. Configuration and Settings
 
