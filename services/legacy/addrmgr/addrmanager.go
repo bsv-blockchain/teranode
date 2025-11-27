@@ -774,7 +774,7 @@ func (a *AddrManager) AddAddressByIP(addrIP string) error {
 		return fmt.Errorf("invalid ip address %s", addr)
 	}
 
-	port, err := strconv.ParseUint(portStr, 10, 0)
+	port, err := strconv.ParseUint(portStr, 10, 16)
 	if err != nil {
 		return fmt.Errorf("invalid port %s: %v", portStr, err)
 	}

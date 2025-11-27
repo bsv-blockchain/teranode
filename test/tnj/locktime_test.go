@@ -92,7 +92,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 
 	logger := testEnv.Logger
 
-	txDistributor := testEnv.Nodes[0].DistributorClient
+	txDistributor := testEnv.Nodes[0].PropagationClient
 
 	// Generate private keys and addresses
 	coinbasePrivKey, _ := gocore.Config().Get("coinbase_wallet_private_key")
@@ -111,7 +111,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 	tx, err := coinbaseClient.RequestFunds(ctx, address.AddressString, true)
 	require.NoError(t, err)
 
-	_, err = txDistributor.SendTransaction(ctx, tx)
+	err = txDistributor.ProcessTransaction(ctx, tx)
 	require.NoError(t, err)
 
 	output := tx.Outputs[0]
@@ -135,7 +135,7 @@ func (suite *TNJLockTimeTestSuite) runLocktimeScenario(scenario LockTimeScenario
 	newTx.Inputs[0].SequenceNumber = scenario.sequenceNumber
 	newTx.LockTime = scenario.lockTime
 
-	_, err = txDistributor.SendTransaction(ctx, newTx)
+	err = txDistributor.ProcessTransaction(ctx, newTx)
 	require.NoError(t, err)
 
 	t.Logf("Transaction sent: %s %s\n", newTx.TxIDChainHash(), newTx.TxID())

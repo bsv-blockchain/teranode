@@ -36,6 +36,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		mockBlockchainClient := &blockchain.Mock{}
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a block header to reset to
 		targetHeader := &model.BlockHeader{
@@ -89,6 +90,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Store the coinbase UTXO first to avoid errors
 		_, err = utxoStore.Create(context.Background(), coinbaseTx, 1)
@@ -116,6 +118,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a simple block with coinbase tx
 		block2 := &model.Block{
@@ -154,6 +157,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		mockBlockchainClient := &blockchain.Mock{}
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a block header to reset to
 		targetHeader := &model.BlockHeader{
@@ -229,6 +233,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create transactions that will conflict during reset
 		conflictTx1Hash, err := chainhash.NewHashFromStr("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
@@ -248,19 +253,19 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		stp.InitCurrentBlockHeader(moveBackBlock2.Header)
 
 		// Add transactions that would be in the blocks being moved back
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *conflictTx1Hash,
 			Fee:         300,
 			SizeInBytes: 400,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *conflictTx2Hash,
 			Fee:         400,
 			SizeInBytes: 500,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *uniqueTxHash,
 			Fee:         500,
 			SizeInBytes: 600,
@@ -356,6 +361,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create transactions - some will be in both moveBack and moveForward blocks
 		duplicateTxHash, err := chainhash.NewHashFromStr("fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
@@ -419,13 +425,13 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		moveBackSubtree1, err := subtree.NewTreeByLeafCount(64)
 		require.NoError(t, err)
 		_ = moveBackSubtree1.AddCoinbaseNode()
-		err = moveBackSubtree1.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveBackSubtree1.AddSubtreeNode(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
 		})
 		require.NoError(t, err)
-		err = moveBackSubtree1.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveBackSubtree1.AddSubtreeNode(subtree.Node{
 			Hash:        *moveBackOnlyTxHash,
 			Fee:         700,
 			SizeInBytes: 800,
@@ -436,13 +442,13 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		moveBackSubtree2, err := subtree.NewTreeByLeafCount(64)
 		require.NoError(t, err)
 		_ = moveBackSubtree2.AddCoinbaseNode()
-		err = moveBackSubtree2.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveBackSubtree2.AddSubtreeNode(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
 		})
 		require.NoError(t, err)
-		err = moveBackSubtree2.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveBackSubtree2.AddSubtreeNode(subtree.Node{
 			Hash:        *moveBackOnlyTxHash,
 			Fee:         700,
 			SizeInBytes: 800,
@@ -475,13 +481,13 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		moveForwardSubtree1, err := subtree.NewTreeByLeafCount(64)
 		require.NoError(t, err)
 		_ = moveForwardSubtree1.AddCoinbaseNode()
-		err = moveForwardSubtree1.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveForwardSubtree1.AddSubtreeNode(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
 		})
 		require.NoError(t, err)
-		err = moveForwardSubtree1.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveForwardSubtree1.AddSubtreeNode(subtree.Node{
 			Hash:        *moveForwardOnlyTxHash,
 			Fee:         800,
 			SizeInBytes: 900,
@@ -492,13 +498,13 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		moveForwardSubtree2, err := subtree.NewTreeByLeafCount(64)
 		require.NoError(t, err)
 		_ = moveForwardSubtree2.AddCoinbaseNode()
-		err = moveForwardSubtree2.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveForwardSubtree2.AddSubtreeNode(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
 		})
 		require.NoError(t, err)
-		err = moveForwardSubtree2.AddSubtreeNode(subtree.SubtreeNode{
+		err = moveForwardSubtree2.AddSubtreeNode(subtree.Node{
 			Hash:        *moveForwardOnlyTxHash,
 			Fee:         800,
 			SizeInBytes: 900,
@@ -533,13 +539,13 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		stp.InitCurrentBlockHeader(moveBackBlock.Header)
 
 		// Add initial transactions to simulate existing state
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *moveBackOnlyTxHash,
 			Fee:         700,
 			SizeInBytes: 800,
@@ -624,8 +630,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Test reorg with no blocks - should fail with expected error
 		err = stp.Reorg(nil, nil)
@@ -648,6 +657,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		mockBlockchainClient := &blockchain.Mock{}
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a simple block
 		block1 := &model.Block{
@@ -695,6 +705,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		mockBlockchainClient := &blockchain.Mock{}
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a simple block
 		block2 := &model.Block{
@@ -725,8 +736,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a test block for moveBack
 		blockToMoveBack := &model.Block{
@@ -767,12 +781,14 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.AnythingOfType("*chainhash.Hash"), mock.AnythingOfType("[]bool")).Return(nil)
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(prevBlockHeader, &model.BlockHeaderMeta{}, nil)
 		mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a proper blockchain scenario:
 		// Original chain: Genesis -> Block1 -> Block2
@@ -882,12 +898,14 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.AnythingOfType("*chainhash.Hash"), mock.AnythingOfType("[]bool")).Return(nil)
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(prevBlockHeader, &model.BlockHeaderMeta{}, nil)
 		mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create unique transactions for the test scenario
 		tx1Hash, err := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
@@ -984,25 +1002,25 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		// Add transactions to simulate they were processed up to block3
 		// tx1 and tx2 would have been processed in block2
 		// tx3 and tx4 would have been processed in block3
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *tx1Hash,
 			Fee:         100,
 			SizeInBytes: 250,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *tx2Hash,
 			Fee:         200,
 			SizeInBytes: 300,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *tx3Hash,
 			Fee:         300,
 			SizeInBytes: 400,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *tx4Hash,
 			Fee:         400,
 			SizeInBytes: 500,
@@ -1109,12 +1127,14 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.AnythingOfType("*chainhash.Hash"), mock.AnythingOfType("[]bool")).Return(nil)
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(prevBlockHeader, &model.BlockHeaderMeta{}, nil)
 		mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create specific transactions that will demonstrate duplicate handling
 		uniqueTxHash, err := chainhash.NewHashFromStr("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -1175,13 +1195,13 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		stp.InitCurrentBlockHeader(oldBlockHeader)
 
 		// Add transactions that would be in the old block
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *uniqueTxHash,
 			Fee:         100,
 			SizeInBytes: 250,
 		}, subtree.TxInpoints{})
 
-		stp.Add(subtree.SubtreeNode{
+		stp.Add(subtree.Node{
 			Hash:        *duplicateTxHash,
 			Fee:         200,
 			SizeInBytes: 300,
@@ -1212,7 +1232,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
 			// This simulates the duplicate transaction being processed in the new block
-			stp.Add(subtree.SubtreeNode{
+			stp.Add(subtree.Node{
 				Hash:        *duplicateTxHash, // Same transaction as before
 				Fee:         200,
 				SizeInBytes: 300,

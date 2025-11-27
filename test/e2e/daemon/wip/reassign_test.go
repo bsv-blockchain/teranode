@@ -59,7 +59,7 @@ func TestShouldAllowReassign(t *testing.T) {
 	)
 
 	// Send Alice to Bob transaction
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, aliceToBobTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, aliceToBobTx)
 	require.NoError(t, err)
 
 	// Mine a block and wait for processing
@@ -120,13 +120,13 @@ func TestShouldAllowReassign(t *testing.T) {
 	err = charlesSpendingTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: charlesPrivatekey})
 	require.NoError(t, err)
 
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, charlesSpendingTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, charlesSpendingTx)
 	require.Error(t, err, "Transaction should be rejected since UTXO is not spendable until block 1000")
 
 	// Generate 1000 blocks to reach reassignment height
 	td.MineAndWait(t, 1000)
 
 	// Now try spending the reassigned UTXO - should succeed
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, charlesSpendingTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, charlesSpendingTx)
 	require.NoError(t, err)
 }

@@ -115,8 +115,7 @@ func setupServer(t *testing.T, sendBatchSize ...int) (context.Context, *Server, 
 	}
 
 	utxoStore := &utxo.MockUtxostore{}
-	utxoStore.On("GetBlockHeight").Return(uint32(1000))
-	utxoStore.On("GetMedianBlockTime").Return(uint32(time.Now().Unix())) // nolint:gosec
+	utxoStore.On("GetBlockState").Return(utxo.BlockState{Height: 1000, MedianTime: uint32(time.Now().Unix())}) // nolint:gosec
 	utxoStore.On("PreviousOutputsDecorate", mock.Anything, mock.Anything).Return(nil)
 
 	blockchainClient := &blockchain.MockBlockchain{}

@@ -66,6 +66,7 @@ func TestSubtreeProcessor_LowVolumeNeverIncreases(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	// Test: High utilization but low volume (< 50 nodes per subtree)
 	t.Run("high utilization low volume keeps size", func(t *testing.T) {
@@ -185,6 +186,7 @@ func TestSubtreeProcessor_UsageBasedCapping(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("caps increase based on max observed nodes", func(t *testing.T) {
 		stp.currentItemsPerFile = 32
@@ -288,6 +290,7 @@ func TestSubtreeProcessor_RealWorldScenario(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("adapts to changing load patterns", func(t *testing.T) {
 		// Start with high load
@@ -388,6 +391,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("tracks node counts correctly", func(t *testing.T) {
 		// Create a subtree with known node count
@@ -402,7 +406,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 		for i := 0; i < 4; i++ {
 			hash := chainhash.Hash{}
 			copy(hash[:], []byte{byte(i)})
-			node := subtreepkg.SubtreeNode{
+			node := subtreepkg.Node{
 				Hash:        hash,
 				Fee:         100,
 				SizeInBytes: 250,
@@ -448,7 +452,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 		for i := 0; i < 3; i++ {
 			hash := chainhash.Hash{}
 			copy(hash[:], []byte{byte(i + 10)})
-			node := subtreepkg.SubtreeNode{
+			node := subtreepkg.Node{
 				Hash:        hash,
 				Fee:         100,
 				SizeInBytes: 250,
@@ -478,7 +482,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 
 		hash := chainhash.Hash{}
 		copy(hash[:], []byte{byte(20)})
-		node := subtreepkg.SubtreeNode{
+		node := subtreepkg.Node{
 			Hash:        hash,
 			Fee:         100,
 			SizeInBytes: 250,
@@ -549,6 +553,7 @@ func TestSubtreeProcessor_MinimumSizeRespected(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("never goes below minimum", func(t *testing.T) {
 		stp.currentItemsPerFile = 4 // At minimum
@@ -620,6 +625,7 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("scales up with sustained high volume", func(t *testing.T) {
 		// Start with a moderate size
@@ -894,6 +900,7 @@ func TestSubtreeProcessor_VolumeThresholds(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("just below threshold blocks increase", func(t *testing.T) {
 		stp.currentItemsPerFile = 64

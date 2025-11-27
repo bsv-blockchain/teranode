@@ -80,6 +80,11 @@ func (h *HTTP) getLimitOffset(c echo.Context) (int, int, error) {
 		}
 	}
 
+	// Validate offset is non-negative to prevent underflow issues
+	if offset < 0 {
+		return 0, 0, echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("offset must be non-negative").Error())
+	}
+
 	limit := 20
 	limitStr := c.QueryParam("limit")
 
@@ -88,6 +93,11 @@ func (h *HTTP) getLimitOffset(c echo.Context) (int, int, error) {
 		if err != nil {
 			return 0, 0, echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid limit format", err).Error())
 		}
+	}
+
+	// Validate limit bounds to prevent allocation issues
+	if limit < 1 {
+		limit = 1
 	}
 
 	if limit > 100 {

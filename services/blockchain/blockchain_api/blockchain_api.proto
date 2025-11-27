@@ -81,6 +81,12 @@ service BlockchainAPI {
   // GetBlockHeadersByHeight retrieves block headers between two specified heights.
   rpc GetBlockHeadersByHeight(GetBlockHeadersByHeightRequest) returns (GetBlockHeadersByHeightResponse) {}
 
+  // GetBlocksByHeight retrieves full blocks between two specified heights.
+  rpc GetBlocksByHeight(GetBlocksByHeightRequest) returns (GetBlocksByHeightResponse) {}
+
+  // FindBlocksContainingSubtree finds all blocks that contain the specified subtree hash.
+  rpc FindBlocksContainingSubtree(FindBlocksContainingSubtreeRequest) returns (FindBlocksContainingSubtreeResponse) {}
+
   // GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
 
@@ -319,6 +325,28 @@ message GetBlockHeadersByHeightRequest {
 message GetBlockHeadersByHeightResponse {
   repeated bytes blockHeaders = 1;  // List of serialized block headers
   repeated bytes metas = 2;         // List of serialized metadata
+}
+
+// GetBlocksByHeightRequest requests full blocks between two heights.
+message GetBlocksByHeightRequest {
+  uint32 startHeight = 1;  // Starting height
+  uint32 endHeight = 2;    // Ending height
+}
+
+// GetBlocksByHeightResponse contains full blocks between heights.
+message GetBlocksByHeightResponse {
+  repeated bytes blocks = 1;  // List of serialized full blocks
+}
+
+// FindBlocksContainingSubtreeRequest specifies a subtree hash to search for.
+message FindBlocksContainingSubtreeRequest {
+  bytes subtree_hash = 1;  // Subtree hash to find
+  uint32 max_blocks = 2;   // Maximum number of blocks to return (0 = no limit)
+}
+
+// FindBlocksContainingSubtreeResponse contains blocks that contain the subtree.
+message FindBlocksContainingSubtreeResponse {
+  repeated bytes blocks = 1;  // List of serialized full blocks containing the subtree
 }
 
 // GetBlockHeaderIDsResponse contains block header identifiers.

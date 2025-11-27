@@ -776,8 +776,8 @@ func (t *TxMetaCache) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Sp
 // Returns:
 // - Array of Spend objects representing the spent UTXOs
 // - Error if the spend operation fails
-func (t *TxMetaCache) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	return t.utxoStore.Spend(ctx, tx)
+func (t *TxMetaCache) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	return t.utxoStore.Spend(ctx, tx, blockHeight, ignoreFlags...)
 }
 
 // Unspend marks previously spent UTXOs as unspent.
@@ -996,6 +996,10 @@ func (t *TxMetaCache) SetMedianBlockTime(height uint32) error {
 // consensus-determined time.
 func (t *TxMetaCache) GetMedianBlockTime() uint32 {
 	return t.utxoStore.GetMedianBlockTime()
+}
+
+func (t *TxMetaCache) GetBlockState() utxo.BlockState {
+	return t.utxoStore.GetBlockState()
 }
 
 // QueryOldUnminedTransactions forwards the query request to the underlying UTXO store.

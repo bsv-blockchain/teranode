@@ -1,0 +1,131 @@
+name: SonarQube Analysis for PRs
+
+# This workflow handles SonarCloud analysis for ALL pull requests (internal and fork).
+#
+# Why use workflow_run instead of running directly in teranode_pr_tests.yaml:
+# - Fork PRs cannot access repository secrets (SONAR_TOKEN) for security reasons
+# - workflow_run always runs in the base repository context with access to secrets
+#
+# How it works:
+# 1. teranode_pr_tests.yaml runs on PR (fork or internal) and generates artifacts
+# 2. When that completes, this workflow triggers with access to SONAR_TOKEN
+# 3. Downloads artifacts and runs SonarQube scan with proper PR decoration
+
+on:
+  workflow_run:
+    workflows: ["Teranode PR init"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+env:
+  GO_VERSION: "1.25.2"
+
+jobs:
+  sonarqube:
+    name: SonarQube Analysis
+    runs-on: teranode-runner-4-core
+    # Only run if:
+    # 1. The triggering workflow succeeded (ensures all artifacts were generated)
+    # 2. It was triggered by a pull_request event (not push to main)
+    if: |
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+          comment_on_pr: "false"
+
+      - name: Get PR number and metadata
+        id: pr
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            // Try to get PR number from workflow_run.pull_requests first
+            let prNumber;
+            if (context.payload.workflow_run.pull_requests && context.payload.workflow_run.pull_requests.length > 0) {
+              prNumber = context.payload.workflow_run.pull_requests[0].number;
+            } else {
+              // Fallback: search for PR by head SHA (needed for fork PRs where pull_requests array is empty)
+              const headSha = context.payload.workflow_run.head_sha;
+              core.info(`pull_requests array is empty, searching for PR by head SHA: ${headSha}`);
+
+              const { data: prs } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+                sort: 'updated',
+                direction: 'desc',
+                per_page: 100
+              });
+
+              const pr = prs.find(p => p.head.sha === headSha);
+              if (!pr) {
+                core.setFailed(`Could not find PR for head SHA: ${headSha}`);
+                return;
+              }
+              prNumber = pr.number;
+            }
+
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+
+            core.setOutput('number', prNumber);
+            core.setOutput('base', pr.data.base.ref);
+            core.setOutput('head', pr.data.head.ref);
+            core.setOutput('head_sha', pr.data.head.sha);
+
+      - name: Checkout base branch
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: ${{ steps.pr.outputs.base }}
+          fetch-depth: 0
+
+      - name: Checkout PR head
+        run: |
+          git fetch origin pull/${{ steps.pr.outputs.number }}/head:pr-${{ steps.pr.outputs.number }}
+          git checkout pr-${{ steps.pr.outputs.number }}
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download golangci-lint report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: golangci-lint-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download filename check report
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sonar-filename-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: "-Dsonar.pullrequest.key=${{ steps.pr.outputs.number }} -Dsonar.pullrequest.branch=${{ steps.pr.outputs.head }} -Dsonar.pullrequest.base=${{ steps.pr.outputs.base }}"
+
+      - name: SonarQube Quality Gate check
+        uses: sonarsource/sonarqube-quality-gate-action@cf038b0e0cdecfa9e56c198bbb7d21d751d62c3b # v1.2.0
+        timeout-minutes: 10
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

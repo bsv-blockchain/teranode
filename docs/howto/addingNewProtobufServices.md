@@ -13,22 +13,24 @@ To start, you’ll need to define your new service or message by creating or mod
 For example, to add a new RPC method in `subtreevalidation_api.proto`:
 
 ```proto
-service SubtreeValidationService {
-rpc ValidateSubtree (SubtreeValidationRequest) returns (SubtreeValidationResponse);
-rpc NewValidationEndpoint (NewValidationRequest) returns (NewValidationResponse); // New RPC method
+service SubtreeValidationAPI {
+  rpc CheckSubtreeFromBlock (CheckSubtreeFromBlockRequest) returns (CheckSubtreeFromBlockResponse) {};
+  rpc NewValidationEndpoint (NewValidationRequest) returns (NewValidationResponse) {}; // New RPC method
 }
 
 message NewValidationRequest {
-string data = 1;
+  string data = 1;
 }
 
 message NewValidationResponse {
-bool success = 1;
-string message = 2;
+  bool success = 1;
+  string message = 2;
 }
 ```
 
-You can also define a completely new service and corresponding messages in a new `.proto` file, such as `services/newservice/newservice_api.proto`.
+**Note:** All service names in Teranode use the `API` suffix (e.g., `SubtreeValidationAPI`, `ValidatorAPI`, `BlockchainAPI`).
+
+You can also define a completely new service and corresponding messages in a new `.proto` file, such as `services/newservice/newservice_api/newservice_api.proto`.
 
 #### Step 2: Update the `Makefile`
 
@@ -37,9 +39,9 @@ Once your new or modified `.proto` file is ready, you need to update the `Makefi
 To add a new service or dependency, follow these steps:
 
 1. **Locate the `Makefile`** in the project root.
-2. **Add a new `protoc` command** for your new `.proto` file under the `gen` section.
+2. **Add a new `protoc` command** for your new `.proto` file under the `gen` target.
 
-For example, if you created a new `newservice_api.proto` file in the `services/newservice/` directory, add a new `protoc` command like this:
+For example, if you created a new `newservice_api.proto` file in the `services/newservice/newservice_api/` directory, add a new `protoc` command like this:
 
 ```makefile
 protoc \
@@ -48,8 +50,10 @@ protoc \
 --go_opt=paths=source_relative \
 --go-grpc_out=. \
 --go-grpc_opt=paths=source_relative \
-services/newservice/newservice_api.proto
+services/newservice/newservice_api/newservice_api.proto
 ```
+
+**Note:** The directory structure follows the pattern `services/<service_name>/<service_name>_api/<service_name>_api.proto`.
 
 This ensures that the new `.proto` file is processed and generates the corresponding Go code (both the message definitions and the gRPC stubs).
 
@@ -69,51 +73,151 @@ This will generate the necessary Go files for all services, including the newly 
 
 Once the Go files have been generated, you can verify that the new service or endpoint is available by checking the generated `.pb.go` and `_grpc.pb.go` files. For instance, after adding a new method, you should see:
 
-- The new RPC method in the `SubtreeValidationServiceServer` interface in the `_grpc.pb.go` file.
+- The new RPC method in the `SubtreeValidationAPIServer` interface in the `_grpc.pb.go` file.
 - The new request and response message types in the `.pb.go` file.
 
-Here’s what you might expect in `subtreevalidation_api_grpc.pb.go`:
+Here's what you might expect in `subtreevalidation_api_grpc.pb.go`:
 
 ```go
-// SubtreeValidationServiceServer is the server API for SubtreeValidationService.
-type SubtreeValidationServiceServer interface {
-ValidateSubtree(context.Context, *SubtreeValidationRequest) (*SubtreeValidationResponse, error)
-NewValidationEndpoint(context.Context, *NewValidationRequest) (*NewValidationResponse, error) // New RPC method
+// SubtreeValidationAPIServer is the server API for SubtreeValidationAPI.
+type SubtreeValidationAPIServer interface {
+  CheckSubtreeFromBlock(context.Context, *CheckSubtreeFromBlockRequest) (*CheckSubtreeFromBlockResponse, error)
+  NewValidationEndpoint(context.Context, *NewValidationRequest) (*NewValidationResponse, error) // New RPC method
 }
 ```
 
-#### Example: Adding a New Protobuf Dependency
+#### Example: Creating a Complete New Service
 
-Let’s say you want to add a new `.proto` file that defines a shared data model used across several services. This file could be called `common.proto` and might look like this:
+When creating a new service from scratch, your `.proto` file should include all required elements. Here's a complete example for `services/newservice/newservice_api/newservice_api.proto`:
 
 ```proto
 syntax = "proto3";
 
-package common;
+option go_package = "./;newservice_api";
 
-message CommonMessage {
-string id = 1;
-string content = 2;
+package newservice_api;
+
+import "google/protobuf/timestamp.proto";
+
+// NewServiceAPI provides methods for the new service functionality
+service NewServiceAPI {
+  // HealthGRPC checks the service's health status
+  rpc HealthGRPC (EmptyMessage) returns (HealthResponse) {}
+
+  // ProcessData performs the main service operation
+  rpc ProcessData (ProcessDataRequest) returns (ProcessDataResponse) {}
+}
+
+// EmptyMessage represents an empty message structure used for health check requests
+message EmptyMessage {}
+
+// HealthResponse encapsulates the service health status information
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// ProcessDataRequest defines the input for data processing
+message ProcessDataRequest {
+  string data = 1;
+}
+
+// ProcessDataResponse contains the processing result
+message ProcessDataResponse {
+  bool success = 1;
+  string result = 2;
 }
 ```
 
-To add this new `common.proto` file to your project and make it available to other services, follow these steps:
+**Key elements to include:**
 
-1. **Add the `common.proto` file** to the `model` or `shared` directory (or another appropriate location).
-2. **Update the `Makefile`** by adding a `protoc` command to generate the Go files for `common.proto`.
+- `syntax = "proto3";` - Specifies the protobuf version
+- `option go_package = "./;newservice_api";` - Required for Go code generation
+- `package newservice_api;` - Package name matching the directory structure
+- Import statements for dependencies (e.g., `google/protobuf/timestamp.proto`)
+- Service definition with `API` suffix
+- Common patterns like `HealthGRPC` endpoint (present in all services)
+- Comprehensive comments for all messages and RPC methods
 
-For example:
-```makefile
-protoc \
---proto_path=. \
---go_out=. \
---go_opt=paths=source_relative \
-model/common.proto
+#### Example: Using Shared Protobuf Models
+
+Teranode already provides shared data models in `model/model.proto` that can be used across services. To use these in your new service:
+
+1. **Import the model** in your service's `.proto` file:
+
+   ```proto
+   import "model/model.proto";
+   ```
+
+2. **Reference the model types** in your messages:
+
+   ```proto
+   message MyServiceRequest {
+     model.MiningCandidate candidate = 1;
+     string additional_data = 2;
+   }
+   ```
+
+If you need to add new shared models, update `model/model.proto` directly. The Makefile already includes this file in the `gen` target, so running `make gen` will regenerate the code.
+
+**Existing shared proto files:**
+
+- `model/model.proto` - Core data models (MiningCandidate, BlockInfo, etc.)
+- `errors/error.proto` - Error handling structures
+- `stores/utxo/status.proto` - UTXO status definitions
+
+#### Step 5: Implement the Service Interface
+
+After generating the protobuf files, you need to implement the service interface in your Go code. Create an implementation file (e.g., `services/newservice/service.go`):
+
+```go
+package newservice
+
+import (
+    "context"
+    "github.com/bsv-blockchain/teranode/services/newservice/newservice_api"
+    "google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// Service implements the NewServiceAPIServer interface
+type Service struct {
+    newservice_api.UnimplementedNewServiceAPIServer
+    // Add your service dependencies here
+}
+
+// NewService creates a new instance of the service
+func NewService() *Service {
+    return &Service{}
+}
+
+// HealthGRPC implements the health check endpoint
+func (s *Service) HealthGRPC(ctx context.Context, req *newservice_api.EmptyMessage) (*newservice_api.HealthResponse, error) {
+    return &newservice_api.HealthResponse{
+        Ok:        true,
+        Details:   "Service is running",
+        Timestamp: timestamppb.Now(),
+    }, nil
+}
+
+// ProcessData implements the main service operation
+func (s *Service) ProcessData(ctx context.Context, req *newservice_api.ProcessDataRequest) (*newservice_api.ProcessDataResponse, error) {
+    // Implement your business logic here
+    return &newservice_api.ProcessDataResponse{
+        Success: true,
+        Result:  "Processed: " + req.Data,
+    }, nil
+}
 ```
 
-This ensures that any service depending on `common.proto` can now reference the generated Go code.
+**Next steps:**
 
-#### Step 5: Cleaning Up Generated Files (Optional)
+1. Register the service with the gRPC server in your main application
+2. Add configuration for the service in `settings.conf`
+3. Write unit tests for your service implementation
+4. Add integration tests if needed
+
+#### Step 6: Cleaning Up Generated Files (Optional)
 
 If you need to remove the previously generated files for some reason (e.g., during refactoring), you can use the following command:
 

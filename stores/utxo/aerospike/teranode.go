@@ -70,7 +70,7 @@ import (
 //go:embed teranode.lua
 var teranodeLUA []byte
 
-var LuaPackage = "teranode_v48" // N.B. Do not have any "." in this string
+var LuaPackage = "teranode_v50" // N.B. Do not have any "." in this string
 
 // frozenUTXOBytes which is FF...FF, which is equivalent to a coinbase placeholder
 var frozenUTXOBytes = subtree.FrozenBytes[:]
@@ -238,6 +238,7 @@ const (
 	LuaErrorCodeTxNotFound       LuaErrorCode = "TX_NOT_FOUND"
 	LuaErrorCodeConflicting      LuaErrorCode = "CONFLICTING"
 	LuaErrorCodeLocked           LuaErrorCode = "LOCKED"
+	LuaErrorCodeCreating         LuaErrorCode = "CREATING"
 	LuaErrorCodeFrozen           LuaErrorCode = "FROZEN"
 	LuaErrorCodeAlreadyFrozen    LuaErrorCode = "ALREADY_FROZEN"
 	LuaErrorCodeFrozenUntil      LuaErrorCode = "FROZEN_UNTIL"

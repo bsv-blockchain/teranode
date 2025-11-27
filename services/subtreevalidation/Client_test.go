@@ -246,7 +246,7 @@ func TestClient_CheckBlockSubtrees_Success(t *testing.T) {
 		return req.BaseUrl == baseURL && len(req.Block) > 0
 	}), mock.Anything).Return(response, nil)
 
-	err := client.CheckBlockSubtrees(ctx, block, baseURL)
+	err := client.CheckBlockSubtrees(ctx, block, "", baseURL)
 
 	assert.NoError(t, err)
 	mockAPIClient.AssertExpectations(t)
@@ -262,7 +262,7 @@ func TestClient_CheckBlockSubtrees_SerializationError(t *testing.T) {
 	}
 	baseURL := "http://example.com"
 
-	err := client.CheckBlockSubtrees(ctx, block, baseURL)
+	err := client.CheckBlockSubtrees(ctx, block, "", baseURL)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to serialize block for subtree validation")
@@ -281,7 +281,7 @@ func TestClient_CheckBlockSubtrees_GRPCError(t *testing.T) {
 	grpcErr := status.Error(codes.Internal, "internal processing error")
 	mockAPIClient.On("CheckBlockSubtrees", ctx, mock.Anything, mock.Anything).Return(nil, grpcErr)
 
-	err := client.CheckBlockSubtrees(ctx, block, baseURL)
+	err := client.CheckBlockSubtrees(ctx, block, "", baseURL)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "internal processing error")

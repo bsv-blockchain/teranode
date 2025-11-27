@@ -39,15 +39,15 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, err)
 
 		// spend the tx
-		_, err = store.Spend(ctx, spendTx)
+		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		// spend again, should not return an error
-		_, err = store.Spend(ctx, spendTx)
+		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		// try to spend the tx with a different tx, check the spending tx ID
-		spends, err := store.Spend(ctx, spendTx2)
+		spends, err := store.Spend(ctx, spendTx2, store.GetBlockHeight()+1)
 		require.Error(t, err)
 
 		var tErr *errors.Error
@@ -84,7 +84,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.False(t, ok)
 
 		// mine the tx
-		blockIDsMap, err := store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101})
+		blockIDsMap, err := store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101, OnLongestChain: true})
 		require.NoError(t, err)
 		assert.Len(t, blockIDsMap, 1)
 		assert.Equal(t, uint32(101), blockIDsMap[*tx.TxIDChainHash()][0])
@@ -139,7 +139,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, err)
 
 		// spend 1,2,3,4
-		_, err = store.Spend(ctx, spendTxRemaining)
+		_, err = store.Spend(ctx, spendTxRemaining, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		// give the db time to update the main record
@@ -155,7 +155,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
 		// spend 0
-		_, err = store.Spend(ctx, spendTx)
+		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		resp, err = client.Get(nil, mainRecordKey)
@@ -248,6 +248,7 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 			fields.SpentUtxos.String():     2,
 			fields.BlockIDs.String():       []int{101},
 			fields.TotalExtraRecs.String(): 2,
+			fields.UnminedSince.String():   nil, // Clear unminedSince to simulate transaction on longest chain
 		})
 		require.NoError(t, err)
 
@@ -345,7 +346,7 @@ func TestStore_Unspend(t *testing.T) {
 		require.NoError(t, err)
 
 		// Spend the tx
-		spends, err := store.Spend(ctx, spendTx)
+		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 
@@ -354,7 +355,7 @@ func TestStore_Unspend(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify we can now spend it again with a different tx
-		spends, err = store.Spend(ctx, spendTx2)
+		spends, err = store.Spend(ctx, spendTx2, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 	})
@@ -388,7 +389,7 @@ func TestStore_Unspend(t *testing.T) {
 		require.NoError(t, err)
 
 		// Verify we can still spend it
-		spends, err := store.Spend(ctx, spendTx)
+		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 		require.Len(t, spends, 1)
 	})

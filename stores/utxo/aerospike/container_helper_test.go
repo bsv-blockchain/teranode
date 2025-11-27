@@ -23,6 +23,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
 )
 
 const (
@@ -126,13 +127,15 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 
 	// Assert required container interface
 	type containerAPI interface {
-		Terminate(ctx context.Context) error
+		Terminate(ctx context.Context, opts ...testcontainers.TerminateOption) error
 		Host(ctx context.Context) (string, error)
 		ServicePort(ctx context.Context) (int, error)
 	}
+
 	container, ok := containerAny.(containerAPI)
 	if !ok {
-		t.Skip("Skipping Aerospike integration tests: unexpected container type")
+		t.Error("Aerospike integration tests: unexpected container type")
+		t.FailNow()
 	}
 
 	// go func() {
