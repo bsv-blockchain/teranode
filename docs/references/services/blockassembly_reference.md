@@ -41,6 +41,9 @@ type BlockAssembly struct {
 
     // skipWaitForPendingBlocks stores the flag value for tests
     skipWaitForPendingBlocks bool
+
+    // stopOnce ensures Stop() is only executed once
+    stopOnce sync.Once
 }
 ```
 
@@ -74,11 +77,17 @@ type BlockAssembler struct {
     // miningCandidateCh coordinates requests for mining candidates
     miningCandidateCh chan chan *miningCandidateResponse
 
-    // bestBlockHeader atomically stores the current best block header
-    bestBlockHeader atomic.Pointer[model.BlockHeader]
+    // bestBlock atomically stores the current best block header and height together
+    bestBlock atomic.Pointer[BestBlockInfo]
 
-    // bestBlockHeight atomically stores the current best block height
-    bestBlockHeight atomic.Uint32
+    // stateChangeCh notifies listeners of state changes
+    // Protected by stateChangeMu to prevent race conditions
+    stateChangeMu sync.RWMutex
+    stateChangeCh chan BestBlockInfo
+
+    // lastPersistedHeight tracks the last block height processed by block persister
+    // This is updated via BlockPersisted notifications and used to coordinate with cleanup
+    lastPersistedHeight atomic.Uint32
 
     // currentChainMap maps block hashes to their heights
     currentChainMap map[chainhash.Hash]uint32
@@ -92,20 +101,11 @@ type BlockAssembler struct {
     // blockchainSubscriptionCh receives blockchain notifications
     blockchainSubscriptionCh chan *blockchain.Notification
 
-    // currentDifficulty stores the current mining difficulty target
-    currentDifficulty atomic.Pointer[model.NBit]
-
     // defaultMiningNBits stores the default mining difficulty
     defaultMiningNBits *model.NBit
 
     // resetCh handles reset requests for the assembler
-    resetCh chan struct{}
-
-    // resetWaitCount tracks the number of blocks to wait after reset
-    resetWaitCount atomic.Int32
-
-    // resetWaitDuration tracks the time to wait after reset
-    resetWaitDuration atomic.Int32
+    resetCh chan resetRequest
 
     // currentRunningState tracks the current operational state
     currentRunningState atomic.Value
@@ -115,6 +115,12 @@ type BlockAssembler struct {
 
     // cleanupServiceLoaded indicates if the cleanup service has been loaded
     cleanupServiceLoaded atomic.Bool
+
+    // cleanupQueueCh queues cleanup operations (parent preserve + DAH cleanup) to prevent flooding during catchup
+    cleanupQueueCh chan uint32
+
+    // cleanupQueueWorkerStarted tracks if the cleanup queue worker is running
+    cleanupQueueWorkerStarted atomic.Bool
 
     // unminedCleanupTicker manages periodic cleanup of old unmined transactions
     unminedCleanupTicker *time.Ticker

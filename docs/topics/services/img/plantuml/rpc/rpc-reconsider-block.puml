@@ -48,10 +48,20 @@ else Valid Hash
     RPC -> Blockchain : RevalidateBlock(ctx, hash)
     activate Blockchain
 
-    alt Revalidation Fails
+    note over Blockchain
+        RevalidateBlock performs FULL block
+        validation, not just status removal.
+        This ensures the block passes all
+        consensus rules before reactivation.
+    end note
+
+    Blockchain -> Blockchain : ValidateBlock(ctx, block, true)
+    note right: fullValidation = true
+
+    alt Full Validation Fails
         Blockchain --> RPC : Return error
         RPC -> Client : Return error
-    else Revalidation Succeeds
+    else Full Validation Succeeds
         Blockchain --> RPC : Return nil
         deactivate Blockchain
 
@@ -61,10 +71,14 @@ else Valid Hash
             - Returns nil on success
 
             Effects:
-            - Removes invalid status from block
+            - Block undergoes complete validation
+            - Removes invalid status if validation passes
             - Descendants become eligible for inclusion
             - May trigger chain reorganization
-            - Block must still pass all consensus rules
+            - Block MUST pass all consensus rules
+
+            Important: This is now a full validation,
+            not just a status change
         end note
     end
 end

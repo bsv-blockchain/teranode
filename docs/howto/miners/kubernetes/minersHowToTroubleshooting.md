@@ -19,30 +19,25 @@ Last modified: 6-March-2025
 - [Recovery Procedures](#recovery-procedures)
     - [Third Party Component Failure](#third-party-component-failure)
 
-
 ## Health Checks and System Monitoring
-
 
 ### Service Status
 
 ```bash
 kubectl get pods -n teranode-operator
 ```
+
 This command lists all pods in the current namespace, showing their status and readiness.
 
-
 ### Detailed Container/Pod Health
-
 
 ```bash
 kubectl describe pod <pod-name> -n teranode-operator
 ```
+
 This provides detailed information about the pod, including its current state, recent events, and readiness probe results.
 
-
-
 ### Configuring Health Checks
-
 
 In your Deployment or StatefulSet specification:
 
@@ -71,48 +66,37 @@ spec:
           initialDelaySeconds: 40
 ```
 
-
 ### Viewing Health Check Logs
-
 
 Health check results are typically logged in the pod events:
 
 ```bash
 kubectl describe pod <pod-name>
 ```
+
 Look for events related to readiness and liveness probes.
-
-
 
 ### Monitoring System Resources
 
-
-
-* Use `kubectl top` to view resource usage:
+- Use `kubectl top` to view resource usage:
 
 ```bash
 kubectl top pods
 kubectl top nodes
 ```
 
-
 For both environments:
 
-* Consider setting up Prometheus and Grafana for more comprehensive monitoring.
-* Look for services consuming unusually high resources.
-
-
+- Consider setting up Prometheus and Grafana for more comprehensive monitoring.
+- Look for services consuming unusually high resources.
 
 ### Viewing Global Logs
-
 
 ```bash
 kubectl logs -n teranode-operator -l app.kubernetes.io/part-of=teranode-operator
 kubectl logs -n teranode-operator -f -l app.kubernetes.io/part-of=teranode-operator  # Follow logs in real-time
 kubectl logs -n teranode-operator --tail=100 -l app.kubernetes.io/part-of=teranode-operator  # View only the most recent logs
 ```
-
-
 
 ### Viewing Logs for Specific Microservices
 
@@ -122,15 +106,20 @@ kubectl logs -n teranode-operator <pod-name>
 
 ### Useful Options for Log Viewing
 
-* Show timestamps:
+- Show timestamps:
+
 ```bash
 kubectl logs -n teranode-operator <pod-name> --timestamps=true
 ```
-* Limit output:
+
+- Limit output:
+
 ```bash
 kubectl logs -n teranode-operator <pod-name> --tail=50
 ```
-* Since time:
+
+- Since time:
+
 ```bash
 kubectl logs -n teranode-operator <pod-name> --since-time="2023-07-01T00:00:00Z"
 ```
@@ -139,18 +128,17 @@ kubectl logs -n teranode-operator <pod-name> --since-time="2023-07-01T00:00:00Z"
 
 Replace `[service_name]` or `<pod-name>` with the appropriate service or pod name:
 
-* Propagation Service (service name: `propagation`)
-* Blockchain Service (service name: `blockchain`)
-* Asset Service (service name: `asset`)
-* Block Validation Service (service name: `block-validator`)
-* P2P Service (service name: `p2p`)
-* Block Assembly Service (service name: `block-assembly`)
-* Subtree Validation Service (service name: `subtree-validator`)
-* Miner Service (service name: `miner`)
-* RPC Server (service name: `rpc`)
-* Block Persister Service (service name: `block-persister`)
-* UTXO Persister Service (service name: `utxo-persister`)
-
+- Propagation Service (service name: `propagation`)
+- Blockchain Service (service name: `blockchain`)
+- Asset Service (service name: `asset`)
+- Block Validation Service (service name: `block-validator`)
+- P2P Service (service name: `p2p`)
+- Block Assembly Service (service name: `block-assembly`)
+- Subtree Validation Service (service name: `subtree-validator`)
+- Miner Service (service name: `miner`)
+- RPC Server (service name: `rpc`)
+- Block Persister Service (service name: `block-persister`)
+- UTXO Persister Service (service name: `utxo-persister`)
 
 ### Redirecting Logs to a File
 
@@ -161,46 +149,26 @@ kubectl logs -n teranode-operator <pod-name> > pod_logs.txt
 
 Remember to replace placeholders like `[service_name]`, `<pod-name>`, and label selectors with the appropriate values for your Teranode setup.
 
-
 ### Check Services Dashboard**
 
 Check your Grafana `TERANODE Service Overview` dashboard:
 
-
 - Check that there's no blocks in the queue (`Queued Blocks in Block Validation`). We expect little or no queueing, and not creeping up. 3 blocks queued up are already a concern.
-
-
 
 - Check that the propagation instances are handling around the same load to make sure the load is equally distributed among all the propagation servers. See the `Propagation Processed Transactions per Instance` diagram.
 
-
-
 - Check that the cache is at a sustainable pattern rather than "exponentially" growing (see both the `Tx Meta Cache in Block Validation` and `Tx Meta Cache Size in Block Validation` diagrams).
-
-
 
 - Check that go routines (`Goroutines` graph) are not creeping up or reaching excessive levels.
 
-
-
 ## Recovery Procedures
-
-
 
 ### Third Party Component Failure
 
-
-
 Teranode is highly dependent on its third party dependencies. Postgres, Kafka and Aerospike are critical for Teranode operations, and the node cannot work without them.
-
-
 
 If a third party service fails, you must restore its functionality. Once it is back, please restart Teranode cleanly following the instructions in the [How to Start and Stop Teranode in Kubernetes](minersHowToStopStartKubernetesTeranode.md) guide.
 
-
-
-
 ------
 
-
-Should you encounter a bug, please report it following the instructions in the Bug Reporting section.
+Should you encounter a bug, please report it following the instructions in the [Bug Reporting](../../bugReporting.md) section.

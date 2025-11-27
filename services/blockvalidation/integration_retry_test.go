@@ -13,7 +13,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -88,10 +87,7 @@ func TestIntegrationRetryWithMultipleFailures(t *testing.T) {
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 		catchupCh:           make(chan processBlockCatchup, 10),
 		kafkaConsumerClient: mockKafkaConsumer,
-		peerMetrics: &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		},
-		stats: gocore.NewStat("test"),
+		stats:               gocore.NewStat("test"),
 	}
 
 	// Initialize server
@@ -269,9 +265,6 @@ func TestEdgeCasesAndErrorScenarios(t *testing.T) {
 		forkManager:         NewForkManager(logger, tSettings),
 		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
-		peerMetrics: &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		},
 	}
 
 	t.Run("Empty_BaseURL_On_Retry", func(t *testing.T) {
@@ -348,23 +341,7 @@ func TestEdgeCasesAndErrorScenarios(t *testing.T) {
 		assert.Equal(t, "http://peer0", firstBlock.baseURL)
 	})
 
-	t.Run("Malicious_Peer_Recovery", func(t *testing.T) {
-		// Test that a peer marked as malicious can recover
-		peerID := "recovering_peer"
-		peerMetric := server.peerMetrics.GetOrCreatePeerMetrics(peerID)
-
-		// Mark as malicious
-		for i := 0; i < 10; i++ {
-			peerMetric.RecordMaliciousAttempt()
-		}
-		assert.True(t, peerMetric.IsMalicious())
-
-		// Record many successes
-		for i := 0; i < 100; i++ {
-			peerMetric.RecordSuccess()
-		}
-
-		// Should still not be malicious, successes should improve reputation
-		assert.False(t, peerMetric.IsMalicious())
-	})
+	// Note: Test for malicious peer recovery removed as peerMetrics field
+	// has been removed from Server struct. Tests should be updated to use
+	// mock p2pClient instead for peer metrics functionality.
 }

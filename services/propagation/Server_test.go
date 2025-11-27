@@ -798,9 +798,16 @@ func testProcessTransactionInternal(t *testing.T, utxoStoreURL string) {
 
 		g := errgroup.Group{}
 
-		// Reduce parallelism to avoid hot key issues in Aerospike test environment
-		// Still tests the deduplication logic with concurrent requests
-		numGoroutines := 50 // Reduced from 99 to avoid overwhelming test Aerospike
+		// Determine parallelism based on store type to avoid hot key issues
+		// Aerospike has stricter concurrency limits for the same key in test environments
+		numGoroutines := 50 // Default for in-memory/PostgreSQL stores
+
+		// Detect if we're using Aerospike by checking the URL scheme
+		if parsedURL.Scheme == "aerospike" {
+			// Reduce parallelism significantly for Aerospike to avoid KEY_BUSY errors
+			// Still tests deduplication with concurrent requests, just fewer
+			numGoroutines = 10
+		}
 
 		// add the transaction in parallel
 		for i := 0; i < numGoroutines; i++ {

@@ -79,3 +79,17 @@ var testNetParams = params{
 	Params:  &chaincfg.TestNetParams,
 	rpcPort: "18334",
 }
+
+// teraTestNetParams contains parameters specific to the Teranode test network.
+//
+// NOTE: The RPC port is intentionally different than the reference implementation - see
+// the mainNetParams comment for details.
+//
+// The Teranode test network (teratestnet) is a specialized testing environment used
+// for testing Teranode compatibility and features. It uses a different genesis block
+// and network magic bytes than standard testnet, allowing for isolated testing of
+// Teranode-specific functionality while maintaining compatibility with SVNode.
+var teraTestNetParams = params{
+	Params:  &chaincfg.TeraTestNetParams,
+	rpcPort: "18334",
+}

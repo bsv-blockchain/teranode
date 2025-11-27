@@ -91,7 +91,10 @@ Processes a single transaction.
 func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *propagation_api.ProcessTransactionBatchRequest) (*propagation_api.ProcessTransactionBatchResponse, error)
 ```
 
-Processes a batch of transactions.
+Processes a batch of transactions with the following limits:
+
+- Maximum 1024 transactions per batch request
+- Maximum 32 MB total data size per batch request
 
 ## Additional Methods
 
@@ -138,6 +141,12 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 Handles the core transaction processing logic including validation, storage, and triggering async validation.
 
 ```go
+func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btTx *bt.Tx) error
+```
+
+Performs the core business logic for processing a transaction, including coinbase validation, sanity checks, storage, and routing to appropriate validation paths (Kafka or HTTP).
+
+```go
 func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) error
 ```
 
@@ -166,9 +175,11 @@ Performs basic sanity checks on transactions to ensure they have at least one in
 ### Transaction Processing
 
 1. The server receives transactions through various protocols (UDP6 multicast, HTTP, gRPC).
-2. Transactions are validated to ensure they are not coinbase transactions and are in the extended format.
-3. Valid transactions are stored in the transaction store using their chain hash as the key.
-4. Transactions are sent to the validator either via Kafka or HTTP (for large transactions) for further processing.
+2. Transactions undergo basic sanity checks to ensure they have at least one input and one output.
+3. Transactions are validated to ensure they are not coinbase transactions (coinbase transactions are rejected).
+4. Valid transactions are stored in the transaction store using their chain hash as the key.
+5. Transactions are sent to the validator either via Kafka (for normal-sized transactions) or HTTP (for large transactions exceeding Kafka message size limits) for further processing.
+6. Size-based routing: transactions larger than the configured Kafka message size limit automatically use HTTP fallback validation.
 
 ### UDP6 Multicast Listening
 
@@ -186,8 +197,8 @@ The server provides HTTP endpoints for transaction submission configured through
 - `/tx` endpoint for single transaction submissions
 - `/txs` endpoint for batch transaction submissions
 - `/health` endpoint for service health checks
-- Supports rate limiting for API protection
-- Implements middleware for recovery, CORS, request ID tracking, and logging
+- `/*` catch-all endpoint that returns "Unknown route" for unmatched paths
+- Supports rate limiting for API protection when `HTTPRateLimit` is configured
 
 ### Kafka Integration
 
@@ -197,14 +208,24 @@ The server uses a Kafka producer to send transactions to a validator service for
 
 The Propagation Server is configured through the settings system instead of directly using `gocore.Config()`, including:
 
+### Propagation Settings
+
 - `settings.Propagation.IPv6Addresses`: Comma-separated list of IPv6 multicast addresses for UDP listeners
 - `settings.Propagation.IPv6Interface`: Network interface for IPv6 multicast (default: "en0")
 - `settings.Propagation.HTTPListenAddress`: HTTP addresses for transaction submission endpoints
+- `settings.Propagation.HTTPAddresses`: Array of HTTP addresses for multiple endpoint configurations
 - `settings.Propagation.HTTPRateLimit`: HTTP request rate limiting (requests per second)
+- `settings.Propagation.AlwaysUseHTTP`: Boolean flag to prefer HTTP over other protocols
+- `settings.Propagation.SendBatchSize`: Batch size for sending transactions (default: 100)
+- `settings.Propagation.SendBatchTimeout`: Timeout for batch sending operations (default: 5 seconds)
 - `settings.Propagation.GRPCListenAddress`: gRPC server address for the Propagation API
+- `settings.Propagation.GRPCAddresses`: Array of gRPC addresses for multiple endpoint configurations
 - `settings.Propagation.GRPCMaxConnectionAge`: Maximum age for gRPC connections before forced refresh
+
+### Validator Settings
+
 - `settings.Validator.HTTPAddress`: HTTP address for the validator service (used for fallback validation)
-- `settings.Validator.KafkaMaxMessageBytes`: Maximum Kafka message size for transaction routing
+- `settings.Validator.KafkaMaxMessageBytes`: Maximum Kafka message size for transaction routing (default: 1MB)
 
 ## Dependencies
 

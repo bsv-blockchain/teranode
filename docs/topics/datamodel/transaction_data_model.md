@@ -103,18 +103,21 @@ During validation, the Validator Service automatically handles format conversion
 
 1. **Check if Extended**: The validator checks `tx.IsExtended()` status on the transaction
 2. **Automatic Extension**: If not extended, the validator:
-   - Queries the UTXO store for each input's parent transaction
-   - Extracts the referenced output's satoshi value and locking script
-   - Decorates the transaction inputs with this data in-memory
-   - Marks the transaction as extended for the validation process
+
+    - Queries the UTXO store for each input's parent transaction
+    - Extracts the referenced output's satoshi value and locking script
+    - Decorates the transaction inputs with this data in-memory
+    - Marks the transaction as extended for the validation process
+
 3. **Validation**: Proceeds with full validation including script verification using the extended data
 
 This extension process happens transparently at multiple checkpoints throughout the validation pipeline:
 
-- `Validator.Validate()` in `services/validator/Validator.go` - Before transaction format validation
-- `Validator.validateConsensusRules()` in `services/validator/Validator.go` - Before consensus rule checks
-- `Validator.validateScripts()` in `services/validator/Validator.go` - Before script validation
-- `quickValidate()` in `services/blockvalidation/quick_validate.go` - During block validation for historical blocks
+- `Validator.Validate()` in `services/validator/Validator.go` - Main validation entry point
+- `Validator.validateTransaction()` in `services/validator/Validator.go` - Before transaction format validation
+- `Validator.validateTransactionScripts()` in `services/validator/Validator.go` - Before script validation
+- `BlockValidation.quickValidateBlock()` in `services/blockvalidation/quick_validate.go` - During block validation for historical blocks
+- `BlockValidation.ExtendTransaction()` in `services/blockvalidation/quick_validate.go` - During block processing when transactions are not extended
 
 **Key implementation details:**
 
@@ -209,7 +212,7 @@ Common scenarios requiring parent transactions:
 | Aspect | BIP-239 Spec | Teranode Implementation |
 |--------|--------------|------------------------|
 | **Format requirement** | Extended format recommended | Both formats accepted |
-| **Storage** | Not specified | Always standard format |
+| **Storage** | Not specified | Received format preserved |
 | **Extension** | Manual by client | Automatic by validator |
 | **Performance** | Faster validation | Negligible difference |
 | **Compatibility** | Limited to BIP-239 aware clients | Full Bitcoin ecosystem compatibility |
@@ -218,8 +221,8 @@ Common scenarios requiring parent transactions:
 
 For developers interested in the implementation details:
 
-- Extension logic: `Validator.Validate()` method in `services/validator/Validator.go`
-- UTXO decoration: `PreviousOutputsDecorate()` method in `stores/utxo/*/` implementations
+- Extension logic: `Validator.extendTransaction()` method in `services/validator/Validator.go`
+- UTXO decoration: `PreviousOutputsDecorate()` method in `stores/utxo/Interface.go` and implementations
 - Storage serialization: Uses go-bt library's `SerializeBytes()` method (preserves received format)
 
 ## Additional Resources

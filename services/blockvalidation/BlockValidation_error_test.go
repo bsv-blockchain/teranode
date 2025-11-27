@@ -49,7 +49,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic(t *testing.
 	defer cleanup()
 
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.BlockValidation.ArePreviousBlocksProcessedMaxRetry = 2
+	tSettings.BlockValidation.IsParentMinedRetryMaxRetry = 2
 
 	coinbaseTx, childTx, _, _ := createCoinbaseAndChildTx(t)
 	storeTxsInUtxoStore(t, utxoStore, coinbaseTx, childTx)
@@ -105,7 +105,7 @@ func TestValidateBlock_WaitForPreviousBlocksToBeProcessed_RetryLogic_UOM(t *test
 	defer cleanup()
 
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.BlockValidation.ArePreviousBlocksProcessedMaxRetry = 2
+	tSettings.BlockValidation.IsParentMinedRetryMaxRetry = 2
 
 	coinbaseTx, childTx, _, _ := createCoinbaseAndChildTx(t)
 	storeTxsInUtxoStore(t, utxoStore, coinbaseTx, childTx)
@@ -411,7 +411,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	}
 
 	// Inject our mock Kafka producer directly into the BlockValidation struct
-	bv.BlockValidation.invalidBlockKafkaProducer = mockKafka
+	bv.invalidBlockKafkaProducer = mockKafka
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)
@@ -538,7 +538,7 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	}
 
 	// Inject our mock Kafka producer directly into the BlockValidation struct
-	bv.BlockValidation.invalidBlockKafkaProducer = mockKafka
+	bv.invalidBlockKafkaProducer = mockKafka
 
 	subtreeBytes, err := subtree.Serialize()
 	require.NoError(t, err)

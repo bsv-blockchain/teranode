@@ -169,6 +169,21 @@ This blocking behavior ensures data integrity during startup and prevents race c
 - The server then checks if the subtree already exists in the Subtree Store. Otherwise, the server persists the new subtree in the store with a specified (and settings-driven) TTL (Time-To-Live).
 - Finally, the server sends a notification to the BlockchainClient to announce the new subtree. This will be propagated to other nodes via the P2P service.
 
+**Periodic Subtree Announcements:**
+
+To ensure mining candidates remain up-to-date, the Subtree Processor implements a timer-based announcement mechanism:
+
+- Current subtree is announced at a minimum every 10 seconds (configurable)
+- This ensures miners receive updates even during low transaction periods
+- The timer triggers announcements of the current subtree state, regardless of completion status
+- Prevents stale mining candidates when transaction volume is low
+
+This periodic announcement complements the size-based announcements, ensuring:
+
+- Consistent mining candidate freshness
+- Reduced latency for mining operations
+- Better network synchronization during varying load conditions
+
 ### 2.3.1 Dynamic Subtree Size Adjustment
 
 The Block Assembly service can dynamically adjust the subtree size based on real-time performance metrics when enabled via configuration:
@@ -597,7 +612,7 @@ The service integrates comprehensive Prometheus metrics for operational monitori
 To run the Block Assembly Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -BlockAssembly=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -blockassembly=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Block Assembly Service locally.

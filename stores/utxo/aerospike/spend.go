@@ -93,6 +93,7 @@ import (
 // batchSpend represents a single UTXO spend request in a batch
 type batchSpend struct {
 	spend             *utxo.Spend // UTXO to spend
+	blockHeight       uint32      // Current block height
 	errCh             chan error  // Channel for completion notification
 	ignoreConflicting bool
 	ignoreLocked      bool
@@ -137,6 +138,15 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 				aggErr = recErr
 			} else {
 				aggErr = errors.Join(aggErr, recErr)
+			}
+		}
+
+		response := batchRecords[i].BatchRec().Record
+		if response != nil && response.Bins != nil {
+			successMap := response.Bins[LuaSuccess.String()].(map[interface{}]interface{})
+			status, ok := successMap["status"].(string)
+			if !ok || status != "OK" {
+				aggErr = errors.Join(aggErr, errors.NewProcessingError(successMap["message"].(string)))
 			}
 		}
 	}
@@ -284,13 +294,17 @@ type batchDAH struct {
 //	}
 //
 //	err := store.Spend(ctx, tx)
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	defer func() {
 		if recoverErr := recover(); recoverErr != nil {
 			prometheusUtxoMapErrors.WithLabelValues("Spend", "Failed Spend Cleaning").Inc()
 			s.logger.Errorf("ERROR panic in aerospike Spend: %v\n", recoverErr)
 		}
 	}()
+
+	if blockHeight == 0 {
+		return nil, errors.NewProcessingError("blockHeight must be greater than zero")
+	}
 
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
@@ -318,16 +332,44 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 		spend := spend
 
 		g.Go(func() error {
-			errCh := make(chan error)
+			// Fast-fail check: if circuit breaker is already open, reject immediately
+			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
+				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request")
+				return nil
+			}
+
+			errCh := make(chan error, 1)
 			s.spendBatcher.Put(&batchSpend{
 				spend:             spend,
+				blockHeight:       blockHeight,
 				errCh:             errCh,
 				ignoreConflicting: useIgnoreConflicting,
 				ignoreLocked:      useIgnoreLocked,
 			})
 
-			// this waits for the batch to be sent and the response to be received from the batch operation
-			batchErr := <-errCh
+			// Wait for batch response with timeout to prevent indefinite blocking
+			var batchErr error
+			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+			if spendTimeout <= 0 {
+				spendTimeout = 30 * time.Second
+			}
+
+			timer := time.NewTimer(spendTimeout)
+			defer timer.Stop()
+
+			select {
+			case batchErr = <-errCh:
+				// Batch completed successfully or with error
+			case <-ctx.Done():
+				spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
+				return nil
+			case <-timer.C:
+				if prometheusUtxoMapErrors != nil {
+					prometheusUtxoMapErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
+				}
+				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
+				return nil
+			}
 
 			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) {
 				mu.Lock()
@@ -406,6 +448,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.Ignore
 
 type keyIgnoreLocked struct {
 	key               *aerospike.Key
+	blockHeight       uint32
 	ignoreConflicting bool
 	ignoreLocked      bool
 }
@@ -479,6 +522,7 @@ func (s *Store) prepareSpendBatches(batch []*batchSpend, batchID uint64) (map[ke
 		mapValue := s.createSpendMapValue(idx, bItem)
 		useKey := keyIgnoreLocked{
 			key:               key,
+			blockHeight:       bItem.blockHeight,
 			ignoreConflicting: bItem.ignoreConflicting,
 			ignoreLocked:      bItem.ignoreLocked,
 		}
@@ -531,14 +575,13 @@ func (s *Store) createBatchRecords(batchesByKey map[keyIgnoreLocked][]aerospike.
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(batchesByKey))
 	batchRecordKeys := make([]keyIgnoreLocked, 0, len(batchesByKey))
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
-	thisBlockHeight := s.blockHeight.Load() + 1
 
 	for batchKey, batchItems := range batchesByKey {
 		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, LuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
 			aerospike.NewValue(batchKey.ignoreConflicting),
 			aerospike.NewValue(batchKey.ignoreLocked),
-			aerospike.NewValue(thisBlockHeight),
+			aerospike.NewValue(batchKey.blockHeight),
 			aerospike.NewValue(s.settings.GetUtxoStoreBlockHeightRetention()),
 		))
 		batchRecordKeys = append(batchRecordKeys, batchKey)
@@ -562,17 +605,16 @@ func (s *Store) executeSpendBatch(batchRecords []aerospike.BatchRecordIfc, batch
 
 // processSpendBatchResults processes the results of the batch operation
 func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batchRecordKeys []keyIgnoreLocked, batchesByKey map[keyIgnoreLocked][]aerospike.MapValue, batch []*batchSpend, batchID uint64) {
-	thisBlockHeight := s.blockHeight.Load() + 1
-
 	for batchIdx, batchRecord := range batchRecords {
-		batchByKey, ok := batchesByKey[batchRecordKeys[batchIdx]]
+		key := batchRecordKeys[batchIdx]
+		batchByKey, ok := batchesByKey[key]
 		if !ok {
 			s.logger.Errorf("[SPEND_BATCH_LUA] could not find batch key for batchIdx %d", batchIdx)
 			continue
 		}
 
 		txID := batch[batchByKey[0]["idx"].(int)].spend.TxID
-		s.processSingleBatchResult(ctx, batchRecord, batchByKey, batch, txID, thisBlockHeight, batchID)
+		s.processSingleBatchResult(ctx, batchRecord, batchByKey, batch, txID, key.blockHeight, batchID)
 	}
 
 	if s.settings.UtxoStore.VerboseDebug {
@@ -584,7 +626,7 @@ func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aer
 func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerospike.BatchRecordIfc, batchByKey []aerospike.MapValue, batch []*batchSpend, txID *chainhash.Hash, thisBlockHeight uint32, batchID uint64) {
 	batchErr := batchRecord.BatchRec().Err
 	if batchErr != nil {
-		s.handleBatchError(batchByKey, batch, txID, thisBlockHeight, batchID, batchErr)
+		s.handleBatchError(batchByKey, batch, thisBlockHeight, batchID, batchErr)
 		return
 	}
 
@@ -606,18 +648,23 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	}
 
 	// Process based on status
-	if res.Status == LuaStatusOK {
+	switch res.Status {
+	case LuaStatusOK:
 		s.handleSuccessfulSpends(batchByKey, batch)
-	} else if res.Status == LuaStatusError {
+	case LuaStatusError:
 		s.handleErrorSpends(res, batchByKey, batch, txID, thisBlockHeight, batchID)
 	}
 }
 
 // handleBatchError handles errors from batch operations
-func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batchSpend, txID *chainhash.Hash, thisBlockHeight uint32, batchID uint64, err error) {
+func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batchSpend, thisBlockHeight uint32, batchID uint64, err error) {
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
+	}
+	// Record batch-level failure for circuit breaker
+	if s.spendCircuitBreaker != nil {
+		s.spendCircuitBreaker.RecordFailure()
 	}
 }
 
@@ -671,6 +718,10 @@ func (s *Store) handleSuccessfulSpends(batchByKey []aerospike.MapValue, batch []
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- nil
 	}
+	// Record successful batch operation for circuit breaker
+	if s.spendCircuitBreaker != nil {
+		s.spendCircuitBreaker.RecordSuccess()
+	}
 }
 
 // handleErrorSpends handles error responses from spend operations
@@ -703,6 +754,8 @@ func (s *Store) createGeneralError(errorCode LuaErrorCode, txID *chainhash.Hash,
 		return errors.NewTxConflictingError("[SPEND_BATCH_LUA][%s] transaction is conflicting, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
 	case LuaErrorCodeLocked:
 		return errors.NewTxLockedError("[SPEND_BATCH_LUA][%s] transaction is locked, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
+	case LuaErrorCodeCreating:
+		return errors.NewTxCreatingError("[SPEND_BATCH_LUA][%s] transaction is creating, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
 	case LuaErrorCodeCoinbaseImmature:
 		return errors.NewTxCoinbaseImmatureError("[SPEND_BATCH_LUA][%s] coinbase is locked, blockHeight %d: %d - %s", txID.String(), thisBlockHeight, batchID, message)
 	case LuaErrorCodeTxNotFound:

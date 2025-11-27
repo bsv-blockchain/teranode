@@ -1,3 +1,10 @@
+// Package sql implements the blockchain.Store interface using SQL database backends.
+// It provides concrete SQL-based implementations for all blockchain operations
+// defined in the interface, with support for different SQL engines.
+//
+// This file defines SQLite error constants for database error handling and diagnostics.
+// These constants correspond to the standard SQLite result codes and are used throughout
+// the SQL implementation to handle database-specific errors appropriately.
 package sql
 
 //nolint:gosec,revive,golint

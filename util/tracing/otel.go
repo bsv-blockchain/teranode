@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -20,11 +21,24 @@ import (
 )
 
 var (
-	once    sync.Once
-	initErr error
-	tp      *sdktrace.TracerProvider
-	mu      sync.Mutex
+	once           sync.Once
+	initErr        error
+	tp             *sdktrace.TracerProvider
+	mu             sync.Mutex
+	tracingEnabled atomic.Bool // Global flag to completely disable tracing overhead
 )
+
+// SetTracingEnabled sets the global tracing enabled flag.
+// This should be called during initialization based on settings.TracingEnabled.
+// When false, all tracing operations become no-ops with minimal overhead.
+func SetTracingEnabled(enabled bool) {
+	tracingEnabled.Store(enabled)
+}
+
+// IsTracingEnabled returns whether tracing is currently enabled.
+func IsTracingEnabled() bool {
+	return tracingEnabled.Load()
+}
 
 // InitTracer initializes the global tracer. Safe to call multiple times.
 // Only the first call will actually initialize the tracer.
@@ -78,6 +92,9 @@ func InitTracer(appSettings *settings.Settings) error {
 			propagation.TraceContext{},
 			propagation.Baggage{},
 		))
+
+		// Enable tracing globally now that initialization succeeded
+		SetTracingEnabled(true)
 	})
 
 	return initErr

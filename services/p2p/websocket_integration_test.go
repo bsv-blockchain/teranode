@@ -44,8 +44,7 @@ func TestP2PWebSocketIntegration(t *testing.T) {
 	notificationCh := make(chan *notificationMsg, 10)
 
 	// Create handler
-	baseURL := "http://test.com"
-	handler := server.HandleWebSocket(notificationCh, baseURL)
+	handler := server.HandleWebSocket(notificationCh)
 
 	// Create test server
 	e := echo.New()

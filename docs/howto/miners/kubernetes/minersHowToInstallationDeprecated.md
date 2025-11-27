@@ -105,7 +105,7 @@ Teranode requires an initial block synchronization to function properly. There a
 
 #### Initial Data Set Installation
 
-To speed up the initial synchronization process, you have the option to seed Teranode from pre-existing data. To know more about this approach, please refer to the [How to Sync the Node](../minersHowToSyncTheNode.md) guide.
+To speed up the initial synchronization process, you have the option to seed Teranode from pre-existing data. To know more about this approach, please refer to the [How to Sync the Node](minersHowToSyncTheNode.md) guide.
 
 Pros:
 
@@ -305,13 +305,13 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 1. **Force the node to transition to Run mode:**
 
    ```bash
-   grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.Run
+   kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate RUNNING
    ```
 
 2. **Or LegacySync mode:**
 
    ```bash
-   grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.LegacySync
+   kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate LEGACYSYNCING
    ```
 
 ### Step 10: Access Monitoring Tools
@@ -367,9 +367,7 @@ Additional Notes:
 
 ## Optimizations
 
-When running on a box without a public IP, you should enable `legacy_config_Upnp` (in your settings), so you don't get banned by the SV Nodes.
-
-If you have local access to SV Nodes, you can use them to speed up the initial block synchronization too. You can set `legacy_connect_peers: "172.x.x.x:8333|10.x.x.x:8333"` in your `docker-compose.yml` to force the legacy service to only connect to those peers.
+If you have local access to SV Nodes, you can use them to speed up the initial block synchronization. You can configure specific peer connections in your ConfigMap by setting `legacy_config_ConnectPeers: "172.x.x.x:8333|10.x.x.x:8333"` to force the legacy service to only connect to those peers.
 
 ## Reference - Settings
 

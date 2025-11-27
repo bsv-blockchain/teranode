@@ -23,6 +23,7 @@
 package state
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -32,6 +33,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -62,11 +64,12 @@ func New(logger ulogger.Logger, blocksFilePath string) *State {
 	}
 }
 
-// GetLastPersistedBlockHeight retrieves the height of the last persisted block
+// GetLastPersistedBlock retrieves the height and hash of the last persisted block
 // Returns:
-//   - uint32: the block height
+//   - uint32: the block height (0 if no blocks persisted)
+//   - *chainhash.Hash: the block hash (nil if no blocks persisted)
 //   - error: any error encountered
-func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
+func (s *State) GetLastPersistedBlock() (uint32, *chainhash.Hash, error) {
 	s.fileLock.Lock()
 	defer s.fileLock.Unlock()
 
@@ -74,16 +77,16 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 	file, err := os.Open(s.filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return 0, nil // Return 0 if file doesn't exist yet
+			return 0, nil, nil // Return zero values if file doesn't exist yet
 		}
 
-		return 0, errors.NewProcessingError("failed to open blocks file", err)
+		return 0, nil, errors.NewProcessingError("failed to open blocks file", err)
 	}
 	defer file.Close()
 
 	deferFn, err := s.lockFile(file, syscall.LOCK_SH)
 	if err != nil {
-		return 0, errors.NewProcessingError("could not lock file", err)
+		return 0, nil, errors.NewProcessingError("could not lock file", err)
 	}
 	defer deferFn()
 
@@ -97,20 +100,20 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 			offset = 0
 
 			if _, err := file.Seek(0, io.SeekStart); err != nil {
-				return 0, errors.NewProcessingError("failed to seek to start", err)
+				return 0, nil, errors.NewProcessingError("failed to seek to start", err)
 			}
 		} else {
-			return 0, errors.NewProcessingError("failed to seek from end", err)
+			return 0, nil, errors.NewProcessingError("failed to seek from end", err)
 		}
 	}
 
 	n, err := file.Read(buf)
 	if err != nil && err != io.EOF {
-		return 0, errors.NewProcessingError("failed to read file", err)
+		return 0, nil, errors.NewProcessingError("failed to read file", err)
 	}
 
 	if n == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 
 	buf = buf[:n] // Trim buffer to actual read size
@@ -123,13 +126,13 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 		// Find the second last newline by finding the last newline before the final one
 		lastNewline := bytes.LastIndex(buf, []byte{'\n'})
 		if lastNewline == -1 {
-			return 0, errors.NewProcessingError("no newline found in last chunk", nil)
+			return 0, nil, errors.NewProcessingError("no newline found in last chunk", nil)
 		}
 
 		// Find the second last newline
 		lastIndex = bytes.LastIndex(buf[:lastNewline], []byte{'\n'})
 		if lastIndex == -1 {
-			return 0, errors.NewProcessingError("no second newline found in last chunk", nil)
+			return 0, nil, errors.NewProcessingError("no second newline found in last chunk", nil)
 		}
 	}
 
@@ -141,25 +144,44 @@ func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
 		lastLine = buf[lastIndex+1:]
 	}
 
-	// Parse height from the line
+	// Parse height and hash from the line (format: height,hash)
 	commaIndex := bytes.IndexByte(lastLine, ',')
 	if commaIndex == -1 {
-		return 0, errors.NewProcessingError("invalid line format: no comma found", nil)
+		return 0, nil, errors.NewProcessingError("invalid line format: no comma found", nil)
 	}
 
+	// Parse height
 	height, err := strconv.ParseUint(string(lastLine[:commaIndex]), 10, 32)
 	if err != nil {
-		return 0, errors.NewProcessingError("failed to parse block height", err)
+		return 0, nil, errors.NewProcessingError("failed to parse block height", err)
 	}
-
-	// Safe conversion since ParseUint with bitSize=32 ensures the value fits in uint32
 
 	heightUint32, err := safeconversion.Uint64ToUint32(height)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
-	return heightUint32, nil
+	// Extract hash (everything after comma, trimming newline)
+	hashBytes := lastLine[commaIndex+1:]
+	hashStr := string(bytes.TrimSpace(hashBytes))
+
+	// Parse the hash string into a chainhash.Hash
+	hash, err := chainhash.NewHashFromStr(hashStr)
+	if err != nil {
+		return 0, nil, errors.NewProcessingError("failed to parse block hash", err)
+	}
+
+	return heightUint32, hash, nil
+}
+
+// GetLastPersistedBlockHeight retrieves the height of the last persisted block
+// This is a convenience wrapper around GetLastPersistedBlock for backwards compatibility
+// Returns:
+//   - uint32: the block height
+//   - error: any error encountered
+func (s *State) GetLastPersistedBlockHeight() (uint32, error) {
+	height, _, err := s.GetLastPersistedBlock()
+	return height, err
 }
 
 // AddBlock records a new block in the state file.
@@ -205,6 +227,125 @@ func (s *State) AddBlock(height uint32, hash string) error {
 		return errors.NewProcessingError("failed to sync blocks file", err)
 	}
 
+	return nil
+}
+
+// RollbackToHash truncates the state file to the specified block hash
+// This removes all blocks after the first occurrence of the target hash
+// Uses streaming to minimize memory usage - only one line in memory at a time
+// Parameters:
+//   - targetHash: the hash of the block to rollback to
+//
+// Returns:
+//   - error: any error encountered (including if hash is not found)
+func (s *State) RollbackToHash(targetHash *chainhash.Hash) (err error) {
+	s.fileLock.Lock()
+	defer s.fileLock.Unlock()
+
+	// Open source file for reading
+	srcFile, err := os.Open(s.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.NewProcessingError("cannot rollback to hash %s: state file does not exist", targetHash.String())
+		}
+		return errors.NewProcessingError("failed to open blocks file", err)
+	}
+	defer srcFile.Close()
+
+	srcDeferFn, err := s.lockFile(srcFile, syscall.LOCK_SH)
+	if err != nil {
+		return errors.NewProcessingError("could not lock file for reading", err)
+	}
+	defer srcDeferFn()
+
+	// Create temporary file for writing
+	dir := filepath.Dir(s.filePath)
+	tmpFile, err := os.CreateTemp(dir, "blocks.*.tmp")
+	if err != nil {
+		return errors.NewProcessingError("failed to create temporary file", err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // Always cleanup temp file (fails silently if renamed)
+
+	// Defer tmpFile.Close() - will be skipped on success via tmpFileClosed flag
+	tmpFileClosed := false
+	defer func() {
+		if !tmpFileClosed {
+			tmpFile.Close()
+		}
+	}()
+
+	tmpDeferFn, err := s.lockFile(tmpFile, syscall.LOCK_EX)
+	if err != nil {
+		return errors.NewProcessingError("could not lock temporary file", err)
+	}
+	defer tmpDeferFn()
+
+	// Stream copy line by line until we hit the target hash
+	scanner := bufio.NewScanner(srcFile)
+	linesWritten := 0
+	hashFound := false
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+
+		if len(line) == 0 {
+			continue
+		}
+
+		// Parse hash from the line (format: height,hash)
+		commaIndex := bytes.IndexByte(line, ',')
+		if commaIndex != -1 {
+			// Extract and check hash
+			hashStr := string(bytes.TrimSpace(line[commaIndex+1:]))
+			hash, err := chainhash.NewHashFromStr(hashStr)
+			if err == nil && hash.IsEqual(targetHash) {
+				// Found target hash - write this line and stop
+				if _, err := tmpFile.Write(line); err != nil {
+					return errors.NewProcessingError("failed to write to temporary file", err)
+				}
+				if _, err := tmpFile.WriteString("\n"); err != nil {
+					return errors.NewProcessingError("failed to write newline to temporary file", err)
+				}
+				linesWritten++
+				hashFound = true
+				break
+			}
+		}
+
+		// Write line and continue
+		if _, err := tmpFile.Write(line); err != nil {
+			return errors.NewProcessingError("failed to write to temporary file", err)
+		}
+		if _, err := tmpFile.WriteString("\n"); err != nil {
+			return errors.NewProcessingError("failed to write newline to temporary file", err)
+		}
+		linesWritten++
+	}
+
+	if err = scanner.Err(); err != nil {
+		return errors.NewProcessingError("failed to read blocks file", err)
+	}
+
+	if !hashFound {
+		return errors.NewProcessingError("cannot rollback to hash %s: hash not found in state file", targetHash.String())
+	}
+
+	// Sync temp file to disk
+	if err = tmpFile.Sync(); err != nil {
+		return errors.NewProcessingError("failed to sync temporary file", err)
+	}
+
+	// Close temp file before rename (locks will be released by defers)
+	tmpFile.Close()
+	tmpFileClosed = true
+
+	// Atomically replace the original file
+	if err = os.Rename(tmpPath, s.filePath); err != nil {
+		return errors.NewProcessingError("failed to rename temporary file", err)
+	}
+
+	s.logger.Infof("[BlockPersister State] Rolled back to hash %s (%d blocks in final state)", targetHash.String(), linesWritten)
 	return nil
 }
 

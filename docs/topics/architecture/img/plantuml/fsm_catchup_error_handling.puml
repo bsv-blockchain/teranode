@@ -1,0 +1,61 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam state {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+title FSM Catchup Error Handling Behavior
+
+state "RUNNING" as Running : Processing blocks normally
+
+state "CATCHING_BLOCKS" as CatchingBlocks : Fetching and validating blocks\nfrom peers
+
+state "ERROR" as ErrorState : Catchup error occurred\nState remains CATCHING_BLOCKS\n----\n**Important**: State does NOT\nrevert to RUNNING on error
+
+[*] --> Running : Initial State
+
+Running --> CatchingBlocks : Catchup Required\n(Missing blocks detected)
+
+CatchingBlocks --> CatchingBlocks : Processing blocks
+
+CatchingBlocks --> ErrorState : Error during catchup\n(e.g., validation failure,\nnetwork error)
+
+note right of ErrorState
+  **Updated Behavior:**
+  - FSM remains in CATCHING_BLOCKS state
+  - Does not automatically revert to RUNNING
+  - Requires explicit resolution or retry
+  - Prevents inconsistent state transitions
+end note
+
+ErrorState --> CatchingBlocks : Retry catchup\n(Manual or automatic retry)
+
+ErrorState --> Running : Explicit reset or\nsuccessful recovery
+
+CatchingBlocks --> Running : Catchup completed\nsuccessfully
+
+Running --> [*] : Shutdown
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
