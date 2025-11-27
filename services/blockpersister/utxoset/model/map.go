@@ -1,3 +1,20 @@
+// Package model defines the core data structures for UTXO (Unspent Transaction Output) management.
+//
+// This package provides the fundamental types and operations for handling UTXOs in the Teranode
+// block persister service. UTXOs represent the unspent outputs from Bitcoin transactions that
+// can be used as inputs in future transactions, forming the basis of Bitcoin's accounting model.
+//
+// The package includes:
+//   - UTXO: Core structure representing an unspent transaction output
+//   - UTXOKey: Unique identifier for UTXOs combining transaction hash and output index
+//   - UTXOValue: Value and script data associated with a UTXO
+//   - UTXOSet: Collection of UTXOs with efficient lookup and modification operations
+//   - UTXODiff: Difference sets for tracking UTXO changes during block processing
+//   - UTXOMap: High-performance map implementation optimized for UTXO operations
+//
+// Thread safety:
+// Map implementations (swissMap, goMap) and UTXOSetCache provide built-in thread safety
+// using sync.RWMutex for concurrent access protection.
 package model
 
 import (

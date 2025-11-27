@@ -28,15 +28,9 @@ title UTXO Persister Service - Component Diagram
 
 Container_Boundary(utxo_persister, "UTXO Persister Service") {
 
-Component(notification_handler, "Notification Handler", "Go", "Handles blockchain notifications and triggers")
+Component(server, "Server", "Go", "Main service component handling notifications, block monitoring, and UTXO processing orchestration")
 
-Component(block_monitor, "Block Monitor", "Go", "Monitors for new block files from Block Persister")
-
-Component(utxo_processor, "UTXO Processor", "Go", "Processes UTXO additions and deletions")
-
-Component(consolidator, "Consolidator", "Go", "Consolidates block ranges for efficient processing")
-
-Component(utxo_set_generator, "UTXO Set Generator", "Go", "Generates complete UTXO set files")
+Component(consolidator, "Consolidator Helper", "Go", "Temporary helper for consolidating block ranges during processing")
 
 
 
@@ -48,15 +42,7 @@ Component(block_store_client, "Block Store Client", "Go", "Interface to shared b
 
 
 
-Component(state_manager, "State Manager", "Go", "Manages processing state persistence")
-
 Component(file_storer, "File Storer", "Go", "Optimized UTXO file storage mechanism")
-
-
-
-Component(metrics_collector, "Metrics Collector", "Prometheus", "Collects UTXO processing metrics")
-
-Component(health_monitor, "Health Monitor", "Go", "Monitors service and dependency health")
 
 }
 
@@ -76,41 +62,31 @@ Person(admin, "Administrator", "Node operator")
 
 System_Ext(block_persister, "Block Persister Service", "Produces enriched block data")
 
-' Notification and trigger flow
+' Notification and processing flow
 
-Rel(blockchain, notification_handler, "Block notifications", "gRPC")
+Rel(blockchain, server, "Block notifications", "gRPC")
 
-Rel(notification_handler, block_monitor, "Trigger processing")
+Rel(server, consolidator, "Create consolidator for block range processing")
 
-Rel(block_monitor, utxo_processor, "Process new blocks")
-
-' UTXO processing flow
-
-Rel(utxo_processor, consolidator, "Consolidate block ranges")
-
-Rel(consolidator, utxo_set_generator, "Generate UTXO sets")
-
-Rel(utxo_set_generator, file_storer, "Store UTXO set files")
+Rel(consolidator, file_storer, "Store UTXO set files")
 
 ' Data access
 
-Rel(notification_handler, blockchain_client, "Subscribe to notifications")
+Rel(server, blockchain_client, "Subscribe to notifications and get block info")
 
-Rel(consolidator, blockchain_store_client, "Get block headers (optional)")
+Rel(server, blockchain_store_client, "Get block headers (optional direct access)")
+
+Rel(server, block_store_client, "Read/write block and UTXO files")
 
 Rel(consolidator, blockchain_client, "Get block headers")
 
-Rel(block_monitor, block_store_client, "Read block files")
-
-Rel(utxo_processor, block_store_client, "Read UTXO additions/deletions")
+Rel(consolidator, block_store_client, "Read UTXO additions/deletions")
 
 Rel(file_storer, block_store_client, "Store UTXO set files")
 
 ' State management
 
-Rel(block_monitor, state_manager, "Update processing state")
-
-Rel(state_manager, state_file, "Persist state", "Filesystem")
+Rel(server, state_file, "Persist processing state (lastProcessed.dat)", "Filesystem")
 
 ' External service connections
 
@@ -124,25 +100,7 @@ Rel(block_store_client, block_store, "Blob operations", "Direct")
 
 Rel(block_persister, block_store, "Produces enriched block files", "Direct")
 
-' Administrative monitoring
-
-Rel(admin, metrics_collector, "Monitor UTXO processing metrics", "HTTP")
-
-' Health and monitoring
-
-Rel(health_monitor, blockchain_client, "Health checks")
-
-Rel(health_monitor, block_store_client, "Health checks")
-
-' Metrics collection
-
-Rel(notification_handler, metrics_collector, "Notification metrics")
-
-Rel(utxo_processor, metrics_collector, "Processing metrics")
-
-Rel(consolidator, metrics_collector, "Consolidation metrics")
-
-Rel(utxo_set_generator, metrics_collector, "Generation metrics")
+' Administrative monitoring (Server provides Health() method for health checks)
 
 SHOW_LEGEND()
 

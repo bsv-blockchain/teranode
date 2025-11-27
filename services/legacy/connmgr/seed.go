@@ -58,8 +58,12 @@ func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 			}
 
 			addresses := make([]*wire.NetAddress, len(seedpeers))
-			// if this errors then we have *real* problems
-			intPort, _ := strconv.Atoi(chainParams.DefaultPort)
+			// Parse port as uint16 directly to avoid integer conversion issues
+			port, err := strconv.ParseUint(chainParams.DefaultPort, 10, 16)
+			if err != nil {
+				// Invalid port configuration, skip this seed
+				return
+			}
 
 			for i, peer := range seedpeers {
 				randSource := mrand.NewPCG(uint64(time.Now().UnixNano()), uint64(secondsIn4Days))
@@ -70,7 +74,7 @@ func SeedFromDNS(chainParams *chaincfg.Params, reqServices wire.ServiceFlag,
 					// a time randomly selected between 3
 					// and 7 days ago.
 					time.Now().Add(-1*time.Second*time.Duration(secondsIn3Days+rand.Int32N(secondsIn4Days))),
-					0, peer, uint16(intPort))
+					0, peer, uint16(port))
 			}
 
 			seedFn(addresses)

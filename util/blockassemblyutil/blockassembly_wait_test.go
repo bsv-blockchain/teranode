@@ -52,19 +52,19 @@ func TestWaitForBlockAssemblyReady(t *testing.T) {
 			blockHeight: 100,
 			blockHash:   "test-hash",
 			setupMock: func(m *blockassembly.Mock) {
-				// First call - behind
+				// First call - behind (CurrentHeight: 88 + maxBlocksBehind: 10 = 98, which is < 100)
 				m.On("GetBlockAssemblyState", mock.Anything).Return(
-					&blockassembly_api.StateMessage{CurrentHeight: 98},
+					&blockassembly_api.StateMessage{CurrentHeight: 88},
 					nil,
 				).Once()
 				// Second call - still behind
 				m.On("GetBlockAssemblyState", mock.Anything).Return(
-					&blockassembly_api.StateMessage{CurrentHeight: 98},
+					&blockassembly_api.StateMessage{CurrentHeight: 88},
 					nil,
 				).Once()
-				// Third call - caught up
+				// Third call - caught up (88 + 10 = 98, still behind, so need 90+)
 				m.On("GetBlockAssemblyState", mock.Anything).Return(
-					&blockassembly_api.StateMessage{CurrentHeight: 99},
+					&blockassembly_api.StateMessage{CurrentHeight: 90},
 					nil,
 				).Once()
 			},
@@ -75,9 +75,9 @@ func TestWaitForBlockAssemblyReady(t *testing.T) {
 			blockHeight: 100,
 			blockHash:   "test-hash",
 			setupMock: func(m *blockassembly.Mock) {
-				// Always return behind height
+				// Always return behind height (CurrentHeight: 88 + maxBlocksBehind: 10 = 98, which is < 100)
 				m.On("GetBlockAssemblyState", mock.Anything).Return(
-					&blockassembly_api.StateMessage{CurrentHeight: 98},
+					&blockassembly_api.StateMessage{CurrentHeight: 88},
 					nil,
 				)
 			},
@@ -128,7 +128,7 @@ func TestWaitForBlockAssemblyReady(t *testing.T) {
 				logger,
 				mockClient,
 				tt.blockHeight,
-				1, // Allow 1 block behind for the test
+				10, // maxBlocksBehind
 			)
 
 			if tt.expectedError {
@@ -156,9 +156,9 @@ func TestWaitForBlockAssemblyReady(t *testing.T) {
 func TestWaitForBlockAssemblyReadyContextCancellation(t *testing.T) {
 	mockClient := &blockassembly.Mock{}
 
-	// Make block assembly always behind
+	// Make block assembly always behind (CurrentHeight: 88 + maxBlocksBehind: 10 = 98, which is < 100)
 	mockClient.On("GetBlockAssemblyState", mock.Anything).Return(
-		&blockassembly_api.StateMessage{CurrentHeight: 98},
+		&blockassembly_api.StateMessage{CurrentHeight: 88},
 		nil,
 	)
 
@@ -172,7 +172,7 @@ func TestWaitForBlockAssemblyReadyContextCancellation(t *testing.T) {
 		logger,
 		mockClient,
 		100,
-		1, // Allow 1 block behind for the test
+		10, // maxBlocksBehind
 	)
 
 	assert.Error(t, err)

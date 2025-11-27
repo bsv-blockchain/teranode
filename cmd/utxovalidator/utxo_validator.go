@@ -69,7 +69,7 @@ func ValidateUTXOFile(ctx context.Context, path string, logger ulogger.Logger, s
 func validateUTXOSet(ctx context.Context, r io.Reader, verbose bool) (*UTXOValidationResult, error) {
 	result := &UTXOValidationResult{}
 
-	br := bufio.NewReaderSize(r, 1024*512) // 512KB buffer
+	br := bufio.NewReaderSize(r, 64*1024) // 64KB buffer - sufficient for CLI tool validation
 
 	// Read file header to verify this is a UTXO set file
 	header, err := fileformat.ReadHeader(br)

@@ -37,7 +37,7 @@ func TestWaitForBestBlockHeaderUpdate(t *testing.T) {
 		}
 
 		// Store initial header
-		server.blockAssembler.bestBlockHeader.Store(initialHeader)
+		server.blockAssembler.setBestBlockHeader(initialHeader, 0)
 		previousHash := initialHeader.Hash()
 
 		// Update header in background after delay
@@ -51,7 +51,7 @@ func TestWaitForBestBlockHeaderUpdate(t *testing.T) {
 				Bits:           *bits,
 				Nonce:          1,
 			}
-			server.blockAssembler.bestBlockHeader.Store(newHeader)
+			server.blockAssembler.setBestBlockHeader(newHeader, 1)
 		}()
 
 		// Call the wait method
@@ -64,7 +64,8 @@ func TestWaitForBestBlockHeaderUpdate(t *testing.T) {
 		assert.Greater(t, elapsed, 40*time.Millisecond, "should wait for the update")
 
 		// Verify header was actually updated
-		currentHash := server.blockAssembler.bestBlockHeader.Load().Hash()
+		currentHeader, _ := server.blockAssembler.CurrentBlock()
+		currentHash := currentHeader.Hash()
 		assert.False(t, currentHash.IsEqual(previousHash), "header should have changed")
 	})
 
@@ -89,7 +90,7 @@ func TestWaitForBestBlockHeaderUpdate(t *testing.T) {
 			Bits:           *bits,
 			Nonce:          0,
 		}
-		server.blockAssembler.bestBlockHeader.Store(initialHeader)
+		server.blockAssembler.setBestBlockHeader(initialHeader, 0)
 		previousHash := initialHeader.Hash()
 
 		// Don't update the header - simulate stuck scenario
@@ -107,7 +108,8 @@ func TestWaitForBestBlockHeaderUpdate(t *testing.T) {
 		assert.Less(t, elapsed, 150*time.Millisecond, "should not wait much longer than timeout")
 
 		// Verify header didn't change
-		currentHash := server.blockAssembler.bestBlockHeader.Load().Hash()
+		currentHeader, _ := server.blockAssembler.CurrentBlock()
+		currentHash := currentHeader.Hash()
 		assert.True(t, currentHash.IsEqual(previousHash), "header should not have changed")
 	})
 
@@ -143,7 +145,7 @@ func TestWaitForBestBlockHeaderUpdate(t *testing.T) {
 		}
 
 		// Store the new header (already updated)
-		server.blockAssembler.bestBlockHeader.Store(newHeader)
+		server.blockAssembler.setBestBlockHeader(newHeader, 1)
 
 		// Call wait with the old hash
 		start := time.Now()
@@ -180,7 +182,7 @@ func TestWaitForBestBlockHeaderUpdate(t *testing.T) {
 
 		// Calculate hash before storing to avoid concurrent access to Hash() method
 		headerHash := header.Hash()
-		server.blockAssembler.bestBlockHeader.Store(header)
+		server.blockAssembler.setBestBlockHeader(header, 0)
 
 		// Create already cancelled context
 		ctx, cancel := context.WithCancel(context.Background())

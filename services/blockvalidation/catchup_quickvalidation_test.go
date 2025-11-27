@@ -146,7 +146,6 @@ func TestTryQuickValidation(t *testing.T) {
 		assert.NoError(t, err, "should handle not found error gracefully")
 		assert.True(t, shouldTryNormal, "should return true to fallback to normal validation")
 	})
-
 }
 
 // TestValidateBlocksOnChannel_ErrorHandling tests the error handling changes in validateBlocksOnChannel

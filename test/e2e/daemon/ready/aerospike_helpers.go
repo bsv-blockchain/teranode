@@ -16,9 +16,8 @@ import (
 // If specific fields are provided and only one field is requested, returns the value of that field directly
 // Otherwise returns a map of all requested fields
 func GetRawTx(t *testing.T, store utxo.Store, txID chainhash.Hash, fields ...string) interface{} {
-	switch store.(type) {
+	switch aeroStore := store.(type) {
 	case *aerospikestore.Store:
-		aeroStore := store.(*aerospikestore.Store)
 		namespace := aeroStore.GetNamespace()
 		setName := aeroStore.GetName()
 		key, err := aerospikeclient.NewKey(namespace, setName, txID.CloneBytes())

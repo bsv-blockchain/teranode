@@ -29,8 +29,9 @@ func TestAddScore_BanAndDecay(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.P2P.BanThreshold = 30
 	tSettings.P2P.BanDuration = 2 * time.Hour
+	registry := NewPeerRegistry()
 
-	m := NewPeerBanManager(context.Background(), handler, tSettings)
+	m := NewPeerBanManager(context.Background(), handler, tSettings, registry)
 
 	m.decayInterval = time.Second // fast decay for test
 	m.decayAmount = 5
@@ -60,7 +61,8 @@ func TestAddScore_BanAndDecay(t *testing.T) {
 
 func TestAddScore_UnknownReason(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
-	m := NewPeerBanManager(context.Background(), nil, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(context.Background(), nil, tSettings, registry)
 	peerID := "peer2"
 	score, banned := m.AddScore(peerID, ReasonUnknown)
 	assert.Equal(t, 1, score)
@@ -69,7 +71,8 @@ func TestAddScore_UnknownReason(t *testing.T) {
 
 func TestResetAndCleanupBanScore(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
-	m := NewPeerBanManager(context.Background(), nil, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(context.Background(), nil, tSettings, registry)
 	peerID := "peer3"
 	m.AddScore(peerID, ReasonInvalidSubtree)
 	assert.NotZero(t, m.peerBanScores[peerID].Score)
@@ -89,7 +92,8 @@ func TestResetAndCleanupBanScore(t *testing.T) {
 func TestGetBanScoreAndReasons(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.P2P.BanThreshold = 100
-	m := NewPeerBanManager(context.Background(), nil, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(context.Background(), nil, tSettings, registry)
 	peerID := "peer4"
 	m.AddScore(peerID, ReasonInvalidSubtree)
 	m.AddScore(peerID, ReasonSpam)
@@ -105,7 +109,8 @@ func TestGetBanScoreAndReasons(t *testing.T) {
 
 func TestIsBannedAndListBanned(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
-	m := NewPeerBanManager(context.Background(), nil, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(context.Background(), nil, tSettings, registry)
 	m.banThreshold = 10
 	m.banDuration = 1 * time.Second // short ban for test
 
@@ -147,7 +152,8 @@ func TestBanReason_String(t *testing.T) {
 
 func TestGetBanReasons_Empty(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
-	m := NewPeerBanManager(context.Background(), nil, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(context.Background(), nil, tSettings, registry)
 
 	// Get reasons for non-existent peer (empty case)
 	reasons := m.GetBanReasons("unknown")
@@ -157,7 +163,8 @@ func TestGetBanReasons_Empty(t *testing.T) {
 func TestPeerBanManager_ConcurrentAccess(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	handler := &testBanHandler{}
-	m := NewPeerBanManager(context.Background(), handler, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(context.Background(), handler, tSettings, registry)
 
 	var wg sync.WaitGroup
 
@@ -218,7 +225,8 @@ func TestPeerBanManager_BackgroundCleanup(t *testing.T) {
 	defer cancel()
 
 	tSettings := test.CreateBaseTestSettings(t)
-	m := NewPeerBanManager(ctx, nil, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(ctx, nil, tSettings, registry)
 
 	// Add peer with zero score directly
 	m.mu.Lock()
@@ -285,7 +293,8 @@ func TestPeerBanManager_NilHandler(t *testing.T) {
 	tSettings.P2P.BanThreshold = 90
 
 	// Create manager with nil handler
-	m := NewPeerBanManager(context.Background(), nil, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(context.Background(), nil, tSettings, registry)
 
 	// Should not panic when banning
 	score, banned := m.AddScore("peer1", ReasonSpam)
@@ -301,7 +310,8 @@ func TestPeerBanManager_NilHandler(t *testing.T) {
 func TestPeerBanManager_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	tSettings := test.CreateBaseTestSettings(t)
-	m := NewPeerBanManager(ctx, nil, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(ctx, nil, tSettings, registry)
 
 	// Set fast decay interval for testing
 	m.decayInterval = 10 * time.Millisecond
@@ -327,7 +337,8 @@ func TestPeerBanManager_ContextCancellation(t *testing.T) {
 
 func TestPeerBanManager_ExtendedDecayLogic(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
-	m := NewPeerBanManager(context.Background(), nil, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(context.Background(), nil, tSettings, registry)
 
 	// Set decay parameters
 	m.decayInterval = time.Second
@@ -355,7 +366,8 @@ func TestPeerBanManager_ExtendedDecayLogic(t *testing.T) {
 
 func TestPeerBanManager_ReasonCatchupFailure(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
-	m := NewPeerBanManager(context.Background(), nil, tSettings)
+	registry := NewPeerRegistry()
+	m := NewPeerBanManager(context.Background(), nil, tSettings, registry)
 
 	peerID := "catchup-test-peer"
 

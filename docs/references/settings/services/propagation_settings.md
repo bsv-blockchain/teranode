@@ -1,83 +1,78 @@
-# Propagation Settings
+# Propagation Service Settings
 
 **Related Topic**: [Propagation Service](../../../topics/services/propagation.md)
 
-The Propagation service serves as the transaction intake and distribution system for the Teranode network, critical for handling transaction flow between clients and the internal services. This section provides a comprehensive overview of all configuration options, organized by functional category.
+## Configuration Settings
 
-## Network and Communication Settings
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| IPv6Addresses | string | "" | ipv6_addresses | IPv6 multicast addresses for transaction reception |
+| IPv6Interface | string | "" | ipv6_interface | Network interface for IPv6 multicast (defaults to "en0") |
+| GRPCMaxConnectionAge | time.Duration | 90s | propagation_grpcMaxConnectionAge | **CRITICAL** - gRPC connection lifecycle management |
+| HTTPListenAddress | string | "" | propagation_httpListenAddress | **CRITICAL** - HTTP server binding, health checks only run if not empty |
+| HTTPAddresses | []string | [] | propagation_httpAddresses | HTTP client connections |
+| AlwaysUseHTTP | bool | false | propagation_alwaysUseHTTP | **CRITICAL** - Forces HTTP transport over gRPC |
+| HTTPRateLimit | int | 1024 | propagation_httpRateLimit | **CRITICAL** - HTTP API rate limiting (requests/second) |
+| SendBatchSize | int | 100 | propagation_sendBatchSize | Batch processing configuration |
+| SendBatchTimeout | int | 5 | propagation_sendBatchTimeout | Batch timeout configuration (milliseconds) |
+| GRPCAddresses | []string | [] | propagation_grpcAddresses | gRPC client connections |
+| GRPCListenAddress | string | "" | propagation_grpcListenAddress | **CRITICAL** - gRPC server binding, health checks only run if not empty |
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `propagation_grpcListenAddress` | string | "" | Address for gRPC server to listen on | Controls the endpoint where the gRPC API is exposed |
-| `propagation_grpcAddresses` | []string | [] | List of gRPC addresses for other services to connect to | Affects how other services discover and communicate with this service |
-| `propagation_httpListenAddress` | string | "" | Address for HTTP server to listen on | Controls if and where the HTTP transaction API is exposed |
-| `propagation_httpAddresses` | []string | [] | List of HTTP addresses for other services to connect to | Affects how other services discover this service's HTTP API |
-| `ipv6_addresses` | string | "" | Comma-separated list of IPv6 multicast addresses | Controls which IPv6 multicast addresses are used for transaction reception |
-| `ipv6_interface` | string | "" | Network interface name for IPv6 multicast | Determines which network interface is used for multicast communication |
+## Configuration Dependencies
 
-## Performance and Throttling Settings
+### HTTP Server Management
+- When `HTTPListenAddress` is not empty, HTTP server starts
+- `HTTPRateLimit` controls request rate limiting when HTTP server is active
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `propagation_grpcMaxConnectionAge` | duration | 90s | Maximum duration for gRPC connections before forced renewal | Controls connection lifecycle and helps with load balancing |
-| `propagation_httpRateLimit` | int | 1024 | Rate limit for HTTP API requests (per second) | Controls how many requests per second the HTTP API can handle |
-| `propagation_sendBatchSize` | int | 100 | Maximum number of transactions to send in a batch | Affects efficiency and throughput of transaction processing |
-| `propagation_sendBatchTimeout` | int | 5 | Timeout in milliseconds for batch sending operations | Controls how long the service waits to collect a full batch before processing |
+### gRPC Server Management
+- When `GRPCListenAddress` is not empty, gRPC server starts with connection age management
+- Health checks only run if address is configured
+- `GRPCMaxConnectionAge` controls connection lifecycle
 
-## Transport and Behavior Settings
+### Transport Selection
+- `AlwaysUseHTTP` forces HTTP transport over gRPC for transaction operations
+- Affects client-side transport selection in transaction processing
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `propagation_alwaysUseHTTP` | bool | false | Forces using HTTP instead of gRPC for transaction validation | Affects performance and reliability of transaction validation |
+### IPv6 Multicast
+- When `IPv6Addresses` is not empty, starts UDP6 listeners
+- Uses `IPv6Interface` for network interface selection (defaults to "en0")
 
-## Dependency-Injected Settings (from other services)
+## Service Dependencies
 
-| Setting | Type | Default | Description | Impact |
-|---------|------|---------|-------------|--------|
-| `validator_httpAddress` | url | null | URL for validator HTTP API | Used as fallback for large transactions exceeding Kafka limits |
-| `validator_kafkaMaxMessageBytes` | int | varies | Maximum size for Kafka messages in bytes | Determines when HTTP fallback is used for large transactions |
-| `useLocalValidator` | bool | false | Daemon-level setting for validator deployment mode | Controls whether validator runs in-process or as separate service |
+| Dependency | Interface | Usage |
+|------------|-----------|-------|
+| TxStore | blob.Store | **CRITICAL** - Transaction storage and retrieval |
+| ValidatorClient | validator.ClientI | **CRITICAL** - Transaction validation operations |
+| BlockchainClient | blockchain.ClientI | **CRITICAL** - Blockchain state verification |
+| ValidatorKafkaProducer | kafka.KafkaAsyncProducerI | **CRITICAL** - Validator messaging |
 
-## Configuration Interactions and Dependencies
+## Validation Rules
 
-### Transaction Ingestion Paths
+| Setting | Validation | Impact |
+|---------|------------|--------|
+| GRPCListenAddress | Health checks only if not empty | Service monitoring |
+| HTTPListenAddress | Health checks only if not empty | Service monitoring |
+| IPv6Interface | Defaults to "en0" if empty | Network interface selection |
 
-The Propagation service supports multiple methods for receiving transactions, controlled by several related settings:
+## Configuration Examples
 
-- HTTP API (`propagation_httpListenAddress`): REST-based transaction submission, rate-limited by `propagation_httpRateLimit`
-- gRPC API (`propagation_grpcListenAddress`): High-performance RPC interface for transaction submission
-- IPv6 Multicast (`ipv6_addresses` on the specified `ipv6_interface`): Efficient multicast reception of transactions
+### Basic Configuration
 
-At least one ingestion path must be configured for the service to be functional. For production deployments, all three methods should be configured for maximum compatibility and performance.
+```text
+propagation_grpcListenAddress = ":9905"
+propagation_httpListenAddress = ":8080"
+```
 
-### Transaction Validation Architecture
+### HTTP Rate Limiting
 
-The Propagation service interacts with the Validator service using one of two architectural patterns:
+```text
+propagation_httpRateLimit = 2048
+propagation_alwaysUseHTTP = false
+```
 
-- **Local Validator Mode** (`useLocalValidator=true`):
+### IPv6 Multicast
 
-  - Validator runs in-process with the Propagation service
-  - Eliminates network overhead for validation operations
-  - Recommended for production deployments to minimize latency
-
-- **Remote Validator Mode** (`useLocalValidator=false`):
-
-  - Propagation service communicates with a separate Validator service
-  - **Transaction Size-Based Routing**: Transactions are automatically routed based on size:
-
-    - Normal transactions (≤ `validator_kafka_maxMessageBytes`): Sent via Kafka for async validation
-    - Large transactions (> `validator_kafka_maxMessageBytes`): Automatically sent via HTTP to `validator_httpAddress`
-  - **Transport Override**: `propagation_alwaysUseHTTP=true` forces all transactions to use HTTP regardless of size
-  - **Automatic Fallback**: HTTP fallback ensures reliability for transactions of any size
-
-### Client-Side Batch Processing Optimization
-
-The propagation client uses batching to optimize throughput, controlled by:
-
-- `propagation_sendBatchSize`: Determines maximum batch size for client transaction processing (default: 100)
-- `propagation_sendBatchTimeout`: Controls how long to wait in milliseconds for a batch to fill before processing (default: 5ms)
-
-These settings should be tuned together based on expected transaction volume and size characteristics:
-
-- **Higher batch sizes** improve throughput but increase latency
-- **Shorter timeouts** decrease latency but may result in smaller, less efficient batches
+```text
+ipv6_addresses = "ff02::1"
+ipv6_interface = "eth0"
+```

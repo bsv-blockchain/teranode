@@ -156,7 +156,6 @@ func NewForkManager(logger ulogger.Logger, tSettings *settings.Settings) *ForkMa
 }
 
 func NewForkManagerWithConfig(logger ulogger.Logger, tSettings *settings.Settings, cleanupConfig ForkCleanupConfig) *ForkManager {
-
 	// Determine max parallel forks (default to 4)
 	maxParallelForks := 4
 	if tSettings.BlockValidation.MaxParallelForks > 0 {

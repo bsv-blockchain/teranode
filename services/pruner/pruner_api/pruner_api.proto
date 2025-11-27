@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package pruner;
+
+option go_package = "github.com/bsv-blockchain/teranode/services/pruner/pruner_api";
+
+service PrunerAPI {
+  rpc HealthGRPC(EmptyMessage) returns (HealthResponse) {}
+}
+
+message EmptyMessage {}
+
+message HealthResponse {
+  bool ok = 1;
+  string details = 2;
+}

@@ -68,6 +68,26 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 		return nil, nil, errors.NewProcessingError("blockLocator cannot be empty")
 	}
 
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to be consistent with other operations
+	locatorStrs := make([]string, len(blockLocator))
+	for i, hash := range blockLocator {
+		locatorStrs[i] = hash.String()
+	}
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetLatestHeaderFromBlockLocator-%s-%s", bestBlockHash.String(), strings.Join(locatorStrs, ","))))
+	cacheOp := s.responseCache.Begin(cacheID)
+
+	cached := cacheOp.Get()
+	if cached != nil {
+		if result, ok := cached.Value().([2]interface{}); ok {
+			if header, ok := result[0].(*model.BlockHeader); ok {
+				if meta, ok := result[1].(*model.BlockHeaderMeta); ok {
+					return header, meta, nil
+				}
+			}
+		}
+	}
+
 	var q string
 	var args []interface{}
 
@@ -190,6 +210,9 @@ func (s *SQL) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBloc
 
 		blockHeaderMeta.Miner = miner
 	}
+
+	// Cache the result in response cache
+	cacheOp.Set([2]interface{}{blockHeader, blockHeaderMeta}, s.cacheTTL)
 
 	return blockHeader, blockHeaderMeta, nil
 }

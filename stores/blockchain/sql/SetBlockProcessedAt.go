@@ -12,6 +12,9 @@ import (
 func (s *SQL) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
 	s.logger.Debugf("SetBlockProcessedAt %s", blockHash.String())
 
+	// Invalidate response cache to ensure cached blocks reflect updated processed_at timestamp
+	defer s.ResetResponseCache()
+
 	var q string
 
 	if len(clear) > 0 && clear[0] {
@@ -44,15 +47,6 @@ func (s *SQL) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash
 	// check if the block was updated
 	if rows, _ := res.RowsAffected(); rows <= 0 {
 		return errors.NewStorageError("block %s processed_at timestamp was not updated", blockHash.String())
-	}
-
-	// Invalidate response cache to ensure cached blocks reflect updated processed_at timestamp
-	// NOTE: We don't invalidate blocksCache here as processed_at isn't cached in blocksCache
-	// and ResetBlocksCache is expensive
-	s.ResetResponseCache()
-
-	if err = s.ResetBlocksCache(ctx); err != nil {
-		return errors.NewStorageError("error clearing caches", err)
 	}
 
 	return nil

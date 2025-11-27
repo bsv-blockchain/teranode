@@ -123,6 +123,9 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
 		Return(expectedNBits, nil).Once()
 
+	// Mock AddBlock to store invalid block when difficulty check fails
+	mockBlockchain.On("AddBlock", mock.Anything, block, "test", mock.Anything).Return(nil).Once()
+
 	// Mock GetBlock for bloom filter creation
 	prevBlock := &model.Block{
 		Header:     prevBlockHeader,
@@ -250,6 +253,9 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 	// Mock GetNextWorkRequired to return the expected difficulty
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
 		Return(expectedNBits, nil).Once()
+
+	// Mock AddBlock to store invalid block when difficulty target is not met
+	mockBlockchain.On("AddBlock", mock.Anything, block, "test", mock.Anything).Return(nil).Once()
 
 	// Mock GetBlock for bloom filter creation
 	prevBlock := &model.Block{

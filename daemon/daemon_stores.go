@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -24,6 +25,8 @@ type Stores struct {
 	mainBlockPersisterStore     blob.Store
 	mainBlockStore              blob.Store
 	mainBlockValidationClient   blockvalidation.Interface
+	mainBlockAssemblyClient     blockassembly.ClientI
+	mainP2PClient               p2p.ClientI
 	mainSubtreeStore            blob.Store
 	mainSubtreeValidationClient subtreevalidation.Interface
 	mainTempStore               blob.Store
@@ -83,6 +86,33 @@ func (d *Stores) GetBlockValidationClient(ctx context.Context, logger ulogger.Lo
 	return d.mainBlockValidationClient, err
 }
 
+// GetP2PClient creates and returns a new P2P client instance. Unlike other store getters, this function
+// always creates a new client instance to maintain source information. The source parameter
+// identifies the origin or purpose of the client.
+//
+// Parameters:
+//   - ctx: The context for managing the client's lifecycle.
+//   - logger: The logger instance for logging client activities.
+//   - appSettings: The application settings containing configuration details.
+//
+// Returns:
+//   - p2p.ClientI: The newly created P2P client instance.
+//   - error: An error object if the client creation fails; otherwise, nil.
+func (d *Stores) GetP2PClient(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (p2p.ClientI, error) {
+	if d.mainP2PClient != nil {
+		return d.mainP2PClient, nil
+	}
+
+	p2pClient, err := p2p.NewClient(ctx, logger, appSettings)
+	if err != nil {
+		return nil, err
+	}
+
+	d.mainP2PClient = p2pClient
+
+	return p2pClient, nil
+}
+
 // GetBlockchainClient creates and returns a new blockchain client instance. Unlike other store
 // getters, this function always creates a new client instance to maintain source information.
 // The source parameter identifies the origin or purpose of the client.
@@ -93,10 +123,22 @@ func (d *Stores) GetBlockchainClient(ctx context.Context, logger ulogger.Logger,
 }
 
 // GetBlockAssemblyClient creates and returns a new block assembly client instance.
-func GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logger,
+func (d *Stores) GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logger,
 	appSettings *settings.Settings) (blockassembly.ClientI, error) {
-	// don't use a global client, otherwise we don't know the source
-	return blockassembly.NewClient(ctx, logger, appSettings)
+	if d.mainBlockAssemblyClient != nil {
+		return d.mainBlockAssemblyClient, nil
+	}
+
+	var err error
+
+	client, err := blockassembly.NewClient(ctx, logger, appSettings)
+	if err != nil {
+		return nil, err
+	}
+
+	d.mainBlockAssemblyClient = client
+
+	return client, nil
 }
 
 // GetValidatorClient returns the main validator client instance. If the client hasn't been
@@ -138,7 +180,7 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 
 		var blockAssemblyClient blockassembly.ClientI
 
-		blockAssemblyClient, err = GetBlockAssemblyClient(ctx, logger, appSettings)
+		blockAssemblyClient, err = d.GetBlockAssemblyClient(ctx, logger, appSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create block assembly client for local validator", err)
 		}
@@ -376,8 +418,9 @@ func (d *Stores) Cleanup() {
 	d.mainTxStore = nil
 	d.mainUtxoStore = nil
 	d.mainValidatorClient = nil
+	d.mainP2PClient = nil
 
 	// Reset the Aerospike cleanup service singleton if it exists
 	// This prevents state leakage between test runs
-	aerospike.ResetCleanupServiceForTests()
+	aerospike.ResetPrunerServiceForTests()
 }
