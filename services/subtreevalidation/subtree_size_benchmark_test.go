@@ -644,11 +644,11 @@ func TestBlockSizeScaling(t *testing.T) {
 
 	// Track results for comparison
 	type result struct {
-		blockSize     int
-		subtreeSize   int
-		numSubtrees   int
-		validationMs  float64
-		perSubtreeUs  float64
+		blockSize    int
+		subtreeSize  int
+		numSubtrees  int
+		validationMs float64
+		perSubtreeUs float64
 	}
 	results := make([]result, 0, len(testCases))
 
@@ -674,11 +674,11 @@ func TestBlockSizeScaling(t *testing.T) {
 			perSubtreeUs := float64(avgDuration.Microseconds()) / float64(numSubtrees)
 
 			results = append(results, result{
-				blockSize:     tc.totalTxCount,
-				subtreeSize:   tc.txPerSubtree,
-				numSubtrees:   numSubtrees,
-				validationMs:  float64(avgDuration.Milliseconds()),
-				perSubtreeUs:  perSubtreeUs,
+				blockSize:    tc.totalTxCount,
+				subtreeSize:  tc.txPerSubtree,
+				numSubtrees:  numSubtrees,
+				validationMs: float64(avgDuration.Milliseconds()),
+				perSubtreeUs: perSubtreeUs,
 			})
 
 			t.Logf("Block: %dk tx, %d tx/subtree, %d subtrees, validation: %.2fms, per-subtree: %.2fµs",
