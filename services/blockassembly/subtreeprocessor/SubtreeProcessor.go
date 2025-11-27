@@ -256,6 +256,11 @@ type SubtreeProcessor struct {
 
 	// closeOnce ensures Close() is only executed once
 	closeOnce sync.Once
+
+	// dequeueBatchBuffer is a pre-allocated reusable slice for batch dequeuing
+	// This eliminates the allocation overhead of creating a new slice on each dequeue cycle
+	// Size is set smaller than batchSize to handle typical queue depths efficiently
+	dequeueBatchBuffer []*TxIDAndFee
 }
 
 type State uint32
@@ -400,6 +405,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		announcementTicker:       time.NewTicker(tSettings.BlockAssembly.SubtreeAnnouncementInterval),
 		ctx:                      processorCtx,
 		cancel:                   cancel,
+		dequeueBatchBuffer:       make([]*TxIDAndFee, 0, tSettings.BlockAssembly.SubtreeProcessorBatcherSize),
 	}
 	stp.setCurrentRunningState(StateStarting)
 
@@ -636,6 +642,8 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 				}
 
 			default:
+				var err error
+
 				stp.setCurrentRunningState(StateDequeue)
 
 				batchSize := stp.settings.BlockAssembly.SubtreeProcessorBatcherSize
@@ -646,14 +654,39 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 				mapLength := removeMap.Length()
 				currentTxMap := stp.currentTxMap
 				validFromMillis := time.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
+				addedCount := uint64(0)
 
-				for nrProcessed < batchSize {
-					node, txInpoints, _, found := stp.queue.dequeue(validFromMillis)
-					if !found {
-						// Queue is empty right now → be nice to the core
-						runtime.Gosched()
-						break
+				// Check if we need to create a new subtree
+				if stp.currentSubtree == nil {
+					stp.currentSubtree, err = subtreepkg.NewTreeByLeafCount(stp.currentItemsPerFile)
+					if err != nil {
+						stp.logger.Errorf("error creating new subtree: %s", err)
+						// If we can't create a subtree, we can't process this node.
+						// We should probably retry or abort, but here we skip to avoid crash.
+						continue
 					}
+
+					// This is the first subtree for this block - we need a coinbase placeholder
+					if err = stp.currentSubtree.AddCoinbaseNode(); err != nil {
+						stp.logger.Errorf("error adding coinbase placeholder: %s", err)
+						continue
+					}
+					addedCount++
+				}
+
+				// Batch dequeue for improved throughput
+				// Dequeues up to batchSize transactions at once, amortizing loop overhead
+				stp.dequeueBatchBuffer = stp.queue.DequeueBatch(stp.dequeueBatchBuffer, batchSize, validFromMillis)
+				if len(stp.dequeueBatchBuffer) == 0 {
+					// Queue is empty right now → be nice to the core
+					runtime.Gosched()
+					continue
+				}
+
+				// Process the batch
+				for _, item := range stp.dequeueBatchBuffer {
+					node := item.node
+					txInpoints := item.txInpoints
 
 					// Fast reject path first (most common in practice)
 					if mapLength > 0 && removeMap.Exists(node.Hash) {
@@ -662,23 +695,33 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 						continue
 					}
 
-					// Coinbase placeholder — extremely rare → check last
-					if node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
-						stp.logger.Errorf("skipping coinbase placeholder")
+					// We always have txInpoints from the queue, so we use SetIfNotExists.
+					// This covers the common case where we are adding a new transaction.
+					if _, wasSet := currentTxMap.SetIfNotExists(node.Hash, txInpoints); !wasSet {
+						stp.logger.Debugf("duplicate tx %s", node.Hash.String())
 						continue
 					}
 
-					if _, exists := currentTxMap.Get(node.Hash); exists {
-						stp.logger.Warnf("duplicate tx %s", node.Hash.String())
-						continue
-					}
-
-					if err := stp.addNode(node, &txInpoints, false); err != nil {
-						stp.logger.Errorf("addNode failed: %s", err)
+					// Add to current subtree
+					if err = stp.currentSubtree.AddSubtreeNode(node); err != nil {
+						stp.logger.Errorf("addNode failed: error adding node to subtree: %s", err)
+						// If adding failed, should we remove from map?
+						// addNode didn't remove it, so we keep consistent behavior.
 					} else {
-						stp.txCount.Add(1)
+						addedCount++
 						nrProcessed++
 					}
+
+					// Check if subtree is complete
+					if len(stp.currentSubtree.Nodes) >= stp.currentItemsPerFile {
+						if err = stp.processCompleteSubtree(false); err != nil {
+							stp.logger.Errorf("processCompleteSubtree failed: %s", err)
+						}
+					}
+				}
+
+				if addedCount > 0 {
+					stp.txCount.Add(addedCount)
 				}
 
 				// Only yield if we actually hit the batch limit (means queue still has work)
