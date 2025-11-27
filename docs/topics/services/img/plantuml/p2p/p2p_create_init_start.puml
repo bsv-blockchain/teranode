@@ -22,7 +22,7 @@ skinparam participant {
 
 
 participant "P2P Server" as P2PServer
-participant "P2PNode" as P2PNode
+participant "P2PClient" as P2PClient
 database "Blockchain Client" as BlockchainClient
 database "Block Validation Client" as BlockValidationClient
 database "Validator Client" as ValidatorClient
@@ -34,8 +34,8 @@ queue "Set Topic Handlers" as TopicHandlers
 P2PServer -> P2PServer: NewServer
 activate P2PServer
 
-P2PServer -> P2PNode: Creates P2PNode
-P2PNode --> P2PServer
+P2PServer -> P2PClient: Creates P2PClient
+P2PClient --> P2PServer
 
 
 P2PServer -> P2PServer: Sets up topics & notification channel
@@ -56,7 +56,7 @@ P2PServer -> P2PServer: Calls Start
 activate P2PServer
 P2PServer -> HTTPServer: Setup Echo Server (Middleware, Routes)
 HTTPServer --> P2PServer
-P2PServer -> P2PServer: Start P2PNode (Join PubSub Topics)
+P2PServer -> P2PServer: Start P2PClient (Join PubSub Topics)
 P2PServer -> StaticPeers: Connect to Static Peers
 StaticPeers --> P2PServer
 P2PServer -> TopicHandlers: Set Topic Handlers (Subscribe)

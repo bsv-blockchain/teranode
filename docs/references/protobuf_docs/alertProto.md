@@ -1,4 +1,4 @@
-# GRPC Documentation - AlertAPI
+# GRPC Documentation - AlertAPI 
 <a name="top"></a>
 
 ## Table of Contents

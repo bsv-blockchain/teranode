@@ -1,0 +1,191 @@
+# Teranode Docker Configuration Template
+#
+# This file is a template to help you configure your Teranode Docker deployment.
+# To use it:
+#   1. Copy this file to settings_local.conf in the same directory
+#   2. Uncomment and customize the settings you need
+#   3. Start your Docker deployment (the settings_local.conf file is mounted into containers)
+#
+# IMPORTANT: Understanding the .docker.m namespace suffix
+# --------------------------------------------------------
+# All settings in this file use the ".docker.m" suffix. This is CRITICAL because:
+#   - Teranode uses a hierarchical settings system with context-specific overrides
+#   - The Docker deployment sets SETTINGS_CONTEXT=docker.m (see base/docker-teranode.yml)
+#   - Settings with .docker.m suffix override any defaults in the main settings.conf
+#   - WITHOUT this suffix, your customizations will be ignored
+#
+# Example: If settings.conf has "listen_mode = full" but you want listen_only for Docker,
+# you MUST use "listen_mode.docker.m = listen_only" (not just "listen_mode = listen_only")
+#
+# For reference, see the main settings.conf file in the repository root for all available
+# settings and their default values.
+
+# ==============================================================================
+# NETWORK PARTICIPATION MODE
+# ==============================================================================
+#
+# Controls how your node participates in the network:
+#   - "listen_only": Your node receives and validates blocks but does not forward
+#                    transactions or actively participate in P2P. Good for private
+#                    nodes or initial sync. Does not require public accessibility.
+#   - "full": Your node fully participates in the network, forwarding transactions
+#             and blocks to peers. Requires public accessibility (see settings below).
+#
+# Default in settings.conf is "full", but Docker deployments default to "listen_only"
+# for safety. Switch to "full" once you've configured public endpoints below.
+#
+# listen_mode.docker.m = listen_only
+
+# After opening your node to the public internet, enable full mode:
+# listen_mode.docker.m = full
+
+# ==============================================================================
+# PUBLIC NETWORK ENDPOINTS
+# ==============================================================================
+#
+# Required if you set listen_mode to "full". These settings tell other nodes
+# how to reach your node over the public internet.
+
+# Asset HTTP Public Address
+# --------------------------
+# The publicly accessible URL where other nodes can download blocks and subtrees
+# from your node. This is the asset server's HTTP API endpoint.
+#
+# Format: https://your-domain.com/api/v1 or https://your-domain.com:port/api/v1
+#
+# Examples:
+#   - With a domain: https://teranode.example.com/api/v1
+#   - With ngrok tunnel: https://abc123.ngrok-free.app/api/v1
+#   - With custom port: https://teranode.example.com:8443/api/v1
+#
+# Note: The "/api/v1" suffix is required and matches the asset_apiPrefix setting.
+#
+# asset_httpPublicAddress.docker.m = https://teranode.example.com/api/v1
+
+# P2P Advertised Addresses
+# -------------------------
+# The public IP address or domain name where other nodes can connect to your P2P
+# service. This is used for peer-to-peer communication between nodes.
+#
+# Format: your-domain.com or IP.address (do NOT include protocol or port)
+#
+# The P2P service listens on port 9905 by default. Ensure this port is:
+#   1. Open in your firewall
+#   2. Forwarded if behind NAT
+#   3. Accessible from the public internet
+#
+# Examples:
+#   - With a domain: teranode.example.com
+#   - With IP: 203.0.113.42
+#
+# p2p_advertise_addresses.docker.m = teranode.example.com
+
+# ==============================================================================
+# RPC AUTHENTICATION
+# ==============================================================================
+#
+# Credentials for accessing the JSON-RPC interface. The RPC server provides
+# Bitcoin-compatible API access to your node.
+#
+# Default credentials (from settings.conf):
+#   - Username: bitcoin
+#   - Password: bitcoin
+#
+# SECURITY WARNING: Change these credentials in production! The defaults are
+# well-known and should only be used for local development.
+#
+# The RPC interface is exposed on port 9292. In the Docker deployment, this
+# is bound to localhost only (127.0.0.1:9292) for security.
+#
+# rpc_user.docker.m = your_username
+# rpc_pass.docker.m = your_secure_password
+
+# ==============================================================================
+# MINING CONFIGURATION
+# ==============================================================================
+#
+# If you're mining blocks, customize these settings to identify your mined blocks.
+
+# Coinbase Arbitrary Text (Miner Tag)
+# ------------------------------------
+# A text string included in the coinbase transaction of blocks you mine. This
+# identifies your mining operation and can include your pool name, location, etc.
+#
+# Format: /YourTag/ (slashes are conventional but not required)
+# Maximum length: Limited by Bitcoin script size
+#
+# Default in settings.conf: /teranode/
+#
+# Examples:
+#   - /MyMiningPool/
+#   - /Teranode-US-East/
+#   - /MyCompany-Miner-01/
+#
+# coinbase_arbitrary_text.docker.m = /MyMiningPool/
+
+# Mining Rewards Address
+# -----------------------
+# Note: The mining rewards address is typically configured through the block
+# assembly service's coinbase configuration, not in this settings file.
+# Consult the block assembly documentation for details on configuring where
+# mining rewards are sent.
+
+# ==============================================================================
+# NODE IDENTIFICATION
+# ==============================================================================
+
+# Client Name
+# -----------
+# A human-readable name for your node. This appears in:
+#   - Web interfaces (Grafana dashboards, blockchain viewer)
+#   - Log messages
+#   - Monitoring systems
+#
+# Default in settings.conf: teranode
+#
+# Choose a descriptive name that helps you identify this node in a multi-node setup.
+#
+# Examples:
+#   - My Teranode
+#   - Production Node 1
+#   - Teranode-Europe
+#
+# clientName.docker.m = My Teranode
+
+# ==============================================================================
+# ADDITIONAL SETTINGS
+# ==============================================================================
+#
+# This template covers the most commonly customized settings for Docker deployments.
+# Many other settings can be overridden here using the .docker.m suffix.
+#
+# To explore additional settings:
+#   1. Check settings.conf in the repository root for all available options
+#   2. Look for settings with .docker or .docker.m context in that file
+#   3. Add any setting here with the .docker.m suffix to override defaults
+#
+# Common additional customizations:
+#   - Performance tuning (concurrency, cache sizes, batch sizes)
+#   - Storage backends (Aerospike, PostgreSQL, blob store configuration)
+#   - Network timeouts and retry policies
+#   - Logging levels and output formats
+#   - Kafka topic names and partitioning
+#
+# Example advanced overrides:
+# block_getAndValidateSubtreesConcurrency.docker.m = 64
+# blockassembly_sendBatchSize.docker.m = 2048
+# KAFKA_PARTITIONS_HIGH.docker.m = 16
+
+# ==============================================================================
+# ENVIRONMENT VARIABLES vs SETTINGS FILES
+# ==============================================================================
+#
+# Note: Some configuration is done via environment variables in docker-compose.yml
+# rather than in this settings file. These include:
+#
+#   - network: The Bitcoin network to connect to (mainnet, testnet, etc.)
+#   - logLevel: Logging verbosity (DEBUG, INFO, WARN, ERROR)
+#   - legacy_config_Upnp: Enable UPnP for automatic port forwarding
+#
+# Check your docker-compose.yml file's "x-teranode-settings" section to configure
+# these environment-based settings.

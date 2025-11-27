@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // contextKey is a custom type for context keys to avoid collisions
@@ -149,6 +150,18 @@ type USpan struct {
 	ctx  context.Context
 }
 
+var (
+	// noopTracerProvider is a singleton no-op tracer provider used when tracing is disabled
+	noopTracerProvider = noop.NewTracerProvider()
+
+	// noopTracer is a singleton no-op tracer returned when tracing is disabled
+	// This eliminates allocation overhead from creating new UTracer instances
+	noopTracer = &UTracer{
+		name:   "noop",
+		tracer: noopTracerProvider.Tracer("noop"),
+	}
+)
+
 // Tracer creates a new unified tracer with the given name.
 // The name typically represents the service or component being traced.
 //
@@ -156,6 +169,15 @@ type USpan struct {
 //   - name: The name of the service or component
 //   - otelOpts: OpenTelemetry tracer options passed directly to otel.Tracer
 func Tracer(name string, otelOpts ...trace.TracerOption) *UTracer {
+	// Fast path: return singleton no-op tracer when tracing is disabled
+	// This eliminates the overhead of:
+	// - Global otel.Tracer lookup (~expensive)
+	// - UTracer allocation (~700ms/3.5% CPU in profiles)
+	// - Option processing
+	if !IsTracingEnabled() {
+		return noopTracer
+	}
+
 	// Filter out nil options to prevent panic in OpenTelemetry
 	var validOpts []trace.TracerOption
 
@@ -188,6 +210,14 @@ func Tracer(name string, otelOpts ...trace.TracerOption) *UTracer {
 //	)
 //	defer span.End()
 func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (context.Context, trace.Span, func(...error)) {
+	// Fast path: if tracing is disabled globally, return no-op span immediately
+	// This avoids all the overhead of processing options, creating contexts, etc.
+	if !IsTracingEnabled() {
+		// Return a no-op span that does nothing
+		noopSpan := trace.SpanFromContext(ctx)
+		return ctx, noopSpan, func(...error) {} // No-op cleanup function
+	}
+
 	// Process options
 	options := &TraceOptions{}
 	for _, opt := range opts {
@@ -300,6 +330,12 @@ func (span *USpan) Stat() *gocore.Stat {
 
 // DecoupleTracingSpan creates a new context with the current span for decoupled tracing
 func DecoupleTracingSpan(ctx context.Context, name string, spanName string) (context.Context, trace.Span, func(...error)) {
+	// Fast path: if tracing is disabled, return immediately
+	if !IsTracingEnabled() {
+		noopSpan := trace.SpanFromContext(ctx)
+		return ctx, noopSpan, func(...error) {}
+	}
+
 	// Extract the current span from context
 	currentSpan := trace.SpanFromContext(ctx)
 

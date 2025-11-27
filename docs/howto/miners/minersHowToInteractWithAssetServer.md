@@ -348,6 +348,32 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
     - Returns: Array of UTXO data in JSON format
 
+### Merkle Proof Endpoints
+
+- GET `/api/v1/merkle_proof/:hash`
+    - Description: Retrieves merkle proof for a transaction in binary format
+    - Parameters:
+
+        - `hash`: Transaction hash (hex string)
+
+    - Returns: Merkle proof data in binary format
+
+- GET `/api/v1/merkle_proof/:hash/hex`
+    - Description: Retrieves merkle proof for a transaction in hexadecimal format
+    - Parameters:
+
+        - `hash`: Transaction hash (hex string)
+
+    - Returns: Merkle proof data as hex string
+
+- GET `/api/v1/merkle_proof/:hash/json`
+    - Description: Retrieves merkle proof for a transaction in JSON format
+    - Parameters:
+
+        - `hash`: Transaction hash (hex string)
+
+    - Returns: Merkle proof data in BSV Unified Merkle Path (BUMP) format as structured JSON
+
 ### Subtree Endpoints
 
 - GET `/api/v1/subtree/:hash`

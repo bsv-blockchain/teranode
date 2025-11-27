@@ -25,11 +25,12 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer_api"
-	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -554,8 +555,8 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		// Should return a GetBlockVerboseTxResult
-		blockResult, ok := result.(bsvjson.GetBlockVerboseTxResult)
+		// Should return a *GetBlockVerboseTxResult
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
 		assert.True(t, ok)
 
 		// Verify basic fields
@@ -618,8 +619,8 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		// Should return a GetBlockVerboseTxResult
-		blockResult, ok := result.(bsvjson.GetBlockVerboseTxResult)
+		// Should return a *GetBlockVerboseTxResult
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
 		assert.True(t, ok)
 
 		// Verify the size field is populated
@@ -1237,6 +1238,130 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "blockchain error")
 	})
+
+	t.Run("block not on main chain should return -1 confirmations", func(t *testing.T) {
+		prevHash := chainhash.Hash{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+		merkleRoot := chainhash.Hash{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
+		blockHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &prevHash,
+			HashMerkleRoot: &merkleRoot,
+			Timestamp:      1234567890,
+			Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+			Nonce:          12345,
+		}
+
+		orphanBlock := &model.Block{
+			Header: blockHeader,
+			Height: 100000,
+			ID:     200,
+		}
+
+		bestBlockMeta := &model.BlockHeaderMeta{
+			Height: 100010,
+		}
+
+		mockClient := &mockBlockchainClient{
+			getBlockFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
+				return orphanBlock, nil
+			},
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, bestBlockMeta, nil
+			},
+			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
+				return nil, errors.ErrBlockNotFound
+			},
+			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
+				return false, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		validHash := "0000000000000000000000000000000000000000000000000000000000000002"
+		verbosity := uint32(1)
+		cmd := &bsvjson.GetBlockCmd{
+			Hash:      validHash,
+			Verbosity: &verbosity,
+		}
+
+		result, err := handleGetBlock(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
+		assert.True(t, ok)
+		assert.NotNil(t, blockResult)
+		assert.Equal(t, int64(-1), blockResult.Confirmations, "orphan block should have -1 confirmations")
+	})
+
+	t.Run("block on main chain should return correct confirmations", func(t *testing.T) {
+		prevHash := chainhash.Hash{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+		merkleRoot := chainhash.Hash{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
+		blockHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &prevHash,
+			HashMerkleRoot: &merkleRoot,
+			Timestamp:      1234567890,
+			Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+			Nonce:          12345,
+		}
+
+		validBlock := &model.Block{
+			Header: blockHeader,
+			Height: 100000,
+			ID:     100,
+		}
+
+		bestBlockMeta := &model.BlockHeaderMeta{
+			Height: 100010,
+		}
+
+		mockClient := &mockBlockchainClient{
+			getBlockFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
+				return validBlock, nil
+			},
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, bestBlockMeta, nil
+			},
+			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
+				return nil, errors.ErrBlockNotFound
+			},
+			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
+				return true, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		validHash := "0000000000000000000000000000000000000000000000000000000000000001"
+		verbosity := uint32(1)
+		cmd := &bsvjson.GetBlockCmd{
+			Hash:      validHash,
+			Verbosity: &verbosity,
+		}
+
+		result, err := handleGetBlock(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
+		assert.True(t, ok)
+		assert.NotNil(t, blockResult)
+		assert.Equal(t, int64(11), blockResult.Confirmations)
+	})
 }
 
 // TestHandleGetBlockByHeightComprehensive tests the handleGetBlockByHeight handler
@@ -1518,6 +1643,117 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "value out of range")
+	})
+
+	t.Run("block on main chain returns correct confirmations", func(t *testing.T) {
+		prevHash := chainhash.Hash{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+		merkleRoot := chainhash.Hash{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
+		blockHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &prevHash,
+			HashMerkleRoot: &merkleRoot,
+			Timestamp:      1234567890,
+			Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+			Nonce:          12345,
+		}
+
+		blockHeaderMeta := &model.BlockHeaderMeta{
+			ID:     100,
+			Height: 100000,
+		}
+
+		bestBlockMeta := &model.BlockHeaderMeta{
+			Height: 100010, // 10 blocks ahead
+		}
+
+		mockClient := &mockBlockchainClient{
+			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, blockHeaderMeta, nil
+			},
+			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
+				return true, nil
+			},
+			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, bestBlockMeta, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		validHash := "0000000000000000000000000000000000000000000000000000000000000001"
+		cmd := &bsvjson.GetBlockHeaderCmd{
+			Hash:    validHash,
+			Verbose: func() *bool { v := true; return &v }(),
+		}
+
+		result, err := handleGetBlockHeader(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		headerResult, ok := result.(*bsvjson.GetBlockHeaderVerboseResult)
+		assert.True(t, ok)
+		assert.NotNil(t, headerResult)
+
+		// Should have 11 confirmations (1 + (100010 - 100000))
+		assert.Equal(t, int64(11), headerResult.Confirmations)
+	})
+
+	t.Run("block not on main chain returns -1 confirmations", func(t *testing.T) {
+		prevHash := chainhash.Hash{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+		merkleRoot := chainhash.Hash{0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0}
+		blockHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  &prevHash,
+			HashMerkleRoot: &merkleRoot,
+			Timestamp:      1234567890,
+			Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+			Nonce:          12345,
+		}
+
+		blockHeaderMeta := &model.BlockHeaderMeta{
+			ID:     200,
+			Height: 100000,
+		}
+
+		mockClient := &mockBlockchainClient{
+			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+				return blockHeader, blockHeaderMeta, nil
+			},
+			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
+				return false, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:           logger,
+			blockchainClient: mockClient,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		validHash := "0000000000000000000000000000000000000000000000000000000000000002"
+		cmd := &bsvjson.GetBlockHeaderCmd{
+			Hash:    validHash,
+			Verbose: func() *bool { v := true; return &v }(),
+		}
+
+		result, err := handleGetBlockHeader(context.Background(), s, cmd, nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		headerResult, ok := result.(*bsvjson.GetBlockHeaderVerboseResult)
+		assert.True(t, ok)
+		assert.NotNil(t, headerResult)
+
+		// Should have -1 confirmations for blocks not on main chain
+		assert.Equal(t, int64(-1), headerResult.Confirmations)
 	})
 }
 
@@ -2455,23 +2691,16 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 		expectedHash, _ := chainhash.NewHashFromStr("00000000000000000007878ec04bb2b2e12317804810f4c26033585b3f81ffaa")
 
 		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-				// Verify the block hash matches expected value
-				assert.Equal(t, expectedHash, blockHash)
-				// Return a mock block
-				return &model.Block{
-					Header: &model.BlockHeader{
-						HashPrevBlock: &chainhash.Hash{},
-					},
-				}, nil
+			getLastNInvalidBlocksFunc: func(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+				// Return empty list - no invalid children
+				return []*model.BlockInfo{}, nil
 			},
 		}
 
 		mockBlockValidationClient := &mockBlockValidationClient{
-			validateBlockFunc: func(ctx context.Context, block *model.Block, options *blockvalidation.ValidateBlockOptions) error {
-				// Verify revalidation flag is set
-				assert.NotNil(t, options)
-				assert.True(t, options.IsRevalidation)
+			revalidateBlockFunc: func(ctx context.Context, blockHash chainhash.Hash) error {
+				// Verify the block hash matches expected value
+				assert.Equal(t, expectedHash, &blockHash)
 				return nil
 			},
 		}
@@ -2521,17 +2750,25 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
 	})
 
-	t.Run("blockchain client error", func(t *testing.T) {
-		expectedError := errors.New(errors.ERR_ERROR, "blockchain service unavailable")
+	t.Run("revalidation error", func(t *testing.T) {
+		expectedError := errors.New(errors.ERR_ERROR, "validation failed")
+
 		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-				return nil, expectedError
+			getLastNInvalidBlocksFunc: func(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+				return []*model.BlockInfo{}, nil
+			},
+		}
+
+		mockBlockValidationClient := &mockBlockValidationClient{
+			revalidateBlockFunc: func(ctx context.Context, blockHash chainhash.Hash) error {
+				return expectedError
 			},
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			blockchainClient: mockClient,
+			logger:                logger,
+			blockchainClient:      mockClient,
+			blockValidationClient: mockBlockValidationClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -2545,17 +2782,18 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, result)
-		// The handler converts GetBlock errors to "Block not found" RPC error
+		// The handler converts revalidation errors to RPC verify error
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
-		assert.Equal(t, bsvjson.ErrRPCBlockNotFound, rpcErr.Code)
-		assert.Equal(t, "Block not found", rpcErr.Message)
+		assert.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Block failed revalidation")
 	})
 
-	t.Run("nil blockchain client", func(t *testing.T) {
+	t.Run("nil validation client", func(t *testing.T) {
 		s := &RPCServer{
-			logger:           logger,
-			blockchainClient: nil, // No blockchain client
+			logger:                logger,
+			blockchainClient:      &mockBlockchainClient{},
+			blockValidationClient: nil, // No validation client
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -2565,27 +2803,39 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 			BlockHash: "00000000000000000007878ec04bb2b2e12317804810f4c26033585b3f81ffaa",
 		}
 
-		// This should panic when trying to call RevalidateBlock on nil client
-		assert.Panics(t, func() {
-			_, _ = handleReconsiderBlock(context.Background(), s, cmd, nil)
-		})
+		result, err := handleReconsiderBlock(context.Background(), s, cmd, nil)
+
+		require.Error(t, err)
+		assert.Nil(t, result)
+		// Should return internal error when validation service is not available
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Block validation service not available")
 	})
 
 	t.Run("context cancellation", func(t *testing.T) {
 		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
+			getLastNInvalidBlocksFunc: func(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+				return []*model.BlockInfo{}, nil
+			},
+		}
+
+		mockBlockValidationClient := &mockBlockValidationClient{
+			revalidateBlockFunc: func(ctx context.Context, blockHash chainhash.Hash) error {
 				select {
 				case <-ctx.Done():
-					return nil, ctx.Err()
+					return ctx.Err()
 				default:
-					return nil, errors.New(errors.ERR_ERROR, "should be cancelled")
+					return errors.New(errors.ERR_ERROR, "should be cancelled")
 				}
 			},
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			blockchainClient: mockClient,
+			logger:                logger,
+			blockchainClient:      mockClient,
+			blockValidationClient: mockBlockValidationClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -2603,11 +2853,11 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, result)
-		// The handler converts the context.Canceled error to "Block not found" RPC error
+		// The handler converts the context.Canceled error to RPC verify error
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
-		assert.Equal(t, bsvjson.ErrRPCBlockNotFound, rpcErr.Code)
-		assert.Equal(t, "Block not found", rpcErr.Message)
+		assert.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Block failed revalidation")
 	})
 
 	t.Run("short block hash succeeds with padding", func(t *testing.T) {
@@ -2763,9 +3013,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 
 	t.Run("p2p client returns banned", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			isBannedFunc: func(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
-				assert.Equal(t, "192.168.1.100", req.IpOrSubnet)
-				return &p2p_api.IsBannedResponse{IsBanned: true}, nil
+			isBannedFunc: func(ctx context.Context, ipOrSubnet string) (bool, error) {
+				assert.Equal(t, "192.168.1.100", ipOrSubnet)
+				return true, nil
 			},
 		}
 
@@ -2798,8 +3048,8 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeer,
+			logger:          logger,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -2819,8 +3069,8 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 
 	t.Run("both clients return not banned", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			isBannedFunc: func(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
-				return &p2p_api.IsBannedResponse{IsBanned: false}, nil
+			isBannedFunc: func(ctx context.Context, ipOrSubnet string) (bool, error) {
+				return false, nil
 			},
 		}
 
@@ -2831,9 +3081,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -2853,8 +3103,8 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 
 	t.Run("p2p banned but legacy not banned", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			isBannedFunc: func(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
-				return &p2p_api.IsBannedResponse{IsBanned: true}, nil
+			isBannedFunc: func(ctx context.Context, ipOrSubnet string) (bool, error) {
+				return true, nil
 			},
 		}
 
@@ -2865,9 +3115,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -2887,8 +3137,8 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 
 	t.Run("p2p client error ignored", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			isBannedFunc: func(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
-				return nil, errors.New(errors.ERR_ERROR, "p2p service error")
+			isBannedFunc: func(ctx context.Context, ipOrSubnet string) (bool, error) {
+				return false, errors.New(errors.ERR_ERROR, "p2p service error")
 			},
 		}
 
@@ -2899,9 +3149,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -2921,9 +3171,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 
 	t.Run("valid subnet CIDR notation", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			isBannedFunc: func(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
-				assert.Equal(t, "192.168.0.0/24", req.IpOrSubnet)
-				return &p2p_api.IsBannedResponse{IsBanned: true}, nil
+			isBannedFunc: func(ctx context.Context, ipOrSubnet string) (bool, error) {
+				assert.Equal(t, "192.168.0.0/24", ipOrSubnet)
+				return true, nil
 			},
 		}
 
@@ -2989,10 +3239,8 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 
 	t.Run("p2p client returns banned list", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			listBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ListBannedResponse, error) {
-				return &p2p_api.ListBannedResponse{
-					Banned: []string{"192.168.1.100", "10.0.0.0/24"},
-				}, nil
+			listBannedFunc: func(ctx context.Context) ([]string, error) {
+				return []string{"192.168.1.100", "10.0.0.0/24"}, nil
 			},
 		}
 
@@ -3024,8 +3272,8 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeer,
+			logger:          logger,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3043,10 +3291,8 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 
 	t.Run("both clients return banned lists - combined", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			listBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ListBannedResponse, error) {
-				return &p2p_api.ListBannedResponse{
-					Banned: []string{"192.168.1.100", "10.0.0.0/24"},
-				}, nil
+			listBannedFunc: func(ctx context.Context) ([]string, error) {
+				return []string{"192.168.1.100", "10.0.0.0/24"}, nil
 			},
 		}
 
@@ -3059,9 +3305,9 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3083,7 +3329,7 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 
 	t.Run("p2p client error - continues with legacy", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			listBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ListBannedResponse, error) {
+			listBannedFunc: func(ctx context.Context) ([]string, error) {
 				return nil, errors.New(errors.ERR_ERROR, "p2p service error")
 			},
 		}
@@ -3097,9 +3343,9 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3132,13 +3378,11 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 
 	t.Run("p2p client timeout", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			listBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ListBannedResponse, error) {
+			listBannedFunc: func(ctx context.Context) ([]string, error) {
 				// Simulate a long-running operation that respects context
 				select {
 				case <-time.After(10 * time.Second):
-					return &p2p_api.ListBannedResponse{
-						Banned: []string{"192.168.1.100"},
-					}, nil
+					return []string{"192.168.1.100"}, nil
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				}
@@ -3172,8 +3416,8 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 
 	t.Run("both clients clear successfully", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			clearBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ClearBannedResponse, error) {
-				return &p2p_api.ClearBannedResponse{}, nil
+			clearBannedFunc: func(ctx context.Context) error {
+				return nil
 			},
 		}
 
@@ -3184,9 +3428,9 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3202,8 +3446,8 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 
 	t.Run("p2p client error - still returns true", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			clearBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ClearBannedResponse, error) {
-				return nil, errors.New(errors.ERR_ERROR, "p2p service error")
+			clearBannedFunc: func(ctx context.Context) error {
+				return errors.New(errors.ERR_ERROR, "p2p service error")
 			},
 		}
 
@@ -3214,9 +3458,9 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3232,8 +3476,8 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 
 	t.Run("only p2p client available", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			clearBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ClearBannedResponse, error) {
-				return &p2p_api.ClearBannedResponse{}, nil
+			clearBannedFunc: func(ctx context.Context) error {
+				return nil
 			},
 		}
 
@@ -3261,8 +3505,8 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeer,
+			logger:          logger,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3294,8 +3538,8 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 
 	t.Run("both clients error - still returns true", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			clearBannedFunc: func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ClearBannedResponse, error) {
-				return nil, errors.New(errors.ERR_ERROR, "p2p service error")
+			clearBannedFunc: func(ctx context.Context) error {
+				return errors.New(errors.ERR_ERROR, "p2p service error")
 			},
 		}
 
@@ -3306,9 +3550,9 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3380,10 +3624,10 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		absoluteFlag := true
 
 		mockP2P := &mockP2PClient{
-			banPeerFunc: func(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
-				assert.Equal(t, "192.168.1.100", req.Addr)
-				assert.Equal(t, absoluteTime, req.Until)
-				return &p2p_api.BanPeerResponse{Ok: true}, nil
+			banPeerFunc: func(ctx context.Context, addr string, until int64) error {
+				assert.Equal(t, "192.168.1.100", addr)
+				assert.Equal(t, absoluteTime, until)
+				return nil
 			},
 		}
 
@@ -3396,9 +3640,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3422,11 +3666,11 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		absoluteFlag := false
 
 		mockP2P := &mockP2PClient{
-			banPeerFunc: func(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
+			banPeerFunc: func(ctx context.Context, addr string, until int64) error {
 				// Check that the ban time is approximately 1 hour from now
 				expectedTime := time.Now().Add(time.Hour).Unix()
-				assert.InDelta(t, expectedTime, req.Until, 5) // Allow 5 second variance
-				return &p2p_api.BanPeerResponse{Ok: true}, nil
+				assert.InDelta(t, expectedTime, until, 5) // Allow 5 second variance
+				return nil
 			},
 		}
 
@@ -3455,11 +3699,11 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		zeroTime := int64(0)
 
 		mockP2P := &mockP2PClient{
-			banPeerFunc: func(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
+			banPeerFunc: func(ctx context.Context, addr string, until int64) error {
 				// Check that the ban time is approximately 24 hours from now
 				expectedTime := time.Now().Add(24 * time.Hour).Unix()
-				assert.InDelta(t, expectedTime, req.Until, 5) // Allow 5 second variance
-				return &p2p_api.BanPeerResponse{Ok: true}, nil
+				assert.InDelta(t, expectedTime, until, 5) // Allow 5 second variance
+				return nil
 			},
 		}
 
@@ -3485,9 +3729,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 
 	t.Run("remove ban", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			unbanPeerFunc: func(ctx context.Context, req *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error) {
-				assert.Equal(t, "192.168.1.100", req.Addr)
-				return &p2p_api.UnbanPeerResponse{Ok: true}, nil
+			unbanPeerFunc: func(ctx context.Context, addr string) error {
+				assert.Equal(t, "192.168.1.100", addr)
+				return nil
 			},
 		}
 
@@ -3499,9 +3743,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3546,8 +3790,8 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		banTime := int64(3600)
 
 		mockP2P := &mockP2PClient{
-			banPeerFunc: func(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
-				return &p2p_api.BanPeerResponse{Ok: false}, nil // Ban failed
+			banPeerFunc: func(ctx context.Context, addr string, until int64) error {
+				return errors.New(errors.ERR_ERROR, "ban failed") // Ban failed
 			},
 		}
 
@@ -3575,9 +3819,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		banTime := int64(7200)
 
 		mockP2P := &mockP2PClient{
-			banPeerFunc: func(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
-				assert.Equal(t, "192.168.0.0/24", req.Addr)
-				return &p2p_api.BanPeerResponse{Ok: true}, nil
+			banPeerFunc: func(ctx context.Context, addr string, until int64) error {
+				assert.Equal(t, "192.168.0.0/24", addr)
+				return nil
 			},
 		}
 
@@ -3605,8 +3849,8 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		banTime := int64(3600)
 
 		mockP2P := &mockP2PClient{
-			banPeerFunc: func(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
-				return nil, errors.New(errors.ERR_ERROR, "p2p ban failed")
+			banPeerFunc: func(ctx context.Context, addr string, until int64) error {
+				return errors.New(errors.ERR_ERROR, "p2p ban failed")
 			},
 		}
 
@@ -3617,9 +3861,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3644,8 +3888,8 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 
 	t.Run("remove ban both clients fail", func(t *testing.T) {
 		mockP2P := &mockP2PClient{
-			unbanPeerFunc: func(ctx context.Context, req *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error) {
-				return nil, errors.New(errors.ERR_ERROR, "p2p unban failed")
+			unbanPeerFunc: func(ctx context.Context, addr string) error {
+				return errors.New(errors.ERR_ERROR, "p2p unban failed")
 			},
 		}
 
@@ -3656,9 +3900,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3727,12 +3971,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		}
 
 		mockP2PClient := &mockP2PClient{
-			getPeersFunc: func(ctx context.Context) (*p2p_api.GetPeersResponse, error) {
-				return &p2p_api.GetPeersResponse{
-					Peers: []*p2p_api.Peer{
-						{Id: "peer1", Addr: "127.0.0.1:8333"},
-						{Id: "peer2", Addr: "127.0.0.1:8334"},
-					},
+			getPeersFunc: func(ctx context.Context) ([]*p2p.PeerInfo, error) {
+				peerID1, _ := peer.Decode("peer1")
+				peerID2, _ := peer.Decode("peer2")
+				return []*p2p.PeerInfo{
+					{ID: peerID1},
+					{ID: peerID2},
 				}, nil
 			},
 		}
@@ -3752,7 +3996,7 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
 			p2pClient:           mockP2PClient,
-			peerClient:          mockLegacyPeerClient,
+			legacyP2PClient:     mockLegacyPeerClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -3922,7 +4166,7 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		}
 
 		mockP2PClient := &mockP2PClient{
-			getPeersFunc: func(ctx context.Context) (*p2p_api.GetPeersResponse, error) {
+			getPeersFunc: func(ctx context.Context) ([]*p2p.PeerInfo, error) {
 				return nil, errors.New(errors.ERR_ERROR, "p2p service unavailable")
 			},
 		}
@@ -3978,7 +4222,7 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 			logger:              logger,
 			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
-			peerClient:          mockLegacyPeerClient,
+			legacyP2PClient:     mockLegacyPeerClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -4016,13 +4260,13 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 		}
 
 		mockP2PClient := &mockP2PClient{
-			getPeersFunc: func(ctx context.Context) (*p2p_api.GetPeersResponse, error) {
+			getPeersFunc: func(ctx context.Context) ([]*p2p.PeerInfo, error) {
 				// Simulate slow response by checking context cancellation
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				case <-time.After(10 * time.Second): // Will timeout before this
-					return &p2p_api.GetPeersResponse{}, nil
+					return []*p2p.PeerInfo{}, nil
 				}
 			},
 		}
@@ -4146,18 +4390,21 @@ func TestHandleGetchaintipsComprehensive(t *testing.T) {
 
 // Mock blockchain client for testing
 type mockBlockchainClient struct {
-	getBlockFunc             func(context.Context, *chainhash.Hash) (*model.Block, error)
-	getBlockByHeightFunc     func(context.Context, uint32) (*model.Block, error)
-	getBlockHeaderFunc       func(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
-	getBestBlockHeaderFunc   func(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
-	getBestHeightAndTimeFunc func(context.Context) (uint32, uint32, error)
-	getChainTipsFunc         func(context.Context) ([]*model.ChainTip, error)
-	invalidateBlockFunc      func(context.Context, *chainhash.Hash) ([]chainhash.Hash, error)
-	revalidateBlockFunc      func(context.Context, *chainhash.Hash) error
-	healthFunc               func(context.Context, bool) (int, string, error)
-	getFSMCurrentStateFunc   func(context.Context) (*blockchain.FSMStateType, error)
-	getBlockHeadersFunc      func(context.Context, *chainhash.Hash, uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-	getBlockStatsFunc        func(context.Context) (*model.BlockStats, error)
+	getBlockFunc                    func(context.Context, *chainhash.Hash) (*model.Block, error)
+	getBlockByHeightFunc            func(context.Context, uint32) (*model.Block, error)
+	getBlockHeaderFunc              func(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+	getBestBlockHeaderFunc          func(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+	getBestHeightAndTimeFunc        func(context.Context) (uint32, uint32, error)
+	getChainTipsFunc                func(context.Context) ([]*model.ChainTip, error)
+	invalidateBlockFunc             func(context.Context, *chainhash.Hash) ([]chainhash.Hash, error)
+	revalidateBlockFunc             func(context.Context, *chainhash.Hash) error
+	getLastNInvalidBlocksFunc       func(context.Context, int64) ([]*model.BlockInfo, error)
+	healthFunc                      func(context.Context, bool) (int, string, error)
+	getFSMCurrentStateFunc          func(context.Context) (*blockchain.FSMStateType, error)
+	getBlockHeadersFunc             func(context.Context, *chainhash.Hash, uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	getBlockStatsFunc               func(context.Context) (*model.BlockStats, error)
+	findBlocksContainingSubtreeFunc func(context.Context, *chainhash.Hash, uint32) ([]*model.Block, error)
+	checkBlockIsInCurrentChainFunc  func(context.Context, []uint32) (bool, error)
 }
 
 func (m *mockBlockchainClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -4217,7 +4464,10 @@ func (m *mockBlockchainClient) GetLastNBlocks(ctx context.Context, n int64, incl
 	return nil, nil
 }
 func (m *mockBlockchainClient) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
-	return nil, nil
+	if m.getLastNInvalidBlocksFunc != nil {
+		return m.getLastNInvalidBlocksFunc(ctx, n)
+	}
+	return []*model.BlockInfo{}, nil
 }
 func (m *mockBlockchainClient) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
 	return nil, nil
@@ -4313,6 +4563,9 @@ func (m *mockBlockchainClient) GetBestHeightAndTime(ctx context.Context) (uint32
 	return 0, 0, nil
 }
 func (m *mockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	if m.checkBlockIsInCurrentChainFunc != nil {
+		return m.checkBlockIsInCurrentChainFunc(ctx, blockIDs)
+	}
 	return false, nil
 }
 func (m *mockBlockchainClient) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
@@ -4344,10 +4597,11 @@ func (m *mockBlockchainClient) WaitUntilFSMTransitionFromIdleState(ctx context.C
 
 // mockBlockValidationClient is a mock implementation of blockvalidation.Interface for testing
 type mockBlockValidationClient struct {
-	validateBlockFunc func(context.Context, *model.Block, *blockvalidation.ValidateBlockOptions) error
-	processBlockFunc  func(context.Context, *model.Block, uint32) error
-	blockFoundFunc    func(context.Context, *chainhash.Hash, string, bool) error
-	healthFunc        func(context.Context, bool) (int, string, error)
+	validateBlockFunc   func(context.Context, *model.Block, *blockvalidation.ValidateBlockOptions) error
+	revalidateBlockFunc func(context.Context, chainhash.Hash) error
+	processBlockFunc    func(context.Context, *model.Block, uint32) error
+	blockFoundFunc      func(context.Context, *chainhash.Hash, string, bool) error
+	healthFunc          func(context.Context, bool) (int, string, error)
 }
 
 func (m *mockBlockValidationClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -4364,7 +4618,7 @@ func (m *mockBlockValidationClient) BlockFound(ctx context.Context, blockHash *c
 	return nil
 }
 
-func (m *mockBlockValidationClient) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, baseURL, peerID string) error {
+func (m *mockBlockValidationClient) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string) error {
 	if m.processBlockFunc != nil {
 		return m.processBlockFunc(ctx, block, blockHeight)
 	}
@@ -4377,6 +4631,18 @@ func (m *mockBlockValidationClient) ValidateBlock(ctx context.Context, block *mo
 	}
 	return nil
 }
+
+func (m *mockBlockValidationClient) RevalidateBlock(ctx context.Context, blockHash chainhash.Hash) error {
+	if m.revalidateBlockFunc != nil {
+		return m.revalidateBlockFunc(ctx, blockHash)
+	}
+	return nil
+}
+
+func (m *mockBlockValidationClient) GetCatchupStatus(ctx context.Context) (*blockvalidation.CatchupStatus, error) {
+	return &blockvalidation.CatchupStatus{IsCatchingUp: false}, nil
+}
+
 func (m *mockBlockchainClient) IsFullyReady(ctx context.Context) (bool, error) { return false, nil }
 func (m *mockBlockchainClient) Run(ctx context.Context, source string) error   { return nil }
 func (m *mockBlockchainClient) CatchUpBlocks(ctx context.Context) error        { return nil }
@@ -4393,6 +4659,15 @@ func (m *mockBlockchainClient) LocateBlockHeaders(ctx context.Context, locator [
 }
 func (m *mockBlockchainClient) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error {
 	return nil
+}
+func (m *mockBlockchainClient) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
+	return nil, nil
+}
+func (m *mockBlockchainClient) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error) {
+	if m.findBlocksContainingSubtreeFunc != nil {
+		return m.findBlocksContainingSubtreeFunc(ctx, subtreeHash, maxBlocks)
+	}
+	return nil, errors.New(errors.ERR_ERROR, "not implemented")
 }
 
 // TestHandleFreezeComprehensive tests the handleFreeze handler
@@ -4589,8 +4864,8 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeerClient,
+			logger:          logger,
+			legacyP2PClient: mockPeerClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -4637,27 +4912,22 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 	t.Run("p2p client with stats", func(t *testing.T) {
 		// Create mock p2p client
 		mockP2PClient := &mockP2PClient{
-			getPeersFunc: func(ctx context.Context) (*p2p_api.GetPeersResponse, error) {
-				return &p2p_api.GetPeersResponse{
-					Peers: []*p2p_api.Peer{
-						{
-							Id:             "12D3KooWExample123456789",
-							Addr:           "203.0.113.10:9333",
-							Services:       "00000001", // NODE_NETWORK
-							Inbound:        true,
-							StartingHeight: 800200,
-							LastSend:       1705223456, // PR #1881 stats
-							LastRecv:       1705223457, // PR #1881 stats
-							BytesSent:      98765,      // PR #1881 stats
-							BytesReceived:  43210,      // PR #1881 stats
-							ConnTime:       1705220000,
-							PingTime:       75,
-							TimeOffset:     2,
-							Version:        70017,
-							SubVer:         "/Teranode:2.0.0/",
-							CurrentHeight:  800250,
-							Banscore:       5,
-						},
+			getPeerRegistryFunc: func(ctx context.Context) ([]*p2p.PeerInfo, error) {
+				peerID, err := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
+				require.NoError(t, err, "Failed to decode peer ID")
+				return []*p2p.PeerInfo{
+					{
+						ID:              peerID,
+						BytesReceived:   43210,
+						BanScore:        5,
+						ClientName:      "/Teranode:2.0.0/",
+						Height:          800250,
+						DataHubURL:      "203.0.113.10:9333",
+						ConnectedAt:     time.Unix(1705220000, 0),
+						LastMessageTime: time.Unix(1705223456, 0),
+						LastBlockTime:   time.Unix(1705223457, 0),
+						AvgResponseTime: 75 * time.Second,
+						IsConnected:     true,
 					},
 				}, nil
 			},
@@ -4682,28 +4952,27 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		require.True(t, ok)
 		require.Len(t, peers, 1)
 
-		peer := peers[0]
+		p := peers[0]
 		// Verify p2p peer info
-		assert.Equal(t, "12D3KooWExample123456789", peer.PeerID)
-		assert.Equal(t, "203.0.113.10:9333", peer.Addr)
-		assert.Equal(t, "00000001", peer.ServicesStr)
-		assert.True(t, peer.Inbound)
-		assert.Equal(t, int32(800200), peer.StartingHeight)
+		assert.Equal(t, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", p.PeerID)
+		assert.Equal(t, "203.0.113.10:9333", p.Addr)
+		assert.True(t, p.Inbound)
+		assert.Equal(t, int32(800250), p.StartingHeight) // P2P uses current height as starting height
 
 		// Verify PR #1881 peer stats are properly mapped for p2p peers
-		assert.Equal(t, int64(1705223456), peer.LastSend)
-		assert.Equal(t, int64(1705223457), peer.LastRecv)
-		assert.Equal(t, uint64(98765), peer.BytesSent)
-		assert.Equal(t, uint64(43210), peer.BytesRecv)
+		assert.Equal(t, int64(1705223456), p.LastSend)
+		assert.Equal(t, int64(1705223457), p.LastRecv)
+		assert.Equal(t, uint64(0), p.BytesSent) // P2P doesn't track bytes sent
+		assert.Equal(t, uint64(43210), p.BytesRecv)
 
 		// Verify other p2p peer info
-		assert.Equal(t, int64(1705220000), peer.ConnTime)
-		assert.Equal(t, float64(75), peer.PingTime)
-		assert.Equal(t, int64(2), peer.TimeOffset)
-		assert.Equal(t, uint32(70017), peer.Version)
-		assert.Equal(t, "/Teranode:2.0.0/", peer.SubVer)
-		assert.Equal(t, int32(800250), peer.CurrentHeight)
-		assert.Equal(t, int32(5), peer.BanScore)
+		assert.Equal(t, int64(1705220000), p.ConnTime)
+		assert.Equal(t, float64(75), p.PingTime) // AvgResponseTime of 75 seconds
+		assert.Equal(t, int64(0), p.TimeOffset)  // P2P doesn't track time offset
+		assert.Equal(t, uint32(0), p.Version)    // P2P doesn't track protocol version
+		assert.Equal(t, "/Teranode:2.0.0/", p.SubVer)
+		assert.Equal(t, int32(800250), p.CurrentHeight)
+		assert.Equal(t, int32(5), p.BanScore)
 	})
 
 	t.Run("combined legacy and p2p peers", func(t *testing.T) {
@@ -4726,26 +4995,25 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		mockP2PClient := &mockP2PClient{
-			getPeersFunc: func(ctx context.Context) (*p2p_api.GetPeersResponse, error) {
-				return &p2p_api.GetPeersResponse{
-					Peers: []*p2p_api.Peer{
-						{
-							Id:            "12D3KooWP2PPeer",
-							Addr:          "203.0.113.20:9333",
-							LastSend:      1705200000,
-							LastRecv:      1705200001,
-							BytesSent:     3000,
-							BytesReceived: 4000,
-						},
+			getPeerRegistryFunc: func(ctx context.Context) ([]*p2p.PeerInfo, error) {
+				peerID, err := peer.Decode("12D3KooWJZZnUE4umdLBuK15eUZL1NF6fdTJ9cucEuwvuX8V8Ktp")
+				require.NoError(t, err, "Failed to decode peer ID")
+				return []*p2p.PeerInfo{
+					{
+						ID:              peerID,
+						BytesReceived:   4000,
+						DataHubURL:      "203.0.113.20:9333",
+						LastMessageTime: time.Unix(1705200000, 0),
+						LastBlockTime:   time.Unix(1705200001, 0),
 					},
 				}, nil
 			},
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeerClient,
-			p2pClient:  mockP2PClient,
+			logger:          logger,
+			legacyP2PClient: mockPeerClient,
+			p2pClient:       mockP2PClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -4767,7 +5035,7 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		for _, peer := range peers {
 			if peer.ID == 1 {
 				legacyPeer = peer
-			} else if peer.PeerID == "12D3KooWP2PPeer" {
+			} else if peer.PeerID == "12D3KooWJZZnUE4umdLBuK15eUZL1NF6fdTJ9cucEuwvuX8V8Ktp" {
 				p2pPeer = peer
 			}
 		}
@@ -4786,7 +5054,7 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		assert.Equal(t, "203.0.113.20:9333", p2pPeer.Addr)
 		assert.Equal(t, int64(1705200000), p2pPeer.LastSend)
 		assert.Equal(t, int64(1705200001), p2pPeer.LastRecv)
-		assert.Equal(t, uint64(3000), p2pPeer.BytesSent)
+		assert.Equal(t, uint64(0), p2pPeer.BytesSent) // P2P doesn't track bytes sent
 		assert.Equal(t, uint64(4000), p2pPeer.BytesRecv)
 	})
 
@@ -4805,8 +5073,8 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeerClient,
+			logger:          logger,
+			legacyP2PClient: mockPeerClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -4834,15 +5102,15 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		mockP2PClient := &mockP2PClient{
-			getPeersFunc: func(ctx context.Context) (*p2p_api.GetPeersResponse, error) {
+			getPeersFunc: func(ctx context.Context) ([]*p2p.PeerInfo, error) {
 				return nil, errors.NewServiceError("p2p service unavailable")
 			},
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeerClient,
-			p2pClient:  mockP2PClient,
+			logger:          logger,
+			legacyP2PClient: mockPeerClient,
+			p2pClient:       mockP2PClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -4882,8 +5150,8 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeerClient,
+			logger:          logger,
+			legacyP2PClient: mockPeerClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -4972,58 +5240,87 @@ func (m *mockLegacyPeerClient) ClearBanned(ctx context.Context, req *emptypb.Emp
 }
 
 type mockP2PClient struct {
-	getPeersFunc    func(ctx context.Context) (*p2p_api.GetPeersResponse, error)
-	isBannedFunc    func(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error)
-	listBannedFunc  func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ListBannedResponse, error)
-	clearBannedFunc func(ctx context.Context, req *emptypb.Empty) (*p2p_api.ClearBannedResponse, error)
-	banPeerFunc     func(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error)
-	unbanPeerFunc   func(ctx context.Context, req *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error)
+	getPeersFunc           func(ctx context.Context) ([]*p2p.PeerInfo, error)
+	getPeerFunc            func(ctx context.Context, peerID string) (*p2p.PeerInfo, error)
+	getPeersForCatchupFunc func(ctx context.Context) ([]*p2p.PeerInfo, error)
+	isBannedFunc           func(ctx context.Context, ipOrSubnet string) (bool, error)
+	listBannedFunc         func(ctx context.Context) ([]string, error)
+	clearBannedFunc        func(ctx context.Context) error
+	banPeerFunc            func(ctx context.Context, addr string, until int64) error
+	unbanPeerFunc          func(ctx context.Context, addr string) error
+	addBanScoreFunc        func(ctx context.Context, peerID string, reason string) error
+	getPeerRegistryFunc    func(ctx context.Context) ([]*p2p.PeerInfo, error)
 }
 
-func (m *mockP2PClient) GetPeers(ctx context.Context) (*p2p_api.GetPeersResponse, error) {
+func (m *mockP2PClient) GetPeers(ctx context.Context) ([]*p2p.PeerInfo, error) {
 	if m.getPeersFunc != nil {
 		return m.getPeersFunc(ctx)
 	}
-	return &p2p_api.GetPeersResponse{Peers: []*p2p_api.Peer{}}, nil
+	return []*p2p.PeerInfo{}, nil
 }
 
-func (m *mockP2PClient) BanPeer(ctx context.Context, req *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
+func (m *mockP2PClient) GetPeer(ctx context.Context, peerID string) (*p2p.PeerInfo, error) {
+	if m.getPeerFunc != nil {
+		return m.getPeerFunc(ctx, peerID)
+	}
+	return nil, nil
+}
+
+func (m *mockP2PClient) GetPeersForCatchup(ctx context.Context) ([]*p2p.PeerInfo, error) {
+	if m.getPeersForCatchupFunc != nil {
+		return m.getPeersForCatchupFunc(ctx)
+	}
+	return []*p2p.PeerInfo{}, nil
+}
+
+func (m *mockP2PClient) IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error) {
+	return false, "", nil
+}
+
+func (m *mockP2PClient) IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, error) {
+	return false, "", 0, nil
+}
+
+func (m *mockP2PClient) BanPeer(ctx context.Context, addr string, until int64) error {
 	if m.banPeerFunc != nil {
-		return m.banPeerFunc(ctx, req)
+		return m.banPeerFunc(ctx, addr, until)
 	}
-	return &p2p_api.BanPeerResponse{}, nil
+	return nil
 }
 
-func (m *mockP2PClient) UnbanPeer(ctx context.Context, req *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error) {
+func (m *mockP2PClient) UnbanPeer(ctx context.Context, addr string) error {
 	if m.unbanPeerFunc != nil {
-		return m.unbanPeerFunc(ctx, req)
+		return m.unbanPeerFunc(ctx, addr)
 	}
-	return &p2p_api.UnbanPeerResponse{}, nil
+	return nil
 }
 
-func (m *mockP2PClient) IsBanned(ctx context.Context, req *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
+func (m *mockP2PClient) IsBanned(ctx context.Context, ipOrSubnet string) (bool, error) {
 	if m.isBannedFunc != nil {
-		return m.isBannedFunc(ctx, req)
+		return m.isBannedFunc(ctx, ipOrSubnet)
 	}
-	return &p2p_api.IsBannedResponse{IsBanned: false}, nil
+	return false, nil
 }
 
-func (m *mockP2PClient) ListBanned(ctx context.Context, req *emptypb.Empty) (*p2p_api.ListBannedResponse, error) {
+func (m *mockP2PClient) ListBanned(ctx context.Context) ([]string, error) {
 	if m.listBannedFunc != nil {
-		return m.listBannedFunc(ctx, req)
+		return m.listBannedFunc(ctx)
 	}
-	return &p2p_api.ListBannedResponse{}, nil
+	return []string{}, nil
 }
 
-func (m *mockP2PClient) ClearBanned(ctx context.Context, req *emptypb.Empty) (*p2p_api.ClearBannedResponse, error) {
+func (m *mockP2PClient) ClearBanned(ctx context.Context) error {
 	if m.clearBannedFunc != nil {
-		return m.clearBannedFunc(ctx, req)
+		return m.clearBannedFunc(ctx)
 	}
-	return &p2p_api.ClearBannedResponse{}, nil
+	return nil
 }
 
-func (m *mockP2PClient) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error) {
-	return &p2p_api.AddBanScoreResponse{}, nil
+func (m *mockP2PClient) AddBanScore(ctx context.Context, peerID string, reason string) error {
+	if m.addBanScoreFunc != nil {
+		return m.addBanScoreFunc(ctx, peerID, reason)
+	}
+	return nil
 }
 
 func (m *mockP2PClient) ConnectPeer(ctx context.Context, peerAddr string) error {
@@ -5032,6 +5329,53 @@ func (m *mockP2PClient) ConnectPeer(ctx context.Context, peerAddr string) error 
 
 func (m *mockP2PClient) DisconnectPeer(ctx context.Context, peerID string) error {
 	return nil
+}
+
+func (m *mockP2PClient) RecordCatchupAttempt(ctx context.Context, peerID string) error {
+	return nil
+}
+
+func (m *mockP2PClient) RecordCatchupSuccess(ctx context.Context, peerID string, durationMs int64) error {
+	return nil
+}
+
+func (m *mockP2PClient) RecordCatchupFailure(ctx context.Context, peerID string) error {
+	return nil
+}
+
+func (m *mockP2PClient) RecordCatchupMalicious(ctx context.Context, peerID string) error {
+	return nil
+}
+
+func (m *mockP2PClient) UpdateCatchupReputation(ctx context.Context, peerID string, score float64) error {
+	return nil
+}
+
+func (m *mockP2PClient) UpdateCatchupError(ctx context.Context, peerID string, errorMessage string) error {
+	return nil
+}
+
+func (m *mockP2PClient) ResetReputation(ctx context.Context, peerID string) (int, error) {
+	return 0, nil
+}
+
+func (m *mockP2PClient) ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error {
+	return nil
+}
+
+func (m *mockP2PClient) ReportValidBlock(ctx context.Context, peerID string, blockHash string) error {
+	return nil
+}
+
+func (m *mockP2PClient) RecordBytesDownloaded(ctx context.Context, peerID string, bytesDownloaded uint64) error {
+	return nil
+}
+
+func (m *mockP2PClient) GetPeerRegistry(ctx context.Context) ([]*p2p.PeerInfo, error) {
+	if m.getPeerRegistryFunc != nil {
+		return m.getPeerRegistryFunc(ctx)
+	}
+	return []*p2p.PeerInfo{}, nil
 }
 
 // TestHandleSubmitMiningSolutionComprehensive tests the complete handleSubmitMiningSolution functionality

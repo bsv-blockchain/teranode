@@ -213,7 +213,7 @@ func TestClientAddBlock(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	coinbase := bt.NewTx()
@@ -264,7 +264,7 @@ func TestClientGetBlock(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	validHeaderBytes := validHeader.Bytes()
@@ -478,7 +478,7 @@ func TestClientGetBlocks(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 
@@ -500,7 +500,7 @@ func TestClientGetBlocks(t *testing.T) {
 		HashPrevBlock:  blockHash,
 		HashMerkleRoot: &chainhash.Hash{7, 8, 9},
 		Timestamp:      uint32(time.Now().Unix()) + 600,
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          456,
 	}
 	validBlock2, _ := model.NewBlock(validHeader2, validCoinbase, subtreeHashes, 2, 2000, 101, 2)
@@ -643,7 +643,7 @@ func TestClientGetBlockByHeight(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	validHeaderBytes := validHeader.Bytes()
@@ -736,7 +736,7 @@ func TestClientGetBlockByID(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	validHeaderBytes := validHeader.Bytes()
@@ -1216,7 +1216,7 @@ func TestClientGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	validHeaderBytes := validHeader.Bytes()
@@ -1499,7 +1499,7 @@ func TestClientGetBlockHeadersFromOldest(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	validHeader2 := &model.BlockHeader{
@@ -1507,7 +1507,7 @@ func TestClientGetBlockHeadersFromOldest(t *testing.T) {
 		HashPrevBlock:  chainTipHash,
 		HashMerkleRoot: &chainhash.Hash{7, 8, 9},
 		Timestamp:      uint32(time.Now().Unix()) + 600,
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          456,
 	}
 
@@ -2108,7 +2108,7 @@ func TestClientGetBestBlockHeader(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 
@@ -2566,7 +2566,7 @@ func TestClientGetBlockHeader(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 
@@ -2781,7 +2781,7 @@ func TestClientGetBlockHeaders(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 
@@ -3487,7 +3487,7 @@ func TestClientGetBlockHeadersToCommonAncestor(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	validMeta1 := &model.BlockHeaderMeta{
@@ -3639,7 +3639,7 @@ func TestClientGetBlockHeadersFromCommonAncestor(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	validMeta1 := &model.BlockHeaderMeta{
@@ -3762,7 +3762,7 @@ func TestClientGetBlockHeadersFromTill(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	validMeta1 := &model.BlockHeaderMeta{
@@ -3884,7 +3884,7 @@ func TestClientGetBlockHeadersFromHeight(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	validMeta1 := &model.BlockHeaderMeta{
@@ -4030,7 +4030,7 @@ func TestClientGetBlockHeadersByHeight(t *testing.T) {
 		HashPrevBlock:  &chainhash.Hash{},
 		HashMerkleRoot: &chainhash.Hash{},
 		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+		Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 		Nonce:          123,
 	}
 	validMeta1 := &model.BlockHeaderMeta{
@@ -4400,7 +4400,7 @@ func TestClientGetBlocksMinedNotSet(t *testing.T) {
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: &chainhash.Hash{},
 			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+			Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 			Nonce:          123,
 		}
 
@@ -4508,7 +4508,7 @@ func TestClientGetBlocksSubtreesNotSet(t *testing.T) {
 			HashPrevBlock:  &chainhash.Hash{},
 			HashMerkleRoot: &chainhash.Hash{},
 			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{0x1d, 0x00, 0xff, 0xff},
+			Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
 			Nonce:          123,
 		}
 

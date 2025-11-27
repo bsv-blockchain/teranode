@@ -50,8 +50,14 @@ func setupTestSubtreeProcessor(t *testing.T) *SubtreeProcessor {
 	})
 
 	// Create SubtreeProcessor
-	stp, err := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, blobStore, nil, utxoStore, newSubtreeChan)
+	stp, err := NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, settings, blobStore, nil, utxoStore, newSubtreeChan)
 	require.NoError(t, err)
+
+	// Start processing and ensure cleanup
+	stp.Start(t.Context())
+	t.Cleanup(func() {
+		stp.Stop(context.Background())
+	})
 
 	return stp
 }
@@ -66,19 +72,19 @@ func TestReorgDuplicateTransactionBug(t *testing.T) {
 
 		// Create a transaction that will appear in multiple subtrees
 		duplicateTxHash := chainhash.HashH([]byte("duplicate_tx_in_reorg"))
-		duplicateNode := subtreepkg.SubtreeNode{
+		duplicateNode := subtreepkg.Node{
 			Hash:        duplicateTxHash,
 			Fee:         1000,
 			SizeInBytes: 250,
 		}
 
 		// Create some unique transactions for variety
-		uniqueTx1 := subtreepkg.SubtreeNode{
+		uniqueTx1 := subtreepkg.Node{
 			Hash:        chainhash.HashH([]byte("unique_1")),
 			Fee:         500,
 			SizeInBytes: 200,
 		}
-		uniqueTx2 := subtreepkg.SubtreeNode{
+		uniqueTx2 := subtreepkg.Node{
 			Hash:        chainhash.HashH([]byte("unique_2")),
 			Fee:         600,
 			SizeInBytes: 180,
@@ -113,7 +119,7 @@ func TestReorgDuplicateTransactionBug(t *testing.T) {
 		require.NoError(t, err)
 		// Add filler to make it look more realistic
 		fillerHash := chainhash.HashH([]byte("filler"))
-		err = subtree3.AddSubtreeNode(subtreepkg.SubtreeNode{Hash: fillerHash, Fee: 300, SizeInBytes: 150})
+		err = subtree3.AddSubtreeNode(subtreepkg.Node{Hash: fillerHash, Fee: 300, SizeInBytes: 150})
 		require.NoError(t, err)
 
 		// Simulate the state during a reorg where we're processing our own block

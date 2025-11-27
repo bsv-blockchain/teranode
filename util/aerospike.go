@@ -45,6 +45,12 @@ var batchSleepBetweenRetries time.Duration
 var batchSleepMultiplier float64
 var concurrentNodes int
 
+var queryMaxRetries int
+var queryTotalTimeout time.Duration
+var querySocketTimeout time.Duration
+var querySleepBetweenRetries time.Duration
+var querySleepMultiplier float64
+
 var aerospikePrometheusMetrics = *safemap.New[string, prometheus.Counter]()
 var aerospikePrometheusHistograms = *safemap.New[string, prometheus.Histogram]()
 
@@ -210,6 +216,44 @@ func getAerospikeClient(logger ulogger.Logger, url *url.URL, tSettings *settings
 		concurrentNodes, err = getQueryInt(batchPolicyURL, "ConcurrentNodes", aerospike.NewBatchPolicy().ConcurrentNodes, logger)
 		if err != nil {
 			return nil, err
+		}
+
+		// Query policy stuff
+		queryPolicyURL := tSettings.Aerospike.QueryPolicyURL
+		if queryPolicyURL == nil {
+			// If no query policy is set, use default values
+			queryMaxRetries = aerospike.NewQueryPolicy().MaxRetries
+			queryTotalTimeout = aerospike.NewQueryPolicy().TotalTimeout
+			querySocketTimeout = aerospike.NewQueryPolicy().SocketTimeout
+			querySleepBetweenRetries = aerospike.NewQueryPolicy().SleepBetweenRetries
+			querySleepMultiplier = aerospike.NewQueryPolicy().SleepMultiplier
+		} else {
+			logger.Infof("[Aerospike] queryPolicy url %s", queryPolicyURL)
+
+			queryMaxRetries, err = getQueryInt(queryPolicyURL, "MaxRetries", aerospike.NewQueryPolicy().MaxRetries, logger)
+			if err != nil {
+				return nil, err
+			}
+
+			queryTotalTimeout, err = getQueryDuration(queryPolicyURL, "TotalTimeout", aerospike.NewQueryPolicy().TotalTimeout, logger)
+			if err != nil {
+				return nil, err
+			}
+
+			querySocketTimeout, err = getQueryDuration(queryPolicyURL, "SocketTimeout", aerospike.NewQueryPolicy().SocketTimeout, logger)
+			if err != nil {
+				return nil, err
+			}
+
+			querySleepBetweenRetries, err = getQueryDuration(queryPolicyURL, "SleepBetweenRetries", aerospike.NewQueryPolicy().SleepBetweenRetries, logger)
+			if err != nil {
+				return nil, err
+			}
+
+			querySleepMultiplier, err = getQueryFloat64(queryPolicyURL, "SleepMultiplier", aerospike.NewQueryPolicy().SleepMultiplier, logger)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		// todo optimize these https://github.com/aerospike/aerospike-client-go/issues/256#issuecomment-479964112
@@ -716,4 +760,22 @@ func GetAerospikeBatchReadPolicy(tSettings *settings.Settings) *aerospike.BatchR
 	}
 
 	return batchReadPolicy
+}
+
+// GetAerospikeQueryPolicy creates a new Aerospike query policy with configured settings.
+// Used for query operations to scan and filter records.
+func GetAerospikeQueryPolicy(tSettings *settings.Settings) *aerospike.QueryPolicy {
+	queryPolicy := aerospike.NewQueryPolicy()
+
+	if tSettings.Aerospike.UseDefaultPolicies {
+		return queryPolicy
+	}
+
+	queryPolicy.MaxRetries = queryMaxRetries
+	queryPolicy.TotalTimeout = queryTotalTimeout
+	queryPolicy.SocketTimeout = querySocketTimeout
+	queryPolicy.SleepBetweenRetries = querySleepBetweenRetries
+	queryPolicy.SleepMultiplier = querySleepMultiplier
+
+	return queryPolicy
 }

@@ -56,7 +56,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 		return errors.NewStorageError("[BlockPersister] error checking if subtree data exists for %s", subtreeHash.String(), err)
 	}
 
-	var subtreeData *subtreepkg.SubtreeData
+	var subtreeData *subtreepkg.Data
 
 	if subtreeDataExists {
 		// Subtree data already exists, load it to process UTXOs
@@ -145,7 +145,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 //
 // Possible errors include storage access failures, file corruption, or deserialization
 // issues. All errors are wrapped with appropriate context for debugging.
-func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.SubtreeData, error) {
+func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Data, error) {
 	// 1. get the subtree from the subtree store
 	subtree, err := u.readSubtree(ctx, subtreeHash)
 	if err != nil {

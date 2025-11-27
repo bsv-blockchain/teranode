@@ -51,7 +51,7 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 		transactions.WithP2PKHOutputs(100, outputAmount),
 	)
 
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, parentTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, parentTx)
 	require.NoError(t, err)
 
 	err = td.WaitForTransactionInBlockAssembly(parentTx, 10*time.Second)
@@ -65,7 +65,7 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 		transactions.WithInput(parentTx, 0),
 		transactions.WithP2PKHOutputs(10, parentTx.Outputs[0].Satoshis/20),
 	)
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, childTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, childTx)
 	require.NoError(t, err)
 
 	// creat another child tx
@@ -73,7 +73,7 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 		transactions.WithInput(parentTx, 1),
 		transactions.WithP2PKHOutputs(10, parentTx.Outputs[1].Satoshis/20),
 	)
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, childTx2)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, childTx2)
 	require.NoError(t, err)
 
 	// verify the child tx is in the block assembly
@@ -101,7 +101,7 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 		transactions.WithInput(childTx, 9),
 		transactions.WithP2PKHOutputs(10, childTx.Outputs[0].Satoshis),
 	)
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, grandchildTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, grandchildTx)
 	require.NoError(t, err)
 
 	err = td.WaitForTransactionInBlockAssembly(grandchildTx, 10*time.Second)
@@ -173,7 +173,7 @@ waitLoop2:
 		transactions.WithInput(childTx2, 0),
 		transactions.WithP2PKHOutputs(1, childTx2.Outputs[0].Satoshis),
 	)
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, grandchildTx2)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, grandchildTx2)
 	require.NoError(t, err)
 
 	err = td.WaitForTransactionInBlockAssembly(grandchildTx2, 10*time.Second)

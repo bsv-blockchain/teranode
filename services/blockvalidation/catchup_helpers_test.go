@@ -188,11 +188,11 @@ func TestCheckContextCancellation(t *testing.T) {
 	})
 
 	t.Run("Timeout", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 		defer cancel()
 
 		// Wait for timeout
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 
 		err := catchup.CheckContextCancellation(ctx)
 		assert.Error(t, err, "Timed out context should error")

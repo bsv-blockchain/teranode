@@ -13,6 +13,8 @@
 package subtreeprocessor
 
 import (
+	"context"
+
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -42,7 +44,15 @@ type Interface interface {
 	// Parameters:
 	//   - node: The transaction node to add to processing
 	//   - txInpoints: Transaction input points for dependency tracking
-	Add(node subtree.SubtreeNode, txInpoints subtree.TxInpoints)
+	Add(node subtree.Node, txInpoints subtree.TxInpoints)
+
+	// Start starts the main processing goroutine for the SubtreeProcessor.
+	// This should be called after loading unmined transactions at startup to avoid race conditions.
+	// Uses sync.Once internally, so multiple calls are safe (only starts once).
+	//
+	// Parameters:
+	//   - ctx: Context for the processing goroutine
+	Start(ctx context.Context)
 
 	// AddDirectly adds a transaction node directly to the processor without
 	// using the queue. This is typically used for block assembly startup.
@@ -57,7 +67,7 @@ type Interface interface {
 	//   - error: Any error encountered during the addition
 	//
 	// Note: This method bypasses the normal queue processing and should be used
-	AddDirectly(node subtree.SubtreeNode, txInpoints subtree.TxInpoints, skipNotification bool) error
+	AddDirectly(node subtree.Node, txInpoints subtree.TxInpoints, skipNotification bool) error
 
 	// GetCurrentRunningState returns the current operational state of the processor.
 	// This provides visibility into whether the processor is running, stopped,
@@ -121,11 +131,12 @@ type Interface interface {
 	// This is used when transactions become invalid or need to be excluded.
 	//
 	// Parameters:
+	//   - ctx: Context for the removal operation
 	//   - hash: Hash of the transaction to remove
 	//
 	// Returns:
 	//   - error: Any error encountered during transaction removal
-	Remove(hash chainhash.Hash) error
+	Remove(ctx context.Context, hash chainhash.Hash) error
 
 	// GetCompletedSubtreesForMiningCandidate returns completed subtrees ready for mining.
 	// These subtrees contain validated transactions that can be included in a block.
@@ -233,4 +244,20 @@ type Interface interface {
 	// Returns:
 	//   - int: Total number of subtrees
 	SubtreeCount() int
+
+	// WaitForPendingBlocks waits for any pending block operations to complete.
+	// This ensures that all block-related processing is finalized before proceeding.
+	//
+	// Returns:
+	//   - error: Any error encountered while waiting
+	WaitForPendingBlocks(ctx context.Context) error
+
+	// Stop gracefully shuts down the SubtreeProcessor.
+	// This method cancels the processor's internal context, which triggers the main
+	// processing goroutine to stop and clean up resources (such as the announcement ticker).
+	// It should be called when the processor is no longer needed to prevent resource leaks.
+	//
+	// Parameters:
+	//   - ctx: Context for the stop operation
+	Stop(ctx context.Context)
 }

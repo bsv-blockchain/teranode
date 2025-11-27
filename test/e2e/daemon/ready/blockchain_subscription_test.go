@@ -2,10 +2,13 @@ package smoke
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/stretchr/testify/require"
 )
 
@@ -13,10 +16,22 @@ func TestBlockchainSubscriptionReconnection(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
+	// aerospike
+	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
+	require.NoError(t, err, "Failed to setup Aerospike container")
+	parsedURL, err := url.Parse(utxoStoreURL)
+	require.NoError(t, err, "Failed to parse UTXO store URL")
+	t.Cleanup(func() {
+		_ = teardown()
+	})
+
 	node := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       true,
 		SettingsContext: "docker.host.teranode1.daemon",
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.UtxoStore.UtxoStore = parsedURL
+		},
 	})
 	defer node.Stop(t, true)
 

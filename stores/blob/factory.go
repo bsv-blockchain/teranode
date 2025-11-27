@@ -167,13 +167,13 @@ func createDAHStore(storeURL *url.URL, logger ulogger.Logger, opts []options.Sto
 //   - error: Any error that occurred during creation, particularly if the batcher
 //     cannot be properly configured with the provided parameters
 func createBatchedStore(storeURL *url.URL, store Store, logger ulogger.Logger) (Store, error) {
-	sizeInBytes := int64(4 * 1024 * 1024)
+	sizeInBytes := 4 * 1024 * 1024
 
 	sizeString := storeURL.Query().Get("sizeInBytes")
 	if sizeString != "" {
 		var err error
 
-		sizeInBytes, err = strconv.ParseInt(sizeString, 10, 64)
+		sizeInBytes, err = strconv.Atoi(sizeString)
 		if err != nil {
 			return nil, errors.NewConfigurationError("error parsing batch size", err)
 		}
@@ -184,7 +184,7 @@ func createBatchedStore(storeURL *url.URL, store Store, logger ulogger.Logger) (
 		writeKeys = true
 	}
 
-	store = batcher.New(logger, store, int(sizeInBytes), writeKeys)
+	store = batcher.New(logger, store, sizeInBytes, writeKeys)
 
 	return store, nil
 }
