@@ -39,20 +39,20 @@
     const urlPageSize = $pageStore.url.searchParams.get('pageSize')
     if (urlPageSize) {
       const parsed = parseInt(urlPageSize, 10)
-      if (!isNaN(parsed) && parsed > 0) {
+      if (!isNaN(parsed) && parsed > 0 && pageSize !== parsed) {
         pageSize = parsed
       }
-    } else {
+    } else if (pageSize !== 20) {
       pageSize = 20 // Default
     }
 
     const urlPage = $pageStore.url.searchParams.get('page')
     if (urlPage) {
       const parsed = parseInt(urlPage, 10)
-      if (!isNaN(parsed) && parsed > 0) {
+      if (!isNaN(parsed) && parsed > 0 && page !== parsed) {
         page = parsed
       }
-    } else {
+    } else if (page !== 1) {
       page = 1 // Always reset to page 1 if not in URL
     }
   }
