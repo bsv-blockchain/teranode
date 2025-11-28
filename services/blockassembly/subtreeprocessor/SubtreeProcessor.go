@@ -261,6 +261,11 @@ type SubtreeProcessor struct {
 	// This eliminates the allocation overhead of creating a new slice on each dequeue cycle
 	// Size is set smaller than batchSize to handle typical queue depths efficiently
 	dequeueBatchBuffer []*TxIDAndFee
+
+	// validItemsBuffer is a pre-allocated reusable slice for parallel duplicate detection
+	// Used to mark which items in a batch are valid and should be processed
+	// Reused across all batch processing cycles to eliminate allocations
+	validItemsBuffer []bool
 }
 
 type State uint32
@@ -405,7 +410,8 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 		announcementTicker:       time.NewTicker(tSettings.BlockAssembly.SubtreeAnnouncementInterval),
 		ctx:                      processorCtx,
 		cancel:                   cancel,
-		dequeueBatchBuffer:       make([]*TxIDAndFee, 0, tSettings.BlockAssembly.SubtreeProcessorBatcherSize),
+		dequeueBatchBuffer:       make([]*TxIDAndFee, 0, 128*1024), // Pre-allocate 128K entries for batch dequeueing
+		validItemsBuffer:         make([]bool, 128*1024),           // Pre-allocate for parallel duplicate detection
 	}
 	stp.setCurrentRunningState(StateStarting)
 
@@ -646,21 +652,22 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 				stp.setCurrentRunningState(StateDequeue)
 
-				batchSize := stp.settings.BlockAssembly.SubtreeProcessorBatcherSize
 				nrProcessed := 0
+				batchSize := cap(stp.dequeueBatchBuffer)
 
 				// Cache these — they are read on every single iteration
 				removeMap := stp.removeMap
 				mapLength := removeMap.Length()
 				currentTxMap := stp.currentTxMap
+				currentItemsPerFile := stp.currentItemsPerFile
 				validFromMillis := time.Now().Add(-stp.settings.BlockAssembly.DoubleSpendWindow).UnixMilli()
 				addedCount := uint64(0)
 
 				// Check if we need to create a new subtree
 				if stp.currentSubtree == nil {
-					stp.currentSubtree, err = subtreepkg.NewTreeByLeafCount(stp.currentItemsPerFile)
+					stp.currentSubtree, err = subtreepkg.NewTreeByLeafCount(currentItemsPerFile)
 					if err != nil {
-						stp.logger.Errorf("error creating new subtree: %s", err)
+						stp.logger.Errorf("[SubtreeProcessor] error creating new subtree: %s", err)
 						// If we can't create a subtree, we can't process this node.
 						// We should probably retry or abort, but here we skip to avoid crash.
 						continue
@@ -668,23 +675,25 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 
 					// This is the first subtree for this block - we need a coinbase placeholder
 					if err = stp.currentSubtree.AddCoinbaseNode(); err != nil {
-						stp.logger.Errorf("error adding coinbase placeholder: %s", err)
+						stp.logger.Errorf("[SubtreeProcessor] error adding coinbase placeholder: %s", err)
 						continue
 					}
 					addedCount++
 				}
 
-				// Batch dequeue for improved throughput
-				// Dequeues up to batchSize transactions at once, amortizing loop overhead
-				stp.dequeueBatchBuffer = stp.queue.DequeueBatch(stp.dequeueBatchBuffer, batchSize, validFromMillis)
-				if len(stp.dequeueBatchBuffer) == 0 {
+				// Batch dequeue for improved throughput using pre-allocated buffer
+				batch := stp.dequeueBatchBuffer
+				batch = stp.queue.DequeueBatch(batch, batchSize, validFromMillis)
+				batchLen := len(batch)
+
+				if batchLen == 0 {
 					// Queue is empty right now → be nice to the core
 					runtime.Gosched()
 					continue
 				}
 
 				// Process the batch
-				for _, item := range stp.dequeueBatchBuffer {
+				for _, item := range batch {
 					node := item.node
 					txInpoints := item.txInpoints
 
@@ -703,7 +712,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 					}
 
 					// Add to current subtree
-					if err = stp.currentSubtree.AddSubtreeNode(node); err != nil {
+					if err = stp.currentSubtree.AddSubtreeNodeWithoutLock(node); err != nil {
 						stp.logger.Errorf("addNode failed: error adding node to subtree: %s", err)
 						// If adding failed, should we remove from map?
 						// addNode didn't remove it, so we keep consistent behavior.
@@ -713,7 +722,7 @@ func NewSubtreeProcessor(ctx context.Context, logger ulogger.Logger, tSettings *
 					}
 
 					// Check if subtree is complete
-					if len(stp.currentSubtree.Nodes) >= stp.currentItemsPerFile {
+					if len(stp.currentSubtree.Nodes) >= currentItemsPerFile {
 						if err = stp.processCompleteSubtree(false); err != nil {
 							stp.logger.Errorf("processCompleteSubtree failed: %s", err)
 						}
@@ -782,7 +791,7 @@ func (stp *SubtreeProcessor) createIncompleteSubtreeCopy() (*subtreepkg.Subtree,
 
 	// Copy all nodes from current subtree (skipping the coinbase placeholder at index 0)
 	for _, node := range stp.currentSubtree.Nodes[1:] {
-		if err = incompleteSubtree.AddSubtreeNode(node); err != nil {
+		if err = incompleteSubtree.AddSubtreeNodeWithoutLock(node); err != nil {
 			return nil, err
 		}
 	}
@@ -1375,16 +1384,14 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.T
 		}
 
 		// This is the first subtree for this block - we need a coinbase placeholder
-		err = stp.currentSubtree.AddCoinbaseNode()
-		if err != nil {
+		if err = stp.currentSubtree.AddCoinbaseNode(); err != nil {
 			return err
 		}
 
 		stp.txCount.Add(1)
 	}
 
-	err = stp.currentSubtree.AddSubtreeNode(node)
-	if err != nil {
+	if err = stp.currentSubtree.AddSubtreeNode(node); err != nil {
 		return errors.NewProcessingError("error adding node to subtree", err)
 	}
 
