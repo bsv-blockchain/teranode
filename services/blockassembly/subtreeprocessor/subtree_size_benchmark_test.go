@@ -386,7 +386,6 @@ func setupSubtreeProcessorForBench(t *testing.T, itemsPerSubtree int) (*SubtreeP
 
 	cleanup := func() {
 		close(done)
-		stp.Close()
 	}
 
 	return stp, cleanup
@@ -733,9 +732,6 @@ func setupSubtreeProcessorForBenchB(b *testing.B, itemsPerSubtree int) (*Subtree
 
 	cleanup := func() {
 		close(done)
-		if stp != nil {
-			stp.Close()
-		}
 	}
 
 	return stp, cleanup
