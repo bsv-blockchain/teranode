@@ -140,8 +140,8 @@ github.com/bitly/go-hostpool v0.1.0/go.mod h1:4gOCgp6+NZnVqlKyZ/iBZFTAJKembaVENU
 github.com/bitly/go-simplejson v0.5.0/go.mod h1:cXHtHw4XUPsvGaxgjIAn8PhEWG9NfngEKAMDJEczWVA=
 github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869/go.mod h1:Ekp36dRnpXw/yCqJaO+ZrUyxD+3VXMFFr56k5XYrpB4=
 github.com/bradfitz/go-smtpd v0.0.0-20170404230938-deb6d6237625/go.mod h1:HYsPBTaaSFSlLx/70C2HPIMNZpVV8+vt/A+FMnYP11g=
-github.com/bsv-blockchain/go-batcher v1.1.0 h1:LntvZyDY/0ySmVaITYtHD6e5ydkcc67WoSqWc5oo4sU=
-github.com/bsv-blockchain/go-batcher v1.1.0/go.mod h1:69pxNteTblVliQot7VRzVoPW+5F1NSsXvgdVZw7eUZk=
+github.com/bsv-blockchain/go-batcher v1.2.5 h1:zaGQgUV9Pl8nY2pduEsiic7CTOhDDni7S5ZgWK6tRBc=
+github.com/bsv-blockchain/go-batcher v1.2.5/go.mod h1:P98X4sdCGGSeBEDfpQE/YzD5tn/nyDXwhyTfcqLpg3w=
 github.com/bsv-blockchain/go-bc v1.0.2 h1:D1PIYI6Q3Jwdhkp2cucf91vmsPXgXtbGkFpk+xpsD0Y=
 github.com/bsv-blockchain/go-bc v1.0.2/go.mod h1:h3/1KfzgrDos3+bLGWsHkGYoFWcWZ2Vmep2r2AoE3AA=
 github.com/bsv-blockchain/go-bn v1.0.3 h1:98+8/mmj8V6nzpvC6e9WvH4MXc6GtkG0JYL/OMPIU3E=
@@ -160,8 +160,8 @@ github.com/bsv-blockchain/go-sdk v1.2.11 h1:SK8kDuDZNP3ubvx0AL0bR/I8tXWljJICyUsi
 github.com/bsv-blockchain/go-sdk v1.2.11/go.mod h1:S+8iokWX2la9G4mzwHIeCvYkADRzcdfk1AprN0z5MDI=
 github.com/bsv-blockchain/go-subtree v1.1.2 h1:evQ961Cku9wIrKA5qjvn2t0nfUL/7rBPqHth2eZRso4=
 github.com/bsv-blockchain/go-subtree v1.1.2/go.mod h1:e+VXWba1DoKZ05LiBU0N6FKZl6cD12yUNE0SrjtJup8=
-github.com/bsv-blockchain/go-tx-map v1.2.0 h1:HF8XTLrl5YGpEeWmsoO58w/XSNKJy49DYgrt/0EQHn4=
-github.com/bsv-blockchain/go-tx-map v1.2.0/go.mod h1:sjsSHrl5HNT+0p1AeS/6CE7Ds4V4Kjn9PRBcKB3ozMc=
+github.com/bsv-blockchain/go-tx-map v1.2.1 h1:uzKryYn4uMCR3ko6N71TyUrKfAnRvwG5Mdm1ufCStyo=
+github.com/bsv-blockchain/go-tx-map v1.2.1/go.mod h1:4NsZBCM6bFNwYEc7J4C6jiNdm5aY/rtRVXqpG7PgbX4=
 github.com/bsv-blockchain/go-wire v1.0.6 h1:rMVASfuXtrZB1ZaZEl+/tvmXfdPMf4KY8Pew7/VeyQ0=
 github.com/bsv-blockchain/go-wire v1.0.6/go.mod h1:Jp6ekSmh/KZL1Gm/OPmbyMspNsficSgjXxlJ6bFD0Hs=
 github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd h1:R/opQEbFEy9JGkIguV40SvRY1uliPX8ifOvi6ICsFCw=
@@ -213,8 +213,8 @@ github.com/containerd/console v1.0.5 h1:R0ymNeydRqH2DmakFNdmjR2k0t7UPuiOV/N/27/q
 github.com/containerd/console v1.0.5/go.mod h1:YynlIjWYF8myEu6sdkwKIvGQq+cOckRm6So2avqoYAk=
 github.com/containerd/containerd/api v1.9.0 h1:HZ/licowTRazus+wt9fM6r/9BQO7S0vD5lMcWspGIg0=
 github.com/containerd/containerd/api v1.9.0/go.mod h1:GhghKFmTR3hNtyznBoQ0EMWr9ju5AqHjcZPsSpTKutI=
-github.com/containerd/containerd/v2 v2.1.4 h1:/hXWjiSFd6ftrBOBGfAZ6T30LJcx1dBjdKEeI8xucKQ=
-github.com/containerd/containerd/v2 v2.1.4/go.mod h1:8C5QV9djwsYDNhxfTCFjWtTBZrqjditQ4/ghHSYjnHM=
+github.com/containerd/containerd/v2 v2.1.5 h1:pWSmPxUszaLZKQPvOx27iD4iH+aM6o0BoN9+hg77cro=
+github.com/containerd/containerd/v2 v2.1.5/go.mod h1:8C5QV9djwsYDNhxfTCFjWtTBZrqjditQ4/ghHSYjnHM=
 github.com/containerd/continuity v0.4.5 h1:ZRoN1sXq9u7V6QoHMcVWGhOwDFqZ4B9i5H6un1Wh0x4=
 github.com/containerd/continuity v0.4.5/go.mod h1:/lNJvtJKUQStBzpVQ1+rasXO1LAWtUQssk28EZvJ3nE=
 github.com/containerd/errdefs v1.0.0 h1:tg5yIfIlQIrxYtu9ajqY42W3lpS19XqdxRQeEwYG8PI=

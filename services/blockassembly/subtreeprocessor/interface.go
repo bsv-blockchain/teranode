@@ -46,6 +46,14 @@ type Interface interface {
 	//   - txInpoints: Transaction input points for dependency tracking
 	Add(node subtree.Node, txInpoints subtree.TxInpoints)
 
+	// Start starts the main processing goroutine for the SubtreeProcessor.
+	// This should be called after loading unmined transactions at startup to avoid race conditions.
+	// Uses sync.Once internally, so multiple calls are safe (only starts once).
+	//
+	// Parameters:
+	//   - ctx: Context for the processing goroutine
+	Start(ctx context.Context)
+
 	// AddDirectly adds a transaction node directly to the processor without
 	// using the queue. This is typically used for block assembly startup.
 	// It allows immediate processing of transactions without waiting for
@@ -123,11 +131,12 @@ type Interface interface {
 	// This is used when transactions become invalid or need to be excluded.
 	//
 	// Parameters:
+	//   - ctx: Context for the removal operation
 	//   - hash: Hash of the transaction to remove
 	//
 	// Returns:
 	//   - error: Any error encountered during transaction removal
-	Remove(hash chainhash.Hash) error
+	Remove(ctx context.Context, hash chainhash.Hash) error
 
 	// GetCompletedSubtreesForMiningCandidate returns completed subtrees ready for mining.
 	// These subtrees contain validated transactions that can be included in a block.
@@ -243,9 +252,12 @@ type Interface interface {
 	//   - error: Any error encountered while waiting
 	WaitForPendingBlocks(ctx context.Context) error
 
-	// Close gracefully shuts down the SubtreeProcessor.
+	// Stop gracefully shuts down the SubtreeProcessor.
 	// This method cancels the processor's internal context, which triggers the main
 	// processing goroutine to stop and clean up resources (such as the announcement ticker).
 	// It should be called when the processor is no longer needed to prevent resource leaks.
-	Close()
+	//
+	// Parameters:
+	//   - ctx: Context for the stop operation
+	Stop(ctx context.Context)
 }

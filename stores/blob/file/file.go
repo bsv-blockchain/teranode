@@ -363,7 +363,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	options := options.NewStoreOptions(opts...)
 
 	if hashPrefix := storeURL.Query().Get("hashPrefix"); len(hashPrefix) > 0 {
-		val, err := strconv.ParseInt(hashPrefix, 10, 64)
+		val, err := strconv.ParseInt(hashPrefix, 10, 32)
 		if err != nil {
 			return nil, errors.NewStorageError("[File] failed to parse hashPrefix", err)
 		}
@@ -372,7 +372,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	}
 
 	if hashSuffix := storeURL.Query().Get("hashSuffix"); len(hashSuffix) > 0 {
-		val, err := strconv.ParseInt(hashSuffix, 10, 64)
+		val, err := strconv.ParseInt(hashSuffix, 10, 32)
 		if err != nil {
 			return nil, errors.NewStorageError("[File] failed to parse hashSuffix", err)
 		}
@@ -400,6 +400,11 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 
 	// Check if longterm storage options are provided
 	if options.PersistSubDir != "" {
+		// Validate PersistSubDir doesn't contain path traversal sequences
+		if strings.Contains(options.PersistSubDir, "..") {
+			return nil, errors.NewInvalidArgumentError("[File] PersistSubDir contains path traversal sequence")
+		}
+
 		// Create persistent subdirectory
 		if err := os.MkdirAll(filepath.Join(path, options.PersistSubDir), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create persist sub directory", err)

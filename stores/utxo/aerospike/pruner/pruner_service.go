@@ -109,6 +109,12 @@ type parentUpdateInfo struct {
 	childHashes []*chainhash.Hash // Child transactions being deleted
 }
 
+// externalFileInfo holds information about external files to delete
+type externalFileInfo struct {
+	txHash   *chainhash.Hash
+	fileType fileformat.FileType
+}
+
 // NewService creates a new cleanup service
 func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 	if opts.Logger == nil {
@@ -326,7 +332,7 @@ func (s *Service) processCleanupJob(job *pruner.Job, workerID int) {
 
 	// Create a query statement
 	stmt := aerospike.NewStatement(s.namespace, s.set)
-	stmt.BinNames = []string{fields.TxID.String(), fields.DeleteAtHeight.String(), fields.Inputs.String(), fields.External.String()}
+	stmt.BinNames = []string{fields.TxID.String(), fields.DeleteAtHeight.String(), fields.Inputs.String(), fields.External.String(), fields.TotalExtraRecs.String()}
 
 	// Set the filter to find records with a delete_at_height less than or equal to the safe cleanup height
 	// This will automatically use the index since the filter is on the indexed bin
@@ -364,6 +370,7 @@ func (s *Service) processCleanupJob(job *pruner.Job, workerID int) {
 	batchSize := s.settings.UtxoStore.PrunerDeleteBatcherSize
 	parentUpdates := make(map[string]*parentUpdateInfo) // keyed by parent txid
 	deletions := make([]*aerospike.Key, 0, batchSize)
+	externalFiles := make([]*externalFileInfo, 0, batchSize)
 
 	// Process records and accumulate into batches
 	for {
@@ -373,7 +380,7 @@ func (s *Service) processCleanupJob(job *pruner.Job, workerID int) {
 			s.logger.Infof("Worker %d: cleanup job for height %d cancelled", workerID, job.BlockHeight)
 			recordset.Close()
 			// Flush any accumulated operations before exiting (use parent context since jobCtx is cancelled)
-			if err := s.flushCleanupBatches(s.ctx, workerID, job.BlockHeight, parentUpdates, deletions); err != nil {
+			if err := s.flushCleanupBatches(s.ctx, workerID, job.BlockHeight, parentUpdates, deletions, externalFiles); err != nil {
 				s.logger.Errorf("Worker %d: error flushing batches during cancellation: %v", workerID, err)
 			}
 			s.markJobAsFailed(job, errors.NewProcessingError("Worker %d: cleanup job for height %d cancelled", workerID, job.BlockHeight))
@@ -427,8 +434,39 @@ func (s *Service) processCleanupJob(job *pruner.Job, workerID int) {
 			}
 		}
 
-		// Accumulate deletion
+		// Handle external transactions: add file for deletion
+		external, isExternal := bins[fields.External.String()].(bool)
+		if isExternal && external {
+			// Determine file type: if we found inputs, it's a .tx file, otherwise it's .outputs
+			fileType := fileformat.FileTypeOutputs
+			if len(inputs) > 0 {
+				fileType = fileformat.FileTypeTx
+			}
+			externalFiles = append(externalFiles, &externalFileInfo{
+				txHash:   txHash,
+				fileType: fileType,
+			})
+		}
+
+		// Accumulate deletions: master record + any child records
 		deletions = append(deletions, rec.Record.Key)
+
+		// If this is a multi-record transaction, delete all child records
+		totalExtraRecs, hasExtraRecs := bins[fields.TotalExtraRecs.String()].(int)
+		if hasExtraRecs && totalExtraRecs > 0 {
+			// Generate keys for all child records: txid_1, txid_2, ..., txid_N
+			for i := 1; i <= totalExtraRecs; i++ {
+				childKeySource := uaerospike.CalculateKeySourceInternal(txHash, uint32(i))
+				childKey, err := aerospike.NewKey(s.namespace, s.set, childKeySource)
+				if err != nil {
+					s.logger.Errorf("Worker %d: failed to create child key for %s_%d: %v", workerID, txHash.String(), i, err)
+					continue
+				}
+				deletions = append(deletions, childKey)
+			}
+			s.logger.Debugf("Worker %d: deleting external tx %s with %d child records", workerID, txHash.String(), totalExtraRecs)
+		}
+
 		recordCount++
 
 		// Log progress
@@ -440,17 +478,18 @@ func (s *Service) processCleanupJob(job *pruner.Job, workerID int) {
 
 		// Execute batch when full
 		if len(deletions) >= batchSize {
-			if err := s.flushCleanupBatches(jobCtx, workerID, job.BlockHeight, parentUpdates, deletions); err != nil {
+			if err := s.flushCleanupBatches(jobCtx, workerID, job.BlockHeight, parentUpdates, deletions, externalFiles); err != nil {
 				s.logger.Errorf("Worker %d: error flushing batches: %v", workerID, err)
 				// Continue processing despite flush error - will retry at end
 			}
 			parentUpdates = make(map[string]*parentUpdateInfo)
 			deletions = make([]*aerospike.Key, 0, batchSize)
+			externalFiles = make([]*externalFileInfo, 0, batchSize)
 		}
 	}
 
 	// Flush any remaining operations
-	if err := s.flushCleanupBatches(jobCtx, workerID, job.BlockHeight, parentUpdates, deletions); err != nil {
+	if err := s.flushCleanupBatches(jobCtx, workerID, job.BlockHeight, parentUpdates, deletions, externalFiles); err != nil {
 		s.logger.Errorf("Worker %d: error flushing final batches: %v", workerID, err)
 		s.markJobAsFailed(job, errors.NewStorageError("failed to flush final batches", err))
 		return
@@ -554,18 +593,29 @@ func (s *Service) markJobAsFailed(job *pruner.Job, err error) {
 	job.Ended = time.Now()
 }
 
-// flushCleanupBatches flushes accumulated parent updates and deletions
-func (s *Service) flushCleanupBatches(ctx context.Context, workerID int, blockHeight uint32, parentUpdates map[string]*parentUpdateInfo, deletions []*aerospike.Key) error {
+// flushCleanupBatches flushes accumulated parent updates, external file deletions, and Aerospike deletions
+func (s *Service) flushCleanupBatches(ctx context.Context, workerID int, blockHeight uint32, parentUpdates map[string]*parentUpdateInfo, deletions []*aerospike.Key, externalFiles []*externalFileInfo) error {
+	// Execute parent updates first
 	if len(parentUpdates) > 0 {
 		if err := s.executeBatchParentUpdates(ctx, workerID, blockHeight, parentUpdates); err != nil {
 			return err
 		}
 	}
+
+	// Delete external files before Aerospike records (fail-safe: if file deletion fails, we keep the record)
+	if len(externalFiles) > 0 {
+		if err := s.executeBatchExternalFileDeletions(ctx, workerID, blockHeight, externalFiles); err != nil {
+			return err
+		}
+	}
+
+	// Delete Aerospike records last
 	if len(deletions) > 0 {
 		if err := s.executeBatchDeletions(ctx, workerID, blockHeight, deletions); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -702,6 +752,51 @@ func (s *Service) executeBatchDeletions(ctx context.Context, workerID int, block
 	// Return error if any individual record operations failed
 	if errorCount > 0 {
 		return errors.NewStorageError("Worker %d: %d deletion operations failed", workerID, errorCount)
+	}
+
+	return nil
+}
+
+// executeBatchExternalFileDeletions deletes external blob files for transactions being pruned
+func (s *Service) executeBatchExternalFileDeletions(ctx context.Context, workerID int, blockHeight uint32, files []*externalFileInfo) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	successCount := 0
+	alreadyDeletedCount := 0
+	errorCount := 0
+
+	for _, fileInfo := range files {
+		// Check context before each deletion
+		select {
+		case <-ctx.Done():
+			s.logger.Infof("Worker %d: context cancelled, stopping external file deletions", workerID)
+			return ctx.Err()
+		default:
+		}
+
+		// Delete the external file
+		err := s.external.Del(ctx, fileInfo.txHash.CloneBytes(), fileInfo.fileType)
+		if err != nil {
+			if errors.Is(err, errors.ErrNotFound) {
+				// Already deleted (by LocalDAH cleanup or previous pruning)
+				alreadyDeletedCount++
+				s.logger.Debugf("Worker %d: external file for tx %s (type %d) already deleted", workerID, fileInfo.txHash.String(), fileInfo.fileType)
+			} else {
+				s.logger.Errorf("Worker %d: failed to delete external file for tx %s (type %d): %v", workerID, fileInfo.txHash.String(), fileInfo.fileType, err)
+				errorCount++
+			}
+		} else {
+			successCount++
+		}
+	}
+
+	s.logger.Debugf("Worker %d: external file deletion batch - success: %d, already deleted: %d, errors: %d", workerID, successCount, alreadyDeletedCount, errorCount)
+
+	// Return error if any deletions failed
+	if errorCount > 0 {
+		return errors.NewStorageError("Worker %d: %d external file deletions failed", workerID, errorCount)
 	}
 
 	return nil

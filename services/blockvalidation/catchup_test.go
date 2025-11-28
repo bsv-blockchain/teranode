@@ -725,6 +725,11 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	blockFoundCh := make(chan processBlockFound, 10)
 	catchupCh := make(chan processBlockCatchup, 10)
 
+	nearForkThreshold := uint32(tSettings.ChainCfgParams.CoinbaseMaturity / 2)
+	if tSettings.BlockValidation.NearForkThreshold > 0 {
+		nearForkThreshold = uint32(tSettings.BlockValidation.NearForkThreshold)
+	}
+
 	baseServer := &Server{
 		logger:              ulogger.TestLogger{},
 		settings:            tSettings,
@@ -738,36 +743,69 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 		txStore:             nil,
 		utxoStore:           nil,
 		blockPriorityQueue:  NewBlockPriorityQueue(ulogger.TestLogger{}),
+		blockClassifier:     NewBlockClassifier(ulogger.TestLogger{}, nearForkThreshold, mockBlockchain),
 		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 	}
 
 	defer baseServer.processBlockNotify.Stop()
 
+	// Prevent worker goroutines started during Init from draining channels we inspect
+	testPQ := baseServer.blockPriorityQueue
+	baseServer.blockPriorityQueue = nil
+	baseServer.forkManager.SetPriorityQueue(nil)
+
 	err = baseServer.Init(ctx)
 	require.NoError(t, err)
 
-	// Fill blockFoundCh to trigger the catchup path - send enough blocks so that
-	// when workers consume them, len(blockFoundCh) > 3 remains for threshold check
-	// With 10 concurrent workers on CI, need many more blocks to ensure len > 3
-	// when checked. Send 5 blocks to overwhelm the workers.
-	go func() {
-		for i := 0; i < 5; i++ {
-			blockFoundCh <- processBlockFound{
-				hash:    dummyBlock.Hash(),
-				baseURL: fmt.Sprintf("http://peer%d", i),
-				errCh:   make(chan error, 1),
-			}
-		}
-	}()
+	baseServer.blockPriorityQueue = testPQ
+	baseServer.forkManager.SetPriorityQueue(testPQ)
+
+	// Stop background goroutines (legacy workers & catchup processor) for deterministic assertions
+	cancel()
+	processingCtx := context.Background()
+
+	// Pre-fill queue so queueSize > 10, forcing catchup path without relying on len(blockFoundCh)
+	prefillBlockPriorityQueueForTest(t, testPQ, 12)
+
+	err = baseServer.processBlockFoundChannel(processingCtx, processBlockFound{
+		hash:    dummyBlock.Hash(),
+		baseURL: "http://peer0",
+		errCh:   make(chan error, 1),
+	})
+	require.NoError(t, err)
 
 	select {
 	case got := <-catchupCh:
 		assert.NotNil(t, got.block)
-		// With multiple blocks sent, any peer URL is valid
-		assert.Contains(t, got.baseURL, "http://peer")
+		assert.Equal(t, "http://peer0", got.baseURL)
 	case <-time.After(5 * time.Second):
 		t.Fatal("processBlockFoundChannel did not put anything on catchupCh")
+	}
+}
+
+func prefillBlockPriorityQueueForTest(t *testing.T, pq *BlockPriorityQueue, count int) {
+	t.Helper()
+
+	pq.mu.Lock()
+	defer pq.mu.Unlock()
+
+	for i := 0; i < count; i++ {
+		hash := chainhash.DoubleHashH([]byte(fmt.Sprintf("prefill-%d", i)))
+		hashCopy := hash
+
+		item := &PrioritizedBlock{
+			blockFound: processBlockFound{
+				hash:    &hashCopy,
+				baseURL: fmt.Sprintf("http://prefill-%d", i),
+			},
+			priority:  PriorityDeepFork,
+			height:    uint32(i),
+			timestamp: time.Now(),
+		}
+
+		pq.items = append(pq.items, item)
+		pq.hashIndex[*item.blockFound.hash] = item
 	}
 }
 

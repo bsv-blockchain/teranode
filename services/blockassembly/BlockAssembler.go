@@ -743,6 +743,9 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
 
+	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
+	b.subtreeProcessor.Start(ctx)
+
 	if err = b.startChannelListeners(ctx); err != nil {
 		return errors.NewProcessingError("[BlockAssembler] failed to start channel listeners: %v", err)
 	}
@@ -870,12 +873,13 @@ func (b *BlockAssembler) AddTx(node subtree.Node, txInpoints subtree.TxInpoints)
 // RemoveTx removes a transaction from the block assembler.
 //
 // Parameters:
+//   - ctx: Context for the removal operation
 //   - hash: Hash of the transaction to remove
 //
 // Returns:
 //   - error: Any error encountered during removal
-func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
-	return b.subtreeProcessor.Remove(hash)
+func (b *BlockAssembler) RemoveTx(ctx context.Context, hash chainhash.Hash) error {
+	return b.subtreeProcessor.Remove(ctx, hash)
 }
 
 type resetRequest struct {

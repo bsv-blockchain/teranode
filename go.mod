@@ -85,7 +85,7 @@ require (
 	github.com/bsv-blockchain/go-bc v1.0.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/containerd/containerd/api v1.9.0 // indirect
-	github.com/containerd/containerd/v2 v2.1.4 // indirect
+	github.com/containerd/containerd/v2 v2.1.5 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/containerd/platforms v1.0.0-rc.2 // indirect
@@ -173,13 +173,13 @@ require (
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/bitcoin-sv/alert-system v0.2.0
-	github.com/bsv-blockchain/go-batcher v1.1.0
+	github.com/bsv-blockchain/go-batcher v1.2.5
 	github.com/bsv-blockchain/go-bn v1.0.3
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.7
 	github.com/bsv-blockchain/go-safe-conversion v1.1.0
 	github.com/bsv-blockchain/go-sdk v1.2.11
-	github.com/bsv-blockchain/go-tx-map v1.2.0
+	github.com/bsv-blockchain/go-tx-map v1.2.1
 	github.com/bsv-blockchain/go-wire v1.0.6
 	github.com/felixge/fgprof v0.9.5
 	github.com/gocarina/gocsv v0.0.0-20240520201108-78e41c74b4b1

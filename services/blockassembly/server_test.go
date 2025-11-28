@@ -93,6 +93,10 @@ func TestCheckBlockAssembly(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		server, _, _, _ := setup(t)
 
+		// Start the block assembler so the subtree processor goroutine is running
+		err := server.blockAssembler.Start(t.Context())
+		require.NoError(t, err)
+
 		resp, err := server.CheckBlockAssembly(t.Context(), &blockassembly_api.EmptyMessage{})
 		require.NoError(t, err)
 
@@ -106,7 +110,7 @@ func TestCheckBlockAssembly(t *testing.T) {
 
 		mockSubtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
 		mockSubtreeProcessor.On("CheckSubtreeProcessor").Return(errors.NewProcessingError("test error"))
-		mockSubtreeProcessor.On("Close").Return() // Expect Close() to be called during cleanup
+		mockSubtreeProcessor.On("Stop", mock.Anything).Return() // Expect Stop() to be called during cleanup
 
 		server.blockAssembler.subtreeProcessor = mockSubtreeProcessor
 
@@ -589,6 +593,10 @@ func TestGetBlockAssemblyStateCoverage(t *testing.T) {
 	server, _, _, _ := setup(t)
 	ctx := t.Context()
 
+	// Start the block assembler so the subtree processor goroutine is running
+	err := server.blockAssembler.Start(ctx)
+	require.NoError(t, err)
+
 	t.Run("get block assembly state", func(t *testing.T) {
 		resp, err := server.GetBlockAssemblyState(ctx, &blockassembly_api.EmptyMessage{})
 		if err == nil {
@@ -608,6 +616,10 @@ func TestGetBlockAssemblyStateCoverage(t *testing.T) {
 func TestGetBlockAssemblyTxsCoverage(t *testing.T) {
 	server, _, _, _ := setup(t)
 	ctx := t.Context()
+
+	// Start the block assembler so the subtree processor goroutine is running
+	err := server.blockAssembler.Start(ctx)
+	require.NoError(t, err)
 
 	t.Run("get block assembly transactions", func(t *testing.T) {
 		resp, err := server.GetBlockAssemblyTxs(ctx, &blockassembly_api.EmptyMessage{})
@@ -1082,7 +1094,7 @@ func TestAddTxIntensive(t *testing.T) {
 
 	t.Run("AddTx increments transaction counter", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		initialCount := server.TxCount()
@@ -1114,7 +1126,7 @@ func TestAddTxIntensive(t *testing.T) {
 
 	t.Run("AddTx with various fee and size values", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		testCases := []struct {
@@ -1165,7 +1177,7 @@ func TestRemoveTxIntensive(t *testing.T) {
 
 	t.Run("RemoveTx with valid transaction", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		// First add a transaction
@@ -1234,7 +1246,7 @@ func TestAddTxBatchIntensive(t *testing.T) {
 
 	t.Run("AddTxBatch with large batch", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		// Create a large batch
@@ -1312,7 +1324,7 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 
 	t.Run("GetMiningCandidate with includeSubtreeHashes", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		// Add some transactions to create subtrees
@@ -1339,7 +1351,7 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 
 	t.Run("GetMiningCandidate creates job in cache", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		req := &blockassembly_api.GetMiningCandidateRequest{}
@@ -1593,7 +1605,7 @@ func TestRunBackgroundProcessors(t *testing.T) {
 func TestConcurrentOperations(t *testing.T) {
 	t.Run("concurrent AddTx operations", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		const numGoroutines = 10
@@ -1679,7 +1691,7 @@ func TestEdgeCasesAndErrorPaths(t *testing.T) {
 		assert.GreaterOrEqual(t, count, 0)
 
 		// After starting
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		count = server.SubtreeCount()
@@ -1821,7 +1833,7 @@ func TestGetCurrentDifficultyErrors(t *testing.T) {
 func TestRemoveTxEdgeCases(t *testing.T) {
 	t.Run("removeTx coverage boost", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		// Add a transaction first
@@ -2034,7 +2046,7 @@ func TestStoreRetryErrorPaths(t *testing.T) {
 func TestGenerateBlockErrors(t *testing.T) {
 	t.Run("generateBlock coverage boost", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		// Call generateBlock to increase coverage - it will likely fail but that's expected
@@ -2089,7 +2101,7 @@ func TestSubmitMiningSolutionEdgeCases(t *testing.T) {
 
 	t.Run("submitMiningSolution with invalid coinbase", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		// Get a mining candidate first to create a job
@@ -2117,7 +2129,7 @@ func TestSubmitMiningSolutionEdgeCases(t *testing.T) {
 
 	t.Run("submitMiningSolution with mining already on same block", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		// Get a mining candidate
@@ -2252,7 +2264,7 @@ func TestMoreCoveragePaths(t *testing.T) {
 
 	t.Run("GetMiningCandidate send notification in background", func(t *testing.T) {
 		server, _ := setupServer(t)
-		err := server.blockAssembler.Start(context.Background())
+		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		req := &blockassembly_api.GetMiningCandidateRequest{}
