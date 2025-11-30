@@ -15,20 +15,39 @@
 | SpendBatcherDurationMillis | int | 100 | utxostore_spendBatcherDurationMillis | Spend batch duration |
 | SpendBatcherSize | int | 100 | utxostore_spendBatcherSize | Spend operation batch size |
 | SpendBatcherConcurrency | int | 32 | utxostore_spendBatcherConcurrency | Spend batch concurrency |
+| SpendWaitTimeout | time.Duration | 30s | utxostore_spendWaitTimeout | Spend operation wait timeout |
+| SpendCircuitBreakerFailureCount | int | 10 | utxostore_spendCircuitBreakerFailureCount | Circuit breaker failure threshold |
+| SpendCircuitBreakerCooldown | time.Duration | 30s | utxostore_spendCircuitBreakerCooldown | Circuit breaker cooldown period |
+| SpendCircuitBreakerHalfOpenMax | int | 4 | utxostore_spendCircuitBreakerHalfOpenMax | Circuit breaker half-open max |
 | StoreBatcherDurationMillis | int | 100 | utxostore_storeBatcherDurationMillis | Store batch duration |
 | StoreBatcherSize | int | 100 | utxostore_storeBatcherSize | Store operation batch size |
 | UtxoBatchSize | int | 128 | utxostore_utxoBatchSize | UTXO operation batch size |
-| DBTimeout | time.Duration | 30s | utxostore_dbTimeout | **CRITICAL** - Database operation timeout |
-| UseExternalTxCache | bool | false | utxostore_useExternalTxCache | External transaction cache usage |
+| IncrementBatcherSize | int | 256 | utxostore_incrementBatcherSize | Increment operation batch size |
+| IncrementBatcherDurationMillis | int | 10 | utxostore_incrementBatcherDurationMillis | Increment batch duration |
+| SetDAHBatcherSize | int | 256 | utxostore_setDAHBatcherSize | DAH operation batch size |
+| SetDAHBatcherDurationMillis | int | 10 | utxostore_setDAHBatcherDurationMillis | DAH batch duration |
+| LockedBatcherSize | int | 1024 | utxostore_lockedBatcherSize | Locked operation batch size |
+| LockedBatcherDurationMillis | int | 5 | utxostore_lockedBatcherDurationMillis | Locked batch duration |
+| LongestChainBatcherSize | int | 1024 | utxostore_longestChainBatcherSize | Longest chain batch size |
+| LongestChainBatcherDurationMillis | int | 5 | utxostore_longestChainBatcherDurationMillis | Longest chain batch duration |
+| GetBatcherSize | int | 1 | utxostore_getBatcherSize | Get operation batch size |
+| GetBatcherDurationMillis | int | 10 | utxostore_getBatcherDurationMillis | Get batch duration |
+| DBTimeout | time.Duration | 5s | utxostore_dbTimeoutDuration | **CRITICAL** - Database operation timeout |
+| UseExternalTxCache | bool | true | utxostore_useExternalTxCache | External transaction cache usage |
 | ExternalizeAllTransactions | bool | false | utxostore_externalizeAllTransactions | Transaction externalization control |
 | PostgresMaxIdleConns | int | 10 | utxostore_postgresMaxIdleConns | PostgreSQL idle connection pool |
-| PostgresMaxOpenConns | int | 100 | utxostore_postgresMaxOpenConns | PostgreSQL max open connections |
-| VerboseDebug | bool | false | utxostore_verboseDebug | Verbose debug logging |
+| PostgresMaxOpenConns | int | 80 | utxostore_utxo_postgresMaxOpenConns | PostgreSQL max open connections |
+| VerboseDebug | bool | false | utxostore_verbose_debug | Verbose debug logging |
 | UpdateTxMinedStatus | bool | true | utxostore_updateTxMinedStatus | Transaction mined status updates |
-| MaxMinedRoutines | int | 10 | utxostore_maxMinedRoutines | Max mined transaction routines |
-| MaxMinedBatchSize | int | 1000 | utxostore_maxMinedBatchSize | Max mined transaction batch size |
+| MaxMinedRoutines | int | 128 | utxostore_maxMinedRoutines | Max mined transaction routines |
+| MaxMinedBatchSize | int | 1024 | utxostore_maxMinedBatchSize | Max mined transaction batch size |
 | BlockHeightRetentionAdjustment | int32 | 0 | utxostore_blockHeightRetentionAdjustment | **CRITICAL** - Retention adjustment |
 | DisableDAHCleaner | bool | false | utxostore_disableDAHCleaner | **CRITICAL** - DAH cleaner process control |
+| PrunerParentUpdateBatcherSize | int | 2000 | utxostore_prunerParentUpdateBatcherSize | Pruner parent update batch size |
+| PrunerParentUpdateBatcherDurationMillis | int | 100 | utxostore_prunerParentUpdateBatcherDurationMillis | Pruner parent update batch duration |
+| PrunerDeleteBatcherSize | int | 5000 | utxostore_prunerDeleteBatcherSize | Pruner delete batch size |
+| PrunerDeleteBatcherDurationMillis | int | 100 | utxostore_prunerDeleteBatcherDurationMillis | Pruner delete batch duration |
+| PrunerMaxConcurrentOperations | int | 0 | utxostore_prunerMaxConcurrentOperations | Pruner max concurrent operations (0=use queue size) |
 
 ## URL Query Parameters
 
