@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -21,7 +20,6 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
-	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -67,23 +65,14 @@ func TestSendTxAndCheckState(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
 		SettingsContext: "dev.system.test",
+		UTXOStoreType:   "aerospike", // Use unified container initialization
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.TracingEnabled = true
 			settings.TracingSampleRate = 1.0
-			settings.UtxoStore.UtxoStore = parsedURL
 			// settings.Validator.UseLocalValidator = true
 		},
 	})
@@ -98,6 +87,8 @@ func TestSendTxAndCheckState(t *testing.T) {
 		context.Background(),
 		"TestSendTxAndCheckState",
 	)
+
+	var err error
 
 	defer func() {
 		endSpan(err)
@@ -270,23 +261,16 @@ func TestSendTxDeleteParentResendTx(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
+	var err error
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
 		SettingsContext: "dev.system.test",
+		UTXOStoreType:   "aerospike",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.TracingEnabled = true
 			settings.TracingSampleRate = 1.0
-			settings.UtxoStore.UtxoStore = parsedURL
 			settings.GlobalBlockHeightRetention = 1
 			// settings.Validator.UseLocalValidator = true
 		},
@@ -362,23 +346,16 @@ func TestSendTxAndCheckStateWithDuplicateTxSentSimultaneously(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
+	var err error
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
 		SettingsContext: "dev.system.test",
+		UTXOStoreType:   "aerospike",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.TracingEnabled = true
 			settings.TracingSampleRate = 1.0
-			settings.UtxoStore.UtxoStore = parsedURL
 			// settings.Validator.UseLocalValidator = true
 		},
 	})
@@ -601,23 +578,16 @@ func TestDuplicateTransactionAfterMining(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
+	var err error
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
 		SettingsContext: "dev.system.test",
+		UTXOStoreType:   "aerospike",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.TracingEnabled = true
 			settings.TracingSampleRate = 1.0
-			settings.UtxoStore.UtxoStore = parsedURL
 		},
 	})
 
@@ -696,25 +666,18 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
+		UTXOStoreType:   "aerospike",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.ChainCfgParams.CSVHeight = 10
-			s.UtxoStore.UtxoStore = parsedURL
 		},
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	tSettings := td.Settings
 
@@ -792,25 +755,18 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test.txsizetest",
+		UTXOStoreType:   "aerospike",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.ChainCfgParams.CoinbaseMaturity = 1
-			settings.UtxoStore.UtxoStore = parsedURL
 		},
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	tSettings := td.Settings
 
@@ -898,25 +854,18 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test.oversizedscripttest",
+		UTXOStoreType:   "aerospike",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.ChainCfgParams.CoinbaseMaturity = 1
-			settings.UtxoStore.UtxoStore = parsedURL
 		},
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	// set run state
 	err = td.BlockchainClient.Run(td.Ctx, "test")
@@ -995,24 +944,15 @@ func TestDoubleInput(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test.oversizedscripttest",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	// set run state
 	err = td.BlockchainClient.Run(td.Ctx, "test")
@@ -1046,21 +986,10 @@ func TestGetBestBlockHash(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
@@ -1094,24 +1023,15 @@ func TestGetPeerInfo(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	// Test getpeerinfo
 	resp, err := td.CallRPC(td.Ctx, "getpeerinfo", []any{})
@@ -1138,21 +1058,10 @@ func TestGetMiningInfo(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
@@ -1190,24 +1099,15 @@ func TestVersion(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	// Test version command
 	resp, err := td.CallRPC(td.Ctx, "version", []any{})
@@ -1240,24 +1140,15 @@ func TestGetBlockVerbosity(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	// Mine some blocks to have data to test with
 	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
@@ -1337,24 +1228,15 @@ func TestGetBlockHeaderVerbose(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	// Mine some blocks to have data to test with
 	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
@@ -1435,24 +1317,15 @@ func TestGetRawTransactionVerbose(t *testing.T) {
 	defer SharedTestLock.Unlock()
 	// t.Skip("Skipping getrawtransaction verbose test, covered by TestSendTxAndCheckState")
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	// Mine some blocks and create a transaction to test with
 	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
@@ -1732,24 +1605,15 @@ func TestGetMiningCandidate(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	// Mine some blocks to have a proper blockchain
 	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
@@ -1868,24 +1732,15 @@ func TestGenerateToAddress(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	// generate a random address for the current network
 	network := strings.ToLower(td.Settings.ChainCfgParams.Net.String())
@@ -1935,24 +1790,15 @@ func TestBlockManagement(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
 	})
 
 	defer td.Stop(t, true)
+
+	var err error
 
 	// Mine some blocks to have data to test with
 	td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
@@ -2294,14 +2140,7 @@ func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
+	var err error
 
 	// Start NodeA
 	t.Log("Starting NodeA...")
@@ -2309,8 +2148,8 @@ func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       true,
 		SettingsContext: "docker.host.teranode1.daemon",
+		UTXOStoreType:   "aerospike",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.UtxoStore.UtxoStore = parsedURL
 			settings.Asset.HTTPPort = 18090
 			settings.Block.GetAndValidateSubtreesConcurrency = 1
 			settings.GlobalBlockHeightRetention = 1

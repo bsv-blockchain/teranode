@@ -43,6 +43,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/test/utils/containers"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/test/utils/wait"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -77,6 +78,7 @@ type TestDaemon struct {
 	UtxoStore             utxo.Store
 	P2PClient             p2p.ClientI
 	composeDependencies   tc.ComposeStack
+	containerManager      *containers.ContainerManager
 	ctxCancel             context.CancelFunc
 	d                     *Daemon
 	privKey               *bec.PrivateKey
@@ -95,6 +97,9 @@ type TestOptions struct {
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
 	FSMState                blockchain.FSMStateType
+	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres")
+	// If empty, defaults to "aerospike"
+	UTXOStoreType string
 }
 
 // JSONError represents a JSON error response from the RPC server.
@@ -314,6 +319,28 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		opts.SettingsOverrideFunc(appSettings)
 	}
 
+	// Initialize container manager for UTXO store if UTXOStoreType is specified
+	var containerManager *containers.ContainerManager
+	if opts.UTXOStoreType != "" {
+		containerManager, err = containers.NewContainerManager(containers.UTXOStoreType(opts.UTXOStoreType))
+		require.NoError(t, err, "Failed to create container manager")
+
+		utxoStoreURL, err := containerManager.Initialize(ctx)
+		require.NoError(t, err, "Failed to initialize container")
+
+		// Register cleanup immediately to prevent resource leak if daemon initialization fails
+		t.Cleanup(func() {
+			if containerManager != nil {
+				_ = containerManager.Cleanup()
+			}
+		})
+
+		// Override the UTXO store URL in settings
+		appSettings.UtxoStore.UtxoStore = utxoStoreURL
+
+		t.Logf("Initialized %s container with URL: %s", opts.UTXOStoreType, utxoStoreURL.String())
+	}
+
 	readyCh := make(chan struct{})
 
 	var (
@@ -481,6 +508,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		UtxoStore:             utxoStore,
 		P2PClient:             p2pClient,
 		composeDependencies:   composeDependencies,
+		containerManager:      containerManager,
 		ctxCancel:             cancel,
 		d:                     d,
 		privKey:               pk,
@@ -505,6 +533,13 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 
 	// Cleanup daemon stores to reset singletons
 	td.d.daemonStores.Cleanup()
+
+	// Cleanup container manager if it exists
+	if td.containerManager != nil {
+		if err := td.containerManager.Cleanup(); err != nil {
+			t.Logf("Warning: Failed to cleanup container manager: %v", err)
+		}
+	}
 
 	WaitForPortsFree(t, td.Ctx, td.Settings)
 
