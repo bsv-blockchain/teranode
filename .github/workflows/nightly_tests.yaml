@@ -8,7 +8,7 @@ env:
   REPO: teranode
   SETTINGS_CONTEXT_DEFAULT: default_context
   GO_VERSION: '1.25.2'
-  TEST_DIR: ./test/e2e/daemon
+  TEST_DIR: ./test/e2e/daemon/ready
 
 permissions:
   contents: read
@@ -33,141 +33,13 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: false
 
-      - name: Run Block Subsidy Tests
+      - name: Run Daemon Ready Tests
         run: |
           go clean -testcache
-          go test -v -run "^TestBlockSubsidy$" $TEST_DIR
+          go test -v $TEST_DIR
         env:
           GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run Legacy Tests
-        run: |
-          go test -v $TEST_DIR/legacy_test.go
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run Reassign Tests
-        run: |
-          go test -v -run "^TestShouldAllowReassign$" $TEST_DIR
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run Reorg Tests
-        run: |
-          go test -v -run "^(\
-          TestMoveUp|\
-          TestMoveDownMoveUpWhenNewBlockIsGenerated|\
-          TestMoveDownMoveUpWhenNoNewBlockIsGenerated|\
-          TestTDRestart|\
-          TestDynamicSubtreeSize|\
-          TestInvalidBlockTestBlockValidationCatchup\
-          )$" $TEST_DIR
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run RPC Smoke PG Tests
-        run: |
-          go test -v -run "^(\
-          TestTracing|\
-          TestSendTxAndCheckState|\
-          TestShouldNotProcessNonFinalTx|\
-          TestShouldRejectOversizedTx|\
-          TestShouldRejectOversizedScript|\
-          TestShouldAllowChainedTransactionsUseRpc|\
-          TestDoubleInput|\
-          TestGetBestBlockHash|\
-          TestGetPeerInfo|\
-          TestGetMiningInfo|\
-          TestVersion|\
-          TestGetBlockVerbosity|\
-          TestGetBlockHeaderVerbose|\
-          TestGetRawTransactionVerbose|\
-          TestGetMiningCandidate|\
-          TestGenerateToAddress|\
-          TestBlockManagement\
-          )$" $TEST_DIR
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run Spend UTXO Tests
-        run: |
-          go test -v -run "^TestShouldAllowSpendAllUtxos$" $TEST_DIR
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run UTXO Tests
-        run: |
-          go test -v -run "^(\
-          TestFreezeAndUnfreezeUtxos|\
-          TestDeleteAtHeightHappyPath|\
-          TestSubtreeBlockHeightRetention|\
-          )$" $TEST_DIR
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run TNC1.1 Test
-        run: |
-          go test -v -run "^TestVerifyMerkleRootCalculation$" $TEST_DIR
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run TNC1.2 Test
-        run: |
-          go test -v $TEST_DIR/tnc1_2_test.go
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run TNC1.3 Test
-        run: |
-          go test -v $TEST_DIR/tnc1_3_test.go
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run TNCA2 Postgres Test
-        run: |
-          go test -v $TEST_DIR/tna2_pg_test.go
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run TNC2.1 Test
-        run: |
-          go test -v -run "^TestVerifyMerkleRootCalculation|TestConcurrentCandidateIdentifiers$" $TEST_DIR
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run TNB2 Test
-        run: |
-          go test -v $TEST_DIR/tnb2_test.go
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Run TNE1.1 Test
-        run: |
-          go test -v $TEST_DIR/tne1_1_test.go
-        env:
-          GITHUB_ACTIONS: true
-        continue-on-error: true
-
-      - name: Check for Test Failures
-        if: always()
-        run: |
-          if [[ "${{ job.status }}" == "failure" ]]; then
-            echo "One or more test suites failed"
-            exit 1
-          fi
+        continue-on-error: false
 
   chaostest:
     name: chaostest

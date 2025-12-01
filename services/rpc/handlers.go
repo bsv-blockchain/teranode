@@ -269,17 +269,67 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 
 		diff := b.Bits.CalculateDifficulty()
 		diffFloat, _ := diff.Float64()
+
+		// Get best block header for confirmations calculation
+		_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		// Calculate median time for this block
+		medianTime, err := calculateMedianTime(ctx, s.blockchainClient, b.Hash())
+		if err != nil {
+			// If we can't calculate median time, use block time
+			s.logger.Warnf("Failed to calculate median time for block %s: %v, falling back to block timestamp", b.Hash(), err)
+			medianTime = b.Timestamp
+		}
+
+		// Handle previousblockhash for genesis block
+		previousBlockHash := b.HashPrevBlock.String()
+		if meta.Height == 0 {
+			// For genesis block, return empty string instead of zeros
+			previousBlockHash = ""
+		}
+
+		// Get next block hash unless there are none
+		nextBlock, err := s.blockchainClient.GetBlockByHeight(ctx, meta.Height+1)
+		var nextBlockHash string
+		if err == nil && nextBlock != nil {
+			nextBlockHash = nextBlock.Hash().String()
+		}
+
+		// Get block size
+		blockBytes := b.Bytes()
+		blockSizeInt32, err := safeconversion.IntToInt32(len(blockBytes))
+		if err != nil {
+			return nil, err
+		}
+
+		// Get transaction count from the block at this height
+		block, err := s.blockchainClient.GetBlockByHeight(ctx, meta.Height)
+		var numTx int
+		if err == nil && block != nil {
+			numTx = int(block.TransactionCount)
+		}
+
 		headerReply := &bsvjson.GetBlockHeaderVerboseResult{
-			Hash:         b.Hash().String(),
-			Version:      versionInt32,
-			VersionHex:   fmt.Sprintf("%08x", b.Version),
-			PreviousHash: b.HashPrevBlock.String(),
-			Nonce:        nonceUint64,
-			Time:         timeInt64,
-			Bits:         b.Bits.String(),
-			Difficulty:   diffFloat,
-			MerkleRoot:   b.HashMerkleRoot.String(),
-			Height:       heightInt32,
+			Hash:          b.Hash().String(),
+			Version:       versionInt32,
+			VersionHex:    fmt.Sprintf("%08x", b.Version),
+			PreviousHash:  previousBlockHash,
+			Nonce:         nonceUint64,
+			Time:          timeInt64,
+			Bits:          b.Bits.String(),
+			Difficulty:    diffFloat,
+			MerkleRoot:    b.HashMerkleRoot.String(),
+			Confirmations: int64(1 + bestBlockMeta.Height - meta.Height),
+			Height:        heightInt32,
+			Size:          blockSizeInt32,
+			NumTx:         numTx,
+			MedianTime:    int64(medianTime),
+			ChainWork:     hex.EncodeToString(meta.ChainWork),
+			NextHash:      nextBlockHash,
+			Status:        "active",
 		}
 
 		// Check if this block is on the main chain
@@ -292,13 +342,6 @@ func handleGetBlockHeader(ctx context.Context, s *RPCServer, cmd interface{}, _ 
 			headerReply.Confirmations = -1
 			return headerReply, nil
 		}
-
-		// Block is on the main chain, calculate confirmations
-		_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			return nil, err
-		}
-		headerReply.Confirmations = 1 + int64(bestBlockMeta.Height) - int64(meta.Height)
 
 		return headerReply, nil
 	}
@@ -333,6 +376,12 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 		return nil, err
 	}
 
+	// Get block metadata for this specific block to retrieve its chain work
+	_, blockMeta, err := s.blockchainClient.GetBlockHeader(ctx, b.Hash())
+	if err != nil {
+		return nil, err
+	}
+
 	// Get next block hash unless there are none.
 	nextBlock, err := s.blockchainClient.GetBlockByHeight(ctx, b.Height+1)
 	if err != nil && !errors.Is(err, errors.ErrBlockNotFound) {
@@ -362,12 +411,28 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 		return nil, err
 	}
 
+	// Calculate median time for this block
+	medianTime, err := calculateMedianTime(ctx, s.blockchainClient, b.Hash())
+	if err != nil {
+		// If we can't calculate median time, use block time
+		s.logger.Warnf("Failed to calculate median time for block %s: %v, falling back to block timestamp", b.Hash(), err)
+		medianTime = b.Header.Timestamp
+	}
+
+	// Handle previousblockhash for genesis block
+	previousBlockHash := b.Header.HashPrevBlock.String()
+	if b.Height == 0 {
+		// For genesis block, return empty string instead of zeros
+		previousBlockHash = ""
+	}
+
+	// Create the base block reply with all required fields
 	baseBlockReply := &bsvjson.GetBlockBaseVerboseResult{
 		Hash:          b.Hash().String(),
 		Version:       versionInt32,
 		VersionHex:    fmt.Sprintf("%08x", b.Header.Version),
 		MerkleRoot:    b.Header.HashMerkleRoot.String(),
-		PreviousHash:  b.Header.HashPrevBlock.String(),
+		PreviousHash:  previousBlockHash,
 		Nonce:         b.Header.Nonce,
 		Time:          int64(b.Header.Timestamp),
 		Confirmations: 1 + int64(bestBlockMeta.Height) - int64(b.Height),
@@ -376,42 +441,19 @@ func (s *RPCServer) blockToJSON(ctx context.Context, b *model.Block, verbosity u
 		Bits:          b.Header.Bits.String(),
 		Difficulty:    diff,
 		NextHash:      nextBlockHash,
+		NumTx:         int(b.TransactionCount),
+		MedianTime:    int64(medianTime),
+		ChainWork:     hex.EncodeToString(blockMeta.ChainWork),
 	}
 
-	// TODO: we can't add the txs to the block as there could be too many.
-	// A breaking change would be to add the subtrees.
+	// For verbosity 1 and above, return the JSON object
+	// Note: Tx field is intentionally kept empty for performance reasons
+	// to avoid large response bodies with potentially millions of transactions
+	s.logger.Debugf("Returning block %s with empty tx array (num_tx=%d) for performance reasons", b.Hash(), b.TransactionCount)
 
-	// If verbose level does not match 0 or 1
-	// we can consider it 2 (current bitcoin core behavior)
-	if verbosity == 1 { //nolint:wsl
-		// 	transactions := blk.Transactions()
-		// 	txNames := make([]string, len(transactions))
-		// 	for i, tx := range transactions {
-		// 		txNames[i] = tx.Hash().String()
-		// 	}
-
-		// 	blockReply = bsvjson.GetBlockVerboseResult{
-		// 		GetBlockBaseVerboseResult: baseBlockReply,
-
-		// 		Tx: txNames,
-		// 	}
-		// } else {
-		// 	txns := blk.Transactions()
-		// 	rawTxns := make([]bsvjson.TxRawResult, len(txns))
-		// 	for i, tx := range txns {
-		// 		rawTxn, err := createTxRawResult(params, tx.MsgTx(),
-		// 			tx.Hash().String(), blockHeader, hash.String(),
-		// 			blockHeight, best.Height)
-		// 		if err != nil {
-		// 			return nil, err
-		// 		}
-		// 		rawTxns[i] = *rawTxn
-		// 	}
-		blockReply = &bsvjson.GetBlockVerboseTxResult{
-			GetBlockBaseVerboseResult: baseBlockReply,
-
-			// Tx: rawTxns,
-		}
+	blockReply = &bsvjson.GetBlockVerboseResult{
+		GetBlockBaseVerboseResult: baseBlockReply,
+		Tx:                        []string{}, // Empty array for backward compatibility
 	}
 
 	return blockReply, nil
@@ -873,15 +915,8 @@ func handleGenerate(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, err
 	}
 
-	err = s.blockAssemblyClient.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: numblocksInt32})
-	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: errors.NewServiceError("RPC blockassembly client", err).Error(),
-		}
-	}
-
-	return nil, nil
+	// Generate blocks and return their hashes
+	return s.generateBlocksAndReturnHashes(ctx, numblocksInt32, nil, nil)
 }
 
 // handleGenerateToAddress implements the generatetoaddress command, which instructs the node to
@@ -950,15 +985,8 @@ func handleGenerateToAddress(ctx context.Context, s *RPCServer, cmd interface{},
 		}
 	}
 
-	err = s.blockAssemblyClient.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{Count: c.NumBlocks, Address: &c.Address, MaxTries: c.MaxTries})
-	if err != nil {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInternal.Code,
-			Message: err.Error(),
-		}
-	}
-
-	return nil, nil
+	// Generate blocks and return their hashes
+	return s.generateBlocksAndReturnHashes(ctx, c.NumBlocks, &c.Address, c.MaxTries)
 }
 
 // handleGetMiningCandidate implements the getminingcandidate command, which provides
@@ -1017,6 +1045,10 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 		return nil, err
 	}
 
+	// Calculate difficulty from nBits
+	difficulty := nBits.CalculateDifficulty()
+	difficultyFloat, _ := difficulty.Float64()
+
 	merkleProofStrings := make([]string, len(mc.MerkleProof))
 
 	for i, hash := range mc.MerkleProof {
@@ -1034,6 +1066,7 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 		"num_tx":              mc.NumTxs,
 		"sizeWithoutCoinbase": mc.SizeWithoutCoinbase,
 		"merkleProof":         merkleProofStrings,
+		"difficulty":          difficultyFloat,
 	}
 
 	if c.ProvideCoinbaseTx != nil && *c.ProvideCoinbaseTx {
@@ -1364,17 +1397,15 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 		return map[string]interface{}{}, errors.NewProcessingError("error calculating median time: %v", err)
 	}
 
-	// Calculate verification progress based on blockchain statistics
+	// Calculate verification progress based on Bitcoin SV's GuessVerificationProgress function
 	verificationProgress, err := calculateVerificationProgress(ctx, s.blockchainClient, bestBlockMeta.Height)
 	if err != nil {
 		// If we can't calculate verification progress, default to 1.0 (assume fully synced)
 		verificationProgress = 1.0
 	}
 
-	chainWorkHash, err := chainhash.NewHash(bestBlockMeta.ChainWork)
-	if err != nil {
-		return map[string]interface{}{}, errors.NewProcessingError("error creating chain work hash: %v", err)
-	}
+	// Convert chainwork bytes to little endian hex string
+	chainWorkHex := hex.EncodeToString(bestBlockMeta.ChainWork)
 
 	difficultyBigFloat := bestBlockHeader.Bits.CalculateDifficulty()
 	difficulty, _ := difficultyBigFloat.Float64()
@@ -1387,7 +1418,7 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 		"difficulty":           difficulty, // Return as float64 to match Bitcoin SV
 		"mediantime":           medianTime,
 		"verificationprogress": verificationProgress,
-		"chainwork":            chainWorkHash.String(),
+		"chainwork":            chainWorkHex,
 		"pruned":               false, // the minimum relay fee for non-free transactions in BSV/KB
 		"softforks":            []interface{}{},
 	}
@@ -1399,8 +1430,8 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 	return jsonMap, nil
 }
 
-// calculateVerificationProgress implements Bitcoin SV's GuessVerificationProgress function.
-// This is a direct translation of the Bitcoin SV code from validation.cpp:
+// calculateVerificationProgress follows the pattern of Bitcoin SV's GuessVerificationProgress function.
+// This is a translation of the Bitcoin SV code from validation.cpp:
 //
 //	double GuessVerificationProgress(const ChainTxData &data, const CBlockIndex *pindex) {
 //	    if (pindex == nullptr) return 0.0;
@@ -1606,7 +1637,12 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 		"difficulty":      difficulty,                                    // the current target difficulty
 		"testnet":         s.settings.ChainCfgParams.Net == wire.TestNet, // whether or not server is using testnet
 		"stn":             s.settings.ChainCfgParams.Net == wire.STN,     // whether or not server is using stn
-
+		"policy": map[string]interface{}{
+			"maxblocksize":                 s.settings.Policy.ExcessiveBlockSize,           // maximum block size
+			"maxminedblocksize":            s.settings.Policy.BlockMaxSize,                 // maximum mined block size
+			"maxstackmemoryusagepolicy":    s.settings.Policy.MaxStackMemoryUsagePolicy,    // max stack memory usage policy
+			"maxstackmemoryusageconsensus": s.settings.Policy.MaxStackMemoryUsageConsensus, // max stack memory usage consensus
+		},
 	}
 
 	if s.settings.RPC.CacheEnabled {
@@ -2693,4 +2729,62 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	}
 
 	return result, nil
+}
+
+// generateBlocksAndReturnHashes is a shared helper method that generates blocks and returns their hashes.
+// This method is used by both handleGenerate and handleGenerateToAddress to avoid code duplication.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - s: The RPC server instance providing access to service clients
+//   - count: Number of blocks to generate
+//   - address: Optional address for mining rewards (nil for generate command)
+//   - maxTries: Optional maximum number of attempts (nil for generate command)
+//
+// Returns:
+//   - []string: Array of block hashes of the generated blocks
+//   - error: Any error encountered during block generation
+func (s *RPCServer) generateBlocksAndReturnHashes(ctx context.Context, count int32, address *string, maxTries *int32) ([]string, error) {
+	// Get the current best block hash before generation
+	_, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInternal.Code,
+			Message: errors.NewServiceError("RPC blockchain client", err).Error(),
+		}
+	}
+	startHeight := bestBlockMeta.Height
+
+	// Generate the blocks
+	err = s.blockAssemblyClient.GenerateBlocks(ctx, &blockassembly_api.GenerateBlocksRequest{
+		Count:    count,
+		Address:  address,
+		MaxTries: maxTries,
+	})
+	if err != nil {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCInternal.Code,
+			Message: errors.NewServiceError("RPC blockassembly client", err).Error(),
+		}
+	}
+
+	// Collect the block hashes of the generated blocks
+	// Note: There may be a brief delay between block generation and availability in blockchain client
+	var blockHashes []string
+	for i := int32(1); i <= count; i++ {
+		targetHeight := startHeight + uint32(i)
+
+		// Get the block at the target height
+		block, err := s.blockchainClient.GetBlockByHeight(ctx, targetHeight)
+		if err != nil {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCInternal.Code,
+				Message: errors.NewServiceError("RPC blockchain client", err).Error(),
+			}
+		}
+
+		blockHashes = append(blockHashes, block.Header.Hash().String())
+	}
+
+	return blockHashes, nil
 }
