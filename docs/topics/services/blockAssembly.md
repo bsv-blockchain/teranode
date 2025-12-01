@@ -17,8 +17,7 @@
     - [2.6.3. The block received is a new block, but it represents a fork.](#263-the-block-received-is-a-new-block-but-it-represents-a-fork)
     - [2.6.4. Fork Detection and Assessment](#264-fork-detection-and-assessment)
     - [2.6.5. Chain Selection and Reorganization Process](#265-chain-selection-and-reorganization-process)
-    - [2.7. Unmined Transaction Cleanup](#27-unmined-transaction-cleanup)
-    - [2.8. Resetting the Block Assembly](#28-resetting-the-block-assembly)
+    - [2.7. Resetting the Block Assembly](#27-resetting-the-block-assembly)
 3. [Data Model](#3-data-model)
 4. [gRPC Protobuf Definitions](#4-grpc-protobuf-definitions)
 5. [Technology](#5-technology)
@@ -76,11 +75,11 @@ The block assembly process involves the following steps:
     - The node also handles the resolution of forks in the blockchain and conflicting subtrees or blocks mined by other nodes.
     - This involves choosing between different versions of the blockchain (in case of forks) and resolving conflicts in transactions and subtrees included in other nodes' blocks.
 
-9. **Periodic Unmined Transaction Cleanup**:
+9. **Coordination with Pruner Service**:
 
-    - The service periodically removes old unmined transactions that have exceeded their retention period.
-    - This cleanup prevents unbounded growth of the UTXO store and maintains system performance.
-    - Parent transactions of younger unmined transactions are preserved to maintain transaction dependencies.
+    - Block Assembly coordinates with the [Pruner Service](pruner.md), which handles UTXO data pruning operations.
+    - The Pruner service was extracted from Block Assembly (PR #114) as a standalone microservice.
+    - Block Assembly provides state information to Pruner to ensure pruning only occurs during stable blockchain states (not during reorgs or resets).
 
 > **Note**: For information about how the Block Assembly service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
@@ -456,28 +455,7 @@ The following diagram illustrates how the Block Assembly service handles a chain
 
 Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will only build on top of such blocks when the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment. For more information, please review the [Double Spend Detection documentation](../architecture/understandingDoubleSpends.md).
 
-### 2.7. Unmined Transaction Cleanup
-
-The Block Assembly service periodically cleans up old unmined transactions to prevent unbounded growth of the UTXO store. This cleanup process is essential for maintaining system performance and preventing resource exhaustion.
-
-![unmined_cleanup_process.svg](img/plantuml/blockassembly/unmined_cleanup_process.svg)
-
-**Cleanup Process:**
-
-1. **Periodic Trigger** - A background ticker (`unminedCleanupTicker`) runs at configured intervals
-2. **Age-Based Selection** - Identifies unmined transactions older than the retention period using `QueryOldUnminedTransactions`
-3. **Parent Preservation** - Protects parent transactions of younger unmined transactions from deletion
-4. **Batch Deletion** - Removes eligible transactions in batches to minimize performance impact
-
-**Configuration:**
-
-- **Retention Period**: Configured via `UnminedTxRetention` settings
-- **Cleanup Interval**: Controlled by the cleanup ticker configuration
-- **Parent Protection**: Uses `PreserveTransactions` to mark parents that should be retained
-
-This cleanup mechanism ensures the UTXO store remains performant while preserving transaction dependencies.
-
-### 2.8. Resetting the Block Assembly
+### 2.7. Resetting the Block Assembly
 
 The Block Assembly service can be reset to the best block by calling the `ResetBlockAssembly` gRPC method.
 
