@@ -3034,6 +3034,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="2.4. Creating Mining Candidates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#241-mining-candidate-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4.1. Mining Candidate Caching
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -3093,10 +3110,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#fork-detection-and-assessment" class="md-nav__link">
+  <a href="#264-fork-detection-and-assessment" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fork Detection and Assessment
+        2.6.4. Fork Detection and Assessment
       
     </span>
   </a>
@@ -3104,10 +3121,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#chain-selection-and-reorganization-process" class="md-nav__link">
+  <a href="#265-chain-selection-and-reorganization-process" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Chain Selection and Reorganization Process
+        2.6.5. Chain Selection and Reorganization Process
       
     </span>
   </a>
@@ -6594,6 +6611,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="2.4. Creating Mining Candidates">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#241-mining-candidate-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4.1. Mining Candidate Caching
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -6653,10 +6687,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#fork-detection-and-assessment" class="md-nav__link">
+  <a href="#264-fork-detection-and-assessment" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Fork Detection and Assessment
+        2.6.4. Fork Detection and Assessment
       
     </span>
   </a>
@@ -6664,10 +6698,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#chain-selection-and-reorganization-process" class="md-nav__link">
+  <a href="#265-chain-selection-and-reorganization-process" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Chain Selection and Reorganization Process
+        2.6.5. Chain Selection and Reorganization Process
       
     </span>
   </a>
@@ -6938,13 +6972,15 @@
 <li><a href="#23-grouping-transactions-into-subtrees">2.3. Grouping Transactions into Subtrees</a></li>
 <li><a href="#231-dynamic-subtree-size-adjustment">2.3.1 Dynamic Subtree Size Adjustment</a></li>
 <li><a href="#24-creating-mining-candidates">2.4. Creating Mining Candidates</a></li>
+<li><a href="#241-mining-candidate-caching">2.4.1. Mining Candidate Caching</a></li>
 <li><a href="#25-submit-mining-solution">2.5. Submit Mining Solution</a></li>
 <li><a href="#26-processing-subtrees-and-blocks-from-other-nodes-and-handling-forks-and-conflicts">2.6. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts</a></li>
 <li><a href="#261-the-block-received-is-the-same-as-the-current-chaintip-ie-the-block-we-have-already-seen">2.6.1. The block received is the same as the current chaintip (i.e. the block we have already seen).</a></li>
 <li><a href="#262-the-block-received-is-a-new-block-and-it-is-the-new-chaintip">2.6.2. The block received is a new block, and it is the new chaintip.</a></li>
 <li><a href="#263-the-block-received-is-a-new-block-but-it-represents-a-fork">2.6.3. The block received is a new block, but it represents a fork.</a></li>
-<li><a href="#fork-detection-and-assessment">Fork Detection and Assessment</a></li>
-<li><a href="#chain-selection-and-reorganization-process">Chain Selection and Reorganization Process</a></li>
+<li><a href="#264-fork-detection-and-assessment">2.6.4. Fork Detection and Assessment</a></li>
+<li><a href="#265-chain-selection-and-reorganization-process">2.6.5. Chain Selection and Reorganization Process</a></li>
+<li><a href="#27-unmined-transaction-cleanup">2.7. Unmined Transaction Cleanup</a></li>
 <li><a href="#28-resetting-the-block-assembly">2.8. Resetting the Block Assembly</a></li>
 </ul>
 </li>
@@ -6962,7 +6998,9 @@
 <li><a href="#10-other-resources">Other Resources</a></li>
 </ol>
 <h2 id="1-description">1. Description</h2>
-<p>The Block Assembly Service is responsible for assembling new blocks and adding them to the blockchain.  The block assembly process involves the following steps:</p>
+<p>The Block Assembly Service is responsible for assembling new blocks and adding them to the blockchain.</p>
+<p><strong>No Mempool Design</strong>: Unlike traditional Bitcoin nodes that maintain a mempool (memory pool) to store unconfirmed transactions, Teranode's Block Assembly service processes transactions directly through a validation and subtree assembly pipeline. Transactions are immediately validated and organized into subtrees for efficient block creation, rather than being held in an intermediate memory pool. This design enables higher throughput and more efficient resource utilization for large-scale transaction processing.</p>
+<p>The block assembly process involves the following steps:</p>
 <ol>
 <li>
 <p><strong>Receiving Transactions from the TX Validator Service</strong>:</p>
@@ -7018,6 +7056,14 @@
 <li>This involves choosing between different versions of the blockchain (in case of forks) and resolving conflicts in transactions and subtrees included in other nodes' blocks.</li>
 </ul>
 </li>
+<li>
+<p><strong>Periodic Unmined Transaction Cleanup</strong>:</p>
+<ul>
+<li>The service periodically removes old unmined transactions that have exceeded their retention period.</li>
+<li>This cleanup prevents unbounded growth of the UTXO store and maintains system performance.</li>
+<li>Parent transactions of younger unmined transactions are preserved to maintain transaction dependencies.</li>
+</ul>
+</li>
 </ol>
 <blockquote>
 <p><strong>Note</strong>: For information about how the Block Assembly service is initialized during daemon startup and how it interacts with other services, see the <a href="../../../references/teranodeDaemonReference/#service-initialization-flow">Teranode Daemon Reference</a>.</p>
@@ -7045,11 +7091,11 @@
 <p><img alt="block_assembly_unmined_loading.svg" src="../img/plantuml/blockassembly/block_assembly_unmined_loading.svg" /></p>
 <p><strong>Process Overview:</strong></p>
 <ol>
-<li><strong>Wait for Pending Blocks</strong>: The service first ensures all pending blocks are processed to avoid conflicts</li>
-<li><strong>Load Unmined Transactions</strong>: Uses the <code>UnminedTxIterator</code> to retrieve all transactions marked with the <code>unminedSince</code> flag</li>
-<li><strong>Order by Creation Time</strong>: Transactions are sorted topologically by their <code>createdAt</code> timestamp to maintain proper dependencies</li>
-<li><strong>Re-add to Processing</strong>: Each unmined transaction is added back to the subtree processor using <code>AddDirectly()</code></li>
-<li><strong>Unlock Transactions</strong>: Previously locked transactions are unlocked to allow processing</li>
+<li><strong>Wait for Pending Blocks</strong> - The service first ensures all pending blocks are processed to avoid conflicts</li>
+<li><strong>Load Unmined Transactions</strong> - Uses the <code>UnminedTxIterator</code> to retrieve all transactions marked with the <code>unminedSince</code> flag</li>
+<li><strong>Order by Creation Time</strong> - Transactions are sorted topologically by their <code>createdAt</code> timestamp to maintain proper dependencies</li>
+<li><strong>Re-add to Processing</strong> - Each unmined transaction is added back to the subtree processor using <code>AddDirectly()</code></li>
+<li><strong>Unlock Transactions</strong> - Previously locked transactions are unlocked to allow processing</li>
 </ol>
 <p>This recovery mechanism ensures that:</p>
 <ul>
@@ -7057,6 +7103,16 @@
 <li>Network participants don't need to resubmit transactions after node restarts</li>
 <li>The transaction processing pipeline maintains continuity</li>
 </ul>
+<p><strong>Startup Blocking Behavior:</strong></p>
+<p>During the unmined transaction loading phase, the Block Assembly service sets an <code>unminedTransactionsLoading</code> flag that blocks certain operations to prevent inconsistent state:</p>
+<ul>
+<li><strong>Blocked Operations</strong>: <code>SubmitMiningSolution</code>, <code>ResetBlockAssembly</code>, and <code>GenerateBlocks</code> requests are rejected during loading</li>
+<li><strong>Error Response</strong>: Clients receive a "service not ready - unmined transactions are still being loaded" error</li>
+<li><strong>Purpose</strong>: Prevents mining solution submissions or resets while the service is reconstructing its transaction state</li>
+<li><strong>Duration</strong>: Typically completes within seconds to minutes depending on the number of unmined transactions</li>
+<li><strong>Visibility</strong>: Service readiness should be checked via health endpoints before submitting critical requests</li>
+</ul>
+<p>This blocking behavior ensures data integrity during startup and prevents race conditions that could result in lost transactions or inconsistent block assembly state.</p>
 <h3 id="22-receiving-transactions-from-the-tx-validator-service">2.2. Receiving Transactions from the TX Validator Service</h3>
 <p><img alt="block_assembly_add_tx.svg" src="../img/plantuml/blockassembly/block_assembly_add_tx.svg" /></p>
 <ul>
@@ -7108,22 +7164,36 @@
 <li>The Block Assembly Server makes status announcements, using the Status Client, about the mining candidate's height and previous hash.</li>
 <li>Finally, the Server tracks the current candidate in the JobStore within a new "job" and its TTL. This information will be retrieved at a later stage, if and when the miner submits a solution to the mining challenge for this specific mining candidate.</li>
 </ul>
-<p><strong>Mining Candidate Caching:</strong></p>
-<p>To optimize performance for frequent GetMiningCandidate requests, the service implements a caching mechanism:</p>
+<h4 id="241-mining-candidate-caching">2.4.1. Mining Candidate Caching</h4>
+<p>The Block Assembly service implements an intelligent caching mechanism for mining candidates to optimize performance and reduce redundant computations:</p>
+<p><strong>Cache Behavior:</strong></p>
 <ul>
-<li>Mining candidates are cached for a configurable timeout period (default: a few seconds)</li>
-<li>Subsequent requests within the timeout period return the cached candidate</li>
+<li>Mining candidates are cached when the block height remains unchanged</li>
+<li>The cache has a configurable timeout (via <code>MiningCandidateCacheTimeout</code> setting)</li>
 <li>
-<p>Cache is invalidated when:</p>
+<p>Cache is automatically invalidated when:</p>
 <ul>
-<li>New subtrees are completed</li>
-<li>A new block is received from the network</li>
-<li>The timeout expires</li>
-<li>This reduces computation overhead for high-frequency mining requests</li>
+<li>A new block is added to the blockchain (height changes)</li>
+<li>New subtrees become available</li>
+<li>The cache timeout expires</li>
 </ul>
 </li>
 </ul>
-<p>The caching strategy balances freshness against performance, ensuring miners receive recent candidates without overloading the system during rapid polling.</p>
+<p><strong>Performance Benefits:</strong></p>
+<ul>
+<li>Reduces CPU overhead for miners requesting frequent updates</li>
+<li>Eliminates redundant subtree processing and merkle tree calculations</li>
+<li>Improves response times for mining candidate requests</li>
+<li>Particularly beneficial for mining pools making high-frequency requests</li>
+</ul>
+<p><strong>Implementation Details:</strong></p>
+<ul>
+<li>Uses thread-safe locking to prevent race conditions during cache updates</li>
+<li>Implements a generation flag to serialize concurrent candidate creation requests</li>
+<li>Cache hit/miss metrics are exposed via Prometheus for monitoring</li>
+<li>Disabled for difficulty adjustment scenarios (when <code>ReduceMinDifficulty</code> is enabled) to ensure accurate difficulty calculations</li>
+</ul>
+<p>This caching mechanism is transparent to miners and significantly improves the efficiency of the mining candidate generation process during normal operations.</p>
 <h3 id="25-submit-mining-solution">2.5. Submit Mining Solution</h3>
 <p>Once a miner solves the mining challenge, it submits a solution to the Block Assembly Service. The solution includes the nonce required to solve the mining challenge.</p>
 <p><img alt="block_assembly_submit_mining_solution.svg" src="../img/plantuml/blockassembly/block_assembly_submit_mining_solution.svg" /></p>
@@ -7254,7 +7324,7 @@
 <h3 id="263-the-block-received-is-a-new-block-but-it-represents-a-fork">2.6.3. The block received is a new block, but it represents a fork</h3>
 <p>In this scenario, the function needs to handle a reorganization. A blockchain reorganization occurs when a node discovers a longer or more difficult chain different from the current local chain. This can happen due to network delays or forks in the blockchain network.</p>
 <p>It is the responsibility of the block assembly to always build on top of the longest chain of work. For clarity, it is not the Block Validation or Blockchain services's responsibility to resolve forks. The Block Assembly is notified of the ongoing chains of work, and it makes sure to build on the longest one. If the longest chain of work is different from the current local chain the block assembly was working on, a reorganization will take place.</p>
-<h4 id="fork-detection-and-assessment">Fork Detection and Assessment</h4>
+<h4 id="264-fork-detection-and-assessment">2.6.4. Fork Detection and Assessment</h4>
 <p>The Block Assembly service implements real-time fork detection through the following mechanisms:</p>
 <ul>
 <li><strong>Real-time Block Monitoring</strong>: Implemented via <code>blockchainSubscriptionCh</code> in the Block Assembler, which continuously monitors for new blocks and chain updates.</li>
@@ -7281,14 +7351,14 @@
 <p><strong>Reorganization Size Protection</strong>:</p>
 <ul>
 <li>Monitors the size of potential chain reorganizations</li>
-<li>If a reorganization would require moving more than 5 blocks either backwards or forwards</li>
+<li>If a reorganization would require moving more than the coinbase maturity threshold (typically 100 blocks, configured via <code>Settings.ChainCfgParams.CoinbaseMaturity</code>) either backwards or forwards</li>
 <li>AND the current chain height is greater than 1000 blocks</li>
 <li>Triggers a full reset of the block assembler as a safety measure against deep reorganizations</li>
 </ul>
 </li>
 </ol>
 <p>The <code>BlockAssembler</code> keeps the node synchronized with the network by identifying and switching to the strongest chain (the one with the most accumulated proof of work), ensuring all nodes in the network converge on the same transaction history.</p>
-<h4 id="chain-selection-and-reorganization-process">Chain Selection and Reorganization Process</h4>
+<h4 id="265-chain-selection-and-reorganization-process">2.6.5. Chain Selection and Reorganization Process</h4>
 <p>During a reorganization, the <code>BlockAssembler</code> performs two key operations:</p>
 <ol>
 <li>Removes (rolls back) transactions from blocks in the current chain, starting from where the fork occurred</li>
@@ -7311,7 +7381,7 @@
 <li>
 <p>Performs a safety check on reorganization depth:</p>
 <ul>
-<li>If the reorganization involves more than 5 blocks in either direction</li>
+<li>If the reorganization involves more than the coinbase maturity threshold (typically 100 blocks, configured via <code>Settings.ChainCfgParams.CoinbaseMaturity</code>) in either direction</li>
 <li>And the current chain height is greater than 1000</li>
 <li>The block assembler will reset rather than attempt the reorganization</li>
 </ul>
@@ -7336,16 +7406,14 @@
 <ul>
 <li>
 <p><code>err = b.handleReorg(ctx, bestBlockchainBlockHeader)</code>:</p>
-</li>
-<li>
-<p>Calls the <code>handleReorg</code> method, passing the current context (<code>ctx</code>) and the new best block header from the blockchain network.</p>
-</li>
-<li>
-<p>The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the <code>BlockAssembler</code>'s blockchain state with the network's state.</p>
+<ul>
+<li>Calls the <code>handleReorg</code> method, passing the current context (<code>ctx</code>) and the new best block header from the blockchain network.</li>
+<li>The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the <code>BlockAssembler</code>'s blockchain state with the network's state.</li>
+</ul>
 </li>
 <li>
 <p><strong>Getting Reorg Blocks</strong>:</p>
-</li>
+<ul>
 <li>
 <p><code>moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, header)</code>:</p>
 <ul>
@@ -7359,12 +7427,14 @@
 <ul>
 <li>
 <p><code>b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)</code>:</p>
-</li>
-<li>
-<p>Executes the actual reorg process in the <code>SubtreeProcessor</code>, responsible for managing the blockchain's data structure and state.</p>
-</li>
+<ul>
+<li>Executes the actual reorg process in the <code>SubtreeProcessor</code>, responsible for managing the blockchain's data structure and state.</li>
 <li>The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).<ul>
 <li>This step involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.</li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -7376,10 +7446,10 @@
 <p><img alt="unmined_cleanup_process.svg" src="../img/plantuml/blockassembly/unmined_cleanup_process.svg" /></p>
 <p><strong>Cleanup Process:</strong></p>
 <ol>
-<li><strong>Periodic Trigger</strong>: A background ticker (<code>unminedCleanupTicker</code>) runs at configured intervals</li>
-<li><strong>Age-Based Selection</strong>: Identifies unmined transactions older than the retention period using <code>QueryOldUnminedTransactions</code></li>
-<li><strong>Parent Preservation</strong>: Protects parent transactions of younger unmined transactions from deletion</li>
-<li><strong>Batch Deletion</strong>: Removes eligible transactions in batches to minimize performance impact</li>
+<li><strong>Periodic Trigger</strong> - A background ticker (<code>unminedCleanupTicker</code>) runs at configured intervals</li>
+<li><strong>Age-Based Selection</strong> - Identifies unmined transactions older than the retention period using <code>QueryOldUnminedTransactions</code></li>
+<li><strong>Parent Preservation</strong> - Protects parent transactions of younger unmined transactions from deletion</li>
+<li><strong>Batch Deletion</strong> - Removes eligible transactions in batches to minimize performance impact</li>
 </ol>
 <p><strong>Configuration:</strong></p>
 <ul>
@@ -7464,7 +7534,7 @@
 <ul>
 <li><strong>Conflicting Transaction Detection</strong>: During reorgs, the service identifies and marks conflicting transactions in affected subtrees</li>
 <li><strong>Transaction Recovery</strong>: Non-conflicting transactions are automatically re-added to new subtrees</li>
-<li><strong>Deep Reorg Protection</strong>: Reorganizations affecting more than 5 blocks trigger a full service reset for safety</li>
+<li><strong>Deep Reorg Protection</strong>: Reorganizations affecting more than the coinbase maturity threshold (typically 100 blocks) trigger a full service reset for safety</li>
 </ul>
 <h4 id="utxo-store-unavailability">UTXO Store Unavailability</h4>
 <ul>

@@ -6495,7 +6495,7 @@
 <p>The Service features are:</p>
 <h3 id="utxo-freezing">UTXO Freezing</h3>
 <ul>
-<li>Ability to freeze a set of UTXOs at a specific block height + 1.</li>
+<li>Ability to freeze a set of UTXOs at a specified block height.</li>
 <li>Frozen UTXOs are classified as such and attempts to spend them are rejected.</li>
 </ul>
 <h3 id="utxo-unfreezing">UTXO Unfreezing</h3>
@@ -6672,22 +6672,9 @@ Based on the received messages, the Alert Service handles the UTXO freezing, unf
 <li>
 <p>The Blockchain Client interacts with the Blockchain Store to:</p>
 <ul>
-<li>Mark the specified block as invalid.</li>
-<li>Retrieve all transactions from the invalidated block.</li>
-</ul>
-</li>
-<li>
-<p>For each transaction in the invalidated block:</p>
-<ul>
-<li>The Blockchain Client re-validates the transaction.</li>
-<li>If the transaction is still valid, it's added back to the Block Assembly service, for re-inclusion in the next mined block.</li>
-</ul>
-</li>
-<li>
-<p>The Blockchain Client then:</p>
-<ul>
-<li>Retrieves the block immediately preceding the invalidated block.</li>
-<li>Sets the chain tip to this previous block, effectively removing the invalidated block from the main chain.</li>
+<li>Mark the specified block and all child blocks as invalid in the database.</li>
+<li>Set the mined status to false for these blocks.</li>
+<li>Return the list of invalidated block hashes.</li>
 </ul>
 </li>
 <li>
