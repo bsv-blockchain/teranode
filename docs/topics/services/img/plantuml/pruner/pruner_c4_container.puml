@@ -1,0 +1,42 @@
+@startuml Pruner_Service_Container_Diagram
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+LAYOUT_WITH_LEGEND()
+
+title Container Diagram for Pruner Service
+
+Person(operator, "Node Operator", "Monitors pruning operations")
+
+System_Boundary(teranode, "Teranode") {
+    Container(pruner, "Pruner Service", "Go, gRPC", "Manages UTXO data pruning with two-phase safety mechanism")
+    Container(blockchain, "Blockchain Service", "Go, gRPC", "Manages blockchain state and FSM")
+    Container(blockpersister, "Block Persister", "Go", "Persists blocks to storage")
+    Container(blockassembly, "Block Assembly", "Go, gRPC", "Assembles blocks for mining")
+    ContainerDb(utxostore, "UTXO Store", "Aerospike/SQL", "Stores unspent transaction outputs")
+    ContainerDb(blobstore, "Blob Store", "S3/File", "Stores transaction blobs")
+}
+
+Rel(operator, pruner, "Monitors metrics", "Prometheus")
+Rel(pruner, blockchain, "Subscribes to events", "gRPC")
+Rel(pruner, blockassembly, "Checks state", "gRPC")
+Rel(pruner, utxostore, "Prunes old records", "Aerospike/SQL API")
+Rel(pruner, blobstore, "Deletes .tx files", "S3/File API")
+Rel(blockpersister, blockchain, "Sends BlockPersisted", "gRPC notification")
+Rel(blockchain, pruner, "Forwards notifications", "gRPC")
+
+note right of pruner
+**Event-Driven Architecture**
+- BlockPersisted notifications (primary)
+- Block notifications (fallback)
+- Non-blocking channel
+- gRPC port: 8096
+end note
+
+note right of utxostore
+**Two-Phase Pruning**
+1. Preserve Parents
+2. DAH Pruning
+Coordinated with Block Persister
+end note
+
+@enduml
