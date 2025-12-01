@@ -669,9 +669,9 @@ type RPCServer struct {
 	// Used for mining-related RPC commands like getminingcandidate and generate
 	blockAssemblyClient blockassembly.ClientI
 
-	// peerClient provides access to legacy peer network services
+	// legacyP2PClient provides access to legacy peer network services
 	// Used for peer management and information retrieval
-	peerClient peer.ClientI
+	legacyP2PClient peer.ClientI
 
 	// p2pClient provides access to the P2P network services
 	// Used for modern peer management and network operations
@@ -1384,7 +1384,7 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // Returns:
 //   - *RPCServer: Configured server instance ready for initialization
 //   - error: Any error encountered during configuration
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI, txStore blob.Store, validatorClient validator.Interface) (*RPCServer, error) {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, legacyPeerClient peer.ClientI, p2pClient p2p.ClientI, txStore blob.Store, validatorClient validator.Interface) (*RPCServer, error) {
 	initPrometheusMetrics()
 
 	assetHTTPAddress := tSettings.Asset.HTTPAddress
@@ -1409,7 +1409,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		helpCacher:             newHelpCacher(),
 		utxoStore:              utxoStore,
 		blockAssemblyClient:    blockAssemblyClient,
-		peerClient:             peerClient,
+		legacyP2PClient:        legacyPeerClient,
 		p2pClient:              p2pClient,
 		txStore:                txStore,
 		validatorClient:        validatorClient,

@@ -353,8 +353,6 @@ type UtxoStoreSettings struct {
 	SpendBatcherSize                  int
 	SpendBatcherConcurrency           int
 	SpendWaitTimeout                  time.Duration
-	SpendQueueLimit                   int
-	SpendEnqueueTimeout               time.Duration
 	SpendCircuitBreakerFailureCount   int
 	SpendCircuitBreakerCooldown       time.Duration
 	SpendCircuitBreakerHalfOpenMax    int
@@ -460,6 +458,9 @@ type P2PSettings struct {
 
 	// Node mode configuration (full vs pruned)
 	AllowPrunedNodeFallback bool // If true, fall back to pruned nodes when no full nodes available (default: true). Selects youngest pruned node (smallest height) to minimize UTXO pruning risk.
+
+	// This is the time we trigger a periodic evaluation in the sync coordinator
+	SyncCoordinatorPeriodicEvaluationInterval time.Duration
 }
 
 type CoinbaseSettings struct {

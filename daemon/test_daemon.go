@@ -47,6 +47,7 @@ import (
 	"github.com/bsv-blockchain/teranode/test/utils/wait"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	libp2pPeer "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
@@ -109,7 +110,7 @@ func (je *JSONError) Error() string {
 
 // NewTestDaemon creates a new TestDaemon instance with the provided options.
 func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	var (
 		composeDependencies tc.ComposeStack
@@ -460,8 +461,13 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	blockAssembler, ok := blockAssemblyService.(*blockassembly.BlockAssembly)
 	require.True(t, ok)
 
+	assetURL := fmt.Sprintf("http://127.0.0.1:%d", appSettings.Asset.HTTPPort)
+	if appSettings.Asset.APIPrefix != "" {
+		assetURL += appSettings.Asset.APIPrefix
+	}
+
 	return &TestDaemon{
-		AssetURL:              fmt.Sprintf("http://127.0.0.1:%d", appSettings.Asset.HTTPPort),
+		AssetURL:              assetURL,
 		BlockAssembler:        blockAssembler.GetBlockAssembler(),
 		BlockAssemblyClient:   blockAssemblyClient,
 		BlockValidationClient: blockValidationClient,
@@ -1294,6 +1300,13 @@ func (td *TestDaemon) WaitForBlockStateChange(t *testing.T, expectedBlock *model
 	}
 }
 
+func (td *TestDaemon) WaitForBlockhash(t *testing.T, blockHash *chainhash.Hash, timeout time.Duration) {
+	require.Eventually(t, func() bool {
+		_, err := td.BlockchainClient.GetBlock(td.Ctx, blockHash)
+		return err == nil
+	}, timeout, 100*time.Millisecond, "Timeout waiting for block with hash %s", blockHash.String())
+}
+
 func (td *TestDaemon) WaitForBlock(t *testing.T, expectedBlock *model.Block, timeout time.Duration, skipVerifyChain ...bool) {
 	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
 	defer cancel()
@@ -1863,6 +1876,25 @@ func (td *TestDaemon) DisconnectFromPeer(t *testing.T, peer *TestDaemon) {
 	// Use the P2P client to disconnect from the peer dynamically
 	err := td.P2PClient.DisconnectPeer(td.Ctx, peer.Settings.P2P.PeerID)
 	require.NoError(t, err, "Failed to disconnect from peer")
+}
+
+func (td *TestDaemon) InjectPeer(t *testing.T, peer *TestDaemon) {
+	peerID, err := libp2pPeer.Decode(peer.Settings.P2P.PeerID)
+	require.NoError(t, err, "Failed to decode peer ID")
+
+	p2pService, err := td.d.ServiceManager.GetService("P2P")
+	require.NoError(t, err, "Failed to get P2P service")
+
+	p2pServer, ok := p2pService.(*p2p.Server)
+	require.True(t, ok, "Failed to cast P2P service to Server")
+
+	// Inject my peer info to other peer...
+	header, meta, err := peer.BlockchainClient.GetBestBlockHeader(td.Ctx)
+	require.NoError(t, err, "Failed to get best block header")
+
+	p2pServer.InjectPeerForTesting(peerID, peer.Settings.Context, peer.AssetURL, meta.Height, header.Hash())
+
+	t.Logf("Injected peer %s into %s's registry (PeerID: %s)", peer.Settings.Context, td.Settings.Context, peerID)
 }
 
 func peerAddress(peer *TestDaemon) string {

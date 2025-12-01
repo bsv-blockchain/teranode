@@ -1,5 +1,9 @@
 name: cleanup-gh-cache
 on: workflow_dispatch
+
+permissions:
+  actions: write  # Required for gh cache list and delete
+
 jobs:
   cleanup:
     runs-on: ubuntu-latest

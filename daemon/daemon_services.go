@@ -452,7 +452,7 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
-	peerClient, err := peer.NewClient(ctx, createLogger("rpc"), appSettings)
+	legacyPeerClient, err := peer.NewClient(ctx, createLogger("rpc"), appSettings)
 	if err != nil {
 		return err
 	}
@@ -489,7 +489,7 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 	// Create the RPC server with the necessary parts
 	var rpcServer *rpc.RPCServer
 
-	rpcServer, err = rpc.NewServer(createLogger(loggerRPC), appSettings, blockchainClient, blockValidationClient, utxoStore, blockAssemblyClient, peerClient, p2pClient, txStore, validatorClient)
+	rpcServer, err = rpc.NewServer(createLogger(loggerRPC), appSettings, blockchainClient, blockValidationClient, utxoStore, blockAssemblyClient, legacyPeerClient, p2pClient, txStore, validatorClient)
 	if err != nil {
 		return err
 	}

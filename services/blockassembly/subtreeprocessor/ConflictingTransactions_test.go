@@ -38,8 +38,9 @@ func TestProcessConflictingTransactions(t *testing.T) {
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 	// Create a subtree processor with mocked dependencies
+	ctx := context.Background()
 	stp, err := NewSubtreeProcessor(
-		context.Background(),
+		ctx,
 		ulogger.TestLogger{},
 		settings,
 		blobStore,
@@ -48,6 +49,7 @@ func TestProcessConflictingTransactions(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	// Create test data
 	block := &model.Block{
@@ -116,8 +118,9 @@ func TestWaitForBlockBeingMined(t *testing.T) {
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 	// Create a subtree processor with mocked blockchain client
+	ctx := context.Background()
 	stp, err := NewSubtreeProcessor(
-		context.Background(),
+		ctx,
 		ulogger.TestLogger{},
 		settings,
 		blobStore,
@@ -126,6 +129,7 @@ func TestWaitForBlockBeingMined(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	// Create test data
 	blockHash := chainhash.HashH([]byte("test-block"))
@@ -196,8 +200,9 @@ func TestGetBlockIDsMap(t *testing.T) {
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 	// Create a subtree processor with mocked dependencies
+	ctx := context.Background()
 	stp, err := NewSubtreeProcessor(
-		context.Background(),
+		ctx,
 		ulogger.TestLogger{},
 		settings,
 		blobStore,
@@ -206,6 +211,7 @@ func TestGetBlockIDsMap(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	// Create test data
 	tx1Hash := chainhash.HashH([]byte("tx1"))
@@ -266,8 +272,9 @@ func TestGetSubtreeAndConflictingTransactionsMap(t *testing.T) {
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 	// Create a subtree processor
+	ctx := context.Background()
 	stp, err := NewSubtreeProcessor(
-		context.Background(),
+		ctx,
 		ulogger.TestLogger{},
 		settings,
 		blobStore,
@@ -276,6 +283,7 @@ func TestGetSubtreeAndConflictingTransactionsMap(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	// Create a subtree with some transactions
 	subtree, err := subtreepkg.NewTreeByLeafCount(4)
@@ -334,8 +342,9 @@ func TestMarkConflictingTxsInSubtrees(t *testing.T) {
 	newSubtreeChan := make(chan NewSubtreeRequest, 10)
 
 	// Create a subtree processor with mocked dependencies
+	ctx := context.Background()
 	stp, err := NewSubtreeProcessor(
-		context.Background(),
+		ctx,
 		ulogger.TestLogger{},
 		settings,
 		blobStore,
@@ -344,6 +353,7 @@ func TestMarkConflictingTxsInSubtrees(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	// Create test data
 	tx1Hash := chainhash.HashH([]byte("tx1"))

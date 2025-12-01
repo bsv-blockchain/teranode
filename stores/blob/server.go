@@ -474,13 +474,13 @@ func (s *HTTPBlobServer) handleSetDAH(w http.ResponseWriter, r *http.Request, op
 
 	dahStr := r.URL.Query().Get("dah")
 
-	dah, err := strconv.Atoi(dahStr)
+	dah, err := strconv.ParseUint(dahStr, 10, 32)
 	if err != nil {
 		http.Error(w, "Invalid DAH", http.StatusBadRequest)
 		return
 	}
 
-	err = s.store.SetDAH(r.Context(), key, fileType, uint32(dah), opts...) // nolint: gosec
+	err = s.store.SetDAH(r.Context(), key, fileType, uint32(dah), opts...)
 	if err != nil {
 		if err == errors.ErrNotFound {
 			http.Error(w, NotFoundMsg, http.StatusNotFound)
