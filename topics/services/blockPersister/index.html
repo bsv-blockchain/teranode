@@ -6760,9 +6760,14 @@
 <h2 id="5-directory-structure-and-main-files">5. Directory Structure and Main Files</h2>
 <p>The Block Persister service is located in the <code>services/blockpersister</code> directory.</p>
 <div class="highlight"><pre><span></span><code>services/blockpersister/
-├── state/          # State management
-├── server.go       # Main service implementation
-└── metrics.go      # Prometheus metrics
+├── state/                      # State management
+├── Server.go                   # Main service implementation
+├── Server_test.go              # Service tests
+├── persist_block.go            # Block persistence logic
+├── persist_block_test.go       # Block persistence tests
+├── processSubtree.go           # Subtree processing logic
+├── processTxMetaUsingStore.go  # Transaction metadata processing
+└── metrics.go                  # Prometheus metrics
 </code></pre></div>
 <h2 id="6-how-to-run">6. How to run</h2>
 <p>To run the Block Persister Service locally, you can execute the following command:</p>
