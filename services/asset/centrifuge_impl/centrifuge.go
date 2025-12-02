@@ -32,6 +32,11 @@ const (
 )
 
 // Centrifuge manages real-time blockchain data broadcasting to WebSocket clients.
+// It provides pub/sub for blockchain events (new blocks, node status updates) using
+// the Centrifuge protocol. Caches current node status and broadcasts updates when
+// blockchain state changes occur.
+//
+// Thread-safe: statusMutex protects cachedCurrentNodeStatus and currentNodePeerID.
 type Centrifuge struct {
 	logger                  ulogger.Logger
 	settings                *settings.Settings
@@ -45,7 +50,9 @@ type Centrifuge struct {
 	statusMutex             sync.RWMutex     // Protects cachedCurrentNodeStatus and currentNodePeerID
 }
 
-// notificationMsg represents a P2P notification message that will be relayed to clients
+// notificationMsg represents a notification message relayed to WebSocket clients.
+// Supports types: "block", "node_status", "sync_status".
+// Uses omitempty to minimize payload size.
 type notificationMsg struct {
 	Timestamp         string  `json:"timestamp,omitempty"`
 	Type              string  `json:"type"`
