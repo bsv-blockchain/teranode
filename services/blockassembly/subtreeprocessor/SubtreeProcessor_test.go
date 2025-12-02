@@ -2116,10 +2116,9 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 }
 
 func Test_removeMap(t *testing.T) {
-	t.Run("removeMap is NOT cleared during reset - memory leak confirmation", func(t *testing.T) {
-		// This test confirms that removeMap entries are NOT cleared during reset,
-		// which is a memory leak. Entries added to removeMap for transactions that
-		// never pass through the queue will remain forever.
+	t.Run("removeMap is cleared during reset - memory leak fix verification", func(t *testing.T) {
+		// This test verifies that removeMap entries ARE cleared during reset,
+		// preventing memory leaks from orphaned remove entries.
 
 		settings := test.CreateBaseTestSettings(t)
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 128
@@ -2194,21 +2193,19 @@ func Test_removeMap(t *testing.T) {
 		currentTxMapLengthAfterReset := stp.currentTxMap.Length()
 		assert.Equal(t, 0, currentTxMapLengthAfterReset, "currentTxMap should be cleared after reset")
 
-		// Verify removeMap was NOT cleared (this is the memory leak!)
+		// Verify removeMap WAS cleared (fix for memory leak)
 		removeMapLengthAfterReset := stp.removeMap.Length()
+		assert.Equal(t, 0, removeMapLengthAfterReset,
+			"removeMap should be cleared after reset to prevent memory leak")
 
-		// This assertion documents the current buggy behavior
-		// The removeMap still contains all 50 entries after reset
-		assert.Equal(t, 50, removeMapLengthAfterReset,
-			"MEMORY LEAK CONFIRMED: removeMap is NOT cleared during reset. "+
-				"Had %d entries before reset, still has %d entries after reset",
-			removeMapLengthBeforeReset, removeMapLengthAfterReset)
-
-		// Verify the specific orphaned hashes are still in removeMap
+		// Verify the specific orphaned hashes are NO LONGER in removeMap
 		for i, hash := range orphanedRemoveHashes {
 			exists := stp.removeMap.Exists(hash)
-			assert.True(t, exists, "Orphaned hash %d should still exist in removeMap after reset (leak)", i)
+			assert.False(t, exists, "Orphaned hash %d should NOT exist in removeMap after reset", i)
 		}
+
+		t.Logf("Memory leak fix verified: removeMap cleared from %d to %d entries after reset",
+			removeMapLengthBeforeReset, removeMapLengthAfterReset)
 	})
 
 	t.Run("when adding from queue", func(t *testing.T) {
@@ -2269,11 +2266,10 @@ func Test_removeMap(t *testing.T) {
 		assert.Equal(t, expectedNrTransactions-transactionsRemoved, stp.currentTxMap.Length())
 	})
 
-	t.Run("moveBackBlock adds to removeMap without cleanup - memory leak", func(t *testing.T) {
+	t.Run("moveBackBlock adds to removeMap and reset clears it", func(t *testing.T) {
 		// This test verifies that when moveBackBlock processes coinbase child spends,
-		// entries are added to removeMap but are never cleaned up, causing a memory leak.
-		// The leak occurs because these entries are only removed when transactions flow
-		// through the queue, but child spends identified during reorg may never be queued.
+		// entries are added to removeMap, and these entries are properly cleared during
+		// reset to prevent memory leaks.
 
 		ctx := context.Background()
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -2352,8 +2348,7 @@ func Test_removeMap(t *testing.T) {
 		assert.Equal(t, 1, removeMapLengthAfter, "removeMap should have 1 entry after removeCoinbaseUtxos")
 		assert.True(t, stp.removeMap.Exists(childHash), "childHash should be in removeMap")
 
-		// Now simulate what happens after a reset - the removeMap entry persists
-		// because the child transaction was never in the queue to be dequeued
+		// Now verify that reset clears the removeMap entry
 		merkleRoot := chainhash.HashH([]byte("merkle"))
 		prevBlock := chainhash.HashH([]byte("prev"))
 		resetTargetHeader := &model.BlockHeader{
@@ -2369,12 +2364,12 @@ func Test_removeMap(t *testing.T) {
 		response := stp.Reset(resetTargetHeader, nil, nil, false, nil)
 		require.NoError(t, response.Err)
 
-		// MEMORY LEAK: The removeMap entry persists after reset
+		// Verify removeMap is cleared after reset (memory leak fix)
 		removeMapLengthAfterReset := stp.removeMap.Length()
-		assert.Equal(t, 1, removeMapLengthAfterReset,
-			"MEMORY LEAK: removeMap entry from removeCoinbaseUtxos persists after reset")
-		assert.True(t, stp.removeMap.Exists(childHash),
-			"MEMORY LEAK: childHash still in removeMap after reset - it will never be cleaned")
+		assert.Equal(t, 0, removeMapLengthAfterReset,
+			"removeMap should be cleared after reset to prevent memory leak")
+		assert.False(t, stp.removeMap.Exists(childHash),
+			"childHash should be removed from removeMap after reset")
 	})
 }
 
