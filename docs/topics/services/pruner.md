@@ -14,8 +14,7 @@
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
 6. [How to Run](#6-how-to-run)
 7. [Configuration Options (Settings Flags)](#7-configuration-options-settings-flags)
-8. [Migration Guide](#8-migration-guide)
-9. [Other Resources](#9-other-resources)
+8. [Other Resources](#8-other-resources)
 
 ## 1. Description
 
@@ -547,124 +546,7 @@ startPruner.docker.host.teranode1 = false
 startPruner.docker.host.teranode2 = false
 ```
 
-## 8. Migration Guide
-
-The Pruner service was extracted from the Block Assembly service in **PR #114** to become a standalone microservice. This section provides guidance for operators upgrading from pre-PR #114 versions.
-
-### What Changed
-
-**Architectural Changes:**
-
-1. **Standalone Service**: Pruning is now a separate microservice with its own gRPC server (port 8096)
-2. **Event-Driven**: Responds to `BlockPersisted` notifications instead of being called directly by Block Assembly
-3. **Service Flag**: New service flag `-pruner=1` to run the Pruner service
-4. **Independent Lifecycle**: Pruner service can be started/stopped independently of other services
-
-**Removed from Block Assembly:**
-
-- `cleanupService` field and cleanup logic
-- `cleanupQueueCh` channel for cleanup coordination
-- `unminedCleanupTicker` periodic cleanup ticker
-- Direct UTXO store cleanup calls
-
-### Configuration Changes
-
-**New Settings:**
-
-- `startPruner` - Enable/disable Pruner service (default: `true`)
-- `pruner_grpcPort` - gRPC server port (default: `8096`)
-- `pruner_grpcAddress` - Client address for connecting to Pruner
-- `pruner_grpcListenAddress` - Server bind address
-- `pruner_jobTimeout` - Job completion timeout (default: `10m`)
-
-**Unchanged Settings:**
-
-These settings remain in UTXO store configuration:
-
-- `utxostore_unminedTxRetention` - Unmined transaction retention period
-- `utxostore_parentPreservationBlocks` - Parent preservation duration
-- `utxostore_prunerMaxConcurrentOperations` - Worker pool size
-- `utxostore_disableDAHCleaner` - Disable Phase 2 pruning
-- `pruner_IndexName` - Aerospike secondary index name
-
-### Verification Steps
-
-After upgrading to a version with standalone Pruner:
-
-1. **Check Service Status**:
-
-    ```bash
-    # Verify Pruner service is running
-    curl http://localhost:8096/health
-    ```
-
-2. **Verify Metrics**:
-
-    ```bash
-    # Check pruning activity
-    curl http://localhost:8096/metrics | grep pruner_processed_total
-    ```
-
-3. **Check Logs**:
-
-    ```bash
-    # Look for Pruner initialization
-    grep "\[Pruner\] Service initialized successfully" teranode.log
-
-    # Verify event subscriptions
-    grep "Subscribed to BlockPersisted notifications" teranode.log
-    ```
-
-4. **Monitor Database Growth**:
-
-    - UTXO database size should stabilize after pruning catches up
-    - Check `pruner_duration_seconds` histogram to ensure pruning completes within timeout
-
-### Backward Compatibility
-
-**Pre-PR #114 Behavior:**
-
-- Pruning was embedded in Block Assembly service
-- No separate Pruner service process
-- No gRPC server on port 8096
-
-**Post-PR #114 Behavior:**
-
-- Pruning requires Pruner service to be running (`-pruner=1`)
-- Block Assembly no longer performs cleanup
-- Pruner service subscribes to blockchain events
-
-**Migration Path:**
-
-1. Update Teranode binary to version with standalone Pruner
-2. Update configuration to include Pruner settings (or use defaults)
-3. Start Pruner service with `-pruner=1` flag
-4. Verify pruning activity via metrics/logs
-5. Block Assembly will continue normal operation without cleanup logic
-
-### Troubleshooting Migration Issues
-
-**Pruning Not Working After Upgrade:**
-
-- **Symptom**: Database continues growing
-- **Check**: Verify `startPruner = true` in settings
-- **Check**: Verify Pruner service is running: `lsof -i :8096`
-- **Check**: Review logs for Pruner initialization errors
-
-**Port Conflicts:**
-
-- **Symptom**: Pruner service fails to start
-- **Cause**: Port 8096 already in use
-- **Solution**: Change `pruner_grpcPort` in settings
-
-**No Pruning Activity:**
-
-- **Symptom**: `pruner_processed_total` metric not increasing
-- **Check**: Verify Block Assembly is in RUNNING state
-- **Check**: Ensure blocks are being mined/persisted
-- **Check**: Review `pruner_skipped_total` metric for skip reasons
-
-## 9. Other Resources
+## 8. Other Resources
 
 ### Related Documentation
 

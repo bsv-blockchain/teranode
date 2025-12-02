@@ -176,6 +176,7 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 | Legacy             | `-legacy=1`                 | Legacy API support                    |
 | P2P                | `-p2p=1`                    | Peer-to-peer networking service       |
 | Propagation        | `-propagation=1`            | Data propagation service              |
+| Pruner             | `-pruner=1`                 | UTXO data pruning service             |
 | RPC                | `-rpc=1`                    | RPC interface service                 |
 | Subtree Validation | `-subtreevalidation=1`      | Subtree validation service            |
 | UTXO Persister     | `-utxopersister=1`          | UTXO persistence service              |
