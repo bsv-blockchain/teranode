@@ -489,9 +489,9 @@ For large transactions stored externally:
 
 ### Key Files
 
-- **`server.go`** (341 lines): Service lifecycle, gRPC server, health checks
-- **`worker.go`** (145 lines): Event handling, channel management, two-phase processing
-- **`metrics.go`** (64 lines): Prometheus metric definitions
+- **`server.go`**: Service lifecycle, gRPC server, health checks
+- **`worker.go`**: Event handling, channel management, two-phase processing
+- **`metrics.go`**: Prometheus metric definitions
 - **`interfaces.go`**: Store-agnostic interfaces for pruner implementations
 - **`job_processor.go`**: Generic job queue with LIFO pattern and worker pool
 - **`aerospike/pruner/pruner_service.go`** (900+ lines): Complete Aerospike implementation
