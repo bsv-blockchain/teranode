@@ -19,9 +19,9 @@
 
 ## 1. Description
 
-The Pruner service is a standalone microservice responsible for managing UTXO data pruning operations in Teranode. Extracted from the Block Assembly service (PR #114), the Pruner operates as an **event-driven overlay service** that continuously monitors blockchain events and removes stale UTXO data to prevent unbounded database growth.
+The Pruner service is a standalone microservice responsible for managing UTXO data pruning operations in Teranode. The Pruner operates as an **event-driven overlay service** that continuously monitors blockchain events and removes stale UTXO data to prevent unbounded database growth.
 
-Unlike the previous embedded cleanup mechanism, the Pruner service:
+The Pruner service:
 
 - **Event-Driven**: Responds to `BlockPersisted` notifications instead of polling
 - **Standalone**: Runs as an independent gRPC service (port 8096)
@@ -500,111 +500,13 @@ For large transactions stored externally:
 
 ## 6. How to Run
 
-### Standalone Execution
+To run the Pruner Service locally, you can execute the following command:
 
-```bash
-# Build Teranode
-make build
-
-# Run with Pruner enabled (default)
-./teranode
-
-# Or explicitly enable
-./teranode --start-pruner
+```shell
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -pruner=1
 ```
 
-### Configuration File
-
-Enable/disable in `settings.conf`:
-
-```conf
-# Enable Pruner service
-startPruner = true
-
-# Disable for specific contexts
-startPruner.docker.host.teranode1.coinbase = false
-```
-
-### Docker Compose
-
-```yaml
-services:
-  pruner:
-    image: teranode:latest
-    command: ["--start-pruner"]
-    ports:
-
-      - "8096:8096"  # gRPC port
-    environment:
-
-      - SETTINGS_CONTEXT=docker
-```
-
-### Kubernetes
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: pruner
-spec:
-  selector:
-    app: pruner
-  ports:
-
-    - protocol: TCP
-      port: 8096
-      targetPort: 8096
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: pruner
-spec:
-  selector:
-    matchLabels:
-      app: pruner
-  template:
-    metadata:
-      labels:
-        app: pruner
-    spec:
-      containers:
-
-        - name: pruner
-          image: teranode:latest
-          args: ["--start-pruner"]
-          ports:
-
-            - containerPort: 8096
-```
-
-### Health Check
-
-```bash
-# gRPC health check
-grpcurl -plaintext localhost:8096 pruner.PrunerAPI/HealthGRPC
-
-# Expected response
-{
-  "ok": true,
-  "details": ""
-}
-```
-
-### Monitoring
-
-```bash
-# Prometheus metrics
-curl http://localhost:8096/metrics | grep pruner
-
-# Key metrics
-pruner_duration_seconds{operation="preserve_parents"}
-pruner_duration_seconds{operation="dah_pruner"}
-pruner_processed_total
-pruner_errors_total{operation="preserve_parents"|"dah_pruner"}
-pruner_skipped_total{reason="not_running"|"no_new_height"}
-```
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Pruner Service locally.
 
 ## 7. Configuration Options (Settings Flags)
 
@@ -647,99 +549,120 @@ startPruner.docker.host.teranode2 = false
 
 ## 8. Migration Guide
 
-### Upgrading from Pre-PR#114 (Embedded Cleanup)
+The Pruner service was extracted from the Block Assembly service in **PR #114** to become a standalone microservice. This section provides guidance for operators upgrading from pre-PR #114 versions.
 
-**Background:**
+### What Changed
 
-Prior to PR #114, UTXO cleanup was embedded in the Block Assembly service. The cleanup logic ran as part of Block Assembly's responsibilities, triggered by polling.
+**Architectural Changes:**
 
-**What Changed:**
+1. **Standalone Service**: Pruning is now a separate microservice with its own gRPC server (port 8096)
+2. **Event-Driven**: Responds to `BlockPersisted` notifications instead of being called directly by Block Assembly
+3. **Service Flag**: New service flag `-pruner=1` to run the Pruner service
+4. **Independent Lifecycle**: Pruner service can be started/stopped independently of other services
 
-1. **Service Extraction**: Cleanup moved to standalone Pruner service
-2. **Terminology**: "Cleanup" renamed to "Pruner" throughout codebase
-3. **Trigger Mechanism**: Polling replaced with event-driven notifications
-4. **Coordination**: Block Persister coordination added via notifications
-5. **gRPC Port**: New service requires port 8096
+**Removed from Block Assembly:**
 
-**Breaking Changes:**
+- `cleanupService` field and cleanup logic
+- `cleanupQueueCh` channel for cleanup coordination
+- `unminedCleanupTicker` periodic cleanup ticker
+- Direct UTXO store cleanup calls
 
-**None** - The migration is backward compatible. The Pruner service is enabled by default and requires no configuration changes.
+### Configuration Changes
 
-**Configuration Changes:**
+**New Settings:**
 
-| Old Setting (Removed) | New Setting | Notes |
-|-----------------------|-------------|-------|
-| N/A (embedded) | `startPruner = true` | New setting, defaults to `true` |
-| N/A | `pruner_grpcPort = 8096` | New gRPC port |
-| N/A | `pruner_jobTimeout = 10m` | New timeout setting |
+- `startPruner` - Enable/disable Pruner service (default: `true`)
+- `pruner_grpcPort` - gRPC server port (default: `8096`)
+- `pruner_grpcAddress` - Client address for connecting to Pruner
+- `pruner_grpcListenAddress` - Server bind address
+- `pruner_jobTimeout` - Job completion timeout (default: `10m`)
 
-**Migration Steps:**
+**Unchanged Settings:**
 
-1. **Update Teranode**:
+These settings remain in UTXO store configuration:
 
-    ```bash
-    git pull
-    make build
-    ```
+- `utxostore_unminedTxRetention` - Unmined transaction retention period
+- `utxostore_parentPreservationBlocks` - Parent preservation duration
+- `utxostore_prunerMaxConcurrentOperations` - Worker pool size
+- `utxostore_disableDAHCleaner` - Disable Phase 2 pruning
+- `pruner_IndexName` - Aerospike secondary index name
 
-2. **Verify Configuration** (optional):
+### Verification Steps
 
-    ```conf
-    # In settings.conf
-    startPruner = true  # Default, no change needed
-    ```
+After upgrading to a version with standalone Pruner:
 
-3. **Restart Services**:
-
-    ```bash
-    ./teranode
-    ```
-
-4. **Verify Pruner Running**:
+1. **Check Service Status**:
 
     ```bash
-    # Check logs
-    grep "\[Pruner\]" teranode.log
-
-    # Expected output
-    [Pruner] Service initialized
-    [Pruner] Subscribed to BlockPersisted notifications
-    [Pruner] Subscribed to Block notifications (fallback)
-
-    # Check gRPC health
-    grpcurl -plaintext localhost:8096 pruner.PrunerAPI/HealthGRPC
+    # Verify Pruner service is running
+    curl http://localhost:8096/health
     ```
 
-5. **Monitor Metrics**:
+2. **Verify Metrics**:
 
     ```bash
+    # Check pruning activity
     curl http://localhost:8096/metrics | grep pruner_processed_total
-
-    # Should see increasing count
-    pruner_processed_total 42
     ```
 
-**Rollback:**
+3. **Check Logs**:
 
-If issues occur, disable Pruner service:
+    ```bash
+    # Look for Pruner initialization
+    grep "\[Pruner\] Service initialized successfully" teranode.log
 
-```conf
-# In settings.conf
-startPruner = false
-```
+    # Verify event subscriptions
+    grep "Subscribed to BlockPersisted notifications" teranode.log
+    ```
 
-**Note**: Disabling pruning stops cleanup operations, but the node continues operating normally. UTXO database will grow until pruning is re-enabled.
+4. **Monitor Database Growth**:
+
+    - UTXO database size should stabilize after pruning catches up
+    - Check `pruner_duration_seconds` histogram to ensure pruning completes within timeout
+
+### Backward Compatibility
+
+**Pre-PR #114 Behavior:**
+
+- Pruning was embedded in Block Assembly service
+- No separate Pruner service process
+- No gRPC server on port 8096
+
+**Post-PR #114 Behavior:**
+
+- Pruning requires Pruner service to be running (`-pruner=1`)
+- Block Assembly no longer performs cleanup
+- Pruner service subscribes to blockchain events
+
+**Migration Path:**
+
+1. Update Teranode binary to version with standalone Pruner
+2. Update configuration to include Pruner settings (or use defaults)
+3. Start Pruner service with `-pruner=1` flag
+4. Verify pruning activity via metrics/logs
+5. Block Assembly will continue normal operation without cleanup logic
+
+### Troubleshooting Migration Issues
+
+**Pruning Not Working After Upgrade:**
+
+- **Symptom**: Database continues growing
+- **Check**: Verify `startPruner = true` in settings
+- **Check**: Verify Pruner service is running: `lsof -i :8096`
+- **Check**: Review logs for Pruner initialization errors
 
 **Port Conflicts:**
 
-If port 8096 is already in use:
+- **Symptom**: Pruner service fails to start
+- **Cause**: Port 8096 already in use
+- **Solution**: Change `pruner_grpcPort` in settings
 
-```conf
-# In settings.conf
-pruner_grpcPort = 8097  # Or any available port
-pruner_grpcAddress = localhost:8097
-pruner_grpcListenAddress = :8097
-```
+**No Pruning Activity:**
+
+- **Symptom**: `pruner_processed_total` metric not increasing
+- **Check**: Verify Block Assembly is in RUNNING state
+- **Check**: Ensure blocks are being mined/persisted
+- **Check**: Review `pruner_skipped_total` metric for skip reasons
 
 ## 9. Other Resources
 
