@@ -830,6 +830,12 @@ func (s *Store) storeExternallyWithLock(
 	fileType fileformat.FileType,
 	funcName string,
 ) {
+	// Acquire semaphore to limit concurrent external storage operations
+	if s.externalStoreSem != nil {
+		s.externalStoreSem <- struct{}{}
+		defer func() { <-s.externalStoreSem }()
+	}
+
 	// Acquire lock FIRST to prevent duplicate work
 	lockKey, err := s.acquireLock(bItem.txHash, len(binsToStore))
 	if err != nil {
