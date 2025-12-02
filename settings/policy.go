@@ -27,6 +27,7 @@ type PolicySettings struct {
 	MinConfConsolidationInput       int     `json:"minconfconsolidationinput"`
 	MinConsolidationInputMaturity   int     `json:"minconsolidationinputmaturity"`
 	AcceptNonStdConsolidationInput  bool    `json:"acceptnonstdconsolidationinput"`
+	MaxCoinsViewCacheSize           uint64  `json:"maxcoinsviewcachesize"`
 }
 
 func NewPolicySettings() *PolicySettings {
@@ -139,6 +140,10 @@ func (ps *PolicySettings) SetAcceptNonStdConsolidationInput(accept bool) {
 	ps.AcceptNonStdConsolidationInput = accept
 }
 
+func (ps *PolicySettings) SetMaxCoinsViewCacheSize(size uint64) {
+	ps.MaxCoinsViewCacheSize = size
+}
+
 func (ps *PolicySettings) GetExcessiveBlockSize() int {
 	return ps.ExcessiveBlockSize
 }
@@ -241,4 +246,8 @@ func (ps *PolicySettings) GetMinConsolidationInputMaturity() int {
 
 func (ps *PolicySettings) GetAcceptNonStdConsolidationInput() bool {
 	return ps.AcceptNonStdConsolidationInput
+}
+
+func (ps *PolicySettings) GetMaxCoinsViewCacheSize() uint64 {
+	return ps.MaxCoinsViewCacheSize
 }

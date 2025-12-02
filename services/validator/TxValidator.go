@@ -201,7 +201,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 
 	// 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
 	// 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
-	if err := tv.checkInputs(tx, blockHeight); err != nil {
+	if err := tv.checkInputs(tx, blockHeight, validationOptions); err != nil {
 		return err
 	}
 
@@ -354,8 +354,10 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOpt
 }
 
 // checkInputs validates transaction inputs according to consensus rules.
-func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
+func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	total := uint64(0)
+	accumulatedPrevUTXOSize := uint64(0)
+	maxCoinsViewCacheSize := tv.settings.Policy.GetMaxCoinsViewCacheSize()
 
 	// blockHeight is not used, but it is required by the interface
 	_ = blockHeight
@@ -399,6 +401,20 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32) error {
 		}
 
 		total += input.PreviousTxSatoshis
+
+		// Check accumulated previous utxo size if maxcoinsviewcachesize is enabled
+		// See BSV Node CCoinsViewCache::Shard::HaveInputsLimited
+		//    https://github.com/teranode-group/bitcoin-sv-staging/blob/develop/src/coins.cpp#L131
+		if !validationOptions.SkipPolicyChecks && maxCoinsViewCacheSize > 0 {
+			if input.PreviousTxScript == nil {
+				return errors.NewTxPolicyError("bad-txns-inputs-too-large")
+			}
+
+			accumulatedPrevUTXOSize += uint64(len(*input.PreviousTxScript))
+			if accumulatedPrevUTXOSize > maxCoinsViewCacheSize {
+				return errors.NewTxPolicyError("bad-txns-inputs-too-large")
+			}
+		}
 	}
 
 	// if total == 0 && blockHeight >= tv.Params().GenesisActivationHeight {

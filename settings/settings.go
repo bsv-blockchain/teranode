@@ -97,6 +97,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MinConfConsolidationInput:       getInt("minconfconsolidationinput", 6, alternativeContext...),
 			MinConsolidationInputMaturity:   getInt("minconsolidationinputmaturity", 6, alternativeContext...),
 			AcceptNonStdConsolidationInput:  getBool("acceptnonstdconsolidationinput", false, alternativeContext...),
+			MaxCoinsViewCacheSize:           getUint64("maxcoinsviewcachesize", 0, alternativeContext...),
 		},
 		Kafka: KafkaSettings{
 			Blocks:                getString("KAFKA_BLOCKS", "blocks", alternativeContext...),
