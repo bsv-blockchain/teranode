@@ -23,7 +23,7 @@ The Service features are:
 
 ### UTXO Freezing
 
-- Ability to freeze a set of UTXOs at a specific block height + 1.
+- Ability to freeze a set of UTXOs at a specified block height.
 - Frozen UTXOs are classified as such and attempts to spend them are rejected.
 
 ### UTXO Unfreezing
@@ -173,22 +173,13 @@ The Alert Service initializes the necessary components and services to start pro
 
 3. The Blockchain Client interacts with the Blockchain Store to:
 
-    - Mark the specified block as invalid.
-    - Retrieve all transactions from the invalidated block.
+    - Mark the specified block and all child blocks as invalid in the database.
+    - Set the mined status to false for these blocks.
+    - Return the list of invalidated block hashes.
 
-4. For each transaction in the invalidated block:
+4. The Blockchain Client confirms the invalidation process to the Alert Service.
 
-    - The Blockchain Client re-validates the transaction.
-    - If the transaction is still valid, it's added back to the Block Assembly service, for re-inclusion in the next mined block.
-
-5. The Blockchain Client then:
-
-    - Retrieves the block immediately preceding the invalidated block.
-    - Sets the chain tip to this previous block, effectively removing the invalidated block from the main chain.
-
-6. The Blockchain Client confirms the invalidation process to the Alert Service.
-
-7. Finally, the Alert Service returns the invalidation result to the P2P network.
+5. Finally, the Alert Service returns the invalidation result to the P2P network.
 
 ## 3. Technology
 

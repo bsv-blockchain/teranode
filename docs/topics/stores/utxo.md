@@ -482,7 +482,25 @@ The following datastores are supported (either in development / experimental or 
 
 ### 5.3. Data Pruning
 
-Stored data is automatically pruned a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.
+Stored data is automatically pruned to prevent the datastore from growing indefinitely. The UTXO Store works in conjunction with the **Pruner Service**, a standalone microservice responsible for managing UTXO data pruning operations.
+
+**Pruning Mechanisms:**
+
+1. **Delete-At-Height (DAH)**: UTXO records are marked with a `DeleteAtHeight` field when they are spent or when coinbase maturity expires. The Pruner Service queries and deletes records where `deleteAtHeight <= currentBlockHeight`.
+
+2. **Parent Preservation**: The Pruner Service implements a critical two-phase safety mechanism to protect parent transactions of old unmined transactions from premature deletion, ensuring resubmitted transactions can validate successfully.
+
+3. **External Transaction Cleanup**: For large transactions stored in blob storage (Aerospike), the Pruner Service also deletes external `.tx` files to reclaim storage space.
+
+**Event-Driven Architecture:**
+
+The Pruner Service operates event-driven, responding to `BlockPersisted` notifications from the Block Persister service. This ensures pruning is coordinated with block persistence, preventing deletion of transaction data before it's safely stored in `.subtree_data` files for catchup nodes.
+
+**For detailed information about pruning operations, configuration, and the two-phase safety mechanism, see:**
+
+- [Pruner Service Documentation](../services/pruner.md)
+- [Pruner Settings Reference](../../references/settings/services/pruner_settings.md)
+- [UTXO Data Model](../datamodel/utxo_data_model.md) (DeleteAtHeight field documentation)
 
 ## 6. Performance Optimizations
 

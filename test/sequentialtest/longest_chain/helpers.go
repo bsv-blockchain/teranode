@@ -1,7 +1,6 @@
 package longest_chain
 
 import (
-	"net/url"
 	"testing"
 	"time"
 
@@ -16,14 +15,17 @@ var (
 	blockWait = 5 * time.Second
 )
 
-func setupLongestChainTest(t *testing.T, utxoStoreOverride string) (td *daemon.TestDaemon, block3 *model.Block) {
+func setupLongestChainTest(t *testing.T, utxoStoreType string) (td *daemon.TestDaemon, block3 *model.Block) {
+	// Default to aerospike if not specified
+	if utxoStoreType == "" {
+		utxoStoreType = "aerospike"
+	}
+
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
 		// EnableFullLogging: true,
 		SettingsContext: "dev.system.test",
+		UTXOStoreType:   utxoStoreType,
 		SettingsOverrideFunc: func(tSettings *settings.Settings) {
-			url, err := url.Parse(utxoStoreOverride)
-			require.NoError(t, err)
-			tSettings.UtxoStore.UtxoStore = url
 			tSettings.ChainCfgParams.CoinbaseMaturity = 2
 		},
 	})

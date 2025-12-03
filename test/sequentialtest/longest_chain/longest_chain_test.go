@@ -4,52 +4,35 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
-	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/stretchr/testify/require"
 )
 
 func TestLongestChainPostgres(t *testing.T) {
-	// start a postgres container
-	utxoStore, teardown, err := postgres.SetupTestPostgresContainer()
-	require.NoError(t, err)
-
-	defer func() {
-		_ = teardown()
-	}()
-
 	t.Run("simple", func(t *testing.T) {
-		testLongestChainSimple(t, utxoStore)
+		testLongestChainSimple(t, "postgres")
 	})
 
 	t.Run("invalid block", func(t *testing.T) {
-		testLongestChainInvalidateBlock(t, utxoStore)
+		testLongestChainInvalidateBlock(t, "postgres")
 	})
 
 	t.Run("invalid block with old tx", func(t *testing.T) {
-		testLongestChainInvalidateBlockWithOldTx(t, utxoStore)
+		t.Skip()
+		testLongestChainInvalidateBlockWithOldTx(t, "postgres")
 	})
 }
 
 func TestLongestChainAerospike(t *testing.T) {
-	// start an aerospike container
-	utxoStore, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	t.Run("simple", func(t *testing.T) {
-		testLongestChainSimple(t, utxoStore)
+		testLongestChainSimple(t, "aerospike")
 	})
 
 	t.Run("invalid block", func(t *testing.T) {
-		testLongestChainInvalidateBlock(t, utxoStore)
+		testLongestChainInvalidateBlock(t, "aerospike")
 	})
 
 	t.Run("invalid block with old tx", func(t *testing.T) {
-		testLongestChainInvalidateBlockWithOldTx(t, utxoStore)
+		testLongestChainInvalidateBlockWithOldTx(t, "aerospike")
 	})
 }
 

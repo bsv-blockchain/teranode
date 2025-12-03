@@ -47,7 +47,6 @@ The following diagram provides a deeper level of detail into the Block Persister
 
 ![block_persister_detailed_component.svg](img/plantuml/blockpersister/block_persister_detailed_component.svg)
 
-
 ## 2. Functionality
 
 ### 2.1 Service Initialization
@@ -215,9 +214,14 @@ The Block Persister service is located in the `services/blockpersister` director
 
 ```text
 services/blockpersister/
-├── state/          # State management
-├── server.go       # Main service implementation
-└── metrics.go      # Prometheus metrics
+├── state/                      # State management
+├── Server.go                   # Main service implementation
+├── Server_test.go              # Service tests
+├── persist_block.go            # Block persistence logic
+├── persist_block_test.go       # Block persistence tests
+├── processSubtree.go           # Subtree processing logic
+├── processTxMetaUsingStore.go  # Transaction metadata processing
+└── metrics.go                  # Prometheus metrics
 ```
 
 ## 6. How to run
@@ -233,6 +237,7 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 ## 7. Configuration options (settings flags)
 
 For comprehensive configuration documentation including all settings, defaults, and interactions, see the [block Persister Settings Reference](../../references/settings/services/blockpersister_settings.md).
+
 ## 8. Other Resources
 
 [Block Persister Reference](../../references/services/blockpersister_reference.md)

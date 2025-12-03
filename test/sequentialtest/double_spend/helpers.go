@@ -1,25 +1,24 @@
 package doublespendtest
 
 import (
-	"net/url"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
-	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/stretchr/testify/require"
 )
 
-func setupDoubleSpendTest(t *testing.T, utxoStoreOverride string, blockOffset ...uint32) (td *daemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block, tx *bt.Tx) {
+func setupDoubleSpendTest(t *testing.T, utxoStoreType string, blockOffset ...uint32) (td *daemon.TestDaemon, coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx, block102 *model.Block, tx *bt.Tx) {
+	// Default to aerospike if not specified
+	if utxoStoreType == "" {
+		utxoStoreType = "aerospike"
+	}
+
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
 		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(tSettings *settings.Settings) {
-			url, err := url.Parse(utxoStoreOverride)
-			require.NoError(t, err)
-			tSettings.UtxoStore.UtxoStore = url
-		},
+		UTXOStoreType:   utxoStoreType,
 	})
 
 	// Set the FSM state to RUNNING...

@@ -133,8 +133,9 @@ type Store struct {
 	externalStore       blob.Store
 	utxoBatchSize       int
 	externalTxCache     *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	indexMutex          sync.Mutex // Mutex for index creation operations
-	indexOnce           sync.Once  // Ensures index creation/wait is only done once per process
+	externalStoreSem    chan struct{} // Semaphore to limit concurrent external storage operations
+	indexMutex          sync.Mutex    // Mutex for index creation operations
+	indexOnce           sync.Once     // Ensures index creation/wait is only done once per process
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -191,6 +192,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		externalTxCache = util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](10 * time.Second)
 	}
 
+	// Initialize external store semaphore if concurrency limit is set
+	var externalStoreSem chan struct{}
+	if tSettings.UtxoStore.ExternalStoreConcurrency > 0 {
+		externalStoreSem = make(chan struct{}, tSettings.UtxoStore.ExternalStoreConcurrency)
+	}
+
 	s := &Store{
 		ctx:       ctx,
 		url:       aerospikeURL,
@@ -199,10 +206,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		setName:   setName,
 		logger:    logger,
 
-		settings:        tSettings,
-		externalStore:   externalStore,
-		utxoBatchSize:   utxoBatchSize,
-		externalTxCache: externalTxCache,
+		settings:         tSettings,
+		externalStore:    externalStore,
+		utxoBatchSize:    utxoBatchSize,
+		externalTxCache:  externalTxCache,
+		externalStoreSem: externalStoreSem,
 	}
 
 	// Ensure index creation/wait is only done once per process

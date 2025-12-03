@@ -33,7 +33,6 @@ import (
 	"testing"
 	"time"
 
-	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	bt "github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -57,6 +56,7 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"

@@ -9,14 +9,15 @@
     - [2.3. Grouping Transactions into Subtrees](#23-grouping-transactions-into-subtrees)
     - [2.3.1 Dynamic Subtree Size Adjustment](#231-dynamic-subtree-size-adjustment)
     - [2.4. Creating Mining Candidates](#24-creating-mining-candidates)
+    - [2.4.1. Mining Candidate Caching](#241-mining-candidate-caching)
     - [2.5. Submit Mining Solution](#25-submit-mining-solution)
     - [2.6. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts](#26-processing-subtrees-and-blocks-from-other-nodes-and-handling-forks-and-conflicts)
     - [2.6.1. The block received is the same as the current chaintip (i.e. the block we have already seen).](#261-the-block-received-is-the-same-as-the-current-chaintip-ie-the-block-we-have-already-seen)
     - [2.6.2. The block received is a new block, and it is the new chaintip.](#262-the-block-received-is-a-new-block-and-it-is-the-new-chaintip)
     - [2.6.3. The block received is a new block, but it represents a fork.](#263-the-block-received-is-a-new-block-but-it-represents-a-fork)
-    - [Fork Detection and Assessment](#fork-detection-and-assessment)
-    - [Chain Selection and Reorganization Process](#chain-selection-and-reorganization-process)
-    - [2.8. Resetting the Block Assembly](#28-resetting-the-block-assembly)
+    - [2.6.4. Fork Detection and Assessment](#264-fork-detection-and-assessment)
+    - [2.6.5. Chain Selection and Reorganization Process](#265-chain-selection-and-reorganization-process)
+    - [2.7. Resetting the Block Assembly](#27-resetting-the-block-assembly)
 3. [Data Model](#3-data-model)
 4. [gRPC Protobuf Definitions](#4-grpc-protobuf-definitions)
 5. [Technology](#5-technology)
@@ -30,7 +31,11 @@
 
 ## 1. Description
 
-The Block Assembly Service is responsible for assembling new blocks and adding them to the blockchain.  The block assembly process involves the following steps:
+The Block Assembly Service is responsible for assembling new blocks and adding them to the blockchain.
+
+**No Mempool Design**: Unlike traditional Bitcoin nodes that maintain a mempool (memory pool) to store unconfirmed transactions, Teranode's Block Assembly service processes transactions directly through a validation and subtree assembly pipeline. Transactions are immediately validated and organized into subtrees for efficient block creation, rather than being held in an intermediate memory pool. This design enables higher throughput and more efficient resource utilization for large-scale transaction processing.
+
+The block assembly process involves the following steps:
 
 1. **Receiving Transactions from the TX Validator Service**:
 
@@ -70,11 +75,17 @@ The Block Assembly Service is responsible for assembling new blocks and adding t
     - The node also handles the resolution of forks in the blockchain and conflicting subtrees or blocks mined by other nodes.
     - This involves choosing between different versions of the blockchain (in case of forks) and resolving conflicts in transactions and subtrees included in other nodes' blocks.
 
+9. **Coordination with Pruner Service**:
+
+    - Block Assembly coordinates with the [Pruner Service](pruner.md), which handles UTXO data pruning operations.
+    - The Pruner service was extracted from Block Assembly (PR #114) as a standalone microservice.
+    - Block Assembly provides state information to Pruner to ensure pruning only occurs during stable blockchain states (not during reorgs or resets).
+
 > **Note**: For information about how the Block Assembly service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
 A high level diagram:
 
-![Block_Assembly_Service_Container_Diagram.png](img%2FBlock_Assembly_Service_Container_Diagram.png)
+![Block_Assembly_Service_Container_Diagram.png](img/Block_Assembly_Service_Container_Diagram.png)
 
 Based on its settings, the Block Assembly receives TX notifications from the validator service via direct gRPC calls.
 
@@ -116,17 +127,29 @@ When the Block Assembly service starts, it automatically recovers unmined transa
 
 **Process Overview:**
 
-1. **Wait for Pending Blocks**: The service first ensures all pending blocks are processed to avoid conflicts
-2. **Load Unmined Transactions**: Uses the `UnminedTxIterator` to retrieve all transactions marked with the `unminedSince` flag
-3. **Order by Creation Time**: Transactions are sorted topologically by their `createdAt` timestamp to maintain proper dependencies
-4. **Re-add to Processing**: Each unmined transaction is added back to the subtree processor using `AddDirectly()`
-5. **Unlock Transactions**: Previously locked transactions are unlocked to allow processing
+1. **Wait for Pending Blocks** - The service first ensures all pending blocks are processed to avoid conflicts
+2. **Load Unmined Transactions** - Uses the `UnminedTxIterator` to retrieve all transactions marked with the `unminedSince` flag
+3. **Order by Creation Time** - Transactions are sorted topologically by their `createdAt` timestamp to maintain proper dependencies
+4. **Re-add to Processing** - Each unmined transaction is added back to the subtree processor using `AddDirectly()`
+5. **Unlock Transactions** - Previously locked transactions are unlocked to allow processing
 
 This recovery mechanism ensures that:
 
 - Transactions accepted but not yet mined persist across restarts
 - Network participants don't need to resubmit transactions after node restarts
 - The transaction processing pipeline maintains continuity
+
+**Startup Blocking Behavior:**
+
+During the unmined transaction loading phase, the Block Assembly service sets an `unminedTransactionsLoading` flag that blocks certain operations to prevent inconsistent state:
+
+- **Blocked Operations**: `SubmitMiningSolution`, `ResetBlockAssembly`, and `GenerateBlocks` requests are rejected during loading
+- **Error Response**: Clients receive a "service not ready - unmined transactions are still being loaded" error
+- **Purpose**: Prevents mining solution submissions or resets while the service is reconstructing its transaction state
+- **Duration**: Typically completes within seconds to minutes depending on the number of unmined transactions
+- **Visibility**: Service readiness should be checked via health endpoints before submitting critical requests
+
+This blocking behavior ensures data integrity during startup and prevents race conditions that could result in lost transactions or inconsistent block assembly state.
 
 ### 2.2. Receiving Transactions from the TX Validator Service
 
@@ -187,20 +210,35 @@ This self-tuning mechanism helps maintain consistent processing rates and optima
 - The Block Assembly Server makes status announcements, using the Status Client, about the mining candidate's height and previous hash.
 - Finally, the Server tracks the current candidate in the JobStore within a new "job" and its TTL. This information will be retrieved at a later stage, if and when the miner submits a solution to the mining challenge for this specific mining candidate.
 
-**Mining Candidate Caching:**
+#### 2.4.1. Mining Candidate Caching
 
-To optimize performance for frequent GetMiningCandidate requests, the service implements a caching mechanism:
+The Block Assembly service implements an intelligent caching mechanism for mining candidates to optimize performance and reduce redundant computations:
 
-- Mining candidates are cached for a configurable timeout period (default: a few seconds)
-- Subsequent requests within the timeout period return the cached candidate
-- Cache is invalidated when:
+**Cache Behavior:**
 
-    - New subtrees are completed
-    - A new block is received from the network
-    - The timeout expires
-- This reduces computation overhead for high-frequency mining requests
+- Mining candidates are cached when the block height remains unchanged
+- The cache has a configurable timeout (via `MiningCandidateCacheTimeout` setting)
+- Cache is automatically invalidated when:
 
-The caching strategy balances freshness against performance, ensuring miners receive recent candidates without overloading the system during rapid polling.
+    - A new block is added to the blockchain (height changes)
+    - New subtrees become available
+    - The cache timeout expires
+
+**Performance Benefits:**
+
+- Reduces CPU overhead for miners requesting frequent updates
+- Eliminates redundant subtree processing and merkle tree calculations
+- Improves response times for mining candidate requests
+- Particularly beneficial for mining pools making high-frequency requests
+
+**Implementation Details:**
+
+- Uses thread-safe locking to prevent race conditions during cache updates
+- Implements a generation flag to serialize concurrent candidate creation requests
+- Cache hit/miss metrics are exposed via Prometheus for monitoring
+- Disabled for difficulty adjustment scenarios (when `ReduceMinDifficulty` is enabled) to ensure accurate difficulty calculations
+
+This caching mechanism is transparent to miners and significantly improves the efficiency of the mining candidate generation process during normal operations.
 
 ### 2.5. Submit Mining Solution
 
@@ -328,7 +366,7 @@ In this scenario, the function needs to handle a reorganization. A blockchain re
 
 It is the responsibility of the block assembly to always build on top of the longest chain of work. For clarity, it is not the Block Validation or Blockchain services's responsibility to resolve forks. The Block Assembly is notified of the ongoing chains of work, and it makes sure to build on the longest one. If the longest chain of work is different from the current local chain the block assembly was working on, a reorganization will take place.
 
-#### Fork Detection and Assessment
+#### 2.6.4. Fork Detection and Assessment
 
 The Block Assembly service implements real-time fork detection through the following mechanisms:
 
@@ -351,13 +389,13 @@ The Block Assembly service implements real-time fork detection through the follo
 3. **Reorganization Size Protection**:
 
     - Monitors the size of potential chain reorganizations
-    - If a reorganization would require moving more than 5 blocks either backwards or forwards
+    - If a reorganization would require moving more than the coinbase maturity threshold (typically 100 blocks, configured via `Settings.ChainCfgParams.CoinbaseMaturity`) either backwards or forwards
     - AND the current chain height is greater than 1000 blocks
     - Triggers a full reset of the block assembler as a safety measure against deep reorganizations
 
 The `BlockAssembler` keeps the node synchronized with the network by identifying and switching to the strongest chain (the one with the most accumulated proof of work), ensuring all nodes in the network converge on the same transaction history.
 
-#### Chain Selection and Reorganization Process
+#### 2.6.5. Chain Selection and Reorganization Process
 
 During a reorganization, the `BlockAssembler` performs two key operations:
 
@@ -377,7 +415,7 @@ The service automatically manages chain selection through:
     - Accepts the chain with the most accumulated proof of work
     - Performs a safety check on reorganization depth:
 
-        - If the reorganization involves more than 5 blocks in either direction
+        - If the reorganization involves more than the coinbase maturity threshold (typically 100 blocks, configured via `Settings.ChainCfgParams.CoinbaseMaturity`) in either direction
         - And the current chain height is greater than 1000
         - The block assembler will reset rather than attempt the reorganization
 
@@ -396,49 +434,28 @@ The following diagram illustrates how the Block Assembly service handles a chain
 
 - `err = b.handleReorg(ctx, bestBlockchainBlockHeader)`:
 
-  - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
-  - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
+    - Calls the `handleReorg` method, passing the current context (`ctx`) and the new best block header from the blockchain network.
+    - The reorg process involves rolling back to the last common ancestor block and then adding the new blocks from the network to align the `BlockAssembler`'s blockchain state with the network's state.
 
 - **Getting Reorg Blocks**:
 
-  - `moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, header)`:
+    - `moveBackBlocks, moveForwardBlocks, err := b.getReorgBlocks(ctx, header)`:
 
-    - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network's consensus chain.
-    - `header` is the new block header that triggered the reorg.
-    - This step involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
+        - Calls `getReorgBlocks` to determine the blocks to move down (to revert) and move up (to apply) for aligning with the network's consensus chain.
+        - `header` is the new block header that triggered the reorg.
+        - This step involves finding the common ancestor and getting the blocks from the current chain (move down) and the new chain (move up).
 
-  - **Performing Reorg in Subtree Processor**:
+    - **Performing Reorg in Subtree Processor**:
 
-    - `b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)`:
+        - `b.subtreeProcessor.Reorg(moveBackBlocks, moveForwardBlocks)`:
 
-      - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
-      - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
-        - This step involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
+            - Executes the actual reorg process in the `SubtreeProcessor`, responsible for managing the blockchain's data structure and state.
+            - The function reverts the coinbase Txs associated to invalidated blocks (deleting their UTXOs).
+                - This step involves reconciling the status of transactions from reverted and new blocks, and coming to a curated new current subtree(s) to include in the next block to mine.
 
 Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will only build on top of such blocks when the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment. For more information, please review the [Double Spend Detection documentation](../architecture/understandingDoubleSpends.md).
 
-### 2.7. Unmined Transaction Cleanup
-
-The Block Assembly service periodically cleans up old unmined transactions to prevent unbounded growth of the UTXO store. This cleanup process is essential for maintaining system performance and preventing resource exhaustion.
-
-![unmined_cleanup_process.svg](img/plantuml/blockassembly/unmined_cleanup_process.svg)
-
-**Cleanup Process:**
-
-1. **Periodic Trigger**: A background ticker (`unminedCleanupTicker`) runs at configured intervals
-2. **Age-Based Selection**: Identifies unmined transactions older than the retention period using `QueryOldUnminedTransactions`
-3. **Parent Preservation**: Protects parent transactions of younger unmined transactions from deletion
-4. **Batch Deletion**: Removes eligible transactions in batches to minimize performance impact
-
-**Configuration:**
-
-- **Retention Period**: Configured via `UnminedTxRetention` settings
-- **Cleanup Interval**: Controlled by the cleanup ticker configuration
-- **Parent Protection**: Uses `PreserveTransactions` to mark parents that should be retained
-
-This cleanup mechanism ensures the UTXO store remains performant while preserving transaction dependencies.
-
-### 2.8. Resetting the Block Assembly
+### 2.7. Resetting the Block Assembly
 
 The Block Assembly service can be reset to the best block by calling the `ResetBlockAssembly` gRPC method.
 
@@ -506,7 +523,7 @@ The Block Assembly service implements robust error handling across multiple laye
 
 - **Conflicting Transaction Detection**: During reorgs, the service identifies and marks conflicting transactions in affected subtrees
 - **Transaction Recovery**: Non-conflicting transactions are automatically re-added to new subtrees
-- **Deep Reorg Protection**: Reorganizations affecting more than 5 blocks trigger a full service reset for safety
+- **Deep Reorg Protection**: Reorganizations affecting more than the coinbase maturity threshold (typically 100 blocks) trigger a full service reset for safety
 
 #### UTXO Store Unavailability
 
