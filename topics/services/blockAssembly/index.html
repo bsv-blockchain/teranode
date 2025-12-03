@@ -3137,21 +3137,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#27-unmined-transaction-cleanup" class="md-nav__link">
+  <a href="#27-resetting-the-block-assembly" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.7. Unmined Transaction Cleanup
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#28-resetting-the-block-assembly" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2.8. Resetting the Block Assembly
+        2.7. Resetting the Block Assembly
       
     </span>
   </a>
@@ -3653,6 +3642,34 @@
     
   
     P2P NAT Traversal
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pruner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
   
 
     
@@ -5250,6 +5267,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/services/pruner_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/services/rpc_reference/" class="md-nav__link">
         
   
@@ -5912,6 +5957,34 @@
     
   
     Propagation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/pruner_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
   
 
     
@@ -6714,21 +6787,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#27-unmined-transaction-cleanup" class="md-nav__link">
+  <a href="#27-resetting-the-block-assembly" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.7. Unmined Transaction Cleanup
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#28-resetting-the-block-assembly" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2.8. Resetting the Block Assembly
+        2.7. Resetting the Block Assembly
       
     </span>
   </a>
@@ -6980,8 +7042,7 @@
 <li><a href="#263-the-block-received-is-a-new-block-but-it-represents-a-fork">2.6.3. The block received is a new block, but it represents a fork.</a></li>
 <li><a href="#264-fork-detection-and-assessment">2.6.4. Fork Detection and Assessment</a></li>
 <li><a href="#265-chain-selection-and-reorganization-process">2.6.5. Chain Selection and Reorganization Process</a></li>
-<li><a href="#27-unmined-transaction-cleanup">2.7. Unmined Transaction Cleanup</a></li>
-<li><a href="#28-resetting-the-block-assembly">2.8. Resetting the Block Assembly</a></li>
+<li><a href="#27-resetting-the-block-assembly">2.7. Resetting the Block Assembly</a></li>
 </ul>
 </li>
 <li><a href="#3-data-model">Data Model</a></li>
@@ -7057,11 +7118,11 @@
 </ul>
 </li>
 <li>
-<p><strong>Periodic Unmined Transaction Cleanup</strong>:</p>
+<p><strong>Coordination with Pruner Service</strong>:</p>
 <ul>
-<li>The service periodically removes old unmined transactions that have exceeded their retention period.</li>
-<li>This cleanup prevents unbounded growth of the UTXO store and maintains system performance.</li>
-<li>Parent transactions of younger unmined transactions are preserved to maintain transaction dependencies.</li>
+<li>Block Assembly coordinates with the <a href="../pruner/">Pruner Service</a>, which handles UTXO data pruning operations.</li>
+<li>The Pruner service was extracted from Block Assembly (PR #114) as a standalone microservice.</li>
+<li>Block Assembly provides state information to Pruner to ensure pruning only occurs during stable blockchain states (not during reorgs or resets).</li>
 </ul>
 </li>
 </ol>
@@ -7441,24 +7502,7 @@
 </li>
 </ul>
 <p>Note: If other nodes propose blocks containing a transaction that Teranode has identified as a double-spend (based on the First-Seen rule), Teranode will only build on top of such blocks when the network has reached consensus on which transaction to accept, even if it differs from Teranode's initial first-seen assessment. For more information, please review the <a href="../../architecture/understandingDoubleSpends/">Double Spend Detection documentation</a>.</p>
-<h3 id="27-unmined-transaction-cleanup">2.7. Unmined Transaction Cleanup</h3>
-<p>The Block Assembly service periodically cleans up old unmined transactions to prevent unbounded growth of the UTXO store. This cleanup process is essential for maintaining system performance and preventing resource exhaustion.</p>
-<p><img alt="unmined_cleanup_process.svg" src="../img/plantuml/blockassembly/unmined_cleanup_process.svg" /></p>
-<p><strong>Cleanup Process:</strong></p>
-<ol>
-<li><strong>Periodic Trigger</strong> - A background ticker (<code>unminedCleanupTicker</code>) runs at configured intervals</li>
-<li><strong>Age-Based Selection</strong> - Identifies unmined transactions older than the retention period using <code>QueryOldUnminedTransactions</code></li>
-<li><strong>Parent Preservation</strong> - Protects parent transactions of younger unmined transactions from deletion</li>
-<li><strong>Batch Deletion</strong> - Removes eligible transactions in batches to minimize performance impact</li>
-</ol>
-<p><strong>Configuration:</strong></p>
-<ul>
-<li><strong>Retention Period</strong>: Configured via <code>UnminedTxRetention</code> settings</li>
-<li><strong>Cleanup Interval</strong>: Controlled by the cleanup ticker configuration</li>
-<li><strong>Parent Protection</strong>: Uses <code>PreserveTransactions</code> to mark parents that should be retained</li>
-</ul>
-<p>This cleanup mechanism ensures the UTXO store remains performant while preserving transaction dependencies.</p>
-<h3 id="28-resetting-the-block-assembly">2.8. Resetting the Block Assembly</h3>
+<h3 id="27-resetting-the-block-assembly">2.7. Resetting the Block Assembly</h3>
 <p>The Block Assembly service can be reset to the best block by calling the <code>ResetBlockAssembly</code> gRPC method.</p>
 <ol>
 <li>

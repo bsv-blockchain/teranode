@@ -3159,6 +3159,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../topics/services/pruner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../topics/services/legacy/" class="md-nav__link">
         
   
@@ -5479,6 +5507,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../pruner_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../rpc_reference/" class="md-nav__link">
         
   
@@ -6147,6 +6203,34 @@
     
   
     Propagation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../settings/services/pruner_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
   
 
     
@@ -7521,7 +7605,7 @@
 <span class="w">    </span><span class="nx">stateChangeCh</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="nx">BestBlockInfo</span>
 
 <span class="w">    </span><span class="c1">// lastPersistedHeight tracks the last block height processed by block persister</span>
-<span class="w">    </span><span class="c1">// This is updated via BlockPersisted notifications and used to coordinate with cleanup</span>
+<span class="w">    </span><span class="c1">// This is updated via BlockPersisted notifications</span>
 <span class="w">    </span><span class="nx">lastPersistedHeight</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Uint32</span>
 
 <span class="w">    </span><span class="c1">// currentChainMap maps block hashes to their heights</span>
@@ -7545,20 +7629,9 @@
 <span class="w">    </span><span class="c1">// currentRunningState tracks the current operational state</span>
 <span class="w">    </span><span class="nx">currentRunningState</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Value</span>
 
-<span class="w">    </span><span class="c1">// cleanupService manages background cleanup tasks</span>
-<span class="w">    </span><span class="nx">cleanupService</span><span class="w"> </span><span class="nx">cleanup</span><span class="p">.</span><span class="nx">Service</span>
-
-<span class="w">    </span><span class="c1">// cleanupServiceLoaded indicates if the cleanup service has been loaded</span>
-<span class="w">    </span><span class="nx">cleanupServiceLoaded</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Bool</span>
-
-<span class="w">    </span><span class="c1">// cleanupQueueCh queues cleanup operations (parent preserve + DAH cleanup) to prevent flooding during catchup</span>
-<span class="w">    </span><span class="nx">cleanupQueueCh</span><span class="w"> </span><span class="kd">chan</span><span class="w"> </span><span class="kt">uint32</span>
-
-<span class="w">    </span><span class="c1">// cleanupQueueWorkerStarted tracks if the cleanup queue worker is running</span>
-<span class="w">    </span><span class="nx">cleanupQueueWorkerStarted</span><span class="w"> </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Bool</span>
-
-<span class="w">    </span><span class="c1">// unminedCleanupTicker manages periodic cleanup of old unmined transactions</span>
-<span class="w">    </span><span class="nx">unminedCleanupTicker</span><span class="w"> </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Ticker</span>
+<span class="w">    </span><span class="c1">// Note: Cleanup-related fields (cleanupService, cleanupQueueCh, unminedCleanupTicker)</span>
+<span class="w">    </span><span class="c1">// were removed in PR #114 when UTXO pruning was extracted to the standalone Pruner service.</span>
+<span class="w">    </span><span class="c1">// See: docs/topics/services/pruner.md</span>
 
 <span class="w">    </span><span class="c1">// cachedCandidate stores the cached mining candidate</span>
 <span class="w">    </span><span class="nx">cachedCandidate</span><span class="w"> </span><span class="o">*</span><span class="nx">CachedMiningCandidate</span>

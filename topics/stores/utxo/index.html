@@ -3171,6 +3171,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../services/pruner/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../services/legacy/" class="md-nav__link">
         
   
@@ -5217,6 +5245,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/services/pruner_reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/services/rpc_reference/" class="md-nav__link">
         
   
@@ -5879,6 +5935,34 @@
     
   
     Propagation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/settings/services/pruner_settings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner
   
 
     
@@ -7362,7 +7446,27 @@ The primary language used for implementing the service's logic.</p>
 <li>Nullstore is more appropriate for testing, development, or lightweight applications.</li>
 </ul>
 <h3 id="53-data-pruning">5.3. Data Pruning</h3>
-<p>Stored data is automatically pruned a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.</p>
+<p>Stored data is automatically pruned to prevent the datastore from growing indefinitely. The UTXO Store works in conjunction with the <strong>Pruner Service</strong>, a standalone microservice responsible for managing UTXO data pruning operations.</p>
+<p><strong>Pruning Mechanisms:</strong></p>
+<ol>
+<li>
+<p><strong>Delete-At-Height (DAH)</strong>: UTXO records are marked with a <code>DeleteAtHeight</code> field when they are spent or when coinbase maturity expires. The Pruner Service queries and deletes records where <code>deleteAtHeight &lt;= currentBlockHeight</code>.</p>
+</li>
+<li>
+<p><strong>Parent Preservation</strong>: The Pruner Service implements a critical two-phase safety mechanism to protect parent transactions of old unmined transactions from premature deletion, ensuring resubmitted transactions can validate successfully.</p>
+</li>
+<li>
+<p><strong>External Transaction Cleanup</strong>: For large transactions stored in blob storage (Aerospike), the Pruner Service also deletes external <code>.tx</code> files to reclaim storage space.</p>
+</li>
+</ol>
+<p><strong>Event-Driven Architecture:</strong></p>
+<p>The Pruner Service operates event-driven, responding to <code>BlockPersisted</code> notifications from the Block Persister service. This ensures pruning is coordinated with block persistence, preventing deletion of transaction data before it's safely stored in <code>.subtree_data</code> files for catchup nodes.</p>
+<p><strong>For detailed information about pruning operations, configuration, and the two-phase safety mechanism, see:</strong></p>
+<ul>
+<li><a href="../../services/pruner/">Pruner Service Documentation</a></li>
+<li><a href="../../../references/settings/services/pruner_settings/">Pruner Settings Reference</a></li>
+<li><a href="../../datamodel/utxo_data_model/">UTXO Data Model</a> (DeleteAtHeight field documentation)</li>
+</ul>
 <h2 id="6-performance-optimizations">6. Performance Optimizations</h2>
 <h3 id="61-shared-buffer-optimization">6.1. Shared Buffer Optimization</h3>
 <p>To improve performance when reading large batches of UTXOs, Teranode implements a shared buffer optimization that significantly reduces memory allocations and garbage collection pressure.</p>

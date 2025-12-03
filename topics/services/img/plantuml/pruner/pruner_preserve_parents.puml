@@ -1,0 +1,50 @@
+@startuml pruner_preserve_parents
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+participant "Pruner Service" as Pruner
+participant "UTXO Store" as UTXO
+participant "Aerospike/SQL" as DB
+
+note over Pruner, DB: **Phase 1: Parent Preservation Detail**
+
+Pruner -> UTXO: PreserveParentsOfOldUnminedTransactions\n(currentHeight)
+
+UTXO -> UTXO: Calculate cutoffHeight\n= currentHeight - UnminedTxRetention
+
+UTXO -> DB: Query: Find Unmined Transactions\nWHERE unmined_since < cutoffHeight
+
+DB --> UTXO: List of Old Unmined Txs
+
+loop For Each Old Unmined Transaction
+    UTXO -> DB: Get Transaction Metadata\n(includes inpoints)
+    DB --> UTXO: Transaction Metadata
+
+    UTXO -> UTXO: Extract Parent TxIDs\nfrom Inpoints
+
+    loop For Each Parent TxID
+        UTXO -> DB: Update Parent Transaction:\nSET PreserveUntil = currentHeight +\nParentPreservationBlocks
+
+        alt Update Successful
+            DB --> UTXO: Parent Protected
+        else Update Failed
+            DB --> UTXO: Error
+            UTXO --> Pruner: **CRITICAL ERROR**
+            note right of Pruner: Abort entire pruning\nPrevents orphaning\nresubmitted transactions
+            return
+        end
+    end
+end
+
+UTXO --> Pruner: All Parents Preserved Successfully
+
+note right of Pruner: Safe to proceed\nto Phase 2 (DAH Pruning)
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml
