@@ -32,6 +32,15 @@ Global settings control system-wide behavior across all Teranode services. These
 | PrettyLogs | bool | true | prettyLogs | Human-readable log formatting |
 | JSONLogging | bool | false | jsonLogging | JSON-structured log output |
 
+### Debug Toggles
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| Debug.All | bool | false | debug_all | Enable every subsystem debug log |
+| Debug.File | bool | false | debug_file | File I/O debug logs |
+| Debug.Blobstore | bool | false | debug_blobstore | Blob store operation logs |
+| Debug.UTXOStore | bool | false | debug_utxostore | UTXO store file logs |
+
 ### HTTP Security Settings
 
 | Setting | Type | Default | Environment Variable | Usage |
@@ -98,6 +107,7 @@ Global settings control system-wide behavior across all Teranode services. These
 - `PrettyLogs = true`: Human-readable colored output (development)
 - `JSONLogging = true`: Structured JSON logs (production)
 - Cannot enable both `PrettyLogs` and `JSONLogging` simultaneously
+- Subsystem debug toggles (`debug_*`) still require `logLevel = DEBUG`
 
 ### HTTPS Configuration
 

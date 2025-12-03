@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/debugflags"
 	"github.com/ordishs/gocore"
 )
 
@@ -30,6 +31,13 @@ func RunDaemon(progname, version, commit string) {
 
 	// Initialize settings
 	tSettings := settings.NewSettings()
+
+	debugflags.Init(debugflags.Flags{
+		All:       tSettings.Debug.All,
+		File:      tSettings.Debug.File,
+		Blobstore: tSettings.Debug.Blobstore,
+		UTXOStore: tSettings.Debug.UTXOStore,
+	})
 
 	readLimit := tSettings.Block.FileStoreReadConcurrency
 	writeLimit := tSettings.Block.FileStoreWriteConcurrency
