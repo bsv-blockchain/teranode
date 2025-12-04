@@ -9,11 +9,16 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/util/debugflags"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNew(t *testing.T) {
+func init() {
+	debugflags.Init(debugflags.Flags{All: true, File: true, Blobstore: true})
+}
+
+func Test_New(t *testing.T) {
 	mockLogger := &MockLogger{}
 	mockStore := &MockBlobStore{}
 
@@ -26,7 +31,7 @@ func TestNew(t *testing.T) {
 	assert.Equal(t, mockStore, loggerImpl.store)
 }
 
-func TestLogger_Health(t *testing.T) {
+func Test_LoggerHealth(t *testing.T) {
 	t.Run("SuccessfulHealth", func(t *testing.T) {
 		var loggedMessage string
 		mockLogger := &MockLogger{
@@ -70,7 +75,7 @@ func TestLogger_Health(t *testing.T) {
 	})
 }
 
-func TestLogger_Exists(t *testing.T) {
+func Test_LoggerExists(t *testing.T) {
 	testKey := []byte{1, 2, 3, 4}
 	fileType := fileformat.FileTypeTx
 
@@ -143,7 +148,7 @@ func TestLogger_Exists(t *testing.T) {
 	})
 }
 
-func TestLogger_Get(t *testing.T) {
+func Test_LoggerGet(t *testing.T) {
 	testKey := []byte{1, 2, 3, 4}
 	testData := []byte("test data")
 	fileType := fileformat.FileTypeBlock
@@ -195,7 +200,7 @@ func TestLogger_Get(t *testing.T) {
 	})
 }
 
-func TestLogger_GetIoReader(t *testing.T) {
+func Test_LoggerGetIoReader(t *testing.T) {
 	testKey := []byte{5, 6, 7, 8}
 	fileType := fileformat.FileTypeSubtree
 
@@ -273,7 +278,7 @@ func TestLogger_Set(t *testing.T) {
 	})
 }
 
-func TestLogger_SetFromReader(t *testing.T) {
+func Test_LoggerSetFromReader(t *testing.T) {
 	testKey := []byte{13, 14, 15, 16}
 	testReader := io.NopCloser(strings.NewReader("reader data"))
 	fileType := fileformat.FileTypeDat
@@ -300,7 +305,7 @@ func TestLogger_SetFromReader(t *testing.T) {
 	})
 }
 
-func TestLogger_SetDAH(t *testing.T) {
+func Test_LoggerSetDAH(t *testing.T) {
 	testKey := []byte{17, 18, 19, 20}
 	testDAH := uint32(100000)
 	fileType := fileformat.FileTypeBlock
@@ -335,7 +340,7 @@ func TestLogger_SetDAH(t *testing.T) {
 	})
 }
 
-func TestLogger_GetDAH(t *testing.T) {
+func Test_LoggerGetDAH(t *testing.T) {
 	testKey := []byte{21, 22, 23, 24}
 	testDAH := uint32(200000)
 	fileType := fileformat.FileTypeTx
@@ -370,7 +375,7 @@ func TestLogger_GetDAH(t *testing.T) {
 	})
 }
 
-func TestLogger_Del(t *testing.T) {
+func Test_LoggerDel(t *testing.T) {
 	testKey := []byte{25, 26, 27, 28}
 	fileType := fileformat.FileTypeSubtree
 
@@ -414,7 +419,7 @@ func TestLogger_Del(t *testing.T) {
 	})
 }
 
-func TestLogger_Close(t *testing.T) {
+func Test_LoggerClose(t *testing.T) {
 	t.Run("SuccessfulClose", func(t *testing.T) {
 		var loggedFormat string
 		mockLogger := &MockLogger{
@@ -454,7 +459,7 @@ func TestLogger_Close(t *testing.T) {
 	})
 }
 
-func TestLogger_SetCurrentBlockHeight(t *testing.T) {
+func Test_LoggerSetCurrentBlockHeight(t *testing.T) {
 	testHeight := uint32(123456)
 
 	t.Run("SuccessfulSetCurrentBlockHeight", func(t *testing.T) {
@@ -483,7 +488,7 @@ func TestLogger_SetCurrentBlockHeight(t *testing.T) {
 	})
 }
 
-func TestLogger_WithOptions(t *testing.T) {
+func Test_LoggerWithOptions(t *testing.T) {
 	testKey := []byte{1, 2, 3}
 	fileType := fileformat.FileTypeTx
 
@@ -543,7 +548,7 @@ func Test_caller(t *testing.T) {
 	})
 }
 
-func TestLogger_EdgeCases(t *testing.T) {
+func Test_LoggerEdgeCases(t *testing.T) {
 	t.Run("NilKey", func(t *testing.T) {
 		mockLogger := &MockLogger{
 			DebugfFunc: func(format string, args ...interface{}) {},
@@ -588,4 +593,34 @@ func TestLogger_EdgeCases(t *testing.T) {
 		assert.NoError(t, err)
 		assert.True(t, exists)
 	})
+}
+
+func Test_LoggerDebugToggle(t *testing.T) {
+	debugflags.Init(debugflags.Flags{})
+	t.Cleanup(func() {
+		debugflags.Init(debugflags.Flags{All: true, File: true, Blobstore: true})
+	})
+
+	calls := 0
+	mockLogger := &MockLogger{
+		DebugfFunc: func(format string, args ...interface{}) {
+			calls++
+		},
+		LogLevelFunc: func() int {
+			return 0
+		},
+	}
+
+	mockStore := &MockBlobStore{}
+	logger := New(mockLogger, mockStore).(*Logger)
+
+	_, err := logger.Exists(context.Background(), []byte{1, 2, 3, 4}, fileformat.FileTypeTx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, calls, "debug log should be suppressed when flags are disabled")
+
+	debugflags.Init(debugflags.Flags{Blobstore: true})
+
+	_, err = logger.Exists(context.Background(), []byte{1, 2, 3, 4}, fileformat.FileTypeTx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls, "debug log should emit when flag enabled")
 }
