@@ -2217,11 +2217,31 @@ func TestDeleteByBin(t *testing.T) {
 			return false
 		}
 
-		count := 0
+	require.Eventually(t, func() bool {
+		recordSet, err = client.Query(nil, statement)
+		if err != nil {
+			t.Logf("query error while waiting for delete completion: %v", err)
+			return false
+		}
+
+		current := 0
 		for result := range recordSet.Results() {
 			if result != nil {
-				count++
+				current++
 			}
+		}
+
+		return current == 1
+	}, 5*time.Second, 100*time.Millisecond, "expected query-execute delete to remove matching records")
+
+	recordSet, err = client.Query(nil, statement)
+	require.NoError(t, err)
+
+	count = 0
+
+	for result := range recordSet.Results() {
+		if result != nil {
+			count++
 		}
 
 		return count == 1
