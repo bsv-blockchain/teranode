@@ -126,7 +126,7 @@ services:
       logLevel: "DEBUG"
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/teranode1/txstore:/app/data/teranode1/txstore
       - ../data/teranode1/subtreestore:/app/data/teranode1/subtreestore
       - ../data/teranode1/blockstore:/app/data/teranode1/blockstore
@@ -174,7 +174,7 @@ services:
       JAEGER_AGENT_PORT: 6831
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/teranode2/txstore:/app/data/teranode2/txstore
       - ../data/teranode2/subtreestore:/app/data/teranode2/subtreestore
       - ../data/teranode2/blockstore:/app/data/teranode2/blockstore
@@ -222,7 +222,7 @@ services:
       JAEGER_AGENT_PORT: 6831
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/teranode3/txstore:/app/data/teranode3/txstore
       - ../data/teranode3/subtreestore:/app/data/teranode3/subtreestore
       - ../data/teranode3/blockstore:/app/data/teranode3/blockstore
@@ -274,6 +274,7 @@ services:
       ]
     volumes:
       - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/miner1:/app/data
     restart: unless-stopped
 
@@ -298,6 +299,7 @@ services:
       ]
     volumes:
       - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/miner2:/app/data
     restart: unless-stopped
 
@@ -322,6 +324,7 @@ services:
       ]
     volumes:
       - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/miner3:/app/data
     restart: unless-stopped
 
@@ -364,7 +367,7 @@ services:
       profilerAddr: "localhost:17092"
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/coinbase1:/app/data
 
   tx-blaster-1:
@@ -384,7 +387,7 @@ services:
       ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100"]
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/txblaster1:/app/data
       # - ../data/txblaster.log:/app/data/txblaster.log
 

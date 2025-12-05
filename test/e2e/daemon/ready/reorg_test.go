@@ -1,7 +1,6 @@
 package smoke
 
 import (
-	"net/url"
 	"testing"
 	"time"
 
@@ -11,8 +10,8 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/test"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
-	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,8 +26,7 @@ func TestMoveUp(t *testing.T) {
 		EnableRPC: true,
 		EnableP2P: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode2.daemon",
-		FSMState:        blockchain.FSMStateRUNNING,
+		FSMState: blockchain.FSMStateRUNNING,
 	})
 	defer node2.Stop(t, true)
 
@@ -39,8 +37,7 @@ func TestMoveUp(t *testing.T) {
 		EnableRPC: true,
 		EnableP2P: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode1.daemon",
-		FSMState:        blockchain.FSMStateRUNNING,
+		FSMState: blockchain.FSMStateRUNNING,
 	})
 	defer node1.Stop(t, true)
 
@@ -73,7 +70,6 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:       true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 			// Create a copy to avoid race conditions
@@ -101,7 +97,6 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:       true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 			// Create a copy to avoid race conditions
@@ -151,7 +146,6 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       true,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 			// Create a copy to avoid race conditions
@@ -175,7 +169,6 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:       true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
-		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 			// Create a copy to avoid race conditions
@@ -210,7 +203,10 @@ func TestTDRestart(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       false,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode1.daemon",
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 
 	// err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -231,7 +227,10 @@ func TestTDRestart(t *testing.T) {
 		EnableP2P:         false,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
-		SettingsContext:   "docker.host.teranode1.daemon",
+		UTXOStoreType:     "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 
 	td.WaitForBlockHeight(t, block1, blockWait, true)
@@ -289,7 +288,6 @@ func TestDynamicSubtreeSize(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       false,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	defer td.Stop(t)
@@ -354,25 +352,16 @@ func TestDynamicSubtreeSize(t *testing.T) {
 }
 
 func TestInvalidateBlock(t *testing.T) {
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "docker.host.teranode1.daemon",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.UtxoStore.UtxoStore = parsedURL
-		},
+		EnableRPC:     true,
+		UTXOStoreType: "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 	defer node1.Stop(t, true)
 
-	_, err = node1.CallRPC(node1.Ctx, "generate", []any{3})
+	_, err := node1.CallRPC(node1.Ctx, "generate", []any{3})
 	require.NoError(t, err)
 
 	node1BestBlockHeader, node1BestBlockHeaderMeta, err := node1.BlockchainClient.GetBestBlockHeader(t.Context())
