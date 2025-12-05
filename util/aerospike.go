@@ -690,6 +690,17 @@ func WithMaxRetriesWrite(retries int) AerospikeWritePolicyOptions {
 	}
 }
 
+// WithExpiration sets the TTL (time-to-live) for records in seconds.
+// Special values:
+//   - aerospike.TTLServerDefault (0): Use namespace default-ttl
+//   - aerospike.TTLDontExpire (MaxUint32): Never expire
+//   - aerospike.TTLDontUpdate (MaxUint32-1): Don't change existing TTL
+func WithExpiration(ttlSeconds uint32) AerospikeWritePolicyOptions {
+	return func(policy *aerospike.WritePolicy) {
+		policy.Expiration = ttlSeconds
+	}
+}
+
 // GetAerospikeWritePolicy creates a new Aerospike write policy with the provided options applied.
 // Used to manage default connection parameters for write operations with strong consistency.
 // If no options are provided, the policy will use the configured default values.

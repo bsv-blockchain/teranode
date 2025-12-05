@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,11 +24,13 @@ func setupLongestChainTest(t *testing.T, utxoStoreType string) (td *daemon.TestD
 
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
 		// EnableFullLogging: true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   utxoStoreType,
-		SettingsOverrideFunc: func(tSettings *settings.Settings) {
-			tSettings.ChainCfgParams.CoinbaseMaturity = 2
-		},
+		UTXOStoreType: utxoStoreType,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(tSettings *settings.Settings) {
+				tSettings.ChainCfgParams.CoinbaseMaturity = 2
+			},
+		),
 	})
 
 	// Set the FSM state to RUNNING...

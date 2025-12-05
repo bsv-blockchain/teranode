@@ -32,9 +32,8 @@ func TestParentNotFullySpentNotMinedonSameChain(t *testing.T) {
 	// Start NodeA
 	t.Log("Starting NodeA...")
 	nodeA := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		SettingsContext: "docker.host.teranode1.daemon",
+		EnableRPC: true,
+		EnableP2P: true,
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 18090
 			settings.Block.GetAndValidateSubtreesConcurrency = 1
@@ -173,9 +172,8 @@ func TestParentSpentNotMinedonSameChain(t *testing.T) {
 	// Start NodeA
 	t.Log("Starting NodeA...")
 	nodeA := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		SettingsContext: "docker.host.teranode1.daemon",
+		EnableRPC: true,
+		EnableP2P: true,
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 18090
 			settings.Block.GetAndValidateSubtreesConcurrency = 1

@@ -50,7 +50,6 @@ type TeranodeTestEnv struct {
 
 type TeranodeTestClient struct {
 	Name                string
-	SettingsContext     string
 	BlockchainClient    bc.ClientI
 	BlockassemblyClient ba.Client
 	PropagationClient   *propagation.Client
@@ -127,9 +126,8 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 			nodeName := strings.ReplaceAll(key, "SETTINGS_CONTEXT_", "teranode")
 			svNodeName := strings.ReplaceAll(nodeName, "tera", "sv")
 			t.Nodes = append(t.Nodes, TeranodeTestClient{
-				SettingsContext: val,
-				Name:            nodeName,
-				Settings:        settings,
+				Name:     nodeName,
+				Settings: settings,
 			})
 			t.LegacyNodes = append(t.LegacyNodes, SVNodeTestClient{
 				Name: svNodeName,
@@ -171,7 +169,6 @@ func (t *TeranodeTestEnv) InitializeTeranodeTestClients() error {
 		node.CoinbaseClient = stubs.NewCoinbaseClient()
 
 		t.Logger.Infof("Initializing node %s", node.Name)
-		t.Logger.Infof("Settings context: %s", node.SettingsContext)
 
 		if err := t.GetContainerIPAddress(node); err != nil {
 			return err
@@ -649,7 +646,6 @@ func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) erro
 		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
 		for idx, key := range order {
 			settings := settings.NewSettings(envSettings[key])
-			t.Nodes[idx].SettingsContext = envSettings[key]
 			t.Nodes[idx].Name = nodeNames[idx]
 			t.Nodes[idx].Settings = settings
 			t.Logger.Infof("Settings context: %s", envSettings[key])
@@ -674,13 +670,9 @@ func (t *TeranodeTestEnv) StartNode(nodeName string) error {
 		}
 
 		nodeNames := []string{"teranode1", "teranode2", "teranode3"}
-		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
 
-		for idx := range order {
-			settings := settings.NewSettings(t.Nodes[idx].SettingsContext)
+		for idx := range nodeNames {
 			t.Nodes[idx].Name = nodeNames[idx]
-			t.Nodes[idx].Settings = settings
-			t.Logger.Infof("Settings context: %s", t.Nodes[idx].SettingsContext)
 			t.Logger.Infof("Node name: %s", nodeNames[idx])
 			t.Logger.Infof("Node settings: %s", t.Nodes[idx].Settings)
 		}

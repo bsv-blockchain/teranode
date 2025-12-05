@@ -31,7 +31,6 @@ func TestUtxoStore(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	t.Cleanup(func() {

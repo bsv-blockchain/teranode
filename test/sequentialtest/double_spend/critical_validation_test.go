@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/test"
 	postgres "github.com/bsv-blockchain/teranode/test/longtest/util/postgres"
 	"github.com/stretchr/testify/require"
 )
@@ -51,12 +52,14 @@ func TestNilSubtreeStoreBypassPostgres(t *testing.T) {
 
 func testNilSubtreeStoreBypass(t *testing.T, utxoStore string) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(tSettings *settings.Settings) {
-			parsedURL, err := url.Parse(utxoStore)
-			require.NoError(t, err)
-			tSettings.UtxoStore.UtxoStore = parsedURL
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(tSettings *settings.Settings) {
+				parsedURL, err := url.Parse(utxoStore)
+				require.NoError(t, err)
+				tSettings.UtxoStore.UtxoStore = parsedURL
+			},
+		),
 	})
 	defer td.Stop(t)
 
@@ -124,13 +127,15 @@ func TestEmptySubtreeSlicesPostgres(t *testing.T) {
 
 func testEmptySubtreeSlices(t *testing.T, utxoStore string) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(tSettings *settings.Settings) {
-			parsedURL, err := url.Parse(utxoStore)
-			require.NoError(t, err)
-			tSettings.UtxoStore.UtxoStore = parsedURL
-		},
+		EnableRPC: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(tSettings *settings.Settings) {
+				parsedURL, err := url.Parse(utxoStore)
+				require.NoError(t, err)
+				tSettings.UtxoStore.UtxoStore = parsedURL
+			},
+		),
 	})
 	defer td.Stop(t)
 
@@ -181,15 +186,17 @@ func TestConcurrencyConfigurationEdgeCasesPostgres(t *testing.T) {
 
 func testConcurrencyConfigurationEdgeCases(t *testing.T, utxoStore string) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(tSettings *settings.Settings) {
-			parsedURL, err := url.Parse(utxoStore)
-			require.NoError(t, err)
-			tSettings.UtxoStore.UtxoStore = parsedURL
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(tSettings *settings.Settings) {
+				parsedURL, err := url.Parse(utxoStore)
+				require.NoError(t, err)
+				tSettings.UtxoStore.UtxoStore = parsedURL
 
-			// Test with concurrency = 0 (should use default)
-			tSettings.Block.CheckDuplicateTransactionsConcurrency = 0
-		},
+				// Test with concurrency = 0 (should use default)
+				tSettings.Block.CheckDuplicateTransactionsConcurrency = 0
+			},
+		),
 	})
 	defer td.Stop(t)
 
@@ -239,15 +246,17 @@ func TestRaceDetectorDuplicateDetectionPostgres(t *testing.T) {
 
 func testRaceDetectorDuplicateDetection(t *testing.T, utxoStore string) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(tSettings *settings.Settings) {
-			parsedURL, err := url.Parse(utxoStore)
-			require.NoError(t, err)
-			tSettings.UtxoStore.UtxoStore = parsedURL
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(tSettings *settings.Settings) {
+				parsedURL, err := url.Parse(utxoStore)
+				require.NoError(t, err)
+				tSettings.UtxoStore.UtxoStore = parsedURL
 
-			// Use high concurrency to increase race detection probability
-			tSettings.Block.CheckDuplicateTransactionsConcurrency = 16
-		},
+				// Use high concurrency to increase race detection probability
+				tSettings.Block.CheckDuplicateTransactionsConcurrency = 16
+			},
+		),
 	})
 	defer td.Stop(t)
 
