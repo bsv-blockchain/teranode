@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/test"
 	postgres "github.com/bsv-blockchain/teranode/test/longtest/util/postgres"
 	"github.com/stretchr/testify/require"
 )
@@ -53,12 +54,14 @@ func TestEarlyDuplicatePartiallySpentAndPrunedPostgres(t *testing.T) {
 func testEarlyDuplicatePartiallySpentAndPruned(t *testing.T, utxoStore string) {
 	// Setup test daemon
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(tSettings *settings.Settings) {
-			parsedURL, err := url.Parse(utxoStore)
-			require.NoError(t, err)
-			tSettings.UtxoStore.UtxoStore = parsedURL
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(tSettings *settings.Settings) {
+				parsedURL, err := url.Parse(utxoStore)
+				require.NoError(t, err)
+				tSettings.UtxoStore.UtxoStore = parsedURL
+			},
+		),
 	})
 	defer td.Stop(t)
 
@@ -115,12 +118,14 @@ func TestEarlyDuplicateNotSpentPostgres(t *testing.T) {
 
 func testEarlyDuplicateNotSpent(t *testing.T, utxoStore string) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(tSettings *settings.Settings) {
-			parsedURL, err := url.Parse(utxoStore)
-			require.NoError(t, err)
-			tSettings.UtxoStore.UtxoStore = parsedURL
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(tSettings *settings.Settings) {
+				parsedURL, err := url.Parse(utxoStore)
+				require.NoError(t, err)
+				tSettings.UtxoStore.UtxoStore = parsedURL
+			},
+		),
 	})
 	defer td.Stop(t)
 

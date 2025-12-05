@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/test"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -68,13 +69,15 @@ func TestSendTxAndCheckState(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
 		UTXOStoreType:   "aerospike", // Use unified container initialization
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.TracingEnabled = true
-			settings.TracingSampleRate = 1.0
-			// settings.Validator.UseLocalValidator = true
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.TracingEnabled = true
+				s.TracingSampleRate = 1.0
+				// s.Validator.UseLocalValidator = true
+			},
+		),
 	})
 
 	// Reset tracing state for clean test environment
@@ -266,14 +269,16 @@ func TestSendTxDeleteParentResendTx(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
 		UTXOStoreType:   "aerospike",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.TracingEnabled = true
-			settings.TracingSampleRate = 1.0
-			settings.GlobalBlockHeightRetention = 1
-			// settings.Validator.UseLocalValidator = true
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.TracingEnabled = true
+				settings.TracingSampleRate = 1.0
+				settings.GlobalBlockHeightRetention = 1
+				// settings.Validator.UseLocalValidator = true
+			},
+		),
 	})
 
 	// Reset tracing state for clean test environment
@@ -351,13 +356,15 @@ func TestSendTxAndCheckStateWithDuplicateTxSentSimultaneously(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
 		UTXOStoreType:   "aerospike",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.TracingEnabled = true
-			settings.TracingSampleRate = 1.0
-			// settings.Validator.UseLocalValidator = true
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.TracingEnabled = true
+				settings.TracingSampleRate = 1.0
+				// settings.Validator.UseLocalValidator = true
+			},
+		),
 	})
 
 	// Reset tracing state for clean test environment
@@ -583,12 +590,14 @@ func TestDuplicateTransactionAfterMining(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
 		UTXOStoreType:   "aerospike",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.TracingEnabled = true
-			settings.TracingSampleRate = 1.0
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.TracingEnabled = true
+				settings.TracingSampleRate = 1.0
+			},
+		),
 	})
 
 	tracer := tracing.Tracer("rpc_smoke_test")
@@ -667,12 +676,14 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.ChainCfgParams.CSVHeight = 10
-		},
+		EnableRPC:     true,
+		UTXOStoreType: "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.ChainCfgParams.CSVHeight = 10
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
@@ -756,12 +767,15 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test.txsizetest",
-		UTXOStoreType:   "aerospike",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.ChainCfgParams.CoinbaseMaturity = 1
-		},
+		EnableRPC:     true,
+		UTXOStoreType: "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.ChainCfgParams.CoinbaseMaturity = 1
+				settings.Policy.MaxTxSizePolicy = 100000
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
@@ -855,12 +869,14 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test.oversizedscripttest",
-		UTXOStoreType:   "aerospike",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.ChainCfgParams.CoinbaseMaturity = 1
-		},
+		EnableRPC:     true,
+		UTXOStoreType: "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.ChainCfgParams.CoinbaseMaturity = 1
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
@@ -945,9 +961,9 @@ func TestDoubleInput(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test.oversizedscripttest",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -987,9 +1003,9 @@ func TestGetBestBlockHash(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -1024,9 +1040,9 @@ func TestGetPeerInfo(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -1059,9 +1075,9 @@ func TestGetMiningInfo(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -1100,9 +1116,9 @@ func TestVersion(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -1141,9 +1157,9 @@ func TestGetBlockVerbosity(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -1229,9 +1245,9 @@ func TestGetBlockHeaderVerbose(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -1318,9 +1334,9 @@ func TestGetRawTransactionVerbose(t *testing.T) {
 	// t.Skip("Skipping getrawtransaction verbose test, covered by TestSendTxAndCheckState")
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -1466,12 +1482,14 @@ func TestCreateAndSendRawTransaction(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.TracingEnabled = true
-			settings.TracingSampleRate = 1.0
-			// settings.UtxoStore.UtxoStore = parsedURL
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.TracingEnabled = true
+				settings.TracingSampleRate = 1.0
+				// settings.UtxoStore.UtxoStore = parsedURL
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
@@ -1606,9 +1624,9 @@ func TestGetMiningCandidate(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -1733,9 +1751,9 @@ func TestGenerateToAddress(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -1791,9 +1809,9 @@ func TestBlockManagement(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:            true,
+		UTXOStoreType:        "aerospike",
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t, true)
@@ -1883,7 +1901,6 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       true,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.GlobalBlockHeightRetention = 10 // NodeA keeps transactions longer
 			s.Asset.HTTPPort = 18090
@@ -1902,7 +1919,6 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       true,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode2.daemon",
 		FSMState:        blockchain.FSMStateRUNNING,
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.GlobalBlockHeightRetention = 1
@@ -2145,10 +2161,9 @@ func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 	// Start NodeA
 	t.Log("Starting NodeA...")
 	nodeA := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		SettingsContext: "docker.host.teranode1.daemon",
-		UTXOStoreType:   "aerospike",
+		EnableRPC:     true,
+		EnableP2P:     true,
+		UTXOStoreType: "aerospike",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 18090
 			settings.Block.GetAndValidateSubtreesConcurrency = 1

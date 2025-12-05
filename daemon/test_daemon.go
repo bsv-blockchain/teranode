@@ -92,7 +92,6 @@ type TestOptions struct {
 	EnableP2P               bool
 	EnableRPC               bool
 	EnableValidator         bool
-	SettingsContext         string
 	SettingsOverrideFunc    func(*settings.Settings)
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
@@ -122,11 +121,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		appSettings         *settings.Settings
 	)
 
-	if opts.SettingsContext != "" {
-		appSettings = settings.NewSettings(opts.SettingsContext)
-	} else {
-		appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
-	}
+	appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 
 	// Dynamically allocate free ports for all relevant services
 	allocatePort := func(schema string) (listenAddr string, clientAddr string, addrPort int) {
@@ -259,15 +254,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	require.NoError(t, err)
 	appSettings.HealthCheckHTTPListenAddress = listenAddr
 
-	path := filepath.Join("data", appSettings.ClientName)
-	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
-		// Create a unique data directory per test to avoid SQLite locking issues
-		// Use test name and timestamp to ensure uniqueness across sequential test runs
-		testName := strings.ReplaceAll(t.Name(), "/", "_")
-		path = filepath.Join("data", fmt.Sprintf("test_%s_%d", testName, time.Now().UnixNano()))
-	}
+	// Create a unique data directory per test
+	// Use test name and timestamp to ensure uniqueness across sequential test runs
+	testName := strings.ReplaceAll(t.Name(), "/", "_")
+	appSettings.ClientName = testName
+	path := filepath.Join("data")
 
-	if !opts.SkipRemoveDataDir {
+	// path := filepath.Join("data", fmt.Sprintf("test_%s_%d", testName, time.Now().UnixNano()))
+
+	if !opts.SkipRemoveDataDir && opts.SkipRemoveDataDir == false {
 		absPath, err := filepath.Abs(path)
 		require.NoError(t, err)
 
@@ -287,12 +282,11 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	// Override DataFolder BEFORE creating any directories
 	// This ensures all store paths (blockstore, quorum, etc.) use the test-specific path
-	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
-		appSettings.DataFolder = path
-		// Override QuorumPath to ensure it uses the test-specific directory
-		// This prevents tests from sharing the same quorum directory
-		appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
-	}
+	// Always set DataFolder and QuorumPath to test-specific directory
+	appSettings.DataFolder = path
+	// Override QuorumPath to ensure it uses the test-specific directory
+	// This prevents tests from sharing the same quorum directory
+	// appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
 
 	absPath, err := filepath.Abs(path)
 	require.NoError(t, err)
