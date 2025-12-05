@@ -6,17 +6,14 @@ This section will walk you through the commands and configurations needed to run
 
 ### Prerequisites
 
-Before running Teranode, ensure the required infrastructure services are started:
+Start PostgreSQL before running Teranode:
 
 ```shell
-# Start Kafka in Docker
-./scripts/kafka.sh
-
 # Start PostgreSQL in Docker
 ./scripts/postgres.sh
 ```
 
-> **Note:** If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:
+> **Note**: Development mode uses in-memory Kafka by default (no Docker setup required). For advanced testing with Docker-based Kafka, run `./scripts/kafka.sh` (requires adding `127.0.0.1 kafka-shared` to `/etc/hosts` first). If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:
 >
 > ```bash
 > # Start Aerospike in Docker
