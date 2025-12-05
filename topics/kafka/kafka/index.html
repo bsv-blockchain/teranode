@@ -7393,6 +7393,7 @@
 <p>Kafka is a high-throughput, distributed messaging system designed to store and process large volumes of data. Its key features include scalability, fault-tolerance, and high availability, making it an ideal choice for real-time data processing and analytics in complex systems like Teranode.</p>
 <p>In the Teranode ecosystem, Kafka plays a crucial role in facilitating communication between various components, such as the Validator, BlockValidation, and Blockchain. It enables these components to exchange messages, notifications, and data reliably and efficiently, ensuring smooth operation of the entire system.</p>
 <p>It's important to note that Kafka is a third-party dependency in Teranode. As such, there is no specific installation or configuration process provided within the Teranode framework. Users are expected to have a properly configured Kafka setup running before initiating the Teranode services. This approach allows for flexibility in Kafka configuration based on specific deployment needs and existing infrastructure.</p>
+<p><strong>Development Mode</strong>: Development and test contexts use in-memory Kafka by default (<code>KAFKA_SCHEMA.dev = memory</code>), requiring no external Kafka setup. For production-like testing with Docker Kafka, see <a href="../../../references/settings/kafka_settings/">Kafka Settings Reference</a>.</p>
 <h2 id="2-use-cases">2. Use Cases</h2>
 <h3 id="propagation-service">Propagation Service</h3>
 <p>After initial sanity check tests, the propagation service endorses transactions to the validator. This is done by sending transaction notifications to the validator via the <code>kafka_validatortxsConfig</code> topic.</p>
@@ -7479,8 +7480,8 @@
 <h4 id="how-the-watchdog-works">How the Watchdog Works</h4>
 <p>The watchdog monitors consumer health by tracking two key states:</p>
 <ol>
-<li><strong>Initial Stuck Detection</strong>: Detects when <code>Consume()</code> is called but <code>Setup()</code> is never invoked (indicating the consumer is stuck in metadata refresh before joining the consumer group)</li>
-<li><strong>Post-Error Stuck Detection</strong>: Detects when <code>Consume()</code> returns with an error, but subsequent retry attempts hang without completing <code>Setup()</code></li>
+<li><strong>Initial Stuck Detection</strong> - Detects when <code>Consume()</code> is called but <code>Setup()</code> is never invoked (indicating the consumer is stuck in metadata refresh before joining the consumer group)</li>
+<li><strong>Post-Error Stuck Detection</strong> - Detects when <code>Consume()</code> returns with an error, but subsequent retry attempts hang without completing <code>Setup()</code></li>
 </ol>
 <h4 id="watchdog-configuration">Watchdog Configuration</h4>
 <ul>

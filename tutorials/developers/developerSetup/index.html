@@ -666,10 +666,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#62-start-kafka-and-postgresql" class="md-nav__link">
+  <a href="#62-start-postgresql" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6.2 Start Kafka and PostgreSQL
+        6.2 Start PostgreSQL
       
     </span>
   </a>
@@ -6650,10 +6650,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#62-start-kafka-and-postgresql" class="md-nav__link">
+  <a href="#62-start-postgresql" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6.2 Start Kafka and PostgreSQL
+        6.2 Start PostgreSQL
       
     </span>
   </a>
@@ -6871,7 +6871,7 @@
 </li>
 <li><a href="#6-prerequisites-for-running-the-node">Prerequisites for Running the Node</a><ul>
 <li><a href="#61-install-orbstack">6.1 Install OrbStack</a></li>
-<li><a href="#62-start-kafka-and-postgresql">6.2 Start Kafka and PostgreSQL</a></li>
+<li><a href="#62-start-postgresql">6.2 Start PostgreSQL</a></li>
 </ul>
 </li>
 <li><a href="#7-run-the-node">Run the Node</a><ul>
@@ -7009,17 +7009,13 @@ If you receive an error <code>ModuleNotFoundError: No module named 'yaml'</code>
 <p><strong>Verify installation</strong>:</p>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>--version
 </code></pre></div>
-<h3 id="62-start-kafka-and-postgresql">6.2 Start Kafka and PostgreSQL</h3>
-<p>Once OrbStack is installed and running, start Kafka and PostgreSQL with:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Start Kafka in Docker</span>
-./scripts/kafka.sh
-
-<span class="c1"># Start PostgreSQL in Docker</span>
+<h3 id="62-start-postgresql">6.2 Start PostgreSQL</h3>
+<p>Once OrbStack is installed and running, start PostgreSQL with:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Start PostgreSQL in Docker</span>
 ./scripts/postgres.sh
 </code></pre></div>
-<p>These scripts will set up Docker containers with the required services configured correctly for Teranode.</p>
 <blockquote>
-<p><strong>Note:</strong> If you configure your settings to use Aerospike for UTXO storage, you'll also need to run the Aerospike script:</p>
+<p><strong>Note on Kafka</strong>: Development mode uses in-memory Kafka by default (no setup required). For production-like testing with Docker-based Kafka, see <a href="../../../references/settings/kafka_settings/">Kafka Settings Reference</a>. If you configure your settings to use Aerospike for UTXO storage, you'll also need to run the Aerospike script:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Start Aerospike in Docker</span>
 ./scripts/aerospike.sh
 </code></pre></div>

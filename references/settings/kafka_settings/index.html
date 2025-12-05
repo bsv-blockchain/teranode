@@ -6740,7 +6740,7 @@
 <p>Example:</p>
 <div class="highlight"><pre><span></span><code>memory://test_blocks?partitions=2&amp;consumer_ratio=1
 </code></pre></div>
-<p><strong>Usage</strong>: The memory scheme is automatically detected by the Kafka utilities and enables in-memory message passing for unit tests and development environments. This eliminates the need for a running Kafka cluster during testing.</p>
+<p><strong>Usage</strong>: Automatically enabled for dev/test contexts (<code>KAFKA_SCHEMA.dev = memory</code> in settings.conf). Eliminates need for running Kafka cluster during development. For Docker-based Kafka, override with <code>KAFKA_SCHEMA.dev = kafka</code> in <code>settings_local.conf</code>.</p>
 <h2 id="url-parameters">URL Parameters</h2>
 <h3 id="consumer-configuration-parameters">Consumer Configuration Parameters</h3>
 <table>

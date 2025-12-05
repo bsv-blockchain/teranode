@@ -6644,15 +6644,12 @@
 <p>This section will walk you through the commands and configurations needed to run your services locally for development purposes.</p>
 <h2 id="quickstart-run-all-services">🚀 Quickstart: Run All Services</h2>
 <h3 id="prerequisites">Prerequisites</h3>
-<p>Before running Teranode, ensure the required infrastructure services are started:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Start Kafka in Docker</span>
-./scripts/kafka.sh
-
-<span class="c1"># Start PostgreSQL in Docker</span>
+<p>Start PostgreSQL before running Teranode:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Start PostgreSQL in Docker</span>
 ./scripts/postgres.sh
 </code></pre></div>
 <blockquote>
-<p><strong>Note:</strong> If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:</p>
+<p><strong>Note</strong>: Development mode uses in-memory Kafka by default (no Docker setup required). For advanced testing with Docker-based Kafka, run <code>./scripts/kafka.sh</code> (requires adding <code>127.0.0.1 kafka-shared</code> to <code>/etc/hosts</code> first). If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Start Aerospike in Docker</span>
 ./scripts/aerospike.sh
 </code></pre></div>
