@@ -299,6 +299,11 @@ func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCa
 
 Records a successful catchup operation with a peer. This increments success counters and updates the peer's reputation score positively.
 
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `duration_ms` (int64): Duration of the catchup operation in milliseconds
+
 ```go
 func (s *Server) RecordCatchupFailure(ctx context.Context, req *p2p_api.RecordCatchupFailureRequest) (*p2p_api.RecordCatchupFailureResponse, error)
 ```
@@ -319,11 +324,21 @@ func (s *Server) UpdateCatchupReputation(ctx context.Context, req *p2p_api.Updat
 
 Directly sets a peer's reputation score. Use sparingly as this bypasses the normal reputation calculation algorithm.
 
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `score` (double): Reputation score value (0-100 range)
+
 ```go
 func (s *Server) UpdateCatchupError(ctx context.Context, req *p2p_api.UpdateCatchupErrorRequest) (*p2p_api.UpdateCatchupErrorResponse, error)
 ```
 
 Records the last error message from a catchup attempt with a peer.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `error_msg` (string): Error message describing the failure
 
 ```go
 func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputationRequest) (*p2p_api.ResetReputationResponse, error)
@@ -345,11 +360,21 @@ func (s *Server) ReportValidSubtree(ctx context.Context, req *p2p_api.ReportVali
 
 Reports that a peer provided a valid subtree. This increments the peer's positive interaction counters.
 
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `subtree_hash` (string): Hash of the validated subtree
+
 ```go
 func (s *Server) ReportValidBlock(ctx context.Context, req *p2p_api.ReportValidBlockRequest) (*p2p_api.ReportValidBlockResponse, error)
 ```
 
 Reports that a peer provided a valid block. This increments the peer's positive interaction counters.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `block_hash` (string): Hash of the validated block
 
 #### Peer Status and Query Endpoints
 
