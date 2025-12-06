@@ -43,7 +43,7 @@ Example:
 memory://test_blocks?partitions=2&consumer_ratio=1
 ```
 
-**Usage**: The memory scheme is automatically detected by the Kafka utilities and enables in-memory message passing for unit tests and development environments. This eliminates the need for a running Kafka cluster during testing.
+**Usage**: Automatically enabled for dev/test contexts (`KAFKA_SCHEMA.dev = memory` in settings.conf). Eliminates need for running Kafka cluster during development. For Docker-based Kafka, override with `KAFKA_SCHEMA.dev = kafka` in `settings_local.conf`.
 
 ## URL Parameters
 
@@ -156,15 +156,18 @@ Consumer timeout parameters must satisfy: `sessionTimeout >= 3 * heartbeatInterv
 ## Service Usage
 
 ### P2P Service
+
 - Uses `InvalidBlocksConfig` or constructs URL from `InvalidBlocks`, `Hosts`, `Port`
 - Applies TLS settings from KafkaSettings
 - Consumer group: `{topic}-consumer`
 
-### Legacy Service  
+### Legacy Service
+
 - Uses `LegacyInvConfig`, `BlocksFinalConfig`, `TxMetaConfig`
 - Applies TLS settings from KafkaSettings
 
 ### Blockchain Service
+
 - Uses async producer for block notifications
 - Applies TLS settings from KafkaSettings
 
