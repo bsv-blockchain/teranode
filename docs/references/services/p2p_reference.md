@@ -293,6 +293,10 @@ func (s *Server) RecordCatchupAttempt(ctx context.Context, req *p2p_api.RecordCa
 
 Records that a catchup attempt was initiated with a peer. This increments the interaction attempt counter.
 
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
 ```go
 func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCatchupSuccessRequest) (*p2p_api.RecordCatchupSuccessResponse, error)
 ```
@@ -310,6 +314,10 @@ func (s *Server) RecordCatchupFailure(ctx context.Context, req *p2p_api.RecordCa
 
 Records a failed catchup attempt with a peer. This increments failure counters and reduces reputation.
 
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
 **Impact**: Decreases peer reputation score and applies recent failure penalty.
 
 ```go
@@ -317,6 +325,10 @@ func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.Record
 ```
 
 Marks a peer as malicious after detecting invalid data during catchup. This severely penalizes the peer's reputation.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
 
 ```go
 func (s *Server) UpdateCatchupReputation(ctx context.Context, req *p2p_api.UpdateCatchupReputationRequest) (*p2p_api.UpdateCatchupReputationResponse, error)
@@ -346,11 +358,19 @@ func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputati
 
 Resets reputation for one or all peers back to neutral (50.0). This implements the reputation recovery mechanism.
 
+**Parameters**:
+
+- `peer_id` (string, optional): If provided, resets reputation for specific peer. If omitted, resets all peers
+
 ```go
 func (s *Server) GetPeersForCatchup(ctx context.Context, req *p2p_api.GetPeersForCatchupRequest) (*p2p_api.GetPeersForCatchupResponse, error)
 ```
 
 Returns a list of peers suitable for catchup operations, ranked by reputation and filtered by selection criteria.
+
+**Parameters**: None (can optionally filter in the future)
+
+**Returns**: Array of `PeerInfoForCatchup` containing peer ID, height, block hash, data hub URL, catchup metrics
 
 #### Validation Reporting Endpoints
 
@@ -365,6 +385,8 @@ Reports that a peer provided a valid subtree. This increments the peer's positiv
 - `peer_id` (string): The peer identifier
 - `subtree_hash` (string): Hash of the validated subtree
 
+**Returns**: `success` (bool) and `message` (string) indicating validation result
+
 ```go
 func (s *Server) ReportValidBlock(ctx context.Context, req *p2p_api.ReportValidBlockRequest) (*p2p_api.ReportValidBlockResponse, error)
 ```
@@ -376,6 +398,8 @@ Reports that a peer provided a valid block. This increments the peer's positive 
 - `peer_id` (string): The peer identifier
 - `block_hash` (string): Hash of the validated block
 
+**Returns**: `success` (bool) and `message` (string) indicating validation result
+
 #### Peer Status and Query Endpoints
 
 ```go
@@ -384,11 +408,23 @@ func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMalicio
 
 Checks if a peer has been marked as malicious.
 
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+**Returns**: `is_malicious` (bool) and optional `reason` (string) explaining why peer is malicious
+
 ```go
 func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealthyRequest) (*p2p_api.IsPeerUnhealthyResponse, error)
 ```
 
 Checks if a peer is considered unhealthy based on reputation score and recent failures.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+**Returns**: `is_unhealthy` (bool), optional `reason` (string), and `reputation_score` (float)
 
 ```go
 func (s *Server) GetPeerRegistry(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeerRegistryResponse, error)
@@ -413,6 +449,12 @@ func (s *Server) GetPeer(ctx context.Context, req *p2p_api.GetPeerRequest) (*p2p
 
 Returns detailed information for a single peer by peer ID.
 
+**Parameters**:
+
+- `peer_id` (string): The peer identifier to query
+
+**Returns**: `PeerRegistryInfo` object with full peer details, and `found` (bool) indicating if peer exists
+
 #### Metrics Tracking Endpoints
 
 ```go
@@ -420,6 +462,11 @@ func (s *Server) RecordBytesDownloaded(ctx context.Context, req *p2p_api.RecordB
 ```
 
 Records bytes downloaded from a peer via HTTP (typically from their DataHub).
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier that provided the data
+- `bytes_downloaded` (uint64): Number of bytes downloaded from the peer
 
 ### Message Handlers
 
