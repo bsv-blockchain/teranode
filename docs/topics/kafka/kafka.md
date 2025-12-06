@@ -36,6 +36,8 @@ In the Teranode ecosystem, Kafka plays a crucial role in facilitating communicat
 
 It's important to note that Kafka is a third-party dependency in Teranode. As such, there is no specific installation or configuration process provided within the Teranode framework. Users are expected to have a properly configured Kafka setup running before initiating the Teranode services. This approach allows for flexibility in Kafka configuration based on specific deployment needs and existing infrastructure.
 
+**Development Mode**: Development and test contexts use in-memory Kafka by default (`KAFKA_SCHEMA.dev = memory`), requiring no external Kafka setup. For production-like testing with Docker Kafka, see [Kafka Settings Reference](../../references/settings/kafka_settings.md).
+
 ## 2. Use Cases
 
 ### Propagation Service
@@ -123,8 +125,8 @@ Teranode implements a consumer watchdog mechanism to detect and recover from stu
 
 The watchdog monitors consumer health by tracking two key states:
 
-1. **Initial Stuck Detection**: Detects when `Consume()` is called but `Setup()` is never invoked (indicating the consumer is stuck in metadata refresh before joining the consumer group)
-2. **Post-Error Stuck Detection**: Detects when `Consume()` returns with an error, but subsequent retry attempts hang without completing `Setup()`
+1. **Initial Stuck Detection** - Detects when `Consume()` is called but `Setup()` is never invoked (indicating the consumer is stuck in metadata refresh before joining the consumer group)
+2. **Post-Error Stuck Detection** - Detects when `Consume()` returns with an error, but subsequent retry attempts hang without completing `Setup()`
 
 #### Watchdog Configuration
 
