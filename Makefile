@@ -188,7 +188,7 @@ testall: test longtest sequentialtest
 smoketest:
 	@mkdir -p /tmp/teranode-test-results
 	# cd test/e2e/daemon && go test -race -tags "testtxmetacache" -count=1 -timeout=5m -parallel 1 -coverprofile=coverage.out ./test/e2e/daemon/ready/... 2>&1 | grep -v "ld: warning:"
-	cd test/e2e/daemon/ready && SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -v -count=1 -race -timeout=5m -parallel 1 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+	cd test/e2e/daemon/ready && go test -v -count=1 -race -timeout=5m -parallel 1 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
 
 
 .PHONY: nightly-tests

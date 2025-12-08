@@ -6,17 +6,14 @@ This section will walk you through the commands and configurations needed to run
 
 ### Prerequisites
 
-Before running Teranode, ensure the required infrastructure services are started:
+Start PostgreSQL before running Teranode:
 
 ```shell
-# Start Kafka in Docker
-./scripts/kafka.sh
-
 # Start PostgreSQL in Docker
 ./scripts/postgres.sh
 ```
 
-> **Note:** If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:
+> **Note**: Development mode uses in-memory Kafka by default (no Docker setup required). For advanced testing with Docker-based Kafka, run `./scripts/kafka.sh` (requires adding `127.0.0.1 kafka-shared` to `/etc/hosts` first). If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:
 >
 > ```bash
 > # Start Aerospike in Docker
@@ -176,6 +173,7 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 | Legacy             | `-legacy=1`                 | Legacy API support                    |
 | P2P                | `-p2p=1`                    | Peer-to-peer networking service       |
 | Propagation        | `-propagation=1`            | Data propagation service              |
+| Pruner             | `-pruner=1`                 | UTXO data pruning service             |
 | RPC                | `-rpc=1`                    | RPC interface service                 |
 | Subtree Validation | `-subtreevalidation=1`      | Subtree validation service            |
 | UTXO Persister     | `-utxopersister=1`          | UTXO persistence service              |

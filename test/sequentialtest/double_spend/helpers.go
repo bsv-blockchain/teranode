@@ -7,6 +7,7 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,8 +18,8 @@ func setupDoubleSpendTest(t *testing.T, utxoStoreType string, blockOffset ...uin
 	}
 
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
-		SettingsContext: "dev.system.test",
-		UTXOStoreType:   utxoStoreType,
+		UTXOStoreType:        utxoStoreType,
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	// Set the FSM state to RUNNING...

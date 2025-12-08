@@ -15,6 +15,7 @@
 | SkipUTXODelete | bool | false | blockpersister_skipUTXODelete | UTXO deletion behavior |
 | BlockPersisterPersistAge | uint32 | 2 | blockpersister_persistAge | **CRITICAL** - Blocks behind tip to avoid reorgs |
 | BlockPersisterPersistSleep | time.Duration | 1m | blockPersister_persistSleep | Sleep when no blocks available |
+| BlockPersisterEnableDefensiveReorgCheck | bool | true | blockpersister_enableDefensiveReorgCheck | **CRITICAL** - Enables defensive reorg detection checks |
 | BlockStore | *url.URL | "" | blockstore | Required when HTTP server enabled |
 
 ## Configuration Dependencies
@@ -33,6 +34,13 @@
 
 - `BlockPersisterPersistAge` determines safety margin from chain tip
 - `BlockPersisterPersistSleep` controls polling frequency when idle
+
+### Reorg Detection
+
+- `BlockPersisterEnableDefensiveReorgCheck` enables defensive checks for blockchain reorganizations
+- Validates last persisted block is still on current chain
+- Validates parent hash consistency during block retrieval
+- Can be disabled for testing or special scenarios
 
 ### Transaction Processing
 
@@ -60,23 +68,24 @@
 
 ### Basic Configuration
 
-```text
-blockPersisterStore = "file://./data/blockstore"
-blockPersister_stateFile = "file://./data/blockpersister_state.txt"
-blockpersister_persistAge = 2
+```bash
+blockPersisterStore=file://./data/blockstore
+blockPersister_stateFile=file://./data/blockpersister_state.txt
+blockpersister_persistAge=2
+blockpersister_enableDefensiveReorgCheck=true
 ```
 
 ### High Performance Configuration
 
-```text
-blockpersister_concurrency = 16
-blockpersister_batchMissingTransactions = true
-blockvalidation_processTxMetaUsingStore_BatchSize = 2048
+```bash
+blockpersister_concurrency=16
+blockpersister_batchMissingTransactions=true
+blockvalidation_processTxMetaUsingStore_BatchSize=2048
 ```
 
 ### HTTP Server Configuration
 
-```text
-blockPersister_httpListenAddress = ":8083"
-blockstore = "file://./data/blockstore"
+```bash
+blockPersister_httpListenAddress=:8083
+blockstore=file://./data/blockstore
 ```

@@ -395,11 +395,12 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 
 	t.Run("tracks node counts correctly", func(t *testing.T) {
 		// Create a subtree with known node count
-		stp.currentSubtree, err = subtreepkg.NewTreeByLeafCount(8)
+		newSubtree, err := subtreepkg.NewTreeByLeafCount(8)
 		require.NoError(t, err)
+		stp.currentSubtree.Store(newSubtree)
 
 		// Add some nodes (including coinbase)
-		err = stp.currentSubtree.AddCoinbaseNode()
+		err = stp.currentSubtree.Load().AddCoinbaseNode()
 		require.NoError(t, err)
 
 		// Add 4 more transaction nodes
@@ -411,7 +412,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 				Fee:         100,
 				SizeInBytes: 250,
 			}
-			err = stp.currentSubtree.AddSubtreeNode(node)
+			err = stp.currentSubtree.Load().AddSubtreeNode(node)
 			require.NoError(t, err)
 		}
 
@@ -444,9 +445,10 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 		}
 
 		// Create another subtree that should trigger the limit
-		stp.currentSubtree, err = subtreepkg.NewTreeByLeafCount(8)
+		newSubtree2, err := subtreepkg.NewTreeByLeafCount(8)
 		require.NoError(t, err)
-		err = stp.currentSubtree.AddCoinbaseNode()
+		stp.currentSubtree.Store(newSubtree2)
+		err = stp.currentSubtree.Load().AddCoinbaseNode()
 		require.NoError(t, err)
 
 		for i := 0; i < 3; i++ {
@@ -457,7 +459,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 				Fee:         100,
 				SizeInBytes: 250,
 			}
-			err = stp.currentSubtree.AddSubtreeNode(node)
+			err = stp.currentSubtree.Load().AddSubtreeNode(node)
 			require.NoError(t, err)
 		}
 
@@ -475,9 +477,10 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 		require.Equal(t, 18, count, "Should have 18 samples (full buffer)")
 
 		// Add one more to test that it maintains the limit
-		stp.currentSubtree, err = subtreepkg.NewTreeByLeafCount(8)
+		newSubtree3, err := subtreepkg.NewTreeByLeafCount(8)
 		require.NoError(t, err)
-		err = stp.currentSubtree.AddCoinbaseNode()
+		stp.currentSubtree.Store(newSubtree3)
+		err = stp.currentSubtree.Load().AddCoinbaseNode()
 		require.NoError(t, err)
 
 		hash := chainhash.Hash{}
@@ -487,7 +490,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 			Fee:         100,
 			SizeInBytes: 250,
 		}
-		err = stp.currentSubtree.AddSubtreeNode(node)
+		err = stp.currentSubtree.Load().AddSubtreeNode(node)
 		require.NoError(t, err)
 
 		err = stp.processCompleteSubtree(false)

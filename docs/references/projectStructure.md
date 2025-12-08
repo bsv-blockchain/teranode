@@ -45,6 +45,7 @@ teranode/
 │   ├── legacy/                   # Legacy services
 │   ├── p2p/                      # Peer-to-peer networking service
 │   ├── propagation/              # Transaction propagation service
+│   ├── pruner/                   # Pruner service
 │   ├── rpc/                      # RPC service
 │   ├── subtreevalidation/        # Subtree validation service
 │   ├── utxopersister/            # UTXO persister service
