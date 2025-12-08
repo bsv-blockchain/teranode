@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/checkblocktemplate"
 	"github.com/bsv-blockchain/teranode/cmd/filereader"
 	"github.com/bsv-blockchain/teranode/cmd/getfsmstate"
+	"github.com/bsv-blockchain/teranode/cmd/logs"
 	"github.com/bsv-blockchain/teranode/cmd/monitor"
 	"github.com/bsv-blockchain/teranode/cmd/resetblockassembly"
 	"github.com/bsv-blockchain/teranode/cmd/seeder"
@@ -47,6 +48,7 @@ var commandHelp = map[string]string{
 	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
 	"validate-utxo-set":       "Validate UTXO set file",
 	"monitor":                 "Live TUI dashboard for monitoring node status",
+	"logs":                    "Interactive log viewer with filtering and search",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -247,6 +249,13 @@ func Start(args []string, version, commit string) {
 	case "monitor":
 		cmd.Execute = func(args []string) error {
 			return monitor.Run(logger, tSettings)
+		}
+	case "logs":
+		logFile := cmd.FlagSet.String("file", "./logs/teranode.log", "Path to log file")
+		bufferSize := cmd.FlagSet.Int("buffer", 10000, "Number of log entries to keep in memory")
+
+		cmd.Execute = func(args []string) error {
+			return logs.Run(*logFile, *bufferSize)
 		}
 	case "setfsmstate":
 		targetFsmState := cmd.FlagSet.String("fsmstate", "", "target fsm state (accepted values: running, idle, catchingblocks, legacysyncing)")

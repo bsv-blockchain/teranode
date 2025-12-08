@@ -82,6 +82,7 @@ require (
 	github.com/OneOfOne/xxhash v1.2.8 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
+	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/bsv-blockchain/go-bc v1.0.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
