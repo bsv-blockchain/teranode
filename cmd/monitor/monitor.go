@@ -1,0 +1,479 @@
+// Package monitor provides a TUI (Text User Interface) dashboard for monitoring Teranode node status.
+// It displays real-time information about blockchain state, connected peers, FSM status, and service health.
+package monitor
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/p2p"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/charmbracelet/bubbles/spinner"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// Styles for the TUI
+var (
+	titleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("205")).
+			MarginBottom(1)
+
+	boxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62")).
+			Padding(0, 1)
+
+	labelStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
+
+	valueStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("255"))
+
+	goodStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("42"))
+
+	warnStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214"))
+
+	errorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("196"))
+
+	headerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("99")).
+			MarginBottom(1)
+
+	helpStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			MarginTop(1)
+)
+
+// NodeData holds the fetched node data
+type NodeData struct {
+	BlockStats   *model.BlockStats
+	FSMState     *blockchain.FSMStateType
+	Peers        []*p2p.PeerInfo
+	BlockchainOK bool
+	P2POK        bool
+	LastUpdated  time.Time
+	Error        string
+}
+
+// Model represents the TUI state
+type Model struct {
+	logger           ulogger.Logger
+	settings         *settings.Settings
+	blockchainClient blockchain.ClientI
+	p2pClient        p2p.ClientI
+	spinner          spinner.Model
+	data             NodeData
+	width            int
+	height           int
+	refreshInterval  time.Duration
+	quitting         bool
+}
+
+// Messages
+type tickMsg time.Time
+type dataMsg NodeData
+
+// NewModel creates a new TUI model
+func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
+	ctx := context.Background()
+
+	// Create blockchain client
+	blockchainClient, err := blockchain.NewClient(ctx, logger, s, "TUI Monitor")
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to create blockchain client", err)
+	}
+
+	// Create P2P client
+	p2pClient, err := p2p.NewClient(ctx, logger, s)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to create p2p client", err)
+	}
+
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
+	return &Model{
+		logger:           logger,
+		settings:         s,
+		blockchainClient: blockchainClient,
+		p2pClient:        p2pClient,
+		spinner:          sp,
+		refreshInterval:  2 * time.Second,
+		width:            80,
+		height:           24,
+	}, nil
+}
+
+// Init initializes the TUI
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(
+		m.spinner.Tick,
+		m.fetchData,
+		m.tick(),
+	)
+}
+
+// tick returns a command that sends a tick message after the refresh interval
+func (m Model) tick() tea.Cmd {
+	return tea.Tick(m.refreshInterval, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+// fetchData fetches data from the node services
+func (m Model) fetchData() tea.Msg {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	data := NodeData{
+		LastUpdated: time.Now(),
+	}
+
+	// Fetch blockchain stats
+	stats, err := m.blockchainClient.GetBlockStats(ctx)
+	if err != nil {
+		data.Error = fmt.Sprintf("blockchain: %v", err)
+	} else {
+		data.BlockStats = stats
+		data.BlockchainOK = true
+	}
+
+	// Fetch FSM state
+	fsmState, err := m.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil {
+		if data.Error != "" {
+			data.Error += "; "
+		}
+		data.Error += fmt.Sprintf("fsm: %v", err)
+	} else {
+		data.FSMState = fsmState
+	}
+
+	// Fetch peers
+	peers, err := m.p2pClient.GetPeers(ctx)
+	if err != nil {
+		if data.Error != "" {
+			data.Error += "; "
+		}
+		data.Error += fmt.Sprintf("p2p: %v", err)
+	} else {
+		data.Peers = peers
+		data.P2POK = true
+	}
+
+	return dataMsg(data)
+}
+
+// Update handles messages and updates the model
+func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "q", "ctrl+c", "esc":
+			m.quitting = true
+			return m, tea.Quit
+		case "r":
+			return m, m.fetchData
+		}
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+
+	case tickMsg:
+		return m, tea.Batch(m.fetchData, m.tick())
+
+	case dataMsg:
+		m.data = NodeData(msg)
+		return m, nil
+
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+	}
+
+	return m, nil
+}
+
+// View renders the TUI
+func (m Model) View() string {
+	if m.quitting {
+		return "Goodbye!\n"
+	}
+
+	var b strings.Builder
+
+	// Title
+	title := titleStyle.Render("TERANODE MONITOR")
+	b.WriteString(title)
+	b.WriteString("\n\n")
+
+	// Create panels
+	blockchainPanel := m.renderBlockchainPanel()
+	fsmPanel := m.renderFSMPanel()
+	peersPanel := m.renderPeersPanel()
+
+	// Arrange panels side by side if there's enough width
+	if m.width >= 100 {
+		leftColumn := lipgloss.JoinVertical(lipgloss.Left, blockchainPanel, fsmPanel)
+		rightColumn := peersPanel
+		b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, "  ", rightColumn))
+	} else {
+		b.WriteString(blockchainPanel)
+		b.WriteString("\n")
+		b.WriteString(fsmPanel)
+		b.WriteString("\n")
+		b.WriteString(peersPanel)
+	}
+
+	// Error display
+	if m.data.Error != "" {
+		b.WriteString("\n")
+		b.WriteString(errorStyle.Render("Errors: " + m.data.Error))
+	}
+
+	// Status bar
+	b.WriteString("\n")
+	statusLine := fmt.Sprintf("Last updated: %s", m.data.LastUpdated.Format("15:04:05"))
+	b.WriteString(labelStyle.Render(statusLine))
+
+	// Help
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("q: quit | r: refresh"))
+
+	return b.String()
+}
+
+// renderBlockchainPanel renders the blockchain statistics panel
+func (m Model) renderBlockchainPanel() string {
+	var content strings.Builder
+
+	content.WriteString(headerStyle.Render("BLOCKCHAIN"))
+	content.WriteString("\n")
+
+	if m.data.BlockStats == nil {
+		content.WriteString(labelStyle.Render("Loading..."))
+		return boxStyle.Width(40).Render(content.String())
+	}
+
+	stats := m.data.BlockStats
+
+	content.WriteString(m.renderRow("Height", fmt.Sprintf("%d", stats.MaxHeight)))
+	content.WriteString(m.renderRow("Blocks", fmt.Sprintf("%d", stats.BlockCount)))
+	content.WriteString(m.renderRow("Transactions", formatNumber(stats.TxCount)))
+	content.WriteString(m.renderRow("Avg Block Size", formatBytes(uint64(stats.AvgBlockSize))))
+	content.WriteString(m.renderRow("Avg Tx/Block", fmt.Sprintf("%.1f", stats.AvgTxCountPerBlock)))
+
+	if stats.LastBlockTime > 0 {
+		lastBlockAge := time.Since(time.Unix(int64(stats.LastBlockTime), 0))
+		ageStr := formatDuration(lastBlockAge)
+		content.WriteString(m.renderRow("Last Block", ageStr+" ago"))
+	}
+
+	return boxStyle.Width(40).Render(content.String())
+}
+
+// renderFSMPanel renders the FSM state panel
+func (m Model) renderFSMPanel() string {
+	var content strings.Builder
+
+	content.WriteString(headerStyle.Render("FSM STATE"))
+	content.WriteString("\n")
+
+	if m.data.FSMState == nil {
+		content.WriteString(labelStyle.Render("Loading..."))
+		return boxStyle.Width(40).Render(content.String())
+	}
+
+	state := m.data.FSMState.String()
+
+	// Color-code the state
+	var stateStyled string
+	switch {
+	case strings.Contains(strings.ToLower(state), "running"):
+		stateStyled = goodStyle.Render(state)
+	case strings.Contains(strings.ToLower(state), "idle"):
+		stateStyled = warnStyle.Render(state)
+	case strings.Contains(strings.ToLower(state), "catching"), strings.Contains(strings.ToLower(state), "sync"):
+		stateStyled = warnStyle.Render(state + " " + m.spinner.View())
+	default:
+		stateStyled = valueStyle.Render(state)
+	}
+
+	content.WriteString(m.renderRow("State", stateStyled))
+
+	// Service health indicators
+	content.WriteString("\n")
+	content.WriteString(labelStyle.Render("Services:"))
+	content.WriteString("\n")
+
+	if m.data.BlockchainOK {
+		content.WriteString("  " + goodStyle.Render("* Blockchain"))
+	} else {
+		content.WriteString("  " + errorStyle.Render("* Blockchain"))
+	}
+	content.WriteString("\n")
+
+	if m.data.P2POK {
+		content.WriteString("  " + goodStyle.Render("* P2P"))
+	} else {
+		content.WriteString("  " + errorStyle.Render("* P2P"))
+	}
+
+	return boxStyle.Width(40).Render(content.String())
+}
+
+// renderPeersPanel renders the peers panel
+func (m Model) renderPeersPanel() string {
+	var content strings.Builder
+
+	content.WriteString(headerStyle.Render("PEERS"))
+	content.WriteString("\n")
+
+	if m.data.Peers == nil {
+		content.WriteString(labelStyle.Render("Loading..."))
+		return boxStyle.Width(50).Render(content.String())
+	}
+
+	// Count connected peers
+	connectedCount := 0
+	for _, peer := range m.data.Peers {
+		if peer.IsConnected {
+			connectedCount++
+		}
+	}
+
+	content.WriteString(m.renderRow("Connected", fmt.Sprintf("%d", connectedCount)))
+	content.WriteString(m.renderRow("Total Known", fmt.Sprintf("%d", len(m.data.Peers))))
+	content.WriteString("\n")
+
+	// Show top peers by height
+	if len(m.data.Peers) > 0 {
+		content.WriteString(labelStyle.Render("Top Peers by Height:"))
+		content.WriteString("\n")
+
+		// Sort and show top 5
+		shown := 0
+		for _, peer := range m.data.Peers {
+			if !peer.IsConnected {
+				continue
+			}
+			if shown >= 5 {
+				break
+			}
+
+			peerID := peer.ID.String()
+			if len(peerID) > 12 {
+				peerID = peerID[:12] + "..."
+			}
+
+			repScore := fmt.Sprintf("%.0f", peer.ReputationScore)
+			var repStyled string
+			if peer.ReputationScore >= 80 {
+				repStyled = goodStyle.Render(repScore)
+			} else if peer.ReputationScore >= 50 {
+				repStyled = warnStyle.Render(repScore)
+			} else {
+				repStyled = errorStyle.Render(repScore)
+			}
+
+			line := fmt.Sprintf("  %s h:%d rep:%s", peerID, peer.Height, repStyled)
+			content.WriteString(line)
+			content.WriteString("\n")
+			shown++
+		}
+
+		if connectedCount > 5 {
+			content.WriteString(labelStyle.Render(fmt.Sprintf("  ... and %d more", connectedCount-5)))
+		}
+	}
+
+	return boxStyle.Width(50).Render(content.String())
+}
+
+// renderRow renders a label-value row
+func (m Model) renderRow(label, value string) string {
+	return fmt.Sprintf("%s %s\n",
+		labelStyle.Render(label+":"),
+		valueStyle.Render(value))
+}
+
+// formatNumber formats a large number with commas
+func formatNumber(n uint64) string {
+	str := fmt.Sprintf("%d", n)
+	if len(str) <= 3 {
+		return str
+	}
+
+	var result strings.Builder
+	remainder := len(str) % 3
+	if remainder > 0 {
+		result.WriteString(str[:remainder])
+		if len(str) > remainder {
+			result.WriteString(",")
+		}
+	}
+
+	for i := remainder; i < len(str); i += 3 {
+		result.WriteString(str[i : i+3])
+		if i+3 < len(str) {
+			result.WriteString(",")
+		}
+	}
+
+	return result.String()
+}
+
+// formatBytes formats bytes to human readable format
+func formatBytes(b uint64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := uint64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// formatDuration formats a duration to a human readable string
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// Run starts the TUI monitor
+func Run(logger ulogger.Logger, s *settings.Settings) error {
+	m, err := NewModel(logger, s)
+	if err != nil {
+		return err
+	}
+
+	p := tea.NewProgram(m, tea.WithAltScreen())
+	_, err = p.Run()
+	return err
+}
