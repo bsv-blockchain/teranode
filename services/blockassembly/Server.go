@@ -107,6 +107,9 @@ type BlockAssembly struct {
 
 	// skipWaitForPendingBlocks stores the flag value for tests
 	skipWaitForPendingBlocks bool
+
+	// stopOnce ensures Stop() is only executed once
+	stopOnce sync.Once
 }
 
 // subtreeRetrySend encapsulates the data needed for retrying subtree storage operations
@@ -271,6 +274,11 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	return nil
 }
 
+// GetBlockAssembler returns the BlockAssembler instance.
+func (ba *BlockAssembly) GetBlockAssembler() *BlockAssembler {
+	return ba.blockAssembler
+}
+
 // runSubtreeRetryProcessor handles retry logic for failed subtree storage operations.
 // It processes subtrees that failed to be stored and retries them with exponential backoff.
 func (ba *BlockAssembly) runSubtreeRetryProcessor(ctx context.Context, subtreeRetryChan chan *subtreeRetrySend) {
@@ -300,8 +308,26 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 				ba.logger.Errorf(err.Error())
 			}
 
-			// Invalidate mining candidate cache when new subtree is available
-			ba.blockAssembler.invalidateMiningCandidateCache()
+			// Smart cache invalidation: only invalidate if significant change
+			// Get current state from subtree processor
+			currentTxCount := uint32(ba.blockAssembler.TxCount())
+			currentSubtreeCount := ba.blockAssembler.SubtreeCount()
+
+			// Calculate actual total size by summing all subtree sizes
+			var currentSize uint64
+			subtrees := ba.blockAssembler.GetChainedSubtrees()
+			for _, st := range subtrees {
+				currentSize += st.SizeInBytes
+			}
+
+			if ba.blockAssembler.shouldInvalidateCache(currentTxCount, currentSize, currentSubtreeCount) {
+				ba.logger.Debugf("[Server] Invalidating cache: significant change detected (txs=%d, size=%d, subtrees=%d)",
+					currentTxCount, currentSize, currentSubtreeCount)
+				ba.blockAssembler.invalidateMiningCandidateCache()
+			} else {
+				ba.logger.Debugf("[Server] Keeping cache valid: minor change (txs=%d, size=%d, subtrees=%d)",
+					currentTxCount, currentSize, currentSubtreeCount)
+			}
 
 			if newSubtreeRequest.ErrChan != nil {
 				newSubtreeRequest.ErrChan <- err
@@ -652,33 +678,47 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 		}, nil)
 	})
 
-	// Start the block assembler component which handles the core block creation logic
+	<-grpcReady
+
 	// This must succeed for the service to be functional
 	if err = ba.blockAssembler.Start(ctx); err != nil {
 		return errors.NewServiceError("failed to start block assembler", err)
 	}
 
-	<-grpcReady
 	// Signal that the service is ready to accept requests
-	closeOnce.Do(func() { close(readyCh) })
+	closeOnce.Do(func() { close(readyCh) }) // Start the block assembler component which handles the core block creation logic
 
-	// Wait for all goroutines to complete
-	if err := g.Wait(); err != nil {
-		return errors.NewServiceError("block assembly service ended with error", err)
-	}
-
-	return nil
+	// Wait for gRPC server completion or error
+	// This blocks until either:
+	// 1. The gRPC server encounters an error and terminates
+	// 2. The context is cancelled, causing graceful shutdown
+	// 3. The server is explicitly stopped from elsewhere
+	//
+	// The function returns the error from gRPC server operation, which could be:
+	// - nil if server shut down gracefully
+	// - context cancellation error if shutdown was requested
+	// - network or configuration errors if startup failed
+	return g.Wait()
 }
 
 // Stop gracefully shuts down the BlockAssembly service.
+// This method is idempotent and safe to call multiple times.
 //
 // Parameters:
 //   - ctx: Context for cancellation (currently unused)
 //
 // Returns:
 //   - error: Any error encountered during shutdown
-func (ba *BlockAssembly) Stop(_ context.Context) error {
-	ba.jobStore.Stop()
+func (ba *BlockAssembly) Stop(ctx context.Context) error {
+	ba.stopOnce.Do(func() {
+		ba.jobStore.Stop()
+
+		// Stop the subtree processor to stop the announcement ticker and cleanup resources
+		if ba.blockAssembler != nil && ba.blockAssembler.subtreeProcessor != nil {
+			ba.blockAssembler.subtreeProcessor.Stop(ctx)
+		}
+	})
+
 	return nil
 }
 
@@ -726,7 +766,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
-		ba.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+		ba.blockAssembler.AddTx(subtreepkg.Node{
 			Hash:        chainhash.Hash(req.Txid),
 			Fee:         req.Fee,
 			SizeInBytes: req.Size,
@@ -776,7 +816,7 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 	hash := chainhash.Hash(req.Txid)
 
 	if !ba.settings.BlockAssembly.Disabled {
-		if err := ba.blockAssembler.RemoveTx(hash); err != nil {
+		if err := ba.blockAssembler.RemoveTx(ctx, hash); err != nil {
 			return nil, errors.WrapGRPC(err)
 		}
 	}
@@ -821,7 +861,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 
 		// create the subtree node
 		if !ba.settings.BlockAssembly.Disabled {
-			ba.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+			ba.blockAssembler.AddTx(subtreepkg.Node{
 				Hash:        chainhash.Hash(req.Txid),
 				Fee:         req.Fee,
 				SizeInBytes: req.Size,
@@ -988,7 +1028,8 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to convert hashPrevBlock", jobID, err)
 	}
 
-	if ba.blockAssembler.bestBlockHeader.Load().HashPrevBlock.IsEqual(hashPrevBlock) {
+	bestBlockHeader, _ := ba.blockAssembler.CurrentBlock()
+	if bestBlockHeader.HashPrevBlock.IsEqual(hashPrevBlock) {
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] already mining on top of the same block that is submitted", jobID)
 	}
 
@@ -1137,7 +1178,8 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	ba.logger.Debugf("[BlockAssembly][%s][%s] add block to blockchain", jobID, block.Header.Hash())
 	ba.logger.Debugf("[BlockAssembly][%s][%s] block difficulty: %s", jobID, block.Header.Hash(), block.Header.Bits.CalculateDifficulty().String())
-	ba.logger.Debugf("[BlockAssembly][%s][%s] time since previous block: %s", jobID, block.Header.Hash(), time.Since(time.Unix(int64(ba.blockAssembler.bestBlockHeader.Load().Timestamp), 0)).String())
+	bestBlockHeader, _ = ba.blockAssembler.CurrentBlock()
+	ba.logger.Debugf("[BlockAssembly][%s][%s] time since previous block: %s", jobID, block.Header.Hash(), time.Since(time.Unix(int64(bestBlockHeader.Timestamp), 0)).String())
 
 	// add the new block to the blockchain
 	if err = ba.blockchainClient.AddBlock(callerCtx, block, ""); err != nil {
@@ -1345,7 +1387,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 
 	subtreeCountUint32, err := safeconversion.IntToUint32(ba.blockAssembler.SubtreeCount())
 	if err != nil {
-		return nil, errors.NewProcessingError("error converting subtree count", err)
+		return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting subtree count", err)
 	}
 
 	subtreeHashes := ba.blockAssembler.subtreeProcessor.GetSubtreeHashes()
@@ -1357,17 +1399,29 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 	removeMap := ba.blockAssembler.subtreeProcessor.GetRemoveMap()
 	removeMapLen32, err := safeconversion.IntToUint32(removeMap.Length())
 	if err != nil {
-		return nil, errors.NewProcessingError("error converting remove map length", err)
+		return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting remove map length", err)
+	}
+
+	currentHeader, currentHeight := ba.blockAssembler.CurrentBlock()
+
+	subtreeSize := uint32(0)
+	if currentSubtree := ba.blockAssembler.subtreeProcessor.GetCurrentSubtree(); currentSubtree != nil {
+		// convert to uint32, safe as subtree size cannot exceed uint32
+		subtreeSize, err = safeconversion.IntToUint32(currentSubtree.Size())
+		if err != nil {
+			return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting current subtree size", err)
+		}
 	}
 
 	return &blockassembly_api.StateMessage{
 		BlockAssemblyState:    StateStrings[ba.blockAssembler.GetCurrentRunningState()],
 		SubtreeProcessorState: subtreeprocessor.StateStrings[ba.blockAssembler.subtreeProcessor.GetCurrentRunningState()],
 		SubtreeCount:          subtreeCountUint32,
+		SubtreeSize:           subtreeSize,
 		TxCount:               ba.blockAssembler.TxCount(),
 		QueueCount:            ba.blockAssembler.QueueLength(),
-		CurrentHeight:         ba.blockAssembler.bestBlockHeight.Load(),
-		CurrentHash:           ba.blockAssembler.bestBlockHeader.Load().Hash().String(),
+		CurrentHeight:         currentHeight,
+		CurrentHash:           currentHeader.Hash().String(),
 		RemoveMapCount:        removeMapLen32,
 		Subtrees:              subtreeHashesStrings,
 	}, nil
@@ -1617,7 +1671,8 @@ func (ba *BlockAssembly) generateBlock(ctx context.Context, address *string) err
 	}
 
 	// Store the current best block hash before submission
-	previousBestHash := ba.blockAssembler.bestBlockHeader.Load().Hash()
+	previousBestHeader, _ := ba.blockAssembler.CurrentBlock()
+	previousBestHash := previousBestHeader.Hash()
 
 	resp, err := ba.submitMiningSolution(ctx, req)
 	if err != nil {
@@ -1649,7 +1704,8 @@ func (ba *BlockAssembly) waitForBestBlockHeaderUpdate(ctx context.Context, previ
 			// Continue anyway - the block was submitted successfully
 			return nil
 		case <-ticker.C:
-			currentBestHash := ba.blockAssembler.bestBlockHeader.Load().Hash()
+			currentBestHeader, _ := ba.blockAssembler.CurrentBlock()
+			currentBestHash := currentBestHeader.Hash()
 			if !currentBestHash.IsEqual(previousBestHash) {
 				// Best block has been updated
 				return nil

@@ -437,6 +437,106 @@ func TestClientWrapperMethods_WithLocalAerospike(t *testing.T) {
 	})
 }
 
+// TestClient_AcquirePermitTimeout verifies that semaphore timeout is a fraction of TotalTimeout
+func TestClient_AcquirePermitTimeout(t *testing.T) {
+	t.Run("semaphore timeout with BasePolicy", func(t *testing.T) {
+		client := &Client{
+			connSemaphore: make(chan struct{}, 1),
+			stats:         NewClientStats(),
+		}
+
+		// Fill the semaphore so next acquire will block
+		client.connSemaphore <- struct{}{}
+
+		policy := &aerospike.BasePolicy{
+			TotalTimeout: 1000 * time.Millisecond,
+		}
+
+		start := time.Now()
+		err := client.acquirePermit(policy)
+		elapsed := time.Since(start)
+
+		// Should timeout after semaphoreTimeoutFraction * TotalTimeout (10% of 1000ms = 100ms)
+		assert.Error(t, err)
+		assert.True(t, elapsed >= minSemaphoreTimeout && elapsed < 200*time.Millisecond,
+			"Expected timeout around %v, got %v", minSemaphoreTimeout, elapsed)
+	})
+
+	t.Run("semaphore timeout with WritePolicy", func(t *testing.T) {
+		client := &Client{
+			connSemaphore: make(chan struct{}, 1),
+			stats:         NewClientStats(),
+		}
+
+		client.connSemaphore <- struct{}{}
+
+		policy := aerospike.NewWritePolicy(0, 0)
+		policy.TotalTimeout = 2000 * time.Millisecond
+
+		start := time.Now()
+		err := client.acquirePermit(policy)
+		elapsed := time.Since(start)
+
+		// Should timeout after 10% of 2000ms = 200ms
+		assert.Error(t, err)
+		assert.True(t, elapsed >= 200*time.Millisecond && elapsed < 400*time.Millisecond,
+			"Expected timeout around 200ms, got %v", elapsed)
+	})
+
+	t.Run("semaphore timeout with BatchPolicy", func(t *testing.T) {
+		client := &Client{
+			connSemaphore: make(chan struct{}, 1),
+			stats:         NewClientStats(),
+		}
+
+		client.connSemaphore <- struct{}{}
+
+		policy := aerospike.NewBatchPolicy()
+		policy.TotalTimeout = 500 * time.Millisecond
+
+		start := time.Now()
+		err := client.acquirePermit(policy)
+		elapsed := time.Since(start)
+
+		// Should timeout after max(10% of 500ms, 100ms) = 100ms (minimum threshold)
+		assert.Error(t, err)
+		assert.True(t, elapsed >= minSemaphoreTimeout && elapsed < 200*time.Millisecond,
+			"Expected timeout around %v, got %v", minSemaphoreTimeout, elapsed)
+	})
+
+	t.Run("no timeout when policy is nil", func(t *testing.T) {
+		client := &Client{
+			connSemaphore: make(chan struct{}, 1),
+			stats:         NewClientStats(),
+		}
+
+		// Try to acquire with nil policy - should succeed immediately
+		err := client.acquirePermit(nil)
+		assert.NoError(t, err)
+
+		// Release for cleanup
+		client.releasePermit()
+	})
+
+	t.Run("successful acquire within timeout", func(t *testing.T) {
+		client := &Client{
+			connSemaphore: make(chan struct{}, 1),
+			stats:         NewClientStats(),
+		}
+
+		policy := &aerospike.BasePolicy{
+			TotalTimeout: 1000 * time.Millisecond,
+		}
+
+		// Should succeed immediately as semaphore is available
+		err := client.acquirePermit(policy)
+		assert.NoError(t, err)
+
+		// Release for cleanup
+		client.releasePermit()
+	})
+}
+
 // Test mock functionality separately
 func TestMockAerospikeClient_CompleteCoverage(t *testing.T) {
 	t.Run("mock client functionality", func(t *testing.T) {

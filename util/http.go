@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -14,7 +15,12 @@ import (
 var (
 	// httpRequestTimeout defines the default HTTP request timeout in milliseconds
 	// when no deadline is set on the context.
-	httpRequestTimeout, _ = gocore.Config().GetInt("http_timeout", 60)
+	httpRequestTimeout, _ = gocore.Config().GetInt("http_timeout", 60000)
+
+	// httpStreamingTimeout defines the default HTTP streaming timeout in milliseconds
+	// for operations that stream large responses. This is longer than httpRequestTimeout
+	// to accommodate large block/subtree downloads during catchup.
+	httpStreamingTimeout, _ = gocore.Config().GetInt("http_streaming_timeout", 300000) // 5 minutes default
 )
 
 // DoHTTPRequest performs an HTTP GET or POST request and returns the response body as bytes.
@@ -57,17 +63,34 @@ func DoHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) ([]by
 	}
 }
 
+// readCloserWithCancel wraps an io.ReadCloser and calls a cancel function when closed.
+type readCloserWithCancel struct {
+	io.ReadCloser
+	cancelFn context.CancelFunc
+}
+
+func (r *readCloserWithCancel) Close() error {
+	defer r.cancelFn()
+	return r.ReadCloser.Close()
+}
+
 // DoHTTPRequestBodyReader performs an HTTP request and returns the response body as a ReadCloser.
 // This is more memory-efficient for large responses as it streams the data.
 // Caller is responsible for closing the returned ReadCloser.
+// Applies a default timeout of 5 minutes (configurable via http_streaming_timeout) when no
+// deadline is set on the context. This timeout is longer than the standard HTTP timeout
+// to accommodate large file downloads during operations like P2P catchup.
 func DoHTTPRequestBodyReader(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, error) {
-	bodyReaderCloser, cancelFn, err := doHTTPRequest(ctx, url, requestBody...)
+	bodyReaderCloser, cancelFn, err := doHTTPRequestForStreaming(ctx, url, requestBody...)
 	if err != nil {
 		cancelFn()
 		return nil, err
 	}
 
-	return bodyReaderCloser, nil
+	return &readCloserWithCancel{
+		ReadCloser: bodyReaderCloser,
+		cancelFn:   cancelFn,
+	}, nil
 }
 
 func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
@@ -79,6 +102,25 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(httpRequestTimeout)*time.Millisecond)
 	}
 
+	return executeHTTPRequest(ctx, cancelFn, url, requestBody...)
+}
+
+// doHTTPRequestForStreaming performs an HTTP request with a longer timeout suitable for streaming.
+// Applies httpStreamingTimeout (default 5 minutes) when no deadline exists on the context.
+func doHTTPRequestForStreaming(ctx context.Context, url string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
+	cancelFn := func() {
+		// noop
+	}
+
+	if _, ok := ctx.Deadline(); !ok {
+		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(httpStreamingTimeout)*time.Millisecond)
+	}
+
+	return executeHTTPRequest(ctx, cancelFn, url, requestBody...)
+}
+
+// executeHTTPRequest performs the actual HTTP request with the given context.
+func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, url string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
 	httpClient := http.DefaultClient
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -125,7 +167,8 @@ func doHTTPRequest(ctx context.Context, url string, requestBody ...[]byte) (io.R
 		return nil, cancelFn, errFn("http request [%s] returned status code [%d]", url, resp.StatusCode)
 	}
 
-	isHTML := resp.Header.Get("content-type") == "text/html"
+	ct := strings.ToLower(resp.Header.Get("content-type"))
+	isHTML := strings.HasPrefix(ct, "text/html")
 	if isHTML {
 		return nil, cancelFn, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", url)
 	}

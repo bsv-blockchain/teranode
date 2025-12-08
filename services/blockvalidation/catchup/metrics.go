@@ -164,6 +164,10 @@ func NewCatchupMetrics() *CatchupMetrics {
 
 // GetOrCreatePeerMetrics gets or creates metrics for a peer
 func (cm *CatchupMetrics) GetOrCreatePeerMetrics(peerID string) *PeerCatchupMetrics {
+	if cm == nil {
+		return &PeerCatchupMetrics{}
+	}
+
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 

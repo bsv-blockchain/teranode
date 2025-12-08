@@ -23,8 +23,7 @@ skinparam participant {
 
 participant Client
 participant "RPC Server" as RPC
-participant "Distributor" as Distributor
-participant "Propagation Service(s)" as Propagation
+participant "Propagation Service" as Propagation
 
 Client -> RPC : SendRawTransactionCmd(HexTx, AllowHighFees)
 activate RPC
@@ -40,33 +39,24 @@ else If Hex Decoding Succeeds
     alt If Parsing Fails
         RPC -> Client : Return ErrRPCDeserialization
     else If Parsing Succeeds
-        RPC -> Distributor : NewDistributor(ctx, logger, settings)
-        activate Distributor
-        Distributor -> RPC : return distributor instance or error
-        deactivate Distributor
+        RPC -> RPC : Check propagationClient is available
 
-        alt If Distributor Creation Fails
-            RPC -> Client : Return ServiceError
-        else If Creation Succeeds
-            RPC -> Distributor : SendTransaction(ctx, tx)
-            activate Distributor
-            loop for each Propagation server
-                Distributor -> Propagation : ProcessTransaction(ctx, tx) via gRPC
-                note right: Concurrent calls\nwith retry logic
-            end
-            Distributor -> RPC : return ResponseWrapper[] or error
-            deactivate Distributor
+        alt If Propagation Client Not Available
+            RPC -> Client : Return ErrRPCInternal
+        else If Client Available
+            RPC -> Propagation : ProcessTransaction(ctx, tx) via gRPC
+            activate Propagation
+            note right: Direct call to cluster's\npropagation service
+            Propagation -> RPC : return error or nil
+            deactivate Propagation
 
-            alt If Too Many Servers Fail
-                RPC -> Client : Return ErrRPCInvalidParameter
-            else If Success Threshold Met
-                RPC -> Client : Return ResponseWrapper[]
+            alt If Transaction Rejected
+                RPC -> Client : Return ErrRPCInvalidParameter with error message
+            else If Transaction Accepted
+                RPC -> Client : Return transaction hash (txid)
                 note right
-                Response contains:
-                - Server addresses
-                - Durations
-                - Retry counts
-                - Any errors
+                Simple string response:
+                Transaction hash only
                 end note
             end
         end

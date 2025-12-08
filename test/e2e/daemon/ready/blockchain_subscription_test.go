@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,9 +15,12 @@ func TestBlockchainSubscriptionReconnection(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	node := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		SettingsContext: "docker.host.teranode1.daemon",
+		EnableRPC:     true,
+		EnableP2P:     true,
+		UTXOStoreType: "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 	defer node.Stop(t, true)
 

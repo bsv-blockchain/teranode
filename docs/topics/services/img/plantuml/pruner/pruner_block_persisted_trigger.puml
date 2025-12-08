@@ -1,0 +1,39 @@
+@startuml pruner_block_persisted_trigger
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+participant "Block Persister" as BlockPersister
+participant "Blockchain Service" as Blockchain
+participant "Pruner Service" as Pruner
+participant "Pruning Channel" as Channel
+
+BlockPersister -> BlockPersister: Complete Block Persistence
+note right of BlockPersister: .subtree_data files created
+
+BlockPersister -> Blockchain: Update BlockPersisterHeight = N
+BlockPersister -> Blockchain: Send BlockPersisted Notification\nwith height N
+
+Blockchain -> Pruner: BlockPersisted Notification\n(height = N)
+
+Pruner -> Pruner: Update lastPersistedHeight = N
+
+Pruner -> Channel: Send Pruning Request\n(buffered channel, size 1)
+
+alt Channel Full (Pruning In Progress)
+    Channel --> Pruner: Request Dropped\n(Non-blocking)
+    note right of Pruner: Deduplicate:\nLatest height will be processed
+else Channel Available
+    Channel --> Pruner: Request Queued
+    Pruner -> Pruner: Trigger Pruning Workflow
+end
+
+note right of Pruner: Pruning will process\nlatest height only
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

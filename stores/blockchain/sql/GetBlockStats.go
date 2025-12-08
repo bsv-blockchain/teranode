@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/util"
@@ -52,6 +53,18 @@ import (
 func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockStats")
 	defer deferFn()
+
+	// Try to get from response cache
+	// Use a fixed cache key for stats since they're global for the entire blockchain
+	statsCacheKey := chainhash.HashH([]byte("GetBlockStats"))
+
+	cacheOp := s.responseCache.Begin(statsCacheKey)
+	cached := cacheOp.Get()
+	if cached != nil && cached.Value() != nil {
+		if cacheData, ok := cached.Value().(*model.BlockStats); ok {
+			return cacheData, nil
+		}
+	}
 
 	tweak := "X'00'"
 
@@ -113,6 +126,9 @@ func (s *SQL) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
 
 	// add 1 to the block count to include the genesis block, which is excluded from the query
 	blockStats.BlockCount += 1
+
+	// Cache the stats result
+	cacheOp.Set(blockStats, s.cacheTTL)
 
 	return blockStats, nil
 }

@@ -67,7 +67,10 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	}
 
 	if !exists {
-		return nil, errors.NewStorageError("block %s does not exist", blockHash.String(), errors.ErrNotFound)
+		// Block doesn't exist - this is not an error, just log it and return success
+		// This makes InvalidateBlock idempotent
+		s.logger.Warnf("InvalidateBlock: block %s does not exist, nothing to invalidate", blockHash.String())
+		return []chainhash.Hash{}, nil
 	}
 
 	// recursively update all children blocks to invalid in 1 query
@@ -102,12 +105,8 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	defer func() {
 		err = errors.Join(err, rows.Close())
 
+		// Invalidate response cache to ensure cached blocks reflect updated invalid field
 		s.ResetResponseCache()
-
-		if err = s.ResetBlocksCache(ctx); err != nil {
-			err = errors.Join(err, errors.NewStorageError("error clearing caches", err))
-			return
-		}
 	}()
 
 	for rows.Next() {

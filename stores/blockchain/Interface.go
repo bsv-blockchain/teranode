@@ -238,6 +238,24 @@ type Store interface {
 	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
 	GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
+	// GetBlocksByHeight retrieves full blocks between two heights.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - startHeight: Starting height (inclusive)
+	//   - endHeight: Ending height (inclusive)
+	// Returns: Slice of full Blocks and any error encountered
+	GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error)
+
+	// FindBlocksContainingSubtree finds all blocks that contain the specified subtree hash.
+	// This method searches through the blockchain to find blocks whose subtree arrays contain
+	// the given subtree hash. It's useful for merkle proof construction and subtree tracking.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - subtreeHash: Hash of the subtree to search for
+	//   - maxBlocks: Maximum number of blocks to search (0 means no limit)
+	// Returns: Slice of blocks containing the subtree and any error encountered
+	FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error)
+
 	// InvalidateBlock marks a block as invalid.
 	// Parameters:
 	//   - ctx: Context for the operation

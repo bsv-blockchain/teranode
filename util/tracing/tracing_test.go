@@ -217,3 +217,243 @@ func setTestTracerProvider(provider *sdktrace.TracerProvider) {
 	defer mu.Unlock()
 	tp = provider
 }
+
+// TestTracingEnabled tests the SetTracingEnabled and IsTracingEnabled functions
+func TestTracingEnabled(t *testing.T) {
+	// Save current state and restore at end to avoid affecting other tests
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Test enabling tracing
+	SetTracingEnabled(true)
+	assert.True(t, IsTracingEnabled(), "tracing should be enabled after SetTracingEnabled(true)")
+
+	// Test disabling tracing
+	SetTracingEnabled(false)
+	assert.False(t, IsTracingEnabled(), "tracing should be disabled after SetTracingEnabled(false)")
+
+	// Test multiple toggles
+	SetTracingEnabled(true)
+	assert.True(t, IsTracingEnabled())
+	SetTracingEnabled(true)
+	assert.True(t, IsTracingEnabled())
+	SetTracingEnabled(false)
+	assert.False(t, IsTracingEnabled())
+}
+
+// TestTracer_Disabled verifies that Tracer() returns a singleton no-op tracer when disabled
+func TestTracer_Disabled(t *testing.T) {
+	// Save and restore state
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Ensure tracing is disabled
+	SetTracingEnabled(false)
+
+	// Get multiple tracers
+	tracer1 := Tracer("service1")
+	tracer2 := Tracer("service2")
+	tracer3 := Tracer("service1") // Same name as tracer1
+
+	// All should return the same singleton instance
+	assert.Same(t, tracer1, tracer2, "should return same singleton no-op tracer")
+	assert.Same(t, tracer1, tracer3, "should return same singleton no-op tracer")
+	assert.Same(t, tracer1, noopTracer, "should return the global noopTracer singleton")
+
+	// Verify it's the no-op tracer
+	assert.Equal(t, "noop", tracer1.name, "should be no-op tracer")
+}
+
+// TestTracer_Enabled verifies that Tracer() returns different instances when enabled
+func TestTracer_Enabled(t *testing.T) {
+	// Save and restore state
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Initialize test tracer
+	err := initTestTracer()
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	// Enable tracing
+	SetTracingEnabled(true)
+
+	// Get multiple tracers
+	tracer1 := Tracer("service1")
+	tracer2 := Tracer("service2")
+
+	// Should return different instances (not singleton)
+	assert.NotSame(t, tracer1, tracer2, "should return different tracer instances when enabled")
+	assert.NotSame(t, tracer1, noopTracer, "should not return no-op tracer when enabled")
+
+	// Names should match
+	assert.Equal(t, "service1", tracer1.name)
+	assert.Equal(t, "service2", tracer2.name)
+}
+
+// TestStart_Disabled verifies that Start() returns no-op span when tracing is disabled
+func TestStart_Disabled(t *testing.T) {
+	// Save and restore state
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Ensure tracing is disabled
+	SetTracingEnabled(false)
+
+	tracer := Tracer("test-service")
+	ctx := context.Background()
+
+	// Start a span
+	newCtx, span, endFn := tracer.Start(ctx, "test-operation",
+		WithTag("key", "value"),
+	)
+
+	// Verify no-op behavior
+	assert.NotNil(t, newCtx, "context should not be nil")
+	assert.NotNil(t, span, "span should not be nil")
+	assert.NotNil(t, endFn, "end function should not be nil")
+
+	// The span should be a no-op span (not recording)
+	assert.False(t, span.IsRecording(), "span should not be recording when tracing disabled")
+
+	// End function should not panic
+	endFn()
+	endFn(errors.NewProcessingError("test error"))
+}
+
+// TestStart_Enabled verifies that Start() returns real span when tracing is enabled
+func TestStart_Enabled(t *testing.T) {
+	// Save and restore state
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Initialize test tracer
+	err := initTestTracer()
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	// Enable tracing
+	SetTracingEnabled(true)
+
+	tracer := Tracer("test-service")
+	ctx := context.Background()
+
+	// Start a span
+	newCtx, span, endFn := tracer.Start(ctx, "test-operation")
+
+	// Verify real span behavior
+	assert.NotNil(t, newCtx)
+	assert.NotNil(t, span)
+	assert.NotNil(t, endFn)
+
+	// The span should be recording when tracing is enabled
+	assert.True(t, span.IsRecording(), "span should be recording when tracing enabled")
+
+	// Cleanup
+	endFn()
+}
+
+// TestDecoupleTracingSpan_Disabled verifies DecoupleTracingSpan returns no-op when disabled
+func TestDecoupleTracingSpan_Disabled(t *testing.T) {
+	// Save and restore state
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Ensure tracing is disabled
+	SetTracingEnabled(false)
+
+	ctx := context.Background()
+
+	// Call DecoupleTracingSpan
+	newCtx, span, endFn := DecoupleTracingSpan(ctx, "test-service", "decoupled-operation")
+
+	// Verify no-op behavior
+	assert.NotNil(t, newCtx)
+	assert.NotNil(t, span)
+	assert.NotNil(t, endFn)
+
+	// The span should be a no-op span
+	assert.False(t, span.IsRecording(), "span should not be recording when tracing disabled")
+
+	// End function should not panic
+	endFn()
+	endFn(errors.NewProcessingError("test error"))
+}
+
+// TestDecoupleTracingSpan_Enabled verifies DecoupleTracingSpan returns real span when enabled
+func TestDecoupleTracingSpan_Enabled(t *testing.T) {
+	// Save and restore state
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Initialize test tracer
+	err := initTestTracer()
+	require.NoError(t, err)
+	defer func() {
+		_ = ShutdownTracer(context.Background())
+	}()
+
+	// Enable tracing
+	SetTracingEnabled(true)
+
+	// Create parent span
+	tracer := Tracer("test-service")
+	ctx, parentSpan, endParent := tracer.Start(context.Background(), "parent-operation")
+
+	// Verify parent is recording
+	require.True(t, parentSpan.IsRecording())
+
+	// Call DecoupleTracingSpan
+	newCtx, span, endFn := DecoupleTracingSpan(ctx, "test-service", "decoupled-operation")
+
+	// Verify real span behavior
+	assert.NotNil(t, newCtx)
+	assert.NotNil(t, span)
+	assert.NotNil(t, endFn)
+
+	// The span should be recording
+	assert.True(t, span.IsRecording(), "span should be recording when tracing enabled")
+
+	// Cleanup
+	endFn()
+	endParent()
+}
+
+// TestTracingDisabled_NoAllocation verifies that disabled tracing returns singleton without allocation
+func TestTracingDisabled_NoAllocation(t *testing.T) {
+	// Save and restore state
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	// Ensure tracing is disabled
+	SetTracingEnabled(false)
+
+	// This test verifies the optimization works, but we can't easily test allocations
+	// in a unit test without benchmarks. We'll just verify behavior is correct.
+
+	// Get tracer multiple times
+	tracer1 := Tracer("service1")
+	tracer2 := Tracer("service2")
+	tracer3 := Tracer("service3")
+
+	// All should be the exact same instance
+	assert.Same(t, tracer1, tracer2)
+	assert.Same(t, tracer2, tracer3)
+
+	// Start spans multiple times
+	ctx := context.Background()
+	_, span1, end1 := tracer1.Start(ctx, "op1")
+	_, span2, end2 := tracer1.Start(ctx, "op2")
+
+	// Both spans should not be recording
+	assert.False(t, span1.IsRecording())
+	assert.False(t, span2.IsRecording())
+
+	// End functions should work
+	end1()
+	end2()
+}

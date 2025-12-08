@@ -165,8 +165,44 @@ Retrieves a single block by its hash.
 
 - **URL**: `/block/:hash` (with `/hex`, `/json` variants)
 - **Method**: GET
-- **Response Format**: Binary stream, hexadecimal, or JSON
-- **Content**: Block data with subtree identifiers and metadata
+- **Response Format**: JSON
+- **Content**: Block header data including previous block ID and metadata
+
+![asset_server_http_get_block_header.svg](img/plantuml/assetserver/asset_server_http_get_block_header.svg)
+
+### 4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()
+
+**GetBlockByHash** - Get a single block by hash:
+
+- **URL**: `/api/v1/block/:hash` (also available: `/api/v1/block/:hash/hex`, `/api/v1/block/:hash/json`)
+- **Method**: GET
+- **URL Parameters**: `hash` - Block hash (64-character hex string)
+- **Response Format**: Binary (default), Hex, or JSON
+- **Content**: Complete block data with subtree identifiers
+
+**GetBlocks** - Get paginated list of blocks:
+
+- **URL**: `/api/v1/blocks`
+- **Method**: GET
+- **Query Parameters**:
+
+    - `offset` (integer, optional, default: 0) - Number of blocks to skip from tip
+    - `limit` (integer, optional, default: 20, max: 100) - Maximum blocks to return
+    - `includeOrphans` (boolean, optional, default: false) - Include orphaned blocks
+- **Response Format**: JSON with pagination metadata
+- **Content**: Block list with pagination information
+
+**GetLastNBlocks** - Get most recent N blocks:
+
+- **URL**: `/api/v1/lastblocks`
+- **Method**: GET
+- **Query Parameters**:
+
+    - `n` (integer, optional, default: 10) - Number of blocks to retrieve
+    - `fromHeight` (unsigned integer, optional, default: 0) - Starting block height
+    - `includeOrphans` (boolean, optional, default: false) - Include orphaned blocks
+- **Response Format**: JSON
+- **Content**: Array of recent blocks in descending order (newest first)
 
 ![asset_server_http_get_block.svg](img/plantuml/assetserver/asset_server_http_get_block.svg)
 
@@ -608,7 +644,7 @@ Key technologies involved:
 To run the Asset Server locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Asset=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -asset=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Asset Server locally.

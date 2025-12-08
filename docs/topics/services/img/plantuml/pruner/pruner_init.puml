@@ -1,0 +1,51 @@
+@startuml pruner_init
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+participant "Pruner Service" as Pruner
+participant "UTXO Store" as UTXO
+participant "Blockchain Client" as Blockchain
+participant "Block Assembly Client" as BlockAssembly
+
+Pruner -> Pruner: Load Settings
+Pruner --> Pruner: Configuration Data
+
+Pruner -> UTXO: Get Pruner Service Implementation
+UTXO --> Pruner: Store-Specific Pruner\n(Aerospike or SQL)
+
+Pruner -> Blockchain: Initialize Blockchain Client
+Blockchain --> Pruner: Blockchain Client Instance
+
+Pruner -> BlockAssembly: Initialize Block Assembly Client
+BlockAssembly --> Pruner: Block Assembly Client Instance
+
+Pruner -> Pruner: Start gRPC Server (Port 8096)
+note right of Pruner: Health check endpoint available
+
+Pruner -> Blockchain: Subscribe to BlockPersisted Notifications
+Blockchain --> Pruner: Subscription Active
+
+Pruner -> Blockchain: Subscribe to Block Notifications\n(Fallback)
+Blockchain --> Pruner: Subscription Active
+
+note right of Pruner: Event-driven pruning ready\nWaiting for BlockPersisted events
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

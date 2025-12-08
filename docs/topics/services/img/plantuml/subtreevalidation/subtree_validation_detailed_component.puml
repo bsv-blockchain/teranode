@@ -24,33 +24,29 @@ skinparam ArrowColor #666666
 
 !include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
 
-title Subtree Validation Service - Component Diagram (Code-Verified Connections)
+title Subtree Validation Service - Component Diagram
 
 Container_Boundary(subtree_validation, "Subtree Validation Service") {
 
 Component(grpc_server, "gRPC Server", "Go gRPC", "Handles external subtree validation API requests")
 
+Component(subtree_handler, "Subtree Handler", "Go", "Handles subtree validation requests with file-based locking and transaction fetching")
+
+Component(txmeta_handler, "TxMeta Handler", "Go", "Handles transaction metadata cache updates")
+
 Component(kafka_consumer_subtrees, "Subtree Consumer", "Go Kafka", "Consumes subtree notifications from P2P service")
 
 Component(kafka_consumer_txmeta, "TxMeta Consumer", "Go Kafka", "Consumes transaction metadata updates")
 
-Component(kafka_producer_txmeta, "TxMeta Producer", "Go Kafka", "Publishes validated transaction metadata")
+Component(kafka_producer_invalid, "Invalid Subtree Producer", "Go Kafka", "Publishes invalid subtree notifications")
 
-Component(subtree_validator, "Subtree Validator", "Go", "Core subtree validation logic")
+Component(validator_client, "Validator Client", "Go", "Interface to Validator service for transaction validation")
 
-Component(transaction_fetcher, "Transaction Fetcher", "Go", "Fetches missing transactions from remote sources")
+Component(blockchain_client, "Blockchain Client", "Go gRPC", "Interface to Blockchain service")
 
-Component(metadata_processor, "Metadata Processor", "Go", "Processes and caches transaction metadata")
+Component(utxo_store_client, "UTXO Store Client", "Go", "Interface to UTXO store for metadata operations")
 
-Component(quorum_manager, "Quorum Manager", "Go", "Distributed locking for concurrent validation")
-
-Component(http_client, "HTTP Client", "Go HTTP", "HTTP client for asset server communication")
-
-Component(validator_interface, "Validator Interface", "Go", "Local/remote validator integration")
-
-Component(metrics_collector, "Metrics Collector", "Prometheus", "Collects validation performance metrics")
-
-Component(health_monitor, "Health Monitor", "Go", "Monitors service and dependency health")
+Component(blob_stores, "Blob Store Clients", "Go", "Subtree and transaction blob storage interfaces")
 
 }
 
@@ -60,9 +56,11 @@ Container(validator, "Validator Service", "Go", "Transaction validation")
 
 Container(blockchain, "Blockchain Service", "Go", "Blockchain state management")
 
-Container(subtree_store, "Subtree Store", "Blob Store", "Validated subtree storage")
+ContainerDb(subtree_store, "Subtree Store", "Blob Store", "Validated subtree storage")
 
-Container(utxo_store, "UTXO Store", "Database", "UTXO and transaction metadata")
+ContainerDb(tx_store, "Transaction Store", "Blob Store", "Transaction data storage")
+
+ContainerDb(utxo_store, "UTXO Store", "Database", "UTXO and transaction metadata")
 
 ContainerQueue(kafka, "Kafka", "Message Queue", "Message broker")
 
@@ -86,69 +84,47 @@ Rel(legacy_service, grpc_server, "Validate subtrees during sync", "gRPC")
 
 Rel(rpc_service, grpc_server, "External subtree validation requests", "gRPC")
 
-Rel(grpc_server, subtree_validator, "Process validation requests")
+Rel(grpc_server, subtree_handler, "Route validation requests")
 
-' CODE-VERIFIED Kafka message flow from P2P
+' Kafka message flow
 
 Rel(p2p_service, kafka, "Publish subtree notifications", "Kafka")
 
-Rel(kafka, kafka_consumer_subtrees, "Subtree notifications from P2P", "Kafka")
+Rel(kafka, kafka_consumer_subtrees, "Subtree notifications", "Kafka")
 
 Rel(kafka, kafka_consumer_txmeta, "Metadata updates", "Kafka")
 
-Rel(kafka_producer_txmeta, kafka, "Publish metadata", "Kafka")
+Rel(kafka_producer_invalid, kafka, "Publish invalid subtrees", "Kafka")
 
 ' Internal processing flow
 
-Rel(kafka_consumer_subtrees, quorum_manager, "Check/acquire locks")
+Rel(kafka_consumer_subtrees, subtree_handler, "Process subtrees")
 
-Rel(kafka_consumer_subtrees, subtree_validator, "Validate subtrees")
+Rel(kafka_consumer_txmeta, txmeta_handler, "Process metadata")
 
-Rel(subtree_validator, transaction_fetcher, "Fetch missing transactions")
+Rel(subtree_handler, validator_client, "Validate transactions")
 
-Rel(transaction_fetcher, http_client, "HTTP requests")
+Rel(subtree_handler, blockchain_client, "Get block information")
 
-Rel(subtree_validator, validator_interface, "Validate transactions")
+Rel(subtree_handler, blob_stores, "Read/write subtrees and transactions")
 
-Rel(subtree_validator, metadata_processor, "Process metadata")
+Rel(subtree_handler, asset_servers, "Fetch missing transactions", "HTTP")
 
-' Metadata handling
+Rel(subtree_handler, kafka_producer_invalid, "Report invalid subtrees")
 
-Rel(kafka_consumer_txmeta, metadata_processor, "Update metadata")
+Rel(txmeta_handler, utxo_store_client, "Cache metadata")
 
-Rel(metadata_processor, kafka_producer_txmeta, "Publish updates")
+' External service connections
 
-' External service interactions
+Rel(validator_client, validator, "Transaction validation", "gRPC/Interface")
 
-Rel(http_client, asset_servers, "Fetch transactions", "HTTP")
+Rel(blockchain_client, blockchain, "Blockchain queries", "gRPC")
 
-Rel(validator_interface, validator, "Transaction validation", "Interface/gRPC")
+Rel(blob_stores, subtree_store, "Subtree operations", "Direct")
 
-Rel(subtree_validator, subtree_store, "Store validated subtrees", "gRPC")
+Rel(blob_stores, tx_store, "Transaction operations", "Direct")
 
-Rel(metadata_processor, utxo_store, "Cache metadata", "gRPC")
-
-Rel(quorum_manager, subtree_store, "Check existence", "gRPC")
-
-' State and health monitoring
-
-Rel(blockchain, kafka_consumer_subtrees, "Block notifications", "Subscription")
-
-Rel(health_monitor, blockchain, "Health checks")
-
-Rel(health_monitor, validator, "Health checks")
-
-Rel(health_monitor, subtree_store, "Health checks")
-
-Rel(health_monitor, utxo_store, "Health checks")
-
-' Metrics collection
-
-Rel(subtree_validator, metrics_collector, "Validation metrics")
-
-Rel(transaction_fetcher, metrics_collector, "Fetch metrics")
-
-Rel(metadata_processor, metrics_collector, "Metadata metrics")
+Rel(utxo_store_client, utxo_store, "Metadata operations", "Direct")
 
 SHOW_LEGEND()
 

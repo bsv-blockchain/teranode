@@ -29,7 +29,7 @@ jobs:
       git_sha: ${{ steps.version.outputs.git_sha }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
           fetch-depth: 0  # Fetch all history for tags
       - name: Calculate version
@@ -48,12 +48,11 @@ jobs:
       repository: ${{ github.repository }}
       tag_latest: true
       build_args: |
-        DEBUG=true
         GIT_VERSION=${{ needs.calculate-version.outputs.git_version }}
         GIT_COMMIT=${{ needs.calculate-version.outputs.git_commit }}
         GIT_SHA=${{ needs.calculate-version.outputs.git_sha }}
       architectures: '["amd64", "arm64"]'
-      runner_labels: '{"amd64":"teranode-runner","arm64":"teranode-runner-arm","manifest":"ubuntu-latest"}'
+      runner_labels: '{"amd64":"teranode-runner-16-core","arm64":"teranode-runner-16-core-arm","manifest":"ubuntu-latest"}'
     secrets: inherit
 
   # Run chain integrity test

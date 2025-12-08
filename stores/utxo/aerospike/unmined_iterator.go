@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // unminedTxIterator implements utxo.UnminedTxIterator for Aerospike
@@ -64,8 +65,7 @@ func newUnminedTxIterator(store *Store, fullScan bool) (*unminedTxIterator, erro
 		fields.IsCoinbase.String(),
 	}
 
-	policy := as.NewQueryPolicy()
-	policy.MaxRetries = 1
+	policy := util.GetAerospikeQueryPolicy(store.settings)
 	policy.IncludeBinData = true
 
 	store.logger.Infof("[newUnminedTxIterator] Starting Aerospike query for unmined transactions (fullScan=%t)", fullScan)

@@ -41,6 +41,8 @@ const (
 	ConflictingChildren FieldName = "conflictingCs" // bin Fieldname can only be max 15 chars in aerospike
 	// Locked indicates whether the transaction outputs are marked as locked, and therefor not spendable
 	Locked FieldName = "locked"
+	// Creating indicates the transaction is in the process of being created (multi-record 2-phase commit)
+	Creating FieldName = "creating"
 	// UtxoSpendableIn indicates the number of blocks after which the UTXO becomes spendable
 	UtxoSpendableIn FieldName = "utxoSpendableIn"
 	// SpendingHeight is the block height at which the UTXO was spent

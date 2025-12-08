@@ -51,13 +51,17 @@ COPY --from=0 /app/teranode.run ./teranode.run
 COPY --from=0 /app/teranode-cli ./teranode-cli
 COPY --from=0 /app/compose/wait.sh /app/wait.sh
 COPY --from=0 /go/bin/dlv .
-COPY --from=0 /app/settings_local.conf .
 COPY --from=0 /app/settings.conf .
 
 RUN chmod +x ./wait.sh
 
 ENV LD_LIBRARY_PATH=/app:${LD_LIBRARY_PATH}
 ENV PATH=/app:$PATH
+
+# Set GOGC=200 to reduce GC aggressiveness (default is 100)
+# Higher values trade memory for less frequent GC pauses
+# Can be overridden at deployment time via docker-compose or Kubernetes
+ENV GOGC=200
 
 # Set the entrypoint to the library
 ENTRYPOINT ["./teranode.run"]

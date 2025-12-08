@@ -21,7 +21,15 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
 	"github.com/bsv-blockchain/teranode/util/retry"
+	"github.com/rcrowley/go-metrics"
 )
+
+// init disables go-metrics globally to prevent memory leak from exponential decay sample heap.
+// This must be set before any Sarama clients are created.
+// See: https://github.com/IBM/sarama/issues/1321
+func init() {
+	metrics.UseNilMetrics = true
+}
 
 // KafkaAsyncProducerI defines the interface for asynchronous Kafka producer operations.
 type KafkaAsyncProducerI interface {
@@ -83,6 +91,7 @@ type KafkaAsyncProducer struct {
 	publishChannel chan *Message        // Channel for publishing messages
 	closed         atomic.Bool          // Flag indicating if producer is closed
 	channelMu      sync.RWMutex         // Mutex to protect publishChannel access
+	publishWg      sync.WaitGroup       // WaitGroup to track publish goroutine
 }
 
 // NewKafkaAsyncProducerFromURL creates a new async producer from a URL configuration.
@@ -263,6 +272,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
+	c.publishWg.Add(1) // Track the publish goroutine
 
 	go func() {
 		context, cancel := context.WithCancel(ctx)
@@ -294,6 +304,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 		}()
 
 		go func() {
+			defer c.publishWg.Done()
 			wg.Done()
 
 			c.channelMu.RLock()
@@ -316,7 +327,22 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 					Value: sarama.ByteEncoder(msgBytes.Value),
 				}
 
-				c.Producer.Input() <- message
+				// Check if closed again right before sending to avoid race condition
+				// where Close() is called between the check above and the send below
+				if c.closed.Load() {
+					break
+				}
+
+				// Use a function with recover to safely handle sends to potentially closed channel
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							// Channel was closed during send, this is expected during shutdown
+							c.Config.Logger.Debugf("[kafka] Recovered from send to closed channel during shutdown")
+						}
+					}()
+					c.Producer.Input() <- message
+				}()
 			}
 		}()
 
@@ -354,10 +380,18 @@ func (c *KafkaAsyncProducer) Stop() error {
 
 	c.closed.Store(true)
 
-	for len(c.publishChannel) > 0 {
-		time.Sleep(100 * time.Millisecond)
+	// Close the publish channel to signal the publish goroutine to exit
+	c.channelMu.Lock()
+	if c.publishChannel != nil {
+		close(c.publishChannel)
+		c.publishChannel = nil
 	}
+	c.channelMu.Unlock()
 
+	// Wait for the publish goroutine to finish processing
+	c.publishWg.Wait()
+
+	// Now it's safe to close the producer
 	if err := c.Producer.Close(); err != nil {
 		c.closed.Store(false)
 		return err
@@ -377,6 +411,10 @@ func (c *KafkaAsyncProducer) BrokersURL() []string {
 
 // Publish sends a message to the producer's publish channel.
 func (c *KafkaAsyncProducer) Publish(msg *Message) {
+	if c.closed.Load() {
+		return
+	}
+
 	c.channelMu.RLock()
 	ch := c.publishChannel
 	c.channelMu.RUnlock()

@@ -18,12 +18,19 @@
         - [2.7.2. Ban Operations](#272-ban-operations)
         - [2.7.3. Ban Event Handling](#273-ban-event-handling)
         - [2.7.4. Configuration](#274-configuration)
-3. [Technology](#3-technology)
-4. [Data Model](#4-data-model)
-5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
-6. [How to run](#6-how-to-run)
-7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
-8. [Other Resources](#8-other-resources)
+    - [2.8. Peer Registry and Reputation System](#28-peer-registry-and-reputation-system)
+        - [2.8.1. Overview](#281-overview)
+        - [2.8.2. Peer Information Tracking](#282-peer-information-tracking)
+        - [2.8.3. Reputation Algorithm](#283-reputation-algorithm)
+        - [2.8.4. Peer Selection](#284-peer-selection)
+        - [2.8.5. Persistence](#285-persistence)
+        - [2.8.6. Recovery Mechanisms](#286-recovery-mechanisms)
+    - [3. Technology](#3-technology)
+    - [4. Data Model](#4-data-model)
+    - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
+    - [6. How to run](#6-how-to-run)
+    - [7. Configuration options (settings flags)](#7-configuration-options-settings-flags)
+    - [8. Other Resources](#8-other-resources)
 
 ## 1. Description
 
@@ -194,17 +201,17 @@ Once these steps are completed, the server is ready to accept peer connections, 
 
 ### 2.2. Peer Discovery and Connection
 
-In the previous section, the P2P Service created a `P2PNode as part of the initialization phase. This P2PNode is responsible for joining the network. The P2PNode utilizes a libp2p host and a Distributed Hash Table (DHT) for peer discovery and connection based on shared topics. This mechanism enables the node to become part of a decentralized network, facilitating communication and resource sharing among peers.
+In the previous section, the P2P Service created a `P2PClient as part of the initialization phase. This P2PClient is responsible for joining the network. The P2PClient utilizes a libp2p host and a Distributed Hash Table (DHT) for peer discovery and connection based on shared topics. This mechanism enables the client to become part of a decentralized network, facilitating communication and resource sharing among peers.
 
 ![p2p_peer_discovery.svg](img/plantuml/p2p/p2p_peer_discovery.svg)
 
 1. **Initialization of DHT and libp2p Host**:
 
-    - The `P2PNode` struct, upon invocation of its `Start` method, initializes the DHT using either `initDHT` or `initPrivateDHT` methods depending on the configuration. This step sets up the DHT for the libp2p host (`s.host`), which allows for peer discovery and content routing within the P2P network. The DHT is bootstrapped with default or configured peers to integrate the node into the existing network.
+    - The `P2PClient` struct, upon invocation of its `Start` method, initializes the DHT using either `initDHT` or `initPrivateDHT` methods depending on the configuration. This step sets up the DHT for the libp2p host (`s.host`), which allows for peer discovery and content routing within the P2P network. The DHT is bootstrapped with default or configured peers to integrate the client into the existing network.
 
 2. **Setting Up Routing Discovery**:
 
-    - Once the DHT is initialized, `P2PNode.Start` sets up `routingDiscovery` with the created DHT instance. This discovery service is responsible for locating peers within the network and advertising the node's own presence.
+    - Once the DHT is initialized, `P2PClient.Start` sets up `routingDiscovery` with the created DHT instance. This discovery service is responsible for locating peers within the network and advertising the client's own presence.
     - The DHT implementation supports two modes:
 
         - Standard mode (`initDHT`): Uses the public IPFS bootstrap nodes for initial discovery
@@ -366,6 +373,78 @@ Ban-related settings in the configuration:
 - `ban_default_duration`: Default duration for bans (24 hours if not specified)
 - `ban_max_entries`: Maximum number of banned entries to maintain
 
+### 2.8. Peer Registry and Reputation System
+
+The P2P service includes a comprehensive peer management system that tracks peer behavior, calculates reputation scores, and selects optimal peers for network operations.
+
+#### 2.8.1. Overview
+
+The system consists of three main components:
+
+- **Peer Registry**: A thread-safe data store maintaining all peer information and interaction history
+- **Peer Selector**: A stateless component that selects optimal peers based on reputation and criteria
+- **Reputation Scoring**: An algorithm calculating peer reliability scores (0-100)
+
+#### 2.8.2. Peer Information Tracking
+
+The peer registry tracks comprehensive information for each peer:
+
+- **Identity**: Peer ID, client name, connection status
+- **Blockchain State**: Height, block hash, storage mode (full/pruned)
+- **Network Info**: DataHub URL, URL responsiveness, bytes received
+- **Reputation Metrics**: Interaction successes/failures, malicious behavior count, average response time
+- **Interaction History**: Blocks received, subtrees received, transactions received
+
+#### 2.8.3. Reputation Algorithm
+
+Peers are assigned reputation scores from 0 to 100:
+
+- **50**: Default neutral score for new peers
+- **20**: Minimum threshold for peer selection eligibility
+- **5**: Score assigned to peers exhibiting malicious behavior
+
+The reputation calculation considers:
+
+- Success rate of interactions (60% weight)
+- Base score component (40% weight)
+- Recent failure penalties (-15 for failures within 1 hour)
+- Recent success bonuses (+10 for successes within 1 hour)
+- Malicious behavior (immediate drop to 5.0)
+
+#### 2.8.4. Peer Selection
+
+The peer selector uses a two-phase approach:
+
+1. **Phase 1 - Full Nodes**: Filter for peers announcing "full" storage mode, sort by reputation
+2. **Phase 2 - Pruned Fallback**: If no full nodes available, select youngest pruned node
+
+Selection criteria include:
+
+- Not banned
+- Has DataHub URL (excludes listen-only nodes)
+- URL is responsive
+- Valid blockchain height
+- Reputation score >= 20.0
+- Passes cooldown period
+
+#### 2.8.5. Persistence
+
+The peer registry persists to `teranode_peer_registry.json`:
+
+- Saves on shutdown and periodically during operation
+- Restores peer metrics on startup
+- Maintains version compatibility
+
+#### 2.8.6. Recovery Mechanisms
+
+Peers can recover from low reputation through:
+
+- **Automatic Recovery**: `ReconsiderBadPeers` resets reputation after cooldown period
+- **Manual Reset**: Via gRPC API or dashboard UI
+- **Exponential Cooldown**: Reset cooldown triples for each subsequent reset
+
+For detailed documentation on the peer registry and reputation system, see [Peer Registry and Reputation System](../features/peer_registry_reputation.md).
+
 ## 3. Technology
 
 1. **Go Programming Language**:
@@ -486,7 +565,7 @@ Within the P2P service, notifications are sent to the Websocket clients using th
 To run the P2P Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -P2P=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -p2p=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the P2P Service locally.

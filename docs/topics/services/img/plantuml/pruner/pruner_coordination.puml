@@ -1,0 +1,52 @@
+@startuml pruner_coordination
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+participant "Block Persister" as BlockPersister
+participant "Blockchain Service" as Blockchain
+participant "Pruner Service" as Pruner
+participant "Store Pruner" as StorePruner
+
+note over BlockPersister, StorePruner: **Coordination: Preventing Premature Deletion**
+
+BlockPersister -> BlockPersister: Process Block N\nCreate .subtree_data files
+
+note right of BlockPersister: Files contain transaction data\nneeded for catchup nodes
+
+BlockPersister -> Blockchain: Update State:\nBlockPersisterHeight = N
+
+BlockPersister -> Blockchain: Send BlockPersisted\nNotification (height = N)
+
+Blockchain -> Pruner: Forward Notification
+
+Pruner -> Pruner: Update lastPersistedHeight = N
+
+Pruner -> StorePruner: UpdateBlockHeight(currentHeight = 100)
+
+note over StorePruner: **Safe Height Calculation**
+
+StorePruner -> Pruner: Get Persisted Height
+Pruner --> StorePruner: persistedHeight = N
+
+StorePruner -> StorePruner: Calculate:\nsafeHeight = min(currentHeight, persistedHeight)\nsafeHeight = min(100, N)
+
+alt Block Persister Active (N = 95)
+    StorePruner -> StorePruner: safeHeight = 95
+    note right of StorePruner: Only prune up to height 95\nProtect blocks 96-100\n.subtree_data not yet created
+else No Block Persister (N = 0)
+    StorePruner -> StorePruner: safeHeight = 100
+    note right of StorePruner: No .subtree_data files\nSafe to prune current height
+end
+
+StorePruner -> StorePruner: Delete Records WHERE\ndeleteAtHeight <= safeHeight
+
+note right of StorePruner: **Result**: Transaction data\nremains available until\n.subtree_data files created
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

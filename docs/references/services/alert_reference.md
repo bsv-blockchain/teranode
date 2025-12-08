@@ -31,7 +31,7 @@ type Server struct {
     utxoStore utxo.Store
 
     // blockassemblyClient handles block assembly operations
-    blockassemblyClient *blockassembly.Client
+    blockassemblyClient blockassembly.ClientI
 
     // appConfig contains alert system specific configuration
     appConfig *config.Config
@@ -57,7 +57,7 @@ type Node struct {
     utxoStore utxo.Store
 
     // blockassemblyClient handles block assembly operations
-    blockassemblyClient *blockassembly.Client
+    blockassemblyClient blockassembly.ClientI
 
     // peerClient handles peer operations
     peerClient peer.ClientI
@@ -79,7 +79,7 @@ The `Node` type represents a node in the network and provides methods for intera
 #### New
 
 ```go
-func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client, peerClient peer.ClientI, p2pClient p2pservice.ClientI) *Server
+func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2pservice.ClientI) *Server
 ```
 
 Creates a new instance of the `Server` with the specified dependencies and initializes Prometheus metrics.
@@ -141,7 +141,7 @@ Gracefully stops the Alert Service by closing all configurations and shutting do
 #### NewNodeConfig
 
 ```go
-func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client, peerClient peer.ClientI, p2pClient p2p.ClientI, tSettings *settings.Settings) config.NodeInterface
+func NewNodeConfig(logger ulogger.Logger, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI, tSettings *settings.Settings) config.NodeInterface
 ```
 
 Creates a new instance of the `Node` with the specified dependencies.
