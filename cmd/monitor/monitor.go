@@ -19,6 +19,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// ViewMode represents the current view
+type ViewMode int
+
+const (
+	ViewDashboard ViewMode = iota
+	ViewSettings
+)
+
 // Styles for the TUI
 var (
 	titleStyle = lipgloss.NewStyle().
@@ -54,6 +62,18 @@ var (
 	helpStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			MarginTop(1)
+
+	settingKeyStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("39")).
+			Bold(true)
+
+	settingValueStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("255"))
+
+	settingSectionStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("205")).
+				MarginTop(1)
 )
 
 // NodeData holds the fetched node data
@@ -79,6 +99,8 @@ type Model struct {
 	height           int
 	refreshInterval  time.Duration
 	quitting         bool
+	viewMode         ViewMode
+	settingsScroll   int // scroll offset for settings view
 }
 
 // Messages
@@ -182,11 +204,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "q", "ctrl+c", "esc":
+		case "q", "ctrl+c":
+			m.quitting = true
+			return m, tea.Quit
+		case "esc":
+			if m.viewMode == ViewSettings {
+				m.viewMode = ViewDashboard
+				return m, nil
+			}
 			m.quitting = true
 			return m, tea.Quit
 		case "r":
 			return m, m.fetchData
+		case "s":
+			if m.viewMode == ViewSettings {
+				m.viewMode = ViewDashboard
+			} else {
+				m.viewMode = ViewSettings
+				m.settingsScroll = 0
+			}
+			return m, nil
+		case "j", "down":
+			if m.viewMode == ViewSettings {
+				m.settingsScroll++
+			}
+		case "k", "up":
+			if m.viewMode == ViewSettings && m.settingsScroll > 0 {
+				m.settingsScroll--
+			}
+		case "g", "home":
+			if m.viewMode == ViewSettings {
+				m.settingsScroll = 0
+			}
+		case "G", "end":
+			if m.viewMode == ViewSettings {
+				m.settingsScroll = 1000 // will be capped in render
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -213,6 +266,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	if m.quitting {
 		return "Goodbye!\n"
+	}
+
+	if m.viewMode == ViewSettings {
+		return m.renderSettingsView()
 	}
 
 	var b strings.Builder
@@ -253,7 +310,7 @@ func (m Model) View() string {
 
 	// Help
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("q: quit | r: refresh"))
+	b.WriteString(helpStyle.Render("q: quit | r: refresh | s: settings"))
 
 	return b.String()
 }
@@ -464,6 +521,130 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// renderSettingsView renders the settings panel
+func (m Model) renderSettingsView() string {
+	var b strings.Builder
+
+	// Title
+	title := titleStyle.Render("TERANODE SETTINGS")
+	b.WriteString(title)
+	b.WriteString("\n")
+	b.WriteString(labelStyle.Render(fmt.Sprintf("Context: %s", m.settings.Context)))
+	b.WriteString("\n\n")
+
+	// Collect all settings lines
+	var lines []string
+
+	// General settings
+	lines = append(lines, settingSectionStyle.Render("GENERAL"))
+	lines = append(lines, m.renderSettingRow("Version", m.settings.Version))
+	lines = append(lines, m.renderSettingRow("Commit", m.settings.Commit))
+	lines = append(lines, m.renderSettingRow("Network", m.settings.ChainCfgParams.Name))
+	lines = append(lines, m.renderSettingRow("Data Folder", m.settings.DataFolder))
+	lines = append(lines, m.renderSettingRow("Log Level", m.settings.LogLevel))
+	lines = append(lines, m.renderSettingRow("Pretty Logs", fmt.Sprintf("%v", m.settings.PrettyLogs)))
+
+	// Blockchain settings
+	lines = append(lines, settingSectionStyle.Render("BLOCKCHAIN"))
+	lines = append(lines, m.renderSettingRow("gRPC Address", m.settings.BlockChain.GRPCAddress))
+	lines = append(lines, m.renderSettingRow("gRPC Listen", m.settings.BlockChain.GRPCListenAddress))
+	lines = append(lines, m.renderSettingRow("HTTP Listen", m.settings.BlockChain.HTTPListenAddress))
+	if m.settings.BlockChain.StoreURL != nil {
+		lines = append(lines, m.renderSettingRow("Store", m.settings.BlockChain.StoreURL.String()))
+	}
+
+	// P2P settings
+	lines = append(lines, settingSectionStyle.Render("P2P"))
+	lines = append(lines, m.renderSettingRow("gRPC Address", m.settings.P2P.GRPCAddress))
+	lines = append(lines, m.renderSettingRow("gRPC Listen", m.settings.P2P.GRPCListenAddress))
+	lines = append(lines, m.renderSettingRow("HTTP Address", m.settings.P2P.HTTPAddress))
+	lines = append(lines, m.renderSettingRow("Port", fmt.Sprintf("%d", m.settings.P2P.Port)))
+	lines = append(lines, m.renderSettingRow("Listen Mode", m.settings.P2P.ListenMode))
+	lines = append(lines, m.renderSettingRow("DHT Mode", m.settings.P2P.DHTMode))
+	if len(m.settings.P2P.BootstrapPeers) > 0 {
+		lines = append(lines, m.renderSettingRow("Bootstrap Peers", fmt.Sprintf("%d configured", len(m.settings.P2P.BootstrapPeers))))
+	}
+	if len(m.settings.P2P.StaticPeers) > 0 {
+		lines = append(lines, m.renderSettingRow("Static Peers", fmt.Sprintf("%d configured", len(m.settings.P2P.StaticPeers))))
+	}
+
+	// Validator settings
+	lines = append(lines, settingSectionStyle.Render("VALIDATOR"))
+	lines = append(lines, m.renderSettingRow("gRPC Address", m.settings.Validator.GRPCAddress))
+	lines = append(lines, m.renderSettingRow("gRPC Listen", m.settings.Validator.GRPCListenAddress))
+
+	// Block Assembly settings
+	lines = append(lines, settingSectionStyle.Render("BLOCK ASSEMBLY"))
+	lines = append(lines, m.renderSettingRow("Disabled", fmt.Sprintf("%v", m.settings.BlockAssembly.Disabled)))
+	lines = append(lines, m.renderSettingRow("gRPC Address", m.settings.BlockAssembly.GRPCAddress))
+	lines = append(lines, m.renderSettingRow("gRPC Listen", m.settings.BlockAssembly.GRPCListenAddress))
+
+	// Kafka settings
+	lines = append(lines, settingSectionStyle.Render("KAFKA"))
+	lines = append(lines, m.renderSettingRow("Hosts", m.settings.Kafka.Hosts))
+	lines = append(lines, m.renderSettingRow("Port", fmt.Sprintf("%d", m.settings.Kafka.Port)))
+	lines = append(lines, m.renderSettingRow("Partitions", fmt.Sprintf("%d", m.settings.Kafka.Partitions)))
+
+	// Aerospike settings
+	lines = append(lines, settingSectionStyle.Render("AEROSPIKE"))
+	lines = append(lines, m.renderSettingRow("Host", m.settings.Aerospike.Host))
+	lines = append(lines, m.renderSettingRow("Port", fmt.Sprintf("%d", m.settings.Aerospike.Port)))
+
+	// Asset settings
+	lines = append(lines, settingSectionStyle.Render("ASSET"))
+	lines = append(lines, m.renderSettingRow("HTTP Address", m.settings.Asset.HTTPAddress))
+	lines = append(lines, m.renderSettingRow("HTTP Listen", m.settings.Asset.HTTPListenAddress))
+
+	// Apply scroll
+	visibleLines := m.height - 6 // account for header, footer, margins
+	if visibleLines < 5 {
+		visibleLines = 5
+	}
+
+	// Cap scroll offset
+	maxScroll := len(lines) - visibleLines
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.settingsScroll > maxScroll {
+		m.settingsScroll = maxScroll
+	}
+
+	// Render visible lines
+	endIdx := m.settingsScroll + visibleLines
+	if endIdx > len(lines) {
+		endIdx = len(lines)
+	}
+
+	for i := m.settingsScroll; i < endIdx; i++ {
+		b.WriteString(lines[i])
+		b.WriteString("\n")
+	}
+
+	// Scroll indicator
+	if len(lines) > visibleLines {
+		scrollInfo := fmt.Sprintf("(%d-%d of %d)", m.settingsScroll+1, endIdx, len(lines))
+		b.WriteString("\n")
+		b.WriteString(labelStyle.Render(scrollInfo))
+	}
+
+	// Help
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("s/esc: back | j/k: scroll | g/G: top/bottom | q: quit"))
+
+	return b.String()
+}
+
+// renderSettingRow renders a single setting key-value row
+func (m Model) renderSettingRow(key, value string) string {
+	if value == "" {
+		value = labelStyle.Render("(not set)")
+	} else {
+		value = settingValueStyle.Render(value)
+	}
+	return fmt.Sprintf("  %s %s", settingKeyStyle.Render(key+":"), value)
 }
 
 // Run starts the TUI monitor
