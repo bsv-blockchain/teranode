@@ -115,11 +115,27 @@ func createTestServer(t *testing.T) *Server {
 
 	// Create server with minimal setup
 	registry := NewPeerRegistry()
+	mockBanList := &MockBanList{}
+	// Setup default expectations for MockBanList methods
+	mockBanList.On("Add", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockBanList.On("Remove", mock.Anything, mock.Anything).Return(nil)
+	mockBanList.On("ListBanned").Return([]string{})
+	mockBanList.On("IsBanned", mock.Anything).Return(false)
+	mockBanList.On("Clear").Return()
+
+	// Create mock P2PClient for tests that need it
+	mockP2PClient := &MockServerP2PClient{}
+	// GetPeers returns empty list by default (method doesn't use mock.Called)
+	// GetID needs to be set up if used
+	mockP2PClient.On("GetID").Return(peer.ID("test-peer-id")).Maybe()
+
 	s := &Server{
 		logger:       logger,
 		settings:     settings,
 		peerRegistry: registry,
 		banManager:   NewPeerBanManager(context.Background(), nil, settings, registry),
+		banList:      mockBanList,
+		P2PClient:    mockP2PClient,
 	}
 
 	return s
@@ -306,9 +322,7 @@ func TestServerStart(t *testing.T) {
 	})
 }
 
-func TestServerIntegration(t *testing.T) {
-	t.Skip("Integration tests require more comprehensive mocking of dependencies")
-}
+// NOTE: TestServerIntegration was removed - it was an empty placeholder test.
 
 func TestHandleBlockTopic(t *testing.T) {
 	// Setup common test variables
@@ -2674,69 +2688,8 @@ func TestServerStopSuccess(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestDisconnectPeerSuccess(t *testing.T) {
-	t.Skip("disconnect peer is deprecated in new architecture")
-	ctx := context.Background()
-	peerID := "12D3KooWQ89fFeXZtbj4Lmq2Z3zAqz1QzAAzC7D2yxjZK7XWuK6h"
-	logger := ulogger.New("test")
-
-	mockP2P := new(MockServerP2PClient)
-	decodedPeerID, _ := peer.Decode(peerID)
-	mockP2P.On("DisconnectPeer", ctx, decodedPeerID).Return(nil)
-
-	server := &Server{
-		P2PClient:    mockP2P,
-		logger:       logger,
-		peerRegistry: NewPeerRegistry(),
-		// syncManager removed - old architecture
-	}
-
-	req := &p2p_api.DisconnectPeerRequest{PeerId: peerID}
-
-	resp, err := server.DisconnectPeer(ctx, req)
-	assert.NoError(t, err)
-	assert.True(t, resp.Success)
-	assert.Empty(t, resp.Error)
-
-	mockP2P.AssertCalled(t, "DisconnectPeer", ctx, decodedPeerID)
-}
-
-func TestDisconnectPeerInvalidID(t *testing.T) {
-	t.Skip("disconnect peer is deprecated in new architecture")
-	ctx := context.Background()
-	invalidPeerID := "invalid-peer-id"
-	logger := ulogger.New("test")
-
-	server := &Server{
-		P2PClient: new(MockServerP2PClient),
-		logger:    logger,
-	}
-
-	req := &p2p_api.DisconnectPeerRequest{PeerId: invalidPeerID}
-
-	resp, err := server.DisconnectPeer(ctx, req)
-	assert.NoError(t, err)
-	assert.False(t, resp.Success)
-	assert.Contains(t, resp.Error, "invalid peer ID")
-}
-
-func TestDisconnectPeerNoP2PNode(t *testing.T) {
-	t.Skip("disconnect peer is deprecated in new architecture")
-	ctx := context.Background()
-	logger := ulogger.New("test")
-
-	server := &Server{
-		P2PClient: nil,
-		logger:    logger,
-	}
-
-	req := &p2p_api.DisconnectPeerRequest{PeerId: "12D3KooWQ89fFeXZtbj4Lmq2Z3zAqz1QzAAzC7D2yxjZK7XWuK6h"}
-
-	resp, err := server.DisconnectPeer(ctx, req)
-	assert.NoError(t, err)
-	assert.False(t, resp.Success)
-	assert.Equal(t, "P2P node not available", resp.Error)
-}
+// NOTE: TestDisconnectPeerSuccess, TestDisconnectPeerInvalidID, TestDisconnectPeerNoP2PNode
+// were removed because DisconnectPeer is deprecated in the new architecture.
 
 func TestProcessInvalidBlockMessageSuccess(t *testing.T) {
 
@@ -2949,64 +2902,7 @@ func TestBlockchainSubscriptionListener(t *testing.T) {
 	})
 }
 
-func TestConnectPeer(t *testing.T) {
-	t.Skip("connect peer is deprecated in new architecture")
-	t.Run("P2P node is nil", func(t *testing.T) {
-		server := &Server{
-			logger:    ulogger.New("test"),
-			P2PClient: nil,
-		}
-
-		resp, err := server.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
-			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFakePeer",
-		})
-		require.NoError(t, err)
-		assert.False(t, resp.Success)
-		assert.Equal(t, "P2P node not available", resp.Error)
-	})
-
-	t.Run("ConnectToPeer returns error", func(t *testing.T) {
-		mockP2PNode := new(MockServerP2PClient)
-		mockP2PNode.
-			On("ConnectToPeer", mock.Anything, "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFailing").
-			Return(errors.NewProcessingError("connection failed"))
-
-		server := &Server{
-			logger:    ulogger.New("test"),
-			P2PClient: mockP2PNode,
-		}
-
-		resp, err := server.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
-			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFailing",
-		})
-		require.NoError(t, err)
-		assert.False(t, resp.Success)
-		assert.Contains(t, resp.Error, "connection failed")
-
-		mockP2PNode.AssertExpectations(t)
-	})
-
-	t.Run("ConnectToPeer success", func(t *testing.T) {
-		mockP2PNode := new(MockServerP2PClient)
-		mockP2PNode.
-			On("ConnectToPeer", mock.Anything, "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooSuccess").
-			Return(nil)
-
-		server := &Server{
-			logger:    ulogger.New("test"),
-			P2PClient: mockP2PNode,
-		}
-
-		resp, err := server.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
-			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooSuccess",
-		})
-		require.NoError(t, err)
-		assert.True(t, resp.Success)
-		assert.Empty(t, resp.Error)
-
-		mockP2PNode.AssertExpectations(t)
-	})
-}
+// NOTE: TestConnectPeer was removed because ConnectPeer is deprecated in the new architecture.
 
 func TestServer_GetLocalHeight(t *testing.T) {
 	// Test with nil blockchain client
@@ -3580,46 +3476,7 @@ func TestP2PNodeConnectedEnhanced(t *testing.T) {
 }
 */
 
-func TestOnPeerBannedEnhanced(t *testing.T) {
-	t.Skip("onPeerBanned is deprecated in new architecture")
-	// Create fresh mocks for this test
-	mockP2PNode := &MockServerP2PClient{}
-	mockBanList := &MockBanList{}
-
-	server := &Server{
-		logger:    ulogger.New("test"),
-		P2PClient: mockP2PNode,
-		banList:   mockBanList,
-	}
-
-	// Create a ban event handler
-	handler := &myBanEventHandler{server: server}
-
-	// Create a test peer ID
-	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
-	require.NoError(t, err)
-	peerID, err := peer.IDFromPublicKey(pub)
-	require.NoError(t, err)
-
-	until := time.Now().Add(time.Hour)
-	reason := "test ban reason"
-
-	// Mock expectations for valid peer ID
-	mockP2PNode.On("GetPeerIPs", peerID).Return([]string{"192.168.1.1", "10.0.0.1"})
-	mockP2PNode.On("DisconnectPeer", mock.Anything, peerID).Return(nil)
-	mockBanList.On("Add", mock.Anything, "192.168.1.1", until).Return(nil)
-	mockBanList.On("Add", mock.Anything, "10.0.0.1", until).Return(nil)
-
-	// Test OnPeerBanned with valid peer ID
-	handler.OnPeerBanned(peerID.String(), until, reason)
-
-	// Test OnPeerBanned with invalid peer ID (error path coverage)
-	handler.OnPeerBanned("invalid-peer-id", until, reason)
-
-	// Verify mocks
-	mockP2PNode.AssertExpectations(t)
-	mockBanList.AssertExpectations(t)
-}
+// NOTE: TestOnPeerBannedEnhanced was removed because onPeerBanned is deprecated in the new architecture.
 
 func TestDisconnectPreExistingBannedPeersEnhanced(t *testing.T) {
 	ctx := context.Background()

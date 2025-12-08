@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -180,55 +179,6 @@ func TestIntegrationRetryWithMultipleFailures(t *testing.T) {
 		assert.GreaterOrEqual(t, int(atomic.LoadInt32(&peer1Attempts)), 1)
 		assert.GreaterOrEqual(t, int(atomic.LoadInt32(&peer2Attempts)), 1)
 		assert.GreaterOrEqual(t, int(atomic.LoadInt32(&peer3Attempts)), 1)
-	})
-
-	t.Run("Concurrent_Block_Processing", func(t *testing.T) {
-		t.Skip("This test cannot work as the underlying block validation does not support concurrent processing yet")
-
-		// Test processing multiple blocks concurrently
-		var wg sync.WaitGroup
-		successCount := atomic.Int32{}
-
-		// Process blocks 6-9 concurrently
-		for i := 6; i < 10; i++ {
-			wg.Add(1)
-			go func(blockIndex int) {
-				defer wg.Done()
-
-				block := blocks[blockIndex]
-				hash := block.Hash()
-
-				// Mock successful response
-				blockBytes, _ := block.Bytes()
-				httpmock.RegisterResponder("GET", fmt.Sprintf("http://concurrent-peer/block/%s", hash),
-					httpmock.NewBytesResponder(200, blockBytes))
-
-				// Send block announcement
-				blockFound := processBlockFound{
-					hash:    hash,
-					baseURL: "http://concurrent-peer",
-					peerID:  fmt.Sprintf("peer_%d", blockIndex),
-				}
-
-				server.blockPriorityQueue.Add(blockFound, PriorityChainExtending, block.Height)
-				successCount.Add(1)
-			}(i)
-		}
-
-		wg.Wait()
-
-		// Verify all blocks were queued
-		assert.Equal(t, int32(4), successCount.Load())
-
-		// Process queue
-		time.Sleep(2 * time.Second)
-
-		// Verify blocks were processed
-		for i := 6; i < 10; i++ {
-			exists, err := server.blockValidation.GetBlockExists(ctx, blocks[i].Hash())
-			require.NoError(t, err)
-			assert.True(t, exists, "Block %d should be processed", i)
-		}
 	})
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -402,17 +403,46 @@ func TestGetSetUutxoStore(t *testing.T) {
 // TestServerStart tests the Start method
 func TestServerStart(t *testing.T) {
 	t.Run("FSM wait error", func(t *testing.T) {
-		t.Skip("Skipping test - requires mock blockchain client with FSM support")
-		// This test requires a mock blockchain client that can simulate FSM errors
-		// The testutil.NewMemorySQLiteBlockchainClient function doesn't exist
-		// TODO: Create a proper mock blockchain client or fix the testutil package
+		// Create mock blockchain client that returns error on FSM wait
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).
+			Return(errors.NewServiceError("FSM wait failed"))
+
+		server := &Server{
+			logger:           ulogger.TestLogger{},
+			blockchainClient: mockBlockchainClient,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		readyCh := make(chan struct{})
+		err := server.Start(ctx, readyCh)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "FSM wait failed")
+
+		mockBlockchainClient.AssertExpectations(t)
 	})
 
-	t.Run("successful start", func(t *testing.T) {
-		t.Skip("Skipping test that requires proper FSM initialization")
-		// This test requires a properly initialized blockchain client with FSM
-		// The memory SQLite client doesn't transition from IDLE state properly
-		// TODO: Fix this test by mocking the blockchain client's WaitUntilFSMTransitionFromIdleState method
+	t.Run("context cancelled during FSM wait", func(t *testing.T) {
+		// Create mock blockchain client that blocks until context is cancelled
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).
+			Return(context.Canceled)
+
+		server := &Server{
+			logger:           ulogger.TestLogger{},
+			blockchainClient: mockBlockchainClient,
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // Cancel immediately
+
+		readyCh := make(chan struct{})
+		err := server.Start(ctx, readyCh)
+		require.Error(t, err)
+
+		mockBlockchainClient.AssertExpectations(t)
 	})
 }
 

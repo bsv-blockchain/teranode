@@ -811,15 +811,6 @@ func TestGenerateBlocks_NegativeCount(t *testing.T) {
 	})
 }
 
-// TestGenerateBlocks_ContextCancellation tests context cancellation handling
-func TestGenerateBlocks_ContextCancellation(t *testing.T) {
-	t.Run("should handle context cancellation", func(t *testing.T) {
-		// This test demonstrates that GenerateBlocks respects context cancellation
-		// We skip the actual execution to avoid the nil pointer from missing mining service
-		t.Skip("Context cancellation is tested in integration tests to avoid nil pointer issues")
-	})
-}
-
 // MockBlockchainClientForCoverage provides targeted mock functionality for coverage tests
 type MockBlockchainClientForCoverage struct {
 	*blockchain.Mock

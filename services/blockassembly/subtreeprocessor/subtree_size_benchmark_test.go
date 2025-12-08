@@ -74,7 +74,7 @@ func TestSubtreeProcessorSizePerformance(t *testing.T) {
 			duration := time.Since(start)
 
 			subtreeCount := len(stp.chainedSubtrees)
-			if stp.currentSubtree.Length() > 1 { // >1 because of coinbase placeholder
+			if stp.currentSubtree.Load().Length() > 1 { // >1 because of coinbase placeholder
 				subtreeCount++
 			}
 
@@ -567,7 +567,7 @@ func BenchmarkSubtreeProcessorOverheadBreakdown(b *testing.B) {
 
 			b.StopTimer()
 			subtreeCount := len(stp.chainedSubtrees)
-			if stp.currentSubtree != nil && stp.currentSubtree.Length() > 0 {
+			if currentSubtree := stp.currentSubtree.Load(); currentSubtree != nil && currentSubtree.Length() > 0 {
 				subtreeCount++
 			}
 			rotations := len(stp.chainedSubtrees)
