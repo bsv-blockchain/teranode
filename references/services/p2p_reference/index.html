@@ -4882,6 +4882,56 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Public API Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-metrics-and-reputation-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catchup Metrics and Reputation Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation-reporting-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation Reporting Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-status-and-query-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Status and Query Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-tracking-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Tracking Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -6580,6 +6630,56 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Public API Methods">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-metrics-and-reputation-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catchup Metrics and Reputation Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#validation-reporting-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation Reporting Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#peer-status-and-query-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Status and Query Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#metrics-tracking-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Metrics Tracking Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -7027,6 +7127,147 @@
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">IsBanned</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">peer</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsBannedRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsBannedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
 <p>Checks if a specific peer ID is currently banned.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ListBanned</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ListBannedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Returns a list of all currently banned peer IDs and IP addresses.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ClearBanned</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ClearBannedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Clears all bans from the ban list, allowing all previously banned peers to reconnect.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">AddBanScore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">AddBanScoreRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">AddBanScoreResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Increments a peer's ban score. When the ban score reaches a threshold, the peer is automatically banned.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ConnectPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ConnectPeerRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ConnectPeerResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Initiates a connection to a peer using multiaddr format.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">DisconnectPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">DisconnectPeerRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">DisconnectPeerResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Disconnects from a currently connected peer.</p>
+<h4 id="catchup-metrics-and-reputation-endpoints">Catchup Metrics and Reputation Endpoints</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupAttempt</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupAttemptRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupAttemptResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Records that a catchup attempt was initiated with a peer. This increments the interaction attempt counter.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupSuccess</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupSuccessRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupSuccessResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Records a successful catchup operation with a peer. This increments success counters and updates the peer's reputation score positively.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier</li>
+<li><code>duration_ms</code> (int64): Duration of the catchup operation in milliseconds</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupFailure</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupFailureRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupFailureResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Records a failed catchup attempt with a peer. This increments failure counters and reduces reputation.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier</li>
+</ul>
+<p><strong>Impact</strong>: Decreases peer reputation score and applies recent failure penalty.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordCatchupMalicious</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupMaliciousRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordCatchupMaliciousResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Marks a peer as malicious after detecting invalid data during catchup. This severely penalizes the peer's reputation.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">UpdateCatchupReputation</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupReputationRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupReputationResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Directly sets a peer's reputation score. Use sparingly as this bypasses the normal reputation calculation algorithm.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier</li>
+<li><code>score</code> (double): Reputation score value (0-100 range)</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">UpdateCatchupError</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupErrorRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">UpdateCatchupErrorResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Records the last error message from a catchup attempt with a peer.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier</li>
+<li><code>error_msg</code> (string): Error message describing the failure</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ResetReputation</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ResetReputationRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ResetReputationResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Resets reputation for one or all peers back to neutral (50.0). This implements the reputation recovery mechanism.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string, optional): If provided, resets reputation for specific peer. If omitted, resets all peers</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeersForCatchup</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeersForCatchupRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeersForCatchupResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Returns a list of peers suitable for catchup operations, ranked by reputation and filtered by selection criteria.</p>
+<p><strong>Parameters</strong>: None (can optionally filter in the future)</p>
+<p><strong>Returns</strong>: Array of <code>PeerInfoForCatchup</code> containing peer ID, height, block hash, data hub URL, catchup metrics</p>
+<h4 id="validation-reporting-endpoints">Validation Reporting Endpoints</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ReportValidSubtree</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidSubtreeRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidSubtreeResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Reports that a peer provided a valid subtree. This increments the peer's positive interaction counters.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier</li>
+<li><code>subtree_hash</code> (string): Hash of the validated subtree</li>
+</ul>
+<p><strong>Returns</strong>: <code>success</code> (bool) and <code>message</code> (string) indicating validation result</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ReportValidBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">ReportValidBlockResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Reports that a peer provided a valid block. This increments the peer's positive interaction counters.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier</li>
+<li><code>block_hash</code> (string): Hash of the validated block</li>
+</ul>
+<p><strong>Returns</strong>: <code>success</code> (bool) and <code>message</code> (string) indicating validation result</p>
+<h4 id="peer-status-and-query-endpoints">Peer Status and Query Endpoints</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">IsPeerMalicious</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerMaliciousRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerMaliciousResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Checks if a peer has been marked as malicious.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier</li>
+</ul>
+<p><strong>Returns</strong>: <code>is_malicious</code> (bool) and optional <code>reason</code> (string) explaining why peer is malicious</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">IsPeerUnhealthy</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerUnhealthyRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">IsPeerUnhealthyResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Checks if a peer is considered unhealthy based on reputation score and recent failures.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier</li>
+</ul>
+<p><strong>Returns</strong>: <code>is_unhealthy</code> (bool), optional <code>reason</code> (string), and <code>reputation_score</code> (float)</p>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeerRegistry</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeerRegistryResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Returns comprehensive information about all peers in the registry, including full reputation metrics and interaction history.</p>
+<p><strong>Returns</strong>: Array of <code>PeerRegistryInfo</code> containing:</p>
+<ul>
+<li><strong>Identity</strong>: ID, client name, connection status</li>
+<li><strong>Blockchain</strong>: Height, block hash, storage mode, data hub URL</li>
+<li><strong>Ban Info</strong>: Ban score, is banned status</li>
+<li><strong>Connection</strong>: Connected at timestamp, bytes received</li>
+<li><strong>Timing</strong>: Last block time, last message time</li>
+<li><strong>Metrics</strong>: Interaction attempts/successes/failures, malicious count, average response time</li>
+<li><strong>Reputation</strong>: Reputation score (0-100)</li>
+<li><strong>Errors</strong>: Last catchup error message and timestamp</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">GetPeer</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeerRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">GetPeerResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Returns detailed information for a single peer by peer ID.</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier to query</li>
+</ul>
+<p><strong>Returns</strong>: <code>PeerRegistryInfo</code> object with full peer details, and <code>found</code> (bool) indicating if peer exists</p>
+<h4 id="metrics-tracking-endpoints">Metrics Tracking Endpoints</h4>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">RecordBytesDownloaded</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordBytesDownloadedRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">p2p_api</span><span class="p">.</span><span class="nx">RecordBytesDownloadedResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</code></pre></div>
+<p>Records bytes downloaded from a peer via HTTP (typically from their DataHub).</p>
+<p><strong>Parameters</strong>:</p>
+<ul>
+<li><code>peer_id</code> (string): The peer identifier that provided the data</li>
+<li><code>bytes_downloaded</code> (uint64): Number of bytes downloaded from the peer</li>
+</ul>
 <h3 id="message-handlers">Message Handlers</h3>
 <ul>
 <li><code>handleBlockTopic</code>: Handles incoming block messages and validates block announcements.</li>
