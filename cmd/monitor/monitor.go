@@ -10,8 +10,12 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
+	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
+	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -25,6 +29,7 @@ type ViewMode int
 const (
 	ViewDashboard ViewMode = iota
 	ViewSettings
+	ViewHealth
 )
 
 // Styles for the TUI
@@ -76,15 +81,26 @@ var (
 				MarginTop(1)
 )
 
+// ServiceHealth holds health status for a single service
+type ServiceHealth struct {
+	Name       string
+	Configured bool
+	Healthy    bool
+	StatusCode int
+	Message    string
+	Latency    time.Duration
+}
+
 // NodeData holds the fetched node data
 type NodeData struct {
-	BlockStats   *model.BlockStats
-	FSMState     *blockchain.FSMStateType
-	Peers        []*p2p.PeerInfo
-	BlockchainOK bool
-	P2POK        bool
-	LastUpdated  time.Time
-	Error        string
+	BlockStats    *model.BlockStats
+	FSMState      *blockchain.FSMStateType
+	Peers         []*p2p.PeerInfo
+	BlockchainOK  bool
+	P2POK         bool
+	ServiceHealth map[string]*ServiceHealth
+	LastUpdated   time.Time
+	Error         string
 }
 
 // Model represents the TUI state
@@ -93,6 +109,10 @@ type Model struct {
 	settings         *settings.Settings
 	blockchainClient blockchain.ClientI
 	p2pClient        p2p.ClientI
+	validatorClient  validator.Interface
+	blockValClient   blockvalidation.Interface
+	blockAsmClient   blockassembly.ClientI
+	subtreeClient    subtreevalidation.Interface
 	spinner          spinner.Model
 	data             NodeData
 	width            int
@@ -123,6 +143,27 @@ func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
 		return nil, errors.NewProcessingError("failed to create p2p client", err)
 	}
 
+	// Create optional service clients (don't fail if not configured)
+	var validatorClient validator.Interface
+	if s.Validator.GRPCAddress != "" {
+		validatorClient, _ = validator.NewClient(ctx, logger, s)
+	}
+
+	var blockValClient blockvalidation.Interface
+	if s.BlockValidation.GRPCAddress != "" {
+		blockValClient, _ = blockvalidation.NewClient(ctx, logger, s, "TUI Monitor")
+	}
+
+	var blockAsmClient blockassembly.ClientI
+	if s.BlockAssembly.GRPCAddress != "" {
+		blockAsmClient, _ = blockassembly.NewClient(ctx, logger, s)
+	}
+
+	var subtreeClient subtreevalidation.Interface
+	if s.SubtreeValidation.GRPCAddress != "" {
+		subtreeClient, _ = subtreevalidation.NewClient(ctx, logger, s, "TUI Monitor")
+	}
+
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -132,6 +173,10 @@ func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
 		settings:         s,
 		blockchainClient: blockchainClient,
 		p2pClient:        p2pClient,
+		validatorClient:  validatorClient,
+		blockValClient:   blockValClient,
+		blockAsmClient:   blockAsmClient,
+		subtreeClient:    subtreeClient,
 		spinner:          sp,
 		refreshInterval:  2 * time.Second,
 		width:            80,
@@ -161,7 +206,8 @@ func (m Model) fetchData() tea.Msg {
 	defer cancel()
 
 	data := NodeData{
-		LastUpdated: time.Now(),
+		LastUpdated:   time.Now(),
+		ServiceHealth: make(map[string]*ServiceHealth),
 	}
 
 	// Fetch blockchain stats
@@ -196,7 +242,120 @@ func (m Model) fetchData() tea.Msg {
 		data.P2POK = true
 	}
 
+	// Collect service health
+	m.collectServiceHealth(ctx, &data)
+
 	return dataMsg(data)
+}
+
+// collectServiceHealth checks health of all configured services
+func (m Model) collectServiceHealth(ctx context.Context, data *NodeData) {
+	// Blockchain health (use existing check)
+	data.ServiceHealth["blockchain"] = &ServiceHealth{
+		Name:       "Blockchain",
+		Configured: true,
+		Healthy:    data.BlockchainOK,
+		StatusCode: 200,
+		Message:    "OK",
+	}
+	if !data.BlockchainOK {
+		data.ServiceHealth["blockchain"].StatusCode = 503
+		data.ServiceHealth["blockchain"].Message = "Connection failed"
+	}
+
+	// P2P health (use existing check)
+	data.ServiceHealth["p2p"] = &ServiceHealth{
+		Name:       "P2P",
+		Configured: true,
+		Healthy:    data.P2POK,
+		StatusCode: 200,
+		Message:    fmt.Sprintf("%d peers connected", len(data.Peers)),
+	}
+	if !data.P2POK {
+		data.ServiceHealth["p2p"].StatusCode = 503
+		data.ServiceHealth["p2p"].Message = "Connection failed"
+	}
+
+	// Validator health
+	if m.validatorClient != nil {
+		health := m.checkServiceHealth(ctx, "Validator", func(ctx context.Context) (int, string, error) {
+			return m.validatorClient.Health(ctx, true)
+		})
+		data.ServiceHealth["validator"] = health
+	} else {
+		data.ServiceHealth["validator"] = &ServiceHealth{
+			Name:       "Validator",
+			Configured: false,
+			Message:    "Not configured",
+		}
+	}
+
+	// Block Validation health
+	if m.blockValClient != nil {
+		health := m.checkServiceHealth(ctx, "Block Validation", func(ctx context.Context) (int, string, error) {
+			return m.blockValClient.Health(ctx, true)
+		})
+		data.ServiceHealth["blockvalidation"] = health
+	} else {
+		data.ServiceHealth["blockvalidation"] = &ServiceHealth{
+			Name:       "Block Validation",
+			Configured: false,
+			Message:    "Not configured",
+		}
+	}
+
+	// Block Assembly health
+	if m.blockAsmClient != nil {
+		health := m.checkServiceHealth(ctx, "Block Assembly", func(ctx context.Context) (int, string, error) {
+			return m.blockAsmClient.Health(ctx, true)
+		})
+		data.ServiceHealth["blockassembly"] = health
+	} else {
+		data.ServiceHealth["blockassembly"] = &ServiceHealth{
+			Name:       "Block Assembly",
+			Configured: false,
+			Message:    "Not configured",
+		}
+	}
+
+	// Subtree Validation health
+	if m.subtreeClient != nil {
+		health := m.checkServiceHealth(ctx, "Subtree Validation", func(ctx context.Context) (int, string, error) {
+			return m.subtreeClient.Health(ctx, true)
+		})
+		data.ServiceHealth["subtreevalidation"] = health
+	} else {
+		data.ServiceHealth["subtreevalidation"] = &ServiceHealth{
+			Name:       "Subtree Validation",
+			Configured: false,
+			Message:    "Not configured",
+		}
+	}
+}
+
+// checkServiceHealth checks health of a single service with timing
+func (m Model) checkServiceHealth(ctx context.Context, name string, healthFn func(context.Context) (int, string, error)) *ServiceHealth {
+	start := time.Now()
+	statusCode, message, err := healthFn(ctx)
+	latency := time.Since(start)
+
+	health := &ServiceHealth{
+		Name:       name,
+		Configured: true,
+		Latency:    latency,
+	}
+
+	if err != nil {
+		health.Healthy = false
+		health.StatusCode = 503
+		health.Message = err.Error()
+	} else {
+		health.StatusCode = statusCode
+		health.Message = message
+		health.Healthy = statusCode == 200
+	}
+
+	return health
 }
 
 // Update handles messages and updates the model
@@ -208,7 +367,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "esc":
-			if m.viewMode == ViewSettings {
+			if m.viewMode == ViewSettings || m.viewMode == ViewHealth {
 				m.viewMode = ViewDashboard
 				return m, nil
 			}
@@ -222,6 +381,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.viewMode = ViewSettings
 				m.settingsScroll = 0
+			}
+			return m, nil
+		case "h":
+			if m.viewMode == ViewHealth {
+				m.viewMode = ViewDashboard
+			} else {
+				m.viewMode = ViewHealth
 			}
 			return m, nil
 		case "j", "down":
@@ -272,6 +438,10 @@ func (m Model) View() string {
 		return m.renderSettingsView()
 	}
 
+	if m.viewMode == ViewHealth {
+		return m.renderHealthView()
+	}
+
 	var b strings.Builder
 
 	// Title
@@ -297,6 +467,10 @@ func (m Model) View() string {
 		b.WriteString(peersPanel)
 	}
 
+	// Service health summary row
+	b.WriteString("\n")
+	b.WriteString(m.renderHealthSummary())
+
 	// Error display
 	if m.data.Error != "" {
 		b.WriteString("\n")
@@ -310,7 +484,7 @@ func (m Model) View() string {
 
 	// Help
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("q: quit | r: refresh | s: settings"))
+	b.WriteString(helpStyle.Render("q: quit | r: refresh | s: settings | h: health"))
 
 	return b.String()
 }
@@ -645,6 +819,122 @@ func (m Model) renderSettingRow(key, value string) string {
 		value = settingValueStyle.Render(value)
 	}
 	return fmt.Sprintf("  %s %s", settingKeyStyle.Render(key+":"), value)
+}
+
+// renderHealthSummary renders a compact one-line health summary for the dashboard
+func (m Model) renderHealthSummary() string {
+	if len(m.data.ServiceHealth) == 0 {
+		return labelStyle.Render("Services: loading...")
+	}
+
+	// Define service order and short names
+	services := []struct {
+		key   string
+		short string
+	}{
+		{"blockchain", "BC"},
+		{"validator", "VAL"},
+		{"blockvalidation", "BV"},
+		{"blockassembly", "BA"},
+		{"subtreevalidation", "ST"},
+		{"p2p", "P2P"},
+	}
+
+	var parts []string
+	for _, svc := range services {
+		health, ok := m.data.ServiceHealth[svc.key]
+		if !ok {
+			continue
+		}
+
+		var status string
+		if !health.Configured {
+			status = labelStyle.Render(svc.short + ":○")
+		} else if health.Healthy {
+			status = goodStyle.Render(svc.short + ":✓")
+		} else {
+			status = errorStyle.Render(svc.short + ":✗")
+		}
+		parts = append(parts, status)
+	}
+
+	return labelStyle.Render("Services: ") + strings.Join(parts, " ")
+}
+
+// renderHealthView renders the detailed health view
+func (m Model) renderHealthView() string {
+	var b strings.Builder
+
+	// Title
+	title := titleStyle.Render("TERANODE SERVICE HEALTH")
+	b.WriteString(title)
+	b.WriteString("\n\n")
+
+	// Header row
+	header := fmt.Sprintf("  %-20s %-10s %-10s %s", "SERVICE", "STATUS", "LATENCY", "MESSAGE")
+	b.WriteString(headerStyle.Render(header))
+	b.WriteString("\n")
+	b.WriteString(labelStyle.Render("  " + strings.Repeat("─", 70)))
+	b.WriteString("\n")
+
+	// Define service order
+	serviceOrder := []string{
+		"blockchain",
+		"validator",
+		"blockvalidation",
+		"blockassembly",
+		"subtreevalidation",
+		"p2p",
+	}
+
+	for _, key := range serviceOrder {
+		health, ok := m.data.ServiceHealth[key]
+		if !ok {
+			continue
+		}
+
+		// Status indicator
+		var statusStr string
+		if !health.Configured {
+			statusStr = labelStyle.Render("○ N/A")
+		} else if health.Healthy {
+			statusStr = goodStyle.Render("✓ OK")
+		} else {
+			statusStr = errorStyle.Render("✗ DOWN")
+		}
+
+		// Latency
+		var latencyStr string
+		if health.Configured && health.Latency > 0 {
+			latencyStr = fmt.Sprintf("%dms", health.Latency.Milliseconds())
+		} else {
+			latencyStr = "-"
+		}
+
+		// Message (truncate if too long)
+		message := health.Message
+		if len(message) > 35 {
+			message = message[:32] + "..."
+		}
+
+		line := fmt.Sprintf("  %-20s %-10s %-10s %s",
+			health.Name,
+			statusStr,
+			latencyStr,
+			message)
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+
+	// Last checked timestamp
+	b.WriteString("\n")
+	b.WriteString(labelStyle.Render(fmt.Sprintf("Last checked: %s", m.data.LastUpdated.Format("15:04:05"))))
+
+	// Help
+	b.WriteString("\n\n")
+	b.WriteString(helpStyle.Render("h/esc: back | r: refresh | q: quit"))
+
+	return b.String()
 }
 
 // Run starts the TUI monitor
