@@ -55,7 +55,7 @@ func (st *ServiceTracker) Services() []string {
 	}
 
 	// Collect services with counts
-	var sc []serviceCount
+	sc := make([]serviceCount, 0, len(st.services))
 	for name, count := range st.services {
 		sc = append(sc, serviceCount{name, count})
 	}

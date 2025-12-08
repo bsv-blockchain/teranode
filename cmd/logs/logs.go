@@ -4,9 +4,9 @@
 package logs
 
 import (
-	"fmt"
 	"os"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -14,13 +14,13 @@ import (
 func Run(logFile string, bufferSize int) error {
 	// Check if log file exists
 	if _, err := os.Stat(logFile); os.IsNotExist(err) {
-		return fmt.Errorf("log file not found: %s\n\nMake sure teranode is running with logrotate:\n  ./scripts/run-teranode-with-logrotate.sh", logFile)
+		return errors.NewError("log file not found: " + logFile + "\n\nMake sure teranode is running with logrotate:\n  ./scripts/run-teranode-with-logrotate.sh")
 	}
 
 	// Create the model
 	model, err := NewModel(logFile, bufferSize)
 	if err != nil {
-		return fmt.Errorf("failed to initialize log viewer: %w", err)
+		return errors.NewError("failed to initialize log viewer", err)
 	}
 
 	// Run the TUI
@@ -31,7 +31,7 @@ func Run(logFile string, bufferSize int) error {
 	)
 
 	if _, err := p.Run(); err != nil {
-		return fmt.Errorf("error running log viewer: %w", err)
+		return errors.NewError("error running log viewer", err)
 	}
 
 	return nil

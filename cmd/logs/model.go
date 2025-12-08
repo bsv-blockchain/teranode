@@ -1,9 +1,9 @@
 package logs
 
 import (
-	"fmt"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -72,7 +72,7 @@ func NewModel(logFile string, bufferSize int) (*Model, error) {
 	// Create file watcher
 	watcher, err := NewFileWatcher(logFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create file watcher: %w", err)
+		return nil, errors.NewError("failed to create file watcher", err)
 	}
 
 	// Create text inputs

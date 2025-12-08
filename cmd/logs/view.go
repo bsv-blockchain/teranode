@@ -103,12 +103,6 @@ func (m *Model) renderHeader() string {
 func (m *Model) renderStatusBar() string {
 	filterSummary := "Filter: " + m.filter.Summary()
 
-	// Pad to full width
-	padding := m.width - lipgloss.Width(filterSummary)
-	if padding < 0 {
-		padding = 0
-	}
-
 	return StatusBarStyle.Width(m.width).Render(filterSummary)
 }
 
@@ -237,9 +231,9 @@ func (m *Model) renderErrorPanel() string {
 		return HelpStyle.Render("ERRORS (5m): none")
 	}
 
-	var parts []string
 	// Show top services with errors/warnings (limit to fit width)
 	maxServices := 4
+	parts := make([]string, 0, maxServices+1)
 	for i, sc := range summary {
 		if i >= maxServices {
 			break

@@ -840,7 +840,7 @@ func (m Model) renderHealthSummary() string {
 		{"p2p", "P2P"},
 	}
 
-	var parts []string
+	parts := make([]string, 0, len(services))
 	for _, svc := range services {
 		health, ok := m.data.ServiceHealth[svc.key]
 		if !ok {

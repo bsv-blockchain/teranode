@@ -81,7 +81,9 @@ func (fw *FileWatcher) readLastLines(n int) []LogEntry {
 	}
 
 	// Seek to beginning
-	fw.file.Seek(0, io.SeekStart)
+	if _, err := fw.file.Seek(0, io.SeekStart); err != nil {
+		return nil
+	}
 
 	// Read all lines (not efficient for huge files, but simple)
 	var lines []string
@@ -160,7 +162,7 @@ func (fw *FileWatcher) readNewContent() {
 	// Handle truncation (log rotation)
 	if info.Size() < fw.offset {
 		fw.offset = 0
-		fw.file.Seek(0, io.SeekStart)
+		_, _ = fw.file.Seek(0, io.SeekStart)
 	}
 
 	// No new content
@@ -169,7 +171,7 @@ func (fw *FileWatcher) readNewContent() {
 	}
 
 	// Seek to last read position
-	fw.file.Seek(fw.offset, io.SeekStart)
+	_, _ = fw.file.Seek(fw.offset, io.SeekStart)
 
 	// Read new lines
 	scanner := bufio.NewScanner(fw.file)

@@ -69,7 +69,7 @@ func (f *Filter) GetServicesString() string {
 	if len(f.Services) == 0 {
 		return ""
 	}
-	var services []string
+	services := make([]string, 0, len(f.Services))
 	for s := range f.Services {
 		services = append(services, s)
 	}
