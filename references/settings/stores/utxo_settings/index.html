@@ -6543,6 +6543,34 @@
 <td>Spend batch concurrency</td>
 </tr>
 <tr>
+<td>SpendWaitTimeout</td>
+<td>time.Duration</td>
+<td>30s</td>
+<td>utxostore_spendWaitTimeout</td>
+<td>Spend operation wait timeout</td>
+</tr>
+<tr>
+<td>SpendCircuitBreakerFailureCount</td>
+<td>int</td>
+<td>10</td>
+<td>utxostore_spendCircuitBreakerFailureCount</td>
+<td>Circuit breaker failure threshold</td>
+</tr>
+<tr>
+<td>SpendCircuitBreakerCooldown</td>
+<td>time.Duration</td>
+<td>30s</td>
+<td>utxostore_spendCircuitBreakerCooldown</td>
+<td>Circuit breaker cooldown period</td>
+</tr>
+<tr>
+<td>SpendCircuitBreakerHalfOpenMax</td>
+<td>int</td>
+<td>4</td>
+<td>utxostore_spendCircuitBreakerHalfOpenMax</td>
+<td>Circuit breaker half-open max</td>
+</tr>
+<tr>
 <td>StoreBatcherDurationMillis</td>
 <td>int</td>
 <td>100</td>
@@ -6564,16 +6592,86 @@
 <td>UTXO operation batch size</td>
 </tr>
 <tr>
+<td>IncrementBatcherSize</td>
+<td>int</td>
+<td>256</td>
+<td>utxostore_incrementBatcherSize</td>
+<td>Increment operation batch size</td>
+</tr>
+<tr>
+<td>IncrementBatcherDurationMillis</td>
+<td>int</td>
+<td>10</td>
+<td>utxostore_incrementBatcherDurationMillis</td>
+<td>Increment batch duration</td>
+</tr>
+<tr>
+<td>SetDAHBatcherSize</td>
+<td>int</td>
+<td>256</td>
+<td>utxostore_setDAHBatcherSize</td>
+<td>DAH operation batch size</td>
+</tr>
+<tr>
+<td>SetDAHBatcherDurationMillis</td>
+<td>int</td>
+<td>10</td>
+<td>utxostore_setDAHBatcherDurationMillis</td>
+<td>DAH batch duration</td>
+</tr>
+<tr>
+<td>LockedBatcherSize</td>
+<td>int</td>
+<td>1024</td>
+<td>utxostore_lockedBatcherSize</td>
+<td>Locked operation batch size</td>
+</tr>
+<tr>
+<td>LockedBatcherDurationMillis</td>
+<td>int</td>
+<td>5</td>
+<td>utxostore_lockedBatcherDurationMillis</td>
+<td>Locked batch duration</td>
+</tr>
+<tr>
+<td>LongestChainBatcherSize</td>
+<td>int</td>
+<td>1024</td>
+<td>utxostore_longestChainBatcherSize</td>
+<td>Longest chain batch size</td>
+</tr>
+<tr>
+<td>LongestChainBatcherDurationMillis</td>
+<td>int</td>
+<td>5</td>
+<td>utxostore_longestChainBatcherDurationMillis</td>
+<td>Longest chain batch duration</td>
+</tr>
+<tr>
+<td>GetBatcherSize</td>
+<td>int</td>
+<td>1</td>
+<td>utxostore_getBatcherSize</td>
+<td>Get operation batch size</td>
+</tr>
+<tr>
+<td>GetBatcherDurationMillis</td>
+<td>int</td>
+<td>10</td>
+<td>utxostore_getBatcherDurationMillis</td>
+<td>Get batch duration</td>
+</tr>
+<tr>
 <td>DBTimeout</td>
 <td>time.Duration</td>
-<td>30s</td>
-<td>utxostore_dbTimeout</td>
+<td>5s</td>
+<td>utxostore_dbTimeoutDuration</td>
 <td><strong>CRITICAL</strong> - Database operation timeout</td>
 </tr>
 <tr>
 <td>UseExternalTxCache</td>
 <td>bool</td>
-<td>false</td>
+<td>true</td>
 <td>utxostore_useExternalTxCache</td>
 <td>External transaction cache usage</td>
 </tr>
@@ -6594,15 +6692,15 @@
 <tr>
 <td>PostgresMaxOpenConns</td>
 <td>int</td>
-<td>100</td>
-<td>utxostore_postgresMaxOpenConns</td>
+<td>80</td>
+<td>utxostore_utxo_postgresMaxOpenConns</td>
 <td>PostgreSQL max open connections</td>
 </tr>
 <tr>
 <td>VerboseDebug</td>
 <td>bool</td>
 <td>false</td>
-<td>utxostore_verboseDebug</td>
+<td>utxostore_verbose_debug</td>
 <td>Verbose debug logging</td>
 </tr>
 <tr>
@@ -6615,14 +6713,14 @@
 <tr>
 <td>MaxMinedRoutines</td>
 <td>int</td>
-<td>10</td>
+<td>128</td>
 <td>utxostore_maxMinedRoutines</td>
 <td>Max mined transaction routines</td>
 </tr>
 <tr>
 <td>MaxMinedBatchSize</td>
 <td>int</td>
-<td>1000</td>
+<td>1024</td>
 <td>utxostore_maxMinedBatchSize</td>
 <td>Max mined transaction batch size</td>
 </tr>
@@ -6639,6 +6737,41 @@
 <td>false</td>
 <td>utxostore_disableDAHCleaner</td>
 <td><strong>CRITICAL</strong> - DAH cleaner process control</td>
+</tr>
+<tr>
+<td>PrunerParentUpdateBatcherSize</td>
+<td>int</td>
+<td>2000</td>
+<td>utxostore_prunerParentUpdateBatcherSize</td>
+<td>Pruner parent update batch size</td>
+</tr>
+<tr>
+<td>PrunerParentUpdateBatcherDurationMillis</td>
+<td>int</td>
+<td>100</td>
+<td>utxostore_prunerParentUpdateBatcherDurationMillis</td>
+<td>Pruner parent update batch duration</td>
+</tr>
+<tr>
+<td>PrunerDeleteBatcherSize</td>
+<td>int</td>
+<td>5000</td>
+<td>utxostore_prunerDeleteBatcherSize</td>
+<td>Pruner delete batch size</td>
+</tr>
+<tr>
+<td>PrunerDeleteBatcherDurationMillis</td>
+<td>int</td>
+<td>100</td>
+<td>utxostore_prunerDeleteBatcherDurationMillis</td>
+<td>Pruner delete batch duration</td>
+</tr>
+<tr>
+<td>PrunerMaxConcurrentOperations</td>
+<td>int</td>
+<td>0</td>
+<td>utxostore_prunerMaxConcurrentOperations</td>
+<td>Pruner max concurrent operations (0=use queue size)</td>
 </tr>
 </tbody>
 </table>

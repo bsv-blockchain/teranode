@@ -6797,6 +6797,13 @@
 <td><strong>CRITICAL</strong> - Write operation policy URL</td>
 </tr>
 <tr>
+<td>QueryPolicyURL</td>
+<td>*url.URL</td>
+<td>"defaultQueryPolicy"</td>
+<td>aerospike_queryPolicy</td>
+<td><strong>CRITICAL</strong> - Query operation policy URL</td>
+</tr>
+<tr>
 <td>UseDefaultBasePolicies</td>
 <td>bool</td>
 <td>false</td>
@@ -6919,6 +6926,11 @@
 <li>Lower timeout (default: 1s total, 1s socket)</li>
 <li>Controls write behavior (create, update, replace)</li>
 <li>Used for UTXO creation and updates</li>
+</ul>
+<p><strong>Query Policy</strong> (for query operations):</p>
+<ul>
+<li>Timeout configuration for query operations</li>
+<li>Used for database queries</li>
 </ul>
 <h3 id="policy-configuration-behavior">Policy Configuration Behavior</h3>
 <ul>
@@ -7065,6 +7077,11 @@
 <td>Policy parsing failure</td>
 </tr>
 <tr>
+<td>QueryPolicyURL</td>
+<td>Must be valid URL with aerospike:// scheme</td>
+<td>Policy parsing failure</td>
+</tr>
+<tr>
 <td>StatsRefreshDuration</td>
 <td>Must be positive duration</td>
 <td>Statistics update frequency</td>
@@ -7123,6 +7140,7 @@ aerospike_useDefaultPolicies = false
 aerospike_batchPolicy = aerospike:///?MaxRetries=5&amp;TotalTimeout=64s&amp;SocketTimeout=10s
 aerospike_readPolicy = aerospike:///?MaxRetries=3&amp;TotalTimeout=1s&amp;SocketTimeout=1s
 aerospike_writePolicy = aerospike:///?MaxRetries=3&amp;TotalTimeout=1s&amp;SocketTimeout=1s
+aerospike_queryPolicy = aerospike:///?MaxRetries=3&amp;TotalTimeout=2s&amp;SocketTimeout=1s
 </code></pre></div>
 <h2 id="performance-tuning-guidelines">Performance Tuning Guidelines</h2>
 <h3 id="latency-optimized-configuration">Latency-Optimized Configuration</h3>

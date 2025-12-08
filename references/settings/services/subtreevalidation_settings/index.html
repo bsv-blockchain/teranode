@@ -6573,14 +6573,21 @@
 <td>int32</td>
 <td>0</td>
 <td>subtreevalidation_blockHeightRetentionAdjustment</td>
-<td>Retention adjustment</td>
+<td>Block height retention adjustment</td>
 </tr>
 <tr>
 <td>OrphanageTimeout</td>
 <td>time.Duration</td>
 <td>15m</td>
 <td>subtreevalidation_orphanageTimeout</td>
-<td>Orphaned transaction cleanup</td>
+<td>Orphaned transaction timeout</td>
+</tr>
+<tr>
+<td>OrphanageMaxSize</td>
+<td>int</td>
+<td>100000</td>
+<td>subtreevalidation_orphanageMaxSize</td>
+<td><strong>CRITICAL</strong> - Maximum orphanage transactions</td>
 </tr>
 <tr>
 <td>CheckBlockSubtreesConcurrency</td>
@@ -6685,18 +6692,19 @@
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
-<div class="highlight"><pre><span></span><code>subtreevalidation_grpcListenAddress = &quot;:8089&quot;
-subtreestore = &quot;memory:///&quot;
+<div class="highlight"><pre><span></span><code><span class="nv">subtreevalidation_grpcListenAddress</span><span class="o">=</span>:8089
+<span class="nv">subtreestore</span><span class="o">=</span>memory:///
 </code></pre></div>
 <h3 id="performance-tuning">Performance Tuning</h3>
-<div class="highlight"><pre><span></span><code>subtreevalidation_check_block_subtrees_concurrency = 64
-subtreevalidation_getMissingTransactions = 16
-subtreevalidation_spendBatcherSize = 2048
+<div class="highlight"><pre><span></span><code><span class="nv">subtreevalidation_check_block_subtrees_concurrency</span><span class="o">=</span><span class="m">64</span>
+<span class="nv">subtreevalidation_getMissingTransactions</span><span class="o">=</span><span class="m">16</span>
+<span class="nv">subtreevalidation_spendBatcherSize</span><span class="o">=</span><span class="m">2048</span>
+<span class="nv">subtreevalidation_orphanageMaxSize</span><span class="o">=</span><span class="m">200000</span>
 </code></pre></div>
 <h3 id="cache-configuration">Cache Configuration</h3>
-<div class="highlight"><pre><span></span><code>subtreevalidation_txMetaCacheEnabled = true
-txMetaCacheMaxMB = 512
-subtreevalidation_processTxMetaUsingCache_BatchSize = 2048
+<div class="highlight"><pre><span></span><code><span class="nv">subtreevalidation_txMetaCacheEnabled</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">txMetaCacheMaxMB</span><span class="o">=</span><span class="m">512</span>
+<span class="nv">subtreevalidation_processTxMetaUsingCache_BatchSize</span><span class="o">=</span><span class="m">2048</span>
 </code></pre></div>
 
 

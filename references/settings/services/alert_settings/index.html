@@ -5332,10 +5332,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#internal-configuration" class="md-nav__link">
+  <a href="#internal-configuration-hardcoded" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Internal Configuration
+        Internal Configuration (Hardcoded)
       
     </span>
   </a>
@@ -5392,6 +5392,17 @@
     <span class="md-ellipsis">
       
         Development Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#auto-generated-private-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-Generated Private Key
       
     </span>
   </a>
@@ -6277,10 +6288,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#internal-configuration" class="md-nav__link">
+  <a href="#internal-configuration-hardcoded" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Internal Configuration
+        Internal Configuration (Hardcoded)
       
     </span>
   </a>
@@ -6343,6 +6354,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#auto-generated-private-key" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Auto-Generated Private Key
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6384,55 +6406,61 @@
 <td>[]string</td>
 <td>[]</td>
 <td>alert_genesis_keys</td>
-<td><strong>CRITICAL</strong> - Service fails without valid keys</td>
+<td><strong>CRITICAL</strong> - Service fails during Init() if empty (pipe-delimited)</td>
 </tr>
 <tr>
 <td>P2PPrivateKey</td>
 <td>string</td>
 <td>""</td>
 <td>alert_p2p_private_key</td>
-<td>Auto-generates if empty</td>
+<td>PEM-format private key. Auto-generates if empty</td>
 </tr>
 <tr>
 <td>ProtocolID</td>
 <td>string</td>
 <td>"/bitcoin/alert-system/1.0.0"</td>
 <td>alert_protocol_id</td>
-<td>P2P protocol identification</td>
+<td>libp2p protocol identifier</td>
 </tr>
 <tr>
 <td>StoreURL</td>
 <td>*url.URL</td>
 <td>"sqlite:///alert"</td>
 <td>alert_store</td>
-<td>Database connection</td>
+<td>Database connection URL</td>
 </tr>
 <tr>
 <td>TopicName</td>
 <td>string</td>
 <td>"bitcoin_alert_system"</td>
 <td>alert_topic_name</td>
-<td>P2P topic (network-prefixed)</td>
+<td>P2P pubsub topic (auto-prefixed for testnet/regtest)</td>
 </tr>
 <tr>
 <td>P2PPort</td>
 <td>int</td>
 <td>9908</td>
 <td>ALERT_P2P_PORT</td>
-<td>P2P listening port</td>
+<td>P2P listening port (must be &gt;= 10)</td>
 </tr>
 </tbody>
 </table>
 <h2 id="network-specific-behavior">Network-Specific Behavior</h2>
-<p><strong>Topic Name Prefixing:</strong>
-- Mainnet: Uses configured name as-is
-- Testnet: Prefixed as <code>bitcoin_alert_system_testnet</code>
-- Regtest: Prefixed as <code>bitcoin_alert_system_regtest</code></p>
+<p><strong>Topic Name Prefixing:</strong></p>
+<ul>
+<li>Mainnet: Uses configured <code>TopicName</code> as-is</li>
+<li>Testnet: Auto-prefixed as <code>{TopicName}_testnet</code></li>
+<li>Regtest: Auto-prefixed as <code>{TopicName}_regtest</code></li>
+</ul>
+<p>This behavior cannot be overridden.</p>
 <h2 id="auto-generation-behavior">Auto-Generation Behavior</h2>
-<p><strong>P2P Private Key:</strong>
-- If empty, creates <code>$HOME/.alert-system/private_key.pem</code>
-- Creates directory with 0750 permissions
-- Sets <code>PrivateKeyPath</code> in internal config</p>
+<p><strong>P2P Private Key:</strong></p>
+<ul>
+<li>Triggers only if <code>P2PPrivateKey</code> is empty</li>
+<li>Creates directory: <code>$HOME/.alert-system/</code> (permissions: 0750)</li>
+<li>Creates file: <code>private_key.pem</code></li>
+<li>Sets internal <code>PrivateKeyPath</code> (does not modify Teranode settings)</li>
+</ul>
 <h2 id="database-configuration">Database Configuration</h2>
 <table>
 <thead>
@@ -6440,6 +6468,7 @@
 <th>Scheme</th>
 <th>URL Format</th>
 <th>Pool Settings</th>
+<th>Notes</th>
 </tr>
 </thead>
 <tbody>
@@ -6447,25 +6476,29 @@
 <td>SQLite</td>
 <td><code>sqlite:///database_name</code></td>
 <td>Max Idle: 1, Max Open: 1</td>
+<td>File created: <code>{DataFolder}/{database_name}.db</code></td>
 </tr>
 <tr>
 <td>SQLite Memory</td>
 <td><code>sqlitememory:///database_name</code></td>
 <td>Max Idle: 1, Max Open: 1</td>
+<td>In-memory only</td>
 </tr>
 <tr>
 <td>PostgreSQL</td>
-<td><code>postgres://user:pass@host:port/db</code></td>
-<td>Max Idle: 2, Max Open: 5</td>
+<td><code>postgres://user:pass@host:port/db?sslmode=require</code></td>
+<td>Max Idle: 2, Max Open: 5, Timeout: 20s</td>
+<td>Supports <code>sslmode</code> query param</td>
 </tr>
 <tr>
 <td>MySQL</td>
-<td><code>mysql://user:pass@host:port/db</code></td>
-<td>Max Idle: 2, Max Open: 5</td>
+<td><code>mysql://user:pass@host:port/db?sslmode=require</code></td>
+<td>Max Idle: 2, Max Open: 5, Timeout: 20s</td>
+<td>Supports <code>sslmode</code> query param</td>
 </tr>
 </tbody>
 </table>
-<h2 id="internal-configuration">Internal Configuration</h2>
+<h2 id="internal-configuration-hardcoded">Internal Configuration (Hardcoded)</h2>
 <table>
 <thead>
 <tr>
@@ -6488,7 +6521,7 @@
 <tr>
 <td>AutoMigrate</td>
 <td>true</td>
-<td>Database schema migration</td>
+<td>Database schema migration on startup</td>
 </tr>
 <tr>
 <td>DHTMode</td>
@@ -6498,7 +6531,17 @@
 <tr>
 <td>P2P.IP</td>
 <td>"0.0.0.0"</td>
-<td>P2P listening address</td>
+<td>P2P listening address (all interfaces)</td>
+</tr>
+<tr>
+<td>PeerBanDuration</td>
+<td>100 years</td>
+<td>Duration for peer bans (effectively permanent)</td>
+</tr>
+<tr>
+<td>DisableRPCVerification</td>
+<td>false</td>
+<td>Validates blockchain client connection at startup</td>
 </tr>
 </tbody>
 </table>
@@ -6546,6 +6589,7 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Error</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
@@ -6553,33 +6597,44 @@
 <td>GenesisKeys</td>
 <td>Must not be empty</td>
 <td><code>config.ErrNoGenesisKeys</code></td>
+<td>During <code>Init()</code></td>
 </tr>
 <tr>
 <td>P2P.IP</td>
 <td>Length &gt;= 5 characters</td>
 <td><code>config.ErrNoP2PIP</code></td>
+<td>During <code>Init()</code></td>
 </tr>
 <tr>
 <td>P2P.Port</td>
-<td>Length &gt;= 2 characters</td>
+<td>Length &gt;= 2 characters (&gt;= 10)</td>
 <td><code>config.ErrNoP2PPort</code></td>
+<td>During <code>Init()</code></td>
 </tr>
 <tr>
 <td>StoreURL</td>
-<td>Supported scheme</td>
+<td>Supported scheme (sqlite/sqlitememory/postgres/mysql)</td>
 <td><code>ErrDatastoreUnsupported</code></td>
+<td>During <code>Init()</code></td>
 </tr>
 </tbody>
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="production-configuration">Production Configuration</h3>
-<div class="highlight"><pre><span></span><code>alert_store = postgres://user:pass@host:5432/alert_db
-alert_genesis_keys = &quot;key1|key2&quot;
-alert_p2p_port = 4001
+<div class="highlight"><pre><span></span><code><span class="nv">alert_store</span><span class="o">=</span>postgres://user:pass@host:5432/alert_db?sslmode<span class="o">=</span>require
+<span class="nv">alert_genesis_keys</span><span class="o">=</span>key1<span class="p">|</span>key2<span class="p">|</span>key3
+<span class="nv">alert_p2p_port</span><span class="o">=</span><span class="m">4001</span>
+<span class="nv">alert_protocol_id</span><span class="o">=</span>/bitcoin/alert-system/1.0.0
+<span class="nv">alert_topic_name</span><span class="o">=</span>bitcoin_alert_system
 </code></pre></div>
 <h3 id="development-configuration">Development Configuration</h3>
-<div class="highlight"><pre><span></span><code>alert_store = sqlite:///alert
-alert_genesis_keys = &quot;key1&quot;
+<div class="highlight"><pre><span></span><code><span class="nv">alert_store</span><span class="o">=</span>sqlite:///alert
+<span class="nv">alert_genesis_keys</span><span class="o">=</span>devkey1
+</code></pre></div>
+<h3 id="auto-generated-private-key">Auto-Generated Private Key</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Leave empty to auto-generate</span>
+<span class="nv">alert_p2p_private_key</span><span class="o">=</span>
+<span class="c1"># File will be created at: $HOME/.alert-system/private_key.pem</span>
 </code></pre></div>
 
 

@@ -5395,10 +5395,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#grpc-server-health-checks" class="md-nav__link">
+  <a href="#grpc-server" class="md-nav__link">
     <span class="md-ellipsis">
       
-        gRPC Server Health Checks
+        gRPC Server
       
     </span>
   </a>
@@ -6284,10 +6284,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#grpc-server-health-checks" class="md-nav__link">
+  <a href="#grpc-server" class="md-nav__link">
     <span class="md-ellipsis">
       
-        gRPC Server Health Checks
+        gRPC Server
       
     </span>
   </a>
@@ -6447,14 +6447,14 @@
 <td>string</td>
 <td>":8087"</td>
 <td>blockchain_grpcListenAddress</td>
-<td><strong>CRITICAL</strong> - gRPC server binding, health checks only run if not empty</td>
+<td>gRPC server binding (optional, skips health checks if empty)</td>
 </tr>
 <tr>
 <td>HTTPListenAddress</td>
 <td>string</td>
 <td>":8082"</td>
 <td>blockchain_httpListenAddress</td>
-<td><strong>CRITICAL</strong> - HTTP server binding, service fails if empty</td>
+<td><strong>CRITICAL</strong> - HTTP server binding (fails during Start() if empty)</td>
 </tr>
 <tr>
 <td>MaxRetries</td>
@@ -6475,59 +6475,39 @@
 <td>*url.URL</td>
 <td>"sqlite:///blockchain"</td>
 <td>blockchain_store</td>
-<td><strong>CRITICAL</strong> - Database connection</td>
-</tr>
-<tr>
-<td>FSMStateRestore</td>
-<td>bool</td>
-<td>false</td>
-<td>fsm_state_restore</td>
-<td>FSM restore mode trigger</td>
+<td><strong>CRITICAL</strong> - Database connection (fails during daemon startup if null)</td>
 </tr>
 <tr>
 <td>FSMStateChangeDelay</td>
 <td>time.Duration</td>
 <td>0</td>
 <td>fsm_state_change_delay</td>
-<td><strong>TESTING ONLY</strong> - FSM state transition delay</td>
-</tr>
-<tr>
-<td>StoreDBTimeoutMillis</td>
-<td>int</td>
-<td>5000</td>
-<td>blockchain_store_dbTimeoutMillis</td>
-<td>Configuration placeholder</td>
-</tr>
-<tr>
-<td>InitializeNodeInState</td>
-<td>string</td>
-<td>""</td>
-<td>blockchain_initializeNodeInState</td>
-<td>Initial FSM state for testing</td>
+<td><strong>TESTING ONLY</strong> - Delays FSM state transitions</td>
 </tr>
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies</h2>
-<h3 id="grpc-server-health-checks">gRPC Server Health Checks</h3>
+<h3 id="grpc-server">gRPC Server</h3>
 <ul>
-<li>Health checks only run if <code>GRPCListenAddress</code> is not empty</li>
+<li><code>GRPCListenAddress</code> optional - service runs without it</li>
+<li>Health checks skipped if empty</li>
 <li><code>GRPCAddress</code> used for client connections</li>
 </ul>
 <h3 id="http-api-server">HTTP API Server</h3>
 <ul>
-<li>Service fails to start if <code>HTTPListenAddress</code> is empty</li>
-<li>Required for block invalidation/revalidation endpoints</li>
+<li><code>HTTPListenAddress</code> required - service fails during Start() if empty</li>
+<li>Provides block invalidation/revalidation endpoints</li>
 </ul>
 <h3 id="fsm-state-management">FSM State Management</h3>
 <ul>
-<li><code>FSMStateRestore</code> triggers restore mode in RPC service</li>
-<li><code>FSMStateChangeDelay</code> used for test timing control</li>
-<li><code>InitializeNodeInState</code> sets initial test state</li>
+<li><code>FSMStateChangeDelay</code> delays state transitions for test timing control</li>
+<li>Initial FSM state set via <code>-localTestStartFromState</code> CLI argument</li>
+<li>FSM restore mode triggered by RPC service (see RPC settings)</li>
 </ul>
 <h3 id="database-configuration">Database Configuration</h3>
 <ul>
 <li><code>StoreURL</code> determines database backend</li>
-<li><code>StoreDBTimeoutMillis</code> is placeholder (not implemented)</li>
+<li>Service fails during daemon startup if null</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies</h2>
 <table>
@@ -6558,6 +6538,7 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Error</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
@@ -6565,32 +6546,35 @@
 <td>HTTPListenAddress</td>
 <td>Must not be empty</td>
 <td>"No blockchain_httpListenAddress specified"</td>
-</tr>
-<tr>
-<td>GRPCListenAddress</td>
-<td>Health checks only if not empty</td>
-<td>Service monitoring disabled</td>
+<td>During Start()</td>
 </tr>
 <tr>
 <td>StoreURL</td>
-<td>Must be valid URL format</td>
-<td>Database connection failure</td>
+<td>Must not be null</td>
+<td>"blockchain store url not found"</td>
+<td>During daemon startup</td>
+</tr>
+<tr>
+<td>GRPCListenAddress</td>
+<td>Optional</td>
+<td>No error if empty, skips gRPC health checks</td>
+<td>During Health()</td>
 </tr>
 </tbody>
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
-<div class="highlight"><pre><span></span><code>blockchain_grpcListenAddress = &quot;:8087&quot;
-blockchain_httpListenAddress = &quot;:8082&quot;
-blockchain_store = &quot;sqlite:///blockchain&quot;
+<div class="highlight"><pre><span></span><code><span class="nv">blockchain_grpcListenAddress</span><span class="o">=</span>:8087
+<span class="nv">blockchain_httpListenAddress</span><span class="o">=</span>:8082
+<span class="nv">blockchain_store</span><span class="o">=</span>sqlite:///blockchain
 </code></pre></div>
 <h3 id="postgresql-configuration">PostgreSQL Configuration</h3>
-<div class="highlight"><pre><span></span><code>blockchain_store = &quot;postgres://user:pass@host:5432/blockchain&quot;
+<div class="highlight"><pre><span></span><code><span class="nv">blockchain_store</span><span class="o">=</span>postgres://user:pass@host:5432/blockchain
 </code></pre></div>
 <h3 id="testing-configuration">Testing Configuration</h3>
-<div class="highlight"><pre><span></span><code>fsm_state_restore = true
-fsm_state_change_delay = 1000
-blockchain_initializeNodeInState = &quot;IDLE&quot;
+<div class="highlight"><pre><span></span><code><span class="nv">fsm_state_change_delay</span><span class="o">=</span>1s
+<span class="c1"># Set initial FSM state via CLI argument:</span>
+<span class="c1"># -localTestStartFromState=IDLE</span>
 </code></pre></div>
 
 

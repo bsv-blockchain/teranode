@@ -5456,6 +5456,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#reorg-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reorg Detection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#transaction-processing" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6317,6 +6328,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#reorg-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reorg Detection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#transaction-processing" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6499,6 +6521,13 @@
 <td>Sleep when no blocks available</td>
 </tr>
 <tr>
+<td>BlockPersisterEnableDefensiveReorgCheck</td>
+<td>bool</td>
+<td>true</td>
+<td>blockpersister_enableDefensiveReorgCheck</td>
+<td><strong>CRITICAL</strong> - Enables defensive reorg detection checks</td>
+</tr>
+<tr>
 <td>BlockStore</td>
 <td>*url.URL</td>
 <td>""</td>
@@ -6522,6 +6551,13 @@
 <ul>
 <li><code>BlockPersisterPersistAge</code> determines safety margin from chain tip</li>
 <li><code>BlockPersisterPersistSleep</code> controls polling frequency when idle</li>
+</ul>
+<h3 id="reorg-detection">Reorg Detection</h3>
+<ul>
+<li><code>BlockPersisterEnableDefensiveReorgCheck</code> enables defensive checks for blockchain reorganizations</li>
+<li>Validates last persisted block is still on current chain</li>
+<li>Validates parent hash consistency during block retrieval</li>
+<li>Can be disabled for testing or special scenarios</li>
 </ul>
 <h3 id="transaction-processing">Transaction Processing</h3>
 <ul>
@@ -6589,18 +6625,19 @@
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
-<div class="highlight"><pre><span></span><code>blockPersisterStore = &quot;file://./data/blockstore&quot;
-blockPersister_stateFile = &quot;file://./data/blockpersister_state.txt&quot;
-blockpersister_persistAge = 2
+<div class="highlight"><pre><span></span><code><span class="nv">blockPersisterStore</span><span class="o">=</span>file://./data/blockstore
+<span class="nv">blockPersister_stateFile</span><span class="o">=</span>file://./data/blockpersister_state.txt
+<span class="nv">blockpersister_persistAge</span><span class="o">=</span><span class="m">2</span>
+<span class="nv">blockpersister_enableDefensiveReorgCheck</span><span class="o">=</span><span class="nb">true</span>
 </code></pre></div>
 <h3 id="high-performance-configuration">High Performance Configuration</h3>
-<div class="highlight"><pre><span></span><code>blockpersister_concurrency = 16
-blockpersister_batchMissingTransactions = true
-blockvalidation_processTxMetaUsingStore_BatchSize = 2048
+<div class="highlight"><pre><span></span><code><span class="nv">blockpersister_concurrency</span><span class="o">=</span><span class="m">16</span>
+<span class="nv">blockpersister_batchMissingTransactions</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">blockvalidation_processTxMetaUsingStore_BatchSize</span><span class="o">=</span><span class="m">2048</span>
 </code></pre></div>
 <h3 id="http-server-configuration">HTTP Server Configuration</h3>
-<div class="highlight"><pre><span></span><code>blockPersister_httpListenAddress = &quot;:8083&quot;
-blockstore = &quot;file://./data/blockstore&quot;
+<div class="highlight"><pre><span></span><code><span class="nv">blockPersister_httpListenAddress</span><span class="o">=</span>:8083
+<span class="nv">blockstore</span><span class="o">=</span>file://./data/blockstore
 </code></pre></div>
 
 

@@ -5327,10 +5327,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#global-security-settings" class="md-nav__link">
+  <a href="#global-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Global Security Settings
+        Global Settings
       
     </span>
   </a>
@@ -5448,6 +5448,28 @@
     <span class="md-ellipsis">
       
         Centrifuge WebSocket
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#http-response-signing_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTP Response Signing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stats-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stats Endpoints
       
     </span>
   </a>
@@ -6272,10 +6294,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#global-security-settings" class="md-nav__link">
+  <a href="#global-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Global Security Settings
+        Global Settings
       
     </span>
   </a>
@@ -6399,6 +6421,28 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#http-response-signing_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTP Response Signing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stats-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stats Endpoints
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6440,67 +6484,53 @@
 <td>string</td>
 <td>"/api/v1"</td>
 <td>asset_apiPrefix</td>
-<td>API route grouping</td>
+<td>URL prefix for API endpoints</td>
 </tr>
 <tr>
 <td>CentrifugeListenAddress</td>
 <td>string</td>
 <td>":8892"</td>
 <td>asset_centrifugeListenAddress</td>
-<td>WebSocket server address</td>
+<td>WebSocket server binding address</td>
 </tr>
 <tr>
 <td>CentrifugeDisable</td>
 <td>bool</td>
 <td>false</td>
 <td>asset_centrifuge_disable</td>
-<td><strong>CRITICAL</strong> - Disables WebSocket functionality</td>
+<td>Disables WebSocket server</td>
 </tr>
 <tr>
 <td>HTTPAddress</td>
 <td>string</td>
 <td>"http://localhost:8090/api/v1"</td>
 <td>asset_httpAddress</td>
-<td><strong>CRITICAL for Centrifuge</strong> - Base URL</td>
-</tr>
-<tr>
-<td>HTTPPublicAddress</td>
-<td>string</td>
-<td>""</td>
-<td>asset_httpPublicAddress</td>
-<td>Configuration placeholder</td>
+<td><strong>Required when Centrifuge enabled</strong> - Must be valid URL</td>
 </tr>
 <tr>
 <td>HTTPListenAddress</td>
 <td>string</td>
 <td>":8090"</td>
 <td>asset_httpListenAddress</td>
-<td><strong>CRITICAL</strong> - HTTP server binding</td>
-</tr>
-<tr>
-<td>HTTPPort</td>
-<td>int</td>
-<td>8090</td>
-<td>ASSET_HTTP_PORT</td>
-<td>Configuration placeholder</td>
+<td><strong>CRITICAL</strong> - HTTP server binding (fails if empty)</td>
 </tr>
 <tr>
 <td>SignHTTPResponses</td>
 <td>bool</td>
 <td>false</td>
 <td>asset_sign_http_responses</td>
-<td>HTTP response signing</td>
+<td>Adds X-Signature header (requires P2P.PrivateKey)</td>
 </tr>
 <tr>
 <td>EchoDebug</td>
 <td>bool</td>
 <td>false</td>
 <td>ECHO_DEBUG</td>
-<td>Echo framework debug mode</td>
+<td>Enables verbose logging and request middleware</td>
 </tr>
 </tbody>
 </table>
-<h2 id="global-security-settings">Global Security Settings</h2>
+<h2 id="global-settings">Global Settings</h2>
 <table>
 <thead>
 <tr>
@@ -6517,40 +6547,64 @@
 <td>int</td>
 <td>0</td>
 <td>securityLevelHTTP</td>
-<td>HTTP (0) vs HTTPS (non-zero)</td>
+<td>0=HTTP, non-zero=HTTPS</td>
 </tr>
 <tr>
 <td>ServerCertFile</td>
 <td>string</td>
 <td>""</td>
 <td>server_certFile</td>
-<td><strong>Required for HTTPS</strong></td>
+<td>TLS certificate file (required for HTTPS)</td>
 </tr>
 <tr>
 <td>ServerKeyFile</td>
 <td>string</td>
 <td>""</td>
 <td>server_keyFile</td>
-<td><strong>Required for HTTPS</strong></td>
+<td>TLS key file (required for HTTPS)</td>
+</tr>
+<tr>
+<td>StatsPrefix</td>
+<td>string</td>
+<td>"gocore"</td>
+<td>stats_prefix</td>
+<td>URL prefix for gocore stats endpoints</td>
+</tr>
+<tr>
+<td>Dashboard.Enabled</td>
+<td>bool</td>
+<td>false</td>
+<td>N/A</td>
+<td>Enables dashboard UI and authentication</td>
+</tr>
+<tr>
+<td>P2P.PrivateKey</td>
+<td>string</td>
+<td>""</td>
+<td>p2p_private_key</td>
+<td>Hex-encoded Ed25519 key for response signing</td>
 </tr>
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies</h2>
 <h3 id="centrifuge-websocket-server">Centrifuge WebSocket Server</h3>
 <ul>
-<li>Requires <code>CentrifugeDisable = false</code></li>
-<li>Requires valid <code>CentrifugeListenAddress</code></li>
-<li>Requires valid <code>HTTPAddress</code> for base URL</li>
+<li><code>CentrifugeDisable = false</code> enables WebSocket server</li>
+<li><code>CentrifugeListenAddress</code> must be non-empty</li>
+<li><code>HTTPAddress</code> must be valid URL (fails during Init() if invalid)</li>
 </ul>
 <h3 id="http-response-signing">HTTP Response Signing</h3>
 <ul>
-<li>Requires <code>SignHTTPResponses = true</code></li>
-<li>Requires valid <code>P2P.PrivateKey</code> (Ed25519 format)</li>
+<li><code>SignHTTPResponses = true</code> enables signing</li>
+<li>Requires <code>P2P.PrivateKey</code> (hex-encoded Ed25519 format)</li>
+<li>Invalid key logs error but continues without signing (non-fatal)</li>
+<li>Adds <code>X-Signature</code> header to responses</li>
 </ul>
 <h3 id="https-support">HTTPS Support</h3>
 <ul>
-<li>Requires <code>SecurityLevelHTTP != 0</code></li>
-<li>Requires valid <code>ServerCertFile</code> and <code>ServerKeyFile</code></li>
+<li><code>SecurityLevelHTTP != 0</code> enables HTTPS</li>
+<li>Both <code>ServerCertFile</code> and <code>ServerKeyFile</code> required</li>
+<li>Validated during Start(), fails if missing</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies</h2>
 <table>
@@ -6585,7 +6639,17 @@
 <tr>
 <td>BlockchainClient</td>
 <td>blockchain.ClientI</td>
-<td>Blockchain operations, FSM state</td>
+<td>Blockchain operations, FSM state, waits for FSM transition from IDLE</td>
+</tr>
+<tr>
+<td>BlockvalidationClient</td>
+<td>blockvalidation.Interface</td>
+<td>Block invalidation/revalidation endpoints</td>
+</tr>
+<tr>
+<td>P2PClient</td>
+<td>p2p.ClientI</td>
+<td>Peer registry and catchup status endpoints</td>
 </tr>
 </tbody>
 </table>
@@ -6596,6 +6660,7 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Error</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
@@ -6603,38 +6668,51 @@
 <td>HTTPListenAddress</td>
 <td>Must not be empty</td>
 <td>"no asset_httpListenAddress setting found"</td>
+<td>During Init()</td>
 </tr>
 <tr>
 <td>HTTPAddress</td>
-<td>Required when Centrifuge enabled</td>
+<td>Must be valid URL when Centrifuge enabled</td>
 <td>"asset_httpAddress not found in config"</td>
+<td>During Init()</td>
 </tr>
 <tr>
 <td>ServerCertFile</td>
-<td>Required when HTTPS enabled</td>
+<td>Must exist when SecurityLevelHTTP != 0</td>
 <td>"server_certFile is required for HTTPS"</td>
+<td>During Start()</td>
 </tr>
 <tr>
 <td>ServerKeyFile</td>
-<td>Required when HTTPS enabled</td>
+<td>Must exist when SecurityLevelHTTP != 0</td>
 <td>"server_keyFile is required for HTTPS"</td>
+<td>During Start()</td>
 </tr>
 </tbody>
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="http-configuration">HTTP Configuration</h3>
-<div class="highlight"><pre><span></span><code>asset_httpListenAddress = &quot;:8090&quot;
-asset_apiPrefix = &quot;/api/v1&quot;
+<div class="highlight"><pre><span></span><code><span class="nv">asset_httpListenAddress</span><span class="o">=</span>:8090
+<span class="nv">asset_apiPrefix</span><span class="o">=</span>/api/v1
 </code></pre></div>
 <h3 id="https-configuration">HTTPS Configuration</h3>
-<div class="highlight"><pre><span></span><code>securityLevelHTTP = 1
-server_certFile = &quot;/path/to/cert.pem&quot;
-server_keyFile = &quot;/path/to/key.pem&quot;
+<div class="highlight"><pre><span></span><code><span class="nv">securityLevelHTTP</span><span class="o">=</span><span class="m">1</span>
+<span class="nv">server_certFile</span><span class="o">=</span>/path/to/cert.pem
+<span class="nv">server_keyFile</span><span class="o">=</span>/path/to/key.pem
+<span class="nv">asset_httpListenAddress</span><span class="o">=</span>:8090
 </code></pre></div>
 <h3 id="centrifuge-websocket">Centrifuge WebSocket</h3>
-<div class="highlight"><pre><span></span><code>asset_centrifuge_disable = false
-asset_centrifugeListenAddress = &quot;:8892&quot;
-asset_httpAddress = &quot;http://localhost:8090/api/v1&quot;
+<div class="highlight"><pre><span></span><code><span class="nv">asset_centrifuge_disable</span><span class="o">=</span><span class="nb">false</span>
+<span class="nv">asset_centrifugeListenAddress</span><span class="o">=</span>:8892
+<span class="nv">asset_httpAddress</span><span class="o">=</span>http://localhost:8090/api/v1
+</code></pre></div>
+<h3 id="http-response-signing_1">HTTP Response Signing</h3>
+<div class="highlight"><pre><span></span><code><span class="nv">asset_sign_http_responses</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">p2p_private_key</span><span class="o">=</span>&lt;hex-encoded-ed25519-private-key&gt;
+</code></pre></div>
+<h3 id="stats-endpoints">Stats Endpoints</h3>
+<div class="highlight"><pre><span></span><code><span class="nv">stats_prefix</span><span class="o">=</span>/stats/
+<span class="c1"># Registers: /stats/stats, /stats/reset, /stats/*</span>
 </code></pre></div>
 
 

@@ -5539,6 +5539,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#network-scanning-prevention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network Scanning Prevention
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5583,17 +5594,6 @@
     <span class="md-ellipsis">
       
         Basic Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#peer-health-monitoring" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Peer Health Monitoring
       
     </span>
   </a>
@@ -6349,6 +6349,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#network-scanning-prevention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Network Scanning Prevention
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6393,17 +6404,6 @@
     <span class="md-ellipsis">
       
         Basic Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#peer-health-monitoring" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Peer Health Monitoring
       
     </span>
   </a>
@@ -6502,10 +6502,10 @@
 </thead>
 <tbody>
 <tr>
-<td>BootstrapAddresses</td>
+<td>BootstrapPeers</td>
 <td>[]string</td>
 <td>[]</td>
-<td>p2p_bootstrapAddresses</td>
+<td>p2p_bootstrap_peers</td>
 <td>DHT bootstrapping entry points</td>
 </tr>
 <tr>
@@ -6614,13 +6614,6 @@
 <td>Forced peer connections</td>
 </tr>
 <tr>
-<td>RelayPeers</td>
-<td>[]string</td>
-<td>[]</td>
-<td>p2p_relay_peers</td>
-<td>NAT traversal relay peers</td>
-</tr>
-<tr>
 <td>PeerCacheDir</td>
 <td>string</td>
 <td>""</td>
@@ -6677,51 +6670,30 @@
 <td>DHT provider record cleanup interval</td>
 </tr>
 <tr>
-<td>PeerMapMaxSize</td>
-<td>int</td>
-<td>100000</td>
-<td>p2p_peer_map_max_size</td>
-<td>Maximum entries in peer maps</td>
-</tr>
-<tr>
-<td>PeerMapTTL</td>
-<td>time.Duration</td>
-<td>30m</td>
-<td>p2p_peer_map_ttl</td>
-<td>Time-to-live for peer map entries</td>
-</tr>
-<tr>
-<td>PeerMapCleanupInterval</td>
-<td>time.Duration</td>
-<td>5m</td>
-<td>p2p_peer_map_cleanup_interval</td>
-<td>Peer map cleanup interval</td>
-</tr>
-<tr>
 <td>EnableNAT</td>
 <td>bool</td>
 <td>false</td>
 <td>p2p_enable_nat</td>
-<td>Enable UPnP/NAT-PMP port mapping</td>
+<td><strong>CRITICAL</strong> - UPnP/NAT-PMP port mapping (triggers network scanning)</td>
 </tr>
 <tr>
 <td>EnableMDNS</td>
 <td>bool</td>
 <td>false</td>
 <td>p2p_enable_mdns</td>
-<td>Enable mDNS peer discovery</td>
+<td><strong>CRITICAL</strong> - mDNS peer discovery (triggers network scanning)</td>
 </tr>
 <tr>
 <td>AllowPrivateIPs</td>
 <td>bool</td>
 <td>false</td>
 <td>p2p_allow_private_ips</td>
-<td>Allow connections to private IP addresses</td>
+<td><strong>CRITICAL</strong> - Allow RFC1918 private IP connections</td>
 </tr>
 <tr>
 <td>SyncCoordinatorPeriodicEvaluationInterval</td>
 <td>time.Duration</td>
-<td>-</td>
+<td>30s</td>
 <td>p2p_sync_coordinator_periodic_evaluation_interval</td>
 <td>Sync coordinator evaluation interval</td>
 </tr>
@@ -6742,8 +6714,13 @@
 <h3 id="peer-connection-management">Peer Connection Management</h3>
 <ul>
 <li><code>StaticPeers</code> ensures persistent connections</li>
-<li><code>RelayPeers</code> for NAT traversal</li>
 <li><code>PeerCacheDir</code> for peer persistence</li>
+</ul>
+<h3 id="network-scanning-prevention">Network Scanning Prevention</h3>
+<ul>
+<li><code>EnableNAT</code> triggers UPnP gateway scans (disable on shared hosting)</li>
+<li><code>EnableMDNS</code> triggers LAN broadcasts (disable on shared hosting)</li>
+<li><code>AllowPrivateIPs</code> allows RFC1918 connections (disable for production)</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies</h2>
 <table>
@@ -6808,35 +6785,36 @@
 <td>Sync behavior</td>
 </tr>
 <tr>
-<td>PeerHealthCheckInterval</td>
-<td>Must be positive for health checks</td>
-<td>Peer monitoring</td>
+<td>EnableNAT</td>
+<td>Triggers network scanning on shared hosting</td>
+<td>Security alerts</td>
+</tr>
+<tr>
+<td>EnableMDNS</td>
+<td>Triggers network scanning on shared hosting</td>
+<td>Security alerts</td>
 </tr>
 </tbody>
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
-<div class="highlight"><pre><span></span><code>p2p_grpcListenAddress = &quot;:9906&quot;
-p2p_port = 9906
-listen_mode = &quot;full&quot;
-</code></pre></div>
-<h3 id="peer-health-monitoring">Peer Health Monitoring</h3>
-<div class="highlight"><pre><span></span><code>p2p_health_check_interval = 30s
-p2p_health_http_timeout = 5s
-p2p_health_remove_after_failures = 3
+<div class="highlight"><pre><span></span><code><span class="nv">p2p_grpcListenAddress</span><span class="o">=</span>:9906
+<span class="nv">p2p_port</span><span class="o">=</span><span class="m">9906</span>
+<span class="nv">listen_mode</span><span class="o">=</span>full
 </code></pre></div>
 <h3 id="forced-sync-configuration">Forced Sync Configuration</h3>
-<div class="highlight"><pre><span></span><code>p2p_force_sync_peer = &quot;peer-id-12345&quot;
-p2p_allow_pruned_node_fallback = true
+<div class="highlight"><pre><span></span><code><span class="nv">p2p_force_sync_peer</span><span class="o">=</span>peer-id-12345
+<span class="nv">p2p_allow_pruned_node_fallback</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">p2p_sync_coordinator_periodic_evaluation_interval</span><span class="o">=</span>30s
 </code></pre></div>
 <h3 id="dht-configuration">DHT Configuration</h3>
 <p>The DHT (Distributed Hash Table) can operate in two modes:</p>
-<div class="highlight"><pre><span></span><code># Server mode (default) - advertises on DHT and stores provider records
-p2p_dht_mode = &quot;server&quot;
-p2p_dht_cleanup_interval = 24h
+<div class="highlight"><pre><span></span><code><span class="c1"># Server mode (default) - advertises on DHT and stores provider records</span>
+<span class="nv">p2p_dht_mode</span><span class="o">=</span>server
+<span class="nv">p2p_dht_cleanup_interval</span><span class="o">=</span>24h
 
-# Client mode - query-only, no provider storage (reduces network overhead)
-p2p_dht_mode = &quot;client&quot;
+<span class="c1"># Client mode - query-only, no provider storage (reduces network overhead)</span>
+<span class="nv">p2p_dht_mode</span><span class="o">=</span>client
 </code></pre></div>
 <p><strong>When to use client mode:</strong></p>
 <ul>
@@ -6846,20 +6824,15 @@ p2p_dht_mode = &quot;client&quot;
 </ul>
 <h3 id="peer-registry-configuration">Peer Registry Configuration</h3>
 <p>The peer registry persists peer reputation data across restarts:</p>
-<div class="highlight"><pre><span></span><code># Directory for peer cache file (default: binary directory)
-p2p_peer_cache_dir = &quot;/var/lib/teranode/p2p&quot;
-
-# Peer map memory management
-p2p_peer_map_max_size = 100000
-p2p_peer_map_ttl = 30m
-p2p_peer_map_cleanup_interval = 5m
+<div class="highlight"><pre><span></span><code><span class="c1"># Directory for peer cache file (default: binary directory)</span>
+<span class="nv">p2p_peer_cache_dir</span><span class="o">=</span>/var/lib/teranode/p2p
 </code></pre></div>
 <h3 id="network-security-configuration">Network Security Configuration</h3>
 <p><strong>IMPORTANT</strong>: These settings can trigger network scanning alerts on shared hosting.</p>
-<div class="highlight"><pre><span></span><code># Enable only on private/local networks
-p2p_enable_nat = false      # UPnP/NAT-PMP port mapping
-p2p_enable_mdns = false     # mDNS peer discovery
-p2p_allow_private_ips = false  # RFC1918 private networks
+<div class="highlight"><pre><span></span><code><span class="c1"># Enable only on private/local networks</span>
+<span class="nv">p2p_enable_nat</span><span class="o">=</span><span class="nb">false</span><span class="w">      </span><span class="c1"># UPnP/NAT-PMP port mapping</span>
+<span class="nv">p2p_enable_mdns</span><span class="o">=</span><span class="nb">false</span><span class="w">     </span><span class="c1"># mDNS peer discovery</span>
+<span class="nv">p2p_allow_private_ips</span><span class="o">=</span><span class="nb">false</span><span class="w">  </span><span class="c1"># RFC1918 private networks</span>
 </code></pre></div>
 <h3 id="peer-selection-and-reputation">Peer Selection and Reputation</h3>
 <p>For details on how peer selection and reputation scoring work, see <a href="../../../../topics/features/peer_registry_reputation/">Peer Registry and Reputation System</a>.</p>

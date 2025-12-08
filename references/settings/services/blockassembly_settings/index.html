@@ -5355,6 +5355,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#hardcoded-settings-not-configurable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardcoded Settings (Not Configurable)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5365,6 +5376,17 @@
   
     <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#service-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Startup
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#service-disable" class="md-nav__link">
@@ -5382,6 +5404,17 @@
     <span class="md-ellipsis">
       
         Channel Buffer Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mining-candidate-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mining Candidate Caching
       
     </span>
   </a>
@@ -6283,6 +6316,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#hardcoded-settings-not-configurable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardcoded Settings (Not Configurable)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6293,6 +6337,17 @@
   
     <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#service-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Startup
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#service-disable" class="md-nav__link">
@@ -6310,6 +6365,17 @@
     <span class="md-ellipsis">
       
         Channel Buffer Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mining-candidate-caching" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mining Candidate Caching
       
     </span>
   </a>
@@ -6462,7 +6528,7 @@
 <td>bool</td>
 <td>false</td>
 <td>blockassembly_disabled</td>
-<td><strong>CRITICAL</strong> - Disables all block assembly operations</td>
+<td>Service-level kill switch, all operations return early</td>
 </tr>
 <tr>
 <td>GRPCAddress</td>
@@ -6476,7 +6542,7 @@
 <td>string</td>
 <td>":8085"</td>
 <td>blockassembly_grpcListenAddress</td>
-<td><strong>CRITICAL</strong> - gRPC server binding</td>
+<td><strong>CRITICAL</strong> - gRPC server binding (service won't start if empty)</td>
 </tr>
 <tr>
 <td>GRPCMaxRetries</td>
@@ -6491,13 +6557,6 @@
 <td>2s</td>
 <td>blockassembly_grpcRetryBackoff</td>
 <td>Retry delay timing</td>
-</tr>
-<tr>
-<td>LocalDAHCache</td>
-<td>string</td>
-<td>""</td>
-<td>blockassembly_localDAHCache</td>
-<td>Configuration placeholder</td>
 </tr>
 <tr>
 <td>MaxBlockReorgCatchup</td>
@@ -6600,9 +6659,9 @@
 <tr>
 <td>DoubleSpendWindow</td>
 <td>time.Duration</td>
-<td>Calculated</td>
+<td>BlockTime * 6</td>
 <td>N/A</td>
-<td>Double-spend detection window</td>
+<td>Double-spend detection window (calculated)</td>
 </tr>
 <tr>
 <td>MaxGetReorgHashes</td>
@@ -6637,7 +6696,14 @@
 <td>time.Duration</td>
 <td>5s</td>
 <td>blockassembly_miningCandidateCacheTimeout</td>
-<td><strong>CRITICAL</strong> - Mining candidate cache validity</td>
+<td>Mining candidate cache validity (same height)</td>
+</tr>
+<tr>
+<td>MiningCandidateSmartCacheMaxAge</td>
+<td>time.Duration</td>
+<td>10s</td>
+<td>blockassembly_miningCandidateSmartCacheMaxAge</td>
+<td>Stale cache max age for high-load scenarios</td>
 </tr>
 <tr>
 <td>BlockchainSubscriptionTimeout</td>
@@ -6648,7 +6714,55 @@
 </tr>
 </tbody>
 </table>
+<h2 id="hardcoded-settings-not-configurable">Hardcoded Settings (Not Configurable)</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Value</th>
+<th>Usage</th>
+<th>Code Reference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GetMiningCandidateResponseTimeout</td>
+<td>Not configurable</td>
+<td>Mining candidate generation timeout</td>
+<td>BlockAssembler.go:980</td>
+</tr>
+<tr>
+<td>GetMiningCandidateSendTimeout</td>
+<td>Not configurable</td>
+<td>Mining candidate send timeout</td>
+<td>BlockAssembler.go:1049</td>
+</tr>
+<tr>
+<td>ParentValidationBatchSize</td>
+<td>Not configurable</td>
+<td>Parent chain validation batch size</td>
+<td>BlockAssembler.go:1609</td>
+</tr>
+<tr>
+<td>OnRestartRemoveInvalidParentChainTxs</td>
+<td>Not configurable</td>
+<td>Filter invalid txs on restart</td>
+<td>BlockAssembler.go:1695</td>
+</tr>
+<tr>
+<td>jobTTL</td>
+<td>10 minutes</td>
+<td>Mining job cache TTL</td>
+<td>Server.go:57</td>
+</tr>
+</tbody>
+</table>
 <h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="service-startup">Service Startup</h3>
+<ul>
+<li>Service skipped if <code>GRPCListenAddress</code> is empty</li>
+<li>Channel buffers allocated during Init() based on configured sizes</li>
+</ul>
 <h3 id="service-disable">Service Disable</h3>
 <ul>
 <li>When <code>Disabled = true</code>, all block assembly operations return early</li>
@@ -6659,10 +6773,16 @@
 <li><code>NewSubtreeChanBuffer</code> and <code>SubtreeRetryChanBuffer</code> must accommodate concurrent processing loads</li>
 <li>Buffer sizes affect pipeline performance and memory usage</li>
 </ul>
+<h3 id="mining-candidate-caching">Mining Candidate Caching</h3>
+<ul>
+<li><code>MiningCandidateCacheTimeout</code>: Cache valid for same height within timeout</li>
+<li><code>MiningCandidateSmartCacheMaxAge</code>: Fallback for stale cache during high load</li>
+<li>Cache invalidated on significant transaction/subtree changes</li>
+</ul>
 <h3 id="mining-solution-processing">Mining Solution Processing</h3>
 <ul>
 <li><code>SubmitMiningSolutionWaitForResponse</code> controls synchronous vs asynchronous processing</li>
-<li>Affects <code>MiningCandidateCacheTimeout</code> behavior and response handling</li>
+<li>Affects response handling and mining candidate cache behavior</li>
 </ul>
 <h3 id="reorganization-handling">Reorganization Handling</h3>
 <ul>
@@ -6712,23 +6832,27 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Impact</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>GRPCListenAddress</td>
-<td>Health checks only run if not empty</td>
-<td>Service monitoring</td>
+<td>Must not be empty</td>
+<td>Service won't start if empty</td>
+<td>During daemon startup</td>
 </tr>
 <tr>
 <td>MaxGetReorgHashes</td>
 <td>Limits reorganization processing</td>
-<td>Memory protection</td>
+<td>Memory protection during reorgs</td>
+<td>During reorg processing</td>
 </tr>
 <tr>
 <td>Channel Buffers</td>
 <td>Must accommodate processing loads</td>
-<td>Pipeline performance</td>
+<td>Pipeline performance and backpressure</td>
+<td>During Init()</td>
 </tr>
 </tbody>
 </table>
@@ -6738,14 +6862,15 @@
 blockassembly_disabled = false
 </code></pre></div>
 <h3 id="performance-tuning">Performance Tuning</h3>
-<div class="highlight"><pre><span></span><code>blockassembly_subtreeProcessorConcurrentReads = 500
-blockassembly_newSubtreeChanBuffer = 2000
-blockassembly_subtreeRetryChanBuffer = 2000
+<div class="highlight"><pre><span></span><code><span class="nv">blockassembly_subtreeProcessorConcurrentReads</span><span class="o">=</span><span class="m">500</span>
+<span class="nv">blockassembly_newSubtreeChanBuffer</span><span class="o">=</span><span class="m">2000</span>
+<span class="nv">blockassembly_subtreeRetryChanBuffer</span><span class="o">=</span><span class="m">2000</span>
 </code></pre></div>
 <h3 id="mining-configuration">Mining Configuration</h3>
-<div class="highlight"><pre><span></span><code>blockassembly_SubmitMiningSolution_waitForResponse = true
-blockassembly_miningCandidateCacheTimeout = 10s
-miner_wallet_private_keys = &quot;key1|key2&quot;
+<div class="highlight"><pre><span></span><code><span class="nv">blockassembly_SubmitMiningSolution_waitForResponse</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">blockassembly_miningCandidateCacheTimeout</span><span class="o">=</span>10s
+<span class="nv">blockassembly_miningCandidateSmartCacheMaxAge</span><span class="o">=</span>15s
+<span class="nv">miner_wallet_private_keys</span><span class="o">=</span>key1<span class="p">|</span>key2
 </code></pre></div>
 
 
