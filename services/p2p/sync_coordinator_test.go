@@ -1046,8 +1046,6 @@ func TestSyncCoordinator_MonitorFSM_AdaptiveIntervals(t *testing.T) {
 }
 
 func TestSyncCoordinator_HandleFSMTransition_Simplified(t *testing.T) {
-	t.Skip("State transition banning temporarily disabled")
-
 	logger := ulogger.New("test")
 	settings := CreateTestSettings()
 	registry := NewPeerRegistry()
@@ -1070,53 +1068,74 @@ func TestSyncCoordinator_HandleFSMTransition_Simplified(t *testing.T) {
 		return 100
 	})
 
-	// Test RUNNING state with current sync peer - should handle catchup failure
-	syncPeer := peer.ID("sync-peer")
-	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(syncPeer, "", 110, peerHash, "") // Set peer height higher than local
-
-	// Add another peer for selection after the failure
-	altPeer := peer.ID("alt-peer")
-	altHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(altPeer, "", 120, altHash, "http://alt.com")
-
-	sc.mu.Lock()
-	sc.currentSyncPeer = syncPeer
-	sc.mu.Unlock()
-
 	runningState := blockchain_api.FSMStateType_RUNNING
-	transitioned := sc.handleFSMTransition(&runningState)
-	assert.True(t, transitioned, "Should return true for RUNNING state with sync peer")
-
-	// Verify ban score was increased
-	info, exists := registry.Get(syncPeer)
-	assert.True(t, exists)
-	assert.True(t, info.BanScore > 0, "Peer should have increased ban score")
-
-	// Test RUNNING state without sync peer
-	sc.mu.Lock()
-	sc.currentSyncPeer = ""
-	sc.mu.Unlock()
-
-	transitioned = sc.handleFSMTransition(&runningState)
-	assert.False(t, transitioned, "Should return false for RUNNING state without sync peer")
-
-	// Test non-RUNNING state (e.g., CATCHINGBLOCKS) - should not trigger transition logic
 	catchingState := blockchain_api.FSMStateType_CATCHINGBLOCKS
-	transitioned = sc.handleFSMTransition(&catchingState)
-	assert.False(t, transitioned, "Should return false for non-RUNNING state")
 
-	// Test that it no longer tracks previous state
-	// Run multiple transitions and verify behavior is consistent
-	sc.mu.Lock()
-	sc.currentSyncPeer = syncPeer
-	sc.mu.Unlock()
+	t.Run("RUNNING state with sync peer behind triggers transition", func(t *testing.T) {
+		// Test RUNNING state with current sync peer where local height < peer height
+		// This simulates a catchup failure scenario
+		syncPeer := peer.ID("sync-peer-1")
+		peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		registry.Put(syncPeer, "", 110, peerHash, "") // Set peer height higher than local (110 > 100)
 
-	// Multiple RUNNING states should all trigger the same logic
-	for i := 0; i < 3; i++ {
-		transitioned = sc.handleFSMTransition(&runningState)
-		assert.True(t, transitioned, "Should consistently handle RUNNING state")
-	}
+		sc.mu.Lock()
+		sc.currentSyncPeer = syncPeer
+		sc.mu.Unlock()
+
+		transitioned := sc.handleFSMTransition(&runningState)
+		assert.True(t, transitioned, "Should return true for RUNNING state with sync peer behind")
+	})
+
+	t.Run("RUNNING state without sync peer returns false", func(t *testing.T) {
+		// Clear all state first
+		sc.mu.Lock()
+		sc.currentSyncPeer = ""
+		sc.mu.Unlock()
+
+		transitioned := sc.handleFSMTransition(&runningState)
+		assert.False(t, transitioned, "Should return false for RUNNING state without sync peer")
+	})
+
+	t.Run("non-RUNNING state returns false", func(t *testing.T) {
+		// Even with a sync peer set, non-RUNNING state should return false
+		somePeer := peer.ID("some-peer")
+		peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		registry.Put(somePeer, "", 110, peerHash, "")
+
+		sc.mu.Lock()
+		sc.currentSyncPeer = somePeer
+		sc.mu.Unlock()
+
+		transitioned := sc.handleFSMTransition(&catchingState)
+		assert.False(t, transitioned, "Should return false for non-RUNNING state")
+	})
+
+	t.Run("successful sync triggers transition", func(t *testing.T) {
+		// Test successful sync scenario (local height >= peer height)
+		successPeer := peer.ID("success-peer")
+		successHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		registry.Put(successPeer, "", 90, successHash, "") // Set peer height lower than local (90 < 100)
+
+		sc.mu.Lock()
+		sc.currentSyncPeer = successPeer
+		sc.mu.Unlock()
+
+		transitioned := sc.handleFSMTransition(&runningState)
+		assert.True(t, transitioned, "Should return true for RUNNING state with successful sync")
+	})
+
+	t.Run("peer not in registry triggers transition", func(t *testing.T) {
+		// Test scenario where sync peer is no longer in registry (disconnected)
+		missingPeer := peer.ID("missing-peer")
+		// Don't add to registry
+
+		sc.mu.Lock()
+		sc.currentSyncPeer = missingPeer
+		sc.mu.Unlock()
+
+		transitioned := sc.handleFSMTransition(&runningState)
+		assert.True(t, transitioned, "Should return true when sync peer not in registry")
+	})
 }
 
 func TestSyncCoordinator_FilterEligiblePeers(t *testing.T) {
