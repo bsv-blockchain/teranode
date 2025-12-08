@@ -5,9 +5,12 @@ package monitor
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
@@ -30,6 +33,7 @@ const (
 	ViewDashboard ViewMode = iota
 	ViewSettings
 	ViewHealth
+	ViewAerospike
 )
 
 // Styles for the TUI
@@ -91,16 +95,34 @@ type ServiceHealth struct {
 	Latency    time.Duration
 }
 
+// AerospikeStats holds collected Aerospike metrics
+type AerospikeStats struct {
+	Connected   bool
+	ClusterName string
+	Nodes       []nodeInfo
+	Namespaces  map[string]map[string]string // namespace -> stats map
+	Latencies   map[string]string            // latency histograms
+}
+
+// nodeInfo holds per-node Aerospike statistics
+type nodeInfo struct {
+	Name       string
+	Host       string
+	Stats      map[string]string
+	Namespaces map[string]map[string]string
+}
+
 // NodeData holds the fetched node data
 type NodeData struct {
-	BlockStats    *model.BlockStats
-	FSMState      *blockchain.FSMStateType
-	Peers         []*p2p.PeerInfo
-	BlockchainOK  bool
-	P2POK         bool
-	ServiceHealth map[string]*ServiceHealth
-	LastUpdated   time.Time
-	Error         string
+	BlockStats     *model.BlockStats
+	FSMState       *blockchain.FSMStateType
+	Peers          []*p2p.PeerInfo
+	BlockchainOK   bool
+	P2POK          bool
+	ServiceHealth  map[string]*ServiceHealth
+	AerospikeStats *AerospikeStats
+	LastUpdated    time.Time
+	Error          string
 }
 
 // Model represents the TUI state
@@ -113,6 +135,7 @@ type Model struct {
 	blockValClient   blockvalidation.Interface
 	blockAsmClient   blockassembly.ClientI
 	subtreeClient    subtreevalidation.Interface
+	aerospikeClient  *aerospike.Client
 	spinner          spinner.Model
 	data             NodeData
 	width            int
@@ -121,6 +144,7 @@ type Model struct {
 	quitting         bool
 	viewMode         ViewMode
 	settingsScroll   int // scroll offset for settings view
+	aerospikeScroll  int // scroll offset for aerospike view
 }
 
 // Messages
@@ -164,6 +188,12 @@ func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
 		subtreeClient, _ = subtreevalidation.NewClient(ctx, logger, s, "TUI Monitor")
 	}
 
+	// Create optional Aerospike client (don't fail if not configured)
+	var aerospikeClient *aerospike.Client
+	if s.Aerospike.Host != "" && s.Aerospike.Port > 0 {
+		aerospikeClient, _ = aerospike.NewClient(s.Aerospike.Host, s.Aerospike.Port)
+	}
+
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
@@ -177,6 +207,7 @@ func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
 		blockValClient:   blockValClient,
 		blockAsmClient:   blockAsmClient,
 		subtreeClient:    subtreeClient,
+		aerospikeClient:  aerospikeClient,
 		spinner:          sp,
 		refreshInterval:  2 * time.Second,
 		width:            80,
@@ -244,6 +275,9 @@ func (m Model) fetchData() tea.Msg {
 
 	// Collect service health
 	m.collectServiceHealth(ctx, &data)
+
+	// Collect Aerospike stats
+	data.AerospikeStats = m.collectAerospikeStats()
 
 	return dataMsg(data)
 }
@@ -358,6 +392,114 @@ func (m Model) checkServiceHealth(ctx context.Context, name string, healthFn fun
 	return health
 }
 
+// collectAerospikeStats collects statistics from Aerospike cluster
+func (m Model) collectAerospikeStats() *AerospikeStats {
+	stats := &AerospikeStats{
+		Namespaces: make(map[string]map[string]string),
+		Latencies:  make(map[string]string),
+	}
+
+	if m.aerospikeClient == nil {
+		return stats
+	}
+
+	if !m.aerospikeClient.IsConnected() {
+		return stats
+	}
+
+	stats.Connected = true
+
+	// Get cluster name
+	nodes := m.aerospikeClient.GetNodes()
+	if len(nodes) == 0 {
+		return stats
+	}
+
+	// Collect info from each node
+	policy := aerospike.NewInfoPolicy()
+	for _, node := range nodes {
+		ni := nodeInfo{
+			Name:       node.GetName(),
+			Host:       node.GetHost().String(),
+			Stats:      make(map[string]string),
+			Namespaces: make(map[string]map[string]string),
+		}
+
+		// Get node statistics
+		infoMap, err := node.RequestInfo(policy, "statistics")
+		if err == nil {
+			if statsStr, ok := infoMap["statistics"]; ok {
+				ni.Stats = parseAerospikeInfo(statsStr)
+			}
+		}
+
+		// Get cluster name from first node
+		if stats.ClusterName == "" {
+			if clusterInfo, err := node.RequestInfo(policy, "cluster-name"); err == nil {
+				if cn, ok := clusterInfo["cluster-name"]; ok {
+					stats.ClusterName = cn
+				}
+			}
+		}
+
+		// Get namespace information
+		if nsInfo, err := node.RequestInfo(policy, "namespaces"); err == nil {
+			if nsStr, ok := nsInfo["namespaces"]; ok {
+				namespaces := strings.Split(nsStr, ";")
+				for _, ns := range namespaces {
+					if ns == "" {
+						continue
+					}
+					// Get namespace-specific stats
+					nsStatsInfo, err := node.RequestInfo(policy, "namespace/"+ns)
+					if err == nil {
+						if nsStatsStr, ok := nsStatsInfo["namespace/"+ns]; ok {
+							nsStats := parseAerospikeInfo(nsStatsStr)
+							ni.Namespaces[ns] = nsStats
+							// Aggregate namespace stats
+							if stats.Namespaces[ns] == nil {
+								stats.Namespaces[ns] = nsStats
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Get latency information - try different info commands
+		latencyCommands := []string{"latencies:", "latency:"}
+		for _, cmd := range latencyCommands {
+			if latInfo, err := node.RequestInfo(policy, cmd); err == nil {
+				for k, v := range latInfo {
+					if v != "" && v != "error" {
+						stats.Latencies[k] = v
+					}
+				}
+				if len(stats.Latencies) > 0 {
+					break
+				}
+			}
+		}
+
+		stats.Nodes = append(stats.Nodes, ni)
+	}
+
+	return stats
+}
+
+// parseAerospikeInfo parses Aerospike info string into a map
+func parseAerospikeInfo(info string) map[string]string {
+	result := make(map[string]string)
+	pairs := strings.Split(info, ";")
+	for _, pair := range pairs {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) == 2 {
+			result[kv[0]] = kv[1]
+		}
+	}
+	return result
+}
+
 // Update handles messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -367,7 +509,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "esc":
-			if m.viewMode == ViewSettings || m.viewMode == ViewHealth {
+			if m.viewMode == ViewSettings || m.viewMode == ViewHealth || m.viewMode == ViewAerospike {
 				m.viewMode = ViewDashboard
 				return m, nil
 			}
@@ -390,21 +532,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewMode = ViewHealth
 			}
 			return m, nil
+		case "a":
+			if m.viewMode == ViewAerospike {
+				m.viewMode = ViewDashboard
+			} else {
+				m.viewMode = ViewAerospike
+				m.aerospikeScroll = 0
+			}
+			return m, nil
 		case "j", "down":
 			if m.viewMode == ViewSettings {
 				m.settingsScroll++
+			} else if m.viewMode == ViewAerospike {
+				m.aerospikeScroll++
 			}
 		case "k", "up":
 			if m.viewMode == ViewSettings && m.settingsScroll > 0 {
 				m.settingsScroll--
+			} else if m.viewMode == ViewAerospike && m.aerospikeScroll > 0 {
+				m.aerospikeScroll--
 			}
 		case "g", "home":
 			if m.viewMode == ViewSettings {
 				m.settingsScroll = 0
+			} else if m.viewMode == ViewAerospike {
+				m.aerospikeScroll = 0
 			}
 		case "G", "end":
 			if m.viewMode == ViewSettings {
 				m.settingsScroll = 1000 // will be capped in render
+			} else if m.viewMode == ViewAerospike {
+				m.aerospikeScroll = 1000 // will be capped in render
 			}
 		}
 
@@ -440,6 +598,10 @@ func (m Model) View() string {
 
 	if m.viewMode == ViewHealth {
 		return m.renderHealthView()
+	}
+
+	if m.viewMode == ViewAerospike {
+		return m.renderAerospikeView()
 	}
 
 	var b strings.Builder
@@ -484,7 +646,7 @@ func (m Model) View() string {
 
 	// Help
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("q: quit | r: refresh | s: settings | h: health"))
+	b.WriteString(helpStyle.Render("q: quit | r: refresh | s: settings | h: health | a: aerospike"))
 
 	return b.String()
 }
@@ -933,6 +1095,203 @@ func (m Model) renderHealthView() string {
 	// Help
 	b.WriteString("\n\n")
 	b.WriteString(helpStyle.Render("h/esc: back | r: refresh | q: quit"))
+
+	return b.String()
+}
+
+// renderAerospikeView renders the Aerospike statistics view
+func (m Model) renderAerospikeView() string {
+	var b strings.Builder
+
+	// Title
+	title := titleStyle.Render("AEROSPIKE STATISTICS")
+	b.WriteString(title)
+	b.WriteString("\n\n")
+
+	stats := m.data.AerospikeStats
+	if stats == nil || !stats.Connected {
+		if m.aerospikeClient == nil {
+			b.WriteString(labelStyle.Render("Aerospike not configured"))
+			b.WriteString("\n")
+			b.WriteString(labelStyle.Render(fmt.Sprintf("Host: %s, Port: %d", m.settings.Aerospike.Host, m.settings.Aerospike.Port)))
+		} else {
+			b.WriteString(errorStyle.Render("Aerospike not connected"))
+		}
+		b.WriteString("\n\n")
+		b.WriteString(helpStyle.Render("a/esc: back | r: refresh | q: quit"))
+		return b.String()
+	}
+
+	// Collect all lines for scrolling
+	var lines []string
+
+	// Cluster info
+	lines = append(lines, headerStyle.Render("CLUSTER INFO"))
+	lines = append(lines, m.renderSettingRow("Cluster Name", stats.ClusterName))
+	lines = append(lines, m.renderSettingRow("Nodes", fmt.Sprintf("%d", len(stats.Nodes))))
+	lines = append(lines, "")
+
+	// Node summary
+	for i, node := range stats.Nodes {
+		lines = append(lines, headerStyle.Render(fmt.Sprintf("NODE %d: %s", i+1, node.Name)))
+		lines = append(lines, m.renderSettingRow("Host", node.Host))
+
+		// Key node stats
+		keyStats := []string{
+			"cluster_size", "uptime", "system_free_mem_pct",
+			"client_connections", "batch_index_queue", "scan_queue",
+		}
+		for _, key := range keyStats {
+			if val, ok := node.Stats[key]; ok {
+				lines = append(lines, m.renderSettingRow(key, val))
+			}
+		}
+		lines = append(lines, "")
+	}
+
+	// Namespace info
+	for ns, nsStats := range stats.Namespaces {
+		lines = append(lines, headerStyle.Render(fmt.Sprintf("NAMESPACE: %s", ns)))
+
+		// Calculate disk usage percentage
+		if deviceUsed, ok := nsStats["device_used_bytes"]; ok {
+			if deviceTotal, ok := nsStats["device_total_bytes"]; ok {
+				used, _ := strconv.ParseUint(deviceUsed, 10, 64)
+				total, _ := strconv.ParseUint(deviceTotal, 10, 64)
+				if total > 0 {
+					pct := float64(used) / float64(total) * 100
+					diskLine := fmt.Sprintf("%s / %s (%.1f%%)", formatBytes(used), formatBytes(total), pct)
+					lines = append(lines, m.renderSettingRow("Disk Used/Total", diskLine))
+				}
+			}
+		}
+
+		// Key namespace metrics grouped by category
+		criticalStats := []struct {
+			key  string
+			warn bool // if true, highlight when non-zero
+		}{
+			{"stop_writes", true},
+			{"clock_skew_stop_writes", true},
+			{"hwm_breached", true},
+		}
+		for _, stat := range criticalStats {
+			if val, ok := nsStats[stat.key]; ok {
+				if stat.warn && val != "0" && val != "false" {
+					lines = append(lines, "  "+errorStyle.Render(stat.key+": "+val))
+				} else {
+					lines = append(lines, m.renderSettingRow(stat.key, val))
+				}
+			}
+		}
+
+		// Storage metrics
+		storageStats := []string{
+			"data_avail_pct", "memory_used_bytes", "index_used_bytes",
+			"sindex_used_bytes", "cache_read_pct",
+		}
+		for _, key := range storageStats {
+			if val, ok := nsStats[key]; ok {
+				lines = append(lines, m.renderSettingRow(key, val))
+			}
+		}
+
+		// Object/record metrics
+		objectStats := []string{
+			"objects", "tombstones", "evicted_objects", "expired_objects",
+			"truncated_records",
+		}
+		for _, key := range objectStats {
+			if val, ok := nsStats[key]; ok {
+				lines = append(lines, m.renderSettingRow(key, val))
+			}
+		}
+
+		// Throughput metrics
+		throughputStats := []string{
+			"client_read_success", "client_read_error", "client_read_timeout",
+			"client_write_success", "client_write_error", "client_write_timeout",
+			"batch_sub_read_success", "batch_sub_read_error",
+		}
+		for _, key := range throughputStats {
+			if val, ok := nsStats[key]; ok {
+				lines = append(lines, m.renderSettingRow(key, val))
+			}
+		}
+
+		// Migration metrics
+		migrationStats := []string{
+			"migrate_rx_partitions_active", "migrate_tx_partitions_active",
+			"migrate_rx_partitions_remaining", "migrate_tx_partitions_remaining",
+		}
+		for _, key := range migrationStats {
+			if val, ok := nsStats[key]; ok && val != "0" {
+				lines = append(lines, m.renderSettingRow(key, val))
+			}
+		}
+
+		lines = append(lines, "")
+	}
+
+	// Latency info
+	if len(stats.Latencies) > 0 {
+		lines = append(lines, headerStyle.Render("LATENCIES"))
+		// Sort latency keys for consistent display
+		var latKeys []string
+		for k := range stats.Latencies {
+			latKeys = append(latKeys, k)
+		}
+		sort.Strings(latKeys)
+		for _, k := range latKeys {
+			v := stats.Latencies[k]
+			if len(v) > 60 {
+				v = v[:57] + "..."
+			}
+			lines = append(lines, m.renderSettingRow(k, v))
+		}
+		lines = append(lines, "")
+	}
+
+	// Apply scroll
+	visibleLines := m.height - 6
+	if visibleLines < 5 {
+		visibleLines = 5
+	}
+
+	// Cap scroll offset
+	maxScroll := len(lines) - visibleLines
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.aerospikeScroll > maxScroll {
+		m.aerospikeScroll = maxScroll
+	}
+
+	// Render visible lines
+	endIdx := m.aerospikeScroll + visibleLines
+	if endIdx > len(lines) {
+		endIdx = len(lines)
+	}
+
+	for i := m.aerospikeScroll; i < endIdx; i++ {
+		b.WriteString(lines[i])
+		b.WriteString("\n")
+	}
+
+	// Scroll indicator
+	if len(lines) > visibleLines {
+		scrollInfo := fmt.Sprintf("(%d-%d of %d)", m.aerospikeScroll+1, endIdx, len(lines))
+		b.WriteString("\n")
+		b.WriteString(labelStyle.Render(scrollInfo))
+	}
+
+	// Last updated
+	b.WriteString("\n")
+	b.WriteString(labelStyle.Render(fmt.Sprintf("Last updated: %s", m.data.LastUpdated.Format("15:04:05"))))
+
+	// Help
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("a/esc: back | j/k: scroll | g/G: top/bottom | r: refresh | q: quit"))
 
 	return b.String()
 }
