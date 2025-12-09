@@ -741,6 +741,12 @@ NEXT_BATCH_RECORD:
 					items[idx].Data.Conflicting = conflictingBool
 				}
 
+			case fields.Creating:
+				creatingBool, ok := bins[key.String()].(bool)
+				if ok {
+					items[idx].Data.Creating = creatingBool
+				}
+
 			case fields.ConflictingChildren:
 				res, err := processConflictingChildren(bins)
 				if err != nil {
@@ -1309,6 +1315,17 @@ func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chain
 	ctx, _, _ = tracing.Tracer("aerospike").Start(ctx, "GetTxFromExternalStore",
 		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
 	)
+
+	if s.externalTxCache != nil {
+		return s.externalTxCache.GetOrSet(previousTxHash, func() (*bt.Tx, bool, error) {
+			tx, err := s.getExternalTransaction(ctx, previousTxHash)
+			if err != nil {
+				return nil, false, err
+			}
+
+			return tx, true, nil
+		})
+	}
 
 	return s.getExternalTransaction(ctx, previousTxHash)
 }

@@ -148,8 +148,8 @@ There are 2 clients invoking this endpoint:
 1. **The `Asset Server` service:**
     - The `Asset Server` service calls the `GetBlock` method on the `Blockchain Service` to retrieve a block from the blockchain.
 
-- **The `Block Assembly` service:**
-  - The `Block Assembly` service calls the `GetBlock` method on the `Blockchain Service` to retrieve a block from the blockchain.
+2. **The `Block Assembly` service:**
+    - The `Block Assembly` service calls the `GetBlock` method on the `Blockchain Service` to retrieve a block from the blockchain.
 
 ### 2.5. Getting the last N blocks from the blockchain
 
@@ -307,7 +307,7 @@ For further detail, we show here the sequence for the `SetBlockSubtreesSet` call
 
 ## 3. gRPC Protobuf Definitions
 
-The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/blockchainProto.md).
+The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the [Blockchain Protobuf API Reference](../../references/protobuf_docs/blockchainProto.md).
 
 ## 4. Data Model
 
@@ -381,13 +381,9 @@ services/blockchain
 │   ├── blockchain_api_extra.go - Supplemental code extending or enhancing the auto-generated API code.
 │   ├── blockchain_api_grpc.pb.go - Auto-generated gRPC bindings from the `.proto` file, specifically for gRPC communication.
 │   └── fsm_extra.go - Additional logic related to the Finite State Machine (FSM) functionality.
-├── data
-|
-├── fsm.go
-│   - Implements the Finite State Machine logic for managing blockchain states.
-│
+├── fsm.go - Implements the Finite State Machine logic for managing blockchain states.
 ├── fsm_visualizer
-│   └── main.go  - A tool for visualizing the Finite State Machine structure.
+│   └── main.go - A tool for visualizing the Finite State Machine structure.
 │
 ├── metrics.go
 │   - Manages and implements functionality related to operational metrics of the Blockchain service.
@@ -467,7 +463,7 @@ stores/blockchain
 To run the Blockchain Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Blockchain=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -blockchain=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Blockchain Service locally.
@@ -569,11 +565,49 @@ The Blockchain Service employs several strategies to handle errors and maintain 
 - Blocks with invalid headers, merkle roots, or proofs are rejected with appropriate error codes.
 - Invalid blocks can be explicitly marked using the InvalidateBlock method.
 
-#### Chain Reorganization
+#### Chain Reorganization and Longest Chain Tracking
 
-- Detects chain splits and reorganizations automatically.
-- Uses rollback and catch-up operations to handle chain reorganizations.
-- Limits reorganization depth for security (configurable).
+The Blockchain Service implements sophisticated chain reorganization handling with optimized longest chain tracking:
+
+##### Automatic Detection
+
+- Detects chain splits and reorganizations automatically through block header validation
+- Uses rollback and catch-up operations to handle chain reorganizations
+- Limits reorganization depth for security (configurable via `blockchain_maxReorgDepth`)
+
+##### Optimized Longest Chain Selection
+
+The service employs an optimized algorithm for tracking and selecting the longest valid chain:
+
+**Key Features:**
+
+- **Efficient Chain Comparison**: Uses cumulative proof-of-work (chainwork) rather than simple block height for chain selection
+- **Fast Fork Detection**: Maintains indexed fork points to quickly identify competing chains
+- **Minimal Database Queries**: Caches chain tips and their accumulated work to reduce database load
+- **Parallel Validation**: Can validate multiple competing chain tips simultaneously
+
+**Implementation Details:**
+
+1. **Chainwork Tracking**: Each block stores cumulative chainwork from genesis, allowing O(1) chain strength comparison
+2. **Fork Point Cache**: Maintains an in-memory cache of recent fork points for rapid reorganization detection
+3. **Tip Management**: Tracks multiple competing chain tips with their associated metadata:
+    - Total chainwork
+    - Block height
+    - Last validation timestamp
+    - Fork depth from main chain
+
+**Performance Benefits:**
+
+- Reduced latency in chain selection during high fork activity
+- Lower database load through intelligent caching
+- Faster recovery from network partitions
+- Improved resilience to chain split scenarios
+
+**Configuration Options:**
+
+- `blockchain_maxReorgDepth`: Maximum allowed reorganization depth (default: 6 blocks)
+- `blockchain_chainTipCacheSize`: Number of competing tips to track (default: 10)
+- `blockchain_forkPointCacheSize`: Size of fork point cache (default: 100)
 
 #### Storage Errors
 

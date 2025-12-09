@@ -6,17 +6,14 @@ This section will walk you through the commands and configurations needed to run
 
 ### Prerequisites
 
-Before running Teranode, ensure the required infrastructure services are started:
+Start PostgreSQL before running Teranode:
 
 ```shell
-# Start Kafka in Docker
-./scripts/kafka.sh
-
 # Start PostgreSQL in Docker
 ./scripts/postgres.sh
 ```
 
-> **Note:** If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:
+> **Note**: Development mode uses in-memory Kafka by default (no Docker setup required). For advanced testing with Docker-based Kafka, run `./scripts/kafka.sh` (requires adding `127.0.0.1 kafka-shared` to `/etc/hosts` first). If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:
 >
 > ```bash
 > # Start Aerospike in Docker
@@ -25,7 +22,7 @@ Before running Teranode, ensure the required infrastructure services are started
 
 ### Start Teranode
 
-Execute all services in a single terminal window with the command below. Replace `[YOUR_USERNAME]` with your specific username.
+Execute all services in a single terminal window with the command below. Replace `[YOUR_CONTEXT]` with your specific development context identifier.
 
 ```shell
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
@@ -52,29 +49,29 @@ Teranode supports multiple database backends for UTXO storage, configured via se
    ./scripts/postgres.sh
 
    # Your settings_local.conf should have a PostgreSQL connection string
-   utxostore.dev.[YOUR_USERNAME] = postgres://teranode:teranode@localhost:5432/teranode?blockHeightRetention=5
+   utxostore.dev.[YOUR_CONTEXT] = postgres://teranode:teranode@localhost:5432/teranode?blockHeightRetention=5
 
    # Run with the PostgreSQL backend
-   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
    ```
 
 2. **SQLite** (Lightweight option):
 
    ```shell
    # Your settings_local.conf should have an SQLite connection string
-   utxostore.dev.[YOUR_USERNAME] = sqlite:///utxostore?blockHeightRetention=5
+   utxostore.dev.[YOUR_CONTEXT] = sqlite:///utxostore?blockHeightRetention=5
 
    # Run with SQLite backend
-   SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
    ```
 
 3. **Aerospike** (High-performance option):
 
-   !!! warning "Aerospike Requirements"
-
-       - Requires both the appropriate settings AND the 'aerospike' build tag
-       - See the Aerospike Integration section below
-       - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
+   > **Warning: Aerospike Requirements**
+   >
+   > - Requires both the appropriate settings AND the 'aerospike' build tag
+   > - See the Aerospike Integration section below
+   > - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
 
 > **Note:** The database backend is determined by the connection string prefix in your settings:
 >
@@ -99,7 +96,7 @@ To use Aerospike as the UTXO storage backend:
 2. Run Teranode with the aerospike tag:
 
    ```shell
-   rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike .
+   rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
    ```
 
 ### Transaction Metadata Cache Configurations
@@ -109,19 +106,19 @@ Teranode supports different transaction metadata cache sizes through build tags:
 - **Large Cache (Default)**: Used when no specific tx metadata cache tag is specified
 
   ```shell
-  SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike .
+  SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
   ```
 
 - **Small Cache**: Reduces memory usage with a smaller transaction metadata cache
 
   ```shell
-  SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike,smalltxmetacache .
+  SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike,smalltxmetacache .
   ```
 
 - **Test Cache**: Configured specifically for testing scenarios
 
   ```shell
-  SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike,testtxmetacache .
+  SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike,testtxmetacache .
   ```
 
 ### Multiple Tags
@@ -129,7 +126,7 @@ Teranode supports different transaction metadata cache sizes through build tags:
 You can combine multiple tags by separating them with commas:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike,smalltxmetacache .
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike,smalltxmetacache .
 ```
 
 ### Network Configuration
@@ -138,13 +135,13 @@ Teranode supports different Bitcoin networks (mainnet, testnet, etc.). This is p
 
 ```shell
 # Run on testnet
-network=testnet SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+network=testnet SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
 
 # Run on testnet with Aerospike
-network=testnet SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike .
+network=testnet SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
 ```
 
-> **Note:** The network setting defaults to what's specified in your settings_local.conf under `network.dev.[YOUR_USERNAME]`. The environment variable overrides this setting.
+> **Note:** The network setting defaults to what's specified in your settings_local.conf under `network.dev.[YOUR_CONTEXT]`. The environment variable overrides this setting.
 
 ### Testing Tags
 
@@ -163,40 +160,40 @@ Launch the node with specific components using command-line options. This allows
 rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike . [OPTIONS]
 ```
 
-Enable or disable components by setting the corresponding option to `1` or `0`. Options are not case-sensitive.
+Enable or disable components by setting the corresponding option to `1` or `0`. **Note: Options are case-sensitive and must be lowercase.**
 
 | Component          | Option                      | Description                           |
 |--------------------|---------------------------|---------------------------------------|
-| Alert              | `-Alert=1`                  | Alert system for network notifications|
-| Asset              | `-Asset=1`                  | Asset handling service                |
-| Block Assembly     | `-BlockAssembly=1`          | Block assembly service                |
-| Block Persister    | `-BlockPersister=1`         | Block persistence service             |
-| Block Validation   | `-BlockValidation=1`        | Block validation service              |
-| Blockchain         | `-Blockchain=1`             | Blockchain processing service         |
-| Legacy             | `-Legacy=1`                 | Legacy API support                    |
-| P2P                | `-P2P=1`                    | Peer-to-peer networking service       |
-| Propagation        | `-Propagation=1`            | Data propagation service              |
-| RPC                | `-RPC=1`                    | RPC interface service                 |
-| Subtree Validation | `-SubtreeValidation=1`      | Subtree validation service            |
-| UTXO Persister     | `-UTXOPersister=1`          | UTXO persistence service              |
-| Validator          | `-Validator=1`              | Transaction validation service        |
+| Alert              | `-alert=1`                  | Alert system for network notifications|
+| Asset              | `-asset=1`                  | Asset handling service                |
+| Block Assembly     | `-blockassembly=1`          | Block assembly service                |
+| Block Persister    | `-blockpersister=1`         | Block persistence service             |
+| Block Validation   | `-blockvalidation=1`        | Block validation service              |
+| Blockchain         | `-blockchain=1`             | Blockchain processing service         |
+| Legacy             | `-legacy=1`                 | Legacy API support                    |
+| P2P                | `-p2p=1`                    | Peer-to-peer networking service       |
+| Propagation        | `-propagation=1`            | Data propagation service              |
+| Pruner             | `-pruner=1`                 | UTXO data pruning service             |
+| RPC                | `-rpc=1`                    | RPC interface service                 |
+| Subtree Validation | `-subtreevalidation=1`      | Subtree validation service            |
+| UTXO Persister     | `-utxopersister=1`          | UTXO persistence service              |
+| Validator          | `-validator=1`              | Transaction validation service        |
 
 #### Additional Options
 
 | Option                        | Description                                     |
 |-------------------------------|-------------------------------------------------|
-|-------------------------------|-------------------------------------------------|
-| `-all=<1|0>`                  | Enable/disable all services unless explicitly overridden by other flags. By default (when no flags are specified), the system behaves as if `-all=1` was set. |
+| `-all=<1\|0>`                 | Enable/disable all services unless explicitly overridden by other flags. By default (when no flags are specified), the system behaves as if `-all=1` was set. |
 | `-help=1`                     | Display command-line help information            |
 | `-wait_for_postgres=1`        | Wait for PostgreSQL to be available before starting |
 | `-localTestStartFromState=X`  | Start blockchain FSM from a specific state (for testing) |
 
-#### Example Usage:
+#### Examples
 
 To start the node with only validation and UTXO storage:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -Validator=1 -UTXOPersister=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike . -validator=1 -utxopersister=1
 ```
 
 ### Wait For PostgreSQL
@@ -204,7 +201,7 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -Validator=1 -UTXO
 If you want Teranode to wait for PostgreSQL to be available before starting:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run . -wait_for_postgres=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -wait_for_postgres=1
 ```
 
 This is useful in containerized environments or when PostgreSQL might not be immediately ready.
@@ -221,17 +218,17 @@ Teranode exposes health check endpoints on port 8000 (configurable in settings):
 Teranode respects the `NO_COLOR` environment variable to disable colored output in logs.
 
 ```shell
-NO_COLOR=1 SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run .
+NO_COLOR=1 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
 ```
 
-#### Example Usage:
+#### Component Selection Examples
 
 **Running specific components only:**
 
 To initiate the node with only specific components, such as `Validator`:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -Validator=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike . -validator=1
 ```
 
 **Disabling all services by default and enabling only specific ones:**
@@ -239,7 +236,7 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -Validator=1
 This is particularly useful for development:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -tags aerospike . -all=0 -Validator=1 -RPC=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike . -all=0 -validator=1 -rpc=1
 ```
 
 ## 🔧 Running Individual Services

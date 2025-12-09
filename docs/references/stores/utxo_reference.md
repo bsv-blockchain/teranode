@@ -75,6 +75,9 @@ type MinedBlockInfo struct {
     // SubtreeIdx is the index of the subtree where the transaction appears
     SubtreeIdx  int
 
+    // OnLongestChain indicates if this block is on the longest chain
+    OnLongestChain bool
+
     // UnsetMined if true, the mined info will be removed from the tx
     UnsetMined  bool
 }
@@ -117,6 +120,12 @@ type UnminedTransaction struct {
     CreatedAt  int
     // Locked indicates whether the transaction outputs are marked as locked
     Locked     bool
+    // Skip indicates whether this transaction should be skipped during iteration
+    Skip       bool
+    // UnminedSince is the block height since when this transaction has been unmined
+    UnminedSince int
+    // BlockIDs is the list of blocks the transaction has been mined into
+    BlockIDs   []uint32
 }
 ```
 
@@ -233,6 +242,11 @@ type Store interface {
     // SetLocked marks transactions as locked and not spendable.
     SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error
 
+    // MarkTransactionsOnLongestChain marks transactions as being on the longest chain or not.
+    // When onLongestChain is true, the unminedSince field is unset (transaction is mined).
+    // When onLongestChain is false, the unminedSince field is set to the current block height.
+    MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error
+
     // SetBlockHeight updates the current block height in the store.
     SetBlockHeight(height uint32) error
 
@@ -247,7 +261,8 @@ type Store interface {
 
     // GetUnminedTxIterator returns an iterator for all unmined transactions in the store.
     // This is used by the Block Assembly service to recover transactions on startup.
-    GetUnminedTxIterator() (UnminedTxIterator, error)
+    // The fullScan parameter determines whether to perform a full scan of all transactions.
+    GetUnminedTxIterator(fullScan bool) (UnminedTxIterator, error)
 
     // QueryOldUnminedTransactions returns transaction hashes for unmined transactions older than the cutoff height.
     // This method is used by the store-agnostic cleanup implementation to identify transactions for removal.
@@ -277,6 +292,7 @@ type Store interface {
 - `BatchDecorate`: Efficiently fetches metadata for multiple transactions in a single operation.
 - `FreezeUTXOs`/`UnFreezeUTXOs`: Manages frozen status of UTXOs for the alert system.
 - `SetConflicting`/`SetLocked`: Controls transaction conflict and spendability status.
+- `MarkTransactionsOnLongestChain`: Marks transactions as being on the longest chain or not, managing the unminedSince field.
 - `GetMeta`: Retrieves transaction metadata for a single transaction.
 - `SetMinedMulti`: Updates block information for multiple mined transactions and returns a map of transaction hashes to block IDs.
 - `PreviousOutputsDecorate`: Fetches information about transaction inputs' previous outputs from a transaction.

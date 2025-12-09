@@ -7,9 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/services/propagation"
 	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -85,44 +83,6 @@ func (m *MockPropagationClient) SetProcessingDelay(delay time.Duration) {
 	m.ProcessingDelay = delay
 }
 
-// MockLogger functionality removed - use ulogger.TestLogger instead
-
-// TestDistributorFactory provides utility functions for creating test distributors
-type TestDistributorFactory struct{}
-
-// CreateDistributorWithMockClients creates a Distributor with mock propagation clients
-func (f *TestDistributorFactory) CreateDistributorWithMockClients(logger ulogger.Logger, clients map[string]*MockPropagationClient, opts ...Option) *Distributor {
-	// Convert mock clients to propagation.Client interface
-	propagationServers := make(map[string]*propagation.Client)
-	for addr := range clients {
-		// Create a placeholder propagation client - in actual tests we'll replace this
-		propagationServers[addr] = &propagation.Client{}
-	}
-
-	settings := &settings.Settings{
-		Coinbase: settings.CoinbaseSettings{
-			DistributorTimeout:          5 * time.Second,
-			DistributorFailureTolerance: 50,
-		},
-	}
-
-	d := &Distributor{
-		logger:             logger,
-		propagationServers: propagationServers,
-		attempts:           1,
-		backoff:            100 * time.Millisecond,
-		failureTolerance:   50,
-		settings:           settings,
-	}
-
-	// Apply options
-	for _, opt := range opts {
-		opt(d)
-	}
-
-	return d
-}
-
 // CreateTestTransaction creates a test Bitcoin transaction
 func CreateTestTransaction() *bt.Tx {
 	// Just create a new empty transaction - this is sufficient for most tests
@@ -138,15 +98,10 @@ func CreateTestTransactionWithTxID(seed byte) *bt.Tx {
 	return tx
 }
 
-// CreateTestSettings creates test settings for distributor testing
 func CreateTestSettings(addresses []string) *settings.Settings {
 	return &settings.Settings{
 		Propagation: settings.PropagationSettings{
 			GRPCAddresses: addresses,
-		},
-		Coinbase: settings.CoinbaseSettings{
-			DistributorTimeout:          5 * time.Second,
-			DistributorFailureTolerance: 50,
 		},
 	}
 }

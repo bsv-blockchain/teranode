@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/aerospike/aerospike-client-go/v8"
-	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -22,7 +21,9 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
+	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
 )
 
 const (
@@ -113,7 +114,7 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 				err = errors.NewError("container startup panic: %v", r)
 			}
 		}()
-		c, e := aeroTest.RunContainer(ctx)
+		c, e := aeroTest.RunContainer(ctx, aeroTest.WithTTLSupport(aerospikeNamespace))
 		if e != nil {
 			err = e
 			return
@@ -126,13 +127,15 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 
 	// Assert required container interface
 	type containerAPI interface {
-		Terminate(ctx context.Context) error
+		Terminate(ctx context.Context, opts ...testcontainers.TerminateOption) error
 		Host(ctx context.Context) (string, error)
 		ServicePort(ctx context.Context) (int, error)
 	}
+
 	container, ok := containerAny.(containerAPI)
 	if !ok {
-		t.Skip("Skipping Aerospike integration tests: unexpected container type")
+		t.Error("Aerospike integration tests: unexpected container type")
+		t.FailNow()
 	}
 
 	// go func() {

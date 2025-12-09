@@ -56,6 +56,7 @@ package aerospike
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
@@ -79,6 +80,22 @@ import (
 
 // Used for NOOP batch operations
 var placeholderKey *aerospike.Key
+
+// LockRecordIndex is a special index value for lock records
+// Uses high uint32 values to avoid conflict with actual sub-records (0, 1, 2, ...)
+// Version history:
+//   - v1: 0xFFFFFFFF (had TTL bug - locks never expired)
+//   - v2: 0xFFFFFFFE (TTL fix applied)
+const LockRecordIndex = uint32(0xFFFFFFFE)
+
+// LockRecordBaseTTL is the minimum time-to-live for lock records in seconds
+const LockRecordBaseTTL = uint32(30)
+
+// LockRecordPerRecordTTL is the additional TTL per record
+const LockRecordPerRecordTTL = uint32(2)
+
+// LockRecordMaxTTL is the maximum time-to-live for lock records in seconds
+const LockRecordMaxTTL = uint32(300)
 
 // BatchStoreItem represents a transaction to be stored in a batch operation.
 type BatchStoreItem struct {
@@ -377,7 +394,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 					wrapper.Bytes(),
 					setOptions...,
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("error writing outputs to external store [%s]", bItem.txHash.String()))
+					utils.SafeSend[error](bItem.done, errors.NewStorageError("error writing outputs to external store [%s]", bItem.txHash.String()))
 					// NOOP for this record
 					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
@@ -395,7 +412,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 					fileformat.FileTypeTx,
 					bItem.tx.ExtendedBytes(),
 				); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[sendStoreBatch] error batch writing transaction to external store [%s]", bItem.txHash.String()))
+					utils.SafeSend[error](bItem.done, errors.NewStorageError("[sendStoreBatch] error batch writing transaction to external store [%s]", bItem.txHash.String()))
 					// NOOP for this record
 					batchRecords[idx] = aerospike.NewBatchRead(nil, placeholderKey, nil)
 
@@ -715,70 +732,20 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 // This is used when transactions exceed the Aerospike record size limit.
 //
 // The process:
-//  1. Stores transaction data in blob storage
-//  2. Creates Aerospike records with metadata
-//  3. Links records to external data
-//  4. Handles pagination if needed
+//  1. Acquires lock record
+//  2. Stores transaction data in blob storage
+//  3. Creates all Aerospike records in batch with creating=true
+//  4. Clears creating flag for all records
+//  5. Releases lock
 func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStoreItem, binsToStore [][]*aerospike.Bin) {
-	timeStart := time.Now()
-
-	if err := s.externalStore.Set(
+	s.storeExternallyWithLock(
 		ctx,
-		bItem.txHash[:],
-		fileformat.FileTypeTx,
+		bItem,
+		binsToStore,
 		bItem.tx.ExtendedBytes(),
-	); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-		utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[GetBinsToStore] error writing transaction to external store [%s]", bItem.txHash.String()))
-
-		return
-	}
-
-	prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
-
-	// Get a new write policy which will allow CREATE or UPDATE
-	wPolicy := util.GetAerospikeWritePolicy(s.settings, 0)
-
-	// For all records, set the write policy to CREATE_ONLY
-	wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
-
-	for binIdx := len(binsToStore) - 1; binIdx >= 0; binIdx-- {
-		bins := binsToStore[binIdx]
-
-		binIdxUint32, err := safeconversion.IntToUint32(binIdx)
-		if err != nil {
-			s.logger.Errorf("Could not convert binIdx (%d) to uint32", binIdx)
-		}
-
-		keySource := uaerospike.CalculateKeySourceInternal(bItem.txHash, binIdxUint32)
-
-		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
-		if err != nil {
-			utils.SafeSend(bItem.done, err)
-			return
-		}
-
-		putOps := make([]*aerospike.Operation, len(bins))
-		for i, bin := range bins {
-			putOps[i] = aerospike.PutOp(bin)
-		}
-
-		if err = s.client.PutBins(wPolicy, key, bins...); err != nil {
-			var aErr *aerospike.AerospikeError
-
-			ok := errors.As(err, &aErr)
-			if ok {
-				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[StoreTransactionExternally][%s] bin %d already exists in store", bItem.txHash, binIdx))
-					return
-				}
-			}
-
-			utils.SafeSend[error](bItem.done, errors.NewProcessingError("[StoreTransactionExternally][%s] could not put bins (extended mode) to store", bItem.txHash, err))
-			return
-		}
-	}
-
-	utils.SafeSend(bItem.done, nil)
+		fileformat.FileTypeTx,
+		"StoreTransactionExternally",
+	)
 }
 
 // StorePartialTransactionExternally handles storage of partial transactions
@@ -789,8 +756,8 @@ func (s *Store) StoreTransactionExternally(ctx context.Context, bItem *BatchStor
 //   - Very large output sets
 //   - Special transaction types
 func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *BatchStoreItem, binsToStore [][]*aerospike.Bin) {
+	// Prepare output wrapper for blob storage
 	nonNilOutputs := utxopersister.UnpadSlice(bItem.tx.Outputs)
-
 	wrapper := utxopersister.UTXOWrapper{
 		TxID:     *bItem.txHash,
 		Height:   bItem.blockHeight,
@@ -815,64 +782,394 @@ func (s *Store) StorePartialTransactionExternally(ctx context.Context, bItem *Ba
 		})
 	}
 
-	timeStart := time.Now()
-
-	if err := s.externalStore.Set(
+	// Delegate to shared implementation
+	s.storeExternallyWithLock(
 		ctx,
-		bItem.txHash[:],
-		fileformat.FileTypeOutputs,
+		bItem,
+		binsToStore,
 		wrapper.Bytes(),
-	); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
-		utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[StorePartialTransactionExternally] error writing output to external store [%s]", bItem.txHash.String()))
+		fileformat.FileTypeOutputs,
+		"StorePartialTransactionExternally",
+	)
+}
+
+// storeExternallyWithLock is the shared implementation for external transaction storage
+// Both StoreTransactionExternally and StorePartialTransactionExternally delegate to this
+//
+// TWO-PHASE COMMIT PROTOCOL FOR MULTI-RECORD TRANSACTIONS:
+//
+// Phase 1: Create all records with creating=true flag
+//   - Acquires lock to prevent duplicate work
+//   - Stores transaction data in blob storage
+//   - Creates all Aerospike records with creating=true
+//   - Notifies block assembly ONCE (only when records are newly created)
+//   - Lock is released
+//
+// Phase 2: Clear creating flags (children first, then master)
+//   - Children records cleared first (indices 1, 2, ..., N-1)
+//   - Master record cleared last (index 0)
+//   - Master's creating flag absence = atomic completion indicator
+//
+// ERROR HANDLING PHILOSOPHY:
+//
+// The function returns success (nil error) as long as Phase 1 completes, even if Phase 2
+// fails. This is intentional and correct because:
+//
+// 1. TRANSACTION IS PERSISTED: Phase 1 success means all records exist with complete data
+// 2. SPEND PROTECTION: creating=true flags prevent premature UTXO spending (per-record Lua checks)
+// 3. AUTO-RECOVERY: System self-heals through multiple paths (see line 911 for details)
+// 4. ATOMICITY: Returning error would break atomicity (Phase 1 done, but system thinks it failed)
+// 5. BLOCK ASSEMBLY: Notification is about existence, not spendability
+//
+// RECOVERY SCENARIOS:
+// - Retry attempts complete Phase 2 via "All exist" path (line 888)
+// - Auto-recovery triggers when transaction is re-encountered (processTxMetaUsingStore.go:112-122)
+// - Mining operation clears flags via setMined
+func (s *Store) storeExternallyWithLock(
+	ctx context.Context,
+	bItem *BatchStoreItem,
+	binsToStore [][]*aerospike.Bin,
+	blobData []byte,
+	fileType fileformat.FileType,
+	funcName string,
+) {
+	// Acquire semaphore to limit concurrent external storage operations
+	if s.externalStoreSem != nil {
+		s.externalStoreSem <- struct{}{}
+		defer func() { <-s.externalStoreSem }()
+	}
+
+	// Acquire lock FIRST to prevent duplicate work
+	lockKey, err := s.acquireLock(bItem.txHash, len(binsToStore))
+	if err != nil {
+		utils.SafeSend(bItem.done, err)
+		return
+	}
+
+	// Always release the lock when done (success or failure)
+	// The creating bin in each record prevents UTXO spending until cleared
+	// Failed creations leave partial records for the next attempt to "finish off"
+	defer func() {
+		if releaseErr := s.releaseLock(lockKey); releaseErr != nil {
+			s.logger.Warnf("[%s] Failed to release lock: %v", funcName, releaseErr)
+		}
+	}()
+
+	// Pre-create all record keys to fail fast on key creation errors
+	recordKeys, err := s.prepareRecordKeys(bItem.txHash, len(binsToStore))
+	if err != nil {
+		utils.SafeSend(bItem.done, err)
+		return
+	}
+
+	// Write to external blob storage (now protected by lock - no duplicate work)
+	// NOTE: Pass WithDeleteAt(0) to prevent DAH file creation. The pruner service will manage
+	// deletion of external files directly when pruning Aerospike records.
+	timeStart := time.Now()
+	if err := s.externalStore.Set(ctx, bItem.txHash[:], fileType, blobData, options.WithDeleteAt(0)); err != nil && !errors.Is(err, errors.ErrBlobAlreadyExists) {
+		utils.SafeSend[error](bItem.done, errors.NewStorageError("[%s] error writing to external store [%s]", funcName, bItem.txHash.String()))
 		return
 	}
 
 	prometheusTxMetaAerospikeMapSetExternal.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
-	// Get a new write policy which will allow CREATE or UPDATE
-	wPolicy := util.GetAerospikeWritePolicy(s.settings, 0)
+	// Create Aerospike records
+	batchRecords := make([]aerospike.BatchRecordIfc, len(binsToStore))
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	batchWritePolicy.RecordExistsAction = aerospike.CREATE_ONLY
 
-	for i := len(binsToStore) - 1; i >= 0; i-- {
-		bins := binsToStore[i]
+	for idx, bins := range binsToStore {
+		binsWithCreating := s.ensureCreatingBin(bins, true)
+		key := recordKeys[idx]
 
-		if i == 0 {
-			// For the "master" record, set the write policy to CREATE_ONLY
-			wPolicy.RecordExistsAction = aerospike.CREATE_ONLY
-		}
-
-		iUint32, err := safeconversion.IntToUint32(i)
-		if err != nil {
-			s.logger.Errorf("Could not convert i (%d) to uint32", i)
-		}
-
-		keySource := uaerospike.CalculateKeySourceInternal(bItem.txHash, iUint32)
-
-		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
-		if err != nil {
-			utils.SafeSend(bItem.done, err)
-			return
-		}
-
-		putOps := make([]*aerospike.Operation, len(bins))
-		for i, bin := range bins {
+		putOps := make([]*aerospike.Operation, len(binsWithCreating))
+		for i, bin := range binsWithCreating {
 			putOps[i] = aerospike.PutOp(bin)
 		}
 
-		if err := s.client.PutBins(wPolicy, key, bins...); err != nil {
+		if idx == 0 && bItem.conflicting {
+			dah := bItem.blockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
+			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), dah)))
+		}
+
+		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
+	}
+
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
+	_ = s.client.BatchOperate(batchPolicy, batchRecords)
+
+	// Check results - KEY_EXISTS_ERROR means recovery (completing previous attempt)
+	hasFailures := false
+	createdAny := false
+	for idx, record := range batchRecords {
+		if err := record.BatchRec().Err; err != nil {
 			aErr, ok := err.(*aerospike.AerospikeError)
-			if ok {
-				if aErr.ResultCode == types.KEY_EXISTS_ERROR {
-					utils.SafeSend[error](bItem.done, errors.NewTxExistsError("[StorePartialTransactionExternally] %v already exists in store", bItem.txHash))
-
-					return
-				}
+			if ok && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+				s.logger.Debugf("[%s] Record %d already exists for tx %s (completing previous attempt)", funcName, idx, bItem.txHash)
+				continue
 			}
-
-			utils.SafeSend[error](bItem.done, errors.NewProcessingError("could not put partial bins (extended mode) to store", err))
-
-			return
+			s.logger.Errorf("[%s] Failed to create record %d for tx %s: %v", funcName, idx, bItem.txHash, err)
+			hasFailures = true
+		} else {
+			// No error - this record was created successfully
+			createdAny = true
 		}
 	}
 
+	if hasFailures {
+		// Do NOT clean up partial records - leave them for the next attempt to complete
+		// The creating bin in each record prevents UTXO spending until all records exist
+		// The defer will release the lock, allowing another process to finish the creation
+		utils.SafeSend[error](bItem.done, errors.NewProcessingError("failed to create all records for tx %s - partial records remain for next attempt to complete", bItem.txHash))
+		return
+	}
+
+	// If we didn't create any new records, all already existed - transaction is complete
+	if !createdAny {
+		// RECOVERY PATH: All records already exist from previous attempt
+		//
+		// We don't notify block assembly (transaction already processed) but we still attempt
+		// Phase 2 cleanup to handle the case where a previous attempt completed Phase 1 but
+		// failed during Phase 2 (creating flag cleanup).
+		//
+		// This is a key part of the self-healing architecture:
+		// - First attempt: Creates records → Notifies block assembly → Tries to clear flags → Fails
+		// - Retry attempt: Finds all records exist → Skips block assembly → Completes flag cleanup → Success
+		//
+		// Without this cleanup attempt, creating flags would remain set indefinitely, requiring
+		// manual intervention. This ensures eventual consistency through automatic recovery.
+		clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
+		if clearErr != nil {
+			s.logger.Warnf("[%s] Transaction %s exists but creating flag cleanup failed: %v", funcName, bItem.txHash, clearErr)
+		}
+		utils.SafeSend[error](bItem.done, errors.NewTxExistsError("transaction already exists: %s", bItem.txHash))
+		return
+	}
+
+	clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
+	if clearErr != nil {
+		// PARTIAL SUCCESS: Transaction records created successfully, but creating flag cleanup failed
+		//
+		// WHY WE RETURN SUCCESS DESPITE INCOMPLETE PHASE 2:
+		//
+		// 1. TRANSACTION IS PERSISTED: All records exist in Aerospike with complete data.
+		//    Returning error would falsely indicate the transaction doesn't exist.
+		//
+		// 2. SPENDING IS SAFELY PROTECTED: Each UTXO spend operation checks the creating flag
+		//    per-record via Lua script (teranode.lua:288). UTXOs remain unspendable until flags
+		//    are cleared, preventing premature spending.
+		//
+		// 3. AUTO-RECOVERY IS SELF-HEALING: The system automatically recovers via multiple paths:
+		//    a) When transaction is re-encountered (propagation/subtree), subtreevalidation checks
+		//       the Creating flag (processTxMetaUsingStore.go:112-122) and triggers re-processing
+		//    b) When setMined is called, it clears creating flags as part of mining
+		//    c) Retry attempts from other sources will complete Phase 2 via "All exist" path (line 890)
+		//
+		// 4. RETURNING ERROR CREATES WORSE PROBLEMS:
+		//    - Caller would assume transaction failed and retry creation
+		//    - Retry would hit KEY_EXISTS_ERROR, creating confusion
+		//    - Block assembly wouldn't be notified of the transaction's existence
+		//    - Loss of atomicity: Phase 1 complete but system thinks it failed
+		//
+		// 5. BLOCK ASSEMBLY NOTIFICATION IS CORRECT: Block assembly needs to track transaction
+		//    existence for fee calculation and block template building. The creating flag doesn't
+		//    affect this - it only affects individual UTXO spendability.
+		//
+		// RECOVERY GUARANTEES:
+		// - Next transaction encounter triggers auto-recovery and cleanup
+		// - Manual retry completes Phase 2 via "All exist" path
+		// - Mining operation clears flags via setMined
+		// - No manual intervention required
+		s.logger.Errorf("[%s] Transaction %s created but creating flag not cleared: %v", funcName, bItem.txHash, clearErr)
+		s.logger.Errorf("[%s] Records remain with creating=true, preventing UTXO spending until auto-recovery completes", funcName)
+	}
+
 	utils.SafeSend(bItem.done, nil)
+}
+
+// calculateLockKey generates the key for a lock record using the special LockRecordIndex
+func calculateLockKey(txHash *chainhash.Hash) []byte {
+	return uaerospike.CalculateKeySourceInternal(txHash, LockRecordIndex)
+}
+
+// calculateLockTTL dynamically calculates the lock TTL based on the number of records
+func calculateLockTTL(numRecords int) uint32 {
+	ttl := LockRecordBaseTTL + (LockRecordPerRecordTTL * uint32(numRecords))
+	if ttl > LockRecordMaxTTL {
+		return LockRecordMaxTTL
+	}
+	return ttl
+}
+
+// acquireLock creates and acquires the lock record for transaction creation
+// Returns the lock key on success, or error if lock acquisition fails
+func (s *Store) acquireLock(txHash *chainhash.Hash, numRecords int) (*aerospike.Key, error) {
+	lockKey, err := aerospike.NewKey(s.namespace, s.setName, calculateLockKey(txHash))
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to create lock key", err)
+	}
+
+	lockTTL := calculateLockTTL(numRecords)
+
+	lockPolicy := util.GetAerospikeWritePolicy(s.settings, 0, util.WithExpiration(lockTTL))
+	lockPolicy.RecordExistsAction = aerospike.CREATE_ONLY
+
+	hostname, _ := os.Hostname()
+
+	lockBins := []*aerospike.Bin{
+		aerospike.NewBin("created_at", time.Now().Unix()),
+		aerospike.NewBin("lock_type", "tx_creation"),
+		aerospike.NewBin("process_id", os.Getpid()),
+		aerospike.NewBin("hostname", hostname),
+		aerospike.NewBin("expected_recs", numRecords),
+	}
+
+	err = s.client.PutBins(lockPolicy, lockKey, lockBins...)
+	if err != nil {
+		aErr, ok := err.(*aerospike.AerospikeError)
+		if ok && aErr.ResultCode == types.KEY_EXISTS_ERROR {
+			return nil, errors.NewTxExistsError("transaction creation in progress or already exists: %s", txHash)
+		}
+
+		return nil, errors.NewProcessingError("failed to acquire lock", err)
+	}
+
+	return lockKey, nil
+}
+
+// releaseLock deletes the lock record
+func (s *Store) releaseLock(lockKey *aerospike.Key) error {
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+
+	_, err := s.client.Delete(policy, lockKey)
+	if err != nil {
+		aErr, ok := err.(*aerospike.AerospikeError)
+		if ok && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
+			return nil
+		}
+
+		return err
+	}
+
+	return nil
+}
+
+// prepareRecordKeys pre-creates all record keys for transaction storage.
+// This is done BEFORE writing anything to the database to fail fast if key creation fails.
+func (s *Store) prepareRecordKeys(txHash *chainhash.Hash, numRecords int) ([]*aerospike.Key, error) {
+	recordKeys := make([]*aerospike.Key, numRecords)
+	for idx := range numRecords {
+		keySource := uaerospike.CalculateKeySourceInternal(txHash, uint32(idx))
+		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to create record key %d", idx, err)
+		}
+		recordKeys[idx] = key
+	}
+
+	return recordKeys, nil
+}
+
+// ensureCreatingBin ensures the creating bin is set to the specified value
+// The creating bin is used for multi-record 2-phase commit to prevent UTXO spending during creation
+func (s *Store) ensureCreatingBin(bins []*aerospike.Bin, creating bool) []*aerospike.Bin {
+	for i, bin := range bins {
+		if bin.Name == fields.Creating.String() {
+			newBins := make([]*aerospike.Bin, len(bins))
+			copy(newBins, bins)
+			newBins[i] = aerospike.NewBin(fields.Creating.String(), creating)
+			return newBins
+		}
+	}
+
+	newBins := make([]*aerospike.Bin, len(bins)+1)
+	copy(newBins, bins)
+	newBins[len(bins)] = aerospike.NewBin(fields.Creating.String(), creating)
+	return newBins
+}
+
+// clearCreatingFlag removes the creating flag from all records for a transaction
+// This is called after all records have been successfully created to allow UTXO spending
+// Uses expression filtering to only clear the bin on records that have it set
+func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error {
+	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
+
+	// Expression filter: only update records where creating bin exists
+	filterExp := aerospike.ExpBinExists(fields.Creating.String())
+
+	// Separate master record (index 0) from children (indices 1+)
+	// Children will be cleared first, then master last
+	// This makes master's creating flag an atomic completion indicator
+	var masterWrite aerospike.BatchRecordIfc
+	childWrites := make([]aerospike.BatchRecordIfc, 0, numRecords-1)
+
+	for i := range numRecords {
+		keySource := uaerospike.CalculateKeySourceInternal(txHash, uint32(i))
+		key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
+		if err != nil {
+			return err
+		}
+
+		writePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+		writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+		writePolicy.FilterExpression = filterExp // Only update if creating bin exists
+
+		// Delete the creating bin entirely by setting to nil
+		// This saves storage space and makes absence of bin = not creating
+		op := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
+		writeOp := aerospike.NewBatchWrite(writePolicy, key, op)
+
+		if i == 0 {
+			masterWrite = writeOp
+		} else {
+			childWrites = append(childWrites, writeOp)
+		}
+	}
+
+	// Phase 1: Clear child records first (indices 1, 2, ..., N-1)
+	if len(childWrites) > 0 {
+		err := s.client.BatchOperate(batchPolicy, childWrites)
+		if err != nil {
+			return errors.NewProcessingError("failed to unlock child records", err)
+		}
+
+		// Check results - FILTERED_OUT means bin didn't exist (success case)
+		failedCount := 0
+		for idx, record := range childWrites {
+			if record.BatchRec().Err != nil {
+				aErr, ok := record.BatchRec().Err.(*aerospike.AerospikeError)
+				// FILTERED_OUT is success - bin didn't exist, nothing to clear
+				if ok && aErr.ResultCode == types.FILTERED_OUT {
+					continue
+				}
+				failedCount++
+				s.logger.Errorf("[clearCreatingFlag] Failed to clear creating flag for child record %d for tx %s: %v", idx+1, txHash, record.BatchRec().Err)
+			}
+		}
+
+		if failedCount > 0 {
+			return errors.NewProcessingError("failed to unlock %d of %d child records for tx %s", failedCount, len(childWrites), txHash)
+		}
+	}
+
+	// Phase 2: Clear master record last (index 0)
+	// Only executed if children succeeded - master's creating flag becomes atomic completion indicator
+	if masterWrite != nil {
+		err := s.client.BatchOperate(batchPolicy, []aerospike.BatchRecordIfc{masterWrite})
+		if err != nil {
+			return errors.NewProcessingError("failed to unlock master record", err)
+		}
+
+		if masterWrite.BatchRec().Err != nil {
+			aErr, ok := masterWrite.BatchRec().Err.(*aerospike.AerospikeError)
+			// FILTERED_OUT is success - bin didn't exist, nothing to clear
+			if ok && aErr.ResultCode == types.FILTERED_OUT {
+				return nil
+			}
+			s.logger.Errorf("[clearCreatingFlag] Failed to clear creating flag for master record for tx %s: %v", txHash, masterWrite.BatchRec().Err)
+			return errors.NewProcessingError("failed to unlock master record for tx %s", txHash)
+		}
+	}
+
+	return nil
 }

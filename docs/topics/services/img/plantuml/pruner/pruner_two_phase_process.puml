@@ -1,0 +1,68 @@
+@startuml pruner_two_phase_process
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+participant "Pruner Service" as Pruner
+participant "Block Assembly" as BlockAssembly
+participant "Store Pruner" as StorePruner
+participant "UTXO Store" as UTXO
+
+Pruner -> BlockAssembly: Check State
+BlockAssembly --> Pruner: State = RUNNING
+
+alt State NOT Running
+    Pruner -> Pruner: Skip Pruning
+    note right of Pruner: Safety: No pruning\nduring reorgs/resets
+    return
+end
+
+Pruner -> Pruner: Deduplicate Channel\n(Process Latest Height)
+
+note over Pruner, UTXO: **PHASE 1: Preserve Parents (CRITICAL)**
+
+Pruner -> StorePruner: PreserveParentsOfOldUnminedTransactions(height)
+
+StorePruner -> UTXO: Find Unmined Txs older than\n(height - UnminedTxRetention)
+
+UTXO --> StorePruner: Old Unmined Transaction List
+
+loop For Each Old Unmined Tx
+    StorePruner -> UTXO: Get Parent Transaction Hashes\n(from inpoints)
+    UTXO --> StorePruner: Parent TxIDs
+
+    StorePruner -> UTXO: Set PreserveUntil Flag\non Parent Transactions
+    UTXO --> StorePruner: Parents Preserved
+end
+
+StorePruner --> Pruner: Phase 1 Complete
+
+alt Phase 1 Failed
+    Pruner -> Pruner: ABORT Pruning
+    note right of Pruner: Data loss prevention:\nDo NOT proceed to Phase 2
+    return
+end
+
+note over Pruner, UTXO: **PHASE 2: DAH Pruning**
+
+Pruner -> StorePruner: UpdateBlockHeight(height)
+
+StorePruner -> StorePruner: Calculate Safe Height\nsafeHeight = min(currentHeight, persistedHeight)
+
+StorePruner -> StorePruner: Queue Pruning Job\n(LIFO: newest pending first)
+
+StorePruner -> UTXO: Delete Records where\ndeleteAtHeight <= safeHeight
+
+UTXO --> StorePruner: Records Deleted
+
+StorePruner --> Pruner: Phase 2 Complete
+
+note right of Pruner: Pruning cycle finished\nReady for next event
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

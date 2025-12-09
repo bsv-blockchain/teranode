@@ -1,0 +1,77 @@
+@startuml sync_coordination_sequence
+!theme plain
+skinparam backgroundColor white
+skinparam sequenceMessageAlign center
+
+title Sync Coordination: Block Validation and Peer Registry Integration
+
+participant "Block Validation\nService" as BV
+participant "Peer Selector" as PS
+participant "Peer Registry" as PR
+participant "Selected Peer" as SP
+
+== Catchup Initialization ==
+
+BV -> PS: SelectSyncPeer(localHeight)
+PS -> PR: GetAllPeers()
+PR --> PS: Peer list
+PS -> PS: Apply selection algorithm
+PS --> BV: Best peer for sync
+
+== Block Retrieval ==
+
+BV -> PR: RecordSyncAttempt(peerID)
+activate PR
+PR -> PR: Update attempt timestamp
+deactivate PR
+
+BV -> SP: RequestBlock(height)
+activate SP
+
+alt Success
+  SP --> BV: Block data
+  deactivate SP
+
+  BV -> BV: Validate block
+
+  alt Block valid
+    BV -> PR: ReportSuccess(peerID, responseTime)
+    activate PR
+    PR -> PR: Increment successes
+    PR -> PR: Update avg response time
+    PR -> PR: Increment blocks received
+    PR -> PR: Recalculate reputation
+    deactivate PR
+  else Block invalid
+    BV -> PR: ReportMalicious(peerID)
+    activate PR
+    PR -> PR: Increment malicious count
+    PR -> PR: Set reputation = 5.0
+    deactivate PR
+    BV -> PS: SelectSyncPeer(criteria)\nwith previous peer rotation
+  end
+
+else Failure/Timeout
+  SP --> BV: Error
+  deactivate SP
+
+  BV -> PR: ReportFailure(peerID, error)
+  activate PR
+  PR -> PR: Increment failures
+  PR -> PR: Record error details
+  PR -> PR: Apply failure penalty
+  deactivate PR
+
+  BV -> PS: SelectSyncPeer(criteria)\nwith previous peer rotation
+end
+
+== Periodic Recovery ==
+
+BV -> PR: ReconsiderBadPeers()
+activate PR
+PR -> PR: Find peers with score < 20.0
+PR -> PR: Check cooldown periods
+PR -> PR: Reset eligible peers to 30.0
+deactivate PR
+
+@enduml

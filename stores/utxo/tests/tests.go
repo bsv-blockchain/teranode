@@ -81,7 +81,7 @@ func Store(t *testing.T, db utxostore.Store) {
 	require.Error(t, err, errors.ErrTxExists)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
-	_, err = db.Spend(context.Background(), spendTx)
+	_, err = db.Spend(context.Background(), spendTx, db.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	_, err = db.Create(context.Background(), Tx, 1000)
@@ -95,7 +95,7 @@ func Spend(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
-	_, err = db.Spend(ctx, spendTx)
+	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	resp, err := db.Get(ctx, Tx.TxIDChainHash())
@@ -106,7 +106,7 @@ func Spend(t *testing.T, db utxostore.Store) {
 	spendTx2.Outputs = spendTx2.Outputs[1:]
 
 	// try to spend with different txid
-	spends, err := db.Spend(context.Background(), spendTx2)
+	spends, err := db.Spend(context.Background(), spendTx2, db.GetBlockHeight()+1)
 	require.ErrorIs(t, err, errors.ErrUtxoError)
 
 	// check the individual spend error
@@ -121,7 +121,7 @@ func Restore(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
-	_, err = db.Spend(ctx, spendTx)
+	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	// try to reset the utxo
@@ -145,7 +145,7 @@ func Freeze(t *testing.T, db utxostore.Store) {
 	require.NoError(t, err)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
-	spends, err := db.Spend(ctx, spendTx)
+	spends, err := db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
 	require.ErrorIs(t, err, errors.ErrUtxoError)
 	require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
 
@@ -164,7 +164,7 @@ func Freeze(t *testing.T, db utxostore.Store) {
 	require.Equal(t, int(utxostore.Status_OK), resp.Status)
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
-	_, err = db.Spend(ctx, spendTx)
+	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
 	require.NoError(t, err)
 
 	resp, err = db.GetSpend(ctx, testSpend0)
@@ -236,18 +236,18 @@ func ReAssign(t *testing.T, db utxostore.Store) {
 	require.Nil(t, resp.SpendingData)
 
 	// try to spend the old utxo, should fail
-	_, err = db.Spend(ctx, spendTx)
+	_, err = db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
 	require.Error(t, err)
 
 	// try to spend the new utxo, should fail, block height not reached
-	_, err = db.Spend(ctx, spendTx2)
+	_, err = db.Spend(ctx, spendTx2, db.GetBlockHeight()+1)
 	require.Error(t, err)
 
 	err = db.SetBlockHeight(1101)
 	require.NoError(t, err)
 
 	// try to spend the new utxo, should succeed
-	_, err = db.Spend(ctx, spendTx2)
+	_, err = db.Spend(ctx, spendTx2, db.GetBlockHeight()+1)
 	require.NoError(t, err)
 }
 
@@ -308,7 +308,7 @@ func Conflicting(t *testing.T, db utxostore.Store) {
 
 	_ = spendTx.Inputs[0].PreviousTxIDAdd(Tx.TxIDChainHash())
 
-	spends, err := db.Spend(ctx, spendTx)
+	spends, err := db.Spend(ctx, spendTx, db.GetBlockHeight()+1)
 	require.ErrorIs(t, err, errors.ErrUtxoError)
 	require.ErrorIs(t, spends[0].Err, errors.ErrTxConflicting)
 
@@ -361,7 +361,7 @@ func Sanity(t *testing.T, db utxostore.Store) {
 		_ = spentTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", i)
 		_ = spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", &bt.FeeQuote{})
 
-		_, err = db.Spend(ctx, spentTx)
+		_, err = db.Spend(ctx, spentTx, db.GetBlockHeight()+1)
 		require.NoError(t, err)
 
 		txs = append(txs, stx)
@@ -403,7 +403,7 @@ func Benchmark(b *testing.B, db utxostore.Store) {
 			b.Fatal(err)
 		}
 
-		spends, err = db.Spend(ctx, spentTx)
+		spends, err = db.Spend(ctx, spentTx, db.GetBlockHeight()+1)
 		if err != nil {
 			b.Fatal(err)
 		}

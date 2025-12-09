@@ -49,6 +49,13 @@ func (m *MockUTXOStore) GetMedianBlockTime() uint32 {
 	return args.Get(0).(uint32)
 }
 
+func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     m.GetBlockHeight(),
+		MedianTime: m.GetMedianBlockTime(),
+	}
+}
+
 // Implement remaining interface methods as no-ops for testing
 func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	return nil, nil
@@ -70,7 +77,7 @@ func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*met
 	return nil, nil
 }
 
-func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil
 }
 
@@ -293,8 +300,8 @@ func TestNewStore_BlockchainClientError(t *testing.T) {
 
 	// Register mock database initializer
 	mockStore := &MockUTXOStore{}
-	mockStore.On("SetBlockHeight", mock.Anything, mock.Anything).Return(nil).Maybe()
-	mockStore.On("SetMedianBlockTime", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mockStore.On("SetBlockHeight", mock.Anything).Return(nil).Maybe()
+	mockStore.On("SetMedianBlockTime", mock.Anything).Return(nil).Maybe()
 
 	availableDatabases["memory"] = func(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, url *url.URL) (utxo.Store, error) {
 		return mockStore, nil
@@ -302,12 +309,10 @@ func TestNewStore_BlockchainClientError(t *testing.T) {
 	defer delete(availableDatabases, "memory") // Clean up after test
 
 	// Set invalid blockchain settings to cause blockchain client creation error
-	// We'll simulate this by using an invalid blockchain URL
-	originalBlockchain := tSettings.BlockChain.StoreURL
-	invalidBlockchainURL, err := url.Parse("invalid://invalid:9999/invalid")
-	require.NoError(t, err)
-	tSettings.BlockChain.StoreURL = invalidBlockchainURL
-	defer func() { tSettings.BlockChain.StoreURL = originalBlockchain }()
+	// blockchain.NewClient requires GRPCAddress to be set, so we clear it to trigger an error
+	originalGRPCAddress := tSettings.BlockChain.GRPCAddress
+	tSettings.BlockChain.GRPCAddress = ""
+	defer func() { tSettings.BlockChain.GRPCAddress = originalGRPCAddress }()
 
 	// Set memory scheme
 	memoryURL, err := url.Parse("memory://localhost:3000/test")
@@ -319,7 +324,7 @@ func TestNewStore_BlockchainClientError(t *testing.T) {
 
 	assert.Nil(t, store)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "error creating blockchain client")
+	assert.Contains(t, err.Error(), "no blockchain_grpcAddress setting found")
 }
 
 // TestNewStore_DefaultBlockchainListenerBehavior tests default blockchain listener behavior
@@ -336,11 +341,10 @@ func TestNewStore_DefaultBlockchainListenerBehavior(t *testing.T) {
 	defer delete(availableDatabases, "memory") // Clean up after test
 
 	// Set invalid blockchain settings to ensure we hit blockchain client creation
-	originalBlockchain := tSettings.BlockChain.StoreURL
-	invalidBlockchainURL, err := url.Parse("invalid://invalid:9999/invalid")
-	require.NoError(t, err)
-	tSettings.BlockChain.StoreURL = invalidBlockchainURL
-	defer func() { tSettings.BlockChain.StoreURL = originalBlockchain }()
+	// blockchain.NewClient requires GRPCAddress to be set, so we clear it to trigger an error
+	originalGRPCAddress := tSettings.BlockChain.GRPCAddress
+	tSettings.BlockChain.GRPCAddress = ""
+	defer func() { tSettings.BlockChain.GRPCAddress = originalGRPCAddress }()
 
 	// Set memory scheme
 	memoryURL, err := url.Parse("memory://localhost:3000/test")
@@ -352,7 +356,7 @@ func TestNewStore_DefaultBlockchainListenerBehavior(t *testing.T) {
 
 	assert.Nil(t, store)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "error creating blockchain client")
+	assert.Contains(t, err.Error(), "no blockchain_grpcAddress setting found")
 }
 
 // TestNewStore_MultipleStartBlockchainListenerParams tests multiple parameters for blockchain listener

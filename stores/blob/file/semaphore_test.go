@@ -12,7 +12,6 @@ func TestSemaphoreDefaults(t *testing.T) {
 	require.NotNil(t, readSemaphore, "readSemaphore should be initialized")
 	require.NotNil(t, writeSemaphore, "writeSemaphore should be initialized")
 
-	// Verify they have non-zero capacity
-	require.Greater(t, cap(readSemaphore), 0, "readSemaphore should have positive capacity")
-	require.Greater(t, cap(writeSemaphore), 0, "writeSemaphore should have positive capacity")
+	// Note: golang.org/x/sync/semaphore.Weighted doesn't expose capacity,
+	// so we can't verify the capacity directly. Checking non-nil is sufficient.
 }
