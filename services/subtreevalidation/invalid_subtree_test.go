@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -57,7 +58,7 @@ func (m *mockKafkaProducer) Publish(msg *kafka.Message) {
 // when malformed transaction data is received from a peer
 func TestInvalidSubtreeReporting_MalformedTransactionData(t *testing.T) {
 	// setup
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -111,7 +112,7 @@ func TestInvalidSubtreeReporting_MalformedTransactionData(t *testing.T) {
 // when the peer returns a different number of transactions than requested
 func TestInvalidSubtreeReporting_TransactionCountMismatch(t *testing.T) {
 	// setup
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -173,7 +174,7 @@ func TestInvalidSubtreeReporting_TransactionCountMismatch(t *testing.T) {
 // when a peer cannot provide requested data
 func TestInvalidSubtreeReporting_PeerCannotProvideData(t *testing.T) {
 	// setup
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -270,7 +271,7 @@ func TestInvalidSubtreeReporting_NilKafkaProducer(t *testing.T) {
 // TestInvalidSubtreeReporting_HTTPErrorResponse tests invalid subtree reporting for HTTP errors
 func TestInvalidSubtreeReporting_HTTPErrorResponse(t *testing.T) {
 	// setup
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	tSettings := test.CreateBaseTestSettings(t)

@@ -17,6 +17,7 @@ import (
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
@@ -77,7 +78,7 @@ func TestBlockProcessingWithRetry(t *testing.T) {
 	}
 
 	t.Run("Retry_Uses_Alternative_Peer", func(t *testing.T) {
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// First peer fails
@@ -126,7 +127,7 @@ func TestBlockProcessingWithRetry(t *testing.T) {
 	})
 
 	t.Run("Retry_After_All_Alternatives_Fail", func(t *testing.T) {
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create a new block for this test
@@ -223,7 +224,7 @@ func TestBlockProcessingWithRetry(t *testing.T) {
 	})
 
 	t.Run("Malicious_Peer_Skipped_On_Retry", func(t *testing.T) {
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create another test block
@@ -441,7 +442,7 @@ func TestBlockProcessingWorkerRetry(t *testing.T) {
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 	}
 
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	// Create test block
@@ -552,7 +553,7 @@ func TestChainExtendingBlocksNotSentToCatchup(t *testing.T) {
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 	}
 
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	// Mock HTTP responses for blocks

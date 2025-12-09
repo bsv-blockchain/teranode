@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -151,7 +152,7 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 		mockBlockchainClient.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).
 			Return(nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Track request progress
@@ -406,7 +407,7 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
 			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		for _, h := range invalidChain {
@@ -504,7 +505,7 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
 			Return(&model.Block{Height: forkPoint}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Modify first header to point to common ancestor
@@ -590,7 +591,7 @@ func TestCatchup_CoinbaseMaturityFork(t *testing.T) {
 		// Mock GetBlock for validation
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).Return(&model.Block{Height: 1015}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Set common ancestor
@@ -740,7 +741,7 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).
 			Return(false, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Track which chain was accepted first
@@ -941,7 +942,7 @@ func TestCatchup_ForkBattleSimulation(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*model.BlockHeader{bestBlockHeader}, []*model.BlockHeaderMeta{{Height: 1000, ID: 1}}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Setup all chain responses
@@ -1026,7 +1027,7 @@ func TestCatchup_ReorgMetrics(t *testing.T) {
 		mockBlockchainClient.On("GetBlock", mock.Anything, mock.Anything).
 			Return(&model.Block{Height: 950}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Set common ancestor
@@ -1100,7 +1101,7 @@ func TestCatchup_TimestampValidationDuringFork(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*model.BlockHeader{bestBlockHeader}, []*model.BlockHeaderMeta{{Height: 1000, ID: 1}}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		for _, h := range forkChain {
@@ -1223,7 +1224,7 @@ func TestCatchup_CoinbaseMaturityCheckFixed(t *testing.T) {
 			Return(false, nil).Maybe()
 
 		// Setup HTTP mock to return their chain headers
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Return headers from their chain
@@ -1349,7 +1350,7 @@ func TestCatchup_CoinbaseMaturityCheckFixed(t *testing.T) {
 			Return(false, nil).Maybe()
 
 		// Setup HTTP mock
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		headerBytes := make([]byte, 0)

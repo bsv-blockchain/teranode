@@ -26,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka" //nolint:gci
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
@@ -123,7 +124,7 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	require.NoError(t, err)
 
 	// Activate httpmock for HTTP mocking
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 
 	subtreeValidation, err := stv.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, testStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
 	require.NoError(t, err)
