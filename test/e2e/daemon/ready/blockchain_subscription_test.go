@@ -17,7 +17,6 @@ func TestBlockchainSubscriptionReconnection(t *testing.T) {
 	// Use a test-scoped context so we always tear down the subscription
 	// before stopping the daemon. This helps avoid races during shutdown.
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-	t.Cleanup(cancel)
 
 	node := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
@@ -28,7 +27,6 @@ func TestBlockchainSubscriptionReconnection(t *testing.T) {
 		),
 	})
 	t.Cleanup(func() {
-		// Ensure subscription context is cancelled before shutting down services
 		cancel()
 		// Give the subscription goroutine a brief window to detach cleanly
 		time.Sleep(200 * time.Millisecond)
