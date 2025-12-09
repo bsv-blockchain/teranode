@@ -18,6 +18,7 @@ import (
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -93,7 +94,7 @@ func TestIntegrationRetryWithMultipleFailures(t *testing.T) {
 	err = server.Init(ctx)
 	require.NoError(t, err)
 
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	t.Run("Multiple_Peers_Sequential_Failures", func(t *testing.T) {

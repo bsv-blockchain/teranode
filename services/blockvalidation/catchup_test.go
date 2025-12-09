@@ -26,6 +26,7 @@ import (
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
@@ -99,7 +100,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 			suite.MockBlockchain.On("GetBlockExists", mock.Anything, blocks[i].Header.Hash()).Return(false, nil).Maybe()
 		}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		var headersBytes []byte
@@ -152,7 +153,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 		// Mock GetBlockExists for any header to return false
 		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		requestCount := 0
@@ -258,7 +259,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 		locatorHashes := []*chainhash.Hash{targetBlock.Header.Hash()}
 		suite.MockBlockchain.On("GetBlockLocator", mock.Anything, targetBlock.Header.Hash(), mock.Anything).Return(locatorHashes, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -294,7 +295,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 		locatorHashes := []*chainhash.Hash{targetBlock.Header.Hash()}
 		suite.MockBlockchain.On("GetBlockLocator", mock.Anything, targetBlock.Header.Hash(), mock.Anything).Return(locatorHashes, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -331,7 +332,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 		locatorHashes := []*chainhash.Hash{targetBlock.Header.Hash()}
 		suite.MockBlockchain.On("GetBlockLocator", mock.Anything, targetBlock.Header.Hash(), mock.Anything).Return(locatorHashes, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		invalidBytes := make([]byte, 160)
@@ -380,7 +381,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 			suite.MockBlockchain.On("GetBlockExists", mock.Anything, blocks[i].Header.Hash()).Return(false, nil).Maybe()
 		}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		requestCount := 0
@@ -446,7 +447,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 
 		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		requestCount := 0
@@ -519,7 +520,7 @@ func TestCatchupGetBlockHeaders(t *testing.T) {
 		}
 		suite.MockBlockchain.On("GetBlockLocator", mock.Anything, bestBlock.Header.Hash(), uint32(50)).Return(locatorHashes, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		var headersBytes []byte
@@ -688,7 +689,7 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	require.NoError(t, err)
 
 	// Activate httpmock before registering responders
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	// Don't deactivate httpmock - it causes race conditions when goroutines are still
 	// processing HTTP requests during test cleanup. The mock state will be reset by
 	// other tests that activate httpmock.
@@ -930,7 +931,7 @@ func TestProcessBlockFoundChannelCatchup(t *testing.T) {
 	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(blocks[0].Header, &model.BlockHeaderMeta{Height: 100}, nil).Once()
 
 	// Mock HTTP responses for block requests
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	// Mock block responses for each peer
@@ -1273,7 +1274,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 			nil, errors.NewServiceError("not found"),
 		).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Simulate server returning headers in chunks
@@ -1363,7 +1364,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, blocks[0].Header.Hash()).Return(true, nil).Maybe()
 
 		// Activate httpmock and register responder
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -1408,7 +1409,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		locatorHashes := []*chainhash.Hash{blocks[0].Header.Hash()}
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(locatorHashes, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Always return network error to trigger circuit breaker
@@ -1525,7 +1526,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		// This is needed because FilterNewHeaders will check various headers
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock the /blocks/ endpoint for fetching actual blocks
@@ -1627,7 +1628,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 		locatorHashes := []*chainhash.Hash{blocks[0].Header.Hash()}
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(locatorHashes, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Simulate network timeout
@@ -1692,7 +1693,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(locatorHashes, nil)
 
 		// Setup HTTP mocks
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Return invalid header bytes (not divisible by block header size)
@@ -1747,7 +1748,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 		}
 
 		// Setup HTTP mocks
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create headers with some corrupt data
@@ -1837,7 +1838,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 			nil,
 		)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Return valid headers
@@ -1890,7 +1891,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 		locatorHashes := []*chainhash.Hash{blocks[0].Header.Hash()}
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(locatorHashes, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Return 404 error
@@ -1938,7 +1939,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 		locatorHashes := []*chainhash.Hash{blocks[0].Header.Hash()}
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(locatorHashes, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Return response that triggers malicious detection
@@ -1986,7 +1987,7 @@ func TestCatchupErrorScenarios(t *testing.T) {
 		locatorHashes := []*chainhash.Hash{blocks[0].Header.Hash()}
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(locatorHashes, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Simulate different errors for different requests
@@ -2371,7 +2372,7 @@ func SkipTestCatchupPerformanceWithHeaderCache(t *testing.T) {
 		}, nil).Maybe()
 
 	// Setup HTTP mock for header fetching
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	// Create headers starting with common ancestor (block 0) followed by blocks 1-9
@@ -2514,7 +2515,7 @@ func BenchmarkCatchupWithHeaderCache(b *testing.B) {
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 
 		// Create headers
 		headersBytes := []byte{}
@@ -2580,7 +2581,7 @@ func TestCatchup_NoRepeatedHeaderFetching(t *testing.T) {
 	requestCount := 0
 	var lastBlockLocator string
 
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	httpmock.RegisterResponder(
@@ -3361,7 +3362,7 @@ func TestCheckpointValidationWithSuboptimalAncestor(t *testing.T) {
 	}
 
 	// Set up HTTP mock to return these headers
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	httpmock.RegisterResponder(
