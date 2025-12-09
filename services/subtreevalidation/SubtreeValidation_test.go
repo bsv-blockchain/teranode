@@ -34,6 +34,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka" //nolint:gci
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
@@ -116,7 +117,7 @@ func TestBlockValidationValidateSubtree(t *testing.T) {
 
 func setup(t *testing.T) (utxo.Store, *validator.MockValidatorClient, blob.Store, blob.Store, blockchain.ClientI, func()) {
 	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	httpmock.RegisterResponder(
 		"GET",
 		`=~^/tx/[a-z0-9]+\z`,

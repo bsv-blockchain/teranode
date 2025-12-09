@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -259,7 +260,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, bestBlockHeader.Hash()).
 			Return(true, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create full blocks for the honest chain
@@ -547,7 +548,7 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).
 			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1000, ID: 1}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create headers with broken chain - use minimum difficulty for mining

@@ -44,6 +44,7 @@ import (
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -439,7 +440,7 @@ func TestServer_processBlockFoundChannel(t *testing.T) {
 	block, err := model.NewBlockFromBytes(blockBytes)
 	require.NoError(t, err)
 
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	httpmock.RegisterResponder(
 		"GET",
 		`=~^/block/[a-z0-9]+\z`,
@@ -579,7 +580,7 @@ func TestServer_catchup(t *testing.T) {
 		}
 
 		// Setup HTTP mocks
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Register responder for headers_from_common_ancestor with regex to match any hash and query params
