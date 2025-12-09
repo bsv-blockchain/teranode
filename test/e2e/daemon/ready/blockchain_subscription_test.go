@@ -14,6 +14,11 @@ func TestBlockchainSubscriptionReconnection(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
+	// Use a test-scoped context so we always tear down the subscription
+	// before stopping the daemon. This helps avoid races during shutdown.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	t.Cleanup(cancel)
+
 	node := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
 		EnableP2P:     true,
@@ -22,12 +27,15 @@ func TestBlockchainSubscriptionReconnection(t *testing.T) {
 			test.SystemTestSettings(),
 		),
 	})
-	defer node.Stop(t, true)
+	t.Cleanup(func() {
+		// Ensure subscription context is cancelled before shutting down services
+		cancel()
+		// Give the subscription goroutine a brief window to detach cleanly
+		time.Sleep(200 * time.Millisecond)
+		node.Stop(t, true)
+	})
 
 	// Subscribe to blockchain notifications
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
 	subscriptionCh, err := node.BlockchainClient.Subscribe(ctx, "test-subscription")
 	require.NoError(t, err)
 

@@ -2191,18 +2191,22 @@ func TestDeleteByBin(t *testing.T) {
 	writePolicy := aerospike.NewWritePolicy(0, 0)
 	writePolicy.FilterExpression = filterExpression
 
-	task, err := client.QueryExecute(queryPolicy, writePolicy, statement, aerospike.DeleteOp())
+	recordSet, err = client.Query(queryPolicy, statement)
 	require.NoError(t, err)
 
-	for {
-		done, err := task.IsDone()
-		if err != nil {
-			t.Error(err)
+	var keysToDelete []*aerospike.Key
+	for result := range recordSet.Results() {
+		require.NoError(t, result.Err)
+		if result == nil || result.Record == nil || result.Record.Key == nil {
+			continue
 		}
-		if done {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
+
+		keysToDelete = append(keysToDelete, result.Record.Key)
+	}
+
+	for _, key := range keysToDelete {
+		_, err = client.Delete(writePolicy, key)
+		require.NoError(t, err)
 	}
 
 	recordSet, err = client.Query(nil, statement)
