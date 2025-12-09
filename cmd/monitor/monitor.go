@@ -5,6 +5,7 @@ package monitor
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,8 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -95,21 +98,28 @@ type ServiceHealth struct {
 	Latency    time.Duration
 }
 
-// AerospikeStats holds collected Aerospike metrics
+// AerospikeStats holds Aerospike cluster statistics
 type AerospikeStats struct {
-	Connected   bool
-	ClusterName string
-	Nodes       []nodeInfo
-	Namespaces  map[string]map[string]string // namespace -> stats map
-	Latencies   map[string]string            // latency histograms
+	Connected       bool
+	NodeCount       int
+	OpenConnections int
+	TotalNodes      []string
+	ClusterStats    map[string]interface{}
+	ServerStats     map[string]string            // Server-side stats from node.RequestInfo (aggregated for cluster)
+	NamespaceStats  map[string]string            // Namespace-specific stats (aggregated for cluster)
+	NamespaceName   string                       // Name of the namespace being monitored
+	NodeStats       map[string]nodeInfo          // Per-node stats for cluster view
+	Namespaces      map[string]map[string]string // All namespaces stats (for scrollable view)
+	Latencies       map[string]string            // Latency histogram data
+	Error           string
 }
 
-// nodeInfo holds per-node Aerospike statistics
+// nodeInfo holds stats for a single Aerospike node
 type nodeInfo struct {
-	Name       string
-	Host       string
-	Stats      map[string]string
-	Namespaces map[string]map[string]string
+	Name           string
+	Host           string
+	ServerStats    map[string]string
+	NamespaceStats map[string]string
 }
 
 // NodeData holds the fetched node data
@@ -135,7 +145,7 @@ type Model struct {
 	blockValClient   blockvalidation.Interface
 	blockAsmClient   blockassembly.ClientI
 	subtreeClient    subtreevalidation.Interface
-	aerospikeClient  *aerospike.Client
+	aerospikeClient  *uaerospike.Client
 	spinner          spinner.Model
 	data             NodeData
 	width            int
@@ -188,10 +198,15 @@ func NewModel(logger ulogger.Logger, s *settings.Settings) (*Model, error) {
 		subtreeClient, _ = subtreevalidation.NewClient(ctx, logger, s, "TUI Monitor")
 	}
 
-	// Create optional Aerospike client (don't fail if not configured)
-	var aerospikeClient *aerospike.Client
+	// Create Aerospike client (optional - don't fail if not configured)
+	var aerospikeClient *uaerospike.Client
 	if s.Aerospike.Host != "" && s.Aerospike.Port > 0 {
-		aerospikeClient, _ = aerospike.NewClient(s.Aerospike.Host, s.Aerospike.Port)
+		aerospikeURL := &url.URL{
+			Scheme: "aerospike",
+			Host:   fmt.Sprintf("%s:%d", s.Aerospike.Host, s.Aerospike.Port),
+			Path:   "/teranode",
+		}
+		aerospikeClient, _ = util.GetAerospikeClient(logger, aerospikeURL, s)
 	}
 
 	sp := spinner.New()
@@ -280,6 +295,236 @@ func (m Model) fetchData() tea.Msg {
 	data.AerospikeStats = m.collectAerospikeStats()
 
 	return dataMsg(data)
+}
+
+// collectAerospikeStats collects Aerospike cluster statistics
+func (m Model) collectAerospikeStats() *AerospikeStats {
+	stats := &AerospikeStats{
+		ClusterStats:   make(map[string]interface{}),
+		ServerStats:    make(map[string]string),
+		NamespaceStats: make(map[string]string),
+		NodeStats:      make(map[string]nodeInfo),
+		Namespaces:     make(map[string]map[string]string),
+		Latencies:      make(map[string]string),
+	}
+
+	if m.aerospikeClient == nil {
+		stats.Error = "Not configured"
+		return stats
+	}
+
+	if !m.aerospikeClient.IsConnected() {
+		stats.Error = "Disconnected"
+		return stats
+	}
+
+	stats.Connected = true
+
+	// Get nodes
+	nodes := m.aerospikeClient.GetNodes()
+	stats.NodeCount = len(nodes)
+
+	for _, node := range nodes {
+		stats.TotalNodes = append(stats.TotalNodes, node.GetName())
+	}
+
+	// Get client-side cluster stats
+	clusterStats, err := m.aerospikeClient.Stats()
+	if err == nil {
+		stats.ClusterStats = clusterStats
+		// Extract open connections if available
+		if openConn, ok := clusterStats["open-connections"]; ok {
+			switch v := openConn.(type) {
+			case int:
+				stats.OpenConnections = v
+			case int16:
+				stats.OpenConnections = int(v)
+			case int32:
+				stats.OpenConnections = int(v)
+			case int64:
+				stats.OpenConnections = int(v)
+			}
+		}
+	}
+
+	policy := aerospike.NewInfoPolicy()
+	policy.Timeout = 2 * time.Second
+
+	// Determine namespace name from first node
+	var namespaceName string
+	if len(nodes) > 0 {
+		node := nodes[0]
+		nsListInfo, err := node.RequestInfo(policy, "namespaces")
+		if err == nil {
+			if nsList, ok := nsListInfo["namespaces"]; ok && nsList != "" {
+				namespaces := strings.Split(nsList, ";")
+				for _, ns := range namespaces {
+					ns = strings.TrimSpace(ns)
+					if ns != "" {
+						namespaceName = ns
+						break
+					}
+				}
+			}
+		}
+		// Fallback to common namespace names
+		if namespaceName == "" {
+			for _, ns := range []string{"teranode", "test", "bar"} {
+				nsInfo, err := node.RequestInfo(policy, "namespace/"+ns)
+				if err == nil {
+					if nsStr, ok := nsInfo["namespace/"+ns]; ok && nsStr != "" {
+						namespaceName = ns
+						break
+					}
+				}
+			}
+		}
+	}
+	stats.NamespaceName = namespaceName
+
+	// Collect stats from all nodes and aggregate
+	aggregatedServerStats := make(map[string]int64)
+	aggregatedNsStats := make(map[string]int64)
+
+	// Keys to aggregate (sum across nodes)
+	sumKeys := map[string]bool{
+		"objects": true, "master_objects": true, "tombstones": true,
+		"client_connections": true, "device_overloads": true,
+		"fail_record_too_big": true, "fail_key_busy": true, "fail_generation": true,
+		"fail_client_lost": true, "client_write_error": true, "client_write_timeout": true,
+		"client_read_success": true, "client_write_success": true,
+		"device_used_bytes": true, "device_total_bytes": true, "memory_used_bytes": true,
+	}
+	// Keys to average (avg across nodes)
+	avgKeys := map[string]bool{
+		"device_free_pct": true, "device_available_pct": true, "memory_free_pct": true,
+	}
+
+	nodeCount := 0
+	for _, node := range nodes {
+		nInfo := nodeInfo{
+			Name:           node.GetName(),
+			Host:           node.GetHost().String(),
+			ServerStats:    make(map[string]string),
+			NamespaceStats: make(map[string]string),
+		}
+
+		// Get server statistics for this node
+		infoMap, err := node.RequestInfo(policy, "statistics")
+		if err == nil {
+			if statsStr, ok := infoMap["statistics"]; ok {
+				nInfo.ServerStats = parseAerospikeInfoString(statsStr)
+				// Aggregate server stats
+				for key, val := range nInfo.ServerStats {
+					if v, err := strconv.ParseInt(val, 10, 64); err == nil {
+						if sumKeys[key] || avgKeys[key] {
+							aggregatedServerStats[key] += v
+						}
+					}
+				}
+			}
+		}
+
+		// Get namespace statistics for this node
+		if namespaceName != "" {
+			nsInfo, err := node.RequestInfo(policy, "namespace/"+namespaceName)
+			if err == nil {
+				if nsStr, ok := nsInfo["namespace/"+namespaceName]; ok && nsStr != "" {
+					nInfo.NamespaceStats = parseAerospikeInfoString(nsStr)
+					stats.Namespaces[namespaceName] = nInfo.NamespaceStats
+					// Aggregate namespace stats
+					for key, val := range nInfo.NamespaceStats {
+						if v, err := strconv.ParseInt(val, 10, 64); err == nil {
+							if sumKeys[key] || avgKeys[key] {
+								aggregatedNsStats[key] += v
+							}
+						}
+					}
+				}
+			}
+		}
+
+		stats.NodeStats[node.GetName()] = nInfo
+		nodeCount++
+	}
+
+	// Convert aggregated stats back to string map
+	// For single node, just use the node's stats directly
+	if nodeCount == 1 && len(nodes) > 0 {
+		if nInfo, ok := stats.NodeStats[nodes[0].GetName()]; ok {
+			stats.ServerStats = nInfo.ServerStats
+			stats.NamespaceStats = nInfo.NamespaceStats
+		}
+	} else if nodeCount > 0 {
+		// For cluster, use aggregated stats
+		for key, val := range aggregatedNsStats {
+			if avgKeys[key] {
+				// Average for percentages
+				stats.NamespaceStats[key] = strconv.FormatInt(val/int64(nodeCount), 10)
+			} else {
+				// Sum for counts
+				stats.NamespaceStats[key] = strconv.FormatInt(val, 10)
+			}
+		}
+		for key, val := range aggregatedServerStats {
+			if avgKeys[key] {
+				stats.ServerStats[key] = strconv.FormatInt(val/int64(nodeCount), 10)
+			} else {
+				stats.ServerStats[key] = strconv.FormatInt(val, 10)
+			}
+		}
+	}
+
+	// Get latency data from first node (representative sample)
+	if len(nodes) > 0 {
+		node := nodes[0]
+
+		// Try multiple latency info commands (format varies by Aerospike version)
+		latencyCommands := []string{"latencies:", "latency:"}
+		for _, cmd := range latencyCommands {
+			latencyInfo, err := node.RequestInfo(policy, cmd)
+			if err == nil && len(latencyInfo) > 0 {
+				for key, val := range latencyInfo {
+					if val != "" && val != "error" {
+						stats.Latencies[key] = val
+					}
+				}
+				if len(stats.Latencies) > 0 {
+					break
+				}
+			}
+		}
+
+		// Also try to get specific namespace latency if we have a namespace
+		if namespaceName != "" && len(stats.Latencies) == 0 {
+			for _, op := range []string{"read", "write", "udf", "query"} {
+				histCmd := fmt.Sprintf("latency:hist={%s}-%s", namespaceName, op)
+				histInfo, err := node.RequestInfo(policy, histCmd)
+				if err == nil {
+					for key, val := range histInfo {
+						if val != "" && val != "error" {
+							stats.Latencies[key] = val
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return stats
+}
+
+// parseAerospikeInfoString parses Aerospike info string format "key=value;key=value;..."
+func parseAerospikeInfoString(info string) map[string]string {
+	result := make(map[string]string)
+	pairs := strings.Split(info, ";")
+	for _, pair := range pairs {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) == 2 {
+			result[kv[0]] = kv[1]
+		}
+	}
+	return result
 }
 
 // collectServiceHealth checks health of all configured services
@@ -390,114 +635,6 @@ func (m Model) checkServiceHealth(ctx context.Context, name string, healthFn fun
 	}
 
 	return health
-}
-
-// collectAerospikeStats collects statistics from Aerospike cluster
-func (m Model) collectAerospikeStats() *AerospikeStats {
-	stats := &AerospikeStats{
-		Namespaces: make(map[string]map[string]string),
-		Latencies:  make(map[string]string),
-	}
-
-	if m.aerospikeClient == nil {
-		return stats
-	}
-
-	if !m.aerospikeClient.IsConnected() {
-		return stats
-	}
-
-	stats.Connected = true
-
-	// Get cluster name
-	nodes := m.aerospikeClient.GetNodes()
-	if len(nodes) == 0 {
-		return stats
-	}
-
-	// Collect info from each node
-	policy := aerospike.NewInfoPolicy()
-	for _, node := range nodes {
-		ni := nodeInfo{
-			Name:       node.GetName(),
-			Host:       node.GetHost().String(),
-			Stats:      make(map[string]string),
-			Namespaces: make(map[string]map[string]string),
-		}
-
-		// Get node statistics
-		infoMap, err := node.RequestInfo(policy, "statistics")
-		if err == nil {
-			if statsStr, ok := infoMap["statistics"]; ok {
-				ni.Stats = parseAerospikeInfo(statsStr)
-			}
-		}
-
-		// Get cluster name from first node
-		if stats.ClusterName == "" {
-			if clusterInfo, err := node.RequestInfo(policy, "cluster-name"); err == nil {
-				if cn, ok := clusterInfo["cluster-name"]; ok {
-					stats.ClusterName = cn
-				}
-			}
-		}
-
-		// Get namespace information
-		if nsInfo, err := node.RequestInfo(policy, "namespaces"); err == nil {
-			if nsStr, ok := nsInfo["namespaces"]; ok {
-				namespaces := strings.Split(nsStr, ";")
-				for _, ns := range namespaces {
-					if ns == "" {
-						continue
-					}
-					// Get namespace-specific stats
-					nsStatsInfo, err := node.RequestInfo(policy, "namespace/"+ns)
-					if err == nil {
-						if nsStatsStr, ok := nsStatsInfo["namespace/"+ns]; ok {
-							nsStats := parseAerospikeInfo(nsStatsStr)
-							ni.Namespaces[ns] = nsStats
-							// Aggregate namespace stats
-							if stats.Namespaces[ns] == nil {
-								stats.Namespaces[ns] = nsStats
-							}
-						}
-					}
-				}
-			}
-		}
-
-		// Get latency information - try different info commands
-		latencyCommands := []string{"latencies:", "latency:"}
-		for _, cmd := range latencyCommands {
-			if latInfo, err := node.RequestInfo(policy, cmd); err == nil {
-				for k, v := range latInfo {
-					if v != "" && v != "error" {
-						stats.Latencies[k] = v
-					}
-				}
-				if len(stats.Latencies) > 0 {
-					break
-				}
-			}
-		}
-
-		stats.Nodes = append(stats.Nodes, ni)
-	}
-
-	return stats
-}
-
-// parseAerospikeInfo parses Aerospike info string into a map
-func parseAerospikeInfo(info string) map[string]string {
-	result := make(map[string]string)
-	pairs := strings.Split(info, ";")
-	for _, pair := range pairs {
-		kv := strings.SplitN(pair, "=", 2)
-		if len(kv) == 2 {
-			result[kv[0]] = kv[1]
-		}
-	}
-	return result
 }
 
 // Update handles messages and updates the model
@@ -632,6 +769,10 @@ func (m Model) View() string {
 	// Service health summary row
 	b.WriteString("\n")
 	b.WriteString(m.renderHealthSummary())
+
+	// Aerospike status summary
+	b.WriteString("\n")
+	b.WriteString(m.renderAerospikeSummary())
 
 	// Error display
 	if m.data.Error != "" {
@@ -1099,7 +1240,118 @@ func (m Model) renderHealthView() string {
 	return b.String()
 }
 
-// renderAerospikeView renders the Aerospike statistics view
+// renderAerospikeSummary renders a compact one-line Aerospike status for the dashboard
+func (m Model) renderAerospikeSummary() string {
+	stats := m.data.AerospikeStats
+	if stats == nil {
+		return labelStyle.Render("Aerospike: loading...")
+	}
+
+	var parts []string
+
+	// Connection status
+	if stats.Error != "" {
+		parts = append(parts, errorStyle.Render("✗ "+stats.Error))
+	} else if stats.Connected {
+		parts = append(parts, goodStyle.Render("✓"))
+
+		// Show namespace name if available
+		if stats.NamespaceName != "" {
+			parts = append(parts, fmt.Sprintf("ns:%s", stats.NamespaceName))
+		}
+
+		parts = append(parts, fmt.Sprintf("%dn", stats.NodeCount))
+
+		// Show object count and disk usage if available
+		nsStats := stats.NamespaceStats
+		if len(nsStats) > 0 {
+			if val, ok := nsStats["objects"]; ok {
+				if v, err := strconv.ParseInt(val, 10, 64); err == nil {
+					parts = append(parts, fmt.Sprintf("obj:%s", formatNumber(uint64(v))))
+				}
+			}
+
+			// Show disk used/total
+			usedBytes, hasUsed := nsStats["device_used_bytes"]
+			totalBytes, hasTotal := nsStats["device_total_bytes"]
+			if hasUsed && hasTotal {
+				used, _ := strconv.ParseInt(usedBytes, 10, 64)
+				total, _ := strconv.ParseInt(totalBytes, 10, 64)
+				if total > 0 {
+					usedPct := float64(used) / float64(total) * 100
+					diskStr := fmt.Sprintf("disk:%s/%s(%.0f%%)", formatBytes(uint64(used)), formatBytes(uint64(total)), usedPct)
+					if usedPct > 90 {
+						parts = append(parts, errorStyle.Render(diskStr))
+					} else if usedPct > 80 {
+						parts = append(parts, warnStyle.Render(diskStr))
+					} else {
+						parts = append(parts, diskStr)
+					}
+				}
+			}
+
+			// Check device_overloads
+			if val, ok := nsStats["device_overloads"]; ok {
+				if v, err := strconv.ParseInt(val, 10, 64); err == nil && v > 0 {
+					parts = append(parts, errorStyle.Render(fmt.Sprintf("OVERLOAD:%d", v)))
+				}
+			}
+			// Check fail_key_busy (contention)
+			if val, ok := nsStats["fail_key_busy"]; ok {
+				if v, err := strconv.ParseInt(val, 10, 64); err == nil && v > 0 {
+					parts = append(parts, warnStyle.Render(fmt.Sprintf("KEY_BUSY:%d", v)))
+				}
+			}
+			// Check device_available_pct (low free space)
+			if val, ok := nsStats["device_available_pct"]; ok {
+				if v, err := strconv.ParseInt(val, 10, 64); err == nil && v < 20 {
+					if v < 10 {
+						parts = append(parts, errorStyle.Render(fmt.Sprintf("AVAIL:%d%%", v)))
+					} else {
+						parts = append(parts, warnStyle.Render(fmt.Sprintf("AVAIL:%d%%", v)))
+					}
+				}
+			}
+			// Check memory
+			if val, ok := nsStats["memory_free_pct"]; ok {
+				if v, err := strconv.ParseInt(val, 10, 64); err == nil && v < 20 {
+					if v < 10 {
+						parts = append(parts, errorStyle.Render(fmt.Sprintf("MEM:%d%%", v)))
+					} else {
+						parts = append(parts, warnStyle.Render(fmt.Sprintf("MEM:%d%%", v)))
+					}
+				}
+			}
+		}
+
+		// Fallback to server stats if namespace stats empty
+		if len(nsStats) == 0 && len(stats.ServerStats) > 0 {
+			if val, ok := stats.ServerStats["objects"]; ok {
+				if v, err := strconv.ParseInt(val, 10, 64); err == nil {
+					parts = append(parts, fmt.Sprintf("obj:%s", formatNumber(uint64(v))))
+				}
+			}
+			for _, key := range []string{"client_write_error", "client_write_timeout"} {
+				if val, ok := stats.ServerStats[key]; ok {
+					if v, err := strconv.ParseInt(val, 10, 64); err == nil && v > 0 {
+						parts = append(parts, warnStyle.Render(fmt.Sprintf("%s:%d", strings.ToUpper(strings.TrimPrefix(key, "client_")), v)))
+					}
+				}
+			}
+		}
+
+		// Show cluster mode indicator
+		if stats.NodeCount > 1 {
+			parts = append(parts, labelStyle.Render("(cluster)"))
+		}
+	} else {
+		parts = append(parts, warnStyle.Render("○ Unknown"))
+	}
+
+	return labelStyle.Render("Aerospike: ") + strings.Join(parts, " | ")
+}
+
+// renderAerospikeView renders the detailed Aerospike statistics view
 func (m Model) renderAerospikeView() string {
 	var b strings.Builder
 
@@ -1109,14 +1361,17 @@ func (m Model) renderAerospikeView() string {
 	b.WriteString("\n\n")
 
 	stats := m.data.AerospikeStats
-	if stats == nil || !stats.Connected {
-		if m.aerospikeClient == nil {
-			b.WriteString(labelStyle.Render("Aerospike not configured"))
-			b.WriteString("\n")
-			b.WriteString(labelStyle.Render(fmt.Sprintf("Host: %s, Port: %d", m.settings.Aerospike.Host, m.settings.Aerospike.Port)))
-		} else {
-			b.WriteString(errorStyle.Render("Aerospike not connected"))
-		}
+	if stats == nil {
+		b.WriteString(labelStyle.Render("Loading..."))
+		b.WriteString("\n\n")
+		b.WriteString(helpStyle.Render("a/esc: back | r: refresh | q: quit"))
+		return b.String()
+	}
+
+	if stats.Error != "" {
+		b.WriteString(errorStyle.Render("Error: " + stats.Error))
+		b.WriteString("\n")
+		b.WriteString(labelStyle.Render(fmt.Sprintf("Host: %s, Port: %d", m.settings.Aerospike.Host, m.settings.Aerospike.Port)))
 		b.WriteString("\n\n")
 		b.WriteString(helpStyle.Render("a/esc: back | r: refresh | q: quit"))
 		return b.String()
@@ -1127,14 +1382,22 @@ func (m Model) renderAerospikeView() string {
 
 	// Cluster info
 	lines = append(lines, headerStyle.Render("CLUSTER INFO"))
-	lines = append(lines, m.renderSettingRow("Cluster Name", stats.ClusterName))
-	lines = append(lines, m.renderSettingRow("Nodes", fmt.Sprintf("%d", len(stats.Nodes))))
+	lines = append(lines, m.renderSettingRow("Nodes", fmt.Sprintf("%d", stats.NodeCount)))
+	lines = append(lines, m.renderSettingRow("Connections", fmt.Sprintf("%d", stats.OpenConnections)))
+	if stats.NamespaceName != "" {
+		lines = append(lines, m.renderSettingRow("Namespace", stats.NamespaceName))
+	}
+	if len(stats.TotalNodes) > 0 {
+		lines = append(lines, m.renderSettingRow("Node Names", strings.Join(stats.TotalNodes, ", ")))
+	}
 	lines = append(lines, "")
 
 	// Node summary
-	for i, node := range stats.Nodes {
-		lines = append(lines, headerStyle.Render(fmt.Sprintf("NODE %d: %s", i+1, node.Name)))
-		lines = append(lines, m.renderSettingRow("Host", node.Host))
+	for nodeName, node := range stats.NodeStats {
+		lines = append(lines, headerStyle.Render(fmt.Sprintf("NODE: %s", nodeName)))
+		if node.Host != "" {
+			lines = append(lines, m.renderSettingRow("Host", node.Host))
+		}
 
 		// Key node stats
 		keyStats := []string{
@@ -1142,25 +1405,32 @@ func (m Model) renderAerospikeView() string {
 			"client_connections", "batch_index_queue", "scan_queue",
 		}
 		for _, key := range keyStats {
-			if val, ok := node.Stats[key]; ok {
-				lines = append(lines, m.renderSettingRow(key, val))
+			if val, ok := node.ServerStats[key]; ok {
+				lines = append(lines, m.renderSettingRow(key, m.formatAeroStringValue(key, val)))
 			}
 		}
 		lines = append(lines, "")
 	}
 
-	// Namespace info
-	for ns, nsStats := range stats.Namespaces {
-		lines = append(lines, headerStyle.Render(fmt.Sprintf("NAMESPACE: %s", ns)))
+	// Namespace stats
+	if len(stats.NamespaceStats) > 0 {
+		nsHeader := "NAMESPACE STATISTICS"
+		if stats.NamespaceName != "" {
+			nsHeader = fmt.Sprintf("NAMESPACE: %s", stats.NamespaceName)
+		}
+		if stats.NodeCount > 1 {
+			nsHeader += " (aggregated)"
+		}
+		lines = append(lines, headerStyle.Render(nsHeader))
 
 		// Calculate disk usage percentage
-		if deviceUsed, ok := nsStats["device_used_bytes"]; ok {
-			if deviceTotal, ok := nsStats["device_total_bytes"]; ok {
-				used, _ := strconv.ParseUint(deviceUsed, 10, 64)
-				total, _ := strconv.ParseUint(deviceTotal, 10, 64)
+		if deviceUsed, ok := stats.NamespaceStats["device_used_bytes"]; ok {
+			if deviceTotal, ok := stats.NamespaceStats["device_total_bytes"]; ok {
+				used, _ := strconv.ParseInt(deviceUsed, 10, 64)
+				total, _ := strconv.ParseInt(deviceTotal, 10, 64)
 				if total > 0 {
 					pct := float64(used) / float64(total) * 100
-					diskLine := fmt.Sprintf("%s / %s (%.1f%%)", formatBytes(used), formatBytes(total), pct)
+					diskLine := fmt.Sprintf("%s / %s (%.1f%%)", formatBytes(uint64(used)), formatBytes(uint64(total)), pct)
 					lines = append(lines, m.renderSettingRow("Disk Used/Total", diskLine))
 				}
 			}
@@ -1169,16 +1439,16 @@ func (m Model) renderAerospikeView() string {
 		// Key namespace metrics grouped by category
 		criticalStats := []struct {
 			key  string
-			warn bool // if true, highlight when non-zero
+			warn bool
 		}{
 			{"stop_writes", true},
 			{"clock_skew_stop_writes", true},
 			{"hwm_breached", true},
 		}
 		for _, stat := range criticalStats {
-			if val, ok := nsStats[stat.key]; ok {
+			if val, ok := stats.NamespaceStats[stat.key]; ok {
 				if stat.warn && val != "0" && val != "false" {
-					lines = append(lines, "  "+errorStyle.Render(stat.key+": "+val))
+					lines = append(lines, "  "+errorStyle.Render(stat.key+": "+val+" - CRITICAL!"))
 				} else {
 					lines = append(lines, m.renderSettingRow(stat.key, val))
 				}
@@ -1191,8 +1461,8 @@ func (m Model) renderAerospikeView() string {
 			"sindex_used_bytes", "cache_read_pct",
 		}
 		for _, key := range storageStats {
-			if val, ok := nsStats[key]; ok {
-				lines = append(lines, m.renderSettingRow(key, val))
+			if val, ok := stats.NamespaceStats[key]; ok {
+				lines = append(lines, m.renderSettingRow(key, m.formatAeroStringValue(key, val)))
 			}
 		}
 
@@ -1202,8 +1472,8 @@ func (m Model) renderAerospikeView() string {
 			"truncated_records",
 		}
 		for _, key := range objectStats {
-			if val, ok := nsStats[key]; ok {
-				lines = append(lines, m.renderSettingRow(key, val))
+			if val, ok := stats.NamespaceStats[key]; ok {
+				lines = append(lines, m.renderSettingRow(key, m.formatAeroStringValue(key, val)))
 			}
 		}
 
@@ -1214,8 +1484,15 @@ func (m Model) renderAerospikeView() string {
 			"batch_sub_read_success", "batch_sub_read_error",
 		}
 		for _, key := range throughputStats {
-			if val, ok := nsStats[key]; ok {
-				lines = append(lines, m.renderSettingRow(key, val))
+			if val, ok := stats.NamespaceStats[key]; ok {
+				formattedVal := m.formatAeroStringValue(key, val)
+				if strings.Contains(key, "error") || strings.Contains(key, "timeout") {
+					if v, err := strconv.ParseInt(val, 10, 64); err == nil && v > 0 {
+						lines = append(lines, "  "+settingKeyStyle.Render(key+":")+errorStyle.Render(" "+formattedVal))
+						continue
+					}
+				}
+				lines = append(lines, m.renderSettingRow(key, formattedVal))
 			}
 		}
 
@@ -1225,7 +1502,7 @@ func (m Model) renderAerospikeView() string {
 			"migrate_rx_partitions_remaining", "migrate_tx_partitions_remaining",
 		}
 		for _, key := range migrationStats {
-			if val, ok := nsStats[key]; ok && val != "0" {
+			if val, ok := stats.NamespaceStats[key]; ok && val != "0" {
 				lines = append(lines, m.renderSettingRow(key, val))
 			}
 		}
@@ -1244,6 +1521,9 @@ func (m Model) renderAerospikeView() string {
 		sort.Strings(latKeys)
 		for _, k := range latKeys {
 			v := stats.Latencies[k]
+			if k == "latencies:" || k == "latency:" || v == "" {
+				continue
+			}
 			if len(v) > 60 {
 				v = v[:57] + "..."
 			}
@@ -1294,6 +1574,27 @@ func (m Model) renderAerospikeView() string {
 	b.WriteString(helpStyle.Render("a/esc: back | j/k: scroll | g/G: top/bottom | r: refresh | q: quit"))
 
 	return b.String()
+}
+
+// formatAeroStringValue formats an Aerospike stat string value for display
+func (m Model) formatAeroStringValue(key, val string) string {
+	// Try to parse as number for formatting
+	if v, err := strconv.ParseInt(val, 10, 64); err == nil {
+		// Format bytes as human-readable
+		if strings.Contains(key, "_bytes") || strings.Contains(key, "-size") {
+			return formatBytes(uint64(v))
+		}
+		// Format percentages
+		if strings.Contains(key, "_pct") {
+			return fmt.Sprintf("%d%%", v)
+		}
+		// Format large numbers with commas
+		if v > 1000 {
+			return formatNumber(uint64(v))
+		}
+		return fmt.Sprintf("%d", v)
+	}
+	return val
 }
 
 // Run starts the TUI monitor
