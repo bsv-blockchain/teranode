@@ -2194,7 +2194,7 @@ func TestDeleteByBin(t *testing.T) {
 	recordSet, err = client.Query(queryPolicy, statement)
 	require.NoError(t, err)
 
-	var keysToDelete []*aerospike.Key
+	keysToDelete := make([]*aerospike.Key, 0, 2)
 	for result := range recordSet.Results() {
 		require.NoError(t, result.Err)
 		if result == nil || result.Record == nil || result.Record.Key == nil {
