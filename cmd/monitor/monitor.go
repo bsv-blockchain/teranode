@@ -1378,7 +1378,7 @@ func (m Model) renderAerospikeView() string {
 	}
 
 	// Collect all lines for scrolling
-	var lines []string
+	lines := make([]string, 0, 50)
 
 	// Cluster info
 	lines = append(lines, headerStyle.Render("CLUSTER INFO"))
