@@ -52,23 +52,29 @@ alt if TX is valid
       (first phase of two-phase commit)
     end note
 
-    alt if Tx Meta Kafka Producer exists
-        Validator -> TxMetaKafka: Publish tx meta
-    end
-
     alt if !blockAssemblyDisabled
         Validator -> BlockAssembly: Store()
         alt if error in block assembler store
             Validator -> UTXOStore: Delete() # reverseTxMetaStore
             Validator -> UTXOStore: Unspend() # reverseSpends
             Validator --> Server: Return error
-        else if successful
-            Validator -> UTXOStore: SetLocked(txHash, false)  \n # Set the UTXOs as locked \n # after successful addition to block assembly
-            note right of UTXOStore
-              Second phase of two-phase commit:
-              UTXOs are now marked as spendable
-            end note
         end
+    end
+
+    alt if Tx Meta Kafka Producer exists
+        Validator -> TxMetaKafka: Publish tx meta
+    end
+
+    alt if !blockAssemblyDisabled
+        Validator -> Validator: twoPhaseCommitTransaction()
+        Validator -> UTXOStore: SetLocked(txHash, false)  \n # Unlock the UTXOs \n # after successful Block Assembly and Kafka publishing
+        note right of UTXOStore
+          Second phase of two-phase commit:
+          UTXOs are now marked as spendable.
+          This happens AFTER Block Assembly and Kafka.
+          If this fails, it's logged but not fatal
+          (transaction will unlock when mined).
+        end note
     end
 
 else if TX is invalid
