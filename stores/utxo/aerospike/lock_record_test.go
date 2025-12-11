@@ -195,31 +195,6 @@ func TestOrphanedTransactionRecovery(t *testing.T) {
 	}
 }
 
-// TestLockTTLExpiration tests that lock records expire after their TTL
-func TestLockTTLExpiration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
-	}
-
-	// This test verifies that the TTL mechanism works correctly
-	// The lock record should automatically expire after the calculated TTL
-
-	t.Run("lock expires for single record transaction", func(t *testing.T) {
-		// For a single record transaction, TTL should be 32 seconds
-		// We can't easily test the full expiration without waiting,
-		// but we can verify the TTL is set correctly on the lock record
-
-		// This would require accessing Aerospike directly to inspect the lock record
-		// which is more of an integration test with Aerospike itself
-		t.Skip("Requires Aerospike inspection capabilities")
-	})
-
-	t.Run("lock expires for large transaction", func(t *testing.T) {
-		// For a 200-record transaction, TTL should be capped at 300 seconds
-		t.Skip("Requires Aerospike inspection capabilities")
-	})
-}
-
 // TestHandleExistingTransactionScenarios tests various scenarios for
 // handleExistingTransaction
 func TestHandleExistingTransactionScenarios(t *testing.T) {
