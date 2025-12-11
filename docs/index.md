@@ -161,7 +161,6 @@
 - [P2P Server](./references/services/p2p_reference.md)
 - [Propagation Server](./references/services/propagation_reference.md)
 - [RPC Service](./references/services/rpc_reference.md)
-- [RPC API Docs](https://bsv-blockchain.github.io/teranode/references/open-rpc/)
 - [Subtree Validation](./references/services/subtreevalidation_reference.md)
 - [UTXO Persister](./references/services/utxopersister_reference.md)
 - [TX Validator](./references/services/validator_reference.md)

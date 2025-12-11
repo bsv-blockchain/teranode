@@ -56,6 +56,9 @@ go test -v ./test/chaos/...
 
 # Scenario 7: Combined Failures (DB + Kafka)
 ./test/chaos/run_scenario_07.sh
+
+# Scenario 8: Block Validation Memory Pressure
+./test/chaos/run_scenario_08.sh
 ```
 
 The helper scripts will:
@@ -88,6 +91,9 @@ go test -v ./test/chaos -run TestScenario06
 
 # Scenario 7: Combined Failures (DB + Kafka)
 go test -v ./test/chaos -run TestScenario07
+
+# Scenario 8: Block Validation Memory Pressure
+go test -v ./test/chaos -run TestScenario08
 ```
 
 ### Run in Verbose Mode
@@ -525,6 +531,89 @@ go test -v ./test/chaos -run TestScenario07_StaggeredRecovery
 
 **Combined scenario duration:** ~35 seconds
 
+### Scenario 8: Block Validation Memory Pressure
+**File:** `scenario_08_block_validation_memory_test.go`
+
+Tests block validation resilience under various memory pressure scenarios and subtree patterns. This validates that the block validation system can handle extreme cases without panicking or leaking resources.
+
+**What it tests:**
+- Block validation with random subtree patterns (transient, deep chains, mixed)
+- Memory usage and heap allocations during validation
+- Goroutine lifecycle and cleanup
+- Cache hit rates and eviction under pressure
+- Concurrent validation under load
+- `ValidateBlockWithOptions` never panics on any generated subtree
+- `setTxMinedStatus` succeeds for all transactions
+
+**How to run:**
+```bash
+# Using helper script
+./test/chaos/run_scenario_08.sh
+
+# Using go test directly
+go test -v ./test/chaos -run TestScenario08
+```
+
+**Test phases:**
+
+1. **Baseline Metrics**
+   - Capture initial heap allocation
+   - Record starting goroutine count
+   - Force GC for clean baseline
+
+2. **Transient Subtrees (50 blocks)**
+   - Generate many small blocks (shallow depth, few TXs)
+   - Validate each subtree
+   - Monitor heap allocation growth
+   - Verify no goroutine leaks
+   - Target: < 500 MB heap, < 200 goroutines
+
+3. **Deep Chains (100 blocks)**
+   - Generate deep transaction chains (up to 10 levels)
+   - Stress caching and eviction mechanisms
+   - Monitor cache hit/miss rates
+   - Verify all transactions marked as mined
+   - Expected: > 50% cache hit rate
+
+4. **Mixed Patterns (30 blocks)**
+   - Random TX depth (1-10), TX count (1-1000), TX size (100-10000 bytes)
+   - Validate with panic recovery
+   - Verify no panics occur under any pattern
+   - All validations must succeed
+
+5. **Concurrent Validation (10 concurrent blocks)**
+   - Generate and validate 10 subtrees concurrently
+   - Monitor goroutine cleanup after completion
+   - Verify no goroutine leaks (< 5 increase after cleanup)
+   - All concurrent validations must succeed
+
+6. **Cache Eviction Under Pressure (200 blocks)**
+   - Generate many blocks to force cache eviction
+   - Monitor cache size changes
+   - Verify eviction mechanism works
+   - Expected: Multiple cache evictions observed
+
+**Expected results:**
+- ✅ No panics under any subtree pattern
+- ✅ All transactions successfully marked as mined
+- ✅ Heap allocation stays under 500 MB
+- ✅ Goroutine count stays under 200
+- ✅ No goroutine leaks after concurrent validation
+- ✅ Cache hit rate > 50% for deep chains
+- ✅ Cache eviction works under memory pressure
+- ✅ All validations complete within timeout (5s per block)
+
+**Performance metrics tracked:**
+- Heap allocations (MB)
+- Goroutine count
+- Cache hit/miss rates
+- Validation times (average)
+- Cache size and evictions
+
+**Test duration:** ~45-60 seconds (depending on hardware)
+
+**Note:** This test does NOT use Toxiproxy as it focuses on internal block validation logic rather than external service failures.
+
 ## Test Structure
 
 Each chaos test follows this pattern:
@@ -698,7 +787,8 @@ Chaos tests take longer than unit tests:
 - Scenario 5 (Bandwidth Constraints): ~4.4 seconds (database + Kafka bandwidth tests)
 - Scenario 6 (Slow Close Connections): ~55 seconds (slicer toxic tests)
 - Scenario 7 (Combined Failures): ~35 seconds (simultaneous and staggered failures)
-- Full suite: ~13-14 minutes (with all scenarios)
+- Scenario 8 (Block Validation Memory): ~45-60 seconds (memory pressure and validation tests)
+- Full suite: ~14-15 minutes (with all scenarios)
 
 ## Troubleshooting
 
@@ -763,8 +853,9 @@ curl -X POST http://localhost:8474/reset
 - [Toxiproxy GitHub](https://github.com/Shopify/toxiproxy)
 - [Chaos Engineering Principles](https://principlesofchaos.org/)
 
-## Future Scenarios (Planned)
+## Implemented Scenarios
 
+- [x] Scenario 1: Database Latency ✅ **Implemented**
 - [x] Scenario 2: Kafka Broker Failure ✅ **Implemented**
 - [x] Scenario 3: Network Partition ✅ **Implemented**
 - [x] Scenario 4A: Intermittent Connection Drops ✅ **Implemented**
@@ -773,5 +864,6 @@ curl -X POST http://localhost:8474/reset
 - [x] Scenario 5: Bandwidth Constraints ✅ **Implemented**
 - [x] Scenario 6: Slow Close Connections (Slicer toxic) ✅ **Implemented**
 - [x] Scenario 7: Combined Failures (DB + Kafka simultaneously) ✅ **Implemented**
+- [x] Scenario 8: Block Validation Memory Pressure ✅ **Implemented**
 
-All planned chaos test scenarios have been implemented!
+All chaos test scenarios have been implemented! Total: **8 scenarios** covering network failures, infrastructure issues, and internal system resilience.

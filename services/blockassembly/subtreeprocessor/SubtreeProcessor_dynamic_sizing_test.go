@@ -66,6 +66,7 @@ func TestSubtreeProcessor_LowVolumeNeverIncreases(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	// Test: High utilization but low volume (< 50 nodes per subtree)
 	t.Run("high utilization low volume keeps size", func(t *testing.T) {
@@ -185,6 +186,7 @@ func TestSubtreeProcessor_UsageBasedCapping(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("caps increase based on max observed nodes", func(t *testing.T) {
 		stp.currentItemsPerFile = 32
@@ -288,6 +290,7 @@ func TestSubtreeProcessor_RealWorldScenario(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("adapts to changing load patterns", func(t *testing.T) {
 		// Start with high load
@@ -388,14 +391,16 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("tracks node counts correctly", func(t *testing.T) {
 		// Create a subtree with known node count
-		stp.currentSubtree, err = subtreepkg.NewTreeByLeafCount(8)
+		newSubtree, err := subtreepkg.NewTreeByLeafCount(8)
 		require.NoError(t, err)
+		stp.currentSubtree.Store(newSubtree)
 
 		// Add some nodes (including coinbase)
-		err = stp.currentSubtree.AddCoinbaseNode()
+		err = stp.currentSubtree.Load().AddCoinbaseNode()
 		require.NoError(t, err)
 
 		// Add 4 more transaction nodes
@@ -407,7 +412,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 				Fee:         100,
 				SizeInBytes: 250,
 			}
-			err = stp.currentSubtree.AddSubtreeNode(node)
+			err = stp.currentSubtree.Load().AddSubtreeNode(node)
 			require.NoError(t, err)
 		}
 
@@ -440,9 +445,10 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 		}
 
 		// Create another subtree that should trigger the limit
-		stp.currentSubtree, err = subtreepkg.NewTreeByLeafCount(8)
+		newSubtree2, err := subtreepkg.NewTreeByLeafCount(8)
 		require.NoError(t, err)
-		err = stp.currentSubtree.AddCoinbaseNode()
+		stp.currentSubtree.Store(newSubtree2)
+		err = stp.currentSubtree.Load().AddCoinbaseNode()
 		require.NoError(t, err)
 
 		for i := 0; i < 3; i++ {
@@ -453,7 +459,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 				Fee:         100,
 				SizeInBytes: 250,
 			}
-			err = stp.currentSubtree.AddSubtreeNode(node)
+			err = stp.currentSubtree.Load().AddSubtreeNode(node)
 			require.NoError(t, err)
 		}
 
@@ -471,9 +477,10 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 		require.Equal(t, 18, count, "Should have 18 samples (full buffer)")
 
 		// Add one more to test that it maintains the limit
-		stp.currentSubtree, err = subtreepkg.NewTreeByLeafCount(8)
+		newSubtree3, err := subtreepkg.NewTreeByLeafCount(8)
 		require.NoError(t, err)
-		err = stp.currentSubtree.AddCoinbaseNode()
+		stp.currentSubtree.Store(newSubtree3)
+		err = stp.currentSubtree.Load().AddCoinbaseNode()
 		require.NoError(t, err)
 
 		hash := chainhash.Hash{}
@@ -483,7 +490,7 @@ func TestSubtreeProcessor_CompleteSubtreeTracking(t *testing.T) {
 			Fee:         100,
 			SizeInBytes: 250,
 		}
-		err = stp.currentSubtree.AddSubtreeNode(node)
+		err = stp.currentSubtree.Load().AddSubtreeNode(node)
 		require.NoError(t, err)
 
 		err = stp.processCompleteSubtree(false)
@@ -549,6 +556,7 @@ func TestSubtreeProcessor_MinimumSizeRespected(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("never goes below minimum", func(t *testing.T) {
 		stp.currentItemsPerFile = 4 // At minimum
@@ -620,6 +628,7 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("scales up with sustained high volume", func(t *testing.T) {
 		// Start with a moderate size
@@ -894,6 +903,7 @@ func TestSubtreeProcessor_VolumeThresholds(t *testing.T) {
 		newSubtreeChan,
 	)
 	require.NoError(t, err)
+	stp.Start(ctx)
 
 	t.Run("just below threshold blocks increase", func(t *testing.T) {
 		stp.currentItemsPerFile = 64

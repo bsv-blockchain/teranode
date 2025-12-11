@@ -1,0 +1,57 @@
+@startuml pruner_job_queue
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+participant "Pruner Service" as Pruner
+participant "Job Manager" as JobManager
+participant "Job Queue" as Queue
+participant "Worker Pool" as Workers
+
+note over Pruner, Workers: **Job Queue Management (LIFO Pattern)**
+
+Pruner -> JobManager: UpdateBlockHeight(height1)
+
+JobManager -> Queue: Add Job(height1, status=Pending)
+Queue --> JobManager: Job Added
+
+JobManager -> Workers: No workers available
+note right of Workers: All workers busy
+
+Pruner -> JobManager: UpdateBlockHeight(height2)\n(newer block)
+
+JobManager -> Queue: Add Job(height2, status=Pending)
+
+JobManager -> JobManager: Find Superseded Jobs\n(all Pending jobs except newest)
+
+JobManager -> Queue: Cancel Job(height1)
+Queue --> JobManager: Job(height1) status = Cancelled
+
+note right of JobManager: LIFO: Only process\nnewest pending job
+
+Workers -> JobManager: Worker Available
+
+JobManager -> Queue: Get Newest Pending Job
+Queue --> JobManager: Job(height2)
+
+JobManager -> Queue: Update Job(height2, status=Running)
+
+JobManager -> Workers: Execute Job(height2)
+
+Workers -> Workers: Perform DAH Pruning\nfor height2
+
+Workers --> JobManager: Job Complete
+
+JobManager -> Queue: Update Job(height2, status=Completed)
+
+JobManager -> JobManager: Cleanup Job History\n(keep last 1000 for Aerospike,\n10 for SQL)
+
+note right of JobManager: Efficient: Skip intermediate\nheights during catchup
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

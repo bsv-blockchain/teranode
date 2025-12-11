@@ -1969,15 +1969,6 @@ func TestMessageTypeStruct(t *testing.T) {
 	})
 }
 
-// Test P2P connection simulation
-func TestCentrifuge_P2PConnection(t *testing.T) {
-	t.Run("P2P connection handles WebSocket server", func(t *testing.T) {
-		// Skip this test as it requires complex HTTP server mocking
-		// The core P2P connection logic is covered by other tests
-		t.Skip("Skipping P2P WebSocket test to avoid HTTP server complexity")
-	})
-}
-
 // Test cached node status functionality
 func TestCentrifuge_CachedNodeStatus(t *testing.T) {
 	logger := ulogger.TestLogger{}

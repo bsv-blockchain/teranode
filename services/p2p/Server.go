@@ -1390,15 +1390,19 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 		return errors.NewError(fmt.Sprintf("error getting chainhash from notification hash %s: %%w", notification.Hash), err)
 	}
 
-	s.logger.Debugf("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
-
 	switch notification.Type {
 	case model.NotificationType_Block:
+		s.logger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
 		return s.handleBlockNotification(ctx, hash) // These handlers return wrapped errors
+
 	case model.NotificationType_Subtree:
+		s.logger.Debugf("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
 		return s.handleSubtreeNotification(ctx, hash)
+
 	case model.NotificationType_PeerFailure:
+		s.logger.Debugf("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
 		return s.handlePeerFailureNotification(ctx, notification)
+
 	default:
 		s.logger.Warnf("[processBlockchainNotification] Received unhandled notification type: %s for hash %s", notification.Type, hash.String())
 	}
@@ -1831,25 +1835,29 @@ func (s *Server) ReportInvalidSubtree(ctx context.Context, subtreeHash string, p
 		return nil
 	}
 
-	// Add ban score to the peer
-	s.logger.Infof("[ReportInvalidSubtree] adding ban score to peer %s for invalid subtree %s: %s",
+	s.logger.Infof("[ReportInvalidSubtree] invalid subtree report for peer %s, subtree %s: %s",
 		peerID, subtreeHash, reason)
 
-	// Record as malicious interaction for reputation tracking
-	s.peerRegistry.RecordMaliciousInteraction(peer.ID(peerID))
-
-	// Create the request to add ban score
-	req := &p2p_api.AddBanScoreRequest{
-		PeerId: peerID,
-		Reason: "invalid_subtree",
-	}
-
-	// Call the AddBanScore method
-	_, err = s.AddBanScore(ctx, req)
-	if err != nil {
-		s.logger.Errorf("[ReportInvalidSubtree] error adding ban score to peer %s: %v", peerID, err)
-		return errors.NewServiceError("error adding ban score to peer %s", peerID, err)
-	}
+	// TODO: The penalty system here should be refactored. Currently all reasons
+	// (peer_cannot_provide_transactions, malformed_transaction_data, transaction_count_mismatch)
+	// are more likely network issues than malicious behavior. This will be addressed in a separate PR.
+	// For now, both RecordMaliciousInteraction and AddBanScore are disabled.
+	//
+	// // Record as malicious interaction for reputation tracking
+	// s.peerRegistry.RecordMaliciousInteraction(peer.ID(peerID))
+	//
+	// // Create the request to add ban score
+	// req := &p2p_api.AddBanScoreRequest{
+	// 	PeerId: peerID,
+	// 	Reason: "invalid_subtree",
+	// }
+	//
+	// // Call the AddBanScore method
+	// _, err = s.AddBanScore(ctx, req)
+	// if err != nil {
+	// 	s.logger.Errorf("[ReportInvalidSubtree] error adding ban score to peer %s: %v", peerID, err)
+	// 	return errors.NewServiceError("error adding ban score to peer %s", peerID, err)
+	// }
 
 	// Remove the subtree from the map to avoid memory leaks
 	s.subtreePeerMap.Delete(subtreeHash)

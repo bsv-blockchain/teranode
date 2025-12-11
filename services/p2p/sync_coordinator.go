@@ -503,7 +503,13 @@ func (sc *SyncCoordinator) logCandidateList(candidates []*PeerInfo) {
 func (sc *SyncCoordinator) periodicEvaluation(ctx context.Context) {
 	defer sc.wg.Done()
 
-	ticker := time.NewTicker(30 * time.Second)
+	interval := sc.settings.P2P.SyncCoordinatorPeriodicEvaluationInterval
+	if interval <= 0 {
+		sc.logger.Warnf("[SyncCoordinator] Invalid periodic evaluation interval %v, using default 30s", interval)
+		interval = 30 * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

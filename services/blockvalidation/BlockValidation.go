@@ -791,18 +791,14 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	if blockWasAlreadyCached && cachedBlock != nil {
 		// Verify the cached block has subtrees loaded
 		if u.hasValidSubtrees(cachedBlock) {
-			u.logger.Debugf("[setTxMined][%s] using cached block with %d subtrees", blockHash.String(), len(cachedBlock.SubtreeSlices))
+			u.logger.Debugf("[setTxMined][%s] using cached block with subtrees", blockHash.String())
 			block = cachedBlock
 
 			// Remove from cache immediately - we're about to use it and don't need it cached anymore
 			// This frees memory sooner than waiting for cache expiry or the delete at line 894
 			u.lastValidatedBlocks.Delete(*blockHash)
 		} else {
-			if len(cachedBlock.SubtreeSlices) != len(cachedBlock.Subtrees) || len(cachedBlock.SubtreeSlices) == 0 {
-				u.logger.Warnf("[setTxMined][%s] cached block missing subtrees, fetching from blockchain", blockHash.String())
-			} else {
-				u.logger.Warnf("[setTxMined][%s] cached block has invalid subtrees, fetching from blockchain", blockHash.String())
-			}
+			u.logger.Warnf("[setTxMined][%s] cached block has invalid subtrees, fetching from blockchain", blockHash.String())
 			blockWasAlreadyCached = false
 		}
 	}
@@ -1318,7 +1314,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				}
 
 				// Block validation succeeded - now cache it with subtrees loaded
-				u.logger.Debugf("[ValidateBlock][%s] background validation complete, caching block with subtrees", block.Hash().String(), len(block.SubtreeSlices))
+				u.logger.Debugf("[ValidateBlock][%s] background validation complete, caching block", block.Hash().String())
 				u.lastValidatedBlocks.Set(*block.Hash(), block)
 			}()
 		} else {

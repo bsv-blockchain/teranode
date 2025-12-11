@@ -176,6 +176,7 @@ services:
       - "9292"
     volumes:
       - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ./wait.sh:/app/wait.sh
       - ../data/teranode1/txstore:/app/data/txstore
       - ../data/teranode1/subtreestore:/app/data/subtreestore
@@ -231,6 +232,7 @@ services:
       - "9292"
     volumes:
       - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ./wait.sh:/app/wait.sh
       - ../data/teranode2/txstore:/app/data/txstore
       - ../data/teranode2/subtreestore:/app/data/subtreestore
@@ -286,6 +288,7 @@ services:
       - "9292"
     volumes:
       - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ./wait.sh:/app/wait.sh
       - ../data/teranode3/txstore:/app/data/txstore
       - ../data/teranode3/subtreestore:/app/data/subtreestore
@@ -325,7 +328,7 @@ services:
       profilerAddr: "localhost:17092"
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/test/${TEST_ID:-chainintegrity}/coinbase1:/app/data
 
   tx-blaster-1:
@@ -350,5 +353,5 @@ services:
       ]
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/test/${TEST_ID:-chainintegrity}/txblaster1:/app/data

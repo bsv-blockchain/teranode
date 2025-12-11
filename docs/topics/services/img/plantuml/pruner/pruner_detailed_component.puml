@@ -1,0 +1,122 @@
+@startuml pruner_detailed_component
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+skinparam component {
+  BorderColor #666666
+  BackgroundColor #E8E8E8
+}
+
+skinparam package {
+  BorderColor #444444
+  BackgroundColor #F5F5F5
+}
+
+package "Pruner Service\n(/services/pruner/)" {
+    component "Server" as Server {
+        [gRPC Server\n(port 8096)]
+        [Health Check API]
+        [Service Manager]
+    }
+
+    component "Worker" as Worker {
+        [Event Handler]
+        [Channel Manager]
+        [Two-Phase Processor]
+    }
+
+    component "Metrics" as Metrics {
+        [Prometheus Exporter]
+        [pruner_* metrics]
+    }
+}
+
+package "Store-Level Pruner\n(/stores/pruner/)" {
+    component "Job Manager" as JobManager {
+        [Job Queue (LIFO)]
+        [Worker Pool]
+        [Status Tracking]
+    }
+
+    component "Store Interface" as Interface {
+        [Service Interface]
+        [Provider Interface]
+    }
+}
+
+package "Store Implementation\n(/stores/utxo/)" {
+    component "Aerospike Pruner" as AerospikePruner {
+        [Index Waiter]
+        [Query Executor]
+        [Batch Operations]
+        [External Storage Cleaner]
+    }
+
+    component "SQL Pruner" as SQLPruner {
+        [DELETE Query]
+        [Simple Worker Pool]
+    }
+
+    component "Common Logic" as Common {
+        [PreserveParentsOfOldUnminedTransactions]
+    }
+}
+
+package "External Dependencies" {
+    database "Aerospike/SQL" as DB
+    storage "Blob Store\n(S3/File)" as BlobStore
+    component "Blockchain Client" as BlockchainClient
+    component "Block Assembly Client" as BlockAssemblyClient
+}
+
+Server --> Worker : manages
+Worker --> Metrics : updates
+Worker --> BlockchainClient : subscribes
+Worker --> BlockAssemblyClient : checks state
+
+Worker --> JobManager : calls
+JobManager --> Interface : implements
+
+Interface <|-- AerospikePruner : implements
+Interface <|-- SQLPruner : implements
+
+AerospikePruner --> DB : queries/deletes
+AerospikePruner --> BlobStore : deletes .tx files
+AerospikePruner --> Common : uses
+
+SQLPruner --> DB : queries/deletes
+SQLPruner --> Common : uses
+
+Common --> DB : preserves parents
+
+note right of Worker
+  **Event-Driven**
+  - BlockPersisted notifications
+  - Block notifications (fallback)
+  - Non-blocking channel
+end note
+
+note right of JobManager
+  **LIFO Queue**
+  - Newest job first
+  - Cancel superseded
+  - Timeout: 10min default
+end note
+
+note right of AerospikePruner
+  **Aerospike-Specific**
+  - Secondary index required
+  - 4 workers default
+  - External .tx file cleanup
+end note
+
+note right of SQLPruner
+  **SQL-Specific**
+  - Simple DELETE query
+  - 2 workers default
+  - No external dependencies
+end note
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

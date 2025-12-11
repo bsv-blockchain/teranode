@@ -1,0 +1,65 @@
+@startuml pruner_dah_pruning
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+participant "Pruner Service" as Pruner
+participant "Job Manager" as JobManager
+participant "Worker Pool" as Workers
+participant "Aerospike/SQL" as DB
+participant "External Storage" as External
+
+note over Pruner, External: **Phase 2: DAH Pruning Detail**
+
+Pruner -> JobManager: UpdateBlockHeight(height)
+
+JobManager -> JobManager: Get Persisted Height\nfrom Block Persister
+
+JobManager -> JobManager: Calculate Safe Height\nsafeHeight = min(height, persistedHeight)
+
+JobManager -> JobManager: Create Pruning Job\n(height = safeHeight)
+
+JobManager -> JobManager: Cancel Superseded Jobs\n(LIFO: process newest only)
+
+JobManager -> Workers: Dispatch Job to Worker Pool
+
+alt Aerospike Store
+    Workers -> DB: Query with Filter:\ndeleteAtHeight <= safeHeight\nUSING secondary index
+    note right of Workers: 4 workers (default)\nBatch operations
+else SQL Store
+    Workers -> DB: DELETE FROM utxos\nWHERE delete_at_height <= safeHeight
+    note right of Workers: 2 workers (default)\nSimpler query
+end
+
+DB --> Workers: Records Matching Filter
+
+loop For Each Record to Delete
+    alt Has External Transaction Data
+        Workers -> External: Delete .tx file from\nBlob Storage (S3/filesystem)
+        External --> Workers: External Data Deleted
+    end
+
+    Workers -> DB: Delete UTXO Record
+    DB --> Workers: Record Deleted
+
+    Workers -> Workers: Update Metrics:\nutxo_cleanup_batch_duration_seconds
+end
+
+Workers --> JobManager: Job Completed
+
+alt Timeout Reached (10 minutes default)
+    JobManager --> Pruner: Timeout (Non-Error)
+    note right of Pruner: Job continues in background\nWill be re-queued if needed
+else Job Completed
+    JobManager --> Pruner: Success
+end
+
+Pruner -> Pruner: Record Metrics:\npruner_duration_seconds\npruner_processed_total
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

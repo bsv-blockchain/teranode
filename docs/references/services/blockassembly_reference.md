@@ -86,7 +86,7 @@ type BlockAssembler struct {
     stateChangeCh chan BestBlockInfo
 
     // lastPersistedHeight tracks the last block height processed by block persister
-    // This is updated via BlockPersisted notifications and used to coordinate with cleanup
+    // This is updated via BlockPersisted notifications
     lastPersistedHeight atomic.Uint32
 
     // currentChainMap maps block hashes to their heights
@@ -110,20 +110,9 @@ type BlockAssembler struct {
     // currentRunningState tracks the current operational state
     currentRunningState atomic.Value
 
-    // cleanupService manages background cleanup tasks
-    cleanupService cleanup.Service
-
-    // cleanupServiceLoaded indicates if the cleanup service has been loaded
-    cleanupServiceLoaded atomic.Bool
-
-    // cleanupQueueCh queues cleanup operations (parent preserve + DAH cleanup) to prevent flooding during catchup
-    cleanupQueueCh chan uint32
-
-    // cleanupQueueWorkerStarted tracks if the cleanup queue worker is running
-    cleanupQueueWorkerStarted atomic.Bool
-
-    // unminedCleanupTicker manages periodic cleanup of old unmined transactions
-    unminedCleanupTicker *time.Ticker
+    // Note: Cleanup-related fields (cleanupService, cleanupQueueCh, unminedCleanupTicker)
+    // were removed in PR #114 when UTXO pruning was extracted to the standalone Pruner service.
+    // See: docs/topics/services/pruner.md
 
     // cachedCandidate stores the cached mining candidate
     cachedCandidate *CachedMiningCandidate

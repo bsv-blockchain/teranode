@@ -2043,5 +2043,3 @@ The RPC Service implements several security features:
 - TLS support for encrypted communications (when configured)
 
 ## Related Documents
-
-- [RPC API Docs](https://bsv-blockchain.github.io/teranode/references/open-rpc/)

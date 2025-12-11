@@ -21,7 +21,7 @@
 5. [Technology](#5-technology)
     - [5.1. Language and Libraries](#51-language-and-libraries)
     - [5.2. Data Stores](#52-data-stores)
-    - [5.3. Data Purging](#53-data-purging)
+    - [5.3. Data Pruning](#53-data-pruning)
 6. [Performance Optimizations](#6-performance-optimizations)
     - [6.1. Shared Buffer Optimization](#61-shared-buffer-optimization)
 7. [Directory Structure and Main Files](#7-directory-structure-and-main-files)
@@ -104,7 +104,7 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interfac
 
 The following diagram provides a deeper level of detail into the UTXO Store's internal components and their interactions:
 
-> **Note**: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Cleanup Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.
+> **Note**: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Pruner Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.
 
 ![utxo_store_detailed_component.svg](../services/img/plantuml/utxo/utxo_store_detailed_component.svg)
 
@@ -480,9 +480,27 @@ The following datastores are supported (either in development / experimental or 
 - Databases like Aerospike provide a balance of speed and persistence, suitable for larger, more complex systems.
 - Nullstore is more appropriate for testing, development, or lightweight applications.
 
-### 5.3. Data Purging
+### 5.3. Data Pruning
 
-Stored data is automatically purged a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.
+Stored data is automatically pruned to prevent the datastore from growing indefinitely. The UTXO Store works in conjunction with the **Pruner Service**, a standalone microservice responsible for managing UTXO data pruning operations.
+
+**Pruning Mechanisms:**
+
+1. **Delete-At-Height (DAH)**: UTXO records are marked with a `DeleteAtHeight` field when they are spent or when coinbase maturity expires. The Pruner Service queries and deletes records where `deleteAtHeight <= currentBlockHeight`.
+
+2. **Parent Preservation**: The Pruner Service implements a critical two-phase safety mechanism to protect parent transactions of old unmined transactions from premature deletion, ensuring resubmitted transactions can validate successfully.
+
+3. **External Transaction Cleanup**: For large transactions stored in blob storage (Aerospike), the Pruner Service also deletes external `.tx` files to reclaim storage space.
+
+**Event-Driven Architecture:**
+
+The Pruner Service operates event-driven, responding to `BlockPersisted` notifications from the Block Persister service. This ensures pruning is coordinated with block persistence, preventing deletion of transaction data before it's safely stored in `.subtree_data` files for catchup nodes.
+
+**For detailed information about pruning operations, configuration, and the two-phase safety mechanism, see:**
+
+- [Pruner Service Documentation](../services/pruner.md)
+- [Pruner Settings Reference](../../references/settings/services/pruner_settings.md)
+- [UTXO Data Model](../datamodel/utxo_data_model.md) (DeleteAtHeight field documentation)
 
 ## 6. Performance Optimizations
 
@@ -588,13 +606,13 @@ UTXO Store Package Structure (stores/utxo)
 
 ### How to run
 
-To run the UTXO Store locally, you can execute the following command:
+The UTXO Store is a data store component that is used by various services. It is not run independently. To use the UTXO Store locally, run services that depend on it, such as the Validator or UTXO Persister:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -UtxoStore=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -validator=1 -utxopersister=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running services locally.
 
 ## 9. Configuration and Settings
 

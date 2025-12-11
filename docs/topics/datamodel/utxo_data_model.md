@@ -126,7 +126,7 @@ Typically, UTXO records are kept with a time-to-live value that is set when all 
 
 | **Field Name**        | **Data Type**                       | **Description**                                                                                                                             |
 |-----------------------|-------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| **TTL**               | `Integer`                           | Time-to-live value for the record. Set when:<br/>- All UTXOs in a record are spent or reassigned<br/>- Transaction is marked as conflicting |
+| **TTL**               | `Integer`                           | Time-to-live value for the record. Set when:<br/>- All UTXOs in a record are spent or reassigned (for automatic pruning)<br/>- Transaction is marked as conflicting |
 
 ## Aerospike Storage
 
@@ -250,7 +250,7 @@ The following table shows valid state transitions and their triggers:
 | Any | Frozen | Alert system freeze command | `FreezeUTXO()` in `stores/utxo/aerospike/alert_system.go` |
 | Frozen | Unspent or Spent | Alert system unfreeze command | `UnfreezeUTXO()` in `stores/utxo/aerospike/alert_system.go` |
 | Any | Conflicting | Double-spend detected | `ProcessConflicting()` in `stores/utxo/process_conflicting.go` |
-| Any | Scheduled for Deletion | All UTXOs spent or tx conflicting | Lua script signals in `stores/utxo/aerospike/teranode.lua` |
+| Any | Scheduled for Deletion | All UTXOs spent or tx conflicting | Lua script signals in `stores/utxo/aerospike/spend.go` and `set_mined.go` |
 
 ### Detailed State Descriptions
 
@@ -390,17 +390,17 @@ Transaction marked as double-spend:
 
 - Cannot transition out of conflicting state (terminal state)
 - Entire transaction tree marked as conflicting
-- Cleanup occurs after TTL expiration
+- Pruning occurs after TTL expiration
 
 #### Scheduled for Deletion
 
-Record marked for automatic cleanup:
+Record marked for automatic pruning:
 
 - `deleteAtHeight` field set to specific block height
 - Occurs when all UTXOs in record are spent or reassigned
 - Occurs when transaction marked as conflicting
 - Also set via `preserveUntil` field to protect parent transactions
-- Aerospike TTL automatically deletes record when blockchain reaches specified height
+- Aerospike TTL automatically prunes record when blockchain reaches specified height
 - Child pagination records also have DAH set via `SetDAHForChildRecords()`
 - External blob storage has DAH set via `setDAHExternalTransaction()`
 

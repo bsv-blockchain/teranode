@@ -18,7 +18,7 @@ This guide assists you in setting up the Teranode project on your machine. The b
     - [5.3 Verify](#53-verify)
 6. [Prerequisites for Running the Node](#6-prerequisites-for-running-the-node)
     - [6.1 Install OrbStack](#61-install-orbstack)
-    - [6.2 Start Kafka and PostgreSQL](#62-start-kafka-and-postgresql)
+    - [6.2 Start PostgreSQL](#62-start-postgresql)
 7. [Run the Node](#7-run-the-node)
     - [7.2 Debugging Teranode](#72-debugging-teranode)
 8. [Troubleshooting](#8-troubleshooting)
@@ -217,21 +217,16 @@ Teranode uses Docker containers for running dependencies like Kafka and PostgreS
 docker --version
 ```
 
-### 6.2 Start Kafka and PostgreSQL
+### 6.2 Start PostgreSQL
 
-Once OrbStack is installed and running, start Kafka and PostgreSQL with:
+Once OrbStack is installed and running, start PostgreSQL with:
 
 ```bash
-# Start Kafka in Docker
-./scripts/kafka.sh
-
 # Start PostgreSQL in Docker
 ./scripts/postgres.sh
 ```
 
-These scripts will set up Docker containers with the required services configured correctly for Teranode.
-
-> **Note:** If you configure your settings to use Aerospike for UTXO storage, you'll also need to run the Aerospike script:
+> **Note on Kafka**: Development mode uses in-memory Kafka by default (no setup required). For production-like testing with Docker-based Kafka, see [Kafka Settings Reference](../../references/settings/kafka_settings.md). If you configure your settings to use Aerospike for UTXO storage, you'll also need to run the Aerospike script:
 >
 > ```bash
 > # Start Aerospike in Docker

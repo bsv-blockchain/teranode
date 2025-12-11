@@ -20,6 +20,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -76,6 +78,33 @@ type Server struct {
 	state *state.State
 }
 
+// deriveStateFilePath determines the state file path based on the PersisterStore URL.
+// For file:// URLs, it derives the path from the store location.
+// For other store types (S3, etc.), it requires the blockPersister_stateFile setting.
+func deriveStateFilePath(persisterStore *url.URL, stateFile string) (string, error) {
+	// If state file is provided, use it
+	if stateFile != "" {
+		return stateFile, nil
+	}
+
+	// Try to derive from PersisterStore if it's a file:// URL
+	if persisterStore != nil && persisterStore.Scheme == "file" {
+		// Extract the path from file:// URL, matching file store logic
+		var storePath string
+		if persisterStore.Host == "." {
+			storePath = persisterStore.Path[1:] // relative path
+		} else {
+			storePath = persisterStore.Path // absolute path
+		}
+
+		// Place state file in the same directory as the store
+		return filepath.Join(storePath, "blockpersister_state.txt"), nil
+	}
+
+	// Non-file store without explicit state file - return error
+	return "", errors.NewConfigurationError("blockPersister_stateFile is required for non-file store types")
+}
+
 // WithSetInitialState is an optional configuration function that sets the initial state
 // of the block persister server. This can be used during initialization to establish
 // a known starting point for block persistence operations.
@@ -121,8 +150,16 @@ func New(
 	blockchainClient blockchain.ClientI,
 	opts ...func(*Server),
 ) *Server {
-	// Get blocks file path from config, or use default
-	state := state.New(logger, tSettings.Block.StateFile)
+	// Determine state file path
+	stateFilePath, err := deriveStateFilePath(tSettings.Block.PersisterStore, tSettings.Block.StateFile)
+	if err != nil {
+		logger.Errorf("Failed to determine state file path: %v", err)
+
+		// panic - as we cannot continue without a state file
+		panic(err)
+	}
+
+	state := state.New(logger, stateFilePath)
 
 	u := &Server{
 		ctx:              ctx,

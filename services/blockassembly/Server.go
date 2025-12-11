@@ -709,13 +709,13 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 //
 // Returns:
 //   - error: Any error encountered during shutdown
-func (ba *BlockAssembly) Stop(_ context.Context) error {
+func (ba *BlockAssembly) Stop(ctx context.Context) error {
 	ba.stopOnce.Do(func() {
 		ba.jobStore.Stop()
 
-		// Close the subtree processor to stop the announcement ticker and cleanup resources
+		// Stop the subtree processor to stop the announcement ticker and cleanup resources
 		if ba.blockAssembler != nil && ba.blockAssembler.subtreeProcessor != nil {
-			ba.blockAssembler.subtreeProcessor.Close()
+			ba.blockAssembler.subtreeProcessor.Stop(ctx)
 		}
 	})
 
@@ -816,7 +816,7 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 	hash := chainhash.Hash(req.Txid)
 
 	if !ba.settings.BlockAssembly.Disabled {
-		if err := ba.blockAssembler.RemoveTx(hash); err != nil {
+		if err := ba.blockAssembler.RemoveTx(ctx, hash); err != nil {
 			return nil, errors.WrapGRPC(err)
 		}
 	}
