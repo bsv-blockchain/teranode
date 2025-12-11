@@ -378,6 +378,14 @@ func rpcDecodeHexError(gotHex string) *bsvjson.RPCError {
 // handleUnimplemented is the handler for commands that should ultimately be
 // supported but are not yet implemented.
 func handleUnimplemented(ctx context.Context, s *RPCServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
+	select {
+	case <-closeChan:
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCMisc,
+			Message: "Connection closed by client",
+		}
+	default:
+	}
 	s.logger.Debugf("handling unimplemented command")
 	return nil, ErrRPCUnimplemented
 }

@@ -360,6 +360,93 @@ func TestNewWithOptions(t *testing.T) {
 	assert.Equal(t, uint32(42), height)
 }
 
+func TestDeriveStateFilePath(t *testing.T) {
+	tests := []struct {
+		name              string
+		persisterStoreURL string
+		stateFile         string
+		expected          string
+		expectError       bool
+	}{
+		{
+			name:              "file store with simple path",
+			persisterStoreURL: "file://./data/blockstore",
+			stateFile:         "",
+			expected:          "data/blockstore/blockpersister_state.txt",
+			expectError:       false,
+		},
+		{
+			name:              "file store with clientName",
+			persisterStoreURL: "file://./data/teranode1/blockstore",
+			stateFile:         "",
+			expected:          "data/teranode1/blockstore/blockpersister_state.txt",
+			expectError:       false,
+		},
+		{
+			name:              "file store with query parameters",
+			persisterStoreURL: "file://./data/blockstore?localTTLStore=file&localTTLStorePath=./data/blockstore-ttl",
+			stateFile:         "",
+			expected:          "data/blockstore/blockpersister_state.txt",
+			expectError:       false,
+		},
+		{
+			name:              "file store with absolute path",
+			persisterStoreURL: "file:///data/blockstore",
+			stateFile:         "",
+			expected:          "/data/blockstore/blockpersister_state.txt",
+			expectError:       false,
+		},
+		{
+			name:              "explicit state file takes precedence",
+			persisterStoreURL: "file://./data/blockstore",
+			stateFile:         "/custom/path/state.txt",
+			expected:          "/custom/path/state.txt",
+			expectError:       false,
+		},
+		{
+			name:              "s3 store without state file errors",
+			persisterStoreURL: "s3://bucket-name/blockstore",
+			stateFile:         "",
+			expected:          "",
+			expectError:       true,
+		},
+		{
+			name:              "s3 store with state file succeeds",
+			persisterStoreURL: "s3://bucket-name/blockstore",
+			stateFile:         "/local/path/state.txt",
+			expected:          "/local/path/state.txt",
+			expectError:       false,
+		},
+		{
+			name:              "nil store without state file errors",
+			persisterStoreURL: "",
+			stateFile:         "",
+			expected:          "",
+			expectError:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var storeURL *url.URL
+			if tt.persisterStoreURL != "" {
+				var err error
+				storeURL, err = url.Parse(tt.persisterStoreURL)
+				require.NoError(t, err)
+			}
+
+			result, err := deriveStateFilePath(storeURL, tt.stateFile)
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tt.expected, result)
+			}
+		})
+	}
+}
+
 // TestHealthLiveness validates liveness health check
 func TestHealthLiveness(t *testing.T) {
 	ctx := context.Background()

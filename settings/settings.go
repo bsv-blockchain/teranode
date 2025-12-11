@@ -167,7 +167,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		Block: BlockSettings{
 			MinedCacheMaxMB:                         getInt("blockMinedCacheMaxMB", 256, alternativeContext...),
 			PersisterStore:                          getURL("blockPersisterStore", "file://./data/blockstore", alternativeContext...),
-			StateFile:                               getString("blockPersister_stateFile", "file://./data/blockpersister_state.txt", alternativeContext...),
+			StateFile:                               getString("blockPersister_stateFile", "", alternativeContext...),
 			PersisterHTTPListenAddress:              getString("blockPersister_httpListenAddress", ":8083", alternativeContext...),
 			CheckDuplicateTransactionsConcurrency:   getInt("block_checkDuplicateTransactionsConcurrency", -1, alternativeContext...),
 			GetAndValidateSubtreesConcurrency:       getInt("block_getAndValidateSubtreesConcurrency", -1, alternativeContext...),

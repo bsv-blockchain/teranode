@@ -72,6 +72,9 @@ func NewBlockchainDaemon(t *testing.T) (*BlockchainDaemon, error) {
 	tSettings.BlockChain.GRPCListenAddress = fmt.Sprintf("localhost:%d", blockchainPort)
 	tSettings.BlockChain.GRPCAddress = fmt.Sprintf("localhost:%d", blockchainPort)
 
+	// Use dynamic port for HTTP listener to avoid conflicts
+	tSettings.BlockChain.HTTPListenAddress = "localhost:0"
+
 	// Initialize store
 	store, err := blockchain_store.NewStore(logger, storeURL, tSettings)
 	if err != nil {

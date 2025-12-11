@@ -1,0 +1,141 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+title Block Assembly Recovery: Unlocking Transactions After Service Restart
+
+participant "System" as System
+participant "Block Assembly" as BlockAssembly
+database "Internal Storage" as Storage
+database "UTXO Store" as UTXOStore
+participant "Validator" as Validator
+
+== Normal Operation Before Crash ==
+
+Validator -> BlockAssembly: Store(transaction)
+activate BlockAssembly
+BlockAssembly -> Storage: Persist transaction\n(unmined)
+note right of Storage
+  Transaction stored for
+  future block assembly
+end note
+
+BlockAssembly --> Validator: Success
+deactivate BlockAssembly
+
+Validator -> Validator: twoPhaseCommitTransaction()
+Validator -> UTXOStore: SetLocked(txHash, false)
+note right of UTXOStore
+  **Normal Path**
+  Transaction unlocked
+  after successful storage
+end note
+
+== Crash Scenario ==
+
+note over System, UTXOStore #LightCoral
+  **Scenario**: Block Assembly service crashes BEFORE
+  Validator can call twoPhaseCommitTransaction()
+
+  Result: Transaction is stored in Block Assembly
+  but UTXOs remain locked=true in UTXO store
+end note
+
+System -> BlockAssembly: ❌ Service crash
+note over BlockAssembly #LightCoral
+  Service terminated
+  Transaction stored but locked
+end note
+
+== Service Restart and Recovery ==
+
+System -> BlockAssembly: 🔄 Service restart
+activate BlockAssembly
+
+BlockAssembly -> BlockAssembly: Initialize service
+BlockAssembly -> BlockAssembly: loadUnminedTransactions()
+note right of BlockAssembly
+  Recovery function called
+  during startup to reload
+  previously stored transactions
+end note
+
+BlockAssembly -> Storage: Read all unmined\ntransactions
+Storage --> BlockAssembly: List of transactions
+
+BlockAssembly -> BlockAssembly: For each transaction:\ncheck if locked
+
+loop For each unmined transaction
+    BlockAssembly -> UTXOStore: GetMetadata(txHash)
+    UTXOStore --> BlockAssembly: Metadata (including locked flag)
+
+    alt if locked == true
+        note over BlockAssembly, UTXOStore #LightYellow
+          Found transaction that was stored
+          but not yet unlocked before crash
+        end note
+        BlockAssembly -> BlockAssembly: Add to lockedTransactions list
+    end
+end
+
+alt if lockedTransactions is not empty
+    BlockAssembly -> UTXOStore: SetLocked(lockedTxHashes, false)
+    note right of UTXOStore #LightGreen
+      **Recovery Path**
+      Batch unlock all transactions
+      that were stored but not unlocked
+    end note
+
+    UTXOStore --> BlockAssembly: Success
+
+    note over BlockAssembly #LightGreen
+      Recovery complete!
+      Transactions now available
+      for spending and mining
+    end note
+else if no locked transactions
+    note over BlockAssembly #LightGray
+      No recovery needed.
+      All transactions were
+      properly unlocked.
+    end note
+end
+
+BlockAssembly -> BlockAssembly: Continue normal\noperation
+
+deactivate BlockAssembly
+
+== Normal Operation Resumed ==
+
+note over System, UTXOStore #LightGreen
+  **Recovery Complete**
+
+  - All previously stored transactions loaded
+  - Any locked transactions unlocked
+  - Service ready for new transactions
+  - No data loss occurred
+
+  **Key Insight**: The locked flag prevents spending
+  during the crash, then recovery unlocks them safely.
+end note
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

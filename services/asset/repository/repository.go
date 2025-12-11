@@ -28,6 +28,9 @@ import (
 )
 
 // Interface defines blockchain data repository operations.
+// It abstracts access to blocks, transactions, subtrees, and UTXO data across
+// multiple storage backends (UTXO store, transaction store, subtree store, and
+// block persister store).
 type Interface interface {
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
@@ -66,6 +69,10 @@ type Interface interface {
 }
 
 // Repository implements blockchain data access across multiple storage backends.
+// It coordinates between UTXO, transaction, subtree, and block stores to provide
+// a unified data access layer.
+//
+// Thread-safe: delegates to thread-safe store implementations.
 type Repository struct {
 	logger                ulogger.Logger
 	settings              *settings.Settings

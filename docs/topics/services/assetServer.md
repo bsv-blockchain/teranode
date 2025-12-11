@@ -7,21 +7,31 @@
 3. [Data Model](#3-data-model)
 4. [Use Cases](#4-use-cases)
     - [4.1. HTTP](#41-http)
+        - [Response Format Conventions](#response-format-conventions)
         - [4.1.1. getTransaction() and getTransactions()](#411-gettransaction-and-gettransactions)
         - [4.1.2. GetTransactionMeta()](#412-gettransactionmeta)
-        - [4.1.3. GetSubtree()](#413-getsubtree)
-        - [4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()](#414-getblockheaders-getblockheader-and-getbestblockheader)
-        - [4.1.5. GetBlockByHash(), GetBlocks and GetLastNBlocks()](#415-getblockbyhash-getblocks-and-getlastnblocks)
-        - [4.1.6. GetUTXO() and GetUTXOsByTXID()](#416-getutxo-and-getutxosbytxid)
-        - [4.1.7. Search()](#417-search)
-        - [4.1.8. GetBlockStats()](#418-getblockstats)
-        - [4.1.9. GetBlockGraphData()](#419-getblockgraphdata)
-        - [4.1.10. GetBlockForks()](#4110-getblockforks)
-        - [4.1.11. GetBlockSubtrees()](#4111-getblocksubtrees)
-        - [4.1.12. GetLegacyBlock()](#4112-getlegacyblock)
-        - [4.1.13. GetBlockHeadersToCommonAncestor()](#4113-getblockheaderstocommonancestor)
-        - [4.1.14. FSM State Management](#4114-fsm-state-management)
-        - [4.1.15. Block Validation Management](#4115-block-validation-management)
+        - [4.1.3. GetBlockByHash()](#413-getblockbyhash)
+        - [4.1.4. GetBlocks()](#414-getblocks)
+        - [4.1.5. GetLastNBlocks()](#415-getlastnblocks)
+        - [4.1.6. GetBlockStats()](#416-getblockstats)
+        - [4.1.7. GetBlockGraphData()](#417-getblockgraphdata)
+        - [4.1.8. GetBlockForks()](#418-getblockforks)
+        - [4.1.9. GetLegacyBlock()](#419-getlegacyblock)
+        - [4.1.10. GetLegacyBlockREST()](#4110-getlegacyblockrest)
+        - [4.1.11. GetBlockHeader() and GetBestBlockHeader()](#4111-getblockheader-and-getbestblockheader)
+        - [4.1.12. GetHeaders()](#4112-getheaders)
+        - [4.1.13. GetHeadersFromCommonAncestor()](#4113-getheadersfromcommonancestor)
+        - [4.1.14. GetBlockLocator()](#4114-getblocklocator)
+        - [4.1.15. GetSubtree()](#4115-getsubtree)
+        - [4.1.16. GetSubtreeData()](#4116-getsubtreedata)
+        - [4.1.17. GetSubtreeTransactions()](#4117-getsubtreetransactions)
+        - [4.1.18. GetBlockSubtrees()](#4118-getblocksubtrees)
+        - [4.1.19. GetUTXO() and GetUTXOsByTXID()](#4119-getutxo-and-getutxosbytxid)
+        - [4.1.20. Search()](#4120-search)
+        - [4.1.21. FSM State Management](#4121-fsm-state-management)
+        - [4.1.22. Block Validation Management](#4122-block-validation-management)
+        - [4.1.23. Health and Liveness Endpoints](#4123-health-and-liveness-endpoints)
+    - [4.2. WebSocket Real-time Updates](#42-websocket-real-time-updates)
 5. [Technology](#5-technology)
 6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
 7. [How to run](#7-how-to-run)
@@ -80,9 +90,20 @@ The detailed internal component architecture of the Asset Server shows how the v
 - **Blob Store**: Provides Subtree and Extended TX data to the Asset Server, referred here as Subtree Store and TX Store.
 - **Blockchain Server**: Provides blockchain data (blocks and block headers) to the Asset Server.
 
-Finally, note that the Asset Server benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
-Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
-Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
+### Lustre Filesystem Integration
+
+The Asset Server benefits significantly from Lustre Fs (filesystem) integration for high-performance data access. Lustre is a parallel distributed file system primarily used for large-scale cluster computing, designed to support high-performance, large-scale data storage and workloads.
+
+**Benefits for Asset Server:**
+
+- **Low-Latency Data Sharing**: Lustre volumes serve as temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
+- **Reduced Network Overhead**: Teranode microservices use the Lustre file system to share subtree and transaction data, eliminating the need for redundant propagation over gRPC or message queues
+- **Horizontal Scalability**: Multiple Asset Server instances can efficiently access the same blockchain data through Lustre's distributed architecture
+- **Performance**: Direct file system access provides faster retrieval of large blockchain objects (blocks, subtrees) compared to network-based transfers
+
+**Data Sharing Pattern:**
+
+The services sharing subtree data through Lustre include Asset Server, Block Validation, Subtree Validation, and Block Persister. This shared filesystem approach enables:
 
 ![lustre_fs.svg](img/plantuml/lustre_fs.svg)
 
@@ -102,6 +123,24 @@ The following data types are provided by the Asset Server:
 
 The Asset Service exposes the following HTTP methods:
 
+#### Response Format Conventions
+
+Many API endpoints support multiple response formats through URL path suffixes. The Asset Server follows a consistent pattern for format specification:
+
+- **Base path** (no suffix): Returns binary stream format (`application/octet-stream`)
+- **`/hex` suffix**: Returns hexadecimal-encoded string representation
+- **`/json` suffix**: Returns JSON-formatted response with structured data
+
+**Example Format Variations:**
+
+```text
+GET /api/v1/tx/{hash}       # Binary stream
+GET /api/v1/tx/{hash}/hex   # Hexadecimal string
+GET /api/v1/tx/{hash}/json  # JSON object
+```
+
+This pattern applies to most endpoints that return blockchain data including transactions, blocks, headers, subtrees, and UTXOs. Endpoints that only support a single format will explicitly state their response format.
+
 ### 4.1.1. getTransaction() and getTransactions()
 
 - **URL**: `/tx/:hash` (single transaction), `/txs` (multiple transactions via POST)
@@ -120,18 +159,11 @@ The Asset Service exposes the following HTTP methods:
 
 ![asset_server_http_get_transaction_meta.svg](img/plantuml/assetserver/asset_server_http_get_transaction_meta.svg)
 
-### 4.1.3. GetSubtree()
+### 4.1.3. GetBlockByHash()
 
-- **URL**: `/subtree/:hash`
-- **Method**: GET
-- **Response Format**: JSON
-- **Content**: Subtree data with transaction IDs and Merkle root
+Retrieves a single block by its hash.
 
-![asset_server_http_get_subtree.svg](img/plantuml/assetserver/asset_server_http_get_subtree.svg)
-
-### 4.1.4. GetBlockHeaders(), GetBlockHeader() and GetBestBlockHeader()
-
-- **URL**: `/block/:hash/header` (single), `/blocks/headers` (multiple), `/block/best/header` (best)
+- **URL**: `/block/:hash` (with `/hex`, `/json` variants)
 - **Method**: GET
 - **Response Format**: JSON
 - **Content**: Block header data including previous block ID and metadata
@@ -174,31 +206,43 @@ The Asset Service exposes the following HTTP methods:
 
 ![asset_server_http_get_block.svg](img/plantuml/assetserver/asset_server_http_get_block.svg)
 
-### 4.1.6. GetUTXO() and GetUTXOsByTXID()
+Supports multiple response formats through URL path suffixes. Binary response returns raw block data, hex returns hexadecimal string, and JSON returns structured block data with metadata.
 
-- **URL**: `/utxo/:hash` (single UTXO), `/utxos/:hash/json` (UTXOs by transaction ID)
+### 4.1.4. GetBlocks()
+
+Retrieves a paginated list of blocks.
+
+- **URL**: `/blocks`
 - **Method**: GET
 - **Response Format**: JSON
-- **Content**: UTXO data with additional metadata for processing
+- **Content**: Paginated list of blocks with metadata
+- **Query Parameters**:
 
-![asset_server_http_get_utxo.svg](img/plantuml/assetserver/asset_server_http_get_utxo.svg)
+    - `offset`: Number of blocks to skip from the tip (default: 0)
+    - `limit`: Maximum number of blocks to return (default: 20, max: 100)
+    - `includeOrphans`: Whether to include orphaned blocks (default: false)
 
-- For specific UTXO by hash requests (/utxo/:hash), the HTTP Server requests UTXO data from the UtxoStore using a hash.
+Returns blocks with comprehensive metadata including miner information, coinbase value, transaction count, and block size.
 
-- For getting UTXOs by a transaction ID (/utxos/:hash/json), the HTTP Server requests transaction meta data from the UTXO Store using a transaction hash. Then for each output in the transaction, it queries the UtxoStore to get UTXO data for the corresponding output hash.
+### 4.1.5. GetLastNBlocks()
 
-### 4.1.7. Search()
+Retrieves the most recent blocks in the blockchain.
 
-Generic hash search. The server searches for a hash in the Blockchain, the UTXO store and the subtree store.
-
-- **URL**: `/search/:hash`
+- **URL**: `/lastblocks`
 - **Method**: GET
 - **Response Format**: JSON
-- **Content**: Search results from blockchain, UTXO store, and subtree store
+- **Content**: Array of block information with metadata
+- **Query Parameters**:
 
-![asset_server_http_search.svg](img/plantuml/assetserver/asset_server_http_search.svg)
+    - `n`: Number of blocks to retrieve (default: 10)
+    - `fromHeight`: Starting block height (default: 0)
+    - `includeOrphans`: Include orphaned blocks (default: false)
 
-### 4.1.8. GetBlockStats()
+![asset_server_http_get_last_blocks.svg](img/plantuml/assetserver/asset_server_http_get_last_blocks.svg)
+
+Returns recent blocks in descending order (newest first) with comprehensive metadata including miner information, coinbase value, transaction count, and block size.
+
+### 4.1.6. GetBlockStats()
 
 Retrieves block statistics.
 
@@ -209,7 +253,7 @@ Retrieves block statistics.
 
 ![asset_server_http_get_block_stats.svg](img/plantuml/assetserver/asset_server_http_get_block_stats.svg)
 
-### 4.1.9. GetBlockGraphData()
+### 4.1.7. GetBlockGraphData()
 
 Retrieves block graph data for a given period
 
@@ -220,7 +264,7 @@ Retrieves block graph data for a given period
 
 ![asset_server_http_get_block_graph_data.svg](img/plantuml/assetserver/asset_server_http_get_block_graph_data.svg)
 
-### 4.1.10. GetBlockForks()
+### 4.1.8. GetBlockForks()
 
 Retrieves information about block forks
 
@@ -231,18 +275,7 @@ Retrieves information about block forks
 
 ![asset_server_http_get_block_forks.svg](img/plantuml/assetserver/asset_server_http_get_block_forks.svg)
 
-### 4.1.11. GetBlockSubtrees()
-
-Retrieves subtrees for a block in JSON format
-
-- **URL**: `/block/:hash/subtrees`
-- **Method**: GET
-- **Response Format**: JSON
-- **Content**: Subtrees data for a specific block with transaction IDs and Merkle roots
-
-![asset_server_http_get_block_subtrees.svg](img/plantuml/assetserver/asset_server_http_get_block_subtrees.svg)
-
-### 4.1.12. GetLegacyBlock()
+### 4.1.9. GetLegacyBlock()
 
 Retrieves a block in legacy format, and as a binary stream.
 
@@ -253,18 +286,162 @@ Retrieves a block in legacy format, and as a binary stream.
 
 ![asset_server_http_get_legacy_block.svg](img/plantuml/assetserver/asset_server_http_get_legacy_block.svg)
 
-### 4.1.13. GetBlockHeadersToCommonAncestor()
+### 4.1.10. GetLegacyBlockREST()
 
-Retrieves block headers up to a common ancestor point between two chains. This is useful for chain reorganization and fork resolution.
+Legacy REST endpoint for block retrieval in binary format.
 
-- **URL**: `/blocks/headers/ancestor/:hash1/:hash2`
+- **URL**: `/rest/block/:hash.bin`
+- **Method**: GET
+- **Response Format**: Binary stream (`application/octet-stream`)
+- **Content**: Block in legacy Bitcoin protocol format
+
+![asset_server_http_get_legacy_block_rest.svg](img/plantuml/assetserver/asset_server_http_get_legacy_block_rest.svg)
+
+Maintains backward compatibility with legacy Bitcoin clients. Returns blocks in the original Bitcoin binary format.
+
+### 4.1.11. GetBlockHeader() and GetBestBlockHeader()
+
+- **URL**: `/header/:hash` (single with `/hex`, `/json` variants), `/bestblockheader` (best block with `/hex`, `/json` variants)
+- **Method**: GET
+- **Response Format**: Binary stream, hexadecimal, or JSON
+- **Content**: Block header data including previous block ID and metadata
+
+![asset_server_http_get_block_header.svg](img/plantuml/assetserver/asset_server_http_get_block_header.svg)
+
+Supports multiple response formats through URL path suffixes for both endpoints.
+
+### 4.1.12. GetHeaders()
+
+Retrieves multiple consecutive block headers starting from a specific block hash.
+
+- **URL**: `/headers/:hash` (with `/hex`, `/json` variants)
+- **Method**: GET
+- **Response Format**: Binary stream, hexadecimal, or JSON
+- **Content**: Sequence of block headers
+- **Query Parameters**:
+
+    - `n`: Number of headers to retrieve (default: 100, max: 1000)
+
+![asset_server_http_get_headers.svg](img/plantuml/assetserver/asset_server_http_get_headers.svg)
+
+Supports multiple response formats through URL path suffixes. Binary response returns concatenated 80-byte headers, hex returns hexadecimal string, and JSON returns structured header data with metadata.
+
+### 4.1.13. GetHeadersFromCommonAncestor()
+
+Retrieves block headers from a common ancestor point for chain synchronization.
+
+- **URL**: `/headers_from_common_ancestor/:hash` (with `/hex`, `/json` variants)
+- **Method**: GET
+- **Response Format**: Binary stream, hexadecimal, or JSON
+- **Content**: Block headers from common ancestor point
+- **Query Parameters**:
+
+    - `n`: Number of headers to retrieve (default: 100, max: 10,000)
+    - `block_locator_hashes`: Block locator hashes for finding common ancestor (hex string, multiple of 64 characters)
+
+![asset_server_http_get_headers_from_common_ancestor.svg](img/plantuml/assetserver/asset_server_http_get_headers_from_common_ancestor.svg)
+
+Useful for chain synchronization after forks. Finds the common ancestor between the local chain and the provided locator hashes, then returns headers from that point.
+
+### 4.1.14. GetBlockLocator()
+
+Retrieves block locator hashes for efficient blockchain synchronization.
+
+- **URL**: `/block_locator`
 - **Method**: GET
 - **Response Format**: JSON
-- **Content**: Block headers from two chains up to their common ancestor point
+- **Content**: Array of block hashes using exponential backoff algorithm
+- **Query Parameters**:
 
-![asset_server_http_get_headers_to_common_ancestor.svg](img/plantuml/assetserver/asset_server_http_get_headers_to_common_ancestor.svg)
+    - `hash`: Optional starting block hash (default: best block)
+    - `height`: Optional starting block height (ignored if hash provided)
 
-### 4.1.14. FSM State Management
+![asset_server_http_get_block_locator.svg](img/plantuml/assetserver/asset_server_http_get_block_locator.svg)
+
+Returns a strategically selected set of block hashes used by peers to efficiently identify blockchain state and find common ancestors. Uses exponential backoff (first 10 blocks, then doubles) and always includes the genesis block.
+
+### 4.1.15. GetSubtree()
+
+- **URL**: `/subtree/:hash` (with `/hex`, `/json` variants)
+- **Method**: GET
+- **Response Format**: Binary stream, hexadecimal, or JSON
+- **Content**: Subtree data with transaction IDs and Merkle root
+
+![asset_server_http_get_subtree.svg](img/plantuml/assetserver/asset_server_http_get_subtree.svg)
+
+Supports multiple response formats through URL path suffixes.
+
+### 4.1.16. GetSubtreeData()
+
+Retrieves raw subtree transaction data as a binary stream.
+
+- **URL**: `/subtree_data/:hash`
+- **Method**: GET
+- **Response Format**: Binary stream (`application/octet-stream`)
+- **Content**: Concatenated binary transaction data from subtree
+
+![asset_server_http_get_subtree_data.svg](img/plantuml/assetserver/asset_server_http_get_subtree_data.svg)
+
+This endpoint streams all transactions within a subtree as raw binary data, optimized for efficient data transfer without JSON overhead.
+
+### 4.1.17. GetSubtreeTransactions()
+
+Retrieves transaction details from a subtree with pagination support.
+
+- **URL**: `/subtree/:hash/txs/json`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Array of transaction metadata with pagination information
+- **Query Parameters**:
+
+    - `offset`: Number of transactions to skip (default: 0)
+    - `limit`: Maximum transactions to return (default: 20, max: 100)
+
+![asset_server_http_get_subtree_transactions.svg](img/plantuml/assetserver/asset_server_http_get_subtree_transactions.svg)
+
+Returns detailed transaction information including transaction ID, input/output counts, size, and fees. Missing transactions are skipped in the response.
+
+### 4.1.18. GetBlockSubtrees()
+
+Retrieves subtrees for a block in JSON format
+
+- **URL**: `/block/:hash/subtrees/json`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Subtrees data for a specific block with transaction IDs and Merkle roots
+
+![asset_server_http_get_block_subtrees.svg](img/plantuml/assetserver/asset_server_http_get_block_subtrees.svg)
+
+### 4.1.19. GetUTXO() and GetUTXOsByTXID()
+
+- **URL**: `/utxo/:hash` (single UTXO with `/hex`, `/json` variants), `/utxos/:hash/json` (UTXOs by transaction ID)
+- **Method**: GET
+- **Response Format**: Binary stream, hexadecimal, or JSON (single UTXO); JSON only (UTXOs by TXID)
+- **Content**: UTXO data with additional metadata for processing
+
+![asset_server_http_get_utxo.svg](img/plantuml/assetserver/asset_server_http_get_utxo.svg)
+
+- For specific UTXO by hash requests (`/utxo/:hash`), the HTTP Server requests UTXO data from the UtxoStore using a hash. Supports multiple response formats through URL path suffixes.
+
+- For getting UTXOs by a transaction ID (`/utxos/:hash/json`), the HTTP Server requests transaction meta data from the UTXO Store using a transaction hash. Then for each output in the transaction, it queries the UtxoStore to get UTXO data for the corresponding output hash.
+
+### 4.1.20. Search()
+
+Generic hash or block height search. The server searches for a hash in the blockchain, UTXO store, and subtree store, or retrieves a block by height.
+
+- **URL**: `/search`
+- **Method**: GET
+- **Response Format**: JSON
+- **Content**: Search results from blockchain, UTXO store, and subtree store
+- **Query Parameters**:
+
+    - `q`: Search query - either a 64-character hex hash or a numeric block height
+
+![asset_server_http_search.svg](img/plantuml/assetserver/asset_server_http_search.svg)
+
+Returns the entity type (`block`, `tx`, or `subtree`) and hash of the found item.
+
+### 4.1.21. FSM State Management
 
 The Asset Server provides an interface to the Finite State Machine (FSM) of the blockchain service. These endpoints allow for monitoring and controlling the blockchain state:
 
@@ -275,7 +452,7 @@ The Asset Server provides an interface to the Finite State Machine (FSM) of the 
 - **GET /api/v1/fsm/events**: Lists all available FSM events
 - **GET /api/v1/fsm/states**: Lists all possible FSM states
 
-### 4.1.15. Block Validation Management
+### 4.1.22. Block Validation Management
 
 The Asset Server offers endpoints for block validation control:
 
@@ -284,6 +461,102 @@ The Asset Server offers endpoints for block validation control:
 - **POST /api/v1/block/invalidate**: Invalidates a specified block
 - **POST /api/v1/block/revalidate**: Revalidates a previously invalidated block
 - **GET /api/v1/blocks/invalid**: Retrieves a list of invalid blocks
+
+### 4.1.23. Health and Liveness Endpoints
+
+The Asset Server provides health check endpoints for monitoring and orchestration systems like Kubernetes:
+
+- **GET /alive**: Liveness probe endpoint
+    - Returns service uptime and liveness status
+    - Used to determine if the service needs to be restarted
+    - Response: Plain text with uptime information
+    - Status: 200 OK when service is alive
+
+- **GET /health**: Readiness probe endpoint
+    - Checks readiness of all service dependencies
+    - Verifies HTTP server, UTXO store, transaction store, block persister store, and blockchain client
+    - Returns 200 OK when all dependencies are ready
+    - Returns 503 Service Unavailable if any dependency is not ready
+    - Response includes details about dependency status
+
+**Kubernetes Integration Example:**
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /alive
+    port: 8090
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8090
+  initialDelaySeconds: 5
+  periodSeconds: 10
+```
+
+### 4.2. WebSocket Real-time Updates
+
+The Asset Server provides real-time blockchain event notifications through WebSocket connections using the Centrifuge protocol.
+
+#### Connection Endpoint
+
+- **WebSocket URL**: `/connection/websocket`
+    - Protocol: WebSocket (ws:// or wss://)
+    - Default port: 8892 (configurable via `asset_centrifugeListenAddress`)
+    - Authentication: Automatic credential assignment on connection
+    - Connection requirements: Asset service must have cached current node status from P2P
+
+#### Subscription Management
+
+- **POST /subscribe**: Subscribe to channels
+    - Query parameter: `client` - Client ID for the subscription
+    - Subscribes to all available channels (ping, block, subtree, mining_on, node_status)
+
+- **POST /unsubscribe**: Unsubscribe from channels
+    - Query parameter: `client` - Client ID to unsubscribe
+    - Removes all channel subscriptions for the specified client
+
+#### Available Channels
+
+Clients can receive real-time updates on the following channels:
+
+- **ping**: Connection health checks and keep-alive messages
+- **block**: New block notifications with block hash, height, header, and coinbase information
+- **subtree**: Merkle subtree update notifications
+- **mining_on**: Mining status change notifications
+- **node_status**: Node health and status updates including:
+
+    - Peer ID and version information
+    - Best block hash and height
+    - FSM state
+    - Transaction count in assembly
+    - Node uptime and connectivity status
+
+#### Message Format
+
+Messages are published in JSON format with event-specific structure. Example block notification:
+
+```json
+{
+  "hash": "0000000000000000...",
+  "height": 800000,
+  "header": {...},
+  "coinbaseTx": "...",
+  "subtrees": [...],
+  "baseUrl": "http://localhost:8090/api/v1",
+  "miner": "Miner Name"
+}
+```
+
+#### Connection Behavior
+
+- **Readiness Requirement**: WebSocket connections are rejected with HTTP 503 if the asset service hasn't cached the current node status
+- **Auto-subscription**: Upon connection, clients are automatically subscribed to all available channels
+- **Reconnection**: Clients should implement reconnection logic with exponential backoff
+- **Status Caching**: New clients immediately receive the cached current node status upon connection
 
 ## 5. Technology
 
@@ -459,6 +732,7 @@ Centrifuge supports the following subscription channels:
 - `block`: For new block notifications
 - `subtree`: For Merkle tree updates
 - `mining_on`: For mining status updates
+- `node_status`: For node status updates and health information
 
 #### 7.2.3 Security Configuration (Global Settings)
 
@@ -521,6 +795,7 @@ Centrifuge supports the following subscription channels:
 - `block`: For new block notifications
 - `subtree`: For Merkle tree updates
 - `mining_on`: For mining status updates
+- `node_status`: For node status updates and health information
 
 **HTTP Response Signing:**
 
