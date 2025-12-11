@@ -1483,7 +1483,9 @@ func findFilesByExtension(root, ext string) ([]string, error) {
 			return e
 		}
 
-		if filepath.Ext(d.Name()) == extForWalk {
+		// Use HasSuffix instead of filepath.Ext to support multi-dot extensions
+		// filepath.Ext("file.dah.tmp") returns ".tmp", not ".dah.tmp"
+		if strings.HasSuffix(d.Name(), extForWalk) {
 			a = append(a, s)
 		}
 
