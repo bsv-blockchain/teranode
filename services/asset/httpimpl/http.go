@@ -349,6 +349,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Register catchup status endpoint
 	apiGroup.GET("/catchup/status", h.GetCatchupStatus)
 
+	// Register service heights endpoint
+	apiGroup.GET("/service/heights", h.GetServiceHeights)
+
 	// Register peers endpoint
 	apiGroup.GET("/peers", h.GetPeers)
 

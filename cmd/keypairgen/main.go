@@ -4,6 +4,9 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log"
+	"os"
+	"runtime"
+	"strconv"
 
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
@@ -11,6 +14,12 @@ import (
 )
 
 func main() {
+	// Verify 64-bit architecture
+	if strconv.IntSize != 64 {
+		log.Printf("Error: keypairgen requires a 64-bit architecture. Current architecture: %s\n", runtime.GOARCH)
+		os.Exit(1)
+	}
+
 	// Generate a new private key
 	privateKey, err := bec.NewPrivateKey()
 	if err != nil {

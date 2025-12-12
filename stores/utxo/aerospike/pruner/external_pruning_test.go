@@ -3,13 +3,13 @@ package pruner
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
-	"github.com/bsv-blockchain/teranode/stores/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
@@ -58,12 +58,14 @@ func TestExternalTransactionPruning(t *testing.T) {
 		ExternalStore: externalStore,
 		Namespace:     namespace,
 		Set:           set,
-		WorkerCount:   1,
 		IndexWaiter:   mockIndexWaiter,
 	})
 	require.NoError(t, err)
 
 	service.Start(ctx)
+
+	// Wait for index to be ready
+	time.Sleep(2 * time.Second)
 
 	writePolicy := aerospike.NewWritePolicy(0, 0)
 
@@ -97,13 +99,11 @@ func TestExternalTransactionPruning(t *testing.T) {
 	assert.True(t, record.Bins[fields.External.String()].(bool))
 
 	// Trigger cleanup at height 5
-	done := make(chan string)
-	err = service.UpdateBlockHeight(5, done)
+	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	recordsProcessed, err := service.Prune(pruneCtx, 5)
+	cancel()
 	require.NoError(t, err)
-
-	// Wait for completion
-	status := <-done
-	require.Equal(t, pruner.JobStatusCompleted.String(), status)
+	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
 	// Verify the Aerospike record was deleted
 	record, err = client.Get(nil, key)
@@ -155,12 +155,14 @@ func TestExternalTransactionOutputsOnlyPruning(t *testing.T) {
 		ExternalStore: externalStore,
 		Namespace:     namespace,
 		Set:           set,
-		WorkerCount:   1,
 		IndexWaiter:   mockIndexWaiter,
 	})
 	require.NoError(t, err)
 
 	service.Start(ctx)
+
+	// Wait for index to be ready
+	time.Sleep(2 * time.Second)
 
 	writePolicy := aerospike.NewWritePolicy(0, 0)
 
@@ -187,13 +189,11 @@ func TestExternalTransactionOutputsOnlyPruning(t *testing.T) {
 	require.NoError(t, err)
 
 	// Trigger cleanup at height 3
-	done := make(chan string)
-	err = service.UpdateBlockHeight(3, done)
+	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	recordsProcessed, err := service.Prune(pruneCtx, 3)
+	cancel()
 	require.NoError(t, err)
-
-	// Wait for completion
-	status := <-done
-	require.Equal(t, pruner.JobStatusCompleted.String(), status)
+	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
 	// Verify the Aerospike record was deleted
 	_, err = client.Get(nil, key)
@@ -245,12 +245,14 @@ func TestMultiRecordExternalTransactionPruning(t *testing.T) {
 		ExternalStore: externalStore,
 		Namespace:     namespace,
 		Set:           set,
-		WorkerCount:   1,
 		IndexWaiter:   mockIndexWaiter,
 	})
 	require.NoError(t, err)
 
 	service.Start(ctx)
+
+	// Wait for index to be ready
+	time.Sleep(2 * time.Second)
 
 	writePolicy := aerospike.NewWritePolicy(0, 0)
 
@@ -312,13 +314,11 @@ func TestMultiRecordExternalTransactionPruning(t *testing.T) {
 	assert.NotNil(t, record)
 
 	// Trigger cleanup at height 10
-	done := make(chan string)
-	err = service.UpdateBlockHeight(10, done)
+	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	recordsProcessed, err := service.Prune(pruneCtx, 10)
+	cancel()
 	require.NoError(t, err)
-
-	// Wait for completion
-	status := <-done
-	require.Equal(t, pruner.JobStatusCompleted.String(), status)
+	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
 	// Verify ALL records were deleted (master + 2 children)
 	record, err = client.Get(nil, keyMaster)
@@ -378,12 +378,14 @@ func TestExternalFileAlreadyDeleted(t *testing.T) {
 		ExternalStore: externalStore,
 		Namespace:     namespace,
 		Set:           set,
-		WorkerCount:   1,
 		IndexWaiter:   mockIndexWaiter,
 	})
 	require.NoError(t, err)
 
 	service.Start(ctx)
+
+	// Wait for index to be ready
+	time.Sleep(2 * time.Second)
 
 	writePolicy := aerospike.NewWritePolicy(0, 0)
 
@@ -405,13 +407,11 @@ func TestExternalFileAlreadyDeleted(t *testing.T) {
 	require.False(t, exists)
 
 	// Trigger cleanup - should handle missing file gracefully
-	done := make(chan string)
-	err = service.UpdateBlockHeight(7, done)
+	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	recordsProcessed, err := service.Prune(pruneCtx, 7)
+	cancel()
 	require.NoError(t, err)
-
-	// Wait for completion
-	status := <-done
-	require.Equal(t, pruner.JobStatusCompleted.String(), status)
+	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
 	// Verify the Aerospike record was still deleted
 	_, err = client.Get(nil, key)
@@ -458,12 +458,14 @@ func TestMixedExternalAndNormalTransactions(t *testing.T) {
 		ExternalStore: externalStore,
 		Namespace:     namespace,
 		Set:           set,
-		WorkerCount:   1,
 		IndexWaiter:   mockIndexWaiter,
 	})
 	require.NoError(t, err)
 
 	service.Start(ctx)
+
+	// Wait for index to be ready
+	time.Sleep(2 * time.Second)
 
 	writePolicy := aerospike.NewWritePolicy(0, 0)
 
@@ -513,13 +515,11 @@ func TestMixedExternalAndNormalTransactions(t *testing.T) {
 	require.NoError(t, err)
 
 	// Trigger cleanup at height 15
-	done := make(chan string)
-	err = service.UpdateBlockHeight(15, done)
+	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	recordsProcessed, err := service.Prune(pruneCtx, 15)
+	cancel()
 	require.NoError(t, err)
-
-	// Wait for completion
-	status := <-done
-	require.Equal(t, pruner.JobStatusCompleted.String(), status)
+	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
 	// Verify both Aerospike records were deleted
 	_, err = client.Get(nil, keyExternal)

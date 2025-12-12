@@ -28,13 +28,10 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 		return prunerServiceInstance, nil
 	}
 
-	maxJobHistory := 10
-
 	// Create a new pruner service
 	prunerService, err := sqlpruner.NewService(s.settings, sqlpruner.Options{
-		Logger:         s.logger,
-		DB:             s.db,
-		MaxJobsHistory: maxJobHistory,
+		Logger: s.logger,
+		DB:     s.db,
 	})
 	if err != nil {
 		return nil, err

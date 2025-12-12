@@ -151,6 +151,7 @@ type BlockAssembler struct {
 
 	// unminedCleanupTicker manages periodic cleanup of old unmined transactions
 	unminedCleanupTicker *time.Ticker
+
 	// cachedCandidate stores the cached mining candidate
 	cachedCandidate *CachedMiningCandidate
 
