@@ -137,12 +137,12 @@ func TestStartKafkaControlledListenerContextCancellation(t *testing.T) {
 	// Cancel context
 	cancel()
 
-	// Wait for goroutine to finish with shorter timeout
+	// Wait for goroutine to finish
 	select {
 	case <-done:
 		// Good, it finished
-	case <-time.After(200 * time.Millisecond):
-		t.Skip("StartKafkaControlledListener test skipped due to timeout - this is expected in some environments")
+	case <-time.After(2 * time.Second):
+		t.Fatal("StartKafkaControlledListener did not finish after context cancellation")
 	}
 
 	// Check that the listener received context cancellation
