@@ -24,6 +24,8 @@ Usage: teranode-cli <command> [options]
     fix-chainwork        Fix incorrect chainwork values in blockchain database
     getfsmstate          Get the current FSM State
     import-blocks        Import blockchain from CSV
+    logs                 Interactive log viewer with filtering and search
+    monitor              Live TUI dashboard for monitoring node status
     resetblockassembly   Reset block assembly state
     seeder               Seeder
     setfsmstate          Set the FSM State
@@ -88,6 +90,14 @@ Usage: teranode-cli <command> [options]
 |                      |                                                | `--batch-size` - Updates per transaction (default: 1000)        |
 |                      |                                                | `--start-height` - Starting block height (default: 650286)      |
 |                      |                                                | `--end-height` - Ending block height (default: 0 for tip)       |
+
+### Interactive Tools
+
+| Command   | Description                                       | Key Options                                                        |
+|-----------|---------------------------------------------------|--------------------------------------------------------------------|
+| `logs`    | Interactive TUI log viewer with real-time tailing | `--file` - Log file path (default: ./logs/teranode.log)            |
+|           |                                                   | `--buffer` - Log entries to keep in memory (default: 10000)        |
+| `monitor` | Live TUI dashboard for node monitoring            | None (uses settings from config)                                   |
 
 ## Detailed Command Reference
 
@@ -256,6 +266,140 @@ Options:
 - `--end-height`: Ending block height (0 for current tip) (default: 0)
 
 ⚠️ **Warning**: This command modifies blockchain database records. Always run with `--dry-run=true` first to preview changes before applying them to production databases.
+
+### Logs (Interactive Log Viewer)
+
+```bash
+teranode-cli logs [--file=<path>] [--buffer=<size>]
+```
+
+An interactive TUI (Terminal User Interface) for viewing and filtering Teranode logs in real-time. The viewer supports service filtering, log level filtering, text search, and transaction ID tracking across services.
+
+Options:
+
+- `--file`: Path to log file (default: `./logs/teranode.log`)
+- `--buffer`: Number of log entries to keep in memory (default: 10000)
+
+#### Keyboard Shortcuts
+
+**Navigation:**
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` or `up` / `down` | Scroll line by line |
+| `g` / `G` or `home` / `end` | Jump to top / bottom |
+| `pgup` / `pgdn` or `b` / `f` | Page up / down |
+| `ctrl+u` / `ctrl+d` | Half-page up / down |
+
+**Filtering and Search:**
+
+| Key | Action |
+|-----|--------|
+| `/` | Enter text search mode |
+| `s` | Enter service filter mode (comma-separated) |
+| `t` | Enter transaction ID search (64-char hex) |
+| `+` / `-` | Increase / decrease minimum log level |
+| `c` | Clear all filters |
+
+**Controls:**
+
+| Key | Action |
+|-----|--------|
+| `p` or `space` | Pause / resume auto-scroll |
+| `e` | Toggle error summary panel |
+| `r` | Toggle rate graph (logs/second) |
+| `m` | Toggle mouse mode (disable for text selection) |
+| `?` | Toggle help screen |
+| `q` or `ctrl+c` | Quit |
+
+#### Features
+
+- **Real-time tailing**: Automatically follows new log entries as they are written
+- **Service filtering**: Filter by one or more services (e.g., `p2p,validator,blockchain`)
+- **Log level filtering**: Show only logs at or above a minimum severity (DEBUG, INFO, WARN, ERROR, FATAL)
+- **Text search**: Case-insensitive search across log messages
+- **Transaction ID tracking**: Track a specific transaction across all services by its 64-character hex ID
+- **Error statistics**: View error and warning counts by service over the last 5 minutes
+- **Rate monitoring**: Sparkline graph showing log volume over the last 30 seconds
+
+**Example:**
+
+```bash
+# View logs from default location
+teranode-cli logs
+
+# View logs from a specific file with larger buffer
+teranode-cli logs --file=/var/log/teranode/teranode.log --buffer=50000
+```
+
+### Monitor (Node Dashboard)
+
+```bash
+teranode-cli monitor
+```
+
+A live TUI dashboard for monitoring Teranode node status. Displays real-time information about blockchain state, FSM status, connected peers, service health, and Aerospike cluster statistics.
+
+The monitor uses configuration from your settings files (`settings.conf`, `settings_local.conf`) to connect to services.
+
+#### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `s` | Toggle Settings view |
+| `h` | Toggle Health view |
+| `a` | Toggle Aerospike view |
+| `r` | Manual refresh |
+| `j` / `k` or `up` / `down` | Scroll (in Settings/Aerospike views) |
+| `g` / `G` or `home` / `end` | Jump to top / bottom |
+| `esc` | Return to Dashboard |
+| `q` or `ctrl+c` | Quit |
+
+#### Views
+
+**Dashboard (default):**
+
+- **Blockchain panel**: Height, block count, transaction count, average block size, last block age
+- **FSM State panel**: Current state (color-coded), service connectivity indicators
+- **Peers panel**: Connected peer count, top peers by height with reputation scores
+- **Services summary**: Compact health status for all services (BC, VAL, BV, BA, ST, P2P)
+- **Aerospike summary**: Connection status, object count, disk usage
+
+**Settings view (`s`):**
+
+Displays all active configuration settings organized by section: General, Blockchain, P2P, Validator, Block Assembly, Kafka, Aerospike, and Asset.
+
+**Health view (`h`):**
+
+Detailed service health table showing:
+
+- Service name and status (OK / DOWN / N/A)
+- Response latency in milliseconds
+- Status message
+
+**Aerospike view (`a`):**
+
+Comprehensive Aerospike statistics including:
+
+- Cluster info (nodes, connections, namespace)
+- Per-node statistics
+- Namespace metrics (objects, disk usage, throughput)
+- Critical alerts (stop_writes, hwm_breached)
+- Latency histograms
+
+#### Status Indicators
+
+- Green (`✓`): Healthy / Running
+- Orange: Idle / Syncing / Warning
+- Red (`✗`): Down / Error
+- Gray (`○`): Not configured
+
+**Example:**
+
+```bash
+# Launch the monitor dashboard
+teranode-cli monitor
+```
 
 ## Error Handling
 

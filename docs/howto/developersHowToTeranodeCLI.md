@@ -55,7 +55,8 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli getfsmstate
 ```
 
 Typical output:
-```
+
+```text
 Current FSM State: IDLE
 ```
 
@@ -70,14 +71,15 @@ Valid states you can issue are:
 - `running` - Normal operation mode (processes transactions and creates blocks)
 - `idle` - Idle mode (default startup state)
 
-
 Example to switch to RUNNING state:
+
 ```bash
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli setfsmstate --fsmstate running
 ```
 
 Expected output:
-```
+
+```text
 Setting FSM state to: running
 FSM state successfully set to: RUNNING
 ```
@@ -181,6 +183,59 @@ Check if the current block template is valid:
 ```bash
 SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli checkblocktemplate
 ```
+
+### Interactive Monitoring Tools
+
+The CLI includes two TUI (Terminal User Interface) tools for real-time monitoring and debugging.
+
+#### Log Viewer
+
+View and filter logs in real-time with the interactive log viewer:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli logs
+```
+
+Options:
+
+- `--file` - Path to log file (default: `./logs/teranode.log`)
+- `--buffer` - Number of log entries to keep in memory (default: 10000)
+
+Key features for debugging:
+
+- **Service filtering** (`s`): Filter logs by specific services (e.g., `p2p,validator`)
+- **Log level filtering** (`+`/`-`): Adjust minimum severity level
+- **Text search** (`/`): Search for specific text in messages
+- **Transaction tracking** (`t`): Track a transaction ID across all services
+- **Error summary** (`e`): View error counts by service
+- **Pause/resume** (`p` or `space`): Pause auto-scroll to examine specific entries
+
+Press `?` for full keyboard shortcuts or `q` to quit.
+
+#### Node Monitor
+
+Monitor node status with a live dashboard:
+
+```bash
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] ./teranode-cli monitor
+```
+
+The monitor displays:
+
+- Blockchain state (height, block count, transactions)
+- FSM state with color-coded status
+- Connected peers and their reputation scores
+- Service health status with latency measurements
+- Aerospike cluster statistics
+
+Views:
+
+- **Dashboard** (default): Overview of all node metrics
+- **Settings** (`s`): View current configuration
+- **Health** (`h`): Detailed service health table
+- **Aerospike** (`a`): Cluster and namespace statistics
+
+Press `r` to refresh manually or `q` to quit.
 
 ## Common Development Workflows
 
