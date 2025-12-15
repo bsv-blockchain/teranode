@@ -44,34 +44,34 @@ Teranode supports multiple database backends for UTXO storage, configured via se
 
 1. **PostgreSQL** (Default for development):
 
-   ```shell
-   # Make sure PostgreSQL is running
-   ./scripts/postgres.sh
+    ```shell
+    # Make sure PostgreSQL is running
+    ./scripts/postgres.sh
 
-   # Your settings_local.conf should have a PostgreSQL connection string
-   utxostore.dev.[YOUR_CONTEXT] = postgres://teranode:teranode@localhost:5432/teranode?blockHeightRetention=5
+    # Your settings_local.conf should have a PostgreSQL connection string
+    utxostore.dev.[YOUR_CONTEXT] = postgres://teranode:teranode@localhost:5432/teranode?blockHeightRetention=5
 
-   # Run with the PostgreSQL backend
-   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
-   ```
+    # Run with the PostgreSQL backend
+    SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
+    ```
 
 2. **SQLite** (Lightweight option):
 
-   ```shell
-   # Your settings_local.conf should have an SQLite connection string
-   utxostore.dev.[YOUR_CONTEXT] = sqlite:///utxostore?blockHeightRetention=5
+    ```shell
+    # Your settings_local.conf should have an SQLite connection string
+    utxostore.dev.[YOUR_CONTEXT] = sqlite:///utxostore?blockHeightRetention=5
 
-   # Run with SQLite backend
-   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
-   ```
+    # Run with SQLite backend
+    SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
+    ```
 
 3. **Aerospike** (High-performance option):
 
-   > **Warning: Aerospike Requirements**
-   >
-   > - Requires both the appropriate settings AND the 'aerospike' build tag
-   > - See the Aerospike Integration section below
-   > - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
+    > **Warning: Aerospike Requirements**
+    >
+    > - Requires both the appropriate settings AND the 'aerospike' build tag
+    > - See the Aerospike Integration section below
+    > - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
 
 > **Note:** The database backend is determined by the connection string prefix in your settings:
 >
@@ -89,15 +89,15 @@ To use Aerospike as the UTXO storage backend:
 
 1. First, start the Aerospike Docker container:
 
-   ```shell
-   ./scripts/aerospike.sh
-   ```
+    ```shell
+    ./scripts/aerospike.sh
+    ```
 
 2. Run Teranode with the aerospike tag:
 
-   ```shell
-   rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
-   ```
+    ```shell
+    rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
+    ```
 
 ### Transaction Metadata Cache Configurations
 
@@ -245,15 +245,15 @@ You can also run each service on its own:
 
 1. Navigate to a service's directory:
 
-   ```shell
-   cd services/validator
-   ```
+    ```shell
+    cd services/validator
+    ```
 
 2. Run the service:
 
-   ```shell
-   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
-   ```
+    ```shell
+    SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
+    ```
 
 ## 📜 Running Specific Commands
 
