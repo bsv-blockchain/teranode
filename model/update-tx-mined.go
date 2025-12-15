@@ -179,7 +179,14 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		setMinedErrorCount  = atomic.Uint64{}
 	)
 
-	for subtreeIdx, subtree := range block.SubtreeSlices {
+	// Acquire read lock to safely access SubtreeSlices
+	// We need to copy the slice references before spawning goroutines
+	block.RLockSubtreeSlices()
+	subtreeSlicesCopy := make([]*subtreepkg.Subtree, len(block.SubtreeSlices))
+	copy(subtreeSlicesCopy, block.SubtreeSlices)
+	block.RUnlockSubtreeSlices()
+
+	for subtreeIdx, subtree := range subtreeSlicesCopy {
 		subtreeIdx := subtreeIdx
 		subtree := subtree
 

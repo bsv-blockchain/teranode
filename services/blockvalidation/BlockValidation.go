@@ -739,6 +739,9 @@ func (u *BlockValidation) hasValidSubtrees(block *model.Block) bool {
 		return false
 	}
 
+	block.RLockSubtreeSlices()
+	defer block.RUnlockSubtreeSlices()
+
 	// Check if subtrees are loaded and match expected count
 	if len(block.SubtreeSlices) != len(block.Subtrees) || len(block.SubtreeSlices) == 0 {
 		return false
@@ -823,6 +826,7 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	if len(unsetMined) > 0 && unsetMined[0] {
 		u.logger.Warnf("[setTxMined][%s] block is marked as invalid, will attempt to unset tx mined", block.Hash().String())
 
+		block.LockSubtreeSlices()
 		block.SubtreeSlices = make([]*subtreepkg.Subtree, len(block.Subtrees))
 
 		// when the block is invalid, we might not have all the subtrees
@@ -846,8 +850,10 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 
 			u.logger.Debugf("[setTxMined][%s] loaded subtree %d/%s from store", block.Hash().String(), subtreeIdx, subtreeHash.String())
 		}
+		block.UnlockSubtreeSlices()
 	} else {
 		// All subtrees should already be available for fully processed blocks
+		// GetSubtrees internally handles SubtreeSlices locking
 		_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, u.settings.Block.GetAndValidateSubtreesConcurrency)
 		if err != nil {
 			return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
@@ -887,7 +893,9 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	// Clear subtrees to free memory - they're no longer needed after UpdateTxMinedStatus
 	// This prevents memory retention in the blockchain store cache if block came from there and was mutated
 	// Note: lastValidatedBlocks cache was already cleared at line 799 when we retrieved the block
+	block.LockSubtreeSlices()
 	block.SubtreeSlices = nil
+	block.UnlockSubtreeSlices()
 
 	// update block mined_set to true
 	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
@@ -1433,14 +1441,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		// Cache the block only if subtrees are loaded (they should be from Valid() call)
 		if u.hasValidSubtrees(block) {
+			block.RLockSubtreeSlices()
 			u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), len(block.SubtreeSlices))
+			block.RUnlockSubtreeSlices()
 			u.lastValidatedBlocks.Set(*block.Hash(), block)
 		} else {
+			block.RLockSubtreeSlices()
 			if len(block.SubtreeSlices) != len(block.Subtrees) || len(block.SubtreeSlices) == 0 {
 				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), len(block.SubtreeSlices), len(block.Subtrees))
 			} else {
 				u.logger.Warnf("[ValidateBlock][%s] not caching block - some subtrees are nil", block.Hash().String())
 			}
+			block.RUnlockSubtreeSlices()
 		}
 
 		return nil

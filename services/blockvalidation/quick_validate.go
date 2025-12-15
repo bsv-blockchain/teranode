@@ -281,7 +281,9 @@ func (u *BlockValidation) getBlockTransactions(ctx context.Context, block *model
 		return nil, errors.NewProcessingError("[getBlockTransactions][%s] block has no subtrees", block.Hash().String())
 	}
 
+	block.LockSubtreeSlices()
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, len(block.Subtrees))
+	block.UnlockSubtreeSlices()
 	txs := make([]txWrapper, 0, block.TransactionCount)
 	txsIndex := make(map[chainhash.Hash]int, block.TransactionCount)
 	txsPerSubtree := make([][]txWrapper, len(block.Subtrees))
@@ -405,7 +407,9 @@ func (u *BlockValidation) getBlockTransactions(ctx context.Context, block *model
 					}
 				}
 
+				block.LockSubtreeSlices()
 				block.SubtreeSlices[subtreeIdx] = fullSubtree
+				block.UnlockSubtreeSlices()
 
 				fullSubtreeBytes, err := fullSubtree.Serialize()
 				if err != nil {
@@ -433,7 +437,9 @@ func (u *BlockValidation) getBlockTransactions(ctx context.Context, block *model
 					return errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 				}
 
+				block.LockSubtreeSlices()
 				block.SubtreeSlices[subtreeIdx] = fullSubtree
+				block.UnlockSubtreeSlices()
 
 				// make sure the subtree is not marked for deletion
 				if err = u.subtreeStore.SetDAH(gCtx, subtreeHash[:], fileformat.FileTypeSubtree, 0); err != nil {
@@ -529,15 +535,19 @@ func (u *BlockValidation) getBlockTransactions(ctx context.Context, block *model
 	}
 
 	// check that all the subtrees, except the last are the same size
+	block.RLockSubtreeSlices()
 	for i := 0; i < len(block.SubtreeSlices)-1; i++ {
 		if i == 0 {
 			subtreeSize = block.SubtreeSlices[i].Length()
 		} else if block.SubtreeSlices[i].Length() != subtreeSize && i != len(block.SubtreeSlices)-1 {
+			block.RUnlockSubtreeSlices()
 			return nil, errors.NewProcessingError("[getBlockTransactions][%s] subtree %d size %d does not match previous subtree size %d", block.Hash().String(), i, block.SubtreeSlices[i].Size(), subtreeSize)
 		}
 	}
+	block.RUnlockSubtreeSlices()
 
 	// check the merkle root of the block, this is a quick check to ensure we have the correct transactions
+	// CheckMerkleRoot handles its own locking internally
 	if err := block.CheckMerkleRoot(ctx); err != nil {
 		return nil, errors.NewProcessingError("[getBlockTransactions][%s] merkle root mismatch", block.Hash().String(), err)
 	}

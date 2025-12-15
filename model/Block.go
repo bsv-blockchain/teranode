@@ -350,12 +350,33 @@ type MinedBlockStore interface {
 }
 
 func (b *Block) String() string {
-	b.subtreeSlicesMu.Lock()
-	defer func() {
-		b.subtreeSlicesMu.Unlock()
-	}()
+	b.subtreeSlicesMu.RLock()
+	txCount := b.TransactionCount
+	sizeInBytes := b.SizeInBytes
+	b.subtreeSlicesMu.RUnlock()
+	return fmt.Sprintf("Block %s (height: %d, id: %d, txCount: %d, size: %d)", b.Hash().String(), b.Height, b.ID, txCount, sizeInBytes)
+}
 
-	return fmt.Sprintf("Block %s (height: %d, id: %d, txCount: %d, size: %d)", b.Hash().String(), b.Height, b.ID, b.TransactionCount, b.SizeInBytes)
+// LockSubtreeSlices acquires a write lock for SubtreeSlices field.
+// Must be followed by UnlockSubtreeSlices() when done.
+func (b *Block) LockSubtreeSlices() {
+	b.subtreeSlicesMu.Lock()
+}
+
+// UnlockSubtreeSlices releases the write lock for SubtreeSlices field.
+func (b *Block) UnlockSubtreeSlices() {
+	b.subtreeSlicesMu.Unlock()
+}
+
+// RLockSubtreeSlices acquires a read lock for SubtreeSlices field.
+// Must be followed by RUnlockSubtreeSlices() when done.
+func (b *Block) RLockSubtreeSlices() {
+	b.subtreeSlicesMu.RLock()
+}
+
+// RUnlockSubtreeSlices releases the read lock for SubtreeSlices field.
+func (b *Block) RUnlockSubtreeSlices() {
+	b.subtreeSlicesMu.RUnlock()
 }
 
 type SubtreeStore interface {
@@ -470,13 +491,21 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 		}
 
 		// Verify that we have at least one subtree and that it has at least one node
-		if len(b.SubtreeSlices) == 0 || len(b.SubtreeSlices[0].Nodes) == 0 {
+		b.RLockSubtreeSlices()
+		hasNodes := len(b.SubtreeSlices) > 0 && len(b.SubtreeSlices[0].Nodes) > 0
+		var firstNodeHash *chainhash.Hash
+		if hasNodes {
+			firstNodeHash = &b.SubtreeSlices[0].Nodes[0].Hash
+		}
+		b.RUnlockSubtreeSlices()
+
+		if !hasNodes {
 			return false, errors.NewBlockInvalidError("[BLOCK][%s] first subtree has no nodes", b.String())
 		}
 
 		// 7. Check that the first transaction in the first subtree is a coinbase placeholder (zeros)
-		if !b.SubtreeSlices[0].Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholder) {
-			return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), b.SubtreeSlices[0].Nodes[0].Hash.String())
+		if !firstNodeHash.Equal(subtreepkg.CoinbasePlaceholder) {
+			return false, errors.NewBlockInvalidError("[BLOCK][%s] first transaction in first subtree is not a coinbase placeholder: %s", b.String(), firstNodeHash.String())
 		}
 
 		// 8. Calculate the merkle root of the list of subtrees and check it matches the MR in the block header.
@@ -548,10 +577,12 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params) error {
 
 	subtreeFees := uint64(0)
 
+	b.RLockSubtreeSlices()
 	for i := 0; i < len(b.SubtreeSlices); i++ {
 		subtree := b.SubtreeSlices[i]
 		subtreeFees += subtree.Fees
 	}
+	b.RUnlockSubtreeSlices()
 
 	coinbaseReward := util.GetBlockSubsidyForHeight(b.Height, params)
 
@@ -589,15 +620,21 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, checkDuplicateTr
 	}
 
 	// set the expected subtree size based on the first subtree in the block
+	b.RLockSubtreeSlices()
 	subtreeSize := 0
 	if len(b.SubtreeSlices) > 0 {
 		subtreeSize = b.SubtreeSlices[0].Size()
 	}
 
+	// Create a copy of subtree references to avoid holding lock during goroutine execution
+	subtreesCopy := make([]*subtreepkg.Subtree, len(b.SubtreeSlices))
+	copy(subtreesCopy, b.SubtreeSlices)
+	b.RUnlockSubtreeSlices()
+
 	b.txMap = txmap.NewSplitSwissMapUint64(transactionCountUint32)
-	for subIdx := 0; subIdx < len(b.SubtreeSlices); subIdx++ {
+	for subIdx := 0; subIdx < len(subtreesCopy); subIdx++ {
 		subIdx := subIdx
-		subtree := b.SubtreeSlices[subIdx]
+		subtree := subtreesCopy[subIdx]
 
 		g.Go(func() (err error) {
 			return b.checkDuplicateTransactionsInSubtree(subtree, subIdx, subtreeSize)
@@ -688,8 +725,14 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, concurrency)
 
-	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
-		subtree := b.SubtreeSlices[sIdx]
+	// Create a copy of subtree references to avoid holding lock during goroutine execution
+	b.RLockSubtreeSlices()
+	subtreesCopy := make([]*subtreepkg.Subtree, len(b.SubtreeSlices))
+	copy(subtreesCopy, b.SubtreeSlices)
+	b.RUnlockSubtreeSlices()
+
+	for sIdx := 0; sIdx < len(subtreesCopy); sIdx++ {
+		subtree := subtreesCopy[sIdx]
 		sIdx := sIdx
 
 		g.Go(func() error {
@@ -1205,9 +1248,11 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 		}
 	}
 
+	b.subtreeSlicesMu.Lock()
 	b.TransactionCount = txCount.Load()
 	// header + transaction count + size in bytes + coinbase tx size
 	b.SizeInBytes = sizeInBytes.Load() + 80 + util.VarintSize(b.TransactionCount) + uint64(b.CoinbaseTx.Size()) // nolint: gosec
+	b.subtreeSlicesMu.Unlock()
 
 	// TODO something with conflicts
 
@@ -1235,9 +1280,18 @@ func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeSto
 }
 
 func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
-	if len(b.Subtrees) != len(b.SubtreeSlices) {
+	b.RLockSubtreeSlices()
+	subtreesLen := len(b.Subtrees)
+	subtreeSlicesLen := len(b.SubtreeSlices)
+	if subtreesLen != subtreeSlicesLen {
+		b.RUnlockSubtreeSlices()
 		return errors.NewStorageError("[BLOCK][%s] number of subtrees does not match number of subtree slices, have you called block.GetAndValidateSubtrees()?", b.String())
 	}
+
+	// Create a copy of subtree references for processing
+	subtreesCopy := make([]*subtreepkg.Subtree, len(b.SubtreeSlices))
+	copy(subtreesCopy, b.SubtreeSlices)
+	b.RUnlockSubtreeSlices()
 
 	_, _, deferFn := tracing.Tracer("block").Start(ctx, "CheckMerkleRoot",
 		tracing.WithHistogram(prometheusBlockCheckMerkleRoot),
@@ -1246,8 +1300,8 @@ func (b *Block) CheckMerkleRoot(ctx context.Context) (err error) {
 
 	hashes := make([]chainhash.Hash, len(b.Subtrees))
 
-	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
-		subtree := b.SubtreeSlices[sIdx]
+	for sIdx := 0; sIdx < len(subtreesCopy); sIdx++ {
+		subtree := subtreesCopy[sIdx]
 		if subtree == nil {
 			return errors.NewProcessingError("[BLOCK][%s] missing subtree %d of %d", b.String(), sIdx, len(b.Subtrees))
 		}
