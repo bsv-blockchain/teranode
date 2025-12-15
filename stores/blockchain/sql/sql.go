@@ -79,7 +79,7 @@ type SQL struct {
 func New(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*SQL, error) {
 	logger = logger.New("bcsql")
 
-	db, err := util.InitSQLDB(logger, storeURL, tSettings)
+	db, err := util.InitSQLDB(logger, storeURL, tSettings, tSettings.BlockChain.PostgresPool)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to init sql db", err)
 	}

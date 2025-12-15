@@ -35,9 +35,9 @@
 | DBTimeout | time.Duration | 5s | utxostore_dbTimeoutDuration | **CRITICAL** - Database operation timeout |
 | UseExternalTxCache | bool | true | utxostore_useExternalTxCache | External transaction cache usage |
 | ExternalizeAllTransactions | bool | false | utxostore_externalizeAllTransactions | Transaction externalization control |
-| PostgresMaxIdleConns | int | 10 | utxostore_postgresMaxIdleConns | PostgreSQL idle connection pool |
-| PostgresMaxOpenConns | int | 80 | utxostore_utxo_postgresMaxOpenConns | PostgreSQL max open connections |
 | VerboseDebug | bool | false | utxostore_verbose_debug | Verbose debug logging |
+
+**Note**: PostgreSQL connection pool settings (MaxOpenConns, MaxIdleConns, ConnMaxLifetime, ConnMaxIdleTime) are now configured globally via `PostgresSettings`. See [Global Settings](../global_settings.md) for details.
 | UpdateTxMinedStatus | bool | true | utxostore_updateTxMinedStatus | Transaction mined status updates |
 | MaxMinedRoutines | int | 128 | utxostore_maxMinedRoutines | Max mined transaction routines |
 | MaxMinedBatchSize | int | 1024 | utxostore_maxMinedBatchSize | Max mined transaction batch size |

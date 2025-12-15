@@ -102,7 +102,7 @@ type Store struct {
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (*Store, error) {
 	initPrometheusMetrics()
 
-	db, err := util.InitSQLDB(logger, storeURL, tSettings)
+	db, err := util.InitSQLDB(logger, storeURL, tSettings, tSettings.UtxoStore.PostgresPool)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to init sql db", err)
 	}

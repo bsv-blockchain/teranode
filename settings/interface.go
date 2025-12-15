@@ -38,6 +38,7 @@ type Settings struct {
 	UseDatadogProfiler           bool
 	LocalTestStartFromState      string
 	PostgresCheckAddress         string
+	Postgres                     PostgresSettings
 	UseCgoVerifier               bool
 	GRPCResolver                 string
 	GRPCMaxRetries               int
@@ -217,6 +218,7 @@ type BlockChainSettings struct {
 	FSMStateChangeDelay   time.Duration // used by tests to delay the state change and have time to capture the state
 	StoreDBTimeoutMillis  int
 	InitializeNodeInState string
+	PostgresPool          *PostgresSettings // Optional: overrides global PostgresSettings for blockchain store (nil = use global)
 }
 
 type BlockAssemblySettings struct {
@@ -377,9 +379,8 @@ type UtxoStoreSettings struct {
 	DBTimeout                         time.Duration
 	UseExternalTxCache                bool
 	ExternalizeAllTransactions        bool
-	ExternalStoreConcurrency          int // Maximum concurrent external storage operations (0 = unlimited)
-	PostgresMaxIdleConns              int
-	PostgresMaxOpenConns              int
+	ExternalStoreConcurrency          int               // Maximum concurrent external storage operations (0 = unlimited)
+	PostgresPool                      *PostgresSettings // Optional: overrides global PostgresSettings for UTXO store (nil = use global)
 	VerboseDebug                      bool
 	UpdateTxMinedStatus               bool
 	MaxMinedRoutines                  int
@@ -594,4 +595,11 @@ type BlockPersisterSettings struct {
 	SkipUTXODelete           bool
 	PersistSleep             time.Duration
 	ProcessUTXOFiles         bool
+}
+
+type PostgresSettings struct {
+	MaxOpenConns    int           // Maximum number of open connections to the database
+	MaxIdleConns    int           // Maximum number of connections in the idle connection pool
+	ConnMaxLifetime time.Duration // Maximum amount of time a connection may be reused
+	ConnMaxIdleTime time.Duration // Maximum amount of time a connection may be idle before being closed
 }
