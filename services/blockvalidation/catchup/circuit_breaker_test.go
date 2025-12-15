@@ -259,3 +259,61 @@ func TestCircuitBreaker_ConcurrentAccess(t *testing.T) {
 	state := cb.GetState()
 	assert.Contains(t, []CircuitBreakerState{StateClosed, StateOpen, StateHalfOpen}, state)
 }
+
+func TestPeerCircuitBreakers_GetPeerState_DataRace(t *testing.T) {
+	config := CircuitBreakerConfig{
+		FailureThreshold:    5,
+		SuccessThreshold:    2,
+		Timeout:             10 * time.Millisecond,
+		MaxHalfOpenRequests: 1,
+	}
+	pcb := NewPeerCircuitBreakers(config)
+	peerID := "test-peer-001"
+
+	// Create the breaker
+	breaker := pcb.GetBreaker(peerID)
+
+	// Start goroutines that modify breaker.state
+	done := make(chan bool, 3)
+
+	// Goroutine 1: Record failures
+	go func() {
+		for i := 0; i < 1000; i++ {
+			breaker.RecordFailure()
+		}
+		done <- true
+	}()
+
+	// Goroutine 2: Record successes
+	go func() {
+		for i := 0; i < 1000; i++ {
+			breaker.RecordSuccess()
+		}
+		done <- true
+	}()
+
+	// Goroutine 3: Call CanCall (which also modifies state)
+	go func() {
+		for i := 0; i < 1000; i++ {
+			breaker.CanCall()
+		}
+		done <- true
+	}()
+
+	// Main goroutine: Continuously read state via GetPeerState
+	// This reads breaker.state via thread-safe GetState() method
+	readCount := 0
+	for {
+		select {
+		case <-done:
+			readCount++
+			if readCount >= 3 {
+				return // All writers done
+			}
+		default:
+			// This should be safe now - accessing breaker.state
+			// via GetState() which holds breaker.mu
+			_ = pcb.GetPeerState(peerID)
+		}
+	}
+}

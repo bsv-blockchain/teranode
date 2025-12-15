@@ -16,7 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
-	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/cleanup"
+	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
@@ -2189,34 +2189,43 @@ func TestDeleteByBin(t *testing.T) {
 	assert.Equal(t, 2, count)
 
 	writePolicy := aerospike.NewWritePolicy(0, 0)
-	writePolicy.FilterExpression = filterExpression
+	// Note: writePolicy.FilterExpression is not needed here because queryPolicy.FilterExpression
+	// already filters which records are selected for deletion. The writePolicy only controls
+	// how the write operation is applied to the already-filtered record set.
 
 	task, err := client.QueryExecute(queryPolicy, writePolicy, statement, aerospike.DeleteOp())
 	require.NoError(t, err)
 
-	for {
+	// Wait for background delete job to complete on all nodes.
+	// task.IsDone() returns true when the job has finished executing.
+	require.Eventually(t, func() bool {
 		done, err := task.IsDone()
 		if err != nil {
-			t.Error(err)
+			t.Logf("Error checking task status: %v", err)
+			return false
 		}
-		if done {
-			break
+		return done
+	}, 500*time.Millisecond, 50*time.Millisecond, "Background delete job never completed")
+
+	// IMPORTANT: task.IsDone() returning true does NOT mean deletions are visible to queries.
+	// Background job completion only means write operations finished, but changes may not yet
+	// be visible to the query engine due to Aerospike's eventual consistency model.
+	// We must poll until the expected state appears in query results.
+	require.Eventually(t, func() bool {
+		recordSet, err := client.Query(nil, statement)
+		if err != nil {
+			return false
 		}
-		time.Sleep(100 * time.Millisecond)
-	}
 
-	recordSet, err = client.Query(nil, statement)
-	require.NoError(t, err)
-
-	count = 0
-
-	for result := range recordSet.Results() {
-		if result != nil {
-			count++
+		count := 0
+		for result := range recordSet.Results() {
+			if result != nil {
+				count++
+			}
 		}
-	}
 
-	assert.Equal(t, 1, count)
+		return count == 1
+	}, 500*time.Millisecond, 100*time.Millisecond, "Background deletes completed but not yet visible to queries")
 }
 
 func putBins(t *testing.T, client *uaerospike.Client, wp *aerospike.WritePolicy, akey string, bins aerospike.BinMap) {
@@ -2245,16 +2254,14 @@ func TestAerospikeCleanupService(t *testing.T) {
 	})
 
 	// start the cleanup service
-	cleanupService, err := cleanup.NewService(tSettings, cleanup.Options{
-		Ctx:            ctx,
-		Logger:         logger,
-		ExternalStore:  memory.New(),
-		Client:         client,
-		Namespace:      store.GetNamespace(),
-		Set:            store.GetName(),
-		MaxJobsHistory: 50,
-		WorkerCount:    2,
-		IndexWaiter:    &mockIndexWaiter{},
+	cleanupService, err := pruner.NewService(tSettings, pruner.Options{
+		Ctx:           ctx,
+		Logger:        logger,
+		ExternalStore: memory.New(),
+		Client:        client,
+		Namespace:     store.GetNamespace(),
+		Set:           store.GetName(),
+		IndexWaiter:   &mockIndexWaiter{},
 	})
 	require.NoError(t, err)
 
@@ -2355,17 +2362,17 @@ func TestDeletedChildren(t *testing.T) {
 
 	assert.Equal(t, 11, childResp.Bins[fields.DeleteAtHeight.String()])
 
-	opts := cleanup.Options{
-		Logger:         logger,
-		Client:         client,
-		ExternalStore:  memory.New(),
-		Namespace:      store.GetNamespace(),
-		Set:            store.GetName(),
-		MaxJobsHistory: 3,
-		IndexWaiter:    &mockIndexWaiter{},
+	opts := pruner.Options{
+		Ctx:           ctx,
+		Logger:        logger,
+		Client:        client,
+		ExternalStore: memory.New(),
+		Namespace:     store.GetNamespace(),
+		Set:           store.GetName(),
+		IndexWaiter:   &mockIndexWaiter{},
 	}
 
-	cleanupService, err := cleanup.NewService(tSettings, opts)
+	cleanupService, err := pruner.NewService(tSettings, opts)
 	require.NoError(t, err)
 
 	err = cleanupService.ProcessSingleRecord(childTx.TxIDChainHash(), childTx.Inputs)

@@ -36,6 +36,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		mockBlockchainClient := &blockchain.Mock{}
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a block header to reset to
 		targetHeader := &model.BlockHeader{
@@ -89,6 +90,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Store the coinbase UTXO first to avoid errors
 		_, err = utxoStore.Create(context.Background(), coinbaseTx, 1)
@@ -116,6 +118,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a simple block with coinbase tx
 		block2 := &model.Block{
@@ -154,6 +157,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		mockBlockchainClient := &blockchain.Mock{}
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a block header to reset to
 		targetHeader := &model.BlockHeader{
@@ -229,6 +233,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create transactions that will conflict during reset
 		conflictTx1Hash, err := chainhash.NewHashFromStr("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
@@ -356,6 +361,7 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create transactions - some will be in both moveBack and moveForward blocks
 		duplicateTxHash, err := chainhash.NewHashFromStr("fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
@@ -628,6 +634,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Test reorg with no blocks - should fail with expected error
 		err = stp.Reorg(nil, nil)
@@ -650,6 +657,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		mockBlockchainClient := &blockchain.Mock{}
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a simple block
 		block1 := &model.Block{
@@ -697,6 +705,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		mockBlockchainClient := &blockchain.Mock{}
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a simple block
 		block2 := &model.Block{
@@ -731,6 +740,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a test block for moveBack
 		blockToMoveBack := &model.Block{
@@ -778,6 +788,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create a proper blockchain scenario:
 		// Original chain: Genesis -> Block1 -> Block2
@@ -894,6 +905,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create unique transactions for the test scenario
 		tx1Hash, err := chainhash.NewHashFromStr("1111111111111111111111111111111111111111111111111111111111111111")
@@ -1122,6 +1134,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 
 		stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, blobStore, mockBlockchainClient, utxoStore, newSubtreeChan)
 		require.NoError(t, err)
+		stp.Start(ctx)
 
 		// Create specific transactions that will demonstrate duplicate handling
 		uniqueTxHash, err := chainhash.NewHashFromStr("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

@@ -124,7 +124,13 @@ func (h *HTTP) GetBlocks(c echo.Context) error {
 	}
 
 	latestBlockHeight := blockMeta.Height
-	fromHeight := latestBlockHeight - uint32(offset) //nolint:gosec
+
+	// Validate offset doesn't exceed block height to prevent underflow
+	if uint32(offset) > latestBlockHeight {
+		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("offset exceeds block height").Error())
+	}
+
+	fromHeight := latestBlockHeight - uint32(offset)
 
 	h.logger.Debugf("[Asset_http] GetBlockChain for %s with offset = %d, limit = %d and fromHeight = %d", c.Request().RemoteAddr, offset, limit, fromHeight)
 

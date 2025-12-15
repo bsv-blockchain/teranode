@@ -5,7 +5,7 @@
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
     - [2.1. Starting the Propagation Service](#21-starting-the-propagation-service)
-    - [2.1.1 Validator Integration](#211-validator-integration)
+        - [2.1.1 Validator Integration](#211-validator-integration)
     - [2.2. Propagating Transactions](#22-propagating-transactions)
     - [2.3. Transaction Processing Workflow](#23-transaction-processing-workflow)
     - [2.4. Error Handling](#24-error-handling)
@@ -31,7 +31,7 @@ At a glance, the Propagation service:
 
 The gRPC protocol is the primary communication method, although HTTP is also accepted.
 
-- `StartHTTPServer`: This function is designed to start a network listener for the HTTP protocol. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports. For example, the HTTP endpoints are `/tx`, `/txs`, and `/health`.
+- `startHTTPServer`: This function is designed to start a network listener for the HTTP protocol. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports. For example, the HTTP endpoints are `/tx`, `/txs`, and `/health`.
 
 A node can start multiple parallel instances of the Propagation service. This translates into multiple pods within a Kubernetes cluster. Each instance will have its own gRPC server, and will be able to receive and propagate transactions independently. GRPC load balancing allows to distribute the load across the multiple instances.
 
@@ -49,7 +49,7 @@ Also, note how the Blockchain client is used in order to wait for the node State
 
 Upon startup, the Propagation service starts the relevant communication channels, as configured via settings.
 
-### 2.1.1 Validator Integration
+#### 2.1.1 Validator Integration
 
 The Propagation service can work with the Validator in two different configurations:
 

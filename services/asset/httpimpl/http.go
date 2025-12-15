@@ -24,6 +24,10 @@ import (
 var AssetStat = gocore.NewStat("Asset")
 
 // HTTP handles blockchain data API endpoints using the Echo framework.
+// Provides RESTful access to blocks, transactions, subtrees, and UTXO data with
+// support for JSON and binary formats, request signing, CORS, and health checking.
+//
+// Thread-safe: Echo framework and repository handle concurrent requests safely.
 type HTTP struct {
 	logger     ulogger.Logger
 	settings   *settings.Settings
@@ -344,6 +348,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	// Register catchup status endpoint
 	apiGroup.GET("/catchup/status", h.GetCatchupStatus)
+
+	// Register service heights endpoint
+	apiGroup.GET("/service/heights", h.GetServiceHeights)
 
 	// Register peers endpoint
 	apiGroup.GET("/peers", h.GetPeers)

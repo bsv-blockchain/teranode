@@ -35,10 +35,16 @@ import (
 //   - *io.PipeReader: Reader for streaming block data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error) {
+	if err := acquireSemaphorePermit(ctx, repo.semGetLegacyBlockReader, "GetLegacyBlockReader"); err != nil {
+		return nil, err
+	}
+	// Note: semaphore will be released when the returned reader is closed
+
 	returnWireBlock := len(wireBlock) > 0 && wireBlock[0]
 
 	block, err := repo.GetBlockByHash(ctx, hash)
 	if err != nil {
+		releaseSemaphorePermit(repo.semGetLegacyBlockReader)
 		return nil, err
 	}
 
@@ -46,6 +52,9 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 
 	g, gCtx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
+		// Release semaphore when goroutine completes (after all Aerospike reads are done)
+		defer releaseSemaphorePermit(repo.semGetLegacyBlockReader)
+
 		if err = repo.writeLegacyBlockHeader(w, block, returnWireBlock); err != nil {
 			_ = w.CloseWithError(io.ErrClosedPipe)
 			_ = r.CloseWithError(err)

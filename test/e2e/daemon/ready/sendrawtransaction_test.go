@@ -3,11 +3,14 @@ package smoke
 import (
 	"encoding/hex"
 	"encoding/json"
+	"net/url"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/test"
+	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/require"
 )
@@ -23,12 +26,15 @@ func TestSendRawTransaction(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.TracingEnabled = true
-			s.TracingSampleRate = 1.0
-			s.ChainCfgParams.CoinbaseMaturity = 2
-		},
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.TracingEnabled = true
+				s.TracingSampleRate = 1.0
+				s.ChainCfgParams.CoinbaseMaturity = 2
+			},
+		),
 		FSMState: blockchain.FSMStateRUNNING,
 	})
 
@@ -92,17 +98,31 @@ func TestSendRawTransactionInvalidTx(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
+	// aerospike
+	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
+	require.NoError(t, err, "Failed to setup Aerospike container")
+	parsedURL, err := url.Parse(utxoStoreURL)
+	require.NoError(t, err, "Failed to parse UTXO store URL")
+	t.Cleanup(func() {
+		_ = teardown()
+	})
+
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.UtxoStore.UtxoStore = parsedURL
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
 
 	// Test with invalid hex - CallRPC returns error when RPC response has error field
 	invalidHex := "not_valid_hex"
-	_, err := td.CallRPC(td.Ctx, "sendrawtransaction", []any{invalidHex})
+	_, err = td.CallRPC(td.Ctx, "sendrawtransaction", []any{invalidHex})
 	require.Error(t, err, "Should return an error for invalid hex")
 	t.Logf("Invalid hex rejected with error: %v", err)
 
@@ -118,16 +138,28 @@ func TestSendRawTransactionDoubleSpend(t *testing.T) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
+	// aerospike
+	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
+	require.NoError(t, err, "Failed to setup Aerospike container")
+	parsedURL, err := url.Parse(utxoStoreURL)
+	require.NoError(t, err, "Failed to parse UTXO store URL")
+	t.Cleanup(func() {
+		_ = teardown()
+	})
+
 	// Create test daemon with RPC and validator enabled
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.TracingEnabled = true
-			s.TracingSampleRate = 1.0
-			s.ChainCfgParams.CoinbaseMaturity = 2
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.TracingEnabled = true
+				s.TracingSampleRate = 1.0
+				s.ChainCfgParams.CoinbaseMaturity = 2
+				s.UtxoStore.UtxoStore = parsedURL
+			},
+		),
 		FSMState: blockchain.FSMStateRUNNING,
 	})
 

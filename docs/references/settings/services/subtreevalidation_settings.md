@@ -25,8 +25,9 @@
 | MissingTransactionsBatchSize | int | 16384 | subtreevalidation_missingTransactionsBatchSize | **CRITICAL** - Missing transaction batch size |
 | PercentageMissingGetFullData | float64 | 20 | subtreevalidation_percentageMissingGetFullData | **CRITICAL** - Full subtree vs individual transaction threshold |
 | BlacklistedBaseURLs | map[string]struct{} | {} | subtreevalidation_blacklisted_baseurls | URL blacklisting |
-| BlockHeightRetentionAdjustment | int32 | 0 | subtreevalidation_blockHeightRetentionAdjustment | Retention adjustment |
-| OrphanageTimeout | time.Duration | 15m | subtreevalidation_orphanageTimeout | Orphaned transaction cleanup |
+| BlockHeightRetentionAdjustment | int32 | 0 | subtreevalidation_blockHeightRetentionAdjustment | Block height retention adjustment |
+| OrphanageTimeout | time.Duration | 15m | subtreevalidation_orphanageTimeout | Orphaned transaction timeout |
+| OrphanageMaxSize | int | 100000 | subtreevalidation_orphanageMaxSize | **CRITICAL** - Maximum orphanage transactions |
 | CheckBlockSubtreesConcurrency | int | 32 | subtreevalidation_check_block_subtrees_concurrency | **CRITICAL** - Block subtree checking concurrency |
 | PauseTimeout | time.Duration | 5m | subtreevalidation_pauseTimeout | **CRITICAL** - Maximum pause duration |
 
@@ -70,23 +71,24 @@
 
 ### Basic Configuration
 
-```text
-subtreevalidation_grpcListenAddress = ":8089"
-subtreestore = "memory:///"
+```bash
+subtreevalidation_grpcListenAddress=:8089
+subtreestore=memory:///
 ```
 
 ### Performance Tuning
 
-```text
-subtreevalidation_check_block_subtrees_concurrency = 64
-subtreevalidation_getMissingTransactions = 16
-subtreevalidation_spendBatcherSize = 2048
+```bash
+subtreevalidation_check_block_subtrees_concurrency=64
+subtreevalidation_getMissingTransactions=16
+subtreevalidation_spendBatcherSize=2048
+subtreevalidation_orphanageMaxSize=200000
 ```
 
 ### Cache Configuration
 
-```text
-subtreevalidation_txMetaCacheEnabled = true
-txMetaCacheMaxMB = 512
-subtreevalidation_processTxMetaUsingCache_BatchSize = 2048
+```bash
+subtreevalidation_txMetaCacheEnabled=true
+txMetaCacheMaxMB=512
+subtreevalidation_processTxMetaUsingCache_BatchSize=2048
 ```

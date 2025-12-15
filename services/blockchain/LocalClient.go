@@ -395,11 +395,17 @@ func (c *LocalClient) IsFSMCurrentState(_ context.Context, state FSMStateType) (
 	return state == FSMStateRUNNING, nil
 }
 
-func (c *LocalClient) WaitForFSMtoTransitionToGivenState(_ context.Context, _ FSMStateType) error {
+func (c *LocalClient) WaitForFSMtoTransitionToGivenState(ctx context.Context, _ FSMStateType) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (c *LocalClient) WaitUntilFSMTransitionFromIdleState(_ context.Context) error {
+func (c *LocalClient) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return nil
 }
 

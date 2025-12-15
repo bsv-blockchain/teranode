@@ -363,7 +363,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	options := options.NewStoreOptions(opts...)
 
 	if hashPrefix := storeURL.Query().Get("hashPrefix"); len(hashPrefix) > 0 {
-		val, err := strconv.ParseInt(hashPrefix, 10, 64)
+		val, err := strconv.ParseInt(hashPrefix, 10, 32)
 		if err != nil {
 			return nil, errors.NewStorageError("[File] failed to parse hashPrefix", err)
 		}
@@ -372,7 +372,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	}
 
 	if hashSuffix := storeURL.Query().Get("hashSuffix"); len(hashSuffix) > 0 {
-		val, err := strconv.ParseInt(hashSuffix, 10, 64)
+		val, err := strconv.ParseInt(hashSuffix, 10, 32)
 		if err != nil {
 			return nil, errors.NewStorageError("[File] failed to parse hashSuffix", err)
 		}
@@ -400,6 +400,11 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 
 	// Check if longterm storage options are provided
 	if options.PersistSubDir != "" {
+		// Validate PersistSubDir doesn't contain path traversal sequences
+		if strings.Contains(options.PersistSubDir, "..") {
+			return nil, errors.NewInvalidArgumentError("[File] PersistSubDir contains path traversal sequence")
+		}
+
 		// Create persistent subdirectory
 		if err := os.MkdirAll(filepath.Join(path, options.PersistSubDir), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create persist sub directory", err)
@@ -964,8 +969,14 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	}
 
 	// Stream the body using io.Copy with io.TeeReader so the file can use ReadFrom fast path while also hashing.
-	if _, err = io.Copy(file, io.TeeReader(reader, hasher)); err != nil {
+	bytesWritten, err := io.Copy(file, io.TeeReader(reader, hasher))
+	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write data to file", filename, err)
+	}
+
+	// Validate that actual data was written from the reader
+	if bytesWritten == 0 {
+		return errors.NewStorageError("[File][SetFromReader] [%s] reader provided zero bytes of data", filename)
 	}
 
 	// rename the file to remove the .tmp extension
@@ -1225,7 +1236,9 @@ func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.
 	}
 
 	if err := s.validateFileHeader(f, fileName, fileType); err != nil {
-		f.Close()
+		if closeErr := f.Close(); closeErr != nil {
+			s.logger.Warnf("[File][GetIoReader] failed to close file after header validation error: %v", closeErr)
+		}
 		return nil, err
 	}
 

@@ -158,24 +158,6 @@ func TestMine_CreateCoinbaseTxError_WithAddress(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestMine_NonceOverflowScenario(t *testing.T) {
-	// This test verifies the nonce overflow handling
-	// Note: This test is theoretical since we can't actually overflow nonce in reasonable time
-	t.Skip("Skipping nonce overflow test - would take too long to execute in practice")
-
-	ctx := context.Background()
-	candidate := createTestMiningCandidate()
-	// Set impossibly hard difficulty
-	candidate.NBits = []byte{0x1d, 0x00, 0x00, 0x01} // Nearly impossible difficulty
-	tSettings := createTestSettings()
-
-	solution, err := Mine(ctx, tSettings, candidate, nil)
-
-	assert.Nil(t, solution)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "nonce overflow")
-}
-
 func TestMine_DifferentDifficultyLevels(t *testing.T) {
 	tSettings := createTestSettings()
 

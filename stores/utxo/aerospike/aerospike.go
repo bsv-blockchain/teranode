@@ -77,7 +77,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/cleanup"
+	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -124,6 +124,7 @@ type Store struct {
 	storeBatcher        batcherIfc[BatchStoreItem]
 	getBatcher          batcherIfc[batchGetItem]
 	spendBatcher        batcherIfc[batchSpend]
+	spendCircuitBreaker *circuitBreaker
 	outpointBatcher     batcherIfc[batchOutpoint]
 	incrementBatcher    batcherIfc[batchIncrement]
 	setDAHBatcher       batcherIfc[batchDAH]
@@ -132,8 +133,9 @@ type Store struct {
 	externalStore       blob.Store
 	utxoBatchSize       int
 	externalTxCache     *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	indexMutex          sync.Mutex // Mutex for index creation operations
-	indexOnce           sync.Once  // Ensures index creation/wait is only done once per process
+	externalStoreSem    chan struct{} // Semaphore to limit concurrent external storage operations
+	indexMutex          sync.Mutex    // Mutex for index creation operations
+	indexOnce           sync.Once     // Ensures index creation/wait is only done once per process
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -190,6 +192,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		externalTxCache = util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](10 * time.Second)
 	}
 
+	// Initialize external store semaphore if concurrency limit is set
+	var externalStoreSem chan struct{}
+	if tSettings.UtxoStore.ExternalStoreConcurrency > 0 {
+		externalStoreSem = make(chan struct{}, tSettings.UtxoStore.ExternalStoreConcurrency)
+	}
+
 	s := &Store{
 		ctx:       ctx,
 		url:       aerospikeURL,
@@ -198,17 +206,18 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		setName:   setName,
 		logger:    logger,
 
-		settings:        tSettings,
-		externalStore:   externalStore,
-		utxoBatchSize:   utxoBatchSize,
-		externalTxCache: externalTxCache,
+		settings:         tSettings,
+		externalStore:    externalStore,
+		utxoBatchSize:    utxoBatchSize,
+		externalTxCache:  externalTxCache,
+		externalStoreSem: externalStoreSem,
 	}
 
 	// Ensure index creation/wait is only done once per process
-	if cleanup.IndexName != "" {
+	if pruner.IndexName != "" {
 		s.indexOnce.Do(func() {
 			if s.client != nil && s.client.Client != nil {
-				exists, err := s.indexExists(cleanup.IndexName)
+				exists, err := s.indexExists(pruner.IndexName)
 				if err != nil {
 					s.logger.Errorf("Failed to check index existence: %v", err)
 					return
@@ -216,7 +225,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 				if !exists {
 					// Only one process should try to create the index
-					err := s.CreateIndexIfNotExists(ctx, cleanup.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC)
+					err := s.CreateIndexIfNotExists(ctx, pruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC)
 					if err != nil {
 						s.logger.Errorf("Failed to create index: %v", err)
 					}
@@ -265,6 +274,14 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
 	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, true)
+
+	if failureThreshold := tSettings.UtxoStore.SpendCircuitBreakerFailureCount; failureThreshold > 0 {
+		s.spendCircuitBreaker = newCircuitBreaker(
+			failureThreshold,
+			tSettings.UtxoStore.SpendCircuitBreakerHalfOpenMax,
+			tSettings.UtxoStore.SpendCircuitBreakerCooldown,
+		)
+	}
 
 	outpointBatchSize := s.settings.UtxoStore.OutpointBatcherSize
 	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
@@ -788,8 +805,8 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 
 	queryPolicy := aerospike.NewQueryPolicy()
 	queryPolicy.MaxRetries = 3
-	queryPolicy.SocketTimeout = 30 * time.Second
-	queryPolicy.TotalTimeout = 120 * time.Second
+	queryPolicy.SocketTimeout = 5 * time.Minute
+	queryPolicy.TotalTimeout = 30 * time.Minute
 
 	recordset, err := s.client.Query(queryPolicy, stmt)
 	if err != nil {

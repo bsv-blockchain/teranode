@@ -13,6 +13,7 @@
     - [GetCurrentDifficultyResponse](#getcurrentdifficultyresponse)
     - [GetMiningCandidateRequest](#getminingcandidaterequest)
     - [HealthResponse](#healthresponse)
+    - [NewChaintipAndHeightRequest](#newchaintipandheightrequest)
     - [RemoveTxRequest](#removetxrequest)
     - [StateMessage](#statemessage)
     - [SubmitMiningSolutionRequest](#submitminingsolutionrequest)
@@ -173,6 +174,22 @@ Contains the health status of the service. Includes an 'ok' flag indicating heal
 
 
 
+<a name="NewChaintipAndHeightRequest"></a>
+
+### NewChaintipAndHeightRequest
+Request for adding a new chaintip and height information.
+
+
+| Field | Type | Label | Description |
+| ----- | ---- | ----- | ----------- |
+| chaintip | [bytes](#bytes) |  | the chaintip hash |
+| height | [uint32](#uint32) |  | the height of the chaintip in the blockchain |
+
+
+
+
+
+
 <a name="RemoveTxRequest"></a>
 
 ### RemoveTxRequest
@@ -199,6 +216,7 @@ Message containing the state of the block assembly service.
 | blockAssemblyState | [string](#string) |  | the state of the block assembly service |
 | subtreeProcessorState | [string](#string) |  | the state of the block assembly subtree processor |
 | subtreeCount | [uint32](#uint32) |  | the number of subtrees |
+| subtreeSize | [uint32](#uint32) |  | the size of each subtree |
 | txCount | [uint64](#uint64) |  | the number of transactions |
 | queueCount | [int64](#int64) |  | the size of the queue |
 | currentHeight | [uint32](#uint32) |  | the height of the chaintip |
@@ -298,7 +316,7 @@ Responsible for assembling new blocks and managing the blockchain's block creati
 | GetBlockAssemblyState | [EmptyMessage](#blockassembly_api-EmptyMessage) | [StateMessage](#blockassembly_api-StateMessage) | Retrieves the current state of block assembly. Provides detailed information about the assembly process status. |
 | GenerateBlocks | [GenerateBlocksRequest](#blockassembly_api-GenerateBlocksRequest) | [EmptyMessage](#blockassembly_api-EmptyMessage) | Creates new blocks (typically for testing purposes). Allows specification of block count and recipient address. |
 | CheckBlockAssembly | [EmptyMessage](#blockassembly_api-EmptyMessage) | [OKResponse](#blockassembly_api-OKResponse) | Checks the current state of block assembly. This verifies that the block assembly and subtree processor are functioning correctly. |
-| GetBlockAssemblyBlockCandidate | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetBlockAssemblyBlockCandidateResponse](#blockassembly_api-GetBlockAssemblyBlockCandidateResponse) | Retrieves the current block candidate from block assembly. |
+| GetBlockAssemblyBlockCandidate | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetBlockAssemblyBlockCandidateResponse](#blockassembly_api-GetBlockAssemblyBlockCandidateResponse) | Retrieves the current block candidate from block assembly. This provides access to the raw block data being assembled. |
 | GetBlockAssemblyTxs | [EmptyMessage](#blockassembly_api-EmptyMessage) | [GetBlockAssemblyTxsResponse](#blockassembly_api-GetBlockAssemblyTxsResponse) | Retrieves the transactions currently being assembled in the block assembly. This provides visibility into the transactions that are candidates for inclusion in the next block. NOTE: this method is primarily for debugging purposes and may not be suitable for production use. |
 
  <!-- end services -->

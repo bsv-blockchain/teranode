@@ -20,6 +20,7 @@ Aerospike is a high-performance NoSQL database used as a backend for Teranode's 
 | BatchPolicyURL | *url.URL | "defaultBatchPolicy" | aerospike_batchPolicy | **CRITICAL** - Batch operation policy URL |
 | ReadPolicyURL | *url.URL | "defaultReadPolicy" | aerospike_readPolicy | **CRITICAL** - Read operation policy URL |
 | WritePolicyURL | *url.URL | "defaultWritePolicy" | aerospike_writePolicy | **CRITICAL** - Write operation policy URL |
+| QueryPolicyURL | *url.URL | "defaultQueryPolicy" | aerospike_queryPolicy | **CRITICAL** - Query operation policy URL |
 | UseDefaultBasePolicies | bool | false | aerospike_useDefaultBasePolicies | Use Aerospike default base policies |
 | UseDefaultPolicies | bool | false | aerospike_useDefaultPolicies | Use Aerospike default policies |
 
@@ -72,6 +73,11 @@ aerospike:///?MaxRetries=5&SleepBetweenRetries=500ms&TotalTimeout=1s&SocketTimeo
 - Lower timeout (default: 1s total, 1s socket)
 - Controls write behavior (create, update, replace)
 - Used for UTXO creation and updates
+
+**Query Policy** (for query operations):
+
+- Timeout configuration for query operations
+- Used for database queries
 
 ### Policy Configuration Behavior
 
@@ -141,6 +147,7 @@ utxostore = aerospike://${aerospike_host}:${aerospike_port}/namespace?set=utxo&p
 | BatchPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure |
 | ReadPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure |
 | WritePolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure |
+| QueryPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure |
 | StatsRefreshDuration | Must be positive duration | Statistics update frequency |
 
 ## Configuration Examples
@@ -213,6 +220,7 @@ aerospike_useDefaultPolicies = false
 aerospike_batchPolicy = aerospike:///?MaxRetries=5&TotalTimeout=64s&SocketTimeout=10s
 aerospike_readPolicy = aerospike:///?MaxRetries=3&TotalTimeout=1s&SocketTimeout=1s
 aerospike_writePolicy = aerospike:///?MaxRetries=3&TotalTimeout=1s&SocketTimeout=1s
+aerospike_queryPolicy = aerospike:///?MaxRetries=3&TotalTimeout=2s&SocketTimeout=1s
 ```
 
 ## Performance Tuning Guidelines

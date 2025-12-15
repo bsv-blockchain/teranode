@@ -148,8 +148,8 @@ There are 2 clients invoking this endpoint:
 1. **The `Asset Server` service:**
     - The `Asset Server` service calls the `GetBlock` method on the `Blockchain Service` to retrieve a block from the blockchain.
 
-- **The `Block Assembly` service:**
-  - The `Block Assembly` service calls the `GetBlock` method on the `Blockchain Service` to retrieve a block from the blockchain.
+2. **The `Block Assembly` service:**
+    - The `Block Assembly` service calls the `GetBlock` method on the `Blockchain Service` to retrieve a block from the blockchain.
 
 ### 2.5. Getting the last N blocks from the blockchain
 
@@ -307,7 +307,7 @@ For further detail, we show here the sequence for the `SetBlockSubtreesSet` call
 
 ## 3. gRPC Protobuf Definitions
 
-The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/blockchainProto.md).
+The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the [Blockchain Protobuf API Reference](../../references/protobuf_docs/blockchainProto.md).
 
 ## 4. Data Model
 
@@ -381,13 +381,9 @@ services/blockchain
 │   ├── blockchain_api_extra.go - Supplemental code extending or enhancing the auto-generated API code.
 │   ├── blockchain_api_grpc.pb.go - Auto-generated gRPC bindings from the `.proto` file, specifically for gRPC communication.
 │   └── fsm_extra.go - Additional logic related to the Finite State Machine (FSM) functionality.
-├── data
-|
-├── fsm.go
-│   - Implements the Finite State Machine logic for managing blockchain states.
-│
+├── fsm.go - Implements the Finite State Machine logic for managing blockchain states.
 ├── fsm_visualizer
-│   └── main.go  - A tool for visualizing the Finite State Machine structure.
+│   └── main.go - A tool for visualizing the Finite State Machine structure.
 │
 ├── metrics.go
 │   - Manages and implements functionality related to operational metrics of the Blockchain service.
@@ -467,7 +463,7 @@ stores/blockchain
 To run the Blockchain Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -Blockchain=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -blockchain=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Blockchain Service locally.

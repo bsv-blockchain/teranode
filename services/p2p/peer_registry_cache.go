@@ -75,8 +75,8 @@ func getPeerRegistryCacheFilePath(configuredDir string) string {
 
 // SavePeerRegistryCache saves the peer registry data to a JSON file
 func (pr *PeerRegistry) SavePeerRegistryCache(cacheDir string) error {
-	pr.mu.RLock()
-	defer pr.mu.RUnlock()
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
 
 	cache := &PeerRegistryCache{
 		Version:     PeerRegistryCacheVersion,

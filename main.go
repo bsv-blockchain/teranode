@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,6 +73,12 @@ func main() {
 			fmt.Printf("%s version %s (commit: %s)\n", progname, version, commit)
 			os.Exit(0)
 		}
+	}
+
+	// Verify 64-bit architecture
+	if strconv.IntSize != 64 {
+		fmt.Fprintf(os.Stderr, "Error: %s requires a 64-bit architecture. Current architecture: %s\n", progname, runtime.GOARCH)
+		os.Exit(1)
 	}
 
 	// If not showing version, run the daemon

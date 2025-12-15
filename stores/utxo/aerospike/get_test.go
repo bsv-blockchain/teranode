@@ -1,7 +1,9 @@
 package aerospike_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"log"
 	"net/url"
 	"os"
@@ -398,4 +400,127 @@ func fetchTransaction(ctx context.Context, txStore blob.Store, b *bitcoin.Bitcoi
 	}
 
 	return tx, nil
+}
+
+func TestParseInputReferencesOnly(t *testing.T) {
+	t.Run("parses single input correctly", func(t *testing.T) {
+		tx := createTestTxWithInputs(t, 1, 100)
+		txBytes := tx.Bytes()
+
+		inputs, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(txBytes))
+
+		require.NoError(t, err)
+		require.Len(t, inputs, 1)
+		require.NotNil(t, inputs[0].PreviousTxIDChainHash())
+		require.Equal(t, uint32(0), inputs[0].PreviousTxOutIndex)
+		require.Nil(t, inputs[0].UnlockingScript)
+	})
+
+	t.Run("parses multiple inputs", func(t *testing.T) {
+		tx := createTestTxWithInputs(t, 10, 50)
+		txBytes := tx.Bytes()
+
+		inputs, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(txBytes))
+
+		require.NoError(t, err)
+		require.Len(t, inputs, 10)
+
+		for i, input := range inputs {
+			require.NotNil(t, input.PreviousTxIDChainHash())
+			require.Equal(t, uint32(i), input.PreviousTxOutIndex)
+		}
+	})
+
+	t.Run("skips large scripts without allocation", func(t *testing.T) {
+		tx := createTestTxWithInputs(t, 2, 1024*100)
+		txBytes := tx.Bytes()
+
+		inputs, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(txBytes))
+
+		require.NoError(t, err)
+		require.Len(t, inputs, 2)
+	})
+
+	t.Run("handles zero inputs", func(t *testing.T) {
+		tx := &bt.Tx{
+			Version: 1,
+			Inputs:  []*bt.Input{},
+			Outputs: []*bt.Output{{Satoshis: 100, LockingScript: &bscript.Script{0x76}}},
+		}
+		txBytes := tx.Bytes()
+
+		inputs, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(txBytes))
+
+		require.NoError(t, err)
+		require.Len(t, inputs, 0)
+	})
+
+	t.Run("error on truncated prevTxID", func(t *testing.T) {
+		tx := createTestTxWithInputs(t, 1, 10)
+		txBytes := tx.Bytes()
+
+		// Truncate in middle of first input's prevTxID
+		truncated := txBytes[:10]
+
+		_, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(truncated))
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "input")
+	})
+
+	t.Run("error on truncated input count", func(t *testing.T) {
+		// Just version, no input count
+		buf := bytes.NewBuffer(nil)
+		err := binary.Write(buf, binary.LittleEndian, uint32(1))
+		require.NoError(t, err)
+
+		_, err = teranode_aerospike.ParseInputReferencesOnly(buf)
+		require.Error(t, err)
+	})
+
+	t.Run("does not read outputs", func(t *testing.T) {
+		tx := createTestTxWithInputs(t, 1, 10)
+
+		// Add massive output
+		largeScript := make(bscript.Script, 1024*1024*5)
+		tx.Outputs = []*bt.Output{{Satoshis: 100, LockingScript: &largeScript}}
+
+		txBytes := tx.Bytes()
+
+		// Should complete without reading the 5MB output
+		inputs, err := teranode_aerospike.ParseInputReferencesOnly(bytes.NewReader(txBytes))
+
+		require.NoError(t, err)
+		require.Len(t, inputs, 1)
+	})
+}
+
+func createTestTxWithInputs(t *testing.T, numInputs int, scriptSize int) *bt.Tx {
+	tx := &bt.Tx{
+		Version: 1,
+		Inputs:  make([]*bt.Input, numInputs),
+		Outputs: []*bt.Output{{Satoshis: 1000, LockingScript: &bscript.Script{0x76, 0xa9}}},
+	}
+
+	for i := 0; i < numInputs; i++ {
+		hashBytes := make([]byte, 32)
+		binary.BigEndian.PutUint32(hashBytes[28:], uint32(i+1))
+		prevHash, err := chainhash.NewHash(hashBytes)
+		require.NoError(t, err)
+
+		script := make(bscript.Script, scriptSize)
+		for j := range script {
+			script[j] = byte(j % 256)
+		}
+
+		tx.Inputs[i] = &bt.Input{
+			PreviousTxOutIndex: uint32(i),
+			UnlockingScript:    &script,
+			SequenceNumber:     0xffffffff,
+		}
+		err = tx.Inputs[i].PreviousTxIDAdd(prevHash)
+		require.NoError(t, err)
+	}
+
+	return tx
 }

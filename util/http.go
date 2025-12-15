@@ -21,7 +21,25 @@ var (
 	// for operations that stream large responses. This is longer than httpRequestTimeout
 	// to accommodate large block/subtree downloads during catchup.
 	httpStreamingTimeout, _ = gocore.Config().GetInt("http_streaming_timeout", 300000) // 5 minutes default
+
+	// httpClient is configured with connection pooling optimized for high-concurrency
+	// operations like P2P catchup. Default MaxIdleConnsPerHost=2 is far too low for catchup
+	// operations that can have 128+ concurrent requests per peer (16 workers * 8 subtree fetchers).
+	httpClient = &http.Client{
+		Transport: func() *http.Transport {
+			t := http.DefaultTransport.(*http.Transport).Clone()
+			t.MaxIdleConns = 1000       // Total idle connections across all hosts (default: 100)
+			t.MaxIdleConnsPerHost = 100 // Per-host idle connections (default: 2)
+			t.MaxConnsPerHost = 200     // Per-host total connections (default: 0/unlimited)
+			return t
+		}(),
+	}
 )
+
+// HTTPClient returns the shared HTTP client for use with httpmock.ActivateNonDefault() in tests.
+func HTTPClient() *http.Client {
+	return httpClient
+}
 
 // DoHTTPRequest performs an HTTP GET or POST request and returns the response body as bytes.
 // Uses GET by default, switches to POST if requestBody is provided.
@@ -121,8 +139,6 @@ func doHTTPRequestForStreaming(ctx context.Context, url string, requestBody ...[
 
 // executeHTTPRequest performs the actual HTTP request with the given context.
 func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, url string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
-	httpClient := http.DefaultClient
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, cancelFn, errors.NewServiceError("failed to create http request", err)
