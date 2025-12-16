@@ -262,6 +262,18 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 	return nil
 }
 
+func (t *TxMetaCache) SetCacheMultiValuesRaw(keys [][]byte, values [][]byte) error {
+
+	err := t.cache.SetMulti(keys, values)
+	if err != nil {
+		return err
+	}
+
+	t.metrics.insertions.Add(uint64(len(keys)))
+
+	return nil
+}
+
 // GetMetaCached retrieves transaction metadata from the cache without falling back to the
 // underlying store. This provides a way to check if data is available in the cache only.
 //
@@ -407,18 +419,50 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 
 	prometheusBlockValidationTxMetaCacheGetOrigin.Add(float64(len(hashes)))
 
-	for _, data := range hashes {
-		if data.Data != nil {
-			if len(data.Data.TxInpoints.ParentTxHashes) > 48 {
-				t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.TxInpoints.ParentTxHashes))
-			}
+	// Batch cache population: build keys/values once and call SetCacheMulti.
+	// Note: values are serialized the same way SetCache() does (MetaBytes + height appended inside SetCacheMulti).
+	keys := make([][]byte, 0, len(hashes))
+	values := make([][]byte, 0, len(hashes))
 
-			if err := t.SetCache(&data.Hash, data.Data); err != nil {
-				if errors.Is(err, errors.ErrProcessing) {
-					t.logger.Debugf("error setting cache for txMeta [%s]: %v", data.Hash.String(), err)
-				} else {
-					t.logger.Errorf("error setting cache for txMeta [%s]: %v", data.Hash.String(), err)
-				}
+	currentBlockHeight := t.utxoStore.GetBlockHeight()
+
+	for _, data := range hashes {
+		if data == nil || data.Data == nil {
+			continue
+		}
+
+		if len(data.Data.TxInpoints.ParentTxHashes) > 48 {
+			t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.TxInpoints.ParentTxHashes))
+		}
+
+		// get the metabytes directly here.
+		txMetaBytes, err := data.Data.MetaBytes()
+		if err != nil {
+			if errors.Is(err, errors.ErrProcessing) {
+				t.logger.Debugf("error serializing txMeta for [%s]: %v", data.Hash.String(), err)
+			} else {
+				t.logger.Errorf("error serializing txMeta for [%s]: %v", data.Hash.String(), err)
+			}
+			continue
+		}
+
+		// append height value to values here to get rid of extra call.
+		// it is safe to modify txMetaBytes itself because data.Data.MetaBytes() creates a brand new slice.
+		startingLenOfTxMetaBytes := len(txMetaBytes)
+		txMetaBytes = append(txMetaBytes, 0, 0, 0, 0) // grow the siz by 4
+		binary.BigEndian.PutUint32(txMetaBytes[startingLenOfTxMetaBytes:], currentBlockHeight)
+
+		keys = append(keys, data.Hash.CloneBytes())
+		values = append(values, txMetaBytes)
+	}
+
+	if len(keys) > 0 {
+		if err := t.SetCacheMultiValuesRaw(keys, values); err != nil {
+			// Preserve prior behavior: cache population failures are logged but don't fail BatchDecorate.
+			if errors.Is(err, errors.ErrProcessing) {
+				t.logger.Debugf("error setting cache batch for %d txMeta entries: %v", len(keys), err)
+			} else {
+				t.logger.Errorf("error setting cache batch for %d txMeta entries: %v", len(keys), err)
 			}
 		}
 	}
