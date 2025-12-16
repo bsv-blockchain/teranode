@@ -83,15 +83,15 @@ func (s *Server) handleBlockTopic(_ context.Context, m []byte, fromID string) {
 	// Update last message time for the sender and originator with client name
 	s.updatePeerLastMessageTime(fromID, blockMessage.PeerID)
 
-	// Track bytes received fromID this message
+	// Track bytes received from this message
 	s.updateBytesReceived(fromID, blockMessage.PeerID, uint64(len(m)))
 
-	// Skip notifications fromID banned peers
+	// Skip notifications from banned peers
 	if s.shouldSkipBannedPeer(blockMessage.PeerID, "handleBlockTopic") {
 		return
 	}
 
-	// Skip notifications fromID unhealthy peers
+	// Skip notifications from unhealthy peers
 	if s.shouldSkipUnhealthyPeer(blockMessage.PeerID, "handleBlockTopic") {
 		return
 	}
@@ -301,21 +301,21 @@ func (s *Server) handleRejectedTxTopic(_ context.Context, m []byte, fromID strin
 	// Update last message time with client name
 	s.updatePeerLastMessageTime(fromID, rejectedTxMessage.PeerID)
 
-	// Track bytes received fromID this message
+	// Track bytes received from this message
 	s.updateBytesReceived(fromID, rejectedTxMessage.PeerID, uint64(len(m)))
 
 	if s.shouldSkipBannedPeer(fromID, "handleRejectedTxTopic") {
 		return
 	}
 
-	// Skip notifications fromID unhealthy peers
+	// Skip notifications from unhealthy peers
 	if s.shouldSkipUnhealthyPeer(fromID, "handleRejectedTxTopic") {
 		return
 	}
 
-	// Rejected TX messages fromID other peers are informational only.
+	// Rejected TX messages from other peers are informational only.
 	// They help us understand network state but don't trigger re-broadcasting.
-	// If we wanted to take action (e.g., remove fromID our mempool), we would do it here.
+	// If we wanted to take action (e.g., remove from our mempool), we would do it here.
 }
 
 // getPeerIDFromDataHubURL finds the peer ID that has the given DataHub URL
