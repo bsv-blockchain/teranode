@@ -105,14 +105,6 @@ func initWorker(tSettings *settings.Settings) {
 					}
 				}()
 
-				// Ensure block is removed from in-flight tracking when done
-				// Note: block was already marked as in-flight in UpdateTxMinedStatus before queueing
-				defer func() {
-					inFlightBlocksMu.Lock()
-					delete(inFlightBlocks, msg.blockID)
-					inFlightBlocksMu.Unlock()
-				}()
-
 				chainBlockIDsMap := make(map[uint32]bool, len(msg.chainBlockIDs))
 				for _, bID := range msg.chainBlockIDs {
 					chainBlockIDsMap[bID] = true
@@ -156,6 +148,13 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	// Mark block as in-flight immediately to prevent duplicate processing
 	inFlightBlocks[blockID] = true
 	inFlightBlocksMu.Unlock()
+
+	// Ensure block is removed from in-flight tracking when done
+	defer func() {
+		inFlightBlocksMu.Lock()
+		delete(inFlightBlocks, blockID)
+		inFlightBlocksMu.Unlock()
+	}()
 
 	startTime := time.Now()
 	defer func() {
