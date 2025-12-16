@@ -906,12 +906,12 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 	// Skip further processing for our own messages (peer height updates, etc.)
 	// but still forward to WebSocket
 	if !isSelf {
-		s.logger.Debugf("[handleNodeStatusTopic] Processing node_status peerID remote peer %s (peer_id: %s)", peerID, nodeStatusMessage.PeerID)
+		s.logger.Debugf("[handleNodeStatusTopic] Processing node_status from remote peer %s (peer_id: %s)", peerID, nodeStatusMessage.PeerID)
 
 		// Update last message time for the sender and originator with client name
 		s.updatePeerLastMessageTime(peerID, nodeStatusMessage.PeerID)
 
-		// Track bytes received peerID this message
+		// Track bytes received from this message
 		s.updateBytesReceived(peerID, nodeStatusMessage.PeerID, uint64(len(m)))
 
 		// Skip processing peerID unhealthy peers (but still forward to WebSocket for monitoring)
@@ -966,7 +966,7 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 
 		hash, err := chainhash.NewHashFromStr(nodeStatusMessage.BestBlockHash)
 		if err != nil {
-			s.logger.Warnf("[handleNodeStatusTopic] failed to create hash peerID best block hash %s: %v", nodeStatusMessage.BestBlockHash, err)
+			s.logger.Warnf("[handleNodeStatusTopic] failed to create hash from best block hash %s: %v", nodeStatusMessage.BestBlockHash, err)
 			return
 		}
 
