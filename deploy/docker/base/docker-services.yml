@@ -95,7 +95,7 @@ services:
   aerospike:
     container_name: aerospike
     image: aerospike/aerospike-server:8.1
-    command: --cold-start --config-file /etc/aerospike.conf
+    command: --config-file /etc/aerospike.conf
     networks:
       - teranode-network
     ports:

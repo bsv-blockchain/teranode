@@ -2255,15 +2255,13 @@ func TestAerospikeCleanupService(t *testing.T) {
 
 	// start the cleanup service
 	cleanupService, err := pruner.NewService(tSettings, pruner.Options{
-		Ctx:            ctx,
-		Logger:         logger,
-		ExternalStore:  memory.New(),
-		Client:         client,
-		Namespace:      store.GetNamespace(),
-		Set:            store.GetName(),
-		MaxJobsHistory: 50,
-		WorkerCount:    2,
-		IndexWaiter:    &mockIndexWaiter{},
+		Ctx:           ctx,
+		Logger:        logger,
+		ExternalStore: memory.New(),
+		Client:        client,
+		Namespace:     store.GetNamespace(),
+		Set:           store.GetName(),
+		IndexWaiter:   &mockIndexWaiter{},
 	})
 	require.NoError(t, err)
 
@@ -2365,14 +2363,13 @@ func TestDeletedChildren(t *testing.T) {
 	assert.Equal(t, 11, childResp.Bins[fields.DeleteAtHeight.String()])
 
 	opts := pruner.Options{
-		Ctx:            ctx,
-		Logger:         logger,
-		Client:         client,
-		ExternalStore:  memory.New(),
-		Namespace:      store.GetNamespace(),
-		Set:            store.GetName(),
-		MaxJobsHistory: 3,
-		IndexWaiter:    &mockIndexWaiter{},
+		Ctx:           ctx,
+		Logger:        logger,
+		Client:        client,
+		ExternalStore: memory.New(),
+		Namespace:     store.GetNamespace(),
+		Set:           store.GetName(),
+		IndexWaiter:   &mockIndexWaiter{},
 	}
 
 	cleanupService, err := pruner.NewService(tSettings, opts)

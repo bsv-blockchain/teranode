@@ -2118,9 +2118,9 @@ func (m *MockCleanupService) Start(ctx context.Context) {
 	m.Called(ctx)
 }
 
-func (m *MockCleanupService) UpdateBlockHeight(height uint32, doneCh ...chan string) error {
-	args := m.Called(height, doneCh)
-	return args.Error(0)
+func (m *MockCleanupService) Prune(ctx context.Context, height uint32) (int64, error) {
+	args := m.Called(ctx, height)
+	return args.Get(0).(int64), args.Error(1)
 }
 
 func (m *MockCleanupService) SetPersistedHeightGetter(getter func() uint32) {

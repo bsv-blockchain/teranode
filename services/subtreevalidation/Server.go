@@ -848,7 +848,7 @@ func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, b
 			})
 		}
 
-		maxLevel, txsPerLevel, err := u.prepareTxsPerLevel(ctx, orphanMissingTxs)
+		maxLevel, txsPerLevel, err := u.selectPrepareTxsPerLevel(ctx, orphanMissingTxs)
 		if err != nil {
 			u.logger.Errorf("[CheckSubtreeFromBlock] Failed to prepare transactions per level: %v", err)
 			return

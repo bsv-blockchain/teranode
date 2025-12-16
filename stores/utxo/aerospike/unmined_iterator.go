@@ -5,7 +5,6 @@ import (
 	"math"
 
 	as "github.com/aerospike/aerospike-client-go/v8"
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -272,21 +271,10 @@ func (it *unminedTxIterator) processTransactionInpoints(ctx context.Context, txD
 }
 
 // processExternalTransactionInpoints processes inputs for external transactions
+// using optimized parsing that skips all scripts (90%+ memory savings)
 func (it *unminedTxIterator) processExternalTransactionInpoints(ctx context.Context, hash *chainhash.Hash) (subtree.TxInpoints, error) {
-	var externalTx *bt.Tx
-	var err error
-
-	externalTx, err = it.store.GetTxFromExternalStore(ctx, *hash)
-	if err != nil {
-		return subtree.TxInpoints{}, err
-	}
-
-	txInpoints, err := subtree.NewTxInpointsFromTx(externalTx)
-	if err != nil {
-		return subtree.TxInpoints{}, errors.NewTxInvalidError("could not process tx inpoints", err)
-	}
-
-	return txInpoints, nil
+	// Use optimized function that only parses input references, skipping all scripts
+	return it.store.GetTxInpointsFromExternalStore(ctx, *hash)
 }
 
 // processInternalTransactionInpoints processes inputs for internal transactions

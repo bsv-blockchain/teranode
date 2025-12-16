@@ -26,6 +26,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -59,6 +60,12 @@ var (
 //   - Prints messages to stdout.
 //   - Exits the process on fatal errors.
 func main() {
+	// Verify 64-bit architecture
+	if strconv.IntSize != 64 {
+		log.Printf("Error: peercli requires a 64-bit architecture. Current architecture: %s\n", runtime.GOARCH)
+		os.Exit(1)
+	}
+
 	bsvPeerConnected = make(chan bool, 1)
 
 	app := &cli.App{

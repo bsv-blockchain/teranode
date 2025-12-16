@@ -91,50 +91,20 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTime).Seconds())
 			}
 
-			// Step 2: Then trigger DAH pruner and WAIT for it to complete
+			// Step 2: Call DAH pruner directly (synchronous)
 			// DAH pruner deletes transactions marked for deletion at or before the current height
 			if s.prunerService != nil {
 				s.logger.Infof("Starting pruner for height %d: DAH pruner", latestHeight)
 				startTime = time.Now()
-				doneCh := make(chan string, 1)
 
-				if err := s.prunerService.UpdateBlockHeight(latestHeight, doneCh); err != nil {
-					s.logger.Errorf("Pruner service error updating block height %d: %v", latestHeight, err)
+				recordsProcessed, err := s.prunerService.Prune(ctx, latestHeight)
+				if err != nil {
+					s.logger.Errorf("Pruner failed for height %d: %v", latestHeight, err)
 					prunerErrors.WithLabelValues("dah_pruner").Inc()
-					continue
-				}
-
-				// Wait for pruner to complete with timeout
-				prunerTimeout := s.settings.Pruner.JobTimeout
-				timeoutTimer := time.NewTimer(prunerTimeout)
-				defer timeoutTimer.Stop()
-
-				select {
-				case status := <-doneCh:
-					if status != "completed" {
-						s.logger.Warnf("Pruner for height %d finished with status: %s", latestHeight, status)
-						prunerErrors.WithLabelValues("dah_pruner").Inc()
-					} else {
-						s.logger.Infof("Pruner for height %d completed successfully", latestHeight)
-						prunerDuration.WithLabelValues("dah_pruner").Observe(time.Since(startTime).Seconds())
-						prunerProcessed.Inc()
-					}
-				case <-timeoutTimer.C:
-					s.logger.Infof("Pruner for height %d exceeded coordinator timeout of %v - pruner continues in background, re-queuing immediately", latestHeight, prunerTimeout)
-					// Note: This is not an error - the pruner job continues processing in the background.
-					// The coordinator re-queues immediately to check again.
-					// Very large pruners may take longer than the timeout and require multiple iterations.
-
-					// Immediately re-queue to check again (non-blocking)
-					select {
-					case s.prunerCh <- latestHeight:
-						s.logger.Debugf("Re-queued pruner for height %d after timeout", latestHeight)
-					default:
-						// Channel full, will be retried when notifications trigger again
-						s.logger.Debugf("Pruner channel full, will retry on next notification")
-					}
-				case <-ctx.Done():
-					return
+				} else {
+					s.logger.Infof("Pruner for height %d completed successfully, pruned %d records", latestHeight, recordsProcessed)
+					prunerDuration.WithLabelValues("dah_pruner").Observe(time.Since(startTime).Seconds())
+					prunerProcessed.Inc()
 				}
 			}
 

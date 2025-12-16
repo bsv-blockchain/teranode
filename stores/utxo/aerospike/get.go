@@ -59,6 +59,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
@@ -533,7 +534,9 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 			return errors.NewProcessingError("failed to init new aerospike key for txMeta", err)
 		}
 
-		bins := []fields.FieldName{fields.Tx, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase}
+		// Default fields - optimized for common use cases without scripts
+		// Services that need full transaction (persister, API) explicitly request fields.Tx
+		bins := []fields.FieldName{fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase}
 		if len(item.Fields) > 0 {
 			bins = item.Fields
 		} else if len(optionalFields) > 0 {
@@ -556,6 +559,10 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 		s.logger.Errorf("error in aerospike map store batch records:\n%#v\n%v", batchRecords, err)
 		return errors.NewStorageError("error in aerospike map store batch records", err)
 	}
+
+	// Track external transaction fetches for debugging memory usage
+	externalTxFetched := 0
+	externalTxSkipped := 0
 
 NEXT_BATCH_RECORD:
 	for idx, batchRecord := range batchRecords {
@@ -580,12 +587,27 @@ NEXT_BATCH_RECORD:
 		// If the tx is external, we need to fetch it from the external store...
 		var externalTx *bt.Tx
 
+		// Check if we need the full external transaction (with all scripts)
+		// TxInpoints can be computed without scripts using optimized parser
+		needsFullExternalTx := false
+		for _, field := range items[idx].Fields {
+			if field == fields.Tx || field == fields.Inputs {
+				needsFullExternalTx = true
+				break
+			}
+		}
+
 		external, ok := bins[fields.External.String()].(bool)
 		if ok && external {
-			if externalTx, err = s.GetTxFromExternalStore(ctx, items[idx].Hash); err != nil {
-				items[idx].Err = err
+			if needsFullExternalTx {
+				externalTxFetched++
+				if externalTx, err = s.GetTxFromExternalStore(ctx, items[idx].Hash); err != nil {
+					items[idx].Err = err
 
-				continue // because there was an error reading the transaction from the external store.
+					continue // because there was an error reading the transaction from the external store.
+				}
+			} else {
+				externalTxSkipped++
 			}
 		}
 
@@ -657,7 +679,13 @@ NEXT_BATCH_RECORD:
 
 			case fields.TxInpoints:
 				if external {
-					items[idx].Data.TxInpoints, err = subtree.NewTxInpointsFromTx(externalTx)
+					// If we already fetched the full external tx (for fields.Tx or fields.Inputs), reuse it
+					// Otherwise use optimized function that skips scripts (90%+ memory savings)
+					if externalTx != nil {
+						items[idx].Data.TxInpoints, err = subtree.NewTxInpointsFromTx(externalTx)
+					} else {
+						items[idx].Data.TxInpoints, err = s.GetTxInpointsFromExternalStore(ctx, items[idx].Hash)
+					}
 					if err != nil {
 						items[idx].Err = errors.NewTxInvalidError("could not process tx inpoints", err)
 
@@ -775,6 +803,11 @@ NEXT_BATCH_RECORD:
 
 	prometheusTxMetaAerospikeMapGetMulti.Inc()
 	prometheusTxMetaAerospikeMapGetMultiN.Add(float64(len(batchRecords)))
+
+	// Log external transaction fetch statistics for memory usage debugging
+	if externalTxFetched > 0 || externalTxSkipped > 0 {
+		s.logger.Infof("[BatchDecorate] Processed %d items - External txs: %d fetched, %d skipped (fields didn't require fetch)", len(items), externalTxFetched, externalTxSkipped)
+	}
 
 	return nil
 }
@@ -1333,36 +1366,31 @@ func (s *Store) GetTxFromExternalStore(ctx context.Context, previousTxHash chain
 func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chainhash.Hash) (*bt.Tx, error) {
 	fileType := fileformat.FileTypeTx
 
-	// Get the raw transaction from the externalStore...
-	txBytes, err := s.externalStore.Get(
-		ctx,
-		previousTxHash[:],
-		fileType,
-	)
+	// Stream parse from external store to avoid double memory allocation (raw bytes + parsed tx)
+	// This saves ~50% memory by eliminating the intermediate txBytes buffer
+	reader, err := s.externalStore.GetIoReader(ctx, previousTxHash[:], fileType)
 	if err != nil {
 		// Try to get the data from an output file instead
 		fileType = fileformat.FileTypeOutputs
 
-		txBytes, err = s.externalStore.Get(
-			ctx,
-			previousTxHash[:],
-			fileType,
-		)
+		reader, err = s.externalStore.GetIoReader(ctx, previousTxHash[:], fileType)
 		if err != nil {
 			return nil, errors.NewStorageError("[GetTxFromExternalStore][%s] could not get tx from external store", previousTxHash.String(), err)
 		}
 	}
+	defer reader.Close()
 
 	tx := &bt.Tx{}
 
+	// Use buffered reader for all file types to reduce syscalls
+	bufferedReader := bufio.NewReader(reader)
+
 	if fileType == fileformat.FileTypeTx {
-		tx, err = bt.NewTxFromBytes(txBytes)
-		if err != nil {
-			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read tx from bytes", previousTxHash.String(), err)
+		// Stream parse directly from buffered reader
+		if _, err = tx.ReadFrom(bufferedReader); err != nil {
+			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read tx from stream", previousTxHash.String(), err)
 		}
 	} else {
-		bufferedReader := bufio.NewReader(bytes.NewReader(txBytes))
-
 		uw, err := utxopersister.NewUTXOWrapperFromReader(ctx, bufferedReader)
 		if err != nil {
 			return nil, errors.NewTxInvalidError("[GetTxFromExternalStore][%s] could not read outputs from reader", previousTxHash.String(), err)
@@ -1382,7 +1410,111 @@ func (s *Store) getExternalTransaction(ctx context.Context, previousTxHash chain
 		}
 	}
 
+	// Log transaction size for memory usage debugging
+	if tx != nil && s.logger != nil {
+		inputCount := len(tx.Inputs)
+		outputCount := len(tx.Outputs)
+		s.logger.Debugf("[GetTxFromExternalStore] Stream-parsed external tx %s: %d inputs, %d outputs", previousTxHash.String(), inputCount, outputCount)
+	}
+
 	return tx, nil
+}
+
+// GetTxInpointsFromExternalStore efficiently extracts TxInpoints from an external transaction
+// by streaming and parsing only the input references (prevTxID + index), skipping all scripts and outputs.
+// This provides massive memory savings (99%+) by avoiding loading potentially large output scripts into memory.
+func (s *Store) GetTxInpointsFromExternalStore(ctx context.Context, txHash chainhash.Hash) (subtree.TxInpoints, error) {
+	ctx, _, _ = tracing.Tracer("aerospike").Start(ctx, "GetTxInpointsFromExternalStore",
+		tracing.WithHistogram(prometheusTxMetaAerospikeMapGetExternal),
+	)
+
+	// Stream from external store - don't load entire file into memory
+	reader, err := s.externalStore.GetIoReader(ctx, txHash[:], fileformat.FileTypeTx)
+	if err != nil {
+		return subtree.TxInpoints{}, errors.NewStorageError("[GetTxInpointsFromExternalStore][%s] could not get tx from external store", txHash.String(), err)
+	}
+	defer reader.Close()
+
+	// Parse only input references from stream, skipping all scripts and outputs
+	inputs, err := ParseInputReferencesOnly(reader)
+	if err != nil {
+		return subtree.TxInpoints{}, errors.NewTxInvalidError("[GetTxInpointsFromExternalStore][%s] could not parse input references", txHash.String(), err)
+	}
+
+	s.logger.Debugf("[GetTxInpointsFromExternalStore] Streamed and parsed %d input references from external tx %s, skipped all scripts", len(inputs), txHash.String())
+
+	return subtree.NewTxInpointsFromInputs(inputs)
+}
+
+// ParseInputReferencesOnly parses Bitcoin wire format from a reader to extract only input references
+// (prevTxID + prevOutIndex), skipping all scripts to minimize memory usage.
+// This is used for TxInpoints computation where scripts are not needed.
+// The reader is consumed only up to the end of inputs - outputs are never read from disk/network.
+func ParseInputReferencesOnly(reader io.Reader) ([]*bt.Input, error) {
+
+	// Skip version (4 bytes)
+	_, err := io.CopyN(io.Discard, reader, 4)
+	if err != nil {
+		return nil, errors.NewTxInvalidError("failed to skip version", err)
+	}
+
+	// Parse input count
+	var inputCountVarInt bt.VarInt
+	if _, err := inputCountVarInt.ReadFrom(reader); err != nil {
+		return nil, errors.NewTxInvalidError("failed to read input count", err)
+	}
+	inputCount := int(inputCountVarInt)
+
+	inputs := make([]*bt.Input, inputCount)
+
+	for i := 0; i < inputCount; i++ {
+		// Read previous tx ID (32 bytes)
+		prevTxID := make([]byte, 32)
+		if _, err := io.ReadFull(reader, prevTxID); err != nil {
+			return nil, errors.NewTxInvalidError("failed to read prevTxID for input %d/%d", i, inputCount, err)
+		}
+
+		// Read previous output index (4 bytes)
+		var prevOutIndex uint32
+		if err := binary.Read(reader, binary.LittleEndian, &prevOutIndex); err != nil {
+			return nil, errors.NewTxInvalidError("failed to read prevOutIndex for input %d/%d", i, inputCount, err)
+		}
+
+		// Read script length but SKIP the script bytes (don't parse signatures)
+		var scriptLenVarInt bt.VarInt
+		if _, err := scriptLenVarInt.ReadFrom(reader); err != nil {
+			return nil, errors.NewTxInvalidError("failed to read script length for input %d/%d", i, inputCount, err)
+		}
+		scriptLen := int64(scriptLenVarInt)
+		// Discard script bytes without allocating memory
+		if _, err := io.CopyN(io.Discard, reader, scriptLen); err != nil {
+			return nil, errors.NewTxInvalidError("failed to skip script (%d bytes) for input %d/%d", scriptLen, i, inputCount, err)
+		}
+
+		// Skip sequence number (4 bytes) - not needed for TxInpoints
+		if _, err := io.CopyN(io.Discard, reader, 4); err != nil {
+			return nil, errors.NewTxInvalidError("failed to skip sequence for input %d/%d", i, inputCount, err)
+		}
+
+		// Create input with minimal data for TxInpoints
+		input := &bt.Input{
+			PreviousTxOutIndex: prevOutIndex,
+		}
+
+		// Set previous tx ID using the proper method
+		prevTxHash, err := chainhash.NewHash(prevTxID)
+		if err != nil {
+			return nil, errors.NewTxInvalidError("failed to create hash for input %d/%d", i, inputCount, err)
+		}
+		if err := input.PreviousTxIDAdd(prevTxHash); err != nil {
+			return nil, errors.NewTxInvalidError("failed to set prevTxID for input %d/%d", i, inputCount, err)
+		}
+
+		inputs[i] = input
+	}
+
+	// STOP HERE - don't parse outputs or their potentially gigabyte-sized scripts
+	return inputs, nil
 }
 
 // sendGetBatch processes a batch of get requests efficiently

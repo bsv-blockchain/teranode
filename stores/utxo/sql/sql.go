@@ -1016,42 +1016,51 @@ func (s *Store) spendWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint3
 }
 
 func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) error {
-	// doing 2 updates is the only thing that works in both postgres and sqlite
-	qSetDAH := `
+	if s.settings.GetUtxoStoreBlockHeightRetention() == 0 {
+		return nil
+	}
+
+	// check whether the transaction has any unspent outputs
+	qUnspent := `
+		SELECT count(o.idx), t.conflicting
+		FROM transactions t
+		LEFT JOIN outputs o ON t.id = o.transaction_id
+		   AND o.spending_data IS NULL
+		WHERE t.id = $1
+		GROUP BY t.id
+	`
+
+	var (
+		unspent              int
+		conflicting          bool
+		deleteAtHeightOrNull sql.NullInt64
+	)
+
+	if err := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting); err != nil {
+		return errors.NewStorageError("[setDAH] error checking for unspent outputs for %d", transactionID, err)
+	}
+
+	if unspent == 0 || conflicting {
+		// Transaction is fully spent or conflicting
+		// Set DAH at normal retention - cleanup service will verify child stability (288 blocks)
+		// before actually deleting, providing the real safety guarantee
+		conservativeRetention := s.settings.GetUtxoStoreBlockHeightRetention()
+		_ = deleteAtHeightOrNull.Scan(int64(s.blockHeight.Load() + conservativeRetention))
+
+		// Note: We do NOT track spending children separately
+		// They are derived from outputs.spending_data when needed by cleanup
+		// This ensures we verify ALL children (not just one) before parent deletion
+	}
+
+	// Update delete_at_height
+	qUpdate := `
 		UPDATE transactions
 		SET delete_at_height = $2
 		WHERE id = $1
 	`
 
-	if s.settings.GetUtxoStoreBlockHeightRetention() > 0 {
-		// check whether the transaction has any unspent outputs
-		qUnspent := `
-			SELECT count(o.idx), t.conflicting
-			FROM transactions t
-			LEFT JOIN outputs o ON t.id = o.transaction_id
-			   AND o.spending_data IS NULL
-			WHERE t.id = $1
-			GROUP BY t.id
-		`
-
-		var (
-			unspent              int
-			conflicting          bool
-			deleteAtHeightOrNull sql.NullInt64
-		)
-
-		if err := txn.QueryRowContext(ctx, qUnspent, transactionID).Scan(&unspent, &conflicting); err != nil {
-			return errors.NewStorageError("[setDAH] error checking for unspent outputs for %d", transactionID, err)
-		}
-
-		if unspent == 0 || conflicting {
-			// Now mark the transaction as tombstoned if there are no more unspent outputs
-			_ = deleteAtHeightOrNull.Scan(int64(s.blockHeight.Load() + s.settings.GetUtxoStoreBlockHeightRetention()))
-		}
-
-		if _, err := txn.ExecContext(ctx, qSetDAH, transactionID, deleteAtHeightOrNull); err != nil {
-			return errors.NewStorageError("[setDAH] error setting DAH for %d", transactionID, err)
-		}
+	if _, err := txn.ExecContext(ctx, qUpdate, transactionID, deleteAtHeightOrNull); err != nil {
+		return errors.NewStorageError("[setDAH] error setting DAH for %d", transactionID, err)
 	}
 
 	return nil

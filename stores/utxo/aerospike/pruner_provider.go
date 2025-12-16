@@ -1,11 +1,10 @@
 package aerospike
 
 import (
-	"context"
 	"sync"
 
-	"github.com/bsv-blockchain/teranode/stores/pruner"
 	aeropruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 )
 
 // Ensure Store implements the pruner.PrunerProvider interface
@@ -23,17 +22,6 @@ var (
 func ResetPrunerServiceForTests() {
 	prunerServiceMutex.Lock()
 	defer prunerServiceMutex.Unlock()
-
-	// Stop the existing service if it exists
-	if prunerServiceInstance != nil {
-		// Try to stop it gracefully if it's an aerospike pruner service
-		if aerospikeService, ok := prunerServiceInstance.(*aeropruner.Service); ok {
-			if err := aerospikeService.Stop(context.Background()); err != nil {
-				// Log but don't fail - tests need to continue
-				_ = err
-			}
-		}
-	}
 
 	prunerServiceInstance = nil
 	prunerServiceError = nil
@@ -65,7 +53,6 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 		Namespace:     s.namespace,
 		Set:           s.setName,
 		IndexWaiter:   s,
-		WorkerCount:   s.settings.Pruner.WorkerCount,
 	}
 
 	// Create a new pruner service
