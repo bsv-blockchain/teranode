@@ -463,13 +463,8 @@ For large transactions stored externally:
     ├── pruner_api.pb.go        # Generated protobuf code
     └── pruner_api_grpc.pb.go   # Generated gRPC code
 
-/stores/pruner/                 # Generic store-agnostic components
-├── interfaces.go               # Service and provider interfaces
-├── job.go                      # Job definition and states
-├── job_processor.go            # Job queue and worker management
-├── job_processor_test.go
-└── example/
-    └── example_service.go      # Example implementation
+/stores/utxo/pruner/            # UTXO-specific pruning interfaces
+└── interfaces.go               # Service and provider interfaces
 
 /stores/utxo/aerospike/pruner/  # Aerospike-specific implementation
 ├── pruner_service.go           # Aerospike pruner service (900+ lines)
@@ -564,7 +559,7 @@ startPruner.docker.host.teranode2 = false
 ### Code Reference
 
 - GitHub: [/services/pruner/](https://github.com/bsv-blockchain/teranode/tree/main/services/pruner)
-- Store-Level: [/stores/pruner/](https://github.com/bsv-blockchain/teranode/tree/main/stores/pruner)
+- UTXO Interfaces: [/stores/utxo/pruner/](https://github.com/bsv-blockchain/teranode/tree/main/stores/utxo/pruner)
 - Aerospike: [/stores/utxo/aerospike/pruner/](https://github.com/bsv-blockchain/teranode/tree/main/stores/utxo/aerospike/pruner)
 - SQL: [/stores/utxo/sql/pruner/](https://github.com/bsv-blockchain/teranode/tree/main/stores/utxo/sql/pruner)
 

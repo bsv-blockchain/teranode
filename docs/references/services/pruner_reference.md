@@ -161,7 +161,7 @@ utxo_cleanup_batch_duration_seconds 0.123
 
 ### Service Interface
 
-Located in `/stores/pruner/interfaces.go`:
+Located in `/stores/utxo/pruner/interfaces.go`:
 
 ```go
 type Service interface {

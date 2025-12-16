@@ -969,8 +969,14 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	}
 
 	// Stream the body using io.Copy with io.TeeReader so the file can use ReadFrom fast path while also hashing.
-	if _, err = io.Copy(file, io.TeeReader(reader, hasher)); err != nil {
+	bytesWritten, err := io.Copy(file, io.TeeReader(reader, hasher))
+	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write data to file", filename, err)
+	}
+
+	// Validate that actual data was written from the reader
+	if bytesWritten == 0 {
+		return errors.NewStorageError("[File][SetFromReader] [%s] reader provided zero bytes of data", filename)
 	}
 
 	// rename the file to remove the .tmp extension
@@ -1230,7 +1236,9 @@ func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.
 	}
 
 	if err := s.validateFileHeader(f, fileName, fileType); err != nil {
-		f.Close()
+		if closeErr := f.Close(); closeErr != nil {
+			s.logger.Warnf("[File][GetIoReader] failed to close file after header validation error: %v", closeErr)
+		}
 		return nil, err
 	}
 

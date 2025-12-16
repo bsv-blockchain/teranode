@@ -169,6 +169,17 @@ type AssetSettings struct {
 	HTTPPort                int
 	SignHTTPResponses       bool
 	EchoDebug               bool
+
+	// Concurrency limits for repository methods (0 = unlimited)
+	ConcurrencyGetTransaction         int
+	ConcurrencyGetTransactionMeta     int
+	ConcurrencyGetSubtreeData         int
+	ConcurrencyGetSubtreeDataReader   int
+	ConcurrencyGetSubtreeTransactions int
+	ConcurrencyGetSubtreeExists       int
+	ConcurrencyGetSubtreeHead         int
+	ConcurrencyGetUtxo                int
+	ConcurrencyGetLegacyBlockReader   int
 }
 
 type BlockSettings struct {
@@ -381,12 +392,6 @@ type UtxoStoreSettings struct {
 	MaxMinedBatchSize                 int
 	BlockHeightRetentionAdjustment    int32 // Adjustment to GlobalBlockHeightRetention (can be positive or negative)
 	DisableDAHCleaner                 bool  // Disable the DAH cleaner process completely
-	// Pruner-specific settings
-	PrunerParentUpdateBatcherSize           int // Batch size for parent record updates during pruning
-	PrunerParentUpdateBatcherDurationMillis int // Batch duration for parent record updates during pruning (ms)
-	PrunerDeleteBatcherSize                 int // Batch size for record deletions during pruning
-	PrunerDeleteBatcherDurationMillis       int // Batch duration for record deletions during pruning (ms)
-	PrunerMaxConcurrentOperations           int // Maximum concurrent operations during pruning (0 = use connection queue size)
 }
 
 type P2PSettings struct {
@@ -489,10 +494,13 @@ type CoinbaseSettings struct {
 }
 
 type PrunerSettings struct {
-	GRPCListenAddress string
-	GRPCAddress       string
-	WorkerCount       int
-	JobTimeout        time.Duration // Timeout for waiting for pruner job completion
+	GRPCListenAddress          string
+	GRPCAddress                string
+	UTXODefensiveEnabled       bool          // Enable defensive checks before deleting UTXO transactions (verify children are mined > BlockHeightRetention blocks ago)
+	UTXODefensiveBatchReadSize int           // Batch size for reading child transactions during defensive UTXO pruning (default: 10000)
+	UTXOChunkSize              int           // Number of records to process in each chunk before batch flushing (default: 1000)
+	UTXOChunkGroupLimit        int           // Maximum parallel chunk processing during UTXO pruning (default: 10)
+	UTXOProgressLogInterval    time.Duration // Interval for logging progress during UTXO pruning (default: 30s)
 }
 
 type SubtreeValidationSettings struct {
@@ -522,6 +530,9 @@ type SubtreeValidationSettings struct {
 	// Concurrency limits
 	CheckBlockSubtreesConcurrency int           // Concurrency limit for CheckBlockSubtrees operations (default: 32)
 	PauseTimeout                  time.Duration // Maximum duration for subtree processing pauses during block validation (default: 5 minutes)
+	TxBatchSize                   int           // Transaction batch size for CheckBlockSubtrees (0 = no batching, default: 1000000)
+	// Level algorithm optimization
+	UseOrderedLevelAlgorithm bool // When true, uses optimized O(V*I) algorithm assuming transactions are ordered (default: true)
 }
 
 type LegacySettings struct {

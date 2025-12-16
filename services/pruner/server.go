@@ -24,8 +24,8 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/pruner/pruner_api"
 	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/stores/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/health"
@@ -133,7 +133,6 @@ func (s *Server) Init(ctx context.Context) error {
 								case s.prunerCh <- height32:
 									s.logger.Debugf("Queued pruning for height %d from BlockPersisted notification", height32)
 								default:
-									s.logger.Debugf("Pruning already in progress for height %d", height32)
 								}
 							}
 						}
@@ -145,7 +144,6 @@ func (s *Server) Init(ctx context.Context) error {
 				persistedHeight := s.lastPersistedHeight.Load()
 				if persistedHeight > 0 {
 					// Block persister is running - BlockPersisted notifications will handle pruning
-					s.logger.Debugf("Block notification received but block persister is active (persisted height: %d), skipping", persistedHeight)
 					continue
 				}
 
@@ -186,7 +184,6 @@ func (s *Server) Init(ctx context.Context) error {
 					case s.prunerCh <- state.CurrentHeight:
 						s.logger.Debugf("Queued pruning for height %d from Block notification (mined_set=true)", state.CurrentHeight)
 					default:
-						s.logger.Debugf("Pruning already in progress for height %d", state.CurrentHeight)
 					}
 				}
 			}

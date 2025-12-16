@@ -1006,7 +1006,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 	missedMu := sync.Mutex{}
 
 	// process the transactions in parallel, based on the number of parents in the list
-	maxLevel, txsPerLevel, err := u.prepareTxsPerLevel(ctx, missingTxs)
+	maxLevel, txsPerLevel, err := u.selectPrepareTxsPerLevel(ctx, missingTxs)
 	if err != nil {
 		return errors.NewProcessingError("[processMissingTransactions][%s] failed to prepare transactions per level: %v", subtreeHash.String(), err)
 	}
@@ -1294,6 +1294,15 @@ type txMapWrapper struct {
 	childLevelInBlock uint32
 }
 
+// selectPrepareTxsPerLevel selects and executes the appropriate level preparation algorithm
+// based on the UseOrderedLevelAlgorithm configuration setting.
+func (u *Server) selectPrepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, [][]missingTx, error) {
+	if u.settings.SubtreeValidation.UseOrderedLevelAlgorithm {
+		return u.prepareTxsPerLevelOrdered(ctx, transactions)
+	}
+	return u.prepareTxsPerLevel(ctx, transactions)
+}
+
 // prepareTxsPerLevel organizes transactions by their dependency level for ordered processing.
 //
 // This method implements a topological sorting algorithm to organize transactions based on their
@@ -1464,6 +1473,122 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 	}
 
 	return maxLevel, blocksPerLevelSlice, nil
+}
+
+// prepareTxsPerLevelOrdered is an optimized version of prepareTxsPerLevel that assumes transactions
+// are already in topological order (parents before children), as guaranteed by the Bitcoin protocol.
+//
+// ORDERING GUARANTEE: The Bitcoin protocol mandates that transactions within a block must be ordered
+// such that parent transactions appear before their children. This is enforced during block construction
+// and validated during block processing. All callers of this function provide transactions from:
+//   - Block.Transactions() - guaranteed ordered by Bitcoin protocol
+//   - Subtree.Txs - maintains block ordering when constructed
+//   - processTransactionsInLevels - preserves original block/subtree ordering via indexed iteration
+//
+// This optimization reduces complexity from O(V*E + V²) to O(V*I) where:
+//   - V = number of transactions
+//   - E = number of dependencies
+//   - I = average inputs per transaction
+//
+// SINGLE-PASS OPTIMIZATION: Calculates levels AND groups transactions simultaneously in ONE iteration.
+// Eliminates: second pass, redundant hash calculations, and extra map lookups.
+// Optimized for 1M+ transaction batches.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - transactions: List of transactions in topological order (parents before children)
+//
+// Returns:
+//   - uint32: The maximum dependency level found
+//   - [][]missingTx: Slice of dependency levels containing transactions at each level
+//   - error: Any error encountered during processing
+func (u *Server) prepareTxsPerLevelOrdered(ctx context.Context, transactions []missingTx) (uint32, [][]missingTx, error) {
+	_, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "prepareTxsPerLevelOrdered",
+		tracing.WithDebugLogMessage(u.logger, "[prepareTxsPerLevelOrdered] preparing %d transactions per level (optimized)", len(transactions)),
+	)
+	defer deferFn()
+
+	// GC OPTIMIZATION: Use index-based approach to minimize heap allocations
+	// Map stores hash -> transaction index (int is smaller than uint32 + reduces map overhead)
+	// Levels stored in slice for fast array access instead of map lookups
+	txIndex := make(map[chainhash.Hash]int, len(transactions))
+	levels := make([]uint32, len(transactions))
+
+	// Pre-allocate result slices with reasonable initial capacity
+	// Most transactions are level 0 (no parents in block), so optimize for that case
+	txsPerLevel := make([][]missingTx, 1, 16)                  // Start with level 0, capacity for 16 levels
+	txsPerLevel[0] = make([]missingTx, 0, len(transactions)/2) // Level 0: assume ~50% of txs
+
+	maxLevel := uint32(0)
+	validTxCount := 0 // Track valid transactions for index mapping
+
+	// SINGLE PASS: calculate levels AND append to result slices simultaneously
+	for i, mTx := range transactions {
+		if mTx.tx == nil || mTx.tx.IsCoinbase() {
+			continue
+		}
+
+		// GC OPTIMIZATION: Get hash pointer once and reuse it
+		// This avoids copying the 32-byte hash multiple times
+		txHashPtr := mTx.tx.TxIDChainHash()
+		txHash := *txHashPtr // Single dereference for map operations
+
+		maxParentLevel := uint32(0)
+		hasParentInBlock := false
+
+		// Check each input to find the maximum parent level
+		// GC OPTIMIZATION: Look up parent level in array instead of map
+		for _, input := range mTx.tx.Inputs {
+			parentHashPtr := input.PreviousTxIDChainHash()
+			parentHash := *parentHashPtr // Single dereference
+
+			// If parent exists in txIndex, it's part of this subtree/block
+			if parentIdx, exists := txIndex[parentHash]; exists {
+				hasParentInBlock = true
+				// Array lookup is faster and more GC-friendly than map lookup
+				parentLevel := levels[parentIdx]
+				if parentLevel > maxParentLevel {
+					maxParentLevel = parentLevel
+				}
+			}
+		}
+
+		// Calculate this transaction's level
+		level := uint32(0)
+		if hasParentInBlock {
+			level = maxParentLevel + 1
+		}
+
+		// Store index mapping for children to reference
+		// GC OPTIMIZATION: Store index (int) in map, level in array
+		txIndex[txHash] = i
+		levels[i] = level
+
+		// Track max level and grow result slice if needed
+		if level > maxLevel {
+			maxLevel = level
+			// Grow txsPerLevel slice to accommodate new level
+			for uint32(len(txsPerLevel)) <= level {
+				// GC OPTIMIZATION: Use more realistic capacity hints based on distribution
+				// Level 0 is large, higher levels are progressively smaller
+				capacity := 64
+				if level == maxLevel && validTxCount > 1000 {
+					// For new max level, estimate based on transaction count
+					capacity = validTxCount / 100 // Heuristic: ~1% of txs at higher levels
+					if capacity < 64 {
+						capacity = 64
+					}
+				}
+				txsPerLevel = append(txsPerLevel, make([]missingTx, 0, capacity))
+			}
+		}
+
+		// Append directly to result slice (NO second pass!)
+		txsPerLevel[level] = append(txsPerLevel[level], mTx)
+		validTxCount++
+	}
+
+	return maxLevel, txsPerLevel, nil
 }
 
 // getMissingTransactionsFromPeer retrieves missing transactions from either the network or local store.
