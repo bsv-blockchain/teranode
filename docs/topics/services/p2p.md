@@ -18,12 +18,13 @@
         - [2.7.2. Ban Operations](#272-ban-operations)
         - [2.7.3. Ban Event Handling](#273-ban-event-handling)
         - [2.7.4. Configuration](#274-configuration)
-3. [Technology](#3-technology)
-4. [Data Model](#4-data-model)
-5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
-6. [How to run](#6-how-to-run)
-7. [Configuration options (settings flags)](#7-configuration-options-settings-flags)
-8. [Other Resources](#8-other-resources)
+3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
+4. [Technology](#4-technology)
+5. [Data Model](#5-data-model)
+6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
+7. [How to run](#7-how-to-run)
+8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
+9. [Other Resources](#9-other-resources)
 
 ## 1. Description
 
@@ -50,8 +51,8 @@ The p2p peers are part of a private network. This private network is managed by 
     - The server uses Kademlia for peer discovery, implementing both standard and private DHT (Distributed Hash Table) modes based on configuration.
     - The server uses GossipSub for PubSub messaging, with automated topic subscription and management.
     - Peers identify themselves using a user agent string in format `teranode/bitcoin/{version}` where the version is dynamically determined at build time from Git tags (e.g., "v1.2.3") or generated as a pseudo-version (e.g., "v0.0.0-20250731141601-18714b9").
-    - `handleBlockchainMessage`, `handleBestBlockTopic`, `handleBlockTopic`, `handleSubtreeTopic`, and `handleMiningOnTopic` are functions to handle incoming messages for different topics.
-    - `sendBestBlockMessage` and `sendPeerMessage` are used for sending messages to peers in the network.
+    - `Server.go:handleBlockchainMessage()`, `Server.go:handleBestBlockTopic()`, `Server.go:handleBlockTopic()`, `Server.go:handleSubtreeTopic()`, and `Server.go:handleMiningOnTopic()` are functions to handle incoming messages for different topics.
+    - `Server.go:sendBestBlockMessage()` and `Server.go:sendPeerMessage()` are used for sending messages to peers in the network.
     - The implementation includes error handling and retry mechanisms for peer connections to enhance network resilience.
 
 4. **Peer Discovery and Connection**:
@@ -63,7 +64,7 @@ The p2p peers are part of a private network. This private network is managed by 
 5. **HTTP Server and WebSockets**:
 
     - An HTTP server is started using `echo`, a Go web framework, providing routes for health checks and WebSocket connections.
-    - `HandleWebSocket` is used to handle incoming WebSocket connections and manage the communication with connected clients.
+    - `HandleWebsocket.go:HandleWebSocket()` is used to handle incoming WebSocket connections and manage the communication with connected clients.
 
 6. **Subscription Listeners**:
 
@@ -107,11 +108,11 @@ The startup process of the node involves the `main.go` file calling the `p2p.New
 
 1. **Private Key Management**:
 
-    - The server tries to read an existing private key from the blockchain store through the `readPrivateKey()` function:
+    - The server tries to read an existing private key from the blockchain store through the `Server.go:readPrivateKey()` function:
 
         - `readPrivateKey` calls `blockchainClient.GetState(ctx, "p2p.privateKey")` to retrieve the serialized key data
         - If found, it deserializes the key using `crypto.UnmarshalPrivateKey()`
-    - If no key is specified in the configuration and no key exists in the blockchain store, it automatically generates and stores a new one using the `generateAndStorePrivateKey()` function:
+    - If no key is specified in the configuration and no key exists in the blockchain store, it automatically generates and stores a new one using the `Server.go:generateAndStorePrivateKey()` function:
 
         - `generateAndStorePrivateKey` creates a new Ed25519 key pair using `crypto.GenerateEd25519Key()`
         - It serializes the private key with `crypto.MarshalPrivateKey()`
@@ -212,17 +213,17 @@ In the previous section, the P2P Service created a `P2PNode as part of the initi
 
 3. **Advertising and Searching for Peers**:
 
-    - The node then advertises itself for the configured topics and looks for peers associated with these topics. This is conducted through the `discoverPeers` method, which iterates over the topic names and uses the routing discovery to advertise and find peers interested in the same topics.
+    - The node then advertises itself for the configured topics and looks for peers associated with these topics. This is conducted through the `Server.go:discoverPeers()` method, which iterates over the topic names and uses the routing discovery to advertise and find peers interested in the same topics.
 
 4. **Connecting to Discovered and Static Peers**:
 
-    - The `discoverPeers` method includes sophisticated filtering and error handling mechanisms:
+    - The `Server.go:discoverPeers()` method includes sophisticated filtering and error handling mechanisms:
 
         - `shouldSkipPeer`: Determines if connection attempts should be skipped based on various criteria
         - `shouldSkipBasedOnErrors`: Manages retry logic for previously failed connections
         - `shouldSkipNoGoodAddresses`: Special handling for peers with address resolution issues
 
-    - The `connectToStaticPeers` method runs in a dedicated goroutine to periodically attempt connections with a predefined list of peers (static peers), ensuring critical network infrastructure remains connected even after temporary failures.
+    - The `Server.go:connectToStaticPeers()` method runs in a dedicated goroutine to periodically attempt connections with a predefined list of peers (static peers), ensuring critical network infrastructure remains connected even after temporary failures.
     - Connection errors are carefully tracked to avoid network congestion from repeated failed connection attempts.
 
 5. **Integration with P2P Network**:
@@ -303,17 +304,17 @@ All notifications collected from the Block and Validator listeners are sent over
 
 - WebSocket Request Handling:
 
-  - An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.
-  - Data is sent over the WebSocket, using its dedicated client channel.
-  - If there's an error in sending data, the channel is removed from the `clientChannels`.
+    - An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.
+    - Data is sent over the WebSocket, using its dedicated client channel.
+    - If there's an error in sending data, the channel is removed from the `clientChannels`.
 
 - The server listens for various types of events in a concurrent process:
 
-  - The server tracks all active client channels (`clientChannels`).
-  - When a new client connects, it is added to the `clientChannels`.
-  - If a client disconnects, it is removed from `clientChannels`.
-  - Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.
-  - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
+    - The server tracks all active client channels (`clientChannels`).
+    - When a new client connects, it is added to the `clientChannels`.
+    - If a client disconnects, it is removed from `clientChannels`.
+    - Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.
+    - When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.
 
 As a sequence:
 
@@ -362,11 +363,128 @@ When a ban event occurs:
 
 Ban-related settings in the configuration:
 
-- `banlist_db`: Database connection string for ban storage
-- `ban_default_duration`: Default duration for bans (24 hours if not specified)
-- `ban_max_entries`: Maximum number of banned entries to maintain
+| Setting | Type | Default | Description | Impact |
+|---------|------|---------|-------------|--------|
+| `banlist_db` | string | "" | Database connection string for ban storage | Required for ban list persistence across restarts |
+| `ban_default_duration` | duration | 24h | Default duration for bans | Controls how long banned peers are excluded from the network |
+| `ban_max_entries` | int | 1000 | Maximum number of banned entries to maintain | Prevents unbounded memory growth in ban list |
 
-## 3. Technology
+## 3. gRPC Protobuf Definitions
+
+The P2P Service exposes a gRPC API for administrative operations and peer management. The protobuf definitions can be found in `services/p2p/p2p_api/p2p_api.proto`.
+
+### PeerService
+
+The PeerService provides RPC methods for managing peer connections and ban lists:
+
+**Peer Information:**
+
+- **`GetPeers()`**: Retrieves information about all connected peers
+
+    - Returns: List of `Peer` objects containing connection details, statistics, and metadata
+    - Use case: Monitoring active peer connections and network health
+
+**Ban Management:**
+
+- **`BanPeer(addr, until)`**: Bans a peer by IP address or subnet
+
+    - Parameters:
+
+        - `addr` (string): IP address or subnet in CIDR notation
+        - `until` (int64): Unix timestamp when ban expires
+    - Returns: Success status
+    - Use case: Manually banning misbehaving peers
+
+- **`UnbanPeer(addr)`**: Removes a ban from a peer address
+
+    - Parameters:
+
+        - `addr` (string): IP address or subnet to unban
+    - Returns: Success status
+    - Use case: Restoring access for previously banned peers
+
+- **`IsBanned(ipOrSubnet)`**: Checks if an IP or subnet is currently banned
+
+    - Parameters:
+
+        - `ipOrSubnet` (string): IP address or subnet to check
+    - Returns: Boolean indicating ban status
+    - Use case: Verifying ban status before connection attempts
+
+- **`ListBanned()`**: Lists all currently banned IP addresses and subnets
+
+    - Returns: Array of banned address strings
+    - Use case: Auditing and reviewing ban list
+
+- **`ClearBanned()`**: Removes all bans from the ban list
+
+    - Returns: Success status
+    - Use case: Resetting ban list (use with caution)
+
+- **`AddBanScore(peer_id, reason)`**: Adds a ban score to a peer for misbehavior
+
+    - Parameters:
+
+        - `peer_id` (string): Peer identifier
+        - `reason` (string): Reason for adding ban score
+    - Returns: Success status
+    - Use case: Incrementally tracking peer misbehavior before full ban
+
+**Connection Management:**
+
+- **`ConnectPeer(peer_address)`**: Manually initiates connection to a peer
+
+    - Parameters:
+
+        - `peer_address` (string): Multiaddr format address (e.g., `/ip4/127.0.0.1/tcp/9005/p2p/12D3KooW...`)
+    - Returns: Success status and error message
+    - Use case: Establishing connections to specific peers
+
+- **`DisconnectPeer(peer_id)`**: Disconnects from a specified peer
+
+    - Parameters:
+
+        - `peer_id` (string): Peer identifier to disconnect from
+    - Returns: Success status and error message
+    - Use case: Manually terminating problematic peer connections
+
+### Peer Data Model
+
+The `Peer` message contains comprehensive peer connection information:
+
+```protobuf
+message Peer {
+  string id = 1;                    // Unique peer identifier
+  string addr = 2;                  // Remote peer address
+  string addrLocal = 3;             // Local address used for connection
+  string services = 4;              // Services advertised by peer
+  int64 lastSend = 5;               // Last message send timestamp
+  int64 lastRecv = 6;               // Last message receive timestamp
+  int64 sendSize = 7;               // Total bytes sent
+  int64 recvSize = 8;               // Total bytes received
+  int64 sendMemory = 9;             // Memory allocated for sending
+  bool pauseSend = 10;              // Send pause status
+  bool unpauseSend = 11;            // Send unpause status
+  uint64 bytesSent = 12;            // Cumulative bytes sent
+  uint64 bytesReceived = 13;        // Cumulative bytes received
+  int64 avgRecvBandwidth = 14;      // Average receive bandwidth
+  string assocId = 15;              // Association identifier
+  string streamPolicy = 16;         // Stream policy configuration
+  bool inbound = 17;                // Connection direction (true=inbound)
+  int64 connTime = 18;              // Connection establishment time
+  int64 pingTime = 19;              // Latest ping round-trip time
+  int64 timeOffset = 20;            // Time offset from peer
+  uint32 version = 21;              // Protocol version
+  string subVer = 22;               // User agent / sub-version
+  int32 startingHeight = 23;        // Block height at connection time
+  int32 currentHeight = 24;         // Current block height
+  int32 banscore = 25;              // Accumulated ban score
+  bool whitelisted = 26;            // Whitelist status
+  int64 feeFilter = 27;             // Minimum fee filter
+}
+```
+
+## 4. Technology
 
 1. **Go Programming Language**:
 
@@ -422,12 +540,50 @@ Ban-related settings in the configuration:
 
     - Configuration management using environment variables, required for setting up network parameters, topic names, etc.
 
-## 4. Data Model
+## 5. Data Model
 
 - [Block Data Model](../datamodel/block_data_model.md): Contain lists of subtree identifiers.
 - [Subtree Data Model](../datamodel/subtree_data_model.md): Contain lists of transaction IDs and their Merkle root.
 
-Within the P2P service, notifications are sent to the Websocket clients using the following data model:
+### P2P Network Message Structures
+
+The following message structures (defined in `github.com/bsv-blockchain/go-p2p`) are exchanged between peers over the P2P network:
+
+**BlockMessage** - Published when a new block is found:
+
+```go
+type BlockMessage struct {
+    Hash       string  // Block hash
+    Height     int32   // Block height in the chain
+    DataHubURL string  // Asset server URL for retrieving full block data
+    PeerID     string  // Peer identifier of the node that found the block
+    Header     string  // Raw block header in hexadecimal format (80 bytes)
+}
+```
+
+**SubtreeMessage** - Published when a new subtree is validated:
+
+```go
+type SubtreeMessage struct {
+    Hash       string  // Subtree merkle root hash
+    DataHubURL string  // Asset server URL for retrieving subtree data
+    PeerID     string  // Peer identifier publishing the subtree
+}
+```
+
+**RejectedTxMessage** - Published when a transaction is rejected by validation:
+
+```go
+type RejectedTxMessage struct {
+    TxID   string  // Transaction ID that was rejected
+    Reason string  // Rejection reason
+    PeerID string  // Peer identifier reporting the rejection
+}
+```
+
+### WebSocket Notification Structures
+
+Within the P2P service, notifications are sent to WebSocket clients using the following internal data model:
 
 - Block notifications:
 
@@ -470,18 +626,51 @@ Within the P2P service, notifications are sent to the Websocket clients using th
    }
 ```
 
-## 5. Directory Structure and Main Files
+## 6. Directory Structure and Main Files
 
 ```text
 ./services/p2p
 │
-├── HandleWebsocket.go   - Manages WebSocket connections and communications.
-├── Server.go            - Main server logic for the P2P service, including network handling and peer interactions.
-├── client.html          - A client-side HTML file for testing or interacting with the WebSocket server.
-└── dht.go               - Implements the Distributed Hash Table (DHT) functionality for the P2P network.
+├── Server.go                           - Main server logic for the P2P service, peer interactions, and network handling
+├── Server_test.go                      - Unit tests for Server.go functionalities
+├── Server_unhealthy_peer_test.go       - Tests for unhealthy peer detection and handling
+├── Client.go                           - Client-side API for interacting with the P2P service
+├── Client_test.go                      - Unit tests for Client.go functionalities
+├── Interface.go                        - Defines the P2P service interface
+├── BanList.go                          - Thread-safe ban list management for IP addresses and subnets
+├── BanList_test.go                     - Unit tests for ban list functionalities
+├── BanManager.go                       - Ban management system coordinating ban operations and persistence
+├── BanManager_test.go                  - Unit tests for ban manager
+├── HandleWebsocket.go                  - WebSocket connection and communication management
+├── HandleWebsocket_test.go             - Unit tests for WebSocket handling
+├── sync_coordinator.go                 - Synchronization coordination between peers
+├── sync_coordinator_test.go            - Unit tests for sync coordinator
+├── sync_coordinator_fsm_ban_test.go    - Tests for FSM state transitions during ban events
+├── sync_integration_test.go            - Integration tests for peer synchronization
+├── peer_health_checker.go              - Monitors peer connection health and responsiveness
+├── peer_health_checker_test.go         - Unit tests for peer health checking
+├── peer_registry.go                    - Maintains registry of known and connected peers
+├── peer_registry_test.go               - Unit tests for peer registry
+├── peer_selector.go                    - Peer selection logic for connection prioritization
+├── peer_selector_test.go               - Unit tests for peer selector
+├── address_utils.go                    - Utility functions for multiaddress parsing and formatting
+├── address_utils_test.go               - Unit tests for address utilities
+├── advertise_config_test.go            - Tests for peer advertisement configuration
+├── peer_cache_config_test.go           - Tests for peer cache configuration
+├── report_invalid_block_test.go        - Tests for invalid block reporting to peers
+├── asset_websocket_integration_test.go - Integration tests for Asset service WebSocket connectivity
+├── websocket_integration_test.go       - General WebSocket integration tests
+├── websocket_live_integration_test.go  - Live WebSocket integration tests
+├── mock.go                             - Mock implementations for testing
+├── test_helpers.go                     - Helper functions for test setup and utilities
+├── README.md                           - P2P service documentation
+└── p2p_api/                            - gRPC API definitions for P2P service
+    ├── p2p_api.proto                   - Protocol Buffers definition for P2P API
+    ├── p2p_api.pb.go                   - Auto-generated protobuf Go bindings
+    └── p2p_api_grpc.pb.go              - gRPC-specific generated code
 ```
 
-## 6. How to run
+## 7. How to run
 
 To run the P2P Service locally, you can execute the following command:
 
@@ -491,10 +680,10 @@ SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -P2P=1
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the P2P Service locally.
 
-## 7. Configuration options (settings flags)
+## 8. Configuration options (settings flags)
 
 For comprehensive configuration documentation including all settings, defaults, and interactions, see the [p2p Settings Reference](../../references/settings/services/p2p_settings.md).
 
-## 8. Other Resources
+## 9. Other Resources
 
 [P2P Reference](../../references/services/p2p_reference.md)
