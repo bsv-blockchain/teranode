@@ -1351,6 +1351,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					reason = err.Error()
 				}
 
+				// Check if we had a storage error; if so do not mark the block as invalid
+				if errors.Is(err, errors.ErrStorageError) {
+					return err
+				}
+
 				u.storeInvalidBlock(ctx, block, baseURL, reason)
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
