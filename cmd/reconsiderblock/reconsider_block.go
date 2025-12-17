@@ -30,21 +30,21 @@ func ReconsiderBlock(logger ulogger.Logger, settings *settings.Settings, blockHa
 
 	blockHash, err := chainhash.NewHashFromStr(blockHashStr)
 	if err != nil {
-		return errors.NewProcessingError("invalid block hash: %v", err)
+		return errors.NewProcessingError("invalid block hash", err)
 	}
 
 	ctx := context.Background()
 
 	blockValidationClient, err := blockvalidation.NewClient(ctx, logger, settings, "Reconsiderblock Command")
 	if err != nil {
-		return errors.NewProcessingError("failed to create block validation client: %v", err)
+		return errors.NewProcessingError("failed to create block validation client", err)
 	}
 
 	logger.Infof("[reconsiderblock] Reconsidering block %s", blockHash.String())
 
 	err = blockValidationClient.RevalidateBlock(ctx, *blockHash)
 	if err != nil {
-		return errors.NewProcessingError("failed to reconsider block %s: %v", blockHash.String(), err)
+		return errors.NewProcessingError("failed to reconsider block %s", blockHash.String(), err)
 	}
 
 	fmt.Printf("Successfully reconsidered block %s\n", blockHash.String())
