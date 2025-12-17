@@ -1,7 +1,8 @@
-// functionality for reconsidering blocks that were
+package reconsiderblock
+
+// ReconsiderBlock provides functionality for reconsidering blocks that were
 // previously marked as invalid. This allows the block to be re-validated and potentially
 // accepted into the blockchain if it passes validation.
-package reconsiderblock
 
 import (
 	"context"
@@ -34,7 +35,7 @@ func ReconsiderBlock(logger ulogger.Logger, settings *settings.Settings, blockHa
 
 	ctx := context.Background()
 
-	blockValidationClient, err := blockvalidation.NewClient(ctx, logger, settings, "reconsiderblock")
+	blockValidationClient, err := blockvalidation.NewClient(ctx, logger, settings, "Reconsiderblock Command")
 	if err != nil {
 		return errors.NewProcessingError("failed to create block validation client: %v", err)
 	}
