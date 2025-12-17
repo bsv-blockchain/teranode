@@ -3,8 +3,8 @@ package aerospike
 import (
 	"sync"
 
-	"github.com/bsv-blockchain/teranode/stores/pruner"
 	aeropruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 )
 
 // Ensure Store implements the pruner.PrunerProvider interface

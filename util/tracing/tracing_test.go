@@ -9,7 +9,10 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
@@ -321,6 +324,57 @@ func TestStart_Disabled(t *testing.T) {
 	// End function should not panic
 	endFn()
 	endFn(errors.NewProcessingError("test error"))
+}
+
+// TestStart_DisabledWithLoggingAndMetrics verifies that logging and metrics still work when tracing is disabled
+func TestStart_DisabledWithLoggingAndMetrics(t *testing.T) {
+	originalState := IsTracingEnabled()
+	defer SetTracingEnabled(originalState)
+
+	SetTracingEnabled(false)
+
+	logger := mocklogger.NewTestLogger()
+
+	counter := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "test_counter",
+		Help: "Test counter for tracing disabled test",
+	})
+
+	histogram := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "test_histogram",
+		Help: "Test histogram for tracing disabled test",
+	})
+
+	tracer := Tracer("test-service")
+	ctx := context.Background()
+
+	parentStat := gocore.NewStat("parent")
+
+	newCtx, span, endFn := tracer.Start(ctx, "test-operation",
+		WithLogMessage(logger, "Test message: %s", "hello"),
+		WithParentStat(parentStat),
+		WithCounter(counter),
+		WithHistogram(histogram),
+	)
+
+	require.NotNil(t, newCtx)
+	require.NotNil(t, span)
+	require.NotNil(t, endFn)
+	require.False(t, span.IsRecording(), "span should not be recording when tracing disabled")
+
+	time.Sleep(10 * time.Millisecond)
+	endFn()
+
+	logger.AssertNumberOfCalls(t, "Infof", 2)
+
+	metric := &dto.Metric{}
+	err := counter.Write(metric)
+	require.NoError(t, err)
+	require.Equal(t, float64(1), metric.Counter.GetValue(), "counter should be incremented even when tracing is disabled")
+
+	err = histogram.Write(metric)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), metric.Histogram.GetSampleCount(), "histogram should be observed even when tracing is disabled")
 }
 
 // TestStart_Enabled verifies that Start() returns real span when tracing is enabled

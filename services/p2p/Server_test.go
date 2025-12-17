@@ -349,7 +349,6 @@ func TestHandleBlockTopic(t *testing.T) {
 
 		// Get initial times
 		senderInfo1, _ := peerRegistry.Get(senderPeerID)
-		originatorInfo1, _ := peerRegistry.Get(originatorPeerID)
 
 		// Wait to ensure time difference
 		time.Sleep(50 * time.Millisecond)
@@ -364,15 +363,13 @@ func TestHandleBlockTopic(t *testing.T) {
 		}
 
 		// Call handler with message
-		blockMsg := fmt.Sprintf(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"%s"}`, originatorPeerID.String())
+		blockMsg := fmt.Sprintf(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"%s"}`, senderPeerID.String())
 		server.handleBlockTopic(ctx, []byte(blockMsg), senderPeerID.String())
 
 		// Verify last message times were updated
 		senderInfo2, _ := peerRegistry.Get(senderPeerID)
-		originatorInfo2, _ := peerRegistry.Get(originatorPeerID)
 
 		assert.True(t, senderInfo2.LastMessageTime.After(senderInfo1.LastMessageTime), "Sender's LastMessageTime should be updated")
-		assert.True(t, originatorInfo2.LastMessageTime.After(originatorInfo1.LastMessageTime), "Originator's LastMessageTime should be updated")
 
 		// Verify notification was sent
 		select {
@@ -386,7 +383,7 @@ func TestHandleBlockTopic(t *testing.T) {
 	t.Run("ignore message from self", func(t *testing.T) {
 		// Create mock P2PClient
 		mockP2PNode := new(MockServerP2PClient)
-		selfPeerID, _ := peer.Decode("QmBannedPeerID")
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		selfPeerIDStr := selfPeerID.String()
 		mockP2PNode.On("GetID").Return(selfPeerID)
 
@@ -405,7 +402,7 @@ func TestHandleBlockTopic(t *testing.T) {
 		}
 
 		// Call the real handler method with message from self
-		server.handleBlockTopic(ctx, []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"QmBannedPeerID"}`), selfPeerIDStr)
+		server.handleBlockTopic(ctx, []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"}`), selfPeerIDStr)
 
 		// Verify message was added to notification channel
 		select {
@@ -498,7 +495,7 @@ func TestHandleBlockTopic(t *testing.T) {
 	t.Run("error on hash parsing", func(t *testing.T) {
 		// Create mock P2PClient
 		mockP2PNode := new(MockServerP2PClient)
-		selfPeerID, _ := peer.Decode("QmBannedPeerID")
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		mockP2PNode.On("GetID").Return(selfPeerID)
 
 		// Create a mock banManager that returns false for any peer
@@ -521,7 +518,7 @@ func TestHandleBlockTopic(t *testing.T) {
 		}
 
 		// Call the real handler method with invalid hash
-		server.handleBlockTopic(ctx, []byte(`{"Hash":"invalid-hash","Height":1,"DataHubURL":"http://example.com","PeerID":"QmValidPeerID"}`), "other-peer-id")
+		server.handleBlockTopic(ctx, []byte(`{"Hash":"invalid-hash","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"}`), "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 
 		// Verify notification was still sent (happens before hash parsing error)
 		select {
@@ -536,7 +533,7 @@ func TestHandleBlockTopic(t *testing.T) {
 	t.Run("successful kafka publish", func(t *testing.T) {
 		// Create mock P2PClient
 		mockP2PNode := new(MockServerP2PClient)
-		selfPeerID, _ := peer.Decode("QmBannedPeerID")
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		mockP2PNode.On("GetID").Return(selfPeerID)
 		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
 
@@ -564,7 +561,7 @@ func TestHandleBlockTopic(t *testing.T) {
 		// Call the real handler with valid block hash
 		// Since we can't mock out proto.Marshal, we'll need to allow an error here
 		// or create a proper test implementation that doesn't use proto.Marshal
-		server.handleBlockTopic(ctx, []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"QmValidPeerID"}`), "other-peer-id")
+		server.handleBlockTopic(ctx, []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"}`), "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 
 		// Verify notification was sent
 		select {
@@ -573,6 +570,47 @@ func TestHandleBlockTopic(t *testing.T) {
 			assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", notification.Hash)
 		default:
 			t.Fatal("Expected notification message but none received")
+		}
+	})
+	t.Run("peer IDs don't match", func(t *testing.T) {
+		// Create mock P2PClient
+		mockP2PNode := new(MockServerP2PClient)
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
+		mockP2PNode.On("GetID").Return(selfPeerID)
+		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
+
+		// Create a mock banManager that returns false for any peer
+		mockBanManager := new(MockPeerBanManager)
+		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+
+		// Create mock kafka producer
+		mockKafkaProducer := new(MockKafkaProducer)
+		mockKafkaProducer.On("Publish", mock.Anything).Return()
+
+		// Create peer registry
+		peerRegistry := NewPeerRegistry()
+
+		// Create server with mocks
+		server := &Server{
+			P2PClient:                 mockP2PNode,
+			notificationCh:            make(chan *notificationMsg, 10),
+			blocksKafkaProducerClient: mockKafkaProducer,
+			banManager:                mockBanManager,
+			peerRegistry:              peerRegistry,
+			logger:                    ulogger.New("test-server"),
+		}
+
+		// Call the real handler with valid block hash
+		// Since we can't mock out proto.Marshal, we'll need to allow an error here
+		// or create a proper test implementation that doesn't use proto.Marshal
+		server.handleBlockTopic(ctx, []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"}`), bannedPeerIDStr)
+
+		// Verify notification was not sent
+		select {
+		case _ = <-server.notificationCh:
+			t.Fatal("Unexpected notification message received")
+		default:
+			t.Logf("Correctly received no notification")
 		}
 	})
 }
@@ -584,7 +622,7 @@ func TestHandleSubtreeTopic(t *testing.T) {
 	t.Run("happy_path_-_successful_handling", func(t *testing.T) {
 		// Create mock P2PClient
 		mockP2PNode := new(MockServerP2PClient)
-		selfPeerID, _ := peer.Decode("QmSelfPeerID")
+		selfPeerID, _ := peer.Decode(peerIDStr)
 		mockP2PNode.On("GetID").Return(selfPeerID)
 
 		// Create a valid peer ID for testing
@@ -625,7 +663,7 @@ func TestHandleSubtreeTopic(t *testing.T) {
 		}
 
 		// Call the method with a valid message from another peer
-		validSubtreeMessage := `{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","DataHubURL":"http://example.com","PeerID":"QmcqHnEQuFdvxoRax8V9qjvHnqF2TpJ8nt8PNGJRRsKKg5"}`
+		validSubtreeMessage := `{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","DataHubURL":"http://example.com","PeerID":"12D3KooWQJ8sLWNhDPsGbMrhA5JhrtpiEVrWvarPGm4GfP6bn6fL"}`
 		server.handleSubtreeTopic(ctx, []byte(validSubtreeMessage), validPeerID)
 
 		// Verify notification was sent to the notification channel
@@ -634,7 +672,7 @@ func TestHandleSubtreeTopic(t *testing.T) {
 			assert.Equal(t, "subtree", notification.Type)
 			assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", notification.Hash)
 			assert.Equal(t, "http://example.com", notification.BaseURL)
-			assert.Equal(t, "QmcqHnEQuFdvxoRax8V9qjvHnqF2TpJ8nt8PNGJRRsKKg5", notification.PeerID)
+			assert.Equal(t, "12D3KooWQJ8sLWNhDPsGbMrhA5JhrtpiEVrWvarPGm4GfP6bn6fL", notification.PeerID)
 		default:
 			t.Fatal("Expected notification message but none received")
 		}
@@ -644,6 +682,46 @@ func TestHandleSubtreeTopic(t *testing.T) {
 
 		// Verify Kafka publish was called since it's not from self or banned peer
 		mockKafkaProducer.AssertCalled(t, "Publish", mock.Anything)
+	})
+	t.Run("peer IDs don't match", func(t *testing.T) {
+		// Create mock P2PClient
+		mockP2PNode := new(MockServerP2PClient)
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
+		mockP2PNode.On("GetID").Return(selfPeerID)
+		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
+
+		// Create a mock banManager that returns false for any peer
+		mockBanManager := new(MockPeerBanManager)
+		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+
+		// Create mock kafka producer
+		mockKafkaProducer := new(MockKafkaProducer)
+		mockKafkaProducer.On("Publish", mock.Anything).Return()
+
+		// Create peer registry
+		peerRegistry := NewPeerRegistry()
+
+		// Create server with mocks
+		server := &Server{
+			P2PClient:                 mockP2PNode,
+			notificationCh:            make(chan *notificationMsg, 10),
+			blocksKafkaProducerClient: mockKafkaProducer,
+			banManager:                mockBanManager,
+			peerRegistry:              peerRegistry,
+			logger:                    ulogger.New("test-server"),
+		}
+
+		// Call the method with a valid message but a non matching peer ID
+		validSubtreeMessage := `{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","DataHubURL":"http://example.com","PeerID":"12D3KooWQJ8sLWNhDPsGbMrhA5JhrtpiEVrWvarPGm4GfP6bn6fL"}`
+		server.handleSubtreeTopic(ctx, []byte(validSubtreeMessage), bannedPeerIDStr)
+
+		// Verify notification was not sent
+		select {
+		case _ = <-server.notificationCh:
+			t.Fatal("Unexpected notification message received")
+		default:
+			t.Logf("Correctly received no notification")
+		}
 	})
 }
 
