@@ -497,11 +497,10 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 		moveBackTxs := make([]chainhash.Hash, 0, len(moveBackBlocksWithMeta)*100)
 
 		for _, blockWithMeta := range moveBackBlocksWithMeta {
-			if blockWithMeta.meta.Invalid {
-				// Skip invalid blocks - BlockValidation already handled them via unsetMined=true
-				continue
-			}
-
+			// NOTE: We no longer skip invalid blocks here. Since commit 226f1003d,
+			// BlockValidation listens for NotificationType_BlockSubtreesSet (not NotificationType_Block).
+			// InvalidateBlock only sends NotificationType_Block, so BlockValidation never
+			// processes invalid blocks with unsetMined=true. We must handle them here.
 			block := blockWithMeta.block
 			blockSubtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
 			if err != nil {
@@ -544,6 +543,12 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 
 	baBestBlockHeader, _ := b.CurrentBlock()
 
+	// Update the best block header BEFORE calling subtreeProcessor.Reset() so that
+	// loadUnminedTransactions (called in postProcessFn) uses the correct (new) best block
+	// when checking which transactions should be loaded. Without this, loadUnminedTransactions
+	// would use the old best block and skip transactions that are in invalid/orphaned blocks.
+	b.setBestBlockHeader(bestBlockchainBlockHeader, currentHeight)
+
 	// TODO: Is this logic right?
 	if response := b.subtreeProcessor.Reset(baBestBlockHeader, moveBackBlocks, moveForwardBlocks, isLegacySync, postProcessFn); response.Err != nil {
 		b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", response.Err)
@@ -558,9 +563,10 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 
 		// set the new height based on the best block header from the subtree processor
 		currentHeight = bestBlockchainBlockHeaderMeta.Height
-	}
 
-	b.setBestBlockHeader(bestBlockchainBlockHeader, currentHeight)
+		// Update best block header again if reset failed and we recovered to a different block
+		b.setBestBlockHeader(bestBlockchainBlockHeader, currentHeight)
+	}
 
 	if err = b.SetState(ctx); err != nil {
 		return errors.NewProcessingError("[Reset] error setting state", err)

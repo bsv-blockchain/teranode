@@ -70,6 +70,7 @@ func (s *SQL) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) 
 		,b.height
 		FROM blocks b
 		WHERE mined_set = false
+		AND invalid = false
 		ORDER BY height ASC
 	`
 
