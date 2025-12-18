@@ -84,6 +84,7 @@ type TestDaemon struct {
 	privKey               *bec.PrivateKey
 	rpcURL                *url.URL
 	skipContainerCleanup  bool
+	t                     *testing.T // Reference to testing.T for unified logging
 }
 
 // TestOptions defines the options for creating a test daemon instance.
@@ -107,6 +108,10 @@ type TestOptions struct {
 	// SkipContainerCleanup when true, prevents the container from being terminated when Stop is called.
 	// Use this when you plan to restart the daemon and reuse the same container.
 	SkipContainerCleanup bool
+	// UseUnifiedLogger when true, routes all application logs through t.Logf for unified test output.
+	// Log format: [TestName:serviceName] LEVEL: message
+	// This provides consistent formatting and ensures all logs are captured by go test.
+	UseUnifiedLogger bool
 }
 
 // JSONError represents a JSON error response from the RPC server.
@@ -360,7 +365,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		loggerFactory Option
 	)
 
-	if opts.EnableFullLogging {
+	if opts.UseUnifiedLogger {
+		// Unified logger routes all output through t.Logf with consistent formatting
+		// Format: [TestName:serviceName] LEVEL: message
+		logger = ulogger.NewUnifiedTestLogger(t, testName, "", cancel)
+		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
+			return ulogger.NewUnifiedTestLogger(t, testName, serviceName, cancel)
+		})
+	} else if opts.EnableFullLogging {
 		logger = ulogger.New(appSettings.ClientName)
 		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
 			return ulogger.New(appSettings.ClientName+"-"+serviceName, ulogger.WithLevel("DEBUG"))
@@ -526,6 +538,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		privKey:               pk,
 		rpcURL:                appSettings.RPC.RPCListenerURL,
 		skipContainerCleanup:  opts.SkipContainerCleanup,
+		t:                     t,
 	}
 }
 
@@ -542,6 +555,10 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 	// Background goroutines may still be running and trying to log errors
 	if errorTestLogger, ok := td.Logger.(*ulogger.ErrorTestLogger); ok {
 		errorTestLogger.Shutdown()
+	}
+
+	if unifiedTestLogger, ok := td.Logger.(*ulogger.UnifiedTestLogger); ok {
+		unifiedTestLogger.Shutdown()
 	}
 
 	// Cleanup daemon stores to reset singletons
@@ -563,6 +580,21 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 	}
 
 	t.Logf("Daemon %s stopped successfully", td.Settings.ClientName)
+}
+
+// Log logs a message with the test name prefix for consistent test output.
+// Format: [TestName] message
+// This method is useful when UseUnifiedLogger is enabled to maintain consistent
+// formatting between test code and application code logs.
+func (td *TestDaemon) Log(format string, args ...interface{}) {
+	td.t.Helper()
+	td.t.Logf("[%s] %s", td.Settings.ClientName, fmt.Sprintf(format, args...))
+}
+
+// Logf is an alias for Log for familiarity with t.Logf.
+func (td *TestDaemon) Logf(format string, args ...interface{}) {
+	td.t.Helper()
+	td.Log(format, args...)
 }
 
 // StopDaemonDependencies stops the daemon dependencies if they were started.
