@@ -281,6 +281,110 @@ func TestDoHTTPRequestBodyReaderServerError(t *testing.T) {
 	assert.Contains(t, err.Error(), "500")
 }
 
+func TestDoHTTPRequestBodyReaderNoTimeoutOnSlowStream(t *testing.T) {
+	// This test verifies that DoHTTPRequestBodyReader successfully completes
+	// for quick responses, proving the streaming timeout is long enough
+	responseData := []byte("streaming response data")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write(responseData)
+		require.NoError(t, err)
+	}))
+	defer server.Close()
+
+	// Context without timeout - function should apply streaming timeout (5 min default)
+	ctx := context.Background()
+	reader, err := DoHTTPRequestBodyReader(ctx, server.URL)
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+	defer func(reader io.ReadCloser) {
+		_ = reader.Close()
+	}(reader)
+
+	body, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, responseData, body)
+}
+
+func TestDoHTTPRequestBodyReaderWithShortTimeout(t *testing.T) {
+	// This test uses a custom short streaming timeout to actually verify timeout behavior
+	// Save and restore the original timeout
+	originalTimeout := httpStreamingTimeout
+	httpStreamingTimeout = 500 // 500ms for testing - enough for connection but not for slow read
+	defer func() {
+		httpStreamingTimeout = originalTimeout
+	}()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		// Write some data immediately
+		flusher, ok := w.(http.Flusher)
+		require.True(t, ok, "Expected http.ResponseWriter to be an http.Flusher")
+		_, _ = w.Write([]byte("starting..."))
+		flusher.Flush()
+
+		// Sleep longer than timeout - this should cause the read to fail
+		time.Sleep(1 * time.Second)
+		_, _ = w.Write([]byte("this should not be received"))
+	}))
+	defer server.Close()
+
+	ctx := context.Background()
+	reader, err := DoHTTPRequestBodyReader(ctx, server.URL)
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+	defer func(reader io.ReadCloser) {
+		_ = reader.Close()
+	}(reader)
+
+	// Reading should fail due to timeout while reading the body
+	_, err = io.ReadAll(reader)
+	// Should get an error because the server is too slow
+	require.Error(t, err, "Should get timeout error on slow stream")
+}
+
+func TestDoHTTPRequestBodyReaderRespectsExistingDeadline(t *testing.T) {
+	// This test verifies that DoHTTPRequestBodyReader respects an existing context deadline
+	// We do this by setting a very short deadline and ensuring it times out quickly
+	// (rather than waiting for the 5-minute streaming timeout)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		// Write initial data
+		_, _ = w.Write([]byte("start"))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		// Sleep for 2 seconds - longer than our 100ms deadline
+		time.Sleep(2 * time.Second)
+		_, _ = w.Write([]byte("should timeout before this"))
+	}))
+	defer server.Close()
+
+	// Context with very short 100ms timeout (much shorter than 5-minute streaming default)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	reader, err := DoHTTPRequestBodyReader(ctx, server.URL)
+	require.NoError(t, err)
+	require.NotNil(t, reader)
+	defer func(reader io.ReadCloser) {
+		_ = reader.Close()
+	}(reader)
+
+	// This should timeout due to our 100ms deadline, not the 5-minute streaming timeout
+	_, err = io.ReadAll(reader)
+	elapsed := time.Since(start)
+
+	// Should fail with timeout
+	require.Error(t, err, "Should timeout with custom deadline")
+	// Should have timed out quickly (within 1 second), not after 5 minutes
+	assert.Less(t, elapsed, 2*time.Second, "Should respect short custom deadline, not wait for streaming timeout")
+}
+
 func TestDoHTTPRequestEmptyRequestBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Empty slice still triggers POST because len(requestBody) > 0

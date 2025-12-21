@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -58,6 +59,13 @@ func (m *NullStore) SetMedianBlockTime(medianTime uint32) error {
 
 func (m *NullStore) GetMedianBlockTime() uint32 {
 	return m.medianBlockTime
+}
+
+func (m *NullStore) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     m.blockHeight,
+		MedianTime: m.medianBlockTime,
+	}
 }
 
 func (m *NullStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -119,7 +127,11 @@ func (m *NullStore) Create(_ context.Context, tx *bt.Tx, blockHeight uint32, opt
 	return txMetaData, nil
 }
 
-func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (m *NullStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	if blockHeight == 0 {
+		return nil, errors.NewProcessingError("blockHeight must be greater than zero")
+	}
+
 	return nil, nil
 }
 

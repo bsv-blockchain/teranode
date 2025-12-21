@@ -38,16 +38,17 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
-	distributor "github.com/bsv-blockchain/teranode/services/rpc"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/test/utils/containers"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/test/utils/wait"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	libp2pPeer "github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go/modules/compose"
@@ -59,18 +60,17 @@ const (
 	blockHashMismatch         = "Block hash mismatch at height %d"
 	failedGettingSubtree      = "Failed to get subtree"
 	failedParsingSubtreeBytes = "Failed to parse subtree bytes"
-	failedParsingStorePort    = "Failed to parse store port: %v"
 )
 
 // TestDaemon is a struct that holds the test daemon instance and its dependencies.
 type TestDaemon struct {
 	AssetURL              string
+	BlockAssembler        *blockassembly.BlockAssembler
 	BlockAssemblyClient   *blockassembly.Client
 	BlockValidationClient *blockvalidation.Client
 	BlockValidation       *blockvalidation.BlockValidation
 	BlockchainClient      blockchain.ClientI
 	Ctx                   context.Context
-	DistributorClient     *distributor.Distributor
 	Logger                ulogger.Logger
 	PropagationClient     *propagation.Client
 	Settings              *settings.Settings
@@ -78,10 +78,12 @@ type TestDaemon struct {
 	UtxoStore             utxo.Store
 	P2PClient             p2p.ClientI
 	composeDependencies   tc.ComposeStack
+	containerManager      *containers.ContainerManager
 	ctxCancel             context.CancelFunc
 	d                     *Daemon
 	privKey               *bec.PrivateKey
 	rpcURL                *url.URL
+	skipContainerCleanup  bool
 }
 
 // TestOptions defines the options for creating a test daemon instance.
@@ -91,11 +93,20 @@ type TestOptions struct {
 	EnableP2P               bool
 	EnableRPC               bool
 	EnableValidator         bool
-	SettingsContext         string
 	SettingsOverrideFunc    func(*settings.Settings)
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
 	FSMState                blockchain.FSMStateType
+	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres")
+	// If empty, defaults to "aerospike"
+	UTXOStoreType string
+	// ContainerManager allows reusing an existing container manager from a previous TestDaemon.
+	// When set, the daemon will use the existing container instead of creating a new one.
+	// This is useful for restart tests where you want to preserve data in external stores like Aerospike.
+	ContainerManager *containers.ContainerManager
+	// SkipContainerCleanup when true, prevents the container from being terminated when Stop is called.
+	// Use this when you plan to restart the daemon and reuse the same container.
+	SkipContainerCleanup bool
 }
 
 // JSONError represents a JSON error response from the RPC server.
@@ -111,18 +122,14 @@ func (je *JSONError) Error() string {
 
 // NewTestDaemon creates a new TestDaemon instance with the provided options.
 func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	var (
 		composeDependencies tc.ComposeStack
 		appSettings         *settings.Settings
 	)
 
-	if opts.SettingsContext != "" {
-		appSettings = settings.NewSettings(opts.SettingsContext)
-	} else {
-		appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
-	}
+	appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 
 	// Dynamically allocate free ports for all relevant services
 	allocatePort := func(schema string) (listenAddr string, clientAddr string, addrPort int) {
@@ -212,7 +219,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	// P2P
 	_, _, p2pPort := allocatePort("") // libp2p doesn't support pre-created listeners
-	appSettings.P2P.BootstrapAddresses = []string{}
 	appSettings.P2P.StaticPeers = nil
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
 	appSettings.P2P.Port = p2pPort
@@ -256,13 +262,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	require.NoError(t, err)
 	appSettings.HealthCheckHTTPListenAddress = listenAddr
 
-	path := filepath.Join("data", appSettings.ClientName)
-	if strings.HasPrefix(opts.SettingsContext, "dev.system.test") {
-		// a bit hacky. Ideally, all stores sit under data/${ClientName}
-		path = "data"
-	}
+	// Create a unique data directory per test
+	// Use test name and timestamp to ensure uniqueness across sequential test runs
+	testName := strings.ReplaceAll(t.Name(), "/", "_")
+	appSettings.ClientName = testName
+	path := filepath.Join("data")
 
-	if !opts.SkipRemoveDataDir {
+	// path := filepath.Join("data", fmt.Sprintf("test_%s_%d", testName, time.Now().UnixNano()))
+
+	if !opts.SkipRemoveDataDir && opts.SkipRemoveDataDir == false {
 		absPath, err := filepath.Abs(path)
 		require.NoError(t, err)
 
@@ -280,6 +288,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	chainParams.CoinbaseMaturity = 1
 	appSettings.ChainCfgParams = &chainParams
 
+	// Override DataFolder BEFORE creating any directories
+	// This ensures all store paths (blockstore, quorum, etc.) use the test-specific path
+	// Always set DataFolder and QuorumPath to test-specific directory
+	appSettings.DataFolder = path
+	// Override QuorumPath to ensure it uses the test-specific directory
+	// This prevents tests from sharing the same quorum directory
+	// appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
+
 	absPath, err := filepath.Abs(path)
 	require.NoError(t, err)
 	t.Logf("Creating data directory: %s", absPath)
@@ -288,12 +304,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	require.NoError(t, err)
 
 	quorumPath := appSettings.SubtreeValidation.QuorumPath
-	require.NotNil(t, quorumPath, "No subtree_quorum_path specified")
+	require.NotEmpty(t, quorumPath, "No subtree_quorum_path specified")
 
 	err = os.MkdirAll(quorumPath, 0755)
 	require.NoError(t, err)
-
-	// Override with test settings...
 	appSettings.Asset.CentrifugeDisable = true
 	appSettings.UtxoStore.DBTimeout = 500 * time.Second
 	appSettings.LocalTestStartFromState = "RUNNING"
@@ -301,11 +315,42 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.ProfilerAddr = ""
 	appSettings.RPC.CacheEnabled = false
 	appSettings.UsePrometheusGRPCMetrics = false
-	appSettings.P2P.BootstrapAddresses = nil
 
 	// Override with test settings...
 	if opts.SettingsOverrideFunc != nil {
 		opts.SettingsOverrideFunc(appSettings)
+	}
+
+	// Initialize container manager for UTXO store if UTXOStoreType is specified
+	var containerManager *containers.ContainerManager
+	if opts.ContainerManager != nil {
+		// Reuse existing container manager (for restart tests)
+		containerManager = opts.ContainerManager
+		utxoStoreURL, err := url.Parse(containerManager.GetContainerURL())
+		require.NoError(t, err, "Failed to parse container URL")
+		appSettings.UtxoStore.UtxoStore = utxoStoreURL
+		t.Logf("Reusing existing %s container with URL: %s", containerManager.GetStoreType(), utxoStoreURL.String())
+	} else if opts.UTXOStoreType != "" {
+		containerManager, err = containers.NewContainerManager(containers.UTXOStoreType(opts.UTXOStoreType))
+		require.NoError(t, err, "Failed to create container manager")
+
+		utxoStoreURL, err := containerManager.Initialize(ctx)
+		require.NoError(t, err, "Failed to initialize container")
+
+		// Register cleanup immediately to prevent resource leak if daemon initialization fails
+		// Only register cleanup if we're not skipping it (for restart tests)
+		if !opts.SkipContainerCleanup {
+			t.Cleanup(func() {
+				if containerManager != nil {
+					_ = containerManager.Cleanup()
+				}
+			})
+		}
+
+		// Override the UTXO store URL in settings
+		appSettings.UtxoStore.UtxoStore = utxoStoreURL
+
+		t.Logf("Initialized %s container with URL: %s", opts.UTXOStoreType, utxoStoreURL.String())
 	}
 
 	readyCh := make(chan struct{})
@@ -389,15 +434,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	blockValidationClient, err = blockvalidation.NewClient(ctx, logger, appSettings, "test")
 	require.NoError(t, err)
 
-	var distributorClient *distributor.Distributor
-
-	distributorClient, err = distributor.NewDistributor(ctx, logger, appSettings,
-		distributor.WithBackoffDuration(500*time.Millisecond),
-		distributor.WithRetryAttempts(10),
-		distributor.WithFailureTolerance(0),
-	)
-	require.NoError(t, err)
-
 	validatorClient, err := d.daemonStores.GetValidatorClient(ctx, logger, appSettings)
 	require.NoError(t, err)
 
@@ -456,17 +492,27 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	assert.NotNil(t, subtreeStore)
 	assert.NotNil(t, utxoStore)
 	assert.NotNil(t, p2pClient)
-	assert.NotNil(t, distributorClient)
 	assert.NotNil(t, blockValidation)
 
+	blockAssemblyService, err := d.ServiceManager.GetService("BlockAssembly")
+	require.NoError(t, err)
+
+	blockAssembler, ok := blockAssemblyService.(*blockassembly.BlockAssembly)
+	require.True(t, ok)
+
+	assetURL := fmt.Sprintf("http://127.0.0.1:%d", appSettings.Asset.HTTPPort)
+	if appSettings.Asset.APIPrefix != "" {
+		assetURL += appSettings.Asset.APIPrefix
+	}
+
 	return &TestDaemon{
-		AssetURL:              fmt.Sprintf("http://127.0.0.1:%d", appSettings.Asset.HTTPPort),
+		AssetURL:              assetURL,
+		BlockAssembler:        blockAssembler.GetBlockAssembler(),
 		BlockAssemblyClient:   blockAssemblyClient,
 		BlockValidationClient: blockValidationClient,
 		BlockValidation:       blockValidation,
 		BlockchainClient:      blockchainClient,
 		Ctx:                   ctx,
-		DistributorClient:     distributorClient,
 		Logger:                logger,
 		PropagationClient:     propagationClient,
 		Settings:              appSettings,
@@ -474,10 +520,12 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		UtxoStore:             utxoStore,
 		P2PClient:             p2pClient,
 		composeDependencies:   composeDependencies,
+		containerManager:      containerManager,
 		ctxCancel:             cancel,
 		d:                     d,
 		privKey:               pk,
 		rpcURL:                appSettings.RPC.RPCListenerURL,
+		skipContainerCleanup:  opts.SkipContainerCleanup,
 	}
 }
 
@@ -490,8 +538,21 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 	// Cancel context first to trigger HTTP server shutdowns
 	td.ctxCancel()
 
+	// Shutdown the logger to prevent race conditions on testing.T access
+	// Background goroutines may still be running and trying to log errors
+	if errorTestLogger, ok := td.Logger.(*ulogger.ErrorTestLogger); ok {
+		errorTestLogger.Shutdown()
+	}
+
 	// Cleanup daemon stores to reset singletons
 	td.d.daemonStores.Cleanup()
+
+	// Cleanup container manager if it exists and we're not skipping cleanup
+	if td.containerManager != nil && !td.skipContainerCleanup {
+		if err := td.containerManager.Cleanup(); err != nil {
+			t.Logf("Warning: Failed to cleanup container manager: %v", err)
+		}
+	}
 
 	WaitForPortsFree(t, td.Ctx, td.Settings)
 
@@ -748,6 +809,13 @@ func (td *TestDaemon) VerifyNotOnLongestChainInUtxoStore(t *testing.T, tx *bt.Tx
 	readTx, err := td.UtxoStore.Get(td.Ctx, tx.TxIDChainHash(), fields.UnminedSince)
 	require.NoError(t, err, "Failed to get transaction %s", tx.String())
 	assert.Greater(t, readTx.UnminedSince, uint32(0), "Expected transaction %s to be on the longest chain", tx.TxIDChainHash().String())
+}
+
+// VerifyNotInUtxoStore verifies that the transaction does not exist in the UTXO store.
+func (td *TestDaemon) VerifyNotInUtxoStore(t *testing.T, tx *bt.Tx) {
+	_, err := td.UtxoStore.Get(td.Ctx, tx.TxIDChainHash(), fields.UnminedSince)
+	require.Error(t, err, "Expected error when getting transaction %s", tx.String())
+	assert.Equal(t, errors.Is(err, errors.ErrTxNotFound), true, "Expected ErrTxNotFound when getting transaction %s", tx.String())
 }
 
 // VerifyNotInBlockAssembly checks that the given transactions are not present in the block assembly candidate's subtrees.
@@ -1255,45 +1323,52 @@ finished:
 	}
 }
 
+func (td *TestDaemon) WaitForBlockStateChange(t *testing.T, expectedBlock *model.Block, timeout time.Duration) {
+	stateChangeCh := make(chan blockassembly.BestBlockInfo)
+	td.BlockAssembler.SetStateChangeCh(stateChangeCh)
+
+	defer func() {
+		td.BlockAssembler.SetStateChangeCh(nil)
+	}()
+
+	// wait until the block assembly reaches the expected block
+	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Timeout waiting for block assembly to reach block %s", expectedBlock.Header.Hash().String())
+		case bestBlockInfo := <-stateChangeCh:
+			t.Logf("Received BestBlockInfo: Height=%d, Hash=%s", bestBlockInfo.Height, bestBlockInfo.Header.Hash().String())
+			if bestBlockInfo.Header.Hash().IsEqual(expectedBlock.Header.Hash()) {
+				return
+			}
+		}
+	}
+}
+
+func (td *TestDaemon) WaitForBlockhash(t *testing.T, blockHash *chainhash.Hash, timeout time.Duration) {
+	require.Eventually(t, func() bool {
+		_, err := td.BlockchainClient.GetBlock(td.Ctx, blockHash)
+		return err == nil
+	}, timeout, 100*time.Millisecond, "Timeout waiting for block with hash %s", blockHash.String())
+}
+
 func (td *TestDaemon) WaitForBlock(t *testing.T, expectedBlock *model.Block, timeout time.Duration, skipVerifyChain ...bool) {
-	deadline := time.Now().Add(timeout)
+	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
+	defer cancel()
 
 	var (
-		err   error
-		state *blockassembly_api.StateMessage
+		err error
 	)
 
-finished:
-	for {
-		switch {
-		case time.Now().After(deadline):
-			t.Fatalf("Timeout waiting for block %s", expectedBlock.Header.Hash().String())
-		default:
-			_, err = td.BlockchainClient.GetBlock(td.Ctx, expectedBlock.Header.Hash())
-			if err == nil {
-				break finished
-			}
-
-			if !errors.Is(err, errors.ErrBlockNotFound) {
-				t.Fatalf("Failed to get block at hash %s: %v", expectedBlock.Header.Hash().String(), err)
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
+	_, err = td.BlockchainClient.GetBlock(ctx, expectedBlock.Header.Hash())
+	if err != nil {
+		t.Fatalf("Failed to get block at hash %s: %v", expectedBlock.Header.Hash().String(), err)
 	}
 
-	for state == nil || state.CurrentHash != expectedBlock.Header.Hash().String() || state.BlockAssemblyState != "running" {
-		state, err = td.BlockAssemblyClient.GetBlockAssemblyState(td.Ctx)
-		require.NoError(t, err)
-
-		if time.Now().After(deadline) {
-			t.Logf("Timeout waiting for block %s", expectedBlock.Header.Hash().String())
-			break
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	require.Equal(t, expectedBlock.Header.Hash().String(), state.CurrentHash, "Expected block assembly to reach hash %s but got %s", expectedBlock.Header.Hash().String(), state.CurrentHash)
+	td.WaitForBlockStateChange(t, expectedBlock, timeout)
 
 	if len(skipVerifyChain) > 0 && skipVerifyChain[0] {
 		return
@@ -1304,7 +1379,7 @@ finished:
 	for height := expectedBlock.Height - 1; height > 0; height-- {
 		var getBlockByHeight *model.Block
 
-		getBlockByHeight, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, height)
+		getBlockByHeight, err = td.BlockchainClient.GetBlockByHeight(ctx, height)
 		require.NoError(t, err)
 
 		require.Equal(t, previousBlockHash.String(), getBlockByHeight.Header.Hash().String(), blockHashMismatch, height)
@@ -1382,7 +1457,7 @@ func createAndSaveSubtrees(ctx context.Context, subtreeStore blob.Store, txs []*
 }
 
 // storeSubtreeFiles serializes and stores the subtree, subtree data, and subtree meta in the provided subtree store.
-func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData, subtreeMeta *subtreepkg.SubtreeMeta) error {
+func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data, subtreeMeta *subtreepkg.Meta) error {
 	subtreeBytes, err := subtree.Serialize()
 	if err != nil {
 		return err
@@ -1441,6 +1516,12 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 func (td *TestDaemon) ResetServiceManagerContext(t *testing.T) {
 	err := td.d.ServiceManager.ResetContext()
 	require.NoError(t, err)
+}
+
+// GetContainerManager returns the container manager used by this test daemon.
+// This is useful for restart tests where you want to pass the same container to a new daemon.
+func (td *TestDaemon) GetContainerManager() *containers.ContainerManager {
+	return td.containerManager
 }
 
 // WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
@@ -1505,7 +1586,7 @@ func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int)
 		err = newTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.privKey})
 		require.NoError(t, err)
 
-		_, err = td.DistributorClient.SendTransaction(td.Ctx, newTx)
+		err = td.PropagationClient.ProcessTransaction(td.Ctx, newTx)
 		require.NoError(t, err)
 
 		td.Logger.Infof("Transaction %d sent: %s", i+1, newTx.TxID())
@@ -1522,46 +1603,6 @@ func (td *TestDaemon) CreateAndSendTxs(t *testing.T, parentTx *bt.Tx, count int)
 type daemonDependency struct {
 	name string
 	port int
-}
-
-// calculateDependencies calculates the dependencies required for the daemon based on the provided app settings.
-// nolint:unused // This function is used to calculate the dependencies for the daemon.
-func calculateDependencies(t *testing.T, appSettings []*settings.Settings) []daemonDependency {
-	dependencies := make([]daemonDependency, 5)
-
-	// Blockchain store
-	blockchainURL := appSettings[0].BlockChain.StoreURL
-
-	port, err := strconv.Atoi(blockchainURL.Port())
-	if err != nil {
-		t.Fatalf(failedParsingStorePort, err)
-	}
-
-	dependencies = append(dependencies, daemonDependency{"postgres", port})
-
-	// Kafka
-	kafkaURL := appSettings[0].Kafka.BlocksConfig
-
-	port, err = strconv.Atoi(kafkaURL.Port())
-	if err != nil {
-		t.Fatalf(failedParsingStorePort, err)
-	}
-
-	dependencies = append(dependencies, daemonDependency{"kafka-shared", port})
-
-	// Aerospike
-	for i, s := range appSettings {
-		aeroURL := s.UtxoStore.UtxoStore
-
-		port, err = strconv.Atoi(aeroURL.Port())
-		if err != nil {
-			t.Fatalf(failedParsingStorePort, err)
-		}
-
-		dependencies = append(dependencies, daemonDependency{"aerospike-" + strconv.Itoa(i+1), port})
-	}
-
-	return dependencies
 }
 
 // StartDaemonDependencies starts the required dependencies for the daemon using Docker Compose.
@@ -1720,14 +1761,10 @@ func (td *TestDaemon) CreateParentTransactionWithNOutputs(t *testing.T, parentTx
 	}
 
 	// Send the transaction
-	var response []*distributor.ResponseWrapper
-
-	response, err = td.DistributorClient.SendTransaction(td.Ctx, newTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, newTx)
 	require.NoError(t, err)
 
-	require.Equal(t, len(response), 1)
-
-	td.Logger.Infof("Created parent transaction with %d outputs: %s, error: %v", count, newTx.TxID(), response[0].Error)
+	td.Logger.Infof("Created parent transaction with %d outputs: %s", count, newTx.TxID())
 
 	// Wait for the transaction to be processed by block assembly
 	err = td.WaitForTransactionInBlockAssembly(newTx, 10*time.Second)
@@ -1781,7 +1818,7 @@ func (td *TestDaemon) CreateAndSendTxsConcurrently(_ *testing.T, parentTx *bt.Tx
 				errorChan <- errors.NewProcessingError("Error filling inputs", err)
 			}
 
-			if _, err := td.DistributorClient.SendTransaction(td.Ctx, newTx); err != nil {
+			if err := td.PropagationClient.ProcessTransaction(td.Ctx, newTx); err != nil {
 				errorChan <- errors.NewProcessingError("Error sending transaction", err)
 			}
 
@@ -1861,22 +1898,22 @@ func (td *TestDaemon) ConnectToPeer(t *testing.T, peer *TestDaemon) {
 
 			return
 		case <-ticker.C:
-			r, err := td.P2PClient.GetPeers(td.Ctx)
+			peers, err := td.P2PClient.GetPeers(td.Ctx)
 			if err != nil {
 				// If there's an error calling RPC, log it and continue retrying
 				t.Logf("Error calling getpeerinfo: %v. Retrying...", err)
 				continue
 			}
 
-			if len(r.Peers) == 0 {
+			if len(peers) == 0 {
 				t.Logf("getpeerinfo returned empty peer list. Retrying...")
 				continue
 			}
 
 			found := false
 
-			for _, p := range r.Peers {
-				if p != nil && p.Id == peer.Settings.P2P.PeerID {
+			for _, p := range peers {
+				if p != nil && p.ID.String() == peer.Settings.P2P.PeerID {
 					found = true
 					break
 				}
@@ -1895,6 +1932,58 @@ func (td *TestDaemon) DisconnectFromPeer(t *testing.T, peer *TestDaemon) {
 	require.NoError(t, err, "Failed to disconnect from peer")
 }
 
+func (td *TestDaemon) InjectPeer(t *testing.T, peer *TestDaemon) {
+	peerID, err := libp2pPeer.Decode(peer.Settings.P2P.PeerID)
+	require.NoError(t, err, "Failed to decode peer ID")
+
+	p2pService, err := td.d.ServiceManager.GetService("P2P")
+	require.NoError(t, err, "Failed to get P2P service")
+
+	p2pServer, ok := p2pService.(*p2p.Server)
+	require.True(t, ok, "Failed to cast P2P service to Server")
+
+	// Inject my peer info to other peer...
+	header, meta, err := peer.BlockchainClient.GetBestBlockHeader(td.Ctx)
+	require.NoError(t, err, "Failed to get best block header")
+
+	p2pServer.InjectPeerForTesting(peerID, peer.Settings.Context, peer.AssetURL, meta.Height, header.Hash())
+
+	t.Logf("Injected peer %s into %s's registry (PeerID: %s)", peer.Settings.Context, td.Settings.Context, peerID)
+}
+
 func peerAddress(peer *TestDaemon) string {
 	return fmt.Sprintf("/dns/127.0.0.1/tcp/%d/p2p/%s", peer.Settings.P2P.Port, peer.Settings.P2P.PeerID)
+}
+
+// WaitForBlockAssemblyToProcessTx waits for block assembly to process a transaction by polling GetTransactionHashes.
+// It checks if the transaction with the given hash string appears in the block assembly transaction list.
+// The function uses a context-based timeout (default 2 seconds) and polls every 100ms.
+func (td *TestDaemon) WaitForBlockAssemblyToProcessTx(t *testing.T, txHashStr string) {
+	timeout := 2 * time.Second
+	ctx, cancel := context.WithTimeout(td.Ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Timeout - fail the test
+			t.Fatalf("tx %s not found in block assembly after %v timeout", txHashStr, timeout)
+			return
+
+		case <-ticker.C:
+			txs, err := td.BlockAssemblyClient.GetTransactionHashes(ctx)
+			if err != nil {
+				// Continue retrying on error
+				continue
+			}
+
+			// Check if our transaction is in the list
+			if slices.Contains(txs, txHashStr) {
+				return
+			}
+		}
+	}
 }

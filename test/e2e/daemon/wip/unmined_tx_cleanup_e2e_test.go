@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/assert"
@@ -41,14 +42,16 @@ func TestUnminedTransactionCleanup(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
 		// EnableFullLogging: true,
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.UtxoStore.UnminedTxRetention = unminedTxRetention
-			s.UtxoStore.ParentPreservationBlocks = parentPreservationBlocks
-			s.GlobalBlockHeightRetention = utxoRetentionHeight
-			s.UtxoStore.BlockHeightRetention = utxoRetentionHeight
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.UtxoStore.UnminedTxRetention = unminedTxRetention
+				s.UtxoStore.ParentPreservationBlocks = parentPreservationBlocks
+				s.GlobalBlockHeightRetention = utxoRetentionHeight
+				s.UtxoStore.BlockHeightRetention = utxoRetentionHeight
+			},
+		),
 	})
 	defer td.Stop(t)
 
@@ -119,7 +122,7 @@ func TestUnminedTransactionCleanup(t *testing.T) {
 	for i := uint32(0); i < blocksToMineBeforePreservation; i++ {
 		nonce++
 		_, prevBlock = td.CreateTestBlock(t, prevBlock, nonce)
-		require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, prevBlock, prevBlock.Height, "legacy", ""),
+		require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, prevBlock, prevBlock.Height, "", "legacy"),
 			"Failed to process block")
 	}
 
@@ -210,7 +213,7 @@ func TestUnminedTransactionCleanup(t *testing.T) {
 	// create a test block
 	nonce++
 	_, block4b := td.CreateTestBlock(t, block3, nonce, spendingParentTxB)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "legacy", "")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy")
 	require.NoError(t, err)
 	time.Sleep(2 * time.Second)
 	prevBlockB := block4b
@@ -303,16 +306,18 @@ func TestUnminedTransactionCleanupAerospike(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
 		// EnableFullLogging: true,
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			parsedURL, _ := url.Parse(utxoStoreURL)
-			s.UtxoStore.UtxoStore = parsedURL
-			s.UtxoStore.UnminedTxRetention = unminedTxRetention
-			s.UtxoStore.ParentPreservationBlocks = parentPreservationBlocks
-			s.GlobalBlockHeightRetention = utxoRetentionHeight
-			s.UtxoStore.BlockHeightRetention = utxoRetentionHeight
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				parsedURL, _ := url.Parse(utxoStoreURL)
+				s.UtxoStore.UtxoStore = parsedURL
+				s.UtxoStore.UnminedTxRetention = unminedTxRetention
+				s.UtxoStore.ParentPreservationBlocks = parentPreservationBlocks
+				s.GlobalBlockHeightRetention = utxoRetentionHeight
+				s.UtxoStore.BlockHeightRetention = utxoRetentionHeight
+			},
+		),
 	})
 	defer td.Stop(t)
 
@@ -375,7 +380,7 @@ func TestUnminedTransactionCleanupAerospike(t *testing.T) {
 	for i := uint32(0); i < blocksToMineBeforePreservation; i++ {
 		nonce++
 		_, prevBlock = td.CreateTestBlock(t, prevBlock, nonce)
-		require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, prevBlock, prevBlock.Height, "legacy", ""),
+		require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, prevBlock, prevBlock.Height, "", "legacy"),
 			"Failed to process block")
 	}
 
@@ -453,7 +458,7 @@ func TestUnminedTransactionCleanupAerospike(t *testing.T) {
 	// Create a test block
 	nonce++
 	_, block4b := td.CreateTestBlock(t, block3, nonce, spendingParentTxB)
-	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "legacy", "")
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy")
 	require.NoError(t, err)
 	time.Sleep(2 * time.Second)
 

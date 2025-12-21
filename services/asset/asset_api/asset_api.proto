@@ -6,9 +6,9 @@ package asset_api;
 
 // swagger:enum Type
 enum Type {
-  PING = 0;
+  NotUsedPING = 0; // Deprecated, previously used for WebSocket keepalive (not a P2P message)
   Subtree = 1;
   Block = 2;
-  MiningOn = 3;
+  NotUsedMiningOn = 3; // Deprecated, previously used for MiningOn
   NodeStatus = 4;
 }

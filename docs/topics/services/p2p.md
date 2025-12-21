@@ -18,13 +18,19 @@
         - [2.7.2. Ban Operations](#272-ban-operations)
         - [2.7.3. Ban Event Handling](#273-ban-event-handling)
         - [2.7.4. Configuration](#274-configuration)
-3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
-4. [Technology](#4-technology)
-5. [Data Model](#5-data-model)
-6. [Directory Structure and Main Files](#6-directory-structure-and-main-files)
-7. [How to run](#7-how-to-run)
-8. [Configuration options (settings flags)](#8-configuration-options-settings-flags)
-9. [Other Resources](#9-other-resources)
+    - [2.8. Peer Registry and Reputation System](#28-peer-registry-and-reputation-system)
+        - [2.8.1. Overview](#281-overview)
+        - [2.8.2. Peer Information Tracking](#282-peer-information-tracking)
+        - [2.8.3. Reputation Algorithm](#283-reputation-algorithm)
+        - [2.8.4. Peer Selection](#284-peer-selection)
+        - [2.8.5. Persistence](#285-persistence)
+        - [2.8.6. Recovery Mechanisms](#286-recovery-mechanisms)
+    - [3. Technology](#3-technology)
+    - [4. Data Model](#4-data-model)
+    - [5. Directory Structure and Main Files](#5-directory-structure-and-main-files)
+    - [6. How to run](#6-how-to-run)
+    - [7. Configuration options (settings flags)](#7-configuration-options-settings-flags)
+    - [8. Other Resources](#8-other-resources)
 
 ## 1. Description
 
@@ -195,17 +201,17 @@ Once these steps are completed, the server is ready to accept peer connections, 
 
 ### 2.2. Peer Discovery and Connection
 
-In the previous section, the P2P Service created a `P2PNode as part of the initialization phase. This P2PNode is responsible for joining the network. The P2PNode utilizes a libp2p host and a Distributed Hash Table (DHT) for peer discovery and connection based on shared topics. This mechanism enables the node to become part of a decentralized network, facilitating communication and resource sharing among peers.
+In the previous section, the P2P Service created a `P2PClient as part of the initialization phase. This P2PClient is responsible for joining the network. The P2PClient utilizes a libp2p host and a Distributed Hash Table (DHT) for peer discovery and connection based on shared topics. This mechanism enables the client to become part of a decentralized network, facilitating communication and resource sharing among peers.
 
 ![p2p_peer_discovery.svg](img/plantuml/p2p/p2p_peer_discovery.svg)
 
 1. **Initialization of DHT and libp2p Host**:
 
-    - The `P2PNode` struct, upon invocation of its `Start` method, initializes the DHT using either `initDHT` or `initPrivateDHT` methods depending on the configuration. This step sets up the DHT for the libp2p host (`s.host`), which allows for peer discovery and content routing within the P2P network. The DHT is bootstrapped with default or configured peers to integrate the node into the existing network.
+    - The `P2PClient` struct, upon invocation of its `Start` method, initializes the DHT using either `initDHT` or `initPrivateDHT` methods depending on the configuration. This step sets up the DHT for the libp2p host (`s.host`), which allows for peer discovery and content routing within the P2P network. The DHT is bootstrapped with default or configured peers to integrate the client into the existing network.
 
 2. **Setting Up Routing Discovery**:
 
-    - Once the DHT is initialized, `P2PNode.Start` sets up `routingDiscovery` with the created DHT instance. This discovery service is responsible for locating peers within the network and advertising the node's own presence.
+    - Once the DHT is initialized, `P2PClient.Start` sets up `routingDiscovery` with the created DHT instance. This discovery service is responsible for locating peers within the network and advertising the client's own presence.
     - The DHT implementation supports two modes:
 
         - Standard mode (`initDHT`): Uses the public IPFS bootstrap nodes for initial discovery
@@ -369,122 +375,79 @@ Ban-related settings in the configuration:
 | `ban_default_duration` | duration | 24h | Default duration for bans | Controls how long banned peers are excluded from the network |
 | `ban_max_entries` | int | 1000 | Maximum number of banned entries to maintain | Prevents unbounded memory growth in ban list |
 
-## 3. gRPC Protobuf Definitions
+### 2.8. Peer Registry and Reputation System
 
-The P2P Service exposes a gRPC API for administrative operations and peer management. The protobuf definitions can be found in `services/p2p/p2p_api/p2p_api.proto`.
+The P2P service includes a comprehensive peer management system that tracks peer behavior, calculates reputation scores, and selects optimal peers for network operations.
 
-### PeerService
+#### 2.8.1. Overview
 
-The PeerService provides RPC methods for managing peer connections and ban lists:
+The system consists of three main components:
 
-**Peer Information:**
+- **Peer Registry**: A thread-safe data store maintaining all peer information and interaction history
+- **Peer Selector**: A stateless component that selects optimal peers based on reputation and criteria
+- **Reputation Scoring**: An algorithm calculating peer reliability scores (0-100)
 
-- **`GetPeers()`**: Retrieves information about all connected peers
+#### 2.8.2. Peer Information Tracking
 
-    - Returns: List of `Peer` objects containing connection details, statistics, and metadata
-    - Use case: Monitoring active peer connections and network health
+The peer registry tracks comprehensive information for each peer:
 
-**Ban Management:**
+- **Identity**: Peer ID, client name, connection status
+- **Blockchain State**: Height, block hash, storage mode (full/pruned)
+- **Network Info**: DataHub URL, URL responsiveness, bytes received
+- **Reputation Metrics**: Interaction successes/failures, malicious behavior count, average response time
+- **Interaction History**: Blocks received, subtrees received, transactions received
 
-- **`BanPeer(addr, until)`**: Bans a peer by IP address or subnet
+#### 2.8.3. Reputation Algorithm
 
-    - Parameters:
+Peers are assigned reputation scores from 0 to 100:
 
-        - `addr` (string): IP address or subnet in CIDR notation
-        - `until` (int64): Unix timestamp when ban expires
-    - Returns: Success status
-    - Use case: Manually banning misbehaving peers
+- **50**: Default neutral score for new peers
+- **20**: Minimum threshold for peer selection eligibility
+- **5**: Score assigned to peers exhibiting malicious behavior
 
-- **`UnbanPeer(addr)`**: Removes a ban from a peer address
+The reputation calculation considers:
 
-    - Parameters:
+- Success rate of interactions (60% weight)
+- Base score component (40% weight)
+- Recent failure penalties (-15 for failures within 1 hour)
+- Recent success bonuses (+10 for successes within 1 hour)
+- Malicious behavior (immediate drop to 5.0)
 
-        - `addr` (string): IP address or subnet to unban
-    - Returns: Success status
-    - Use case: Restoring access for previously banned peers
+#### 2.8.4. Peer Selection
 
-- **`IsBanned(ipOrSubnet)`**: Checks if an IP or subnet is currently banned
+The peer selector uses a two-phase approach:
 
-    - Parameters:
+1. **Phase 1 - Full Nodes**: Filter for peers announcing "full" storage mode, sort by reputation
+2. **Phase 2 - Pruned Fallback**: If no full nodes available, select youngest pruned node
 
-        - `ipOrSubnet` (string): IP address or subnet to check
-    - Returns: Boolean indicating ban status
-    - Use case: Verifying ban status before connection attempts
+Selection criteria include:
 
-- **`ListBanned()`**: Lists all currently banned IP addresses and subnets
+- Not banned
+- Has DataHub URL (excludes listen-only nodes)
+- URL is responsive
+- Valid blockchain height
+- Reputation score >= 20.0
+- Passes cooldown period
 
-    - Returns: Array of banned address strings
-    - Use case: Auditing and reviewing ban list
+#### 2.8.5. Persistence
 
-- **`ClearBanned()`**: Removes all bans from the ban list
+The peer registry persists to `teranode_peer_registry.json`:
 
-    - Returns: Success status
-    - Use case: Resetting ban list (use with caution)
+- Saves on shutdown and periodically during operation
+- Restores peer metrics on startup
+- Maintains version compatibility
 
-- **`AddBanScore(peer_id, reason)`**: Adds a ban score to a peer for misbehavior
+#### 2.8.6. Recovery Mechanisms
 
-    - Parameters:
+Peers can recover from low reputation through:
 
-        - `peer_id` (string): Peer identifier
-        - `reason` (string): Reason for adding ban score
-    - Returns: Success status
-    - Use case: Incrementally tracking peer misbehavior before full ban
+- **Automatic Recovery**: `ReconsiderBadPeers` resets reputation after cooldown period
+- **Manual Reset**: Via gRPC API or dashboard UI
+- **Exponential Cooldown**: Reset cooldown triples for each subsequent reset
 
-**Connection Management:**
+For detailed documentation on the peer registry and reputation system, see [Peer Registry and Reputation System](../features/peer_registry_reputation.md).
 
-- **`ConnectPeer(peer_address)`**: Manually initiates connection to a peer
-
-    - Parameters:
-
-        - `peer_address` (string): Multiaddr format address (e.g., `/ip4/127.0.0.1/tcp/9005/p2p/12D3KooW...`)
-    - Returns: Success status and error message
-    - Use case: Establishing connections to specific peers
-
-- **`DisconnectPeer(peer_id)`**: Disconnects from a specified peer
-
-    - Parameters:
-
-        - `peer_id` (string): Peer identifier to disconnect from
-    - Returns: Success status and error message
-    - Use case: Manually terminating problematic peer connections
-
-### Peer Data Model
-
-The `Peer` message contains comprehensive peer connection information:
-
-```protobuf
-message Peer {
-  string id = 1;                    // Unique peer identifier
-  string addr = 2;                  // Remote peer address
-  string addrLocal = 3;             // Local address used for connection
-  string services = 4;              // Services advertised by peer
-  int64 lastSend = 5;               // Last message send timestamp
-  int64 lastRecv = 6;               // Last message receive timestamp
-  int64 sendSize = 7;               // Total bytes sent
-  int64 recvSize = 8;               // Total bytes received
-  int64 sendMemory = 9;             // Memory allocated for sending
-  bool pauseSend = 10;              // Send pause status
-  bool unpauseSend = 11;            // Send unpause status
-  uint64 bytesSent = 12;            // Cumulative bytes sent
-  uint64 bytesReceived = 13;        // Cumulative bytes received
-  int64 avgRecvBandwidth = 14;      // Average receive bandwidth
-  string assocId = 15;              // Association identifier
-  string streamPolicy = 16;         // Stream policy configuration
-  bool inbound = 17;                // Connection direction (true=inbound)
-  int64 connTime = 18;              // Connection establishment time
-  int64 pingTime = 19;              // Latest ping round-trip time
-  int64 timeOffset = 20;            // Time offset from peer
-  uint32 version = 21;              // Protocol version
-  string subVer = 22;               // User agent / sub-version
-  int32 startingHeight = 23;        // Block height at connection time
-  int32 currentHeight = 24;         // Current block height
-  int32 banscore = 25;              // Accumulated ban score
-  bool whitelisted = 26;            // Whitelist status
-  int64 feeFilter = 27;             // Minimum fee filter
-}
-```
-
-## 4. Technology
+## 3. Technology
 
 1. **Go Programming Language**:
 
@@ -675,7 +638,7 @@ Within the P2P service, notifications are sent to WebSocket clients using the fo
 To run the P2P Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -P2P=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -p2p=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the P2P Service locally.

@@ -28,11 +28,9 @@ title UTXO Store - Component Diagram
 
 Container_Boundary(utxo_store, "UTXO Store System") {
 
-Component(store_interface, "Store Interface", "Go Interface", "Defines UTXO store operations: Get, Create, Spend, Unspend")
+Component(store_interface, "Store Interface", "Go Interface", "Defines UTXO store operations: Get, Create, Spend, Freeze, Reassign")
 
 Component(factory, "Store Factory", "Go", "Creates store instances based on configuration")
-
-
 
 Component(memory_impl, "Memory Implementation", "Go", "In-memory UTXO storage with concurrent access and block height tracking")
 
@@ -42,49 +40,21 @@ Component(sql_impl, "SQL Implementation", "Go", "Relational database storage for
 
 Component(null_impl, "Null Implementation", "Go", "No-op implementation for testing and benchmarking")
 
-
-
 Component(get_batcher, "Get Batcher", "Go", "Batches UTXO retrieval operations for performance")
 
 Component(spend_batcher, "Spend Batcher", "Go", "Batches UTXO spending operations for performance")
 
-Component(unspendable_batcher, "Unspendable Batcher", "Go", "Batches unspendable marking operations")
+Component(outpoint_batcher, "Outpoint Batcher", "Go", "Batches outpoint operations for performance")
 
+Component(increment_batcher, "Increment Batcher", "Go", "Batches block height increment operations")
 
-
-Component(alert_manager, "Alert Manager", "Go", "Handles UTXO freezing, unfreezing, and reassignment")
-
-Component(freeze_component, "Freeze Component", "Go", "Implements UTXO freezing logic with court order support")
-
-Component(reassign_component, "Reassign Component", "Go", "Implements UTXO reassignment for legal recovery")
-
-
-
-Component(external_storage_manager, "External Storage Manager", "Go", "Manages large transaction data in external files")
-
-Component(pagination_manager, "Pagination Manager", "Go", "Handles large transactions with many outputs")
-
-Component(status_manager, "Status Manager", "Go", "Manages UTXO status: OK, SPENT, FROZEN, CONFLICTING, etc.")
-
-
+Component(cleanup_service, "Cleanup Service", "Go", "Manages delete-after-height operations for expired UTXOs")
 
 Component(aerospike_client, "Aerospike Client", "Aerospike Go", "Aerospike database client with connection pooling")
 
 Component(lua_script_manager, "Lua Script Manager", "Aerospike Lua", "Manages Lua scripts for atomic operations")
 
 Component(sql_driver, "SQL Driver", "Go database/sql", "PostgreSQL and SQLite database drivers")
-
-Component(memory_manager, "Memory Manager", "Go sync", "Concurrent in-memory UTXO management")
-
-
-
-Component(dah_manager, "DAH Manager", "Go", "Delete-After-Height management for external storage")
-
-Component(metrics_collector, "Metrics Collector", "Prometheus", "Collects operation metrics and performance counters")
-
-Component(logger_component, "Logger Component", "Go", "Operation logging and audit trail generation")
-
-Component(health_checker, "Health Checker", "Go", "Health check implementation for store backends")
 
 }
 
@@ -102,24 +72,6 @@ ComponentDb(file_system, "File System", "Filesystem", "External transaction data
 
 }
 
-Container_Boundary(monitoring, "Monitoring & Observability") {
-
-Component(prometheus_metrics, "Prometheus Metrics", "Prometheus", "UTXO operation metrics")
-
-Component(tracing_component, "Tracing Component", "OpenTelemetry", "Distributed tracing")
-
-Component(audit_logger, "Audit Logger", "Logging", "Audit trail for legal compliance")
-
-}
-
-Container_Boundary(legal_compliance, "Legal & Compliance") {
-
-Component(court_order_processor, "Court Order Processor", "Go", "Processes legal freeze/reassign orders")
-
-Component(compliance_reporter, "Compliance Reporter", "Go", "Reports compliance data")
-
-}
-
 ' Core interface relationships
 
 Rel(store_interface, factory, "Created by", "Configuration-based instantiation")
@@ -134,8 +86,6 @@ Rel(factory, null_impl, "Creates", "Null store instances")
 
 ' Implementation to backend relationships
 
-Rel(memory_impl, memory_manager, "Uses", "Concurrent access control")
-
 Rel(aerospike_impl, aerospike_client, "Uses", "Database operations")
 
 Rel(aerospike_impl, lua_script_manager, "Uses", "Atomic operations")
@@ -148,27 +98,13 @@ Rel(store_interface, get_batcher, "Enhanced by", "Batch retrieval")
 
 Rel(store_interface, spend_batcher, "Enhanced by", "Batch spending")
 
-Rel(store_interface, unspendable_batcher, "Enhanced by", "Batch marking")
+Rel(store_interface, outpoint_batcher, "Enhanced by", "Batch outpoint operations")
 
-' Alert system relationships
+Rel(store_interface, increment_batcher, "Enhanced by", "Batch height increments")
 
-Rel(store_interface, alert_manager, "Enhanced by", "Alert system features")
+' Cleanup service relationship
 
-Rel(alert_manager, freeze_component, "Uses", "UTXO freezing")
-
-Rel(alert_manager, reassign_component, "Uses", "UTXO reassignment")
-
-Rel(freeze_component, court_order_processor, "Receives from", "Legal orders")
-
-' Storage management relationships
-
-Rel(store_interface, external_storage_manager, "Uses", "Large data management")
-
-Rel(store_interface, pagination_manager, "Uses", "Large transaction handling")
-
-Rel(store_interface, status_manager, "Uses", "Status management")
-
-Rel(external_storage_manager, dah_manager, "Uses", "Retention policies")
+Rel(aerospike_impl, cleanup_service, "Uses", "DAH cleanup operations")
 
 ' Database backend relationships
 
@@ -180,24 +116,8 @@ Rel(sql_impl, postgresql_database, "Stores in", "SQL queries")
 
 Rel(sql_impl, sqlite_database, "Stores in", "SQL queries")
 
-Rel(external_storage_manager, file_system, "Stores in", "File operations")
+Rel(aerospike_impl, file_system, "Uses", "External transaction data")
 
-' Monitoring relationships
-
-Rel(store_interface, metrics_collector, "Reports to", "Metrics collection")
-
-Rel(store_interface, logger_component, "Logged by", "Operation logging")
-
-Rel(store_interface, health_checker, "Checked by", "Health monitoring")
-
-Rel(metrics_collector, prometheus_metrics, "Exports to", "Metrics system")
-
-Rel(logger_component, audit_logger, "Sends to", "Audit trails")
-
-Rel(store_interface, tracing_component, "Traced by", "Operation tracing")
-
-' Compliance relationships
-
-Rel(alert_manager, compliance_reporter, "Reports to", "Compliance data")
+SHOW_LEGEND()
 
 @enduml

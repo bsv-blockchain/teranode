@@ -29,6 +29,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -49,11 +50,11 @@ import (
 //
 // The implementation follows a tiered retrieval strategy for optimal performance:
 //
-// 1. Cache Layer: First checks the in-memory blocksCache for the requested header
-//   - This cache is populated during block storage and previous retrievals
+// 1. Cache Layer: First checks the in-memory response cache for the requested header
+//   - This cache is populated during previous retrievals and related operations
 //   - Provides O(1) access time for frequently accessed headers
 //   - Particularly effective for recent blocks and chain tips
-//   - No cache expiration policy is applied as header data is immutable
+//   - Cache entries have a TTL and are automatically invalidated when blocks are added
 //
 // 2. Database Layer: If not found in cache, executes an optimized SQL query
 //   - Retrieves all header fields plus additional metadata in a single query
@@ -93,9 +94,20 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeader")
 	defer deferFn()
 
-	header, meta := s.blocksCache.GetBlockHeader(*blockHash)
-	if header != nil {
-		return header, meta, nil
+	// Try to get from response cache using derived cache key
+	// Use operation-prefixed key to avoid conflicts with other cached data
+	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockHeader-%s", blockHash.String())))
+	cacheOp := s.responseCache.Begin(cacheID)
+
+	cached := cacheOp.Get()
+	if cached != nil {
+		if result, ok := cached.Value().([2]interface{}); ok {
+			if header, ok := result[0].(*model.BlockHeader); ok {
+				if meta, ok := result[1].(*model.BlockHeaderMeta); ok {
+					return header, meta, nil
+				}
+			}
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -119,6 +131,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		,b.mined_set
 		,b.subtrees_set
 		,b.invalid
+		,b.inserted_at
 		,b.processed_at
 		FROM blocks b
 		WHERE b.hash = $1
@@ -132,6 +145,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		hashMerkleRoot []byte
 		nBits          []byte
 		coinbaseBytes  []byte
+		insertedAt     time.CustomTime
 		processedAt    *time.CustomTime
 		err            error
 	)
@@ -153,6 +167,7 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		&blockHeaderMeta.MinedSet,
 		&blockHeaderMeta.SubtreesSet,
 		&blockHeaderMeta.Invalid,
+		&insertedAt,
 		&processedAt,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -179,6 +194,8 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		blockHeaderMeta.ProcessedAt = &processedAt.Time
 	}
 
+	blockHeaderMeta.Timestamp = uint32(insertedAt.Unix())
+
 	if len(coinbaseBytes) > 0 {
 		coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
 		if err != nil {
@@ -192,6 +209,9 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 
 		blockHeaderMeta.Miner = miner
 	}
+
+	// Cache the result in response cache
+	cacheOp.Set([2]interface{}{blockHeader, blockHeaderMeta}, s.cacheTTL)
 
 	return blockHeader, blockHeaderMeta, nil
 }

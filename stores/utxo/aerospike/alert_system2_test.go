@@ -75,7 +75,7 @@ func TestAlertSystem(t *testing.T) {
 		assert.Equal(t, teranode_aerospike.GetFrozenUTXOBytes(), frozenUTXO[32:68])
 
 		// try to spend the UTXO
-		spends, err := store.Spend(ctx, spendTx)
+		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.Error(t, err)
 
 		var tErr *errors.Error
@@ -114,7 +114,7 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 
 		// try to spend the UTXO
-		spends, err := store.Spend(ctx, spendTx)
+		spends, err := store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 
 		var tErr *errors.Error
 		require.ErrorAs(t, err, &tErr)
@@ -142,7 +142,7 @@ func TestAlertSystem(t *testing.T) {
 		assert.Equal(t, utxoHash0[:], unfrozenUTXO)
 
 		// try to spend the UTXO
-		_, err = store.Spend(ctx, spendTx)
+		_, err = store.Spend(ctx, spendTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 	})
 
@@ -273,18 +273,18 @@ func TestAlertSystem(t *testing.T) {
 		assert.Equal(t, 2, recordUtxos)
 
 		// try to spend the UTXO with the original hash - should fail
-		_, err = store.Spend(ctx, utxoRecTx)
+		_, err = store.Spend(ctx, utxoRecTx, store.GetBlockHeight()+1)
 		require.Error(t, err)
 
 		// try to spend the UTXO with the new hash - should fail, block height has not been reached
-		_, err = store.Spend(ctx, newUtxoRecTx)
+		_, err = store.Spend(ctx, newUtxoRecTx, store.GetBlockHeight()+1)
 		require.Error(t, err, "UTXO is not spendable yet")
 
 		err = store.SetBlockHeight(1101)
 		require.NoError(t, err)
 
 		// try to spend the UTXO with the new hash
-		_, err = store.Spend(ctx, newUtxoRecTx)
+		_, err = store.Spend(ctx, newUtxoRecTx, store.GetBlockHeight()+1)
 		require.NoError(t, err)
 	})
 }

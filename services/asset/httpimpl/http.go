@@ -24,6 +24,10 @@ import (
 var AssetStat = gocore.NewStat("Asset")
 
 // HTTP handles blockchain data API endpoints using the Echo framework.
+// Provides RESTful access to blocks, transactions, subtrees, and UTXO data with
+// support for JSON and binary formats, request signing, CORS, and health checking.
+//
+// Thread-safe: Echo framework and repository handle concurrent requests safely.
 type HTTP struct {
 	logger     ulogger.Logger
 	settings   *settings.Settings
@@ -74,6 +78,10 @@ type HTTP struct {
 //	Legacy Compatibility:
 //	- GET /rest/block/{hash}.bin: Get block in legacy format
 //	- GET /api/v1/block_legacy/{hash}: Get block in legacy format
+//
+//	Network and P2P:
+//	- GET /api/v1/catchup/status: Get blockchain catchup status
+//	- GET /api/v1/peers: Get peer registry data
 //
 // Configuration:
 //   - ECHO_DEBUG: Enable debug logging
@@ -249,6 +257,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/bestblockheader/hex", h.GetBestBlockHeader(HEX))
 	apiGroup.GET("/bestblockheader/json", h.GetBestBlockHeader(JSON))
 
+	apiGroup.GET("/merkle_proof/:hash", h.GetMerkleProof(BINARY_STREAM))
+	apiGroup.GET("/merkle_proof/:hash/hex", h.GetMerkleProof(HEX))
+	apiGroup.GET("/merkle_proof/:hash/json", h.GetMerkleProof(JSON))
+
 	if h.settings.StatsPrefix != "" {
 		e.GET(h.settings.StatsPrefix+"stats", AdaptStdHandler(gocore.HandleStats))
 		e.GET(h.settings.StatsPrefix+"reset", AdaptStdHandler(gocore.ResetStats))
@@ -262,6 +274,17 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		// Apply authentication middleware for all POST endpoints
 		authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
 		apiGroup.Use(authHandler.PostAuthMiddleware)
+
+		// Register dashboard-compatible API routes that need auth protection
+		// The dashboard's SvelteKit +server.ts endpoints don't work in production (adapter-static)
+		// so we need to provide the same endpoints directly in the Go backend
+		apiP2PGroup := e.Group("/api/p2p")
+		apiP2PGroup.Use(authHandler.PostAuthMiddleware) // Protect POST endpoints
+		apiP2PGroup.GET("/peers", h.GetPeers)
+		apiP2PGroup.POST("/reset-reputation", h.ResetReputation)
+
+		apiCatchupGroup := e.Group("/api/catchup")
+		apiCatchupGroup.GET("/status", h.GetCatchupStatus)
 
 		dashboardConfig := middleware.CORSConfig{
 			// Use AllowOriginFunc instead of AllowOrigins to dynamically approve origins
@@ -316,12 +339,21 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	})
 
 	// Create and register block handler for block operations
-	blockHandler := NewBlockHandler(repo.BlockchainClient, logger)
+	blockHandler := NewBlockHandler(repo.BlockchainClient, repo.BlockvalidationClient, logger)
 
 	// Register block invalidation/revalidation endpoints
 	apiGroup.POST("/block/invalidate", blockHandler.InvalidateBlock)
 	apiGroup.POST("/block/revalidate", blockHandler.RevalidateBlock)
 	apiGroup.GET("/blocks/invalid", blockHandler.GetLastNInvalidBlocks)
+
+	// Register catchup status endpoint
+	apiGroup.GET("/catchup/status", h.GetCatchupStatus)
+
+	// Register service heights endpoint
+	apiGroup.GET("/service/heights", h.GetServiceHeights)
+
+	// Register peers endpoint
+	apiGroup.GET("/peers", h.GetPeers)
 
 	// Add OPTIONS handlers for block operations
 	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {

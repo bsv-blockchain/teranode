@@ -40,12 +40,12 @@ var (
 	hash1 = chainhash.HashH([]byte("tx1"))
 	hash2 = chainhash.HashH([]byte("tx2"))
 
-	node1 = subtreepkg.SubtreeNode{
+	node1 = subtreepkg.Node{
 		Hash:        hash1,
 		Fee:         1,
 		SizeInBytes: 1,
 	}
-	node2 = subtreepkg.SubtreeNode{
+	node2 = subtreepkg.Node{
 		Hash:        hash2,
 		Fee:         1,
 		SizeInBytes: 1,
@@ -268,7 +268,7 @@ func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Me
 
 		hashes[hash] = i
 
-		node := subtreepkg.SubtreeNode{
+		node := subtreepkg.Node{
 			Hash:        hash,
 			Fee:         1,
 			SizeInBytes: 1,
@@ -311,8 +311,10 @@ func initSubtreeProcessor(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *me
 
 	newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest, 1)
 
-	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, tSettings, blobStore, blockchainClient, utxoStore, newSubtreeChan)
+	ctx := t.Context()
+	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, blobStore, blockchainClient, utxoStore, newSubtreeChan)
 	require.NoError(t, err)
+	subtreeProcessor.Start(ctx)
 
 	return subtreeProcessor, blobStore, newSubtreeChan
 }

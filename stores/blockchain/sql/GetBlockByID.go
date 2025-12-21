@@ -74,7 +74,8 @@ func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 	// the cache will be invalidated by the StoreBlock function when a new block is added, or after cacheTTL seconds
 	cacheID := chainhash.HashH([]byte(fmt.Sprintf("GetBlockByID-%d", id)))
 
-	cached := s.responseCache.Get(cacheID)
+	cacheOp := s.responseCache.Begin(cacheID)
+	cached := cacheOp.Get()
 	if cached != nil && cached.Value() != nil {
 		if cacheData, ok := cached.Value().(*model.Block); ok && cacheData != nil {
 			s.logger.Debugf("GetBlockByID cache hit")
@@ -170,7 +171,7 @@ func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 		return nil, errors.NewInvalidArgumentError("failed to convert subtrees", err)
 	}
 
-	s.responseCache.Set(cacheID, block, s.cacheTTL)
+	cacheOp.Set(block, s.cacheTTL)
 
 	return block, nil
 }

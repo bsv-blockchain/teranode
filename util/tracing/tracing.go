@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // contextKey is a custom type for context keys to avoid collisions
@@ -149,6 +150,18 @@ type USpan struct {
 	ctx  context.Context
 }
 
+var (
+	// noopTracerProvider is a singleton no-op tracer provider used when tracing is disabled
+	noopTracerProvider = noop.NewTracerProvider()
+
+	// noopTracer is a singleton no-op tracer returned when tracing is disabled
+	// This eliminates allocation overhead from creating new UTracer instances
+	noopTracer = &UTracer{
+		name:   "noop",
+		tracer: noopTracerProvider.Tracer("noop"),
+	}
+)
+
 // Tracer creates a new unified tracer with the given name.
 // The name typically represents the service or component being traced.
 //
@@ -156,6 +169,15 @@ type USpan struct {
 //   - name: The name of the service or component
 //   - otelOpts: OpenTelemetry tracer options passed directly to otel.Tracer
 func Tracer(name string, otelOpts ...trace.TracerOption) *UTracer {
+	// Fast path: return singleton no-op tracer when tracing is disabled
+	// This eliminates the overhead of:
+	// - Global otel.Tracer lookup (~expensive)
+	// - UTracer allocation (~700ms/3.5% CPU in profiles)
+	// - Option processing
+	if !IsTracingEnabled() {
+		return noopTracer
+	}
+
 	// Filter out nil options to prevent panic in OpenTelemetry
 	var validOpts []trace.TracerOption
 
@@ -188,24 +210,20 @@ func Tracer(name string, otelOpts ...trace.TracerOption) *UTracer {
 //	)
 //	defer span.End()
 func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (context.Context, trace.Span, func(...error)) {
+	tracingEnabled := IsTracingEnabled()
+
 	// Process options
 	options := &TraceOptions{}
+
 	for _, opt := range opts {
 		opt(options)
 	}
 
-	// Add any options.Tags to the span options...
-	for _, tag := range options.Tags {
-		options.SpanStartOptions = append(options.SpanStartOptions, trace.WithAttributes(attribute.String(tag.key, tag.value)))
-	}
-
-	// Start OpenTelemetry span
-	ctx, span := u.tracer.Start(ctx, spanName, options.SpanStartOptions...)
-
 	// check whether the context has a timeout set
-	var cancelCtx context.CancelFunc
+	var cancelFunc context.CancelFunc
+
 	if options.Timeout > 0 {
-		ctx, cancelCtx = context.WithTimeout(ctx, options.Timeout)
+		ctx, cancelFunc = context.WithTimeout(ctx, options.Timeout)
 	}
 
 	// Create gocore.Stat (only if enabled)
@@ -223,16 +241,6 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 	// add the start time to the context
 	ctx = context.WithValue(ctx, StartTime, start)
 
-	// Set span attributes from tags
-	if len(options.Tags) > 0 {
-		attrs := make([]attribute.KeyValue, 0, len(options.Tags))
-		for _, tag := range options.Tags {
-			attrs = append(attrs, attribute.String(tag.key, tag.value))
-		}
-
-		span.SetAttributes(attrs...)
-	}
-
 	// Log start messages (only if logging is enabled)
 	if options.Logger != nil && len(options.LogMessages) > 0 {
 		for _, l := range options.LogMessages {
@@ -247,20 +255,42 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		}
 	}
 
-	endFn := func(optionalError ...error) {
-		if span == nil {
-			return
+	var span trace.Span
+
+	if tracingEnabled {
+		// Add any options.Tags to the span options...
+		for _, tag := range options.Tags {
+			options.SpanStartOptions = append(options.SpanStartOptions, trace.WithAttributes(attribute.String(tag.key, tag.value)))
 		}
 
+		// Start OpenTelemetry span
+		ctx, span = u.tracer.Start(ctx, spanName, options.SpanStartOptions...)
+
+		// Set span attributes from tags
+		if len(options.Tags) > 0 {
+			attrs := make([]attribute.KeyValue, 0, len(options.Tags))
+			for _, tag := range options.Tags {
+				attrs = append(attrs, attribute.String(tag.key, tag.value))
+			}
+
+			span.SetAttributes(attrs...)
+		}
+	} else {
+		span = trace.SpanFromContext(ctx)
+	}
+
+	endFn := func(optionalError ...error) {
 		var err error
 
-		if len(optionalError) > 0 && optionalError[0] != nil {
-			err = optionalError[0]
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-		}
+		if tracingEnabled {
+			if len(optionalError) > 0 && optionalError[0] != nil {
+				err = optionalError[0]
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+			}
 
-		span.End()
+			span.End()
+		}
 
 		if stat != nil {
 			stat.AddTime(start)
@@ -270,8 +300,8 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		u.logEndMessage(options, start, err)
 
 		// Ensure the cancelCtx function is called when the span ends
-		if cancelCtx != nil {
-			cancelCtx()
+		if cancelFunc != nil {
+			cancelFunc()
 		}
 	}
 
@@ -300,6 +330,12 @@ func (span *USpan) Stat() *gocore.Stat {
 
 // DecoupleTracingSpan creates a new context with the current span for decoupled tracing
 func DecoupleTracingSpan(ctx context.Context, name string, spanName string) (context.Context, trace.Span, func(...error)) {
+	// Fast path: if tracing is disabled, return immediately
+	if !IsTracingEnabled() {
+		noopSpan := trace.SpanFromContext(ctx)
+		return ctx, noopSpan, func(...error) {}
+	}
+
 	// Extract the current span from context
 	currentSpan := trace.SpanFromContext(ctx)
 

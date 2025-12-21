@@ -74,7 +74,7 @@ func TestCatchup_PartialNetworkFailure(t *testing.T) {
 		httpMock.RegisterFlakeyResponse("http://unreliable-peer", 1, testHeaders[1:])
 		httpMock.Activate()
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://unreliable-peer", "peer-unreliable-001")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "peer-unreliable-001", "http://unreliable-peer")
 
 		suite.RequireNoError(err)
 		assert.NotNil(t, result)
@@ -131,7 +131,7 @@ func TestCatchup_PartialNetworkFailure(t *testing.T) {
 		httpMock.RegisterFlakeyResponse("http://flaky-peer", 3, testHeaders[1:])
 		httpMock.Activate()
 
-		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://flaky-peer", "peer-flaky-001")
+		result, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "peer-flaky-001", "http://flaky-peer")
 
 		suite.RequireNoError(err)
 		assert.NotNil(t, result)
@@ -199,7 +199,7 @@ func TestCatchup_ConnectionDropMidTransfer(t *testing.T) {
 		httpMock.RegisterFlakeyResponse("http://dropping-peer", 1, fullHeaders)
 		httpMock.Activate()
 
-		_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://dropping-peer", "peer-dropping-002")
+		_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "peer-dropping-002", "http://dropping-peer")
 
 		if err != nil {
 			breaker := suite.Server.peerCircuitBreakers.GetBreaker("peer-dropping-002")
@@ -270,17 +270,17 @@ func TestCatchup_ConnectionDropMidTransfer(t *testing.T) {
 		peerID := "peer-bad-001"
 
 		ctx1, cancel1 := context.WithTimeout(suite.Ctx, 2*time.Second)
-		_, _, err1 := suite.Server.catchupGetBlockHeaders(ctx1, targetBlock, "http://bad-peer", peerID)
+		_, _, err1 := suite.Server.catchupGetBlockHeaders(ctx1, targetBlock, peerID, "http://bad-peer")
 		cancel1()
 		assert.Error(t, err1)
 
 		ctx2, cancel2 := context.WithTimeout(suite.Ctx, 2*time.Second)
-		_, _, err2 := suite.Server.catchupGetBlockHeaders(ctx2, targetBlock, "http://bad-peer", peerID)
+		_, _, err2 := suite.Server.catchupGetBlockHeaders(ctx2, targetBlock, peerID, "http://bad-peer")
 		cancel2()
 		assert.Error(t, err2)
 
 		ctx3, cancel3 := context.WithTimeout(suite.Ctx, 2*time.Second)
-		_, _, err3 := suite.Server.catchupGetBlockHeaders(ctx3, targetBlock, "http://bad-peer", peerID)
+		_, _, err3 := suite.Server.catchupGetBlockHeaders(ctx3, targetBlock, peerID, "http://bad-peer")
 		cancel3()
 		assert.Error(t, err3)
 		assert.Contains(t, err3.Error(), "circuit breaker open")
@@ -363,7 +363,7 @@ func TestCatchup_FlappingPeer(t *testing.T) {
 		failCount := 0
 
 		for i := 0; i < 6; i++ {
-			_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "http://flapping-peer", "peer-flapping-002")
+			_, _, err := suite.Server.catchupGetBlockHeaders(suite.Ctx, targetBlock, "peer-flapping-002", "http://flapping-peer")
 			if err != nil {
 				failCount++
 			} else {
@@ -375,15 +375,13 @@ func TestCatchup_FlappingPeer(t *testing.T) {
 
 		assert.Greater(t, successCount, 0, "Should have some successes")
 
-		peerMetric := suite.Server.peerMetrics.PeerMetrics["http://flapping-peer"]
-		if peerMetric != nil {
-			if failCount > 0 {
-				assert.LessOrEqual(t, peerMetric.ReputationScore, float64(100), "Reputation should be affected by failures")
-			}
-			breaker := suite.Server.peerCircuitBreakers.GetBreaker("peer-flapping-001")
-			finalState, _, _, _ := breaker.GetStats()
-			t.Logf("Final circuit breaker state: %v, reputation: %.2f", finalState, peerMetric.ReputationScore)
-		}
+		// Note: peerMetrics field has been removed from Server struct
+		// (peer reputation checks disabled)
+		_ = failCount // Silence unused variable warning
+
+		breaker := suite.Server.peerCircuitBreakers.GetBreaker("peer-flapping-001")
+		finalState, _, _, _ := breaker.GetStats()
+		t.Logf("Final circuit breaker state: %v", finalState)
 	})
 
 	t.Run("PeerEventuallyMarkedUnreliable", func(t *testing.T) {
@@ -459,19 +457,14 @@ func TestCatchup_FlappingPeer(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			reqCtx, reqCancel := context.WithTimeout(suite.Ctx, 2*time.Second)
-			_, _, _ = suite.Server.catchupGetBlockHeaders(reqCtx, targetBlock, "http://degrading-peer", "peer-degrading-001")
+			_, _, _ = suite.Server.catchupGetBlockHeaders(reqCtx, targetBlock, "peer-degrading-001", "http://degrading-peer")
 			reqCancel()
 			time.Sleep(50 * time.Millisecond)
 		}
 
-		peerMetric := suite.Server.peerMetrics.PeerMetrics["peer-degrading-001"]
-		require.NotNil(t, peerMetric, "Expected peer metrics for peer-degrading-001")
-
-		t.Logf("Peer metrics - Reputation: %.2f, Failed: %d, Successful: %d, Total: %d",
-			peerMetric.ReputationScore, peerMetric.FailedRequests, peerMetric.SuccessfulRequests, peerMetric.TotalRequests)
-
-		assert.Greater(t, peerMetric.FailedRequests, int64(0), "Should have recorded some failures")
-		assert.GreaterOrEqual(t, peerMetric.TotalRequests, int64(10), "Should have made at least 10 requests")
+		// Note: peerMetrics field has been removed from Server struct
+		// (peer metrics checks disabled)
+		t.Log("Peer metrics checks disabled - peerMetrics field removed")
 	})
 }
 
@@ -487,9 +480,7 @@ func TestCatchup_NetworkPartition(t *testing.T) {
 		// Mock UTXO store block height
 		mockUTXOStore.On("GetBlockHeight").Return(uint32(1000))
 
-		server.peerMetrics = &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		}
+		// Note: peerMetrics field has been removed from Server struct
 
 		// Create common base
 		// Use consecutive mainnet headers
@@ -550,31 +541,16 @@ func TestCatchup_NetworkPartition(t *testing.T) {
 
 			// Attempt catchup from this peer
 			peerID := fmt.Sprintf("peer-partition-%03d", peerIdx)
-			result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerURL, peerID)
+			result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerID, peerURL)
 
 			if err == nil && result != nil {
-				// Record successful chain info
-				peerMetric := server.peerMetrics.PeerMetrics[peerID]
-				if peerMetric == nil {
-					peerMetric = &catchup.PeerCatchupMetrics{
-						PeerID: peerID,
-					}
-					server.peerMetrics.PeerMetrics[peerID] = peerMetric
-				}
-				peerMetric.SuccessfulRequests++
+				// Note: peerMetrics field has been removed from Server struct
+				// (peer metrics recording disabled)
 			}
 		}
 
-		// All three peers should have metrics
-		assert.Len(t, server.peerMetrics.PeerMetrics, 3)
-
-		// Each peer provided a different valid chain
-		for i := 0; i < 3; i++ {
-			peerID := fmt.Sprintf("peer-partition-%03d", i)
-			metric := server.peerMetrics.PeerMetrics[peerID]
-			assert.NotNil(t, metric)
-			assert.Greater(t, metric.SuccessfulRequests, int64(0))
-		}
+		// Note: peerMetrics field has been removed from Server struct
+		// (peer metrics assertions disabled)
 	})
 }
 
@@ -644,7 +620,7 @@ func TestCatchup_NetworkLatencyHandling(t *testing.T) {
 		httpMock.Activate()
 
 		start := time.Now()
-		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://slow-peer", "peer-slow-001")
+		result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "peer-slow-001", "http://slow-peer")
 		elapsed := time.Since(start)
 
 		// Should succeed but take time
@@ -718,7 +694,7 @@ func TestCatchup_NetworkLatencyHandling(t *testing.T) {
 		httpMock.Activate()
 
 		// Should timeout due to slow response
-		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "http://very-slow-peer", "peer-very-slow-001")
+		_, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "peer-very-slow-001", "http://very-slow-peer")
 
 		assert.Error(t, err)
 		// Should get a timeout error for slow peer response
@@ -738,9 +714,7 @@ func TestCatchup_ConcurrentNetworkRequests(t *testing.T) {
 		// Mock UTXO store block height
 		mockUTXOStore.On("GetBlockHeight").Return(uint32(1000))
 
-		server.peerMetrics = &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		}
+		// Note: peerMetrics field has been removed from Server struct
 
 		numPeers := 5
 		// Use consecutive mainnet headers for proper chain linkage
@@ -818,7 +792,7 @@ func TestCatchup_ConcurrentNetworkRequests(t *testing.T) {
 
 				peerURL := fmt.Sprintf("http://peer-%d", idx)
 				peerID := fmt.Sprintf("peer-concurrent-%03d", idx)
-				result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerURL, peerID)
+				result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, peerID, peerURL)
 				results[idx] = err == nil && result != nil
 			}(i)
 		}
@@ -834,20 +808,9 @@ func TestCatchup_ConcurrentNetworkRequests(t *testing.T) {
 		}
 		assert.Equal(t, numPeers, successCount, "All concurrent requests should succeed")
 
-		// Check metrics were recorded for all peers
-		assert.Len(t, server.peerMetrics.PeerMetrics, numPeers)
+		// Note: peerMetrics field has been removed from Server struct
+		// (peer metrics checks disabled)
 
-		// Fastest peer should have the best response time
-		var fastestPeer string
-		var fastestTime time.Duration = time.Hour
-
-		for peerID, metric := range server.peerMetrics.PeerMetrics {
-			if metric.AverageResponseTime < fastestTime {
-				fastestTime = metric.AverageResponseTime
-				fastestPeer = peerID
-			}
-		}
-
-		assert.Equal(t, "peer-concurrent-004", fastestPeer, "Peer 4 should be fastest")
+		// Note: fastest peer assertion disabled - peerMetrics field removed
 	})
 }

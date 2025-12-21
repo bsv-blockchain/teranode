@@ -72,85 +72,132 @@ func TestMyScenario(t *testing.T) {
 ### IMPORTANT: Database Backend Requirements
 
 All tests MUST be tested with multiple database backends to ensure compatibility:
-- **SQLite** (in-memory, for fast tests)
+
 - **PostgreSQL** (using testcontainers)
 - **Aerospike** (using testcontainers)
 
-### Database Backend Test Pattern
+### Unified Container Management (RECOMMENDED)
+
+**NEW: As of 2025, use the unified `UTXOStoreType` option in TestDaemon for automatic container management.**
+
+This approach eliminates boilerplate container initialization code and ensures consistent setup across all tests.
+
+#### Simple Pattern - Single Backend Test
 
 ```go
 package smoke
 
 import (
-	"os"
 	"testing"
-
 	"github.com/bsv-blockchain/teranode/daemon"
-	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
-	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/stretchr/testify/require"
 )
 
-func init() {
-	os.Setenv("SETTINGS_CONTEXT", "test")
+func TestMyFeature(t *testing.T) {
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
+
+	// Container automatically initialized and cleaned up
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableValidator: true,
+		SettingsContext: "dev.system.test",
+		UTXOStoreType:   "aerospike", // "aerospike", "postgres"
+	})
+	defer td.Stop(t)
+
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	// Test implementation...
 }
+```
 
-// Test with SQLite (in-memory)
-func TestMyFeatureSQLite(t *testing.T) {
-	utxoStore := "sqlite:///test"
+#### Multi-Backend Pattern - Testing All Backends
 
+```go
+package smoke
+
+import (
+	"testing"
+	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/stretchr/testify/require"
+)
+
+// Test with Aerospike (default, recommended for most tests)
+func TestMyFeatureAerospike(t *testing.T) {
 	t.Run("scenario1", func(t *testing.T) {
-		testScenario1(t, utxoStore)
+		testScenario1(t, "aerospike")
 	})
 	t.Run("scenario2", func(t *testing.T) {
-		testScenario2(t, utxoStore)
+		testScenario2(t, "aerospike")
 	})
 }
 
 // Test with PostgreSQL
 func TestMyFeaturePostgres(t *testing.T) {
-	// Setup PostgreSQL container
-	utxoStore, teardown, err := postgres.SetupTestPostgresContainer()
-	require.NoError(t, err)
-
-	defer func() {
-		_ = teardown()
-	}()
-
 	t.Run("scenario1", func(t *testing.T) {
-		testScenario1(t, utxoStore)
+		testScenario1(t, "postgres")
 	})
 	t.Run("scenario2", func(t *testing.T) {
-		testScenario2(t, utxoStore)
-	})
-}
-
-// Test with Aerospike
-func TestMyFeatureAerospike(t *testing.T) {
-	// Setup Aerospike container
-	utxoStore, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
-	t.Run("scenario1", func(t *testing.T) {
-		testScenario1(t, utxoStore)
-	})
-	t.Run("scenario2", func(t *testing.T) {
-		testScenario2(t, utxoStore)
+		testScenario2(t, "postgres")
 	})
 }
 
 // Shared test implementation
-func testScenario1(t *testing.T, utxoStore string) {
+func testScenario1(t *testing.T, storeType string) {
 	SharedTestLock.Lock()
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
+		SettingsContext: "dev.system.test",
+		UTXOStoreType:   storeType, // Automatic container management
+	})
+	defer td.Stop(t)
+
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	// Test implementation...
+}
+```
+
+#### Available Store Types
+
+- `"aerospike"` - Aerospike container (production-like, recommended)
+- `"postgres"` - PostgreSQL container (production-like)
+- `""` (empty) - No automatic container (uses default settings)
+
+#### Benefits of Unified Approach
+
+✅ **No boilerplate** - No manual container initialization
+✅ **Automatic cleanup** - Containers cleaned up with `td.Stop(t)`
+✅ **Consistent setup** - Same initialization across all tests
+✅ **Type-safe** - Compile-time validation of store types
+✅ **Less code** - ~10 lines reduced per test
+
+### Legacy Pattern (Manual Container Setup)
+
+**NOTE: This pattern is deprecated. Use `UTXOStoreType` option instead.**
+
+If you encounter existing tests using manual container setup, they should be refactored to use the unified approach above.
+
+<details>
+<summary>Click to see legacy pattern (for reference only)</summary>
+
+```go
+// OLD PATTERN - Do not use for new tests
+func TestMyFeatureAerospike(t *testing.T) {
+	// Manual container setup (deprecated)
+	utxoStore, teardown, err := aerospike.InitAerospikeContainer()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = teardown()
+	})
+
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		SettingsContext: "dev.system.test",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			url, err := url.Parse(utxoStore)
@@ -159,64 +206,18 @@ func testScenario1(t *testing.T, utxoStore string) {
 		},
 	})
 	defer td.Stop(t)
-
-	// Test implementation...
+	// ...
 }
 ```
 
-### Database URL Formats
-
-- **SQLite**: `"sqlite:///test"` (in-memory database)
-- **PostgreSQL**: Connection string returned by `SetupTestPostgresContainer()`
-- **Aerospike**: URL returned by `InitAerospikeContainer()` (e.g., `"aerospike://host:port/namespace?set=test&expiration=10m"`)
-
-### Helper Functions for Database Setup
-
-#### PostgreSQL Container Setup
-
-```go
-import "github.com/bsv-blockchain/teranode/test/utils/postgres"
-
-utxoStore, teardown, err := postgres.SetupTestPostgresContainer()
-require.NoError(t, err)
-defer func() {
-    _ = teardown()
-}()
-```
-
-#### Aerospike Container Setup
-
-```go
-import "github.com/bsv-blockchain/teranode/test/utils/aerospike"
-
-utxoStore, teardown, err := aerospike.InitAerospikeContainer()
-require.NoError(t, err)
-t.Cleanup(func() {
-    _ = teardown()
-})
-```
-
-### Configuring TestDaemon with Custom UTXO Store
-
-```go
-td := daemon.NewTestDaemon(t, daemon.TestOptions{
-	SettingsContext: "dev.system.test",
-	SettingsOverrideFunc: func(s *settings.Settings) {
-		// Parse the UTXO store URL
-		url, err := url.Parse(utxoStore)
-		require.NoError(t, err)
-		// Override the UTXO store setting
-		s.UtxoStore.UtxoStore = url
-	},
-})
-```
+</details>
 
 ### Best Practices for Multi-Database Testing
 
-1. **Always test all three backends** - SQLite for speed, PostgreSQL and Aerospike for production parity
-2. **Use shared test functions** - Write test logic once, parameterize with `utxoStore`
-3. **Handle cleanup properly** - Always defer teardown functions for containers
-4. **Set SETTINGS_CONTEXT** - Add `os.Setenv("SETTINGS_CONTEXT", "test")` in init()
+1. **Use UTXOStoreType option** - Always prefer the unified container management approach
+2. **Test with two store types** - Aerospike and PostgreSQL
+3. **Use shared test functions** - Write test logic once, parameterize with `storeType`
+4. **Aerospike is default** - Most tests should use Aerospike as it's closest to production
 5. **Use subtests** - Organize scenarios with `t.Run()` for better test output
 6. **Consider test isolation** - Each database backend should be independent
 

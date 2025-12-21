@@ -59,6 +59,14 @@ The `Server` type is the main structure for the Block Persister Service. It cont
 
 ### Server Management
 
+#### WithSetInitialState
+
+```go
+func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server)
+```
+
+WithSetInitialState is an optional configuration function that sets the initial state of the block persister server. This can be used during initialization to establish a known starting point for block persistence operations.
+
 #### New
 
 ```go
@@ -70,7 +78,7 @@ func New(
     subtreeStore blob.Store,
     utxoStore utxo.Store,
     blockchainClient blockchain.ClientI,
-    opts ...func(*Server)
+    opts ...func(*Server),
 ) *Server
 ```
 
@@ -197,6 +205,14 @@ Returns an error if shutdown fails, or nil on successful shutdown.
 
 ### Internal Methods
 
+#### getNextBlockToProcess
+
+```go
+func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error)
+```
+
+Retrieves the next block that needs to be processed based on the current state and configuration. This method determines the next block to persist by comparing the last persisted block height with the current blockchain tip. It ensures blocks are persisted in sequence without gaps and respects the configured persistence age policy to control how far behind persistence can lag.
+
 #### persistBlock
 
 ```go
@@ -315,15 +331,39 @@ This internal method handles the two-stage process of loading subtree informatio
 
 ### Subtree Processing
 
+#### readSubtreeData
+
+```go
+func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.SubtreeData, error)
+```
+
+Reads and deserializes subtree data from the subtree store. This method retrieves a subtree by its hash, deserializes it into a structured format, and returns the transaction data contained within. It handles both regular subtrees and subtrees marked for checking.
+
+#### readSubtree
+
+```go
+func (u *Server) readSubtree(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Subtree, error)
+```
+
+Reads a subtree from the subtree store by its hash. This method attempts to retrieve the subtree from storage, trying both regular subtree files and subtrees marked for checking if the primary lookup fails.
+
+#### processTxMetaUsingStore
+
+```go
+func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData) error
+```
+
+Processes transaction metadata using the UTXO store. This method handles the retrieval and processing of transaction metadata for all transactions in a subtree, with support for both batched and individual transaction processing modes.
+
 #### ProcessSubtree
 
 ```go
-func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx) error
+func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error
 ```
 
 Processes a subtree of transactions, validating and storing them.
 
-A subtree represents a hierarchical structure containing transaction references that make up part of a block. This method retrieves a subtree from the subtree store, processes all the transactions it contains, and creates subtree data for persistent storage.
+A subtree represents a hierarchical structure containing transaction references that make up part of a block. This method retrieves a subtree from the subtree store, processes all the transactions it contains, and writes them to the block store while updating the UTXO set differences.
 
 !!! note "Processing Steps"
     The process follows these key steps:
@@ -343,6 +383,7 @@ A subtree represents a hierarchical structure containing transaction references 
 - `pCtx`: Parent context for the operation, used for cancellation and tracing
 - `subtreeHash`: Hash identifier of the subtree to process
 - `coinbaseTx`: The coinbase transaction for the block containing this subtree
+- `utxoDiff`: UTXO set difference tracker for processing transaction changes
 
 **Returns** an error if any part of the subtree processing fails. Errors are wrapped with appropriate context to identify the specific failure point (storage, processing, etc.).
 

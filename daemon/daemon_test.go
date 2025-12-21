@@ -231,7 +231,7 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	require.NoError(t, err, "Failed to get free port for Asset")
 
 	// Configure settings - this will now pick up KAFKA_PORT and persister URLs from gocore.Config
-	appSettings := settings.NewSettings("docker.host.teranode3.daemon")
+	appSettings := settings.NewSettings()
 	appSettings.LocalTestStartFromState = "RUNNING"
 	appSettings.P2P.Port = p2pPort
 	appSettings.Asset.HTTPPort = assetPort

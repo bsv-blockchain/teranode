@@ -26,6 +26,7 @@ func TestQuickValidateBlock(t *testing.T) {
 		// Mock blockchain AddBlock and check how it was called
 		suite.MockBlockchain.On("GetNextBlockID", mock.Anything).Return(uint64(1), nil).Once()
 		suite.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		suite.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 
@@ -115,7 +116,7 @@ func TestQuickValidateBlock(t *testing.T) {
 		suite.MockUTXOStore.On("Create", mock.Anything, mock.Anything, uint32(100), mock.Anything).Return(&meta.Data{}, nil)
 
 		// Setup UTXO store expectations for spending transactions (context, tx, ignoreFlags)
-		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
+		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil)
 
 		// Setup SetLocked expectation for unlocking UTXOs after AddBlock
 		suite.MockUTXOStore.On("SetLocked", mock.Anything, mock.Anything, false).Return(nil)
@@ -243,7 +244,7 @@ func TestValidateAllTransactions(t *testing.T) {
 			// The validator may call Create during validation
 			suite.MockUTXOStore.On("Create", mock.Anything, tx, mock.Anything, mock.Anything).Return(&meta.Data{}, nil).Maybe()
 			// Setup UTXO store expectations for spending transactions
-			suite.MockUTXOStore.On("Spend", mock.Anything, tx, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
+			suite.MockUTXOStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
 			txWrappers[idx] = txWrapper{tx: tx, subtreeIdx: 0}
 		}
 
@@ -268,7 +269,7 @@ func TestValidateAllTransactions(t *testing.T) {
 			// The validator may call Create during validation
 			suite.MockUTXOStore.On("Create", mock.Anything, tx, mock.Anything, mock.Anything).Return(&meta.Data{}, nil).Maybe()
 			// Setup UTXO store expectations for spending transactions
-			suite.MockUTXOStore.On("Spend", mock.Anything, tx, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
+			suite.MockUTXOStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
 			txWrappers[idx] = txWrapper{tx: tx, subtreeIdx: 0}
 		}
 

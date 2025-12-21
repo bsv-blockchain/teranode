@@ -73,11 +73,8 @@ type Server struct {
     // invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages
     invalidSubtreeDeDuplicateMap *expiringmap.ExpiringMap[string, struct{}]
 
-    // orphanage is used to store transactions that are missing parents that can be validated later
-    orphanage *expiringmap.ExpiringMap[chainhash.Hash, *bt.Tx]
-
-    // orphanageLock is used to make sure we only process the orphanage once at a time
-    orphanageLock sync.Mutex
+    // orphanage manages orphaned transactions that are missing their parent transactions
+    orphanage *Orphanage
 
     // pauseSubtreeProcessing is used to pause subtree processing while a block is being processed
     pauseSubtreeProcessing atomic.Bool
@@ -90,6 +87,10 @@ type Server struct {
 
     // currentBlockIDsMap is used to store the current block IDs for the current best block height
     currentBlockIDsMap atomic.Pointer[map[uint32]bool]
+
+    // p2pClient interfaces with the P2P service
+    // Used to report successful subtree fetches to improve peer reputation
+    p2pClient P2PClientI
 }
 ```
 
@@ -145,6 +146,7 @@ func New(
     blockchainClient blockchain.ClientI,
     subtreeConsumerClient kafka.KafkaConsumerGroupI,
     txmetaConsumerClient kafka.KafkaConsumerGroupI,
+    p2pClient P2PClientI,
 ) (*Server, error)
 ```
 
@@ -379,7 +381,7 @@ Internal implementation of subtree validation logic. This method contains the co
 
 ```go
 func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree, blockHeight uint32,
-    blockIds map[uint32]bool, validationOptions ...validator.Option) (err error)
+    blockIds map[uint32]bool, validationOptions ...validator.Option) (subtree *subtreepkg.Subtree, err error)
 ```
 
 Performs the actual validation of a subtree. This is the core method of the subtree validation service, responsible for the complete validation process of a transaction subtree. It handles the complex task of verifying that all transactions in a subtree are valid both individually and collectively, ensuring they can be safely added to the blockchain.

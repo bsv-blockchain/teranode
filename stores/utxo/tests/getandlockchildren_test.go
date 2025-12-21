@@ -120,7 +120,7 @@ func TestGetAndLockChildren(t *testing.T) {
 		require.NoError(t, err)
 
 		// Spend the parent's output with child transaction
-		_, err = store.Spend(ctx, childTx, utxo.IgnoreFlags{})
+		_, err = store.Spend(ctx, childTx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
 		require.NoError(t, err)
 
 		parentHash := *parentTx.TxIDChainHash()
@@ -190,11 +190,11 @@ func TestGetAndLockChildren(t *testing.T) {
 		require.NoError(t, err)
 
 		// Spend outputs to establish parent-child relationships
-		_, err = store.Spend(ctx, child1Tx, utxo.IgnoreFlags{})
+		_, err = store.Spend(ctx, child1Tx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
 		require.NoError(t, err)
-		_, err = store.Spend(ctx, child2Tx, utxo.IgnoreFlags{})
+		_, err = store.Spend(ctx, child2Tx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
 		require.NoError(t, err)
-		_, err = store.Spend(ctx, grandchildTx, utxo.IgnoreFlags{})
+		_, err = store.Spend(ctx, grandchildTx, store.GetBlockHeight()+1, utxo.IgnoreFlags{})
 		require.NoError(t, err)
 
 		parentHash := *parentTx.TxIDChainHash()
