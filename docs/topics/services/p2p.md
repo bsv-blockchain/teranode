@@ -508,17 +508,19 @@ For detailed documentation on the peer registry and reputation system, see [Peer
 
 ### P2P Network Message Structures
 
-The following message structures (defined in `github.com/bsv-blockchain/go-p2p`) are exchanged between peers over the P2P network:
+The following message structures (defined in `services/p2p/message_types.go`) are exchanged between peers over the P2P network:
 
 **BlockMessage** - Published when a new block is found:
 
 ```go
 type BlockMessage struct {
-    Hash       string  // Block hash
-    Height     int32   // Block height in the chain
-    DataHubURL string  // Asset server URL for retrieving full block data
-    PeerID     string  // Peer identifier of the node that found the block
-    Header     string  // Raw block header in hexadecimal format (80 bytes)
+    PeerID     string  // Identifier of the peer announcing the block
+    ClientName string  // Name of the client software announcing the block
+    DataHubURL string  // URL where the complete block data can be retrieved
+    Hash       string  // Unique hash identifier of the block
+    Height     uint32  // Position of the block in the blockchain
+    Header     string  // Hexadecimal representation of the block header
+    Coinbase   string  // Hexadecimal representation of the coinbase transaction
 }
 ```
 
@@ -526,9 +528,10 @@ type BlockMessage struct {
 
 ```go
 type SubtreeMessage struct {
-    Hash       string  // Subtree merkle root hash
-    DataHubURL string  // Asset server URL for retrieving subtree data
-    PeerID     string  // Peer identifier publishing the subtree
+    PeerID     string  // Identifier of the peer announcing the subtree
+    ClientName string  // Name of the client software announcing the subtree
+    DataHubURL string  // URL where the subtree data can be retrieved
+    Hash       string  // Unique hash identifier of the subtree
 }
 ```
 
@@ -536,9 +539,10 @@ type SubtreeMessage struct {
 
 ```go
 type RejectedTxMessage struct {
-    TxID   string  // Transaction ID that was rejected
-    Reason string  // Rejection reason
-    PeerID string  // Peer identifier reporting the rejection
+    PeerID     string  // Identifier of the peer reporting the rejection
+    ClientName string  // Name of the client software reporting the rejection
+    TxID       string  // Identifier of the rejected transaction
+    Reason     string  // Reason for the transaction rejection
 }
 ```
 
