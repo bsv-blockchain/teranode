@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -86,7 +87,7 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 			Return(true, nil).Maybe()
 
 		// Setup HTTP mock
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		requestCount := 0
@@ -133,7 +134,7 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 		)
 
 		// Execute catchup - should fail due to invalid headers
-		err = server.catchup(ctx, targetBlock, "http://malicious-peer", "")
+		err = server.catchup(ctx, targetBlock, "", "http://malicious-peer")
 		require.Error(t, err, "Catchup should fail with invalid headers")
 
 		// Check memory after test - should not have grown excessively
@@ -149,13 +150,8 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 				"Memory grew by %d bytes, should be limited", memGrowth)
 		}
 
-		// The peer might be marked as malicious if validation detected issues
-		if server.peerMetrics != nil {
-			if peerMetric, exists := server.peerMetrics.PeerMetrics["http://malicious-peer"]; exists {
-				t.Logf("Peer metrics - Malicious: %d, Failed: %d, Total: %d",
-					peerMetric.MaliciousAttempts, peerMetric.FailedRequests, peerMetric.TotalRequests)
-			}
-		}
+		// Note: peerMetrics field has been removed from Server struct
+		// (malicious peer metrics logging disabled)
 
 		// Circuit breaker might not be initialized in this test setup
 		if server.peerCircuitBreakers != nil {
@@ -205,7 +201,7 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
 			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create a large but valid chain of headers
@@ -235,7 +231,7 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 		)
 
 		// Should handle large valid chains without issues
-		err := server.catchup(ctx, targetBlock, "http://honest-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://honest-peer")
 
 		// May have other errors but should not be memory-related
 		if err != nil {
@@ -305,7 +301,7 @@ func TestCatchup_CPUExhaustion(t *testing.T) {
 			Return(false, nil).Maybe()
 
 		// Setup HTTP mock
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Track active requests
@@ -357,7 +353,7 @@ func TestCatchup_CPUExhaustion(t *testing.T) {
 				defer wg.Done()
 
 				peerURL := fmt.Sprintf("http://peer-%d", idx)
-				if err := server.catchup(ctx, targetBlocks[idx], peerURL, ""); err != nil {
+				if err := server.catchup(ctx, targetBlocks[idx], "", peerURL); err != nil {
 					// Check if error indicates resource exhaustion
 					if strings.Contains(err.Error(), "another catchup is currently in progress") {
 						atomic.AddInt32(&rejectedCount, 1)
@@ -438,7 +434,7 @@ func TestCatchup_SlowLorisAttack(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock GetBlockHeader for common ancestor finding
@@ -491,7 +487,7 @@ func TestCatchup_SlowLorisAttack(t *testing.T) {
 		)
 
 		start := time.Now()
-		err := server.catchup(ctx, targetBlock, "http://slow-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://slow-peer")
 		duration := time.Since(start)
 
 		// Should timeout quickly
@@ -553,7 +549,7 @@ func TestCatchup_SlowLorisAttack(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
 			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Simulate normally slow but legitimate peer
@@ -587,7 +583,7 @@ func TestCatchup_SlowLorisAttack(t *testing.T) {
 		)
 
 		start := time.Now()
-		err := server.catchup(ctx, targetBlock, "http://legitimate-slow-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://legitimate-slow-peer")
 		duration := time.Since(start)
 
 		// Should complete successfully despite being slow
@@ -688,7 +684,7 @@ func TestCatchup_MemoryMonitoring(t *testing.T) {
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, bestBlockHeader.Hash()).
 			Return(true, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Track peak memory during request using atomic operations
@@ -745,7 +741,7 @@ func TestCatchup_MemoryMonitoring(t *testing.T) {
 		)
 
 		// Execute catchup
-		_ = server.catchup(ctx, targetBlock, "http://test-peer", "")
+		_ = server.catchup(ctx, targetBlock, "", "http://test-peer")
 
 		// Stop memory monitoring
 		close(memoryCheckDone)
@@ -797,7 +793,7 @@ func TestCatchup_ResourceCleanup(t *testing.T) {
 			Return(true, nil) // Already have this block
 
 		// Execute catchup (should return immediately)
-		err := server.catchup(ctx, targetBlock, "http://test-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://test-peer")
 		require.NoError(t, err)
 
 		// Give time for goroutines to cleanup
@@ -848,7 +844,7 @@ func TestCatchup_ResourceCleanup(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -862,7 +858,7 @@ func TestCatchup_ResourceCleanup(t *testing.T) {
 		)
 
 		// Execute catchup (should fail)
-		err := server.catchup(ctx, targetBlock, "http://test-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://test-peer")
 		assert.Error(t, err)
 
 		// Give time for cleanup

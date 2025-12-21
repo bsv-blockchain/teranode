@@ -1,0 +1,126 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+skinparam state {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+  FontStyle bold
+}
+
+title Locked Flag State Machine
+
+[*] --> TransactionReceived : Transaction submitted
+
+state TransactionReceived {
+  [*] --> Validating
+  Validating : Validator checks\nconsensus rules
+}
+
+TransactionReceived --> UTXOCreatedLocked : Validation successful
+
+state UTXOCreatedLocked {
+  state "UTXOs Created" as Created #LightCoral
+  Created : locked = true
+  Created : Cannot be spent
+  Created : **Phase 1 Complete**
+  note right of Created
+    Initial state after validation.
+    Transaction exists but outputs
+    cannot be spent yet.
+  end note
+}
+
+UTXOCreatedLocked --> BlockAssemblyStored : Store in Block Assembly
+
+state BlockAssemblyStored {
+  state "In Block Assembly" as InBA #LightYellow
+  InBA : Transaction ready\nfor mining
+  InBA : Still locked=true
+}
+
+BlockAssemblyStored --> KafkaPublished : Publish to Kafka
+
+state KafkaPublished {
+  state "Metadata Published" as Published #LightYellow
+  Published : Subtree validation\ncan proceed
+  Published : Still locked=true
+}
+
+state "Decision Point" as Decision <<choice>>
+
+KafkaPublished --> Decision
+
+Decision --> UTXOUnlocked : **Path 1**: twoPhaseCommitTransaction()
+Decision --> WaitingForBlock : **Path 1 Failed**:\nWait for mining
+
+state UTXOUnlocked {
+  state "UTXOs Unlocked" as Unlocked #LightGreen
+  Unlocked : locked = false
+  Unlocked : **Spendable**
+  Unlocked : **Phase 2 Complete**
+  note right of Unlocked
+    Final state.
+    Transaction outputs can
+    now be spent by other
+    transactions.
+  end note
+}
+
+state WaitingForBlock {
+  state "Waiting for Mining" as Waiting #LightYellow
+  Waiting : locked = true
+  Waiting : Fallback path active
+}
+
+WaitingForBlock --> BlockMined : Block containing\ntransaction is mined
+
+state BlockMined {
+  state "Block Validated" as Validated #LightBlue
+  Validated : SetMinedMulti() called
+}
+
+BlockMined --> UTXOUnlocked : **Path 2**: Lua script\nautomatically unlocks
+
+state ServiceCrash {
+  state "Service Restart" as Restart #LightCoral
+  Restart : Block Assembly\nrestarted
+  Restart : Transaction was stored\nbut not unlocked
+}
+
+BlockAssemblyStored --> ServiceCrash : **Unclean\nshutdown**
+ServiceCrash --> UTXOUnlocked : **Path 4**: loadUnminedTransactions()\nunlocks during recovery
+
+state CheckpointSync {
+  state "Checkpointed Block" as Checkpoint #LightBlue
+  Checkpoint : Block below checkpoint\nreceived during sync
+}
+
+TransactionReceived --> CheckpointSync : **Checkpoint path**
+CheckpointSync --> QuickValidation : Create UTXOs\nlocked=true
+
+state QuickValidation {
+  state "Quick Validation" as Quick #LightBlue
+  Quick : Parallel validation\nIgnoreLocked=true
+}
+
+QuickValidation --> UTXOUnlocked : **Path 3**: Batch\nSetLocked(false)
+
+UTXOUnlocked --> [*] : Transaction outputs\nspent or pruned
+
+note bottom
+  **All Paths Lead to Unlock**
+
+  Path 1 (Primary): Normal operation - immediate unlock after Kafka
+  Path 2 (Fallback): Safety net - unlock when mined
+  Path 3 (Quick): Optimized - batch unlock for checkpointed blocks
+  Path 4 (Recovery): Service restart - unlock during recovery
+
+  **Design Principle**: Fail-safe
+  Even if primary path fails, transactions eventually unlock.
+end note
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

@@ -13,12 +13,11 @@ The P2P Server is implemented through the Server struct, which coordinates all p
 ```go
 type Server struct {
     p2p_api.UnimplementedPeerServiceServer
-    P2PNode                           p2p.NodeI          // The P2P network node instance from github.com/bsv-blockchain/go-p2p
-    logger                            ulogger.Logger     // Logger instance for the server
-    settings                          *settings.Settings // Configuration settings
-    bitcoinProtocolID                 string             // Bitcoin protocol identifier (format: "teranode/bitcoin/{version}")
-    blockchainClient                  blockchain.ClientI // Client for blockchain interactions
-    blockValidationClient             blockvalidation.Interface
+    P2PClient                         p2pMessageBus.P2PClient   // The P2P network client from github.com/bsv-blockchain/go-p2p-message-bus
+    logger                            ulogger.Logger            // Logger instance for the server
+    settings                          *settings.Settings       // Configuration settings
+    bitcoinProtocolVersion            string                    // Bitcoin protocol version identifier
+    blockchainClient                  blockchain.ClientI        // Client for blockchain interactions
     blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
     AssetHTTPAddressURL               string                    // HTTP address URL for assets
     e                                 *echo.Echo                // Echo server instance
@@ -30,74 +29,43 @@ type Server struct {
     blocksKafkaProducerClient         kafka.KafkaAsyncProducerI // Kafka producer for blocks
     banList                           BanListI                  // List of banned peers
     banChan                           chan BanEvent             // Channel for ban events
-    banManager                        PeerBanManagerI           // Manager for peer banning (interface)
+    banManager                        PeerBanManagerI           // Manager for peer banning
     gCtx                              context.Context
     blockTopicName                    string
     subtreeTopicName                  string
-    miningOnTopicName                 string
     rejectedTxTopicName               string
-    invalidBlocksTopicName            string       // Kafka topic for invalid blocks
-    invalidSubtreeTopicName           string       // Kafka topic for invalid subtrees
-    handshakeTopicName                string       // pubsub topic for version/verack
-    nodeStatusTopicName               string       // pubsub topic for node status messages
-    topicPrefix                       string       // Chain identifier prefix for topic validation
-    blockPeerMap                      sync.Map     // Map to track which peer sent each block (hash -> peerMapEntry)
-    subtreePeerMap                    sync.Map     // Map to track which peer sent each subtree (hash -> peerMapEntry)
-    startTime                         time.Time    // Server start time for uptime calculation
-    syncManager                       *SyncManager // Manager for peer synchronization and best peer selection
-    peerBlockHashes                   sync.Map     // Map to track peer best block hashes (peerID -> hash string)
-    syncConnectionTimes               sync.Map     // Map to track when we first connected to each sync peer (peerID -> timestamp)
+    invalidBlocksTopicName            string             // Kafka topic for invalid blocks
+    invalidSubtreeTopicName           string             // Kafka topic for invalid subtrees
+    nodeStatusTopicName               string             // pubsub topic for node status messages
+    topicPrefix                       string             // Chain identifier prefix for topic validation
+    blockPeerMap                      sync.Map           // Map to track which peer sent each block (hash -> peerMapEntry)
+    subtreePeerMap                    sync.Map           // Map to track which peer sent each subtree (hash -> peerMapEntry)
+    startTime                         time.Time          // Server start time for uptime calculation
+    peerRegistry                      *PeerRegistry      // Central registry for all peer information
+    peerSelector                      *PeerSelector      // Stateless peer selection logic
+    syncCoordinator                   *SyncCoordinator   // Orchestrates sync operations
+    syncConnectionTimes               sync.Map           // Map to track when we first connected to each sync peer (peerID -> timestamp)
 
     // Cleanup configuration
-    peerMapCleanupTicker *time.Ticker  // Ticker for periodic cleanup of peer maps
-    peerMapMaxSize       int           // Maximum number of entries in peer maps
-    peerMapTTL           time.Duration // Time-to-live for peer map entries
+    peerMapCleanupTicker              *time.Ticker       // Ticker for periodic cleanup of peer maps
+    peerMapMaxSize                    int                // Maximum number of entries in peer maps
+    peerMapTTL                        time.Duration      // Time-to-live for peer map entries
+    registryCacheSaveTicker           *time.Ticker       // Ticker for periodic saving of peer registry cache
 }
 ```
 
 The server manages several key components, each serving a specific purpose in the P2P network:
 
-- The P2PNode handles direct peer connections and message routing through the p2p.NodeI interface from the public github.com/bsv-blockchain/go-p2p package
-- The bitcoinProtocolID contains the node's user agent string in format "teranode/bitcoin/{version}" where version is dynamically determined at build time from Git tags (e.g., "v1.2.3") or generated as a pseudo-version (e.g., "v0.0.0-20250731141601-18714b9")
+- The P2PClient handles direct peer connections and message routing through the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package
+- The bitcoinProtocolVersion contains the node's protocol version identifier
 - The various Kafka clients manage message distribution across the network
 - The ban system maintains network security by managing peer access through BanListI and PeerBanManager
 - The notification channel handles real-time event propagation
+- The peerRegistry, peerSelector, and syncCoordinator provide comprehensive peer management and synchronization capabilities
 
-### p2p.NodeI Interface
+### P2P Client Interface
 
-The P2P Server uses the p2p.NodeI interface from the public github.com/bsv-blockchain/go-p2p package. This interface-based design enables better testability and allows external developers to create custom P2P implementations:
-
-```go
-type NodeI interface {
-    // Core lifecycle methods
-    Start(ctx context.Context, streamHandler func(network.Stream), topicNames ...string) error
-    Stop(ctx context.Context) error
-
-    // Topic-related methods
-    SetTopicHandler(ctx context.Context, topicName string, handler Handler) error
-    GetTopic(topicName string) *pubsub.Topic
-    Publish(ctx context.Context, topicName string, msgBytes []byte) error
-
-    // Peer management methods
-    HostID() peer.ID
-    ConnectedPeers() []PeerInfo
-    CurrentlyConnectedPeers() []PeerInfo
-    DisconnectPeer(ctx context.Context, peerID peer.ID) error
-    SendToPeer(ctx context.Context, pid peer.ID, msg []byte) error
-    SetPeerConnectedCallback(callback func(context.Context, peer.ID))
-    UpdatePeerHeight(peerID peer.ID, height int32)
-
-    // Stats methods
-    LastSend() time.Time
-    LastRecv() time.Time
-    BytesSent() uint64
-    BytesReceived() uint64
-
-    // Additional accessors
-    GetProcessName() string
-    UpdateBytesReceived(bytesCount uint64)
-}
-```
+The P2P Server uses the p2pMessageBus.P2PClient interface from the github.com/bsv-blockchain/go-p2p-message-bus package. This interface-based design enables better testability and allows external developers to create custom P2P implementations that integrate with Teranode's messaging system.
 
 ## Server Operations
 
@@ -106,11 +74,15 @@ type NodeI interface {
 The server initializes through the NewServer function:
 
 ```go
-func NewServer( ctx context.Context,
+func NewServer(
+    ctx context.Context,
     logger ulogger.Logger,
     tSettings *settings.Settings,
     blockchainClient blockchain.ClientI,
+    blockAssemblyClient blockassembly.ClientI,
     rejectedTxKafkaConsumerClient kafka.KafkaConsumerGroupI,
+    invalidBlocksKafkaConsumerClient kafka.KafkaConsumerGroupI,
+    invalidSubtreeKafkaConsumerClient kafka.KafkaConsumerGroupI,
     subtreeKafkaProducerClient kafka.KafkaAsyncProducerI,
     blocksKafkaProducerClient kafka.KafkaAsyncProducerI,
 ) (*Server, error)
@@ -257,14 +229,254 @@ const (
 
 Peer scores automatically decay over time to allow for recovery from temporary issues.
 
+### Public API Methods
+
+```go
+func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeersResponse, error)
+```
+
+Returns a list of connected peers with their connection information and status.
+
+```go
+func (s *Server) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error)
+```
+
+Bans a peer by their peer ID, preventing future connections from that peer.
+
+```go
+func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error)
+```
+
+Removes a ban on a specific peer, allowing them to reconnect.
+
+```go
+func (s *Server) IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error)
+```
+
+Checks if a specific peer ID is currently banned.
+
+```go
+func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ListBannedResponse, error)
+```
+
+Returns a list of all currently banned peer IDs and IP addresses.
+
+```go
+func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ClearBannedResponse, error)
+```
+
+Clears all bans from the ban list, allowing all previously banned peers to reconnect.
+
+```go
+func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error)
+```
+
+Increments a peer's ban score. When the ban score reaches a threshold, the peer is automatically banned.
+
+```go
+func (s *Server) ConnectPeer(ctx context.Context, req *p2p_api.ConnectPeerRequest) (*p2p_api.ConnectPeerResponse, error)
+```
+
+Initiates a connection to a peer using multiaddr format.
+
+```go
+func (s *Server) DisconnectPeer(ctx context.Context, req *p2p_api.DisconnectPeerRequest) (*p2p_api.DisconnectPeerResponse, error)
+```
+
+Disconnects from a currently connected peer.
+
+#### Catchup Metrics and Reputation Endpoints
+
+```go
+func (s *Server) RecordCatchupAttempt(ctx context.Context, req *p2p_api.RecordCatchupAttemptRequest) (*p2p_api.RecordCatchupAttemptResponse, error)
+```
+
+Records that a catchup attempt was initiated with a peer. This increments the interaction attempt counter.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+```go
+func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCatchupSuccessRequest) (*p2p_api.RecordCatchupSuccessResponse, error)
+```
+
+Records a successful catchup operation with a peer. This increments success counters and updates the peer's reputation score positively.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `duration_ms` (int64): Duration of the catchup operation in milliseconds
+
+```go
+func (s *Server) RecordCatchupFailure(ctx context.Context, req *p2p_api.RecordCatchupFailureRequest) (*p2p_api.RecordCatchupFailureResponse, error)
+```
+
+Records a failed catchup attempt with a peer. This increments failure counters and reduces reputation.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+**Impact**: Decreases peer reputation score and applies recent failure penalty.
+
+```go
+func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.RecordCatchupMaliciousRequest) (*p2p_api.RecordCatchupMaliciousResponse, error)
+```
+
+Marks a peer as malicious after detecting invalid data during catchup. This severely penalizes the peer's reputation.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+```go
+func (s *Server) UpdateCatchupReputation(ctx context.Context, req *p2p_api.UpdateCatchupReputationRequest) (*p2p_api.UpdateCatchupReputationResponse, error)
+```
+
+Directly sets a peer's reputation score. Use sparingly as this bypasses the normal reputation calculation algorithm.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `score` (double): Reputation score value (0-100 range)
+
+```go
+func (s *Server) UpdateCatchupError(ctx context.Context, req *p2p_api.UpdateCatchupErrorRequest) (*p2p_api.UpdateCatchupErrorResponse, error)
+```
+
+Records the last error message from a catchup attempt with a peer.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `error_msg` (string): Error message describing the failure
+
+```go
+func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputationRequest) (*p2p_api.ResetReputationResponse, error)
+```
+
+Resets reputation for one or all peers back to neutral (50.0). This implements the reputation recovery mechanism.
+
+**Parameters**:
+
+- `peer_id` (string, optional): If provided, resets reputation for specific peer. If omitted, resets all peers
+
+```go
+func (s *Server) GetPeersForCatchup(ctx context.Context, req *p2p_api.GetPeersForCatchupRequest) (*p2p_api.GetPeersForCatchupResponse, error)
+```
+
+Returns a list of peers suitable for catchup operations, ranked by reputation and filtered by selection criteria.
+
+**Parameters**: None (can optionally filter in the future)
+
+**Returns**: Array of `PeerInfoForCatchup` containing peer ID, height, block hash, data hub URL, catchup metrics
+
+#### Validation Reporting Endpoints
+
+```go
+func (s *Server) ReportValidSubtree(ctx context.Context, req *p2p_api.ReportValidSubtreeRequest) (*p2p_api.ReportValidSubtreeResponse, error)
+```
+
+Reports that a peer provided a valid subtree. This increments the peer's positive interaction counters.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `subtree_hash` (string): Hash of the validated subtree
+
+**Returns**: `success` (bool) and `message` (string) indicating validation result
+
+```go
+func (s *Server) ReportValidBlock(ctx context.Context, req *p2p_api.ReportValidBlockRequest) (*p2p_api.ReportValidBlockResponse, error)
+```
+
+Reports that a peer provided a valid block. This increments the peer's positive interaction counters.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `block_hash` (string): Hash of the validated block
+
+**Returns**: `success` (bool) and `message` (string) indicating validation result
+
+#### Peer Status and Query Endpoints
+
+```go
+func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMaliciousRequest) (*p2p_api.IsPeerMaliciousResponse, error)
+```
+
+Checks if a peer has been marked as malicious.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+**Returns**: `is_malicious` (bool) and optional `reason` (string) explaining why peer is malicious
+
+```go
+func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealthyRequest) (*p2p_api.IsPeerUnhealthyResponse, error)
+```
+
+Checks if a peer is considered unhealthy based on reputation score and recent failures.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+**Returns**: `is_unhealthy` (bool), optional `reason` (string), and `reputation_score` (float)
+
+```go
+func (s *Server) GetPeerRegistry(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeerRegistryResponse, error)
+```
+
+Returns comprehensive information about all peers in the registry, including full reputation metrics and interaction history.
+
+**Returns**: Array of `PeerRegistryInfo` containing:
+
+- **Identity**: ID, client name, connection status
+- **Blockchain**: Height, block hash, storage mode, data hub URL
+- **Ban Info**: Ban score, is banned status
+- **Connection**: Connected at timestamp, bytes received
+- **Timing**: Last block time, last message time
+- **Metrics**: Interaction attempts/successes/failures, malicious count, average response time
+- **Reputation**: Reputation score (0-100)
+- **Errors**: Last catchup error message and timestamp
+
+```go
+func (s *Server) GetPeer(ctx context.Context, req *p2p_api.GetPeerRequest) (*p2p_api.GetPeerResponse, error)
+```
+
+Returns detailed information for a single peer by peer ID.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier to query
+
+**Returns**: `PeerRegistryInfo` object with full peer details, and `found` (bool) indicating if peer exists
+
+#### Metrics Tracking Endpoints
+
+```go
+func (s *Server) RecordBytesDownloaded(ctx context.Context, req *p2p_api.RecordBytesDownloadedRequest) (*p2p_api.RecordBytesDownloadedResponse, error)
+```
+
+Records bytes downloaded from a peer via HTTP (typically from their DataHub).
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier that provided the data
+- `bytes_downloaded` (uint64): Number of bytes downloaded from the peer
+
 ### Message Handlers
 
-- `handleHandshakeTopic`: Handles incoming handshake messages including version and verack exchanges.
-- `handleBlockTopic`: Handles incoming block messages.
-- `handleSubtreeTopic`: Handles incoming subtree messages.
-- `handleMiningOnTopic`: Handles incoming mining-on messages.
+- `handleBlockTopic`: Handles incoming block messages and validates block announcements.
+- `handleSubtreeTopic`: Handles incoming subtree messages and processes subtree data.
+- `handleRejectedTxTopic`: Handles rejected transaction notifications from peers.
 - `handleNodeStatusTopic`: Handles incoming node status update messages.
-- `handleBanEvent`: Handles banning and unbanning events.
+- `invalidBlockHandler`: Processes notifications about invalid blocks from Kafka.
+- `invalidSubtreeHandler`: Processes notifications about invalid subtrees from Kafka.
+- `rejectedTxHandler`: Processes rejected transaction notifications from Kafka.
 
 ### Message Structures
 
@@ -413,8 +625,6 @@ The following settings can be configured for the p2p service:
 - `p2p_http_listen_address`: Specifies the HTTP listen address for the P2P service, enabling HTTP-based interactions.
 - `p2p_grpc_address`: Specifies the gRPC address for external clients to connect to the P2P service.
 - `p2p_grpc_listen_address`: Specifies the gRPC listen address for the P2P service.
-- `p2p_bootstrap_addresses`: List of bootstrap peer addresses for initial network discovery.
-- `p2p_bootstrap_persistent`: A boolean flag (default: false) that controls whether bootstrap addresses are treated as persistent connections that automatically reconnect after disconnection.
 - `p2p_ban_threshold`: Score threshold at which peers are banned from the network.
 - `p2p_ban_duration`: Duration of time a peer remains banned after exceeding the ban threshold.
 - `securityLevelHTTP`: Defines the security level for HTTP communications, where a higher level might enforce HTTPS.
@@ -428,16 +638,17 @@ The following settings can be configured for the p2p service:
 The P2P Server depends on several components:
 
 - `blockchain.ClientI`: Interface for blockchain operations
-- `blockvalidation.Client`: Client for block validation operations
-- `p2p.NodeI`: P2P node interface from the public `github.com/bsv-blockchain/go-p2p` package
+- `blockvalidation.Interface`: Interface for block validation operations
+- `blockassembly.ClientI`: Interface for block assembly operations
+- `p2pMessageBus.P2PClient`: P2P client interface from the `github.com/bsv-blockchain/go-p2p-message-bus` package
 - Kafka producers and consumers for message distribution
 
 These dependencies are injected into the `Server` struct during initialization.
 
-The use of the public go-p2p package enables external developers to:
+The use of the go-p2p-message-bus package enables external developers to:
 
-- Create custom P2P node implementations that are compatible with Teranode
-- Build applications that can directly integrate with Teranode's P2P network
+- Create custom P2P client implementations that are compatible with Teranode
+- Build applications that can directly integrate with Teranode's P2P messaging system
 - Extend P2P functionality while maintaining compatibility with the standard interface
 
 ## Error Handling

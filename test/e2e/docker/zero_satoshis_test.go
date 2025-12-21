@@ -37,7 +37,7 @@ func (suite *ZeroSatoshisTestSuite) TestZeroSatoshisOutput() {
 	ctx := testEnv.Context
 	//logger := testEnv.Logger
 
-	txDistributor := testEnv.Nodes[0].DistributorClient
+	txDistributor := testEnv.Nodes[0].PropagationClient
 
 	coinbaseClient := testEnv.Nodes[0].CoinbaseClient
 	utxoBalanceBefore, _, _ := coinbaseClient.GetBalance(ctx)
@@ -98,7 +98,7 @@ loop:
 	// check tx is malformed
 	require.Equal(t, uint64(0), tx.Outputs[0].Satoshis, "Transaction output satoshis should be 0")
 
-	_, err = txDistributor.SendTransaction(ctx, tx)
+	err = txDistributor.ProcessTransaction(ctx, tx)
 	if err != nil {
 		t.Errorf("Failed to send transaction: %v", err)
 	}
@@ -130,7 +130,7 @@ loop:
 	}
 
 	// send the transaction. We expect this to fail if the tx is malformed
-	_, err = txDistributor.SendTransaction(ctx, newTx)
+	err = txDistributor.ProcessTransaction(ctx, newTx)
 	require.Error(t, err, "Transaction should be rejected")
 	require.Contains(t, err.Error(), "transaction fee is too low")
 

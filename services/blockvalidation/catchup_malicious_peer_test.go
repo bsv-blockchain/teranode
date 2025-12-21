@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -99,18 +100,10 @@ func TestCatchup_EclipseAttack(t *testing.T) {
 		}
 
 		// Try to catch up with the first malicious peer
-		err := server.catchup(ctx, maliciousBlock, "http://malicious-peer-0", "")
+		err := server.catchup(ctx, maliciousBlock, "", "http://malicious-peer-0")
 
 		// Should detect something is wrong
 		assert.Error(t, err)
-
-		// Check that an error was detected (metrics may not be recorded for early failures)
-		// The important thing is that the malicious chain was rejected
-		if server.peerMetrics.PeerMetrics["peer-malicious-001"] != nil {
-			AssertPeerMetrics(t, server, "peer-malicious-001", func(m *catchup.PeerCatchupMetrics) {
-				assert.GreaterOrEqual(t, m.TotalRequests, int64(1), "Should have attempted request")
-			})
-		}
 	})
 
 	t.Run("FindHonestPeerAmongMalicious", func(t *testing.T) {
@@ -189,7 +182,7 @@ func TestCatchup_EclipseAttack(t *testing.T) {
 		// This tests peer diversity and validation
 
 		// Try with honest peer
-		err = server.catchup(ctx, targetBlock, "http://honest-peer", "peer-honest-001")
+		err = server.catchup(ctx, targetBlock, "peer-honest-001", "http://honest-peer")
 
 		// Should work with honest peer
 		if err != nil {
@@ -198,7 +191,7 @@ func TestCatchup_EclipseAttack(t *testing.T) {
 		}
 
 		// Try with malicious peer - should fail
-		err = server.catchup(ctx, targetBlock, "http://malicious-peer-0", "peer-malicious-001")
+		err = server.catchup(ctx, targetBlock, "peer-malicious-001", "http://malicious-peer-0")
 		if err == nil {
 			t.Log("Warning: Accepted malicious peer data without error")
 		}
@@ -267,7 +260,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, bestBlockHeader.Hash()).
 			Return(true, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create full blocks for the honest chain
@@ -486,7 +479,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		for i := 0; i < 5; i++ {
 			peerURL := fmt.Sprintf("http://sybil-peer-%d", i)
 			peerID := fmt.Sprintf("peer-sybil-%03d", i)
-			err := server.catchup(ctx, targetBlock, peerURL, peerID)
+			err := server.catchup(ctx, targetBlock, peerID, peerURL)
 			if err != nil {
 				failCount++
 				t.Logf("Expected: Sybil peer %d failed: %v", i, err)
@@ -502,7 +495,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Maybe()
 
 		// Try the honest peer - should succeed
-		err = server.catchup(ctx, targetBlock, "http://honest-peer", "peer-honest-sybil-001")
+		err = server.catchup(ctx, targetBlock, "peer-honest-sybil-001", "http://honest-peer")
 		if err == nil {
 			successCount++
 			t.Logf("Expected: Honest peer succeeded")
@@ -555,7 +548,7 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, bestBlockHeader.Hash()).
 			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1000, ID: 1}, nil).Maybe()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create headers with broken chain - use minimum difficulty for mining
@@ -594,7 +587,7 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 			httpmock.NewBytesResponder(200, testhelpers.HeadersToBytes(brokenHeaders)),
 		)
 
-		err := server.catchup(ctx, targetBlock, "http://malicious-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://malicious-peer")
 
 		// Should detect the broken chain
 		if err != nil {
@@ -610,11 +603,7 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 		// The circuit breaker might not immediately open on first failure
 		// Check if there were any failures recorded
 		if peerState == catchup.StateClosed {
-			t.Log("Circuit breaker is still closed, checking metrics...")
-			if server.peerMetrics.PeerMetrics["http://malicious-peer"] != nil {
-				metrics := server.peerMetrics.PeerMetrics["http://malicious-peer"]
-				t.Logf("Peer metrics - Failed: %d, Malicious: %d", metrics.FailedRequests, metrics.MaliciousAttempts)
-			}
+			t.Log("Circuit breaker is still closed")
 		}
 		// For now, just verify the error was detected
 		assert.Error(t, err, "Should detect broken chain")
@@ -685,7 +674,7 @@ func TestCatchup_InvalidHeaderSequence(t *testing.T) {
 		httpMock.RegisterHeaderResponse("http://confused-peer", shuffledHeaders)
 		httpMock.Activate()
 
-		err := server.catchup(ctx, targetBlock, "http://confused-peer", "")
+		err := server.catchup(ctx, targetBlock, "", "http://confused-peer")
 
 		// Should detect headers are not properly chained
 		assert.Error(t, err)
@@ -782,7 +771,7 @@ func TestCatchup_SecretMiningDetection(t *testing.T) {
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Maybe()
 
 		// Should detect secret mining attempt
-		err := server.catchup(ctx, targetBlock, "http://secret-miner", "peer-secret-miner-001")
+		err := server.catchup(ctx, targetBlock, "peer-secret-miner-001", "http://secret-miner")
 
 		// Should trigger secret mining detection or fail during validation
 		if err == nil {
@@ -793,15 +782,6 @@ func TestCatchup_SecretMiningDetection(t *testing.T) {
 
 		// The catchup should fail - either due to common ancestor issues or secret mining detection
 		assert.Error(t, err, "Catchup with secret miner should fail")
-
-		// Check if secret mining was recorded or at least failed
-		if server.peerMetrics.PeerMetrics["peer-secret-miner-001"] != nil {
-			metrics := server.peerMetrics.PeerMetrics["peer-secret-miner-001"]
-			t.Logf("Peer metrics - Failed: %d, Malicious: %d, Total: %d",
-				metrics.FailedRequests, metrics.MaliciousAttempts, metrics.TotalRequests)
-			// The metrics should show at least some activity
-			assert.True(t, metrics.TotalRequests > 0, "Should have made at least one request")
-		}
 	})
 
 	t.Run("AllowLegitimateDeepReorg", func(t *testing.T) {
@@ -871,7 +851,7 @@ func TestCatchup_SecretMiningDetection(t *testing.T) {
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil).Maybe()
 
 		// Should allow legitimate reorg
-		err := server.catchup(ctx, targetBlock, "http://legitimate-peer", "peer-legitimate-001")
+		err := server.catchup(ctx, targetBlock, "peer-legitimate-001", "http://legitimate-peer")
 
 		// Should not trigger secret mining for legitimate reorg
 		if err != nil {

@@ -1,4 +1,6 @@
 SHELL=/bin/bash
+# Temp disabled for now until all tests are green
+.SHELLFLAGS=-o pipefail -c
 
 DEBUG_FLAGS=
 TXMETA_TAG=
@@ -144,17 +146,18 @@ build-dashboard:
 .PHONY: install-tools
 install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
+	go install gotest.tools/gotestsum@latest
 
-# make test will run all tests in the project except for the ones in the test directory
 .PHONY: test
 test:
-	@mkdir -p /tmp/teranode-test-results
-	set -o pipefail && go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | SETTINGS_CONTEXT=test xargs go test -v -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out 2>&1 | tee /tmp/teranode-test-results/test-results.txt | grep -v "ld: warning:"
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 
 # run tests in the test/longtest directory
 .PHONY: longtest
 longtest:
-	SETTINGS_CONTEXT=test go test -v -race -tags "testtxmetacache" -count=1 -timeout=5m -parallel 1 -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
 
 # run tests in the test/sequentialtest directory in order, one by one
 .PHONY: sequentialtest
@@ -162,15 +165,34 @@ sequentialtest:
 	@mkdir -p /tmp/teranode-test-results
 	logLevel=INFO test/scripts/run_tests_sequentially.sh 2>&1 | tee /tmp/teranode-test-results/sequentialtest-results.txt
 
+# run sequential tests for specific database backends
+.PHONY: sequentialtest-sqlite
+sequentialtest-sqlite:
+	@mkdir -p /tmp/teranode-test-results
+	logLevel=INFO test/scripts/run_tests_sequentially.sh --db sqlite 2>&1 | tee /tmp/teranode-test-results/sequentialtest-sqlite-results.txt
+
+.PHONY: sequentialtest-postgres
+sequentialtest-postgres:
+	@mkdir -p /tmp/teranode-test-results
+	logLevel=INFO test/scripts/run_tests_sequentially.sh --db postgres 2>&1 | tee /tmp/teranode-test-results/sequentialtest-postgres-results.txt
+
+.PHONY: sequentialtest-aerospike
+sequentialtest-aerospike:
+	@mkdir -p /tmp/teranode-test-results
+	logLevel=INFO test/scripts/run_tests_sequentially.sh --db aerospike 2>&1 | tee /tmp/teranode-test-results/sequentialtest-aerospike-results.txt
+
 .PHONY: testall
 testall: test longtest sequentialtest
 
 # run tests in the test/e2e/daemon directory
 .PHONY: smoketest
 smoketest:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=5m -parallel 1 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+
 	# cd test/e2e/daemon && go test -race -tags "testtxmetacache" -count=1 -timeout=5m -parallel 1 -coverprofile=coverage.out ./test/e2e/daemon/ready/... 2>&1 | grep -v "ld: warning:"
-	cd test/e2e/daemon/ready && SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -v -count=1 -race -timeout=5m -parallel 1 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+	# cd test/e2e/daemon/ready && go test -v -count=1 -race -timeout=5m -parallel 1 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
 
 
 .PHONY: nightly-tests
@@ -403,21 +425,21 @@ chain-integrity-test:
 	@echo "================================================"
 	@echo "Timestamp: $$(date)"
 	@echo ""
-	
+
 	# Step 1: Build chainintegrity binary
 	@echo "Step 1: Building chainintegrity binary..."
 	@echo "  - Compiling chainintegrity tool..."
 	$(MAKE) build-chainintegrity
 	@echo "  ✓ Chainintegrity binary built successfully"
 	@echo ""
-	
+
 	# Step 2: Clean up old data
 	@echo "Step 2: Cleaning up old data..."
 	@echo "  - Removing existing data directory..."
 	@rm -rf data
 	@echo "  ✓ Data directory cleaned up"
 	@echo ""
-	
+
 	# Step 3: Build teranode image locally
 	@echo "Step 3: Building teranode image locally..."
 	@echo "  - Logging into AWS ECR..."
@@ -427,7 +449,7 @@ chain-integrity-test:
 	@docker build -t teranode:latest .
 	@echo "  ✓ Teranode Docker image built successfully"
 	@echo ""
-	
+
 	# Step 4: Start Teranode nodes with 3 block generators
 	@echo "Step 4: Starting Teranode nodes with 3 block generators..."
 	@echo "  - Starting Docker Compose services..."
@@ -437,7 +459,7 @@ chain-integrity-test:
 	@sleep 10
 	@echo "  ✓ Services initialized"
 	@echo ""
-	
+
 	# Step 5: Wait for mining to complete (all nodes at height 120+ and in sync)
 	@echo "Step 5: Waiting for mining to complete (all nodes at height 120+ and in sync)..."
 	@echo "  - Target height: 120 blocks"
@@ -512,26 +534,26 @@ chain-integrity-test:
 		echo "Timeout waiting for all nodes to reach height $$REQUIRED_HEIGHT."; \
 		exit 1; \
 	fi
-	
+
 	# Step 6: Stop Teranode nodes (docker compose down for teranode-1/2/3)
 	@echo "Step 6: Stopping Teranode nodes..."
 	@docker compose -f compose/docker-compose-3blasters.yml down teranode1 teranode2 teranode3
-	
+
 	# Step 7: Run chainintegrity test
 	@echo "Step 7: Running chainintegrity test..."
 	@./chainintegrity.run --logfile=chainintegrity --debug | tee chainintegrity_output.log
-	
+
 	# Step 8: Check for hash mismatch and fail if found
 	@echo "Step 8: Checking for hash mismatch..."
 	@if grep -q "All filtered log file hashes differ! No majority consensus among nodes." chainintegrity_output.log; then \
 		echo "Chain integrity test failed: all log file hashes differ, no majority consensus."; \
 		exit 1; \
 	fi
-	
+
 	# Step 9: Cleanup
 	@echo "Step 9: Cleaning up..."
 	@docker compose -f compose/docker-compose-3blasters.yml down
-	
+
 	@echo "================================================"
 	@echo "✓ Chain Integrity Test completed successfully!"
 	@echo "✓ All nodes reached the required block height"
@@ -555,30 +577,30 @@ chain-integrity-test-custom:
 	@echo "================================================"
 	@echo "Timestamp: $$(date)"
 	@echo ""
-	
+
 	# Set default values if not provided
 	$(eval REQUIRED_HEIGHT ?= 120)
 	$(eval MAX_ATTEMPTS ?= 120)
 	$(eval SLEEP ?= 5)
-	
+
 	@echo "Using parameters: REQUIRED_HEIGHT=$(REQUIRED_HEIGHT), MAX_ATTEMPTS=$(MAX_ATTEMPTS), SLEEP=$(SLEEP)"
-	
+
 	# Step 1: Build chainintegrity binary
 	@echo "Step 1: Building chainintegrity binary..."
 	$(MAKE) build-chainintegrity
-	
+
 	# Step 2: Clean up old data
 	@echo "Step 2: Cleaning up old data..."
 	@rm -rf data
-	
+
 	# Step 3: Build teranode image locally
 	@echo "Step 3: Building teranode image locally..."
 	@docker build -t teranode:latest .
-	
+
 	# Step 4: Start Teranode nodes with 3 block generators
 	@echo "Step 4: Starting Teranode nodes with 3 block generators..."
 	@docker compose -f compose/docker-compose-3blasters.yml up -d
-	
+
 	# Step 5: Wait for mining to complete with custom parameters
 	@echo "Step 5: Waiting for mining to complete (all nodes at height $(REQUIRED_HEIGHT)+ and in sync)..."
 	@echo "This may take several minutes..."
@@ -649,26 +671,26 @@ chain-integrity-test-custom:
 		echo "Timeout waiting for all nodes to reach height $$REQUIRED_HEIGHT."; \
 		exit 1; \
 	fi
-	
+
 	# Step 6: Stop Teranode nodes (docker compose down for teranode-1/2/3)
 	@echo "Step 6: Stopping Teranode nodes..."
 	@docker compose -f compose/docker-compose-3blasters.yml down teranode1 teranode2 teranode3
-	
+
 	# Step 7: Run chainintegrity test
 	@echo "Step 7: Running chainintegrity test..."
 	@./chainintegrity.run --logfile=chainintegrity --debug | tee chainintegrity_output.log
-	
+
 	# Step 8: Check for hash mismatch and fail if found
 	@echo "Step 8: Checking for hash mismatch..."
 	@if grep -q "All filtered log file hashes differ! No majority consensus among nodes." chainintegrity_output.log; then \
 		echo "Chain integrity test failed: all log file hashes differ, no majority consensus."; \
 		exit 1; \
 	fi
-	
+
 	# Step 9: Cleanup
 	@echo "Step 9: Cleaning up..."
 	@docker compose -f compose/docker-compose-3blasters.yml down
-	
+
 	@echo "================================================"
 	@echo "Chain Integrity Test completed successfully!"
 	@echo "Log files generated:"

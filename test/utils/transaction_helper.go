@@ -70,10 +70,7 @@ func RequestUtxosForTransaction(ctx context.Context, node *TeranodeTestClient, a
 		return nil, errors.NewProcessingError("Failed to request funds: %v", err)
 	}
 
-	txDistributor := node.DistributorClient
-
-	_, err = txDistributor.SendTransaction(ctx, requestFundsTx)
-	if err != nil {
+	if err := node.PropagationClient.ProcessTransaction(ctx, requestFundsTx); err != nil {
 		return nil, errors.NewProcessingError("Failed to send transaction: %v", err)
 	}
 

@@ -20,9 +20,8 @@ import (
 func TestInvalidSubtree_BanScoreConfiguration(t *testing.T) {
 	// Create node1 with custom ban settings
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		SettingsContext: "docker.host.teranode1.daemon",
+		EnableRPC: true,
+		EnableP2P: true,
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.P2P.BanThreshold = 30 // Lower threshold for testing
 			s.P2P.BanDuration = 60 * time.Second
@@ -34,7 +33,6 @@ func TestInvalidSubtree_BanScoreConfiguration(t *testing.T) {
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:         true,
 		EnableP2P:         true,
-		SettingsContext:   "docker.host.teranode2.daemon",
 		SkipRemoveDataDir: true,
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.P2P.BanThreshold = 30

@@ -12,7 +12,7 @@ Last modified: 22-January-2025
 
 The Docker Compose installation provides a pre-configured set of settings to make the installation fully operational.
 
-However, you can change the configuration and override any of the default settings in your local `settings_local.conf` file. To check how this file is created, please review the Docker installation guide [here](./minersHowToInstallation.md).
+However, you can change the configuration and override any of the default settings in your local `settings_local.conf` file. The Docker deployment includes an empty `settings_local.conf` file by default. A comprehensive template with detailed explanations is available at [`deploy/docker/base/settings_local.conf.template`](https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/settings_local.conf.template) to guide your configuration.
 
 For a list of settings, and their default values, please refer to the reference at the end of this document.
 
@@ -40,3 +40,5 @@ The Block and UTXO persister services are optional and can be disabled. If enabl
 ## Settings Reference
 
 You can find the pre-configured settings file [here](https://github.com/bsv-blockchain/teranode/blob/main/settings.conf). You can refer to this document in order to identify the current system behaviour and in order to override desired settings in your `settings_local.conf`.
+
+For Docker-specific configuration guidance, refer to the template file at [`deploy/docker/base/settings_local.conf.template`](https://github.com/bsv-blockchain/teranode/blob/main/deploy/docker/base/settings_local.conf.template), which provides detailed explanations and examples for commonly customized Docker deployment settings.

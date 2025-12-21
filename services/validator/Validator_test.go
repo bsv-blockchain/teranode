@@ -33,7 +33,6 @@ import (
 	"testing"
 	"time"
 
-	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	bt "github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -57,6 +56,7 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -813,7 +813,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			utxoStore: &mockUtxoStore,
 		}
 
-		mockUtxoStore.On("GetBlockHeight").Return(uint32(1000))
+		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
 		mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
 			BlockHeights: make([]uint32, 0),
@@ -837,7 +837,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			utxoStore: &mockUtxoStore,
 		}
 
-		mockUtxoStore.On("GetBlockHeight").Return(uint32(1000))
+		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
 		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
 			return hash.String() == "10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"
@@ -895,7 +895,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			},
 		}
 
-		mockUtxoStore.On("GetBlockHeight").Return(uint32(1000))
+		mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
 
 		mockUtxoStore.On("Get", mock.Anything, mock.MatchedBy(func(hash *chainhash.Hash) bool {
 			return hash.String() == "10031ea0997a461d4e09157c6f9d15ff09e61f73aebd9e7f821e4c77c8251afe"

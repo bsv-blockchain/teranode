@@ -349,7 +349,7 @@ func (u *Server) readTxFromReader(body io.ReadCloser) (tx *bt.Tx, err error) {
 // Returns:
 //   - *meta.Data: Transaction metadata structure if validation succeeds, nil otherwise
 //   - error: Detailed error information if validation fails for any reason
-func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
+func (u *Server) blessMissingTransaction(ctx context.Context, blockHash chainhash.Hash, subtreeHash chainhash.Hash, tx *bt.Tx, blockHeight uint32,
 	blockIds map[uint32]bool, validationOptions *validator.Options) (txMeta *meta.Data, err error) {
 	start := time.Now()
 
@@ -358,11 +358,11 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainh
 	}()
 
 	if tx == nil {
-		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s] tx is nil", subtreeHash.String())
+		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s] tx is nil", blockHash.String(), subtreeHash.String())
 	}
 
 	if tx.IsCoinbase() {
-		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s][%s] transaction is coinbase", subtreeHash.String(), tx.TxID())
+		return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is coinbase", blockHash.String(), subtreeHash.String(), tx.TxID())
 	}
 
 	// validate the transaction in the validation service
@@ -371,29 +371,29 @@ func (u *Server) blessMissingTransaction(ctx context.Context, subtreeHash chainh
 	if err != nil {
 		if errors.Is(err, errors.ErrTxConflicting) {
 			// conflicting transaction, which has been saved, but not spent
-			u.logger.Warnf("[blessMissingTransaction][%s][%s] transaction is conflicting", subtreeHash.String(), tx.TxID())
+			u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] transaction is conflicting", blockHash.String(), subtreeHash.String(), tx.TxID())
 		} else {
-			return nil, errors.NewProcessingError("[blessMissingTransaction][%s][%s] failed to validate transaction", subtreeHash.String(), tx.TxID(), err)
+			return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to validate transaction", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
 		}
 	}
 
 	// Not recoverable, returning processing error
 	if txMeta == nil {
-		return nil, errors.NewProcessingError("[blessMissingTransaction][%s][%s] tx meta is nil", subtreeHash.String(), tx.TxID())
+		return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] tx meta is nil", blockHash.String(), subtreeHash.String(), tx.TxID())
 	}
 
 	// check whether this transaction was already mined on our chain by comparing the block ids
 	if len(txMeta.BlockIDs) > 0 && len(blockIds) > 0 {
 		for _, blockID := range txMeta.BlockIDs {
 			if blockIds[blockID] {
-				return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s][%s] transaction is already mined on our chain, in block %d", subtreeHash.String(), tx.TxID(), blockID)
+				return nil, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is already mined on our chain, in block %d", blockHash.String(), subtreeHash.String(), tx.TxID(), blockID)
 			}
 		}
 	}
 
 	if txMeta.Conflicting {
 		if err = u.checkCounterConflictingOnCurrentChain(ctx, *tx.TxIDChainHash(), blockIds); err != nil {
-			return nil, errors.NewProcessingError("[blessMissingTransaction][%s][%s] failed to check counter conflicting tx on current chain", subtreeHash.String(), tx.TxID(), err)
+			return nil, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to check counter conflicting tx on current chain", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
 		}
 	}
 
@@ -485,6 +485,9 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 type ValidateSubtree struct {
 	// SubtreeHash is the unique identifier hash of the subtree to be validated
 	SubtreeHash chainhash.Hash
+
+	// PeerID is the ID of the peer from which we received the subtree
+	PeerID string
 
 	// BaseURL is the source URL for retrieving missing transactions if needed
 	BaseURL string
@@ -830,6 +833,13 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// only set this on no errors
 	prometheusSubtreeValidationValidateSubtreeDuration.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
 
+	// Increase peer's reputation for providing a valid subtree
+	if u.p2pClient != nil && v.PeerID != "" {
+		if err := u.p2pClient.ReportValidSubtree(ctx, v.PeerID, v.SubtreeHash.String()); err != nil {
+			u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to report valid subtree to peer %s: %v", v.SubtreeHash.String(), v.PeerID, err)
+		}
+	}
+
 	return subtree, nil
 }
 
@@ -884,7 +894,14 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 
 	start = gocore.CurrentTime()
 	buffer := make([]byte, chainhash.HashSize)
-	bufferedReader := bufio.NewReaderSize(body, 1024*128)
+
+	// Use pooled bufio.Reader
+	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+	bufferedReader.Reset(body)
+	defer func() {
+		bufferedReader.Reset(nil)
+		bufioReaderPool.Put(bufferedReader)
+	}()
 
 	u.logger.Debugf("[getSubtreeTxHashes][%s] processing subtree response into tx hashes", subtreeHash.String())
 
@@ -910,6 +927,15 @@ func (u *Server) getSubtreeTxHashes(spanCtx context.Context, stat *gocore.Stat, 
 	stat.NewStat("3. createTxHashes").AddTime(start)
 
 	u.logger.Debugf("[getSubtreeTxHashes][%s] done with subtree response", subtreeHash.String())
+
+	// TODO: Report successful subtree fetch to improve peer reputation
+	// Cannot call ReportValidSubtree here because we don't have peer ID, only baseURL (HTTP URL)
+	// Need to track peer ID through the call chain if we want to enable this
+	// if u.p2pClient != nil {
+	// 	if err := u.p2pClient.ReportValidSubtree(spanCtx, peerID, subtreeHash.String()); err != nil {
+	// 		u.logger.Warnf("[getSubtreeTxHashes][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
+	// 	}
+	// }
 
 	return txHashes, nil
 }
@@ -980,7 +1006,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 	missedMu := sync.Mutex{}
 
 	// process the transactions in parallel, based on the number of parents in the list
-	maxLevel, txsPerLevel, err := u.prepareTxsPerLevel(ctx, missingTxs)
+	maxLevel, txsPerLevel, err := u.selectPrepareTxsPerLevel(ctx, missingTxs)
 	if err != nil {
 		return errors.NewProcessingError("[processMissingTransactions][%s] failed to prepare transactions per level: %v", subtreeHash.String(), err)
 	}
@@ -1013,7 +1039,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 			// process each transaction in the background, since the transactions are all batched into the utxo store
 			g.Go(func() error {
-				txMeta, err := u.blessMissingTransaction(gCtx, subtreeHash, tx, blockHeight, blockIds, processedValidatorOptions)
+				txMeta, err := u.blessMissingTransaction(gCtx, chainhash.Hash{}, subtreeHash, tx, blockHeight, blockIds, processedValidatorOptions)
 				if err != nil {
 					// Log the error, but do not return it, since we want to process all transactions in the subtree
 					u.logger.Debugf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
@@ -1029,8 +1055,11 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 						if isRunning {
 							// add tx to the orphanage
 							u.logger.Debugf("[validateSubtree][%s] transaction %s is missing parent, adding to orphanage", subtreeHash.String(), tx.TxIDChainHash().String())
-							u.orphanage.Set(*tx.TxIDChainHash(), tx)
-							addedToOrphanage.Add(1)
+							if u.orphanage.Set(*tx.TxIDChainHash(), tx) {
+								addedToOrphanage.Add(1)
+							} else {
+								u.logger.Warnf("[validateSubtree][%s] Failed to add transaction %s to orphanage - orphanage is full", subtreeHash.String(), tx.TxIDChainHash().String())
+							}
 						}
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Report invalid subtree - contains truly invalid transaction
@@ -1201,6 +1230,15 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 								} else {
 									u.logger.Infof("[validateSubtree][%s] stored subtree data from %s", subtreeHash.String(), url)
 									subtreeDataExists = true
+
+									// TODO: Report successful subtree data fetch to improve peer reputation
+									// Cannot call ReportValidSubtree here because we don't have peer ID, only baseURL (HTTP URL)
+									// Need to track peer ID through the call chain if we want to enable this
+									// if u.p2pClient != nil {
+									// 	if err := u.p2pClient.ReportValidSubtree(ctx, peerID, subtreeHash.String()); err != nil {
+									// 		u.logger.Warnf("[validateSubtree][%s] failed to report valid subtree: %v", subtreeHash.String(), err)
+									// 	}
+									// }
 								}
 							}
 						}
@@ -1254,6 +1292,15 @@ type txMapWrapper struct {
 	// parallel processing during validation. Level 0 transactions have no dependencies
 	// within the current subtree and can be validated first.
 	childLevelInBlock uint32
+}
+
+// selectPrepareTxsPerLevel selects and executes the appropriate level preparation algorithm
+// based on the UseOrderedLevelAlgorithm configuration setting.
+func (u *Server) selectPrepareTxsPerLevel(ctx context.Context, transactions []missingTx) (uint32, [][]missingTx, error) {
+	if u.settings.SubtreeValidation.UseOrderedLevelAlgorithm {
+		return u.prepareTxsPerLevelOrdered(ctx, transactions)
+	}
+	return u.prepareTxsPerLevel(ctx, transactions)
 }
 
 // prepareTxsPerLevel organizes transactions by their dependency level for ordered processing.
@@ -1334,37 +1381,58 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 		}
 	}
 
-	// Calculate levels using recursive approach with memoization
+	// Calculate levels using iterative topological sort to avoid stack overflow
+	// and detect circular dependencies
 	levelCache := make(map[chainhash.Hash]uint32)
 
-	var calculateLevel func(chainhash.Hash) uint32
-	calculateLevel = func(txHash chainhash.Hash) uint32 {
-		if level, exists := levelCache[txHash]; exists {
-			return level
-		}
-
-		// If no dependencies in subtree, level is 0
-		parents := dependencies[txHash]
+	// Find all transactions with no dependencies (level 0)
+	for txHash, parents := range dependencies {
 		if len(parents) == 0 {
 			levelCache[txHash] = 0
-			return 0
 		}
+	}
 
-		// Level is 1 + max(parent levels)
-		maxParentLevel := uint32(0)
-		for _, parentHash := range parents {
-			parentLevel := calculateLevel(parentHash)
-			if parentLevel > maxParentLevel {
-				maxParentLevel = parentLevel
+	// Process remaining transactions level by level
+	// Maximum iterations is len(dependencies) + 1 to handle all possible levels
+	maxIterations := len(dependencies) + 1
+	for iteration := 0; iteration < maxIterations; iteration++ {
+		progress := false
+
+		for txHash, parents := range dependencies {
+			if _, exists := levelCache[txHash]; exists {
+				continue
+			}
+
+			// Check if all parents have computed levels
+			allParentsComputed := true
+			maxParentLevel := uint32(0)
+			for _, parentHash := range parents {
+				parentLevel, exists := levelCache[parentHash]
+				if !exists {
+					allParentsComputed = false
+					break
+				}
+				if parentLevel > maxParentLevel {
+					maxParentLevel = parentLevel
+				}
+			}
+
+			if allParentsComputed {
+				levelCache[txHash] = maxParentLevel + 1
+				progress = true
 			}
 		}
 
-		level := maxParentLevel + 1
-		levelCache[txHash] = level
-		return level
+		if !progress {
+			// No progress made - check if we're done or have a cycle
+			if len(levelCache) < len(dependencies) {
+				return 0, nil, errors.NewProcessingError("Circular dependency detected in transaction graph")
+			}
+			break
+		}
 	}
 
-	// Calculate levels for all transactions and update wrappers
+	// Update wrappers with calculated levels
 	for _, mTx := range transactions {
 		if mTx.tx == nil || mTx.tx.IsCoinbase() {
 			continue
@@ -1376,7 +1444,12 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 			continue
 		}
 
-		level := calculateLevel(txHash)
+		level, exists := levelCache[txHash]
+		if !exists {
+			// This shouldn't happen if the algorithm is correct
+			return 0, nil, errors.NewProcessingError("Failed to calculate level for transaction")
+		}
+
 		wrapper.childLevelInBlock = level
 		wrapper.someParentsInBlock = len(dependencies[txHash]) > 0
 
@@ -1400,6 +1473,122 @@ func (u *Server) prepareTxsPerLevel(ctx context.Context, transactions []missingT
 	}
 
 	return maxLevel, blocksPerLevelSlice, nil
+}
+
+// prepareTxsPerLevelOrdered is an optimized version of prepareTxsPerLevel that assumes transactions
+// are already in topological order (parents before children), as guaranteed by the Bitcoin protocol.
+//
+// ORDERING GUARANTEE: The Bitcoin protocol mandates that transactions within a block must be ordered
+// such that parent transactions appear before their children. This is enforced during block construction
+// and validated during block processing. All callers of this function provide transactions from:
+//   - Block.Transactions() - guaranteed ordered by Bitcoin protocol
+//   - Subtree.Txs - maintains block ordering when constructed
+//   - processTransactionsInLevels - preserves original block/subtree ordering via indexed iteration
+//
+// This optimization reduces complexity from O(V*E + V²) to O(V*I) where:
+//   - V = number of transactions
+//   - E = number of dependencies
+//   - I = average inputs per transaction
+//
+// SINGLE-PASS OPTIMIZATION: Calculates levels AND groups transactions simultaneously in ONE iteration.
+// Eliminates: second pass, redundant hash calculations, and extra map lookups.
+// Optimized for 1M+ transaction batches.
+//
+// Parameters:
+//   - ctx: Context for cancellation and tracing
+//   - transactions: List of transactions in topological order (parents before children)
+//
+// Returns:
+//   - uint32: The maximum dependency level found
+//   - [][]missingTx: Slice of dependency levels containing transactions at each level
+//   - error: Any error encountered during processing
+func (u *Server) prepareTxsPerLevelOrdered(ctx context.Context, transactions []missingTx) (uint32, [][]missingTx, error) {
+	_, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "prepareTxsPerLevelOrdered",
+		tracing.WithDebugLogMessage(u.logger, "[prepareTxsPerLevelOrdered] preparing %d transactions per level (optimized)", len(transactions)),
+	)
+	defer deferFn()
+
+	// GC OPTIMIZATION: Use index-based approach to minimize heap allocations
+	// Map stores hash -> transaction index (int is smaller than uint32 + reduces map overhead)
+	// Levels stored in slice for fast array access instead of map lookups
+	txIndex := make(map[chainhash.Hash]int, len(transactions))
+	levels := make([]uint32, len(transactions))
+
+	// Pre-allocate result slices with reasonable initial capacity
+	// Most transactions are level 0 (no parents in block), so optimize for that case
+	txsPerLevel := make([][]missingTx, 1, 16)                  // Start with level 0, capacity for 16 levels
+	txsPerLevel[0] = make([]missingTx, 0, len(transactions)/2) // Level 0: assume ~50% of txs
+
+	maxLevel := uint32(0)
+	validTxCount := 0 // Track valid transactions for index mapping
+
+	// SINGLE PASS: calculate levels AND append to result slices simultaneously
+	for i, mTx := range transactions {
+		if mTx.tx == nil || mTx.tx.IsCoinbase() {
+			continue
+		}
+
+		// GC OPTIMIZATION: Get hash pointer once and reuse it
+		// This avoids copying the 32-byte hash multiple times
+		txHashPtr := mTx.tx.TxIDChainHash()
+		txHash := *txHashPtr // Single dereference for map operations
+
+		maxParentLevel := uint32(0)
+		hasParentInBlock := false
+
+		// Check each input to find the maximum parent level
+		// GC OPTIMIZATION: Look up parent level in array instead of map
+		for _, input := range mTx.tx.Inputs {
+			parentHashPtr := input.PreviousTxIDChainHash()
+			parentHash := *parentHashPtr // Single dereference
+
+			// If parent exists in txIndex, it's part of this subtree/block
+			if parentIdx, exists := txIndex[parentHash]; exists {
+				hasParentInBlock = true
+				// Array lookup is faster and more GC-friendly than map lookup
+				parentLevel := levels[parentIdx]
+				if parentLevel > maxParentLevel {
+					maxParentLevel = parentLevel
+				}
+			}
+		}
+
+		// Calculate this transaction's level
+		level := uint32(0)
+		if hasParentInBlock {
+			level = maxParentLevel + 1
+		}
+
+		// Store index mapping for children to reference
+		// GC OPTIMIZATION: Store index (int) in map, level in array
+		txIndex[txHash] = i
+		levels[i] = level
+
+		// Track max level and grow result slice if needed
+		if level > maxLevel {
+			maxLevel = level
+			// Grow txsPerLevel slice to accommodate new level
+			for uint32(len(txsPerLevel)) <= level {
+				// GC OPTIMIZATION: Use more realistic capacity hints based on distribution
+				// Level 0 is large, higher levels are progressively smaller
+				capacity := 64
+				if level == maxLevel && validTxCount > 1000 {
+					// For new max level, estimate based on transaction count
+					capacity = validTxCount / 100 // Heuristic: ~1% of txs at higher levels
+					if capacity < 64 {
+						capacity = 64
+					}
+				}
+				txsPerLevel = append(txsPerLevel, make([]missingTx, 0, capacity))
+			}
+		}
+
+		// Append directly to result slice (NO second pass!)
+		txsPerLevel[level] = append(txsPerLevel[level], mTx)
+		validTxCount++
+	}
+
+	return maxLevel, txsPerLevel, nil
 }
 
 // getMissingTransactionsFromPeer retrieves missing transactions from either the network or local store.

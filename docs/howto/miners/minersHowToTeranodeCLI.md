@@ -1,7 +1,5 @@
 # Teranode CLI Documentation
 
-Last Modified: 4-May-2025
-
 ## Overview
 
 The teranode-cli is a command-line interface tool for interacting with Teranode services. It provides various commands for maintenance, debugging, and operational tasks.
@@ -19,16 +17,19 @@ Usage: teranode-cli <command> [options]
     Available Commands:
     aerospikereader      Aerospike Reader
     bitcointoutxoset     Bitcoin to Utxoset
+    checkblock           Check block - fetches a block and validates it using the block validation service
     checkblocktemplate   Check block template
     export-blocks        Export blockchain to CSV
     filereader           File Reader
     fix-chainwork        Fix incorrect chainwork values in blockchain database
     getfsmstate          Get the current FSM State
     import-blocks        Import blockchain from CSV
+    resetblockassembly   Reset block assembly state
     seeder               Seeder
     setfsmstate          Set the FSM State
     settings             Settings
     utxopersister        Utxo Persister
+    validate-utxo-set    Validate UTXO set file
 
     Use 'teranode-cli <command> --help' for more information about a command
 
@@ -63,6 +64,7 @@ Usage: teranode-cli <command> [options]
 
 | Command              | Description                   | Key Options                                                      |
 |----------------------|-------------------------------|------------------------------------------------------------------|
+| `checkblock`         | Validate an existing block    | `<blockhash>` - Hash of the block to validate                    |
 | `checkblocktemplate` | Check block template validity | None                                                             |
 | `seeder`             | Seed initial blockchain data  | `--inputDir` - Input directory for data                          |
 |                      |                               | `--hash` - Hash of the data to process                           |
@@ -71,9 +73,11 @@ Usage: teranode-cli <command> [options]
 | `filereader`         | Read and process files        | `--verbose` - Enable verbose output                              |
 |                      |                               | `--checkHeights` - Check heights in UTXO headers                 |
 |                      |                               | `--useStore` - Use store                                         |
+| `validate-utxo-set`  | Validate UTXO set file        | `--verbose` - Enable verbose output showing individual UTXOs     |
 | `getfsmstate`        | Get the current FSM state     | None                                                             |
 | `setfsmstate`        | Set the FSM state             | `--fsmstate` - Target FSM state                                  |
 |                      |                               | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
+| `resetblockassembly` | Reset block assembly state    | `--full-reset` - Perform full reset including clearing mempool  |
 
 ### Database Maintenance
 
@@ -111,6 +115,25 @@ Options:
 - `--previousBlockHash`: Previous block hash
 - `--blockHeight`: Block height to start from
 - `--dumpRecords`: Dump records from index
+
+### Check Block
+
+```bash
+teranode-cli checkblock <blockhash>
+```
+
+Validates an existing block by its hash. This command performs comprehensive validation including:
+
+- Transaction validation
+- Merkle tree verification
+- Proof of work validation
+- Consensus rule checks
+
+**Example:**
+
+```bash
+teranode-cli checkblock 000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
+```
 
 ### File Reader
 
@@ -185,6 +208,36 @@ Options:
 - `--hash`: Hash of the UTXO set / headers to process (required)
 - `--skipHeaders`: Skip processing headers
 - `--skipUTXOs`: Skip processing UTXOs
+
+### Reset Block Assembly
+
+```bash
+teranode-cli resetblockassembly [--full-reset]
+```
+
+Resets the block assembly state. Useful for clearing stuck transactions or resetting mining state.
+
+Options:
+
+- `--full-reset`: Perform a comprehensive reset including clearing mempool and unmined transactions
+
+### Validate UTXO Set
+
+```bash
+teranode-cli validate-utxo-set [--verbose] <utxo-set-file-path>
+```
+
+Validates a UTXO set file for integrity and correctness. This tool is useful for ensuring UTXO set integrity and detecting any inconsistencies.
+
+Options:
+
+- `--verbose`: Enable verbose output showing individual UTXOs
+
+**Example:**
+
+```bash
+teranode-cli validate-utxo-set --verbose /data/utxos/utxo-set.dat
+```
 
 ### Fix Chainwork
 

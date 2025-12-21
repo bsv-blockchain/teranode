@@ -73,7 +73,7 @@ func (suite *UTXOVerificationTestSuite) TestVerifyUTXOSetConsistency() {
 	ctx := framework.Context
 
 	// Create transactions that will modify the UTXO set
-	txDistributor := framework.Nodes[0].DistributorClient
+	txDistributor := framework.Nodes[0].PropagationClient
 	coinbaseClient := framework.Nodes[0].CoinbaseClient
 
 	// Create two addresses
@@ -99,7 +99,7 @@ func (suite *UTXOVerificationTestSuite) TestVerifyUTXOSetConsistency() {
 	require.NoError(t, err, "Failed to request funds")
 	logger.Infof("Faucet Transaction: %s", faucetTx.TxID())
 
-	_, err = txDistributor.SendTransaction(ctx, faucetTx)
+	err = txDistributor.ProcessTransaction(ctx, faucetTx)
 	require.NoError(t, err, "Failed to send faucet transaction")
 
 	// Create a spending transaction
@@ -121,7 +121,7 @@ func (suite *UTXOVerificationTestSuite) TestVerifyUTXOSetConsistency() {
 	err = spendingTx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey0})
 	require.NoError(t, err, "Error filling transaction inputs")
 
-	_, err = txDistributor.SendTransaction(ctx, spendingTx)
+	err = txDistributor.ProcessTransaction(ctx, spendingTx)
 	require.NoError(t, err, "Failed to send spending transaction")
 
 	// Mine a block to include our transactions

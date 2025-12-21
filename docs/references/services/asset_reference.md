@@ -6,17 +6,19 @@
 
 ```go
 type Server struct {
-    logger              ulogger.Logger
-    settings            *settings.Settings
-    utxoStore           utxo.Store
-    txStore             blob.Store
-    subtreeStore        blob.Store
-    blockPersisterStore blob.Store
-    httpAddr            string
-    httpServer          *httpimpl.HTTP
-    centrifugeAddr      string
-    centrifugeServer    *centrifuge_impl.Centrifuge
-    blockchainClient    blockchain.ClientI
+    logger                ulogger.Logger
+    settings              *settings.Settings
+    utxoStore             utxo.Store
+    txStore               blob.Store
+    subtreeStore          blob.Store
+    blockPersisterStore   blob.Store
+    httpAddr              string
+    httpServer            *httpimpl.HTTP
+    centrifugeAddr        string
+    centrifugeServer      *centrifuge_impl.Centrifuge
+    blockchainClient      blockchain.ClientI
+    blockvalidationClient blockvalidation.Interface
+    p2pClient             p2p.ClientI
 }
 ```
 
@@ -26,13 +28,15 @@ The `Server` type is the main structure for the Asset Service. It coordinates be
 
 ```go
 type Repository struct {
-    logger              ulogger.Logger
-    settings            *settings.Settings
-    UtxoStore           utxo.Store
-    TxStore             blob.Store
-    SubtreeStore        blob.Store
-    BlockPersisterStore blob.Store
-    BlockchainClient    blockchain.ClientI
+    logger                ulogger.Logger
+    settings              *settings.Settings
+    UtxoStore             utxo.Store
+    TxStore               blob.Store
+    SubtreeStore          blob.Store
+    BlockPersisterStore   blob.Store
+    BlockchainClient      blockchain.ClientI
+    BlockvalidationClient blockvalidation.Interface
+    P2PClient             p2p.ClientI
 }
 ```
 
@@ -60,7 +64,7 @@ The `HTTP` type represents the HTTP server for the Asset Service.
 #### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI) *Server
 ```
 
 Creates a new instance of the `Server` with the provided dependencies. It initializes the server with necessary stores and clients for handling blockchain data.
@@ -102,7 +106,7 @@ Gracefully shuts down the server and its components, including HTTP and Centrifu
 #### NewRepository
 
 ```go
-func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error)
+func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store, blockPersisterStore blob.Store, p2pClient p2p.ClientI) (*Repository, error)
 ```
 
 Creates a new instance of the `Repository` with the provided dependencies. It initializes connections to various data stores for blockchain data access.
@@ -495,23 +499,38 @@ Error responses include a JSON object with an error message:
     - Returns: Block data (JSON)
 
 - **GET `/api/v1/block/:hash/forks`**
-    - Purpose: Get fork information for a block
-    - Parameters: `hash` - Block hash (hex string)
-    - Returns: Fork data (JSON)
+    - Purpose: Get fork information and tree structure for a block
+    - URL Parameters: `hash` - Block hash (hex string)
+    - Query Parameters:
+
+        - `limit` (integer, optional, default: 20, max: 100) - Maximum blocks to include in tree
+    - Returns: Fork data (JSON) with parent-child block relationships
 
 - **GET `/api/v1/blocks`**
     - Purpose: Get paginated blocks list
-    - Parameters: `offset`, `limit` (optional)
-    - Returns: Blocks list (JSON)
+    - Query Parameters:
+
+        - `offset` (integer, optional, default: 0) - Number of blocks to skip from tip
+        - `limit` (integer, optional, default: 20, max: 100) - Maximum blocks to return
+        - `includeOrphans` (boolean, optional, default: false) - Include orphaned blocks
+    - Returns: Blocks list (JSON) with pagination metadata
 
 - **GET `/api/v1/blocks/:hash`**
-    - Purpose: Get multiple blocks starting with specified hash (binary)
-    - Parameters: `hash` - Starting block hash, `n` - Number of blocks (optional)
+    - Purpose: Get N consecutive blocks starting from specified hash
+    - URL Parameters: `hash` - Starting block hash (hex string)
+    - Query Parameters:
+
+        - `n` (integer, optional, default: 100, max: 1000) - Number of blocks to retrieve
     - Returns: Block data (binary)
+    - Also available: `/api/v1/blocks/:hash/hex` (hex), `/api/v1/blocks/:hash/json` (JSON)
 
 - **GET `/api/v1/lastblocks`**
     - Purpose: Get most recent blocks
-    - Parameters: `n` (optional) - Number of blocks, `includeorphans` (optional), `height` (optional)
+    - Query Parameters:
+
+        - `n` (integer, optional, default: 10) - Number of blocks to retrieve
+        - `fromHeight` (unsigned integer, optional, default: 0) - Starting block height
+        - `includeOrphans` (boolean, optional, default: false) - Include orphaned blocks
     - Returns: Recent blocks data (JSON)
 
 - **GET `/api/v1/blockstats`**
@@ -533,6 +552,16 @@ Error responses include a JSON object with an error message:
     - Parameters: `hash` - Block hash (hex string)
     - Returns: Block data (binary)
 
+- **GET `/api/v1/block_locator`**
+    - Purpose: Get block locator hashes for blockchain synchronization
+    - Query Parameters:
+
+        - `hash` (string, optional) - Block hash to start from (default: best block)
+        - `height` (unsigned integer, optional) - Block height (ignored if hash provided)
+    - Returns: JSON array of block hashes at exponentially increasing distances
+    - Response Format: `{ "block_locator": ["<hash1>", "<hash2>", ...] }`
+    - Notes: Uses exponential backoff algorithm; always includes genesis block
+
 ### Block Header Endpoints
 
 - **GET `/api/v1/header/:hash`**
@@ -541,9 +570,13 @@ Error responses include a JSON object with an error message:
     - Returns: Block header (binary)
 
 - **GET `/api/v1/headers/:hash`**
-    - Purpose: Get multiple headers starting from hash (binary)
-    - Parameters: `hash` - Starting block hash, `n` - Number of headers (optional)
-    - Returns: Block headers (binary)
+    - Purpose: Get N consecutive block headers starting from specified hash
+    - URL Parameters: `hash` - Starting block hash (hex string)
+    - Query Parameters:
+
+        - `n` (integer, optional, default: 100, max: 1000) - Number of headers to retrieve
+    - Returns: Block headers (binary, 80 bytes per header)
+    - Also available: `/api/v1/headers/:hash/hex` (hex), `/api/v1/headers/:hash/json` (JSON)
 
 - **GET `/api/v1/headers_to_common_ancestor/:hash`**
     - Purpose: Get headers to common ancestor (binary)
@@ -658,16 +691,37 @@ Error responses include a JSON object with an error message:
     - Returns: Transaction data array (JSON)
 
 - **GET `/api/v1/block/:hash/subtrees/json`**
-    - Purpose: Get all subtrees for a block
-    - Parameters: `hash` - Block hash
-    - Returns: Subtree data array (JSON)
+    - Purpose: Get paginated list of subtrees for a block
+    - URL Parameters: `hash` - Block hash (hex string)
+    - Query Parameters:
+
+        - `offset` (integer, optional, default: 0) - Number of subtrees to skip
+        - `limit` (integer, optional, default: 20, max: 100) - Maximum subtrees to return
+    - Returns: Subtree data array (JSON) with pagination metadata
+
+### P2P and Network Endpoints
+
+- **GET `/api/p2p/peers`**
+    - Purpose: Get peer registry information from P2P service
+    - Returns: Peer list (JSON) with reputation metrics, connection status, and catchup statistics
+    - Response includes: peer ID, client name, blockchain height, reputation score, catchup metrics, ban status
+
+- **GET `/api/catchup/status`**
+    - Purpose: Get current blockchain synchronization status
+    - Returns: Catchup status (JSON) with progress metrics and peer information
+    - Response includes: current/target heights, blocks fetched/validated, peer details, fork depth, previous attempt data
 
 ### Search Endpoints
 
 - **GET `/api/v1/search`**
-    - Purpose: Search for blockchain entities
-    - Parameters: `query` - Search term (hash or height)
+    - Purpose: Search for blockchain entities by hash or height
+    - Query Parameters:
+
+        - `q` (string, required) - Search query (64-character hex string or numeric block height)
     - Returns: Search results (JSON)
+    - Response Format: `{ "type": "block|tx|subtree", "hash": "<hash>" }`
+    - Search Priority: Block hash → Transaction hash → Subtree hash → Block height (if numeric)
+    - Status Codes: 200 OK, 400 Bad Request (missing or invalid query), 404 Not Found
 
 ### Authentication
 

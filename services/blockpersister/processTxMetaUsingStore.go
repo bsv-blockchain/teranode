@@ -47,7 +47,7 @@ import (
 // The function handles special cases like coinbase transactions, which are placeholders not
 // present in the store. It also accounts for context cancellation to support clean shutdowns.
 // Concurrent access to shared state is protected using atomic operations to ensure thread safety.
-func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData) error {
+func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data) error {
 	ctx, _, deferFn := tracing.Tracer("blockpersister").Start(ctx, "processTxMetaUsingStore")
 	defer deferFn()
 

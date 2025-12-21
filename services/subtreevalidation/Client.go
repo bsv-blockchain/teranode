@@ -137,7 +137,7 @@ func (s *Client) CheckSubtreeFromBlock(ctx context.Context, subtreeHash chainhas
 	return nil
 }
 
-func (s *Client) CheckBlockSubtrees(ctx context.Context, block *model.Block, baseURL string) error {
+func (s *Client) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string) error {
 	blockBytes, err := block.Bytes()
 	if err != nil {
 		return errors.NewProcessingError("failed to serialize block for subtree validation", err)
@@ -146,6 +146,7 @@ func (s *Client) CheckBlockSubtrees(ctx context.Context, block *model.Block, bas
 	if _, err = s.apiClient.CheckBlockSubtrees(ctx, &subtreevalidation_api.CheckBlockSubtreesRequest{
 		Block:   blockBytes,
 		BaseUrl: baseURL,
+		PeerId:  peerID,
 	}); err != nil {
 		return errors.UnwrapGRPC(err)
 	}

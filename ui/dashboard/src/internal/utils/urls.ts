@@ -12,6 +12,7 @@ export enum DetailType {
 export enum DetailTab {
   overview = 'overview',
   json = 'json',
+  merkleproof = 'merkleproof',
 }
 
 export interface ExtraParams {

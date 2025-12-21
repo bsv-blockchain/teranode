@@ -48,12 +48,7 @@
 
   $: hasSorting = sortColumn && sortOrder
 
-  let totalPages = 0
-
-  const onTotal = (e) => {
-    totalPages = e.detail.total
-  }
-
+  $: totalPages = Math.max(1, Math.ceil((allData?.length || 0) / pageSize))
   $: showPagerNav = totalPages > 1
   $: showPagerSize = showPagerNav || (totalPages === 1 && allData.length > 5)
   $: showTableFooter = showPagerSize
@@ -83,7 +78,6 @@
       }}
       hasBoundaryRight={true}
       on:change={onPage}
-      on:total={onTotal}
     />
     <TableToggle value={variant} on:change={onToggle} />
     {#if hasSorting}
@@ -243,8 +237,8 @@
   :global(.th:nth-child(9)),
   :global(th:nth-child(10)), /* Uptime - right align */
   :global(.th:nth-child(10)),
-  :global(th:nth-child(12)), /* Last Update - right align */
-  :global(.th:nth-child(12)) {
+  :global(th:nth-child(13)), /* Last Update - right align */
+  :global(.th:nth-child(13)) {
     text-align: right !important;
   }
 
@@ -260,8 +254,8 @@
   :global(.th:nth-child(9) .table-cell-row),
   :global(th:nth-child(10) .table-cell-row),
   :global(.th:nth-child(10) .table-cell-row),
-  :global(th:nth-child(12) .table-cell-row),
-  :global(.th:nth-child(12) .table-cell-row) {
+  :global(th:nth-child(13) .table-cell-row),
+  :global(.th:nth-child(13) .table-cell-row) {
     justify-content: flex-end !important;
   }
 

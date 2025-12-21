@@ -92,8 +92,22 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 
 	go func() {
 		<-ctx.Done()
-		l.Infof("[%s] GRPC service shutting down", serviceName)
-		grpcServer.GracefulStop()
+		l.Infof("[%s] GRPC service shutting down gracefully", serviceName)
+
+		// Try graceful stop with timeout to prevent hanging on stuck connections
+		stopped := make(chan struct{})
+		go func() {
+			grpcServer.GracefulStop()
+			close(stopped)
+		}()
+
+		select {
+		case <-stopped:
+			l.Infof("[%s] GRPC service stopped gracefully", serviceName)
+		case <-time.After(5 * time.Second):
+			l.Warnf("[%s] GRPC graceful stop timeout after 5s, forcing shutdown", serviceName)
+			grpcServer.Stop() // Force stop to unblock hung connections
+		}
 	}()
 
 	if err = grpcServer.Serve(listener); err != nil {

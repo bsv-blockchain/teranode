@@ -3,6 +3,7 @@
   import { page } from '$app/stores'
   import SubtreeDetailsCard from './subtree-details-card/index.svelte'
   import SubtreeTxsCard from './subtree-txs-card/index.svelte'
+  import SubtreeMerkleVisualizer from './subtree-merkle-visualizer/index.svelte'
 
   import NoData from '../no-data-card/index.svelte'
   import { spinCount } from '$internal/stores/nav'
@@ -25,7 +26,9 @@
   let display: DetailTab
 
   $: tab = ready ? $page.url.searchParams.get('tab') ?? '' : ''
-  $: display = tab === DetailTab.json ? DetailTab.json : DetailTab.overview
+  $: display = tab === DetailTab.json ? DetailTab.json : 
+              tab === DetailTab.merkleproof ? DetailTab.merkleproof : 
+              DetailTab.overview
 
   let result: any = null
 
@@ -101,6 +104,9 @@
   {#if display === DetailTab.overview}
     <div style="height: 20px" />
     <SubtreeTxsCard subtree={result} {blockHash} />
+  {:else if display === DetailTab.merkleproof}
+    <div style="height: 20px" />
+    <SubtreeMerkleVisualizer subtreeHash={hash} {blockHash} />
   {/if}
 {:else if $spinCount === 0}
   <div class="no-data">

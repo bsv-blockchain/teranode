@@ -23,6 +23,15 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// bufioReaderPool reduces GC pressure by reusing bufio.Reader instances.
+// Using 32KB buffers provides excellent I/O performance for sequential reads
+// while dramatically reducing memory pressure and GC overhead (16x reduction from previous 512KB).
+var bufioReaderPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewReaderSize(nil, 32*1024) // 32KB buffer - optimized for sequential I/O
+	},
+}
+
 // quickValidateBlock performs optimized validation for blocks below checkpoints.
 // This follows the legacy sync approach: create all UTXOs first, then validate later.
 // This is safe because checkpoints guarantee these blocks are valid.
@@ -114,6 +123,15 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		if err = u.utxoStore.SetLocked(ctx, txHashes, false); err != nil {
 			return errors.NewProcessingError("[quickValidateBlock][%s] failed to unlock UTXOs", block.Hash().String(), err)
 		}
+	}
+
+	// Update subtrees DAH and send BlockSubtreesSet notification
+	// This matches the normal validation flow and ensures:
+	// 1. Subtree retention periods are properly managed
+	// 2. BlockSubtreesSet notification is sent to trigger setMinedChan
+	// 3. Transactions are marked as mined in the UTXO store
+	if err = u.updateSubtreesDAH(ctx, block); err != nil {
+		return errors.NewProcessingError("[quickValidateBlock][%s] failed to update subtrees DAH", block.Hash().String(), err)
 	}
 
 	// Mark block as existing in cache
@@ -208,6 +226,16 @@ func (u *BlockValidation) spendAllTransactions(ctx context.Context, block *model
 	spendBatcherSize := u.settings.UtxoStore.SpendBatcherSize
 	spendBatcherConcurrency := u.settings.UtxoStore.SpendBatcherConcurrency
 
+	if block.Height == 0 {
+		// get the block height from the blockchain client
+		_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Hash())
+		if err != nil {
+			return errors.NewProcessingError("[spendAllTransactions][%s] failed to get block header for genesis block", block.Hash().String(), err)
+		}
+
+		block.Height = blockHeaderMeta.Height
+	}
+
 	// validate all the transactions in parallel
 	g, gCtx := errgroup.WithContext(ctx)                           // we don't want the tracing to be linked to these calls
 	util.SafeSetLimit(g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
@@ -220,7 +248,7 @@ func (u *BlockValidation) spendAllTransactions(ctx context.Context, block *model
 		}
 
 		g.Go(func() error {
-			if _, err := u.utxoStore.Spend(gCtx, tx, utxo.IgnoreFlags{IgnoreLocked: true}); err != nil {
+			if _, err := u.utxoStore.Spend(gCtx, tx, block.Height, utxo.IgnoreFlags{IgnoreLocked: true}); err != nil {
 				return errors.NewProcessingError("[spendAllTransactions][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 			}
 
@@ -285,8 +313,13 @@ func (u *BlockValidation) getBlockTransactions(ctx context.Context, block *model
 			}
 			defer subtreeReader.Close()
 
-			// create a buffered reader to read the subtree
-			bufferedReader := bufio.NewReaderSize(subtreeReader, 1024*512) // 512KB buffer size
+			// Use pooled buffered reader to reduce GC pressure
+			bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+			bufferedReader.Reset(subtreeReader)
+			defer func() {
+				bufferedReader.Reset(nil)
+				bufioReaderPool.Put(bufferedReader)
+			}()
 
 			// subtree only contains the tx hashes (nodes) of the subtree. It is missing the fee and sizeInBytes
 			subtree, err := subtreepkg.NewSubtreeFromReader(bufferedReader)
@@ -299,9 +332,10 @@ func (u *BlockValidation) getBlockTransactions(ctx context.Context, block *model
 			if err != nil {
 				return errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree data %s", block.Hash().String(), subtreeHash.String(), err)
 			}
+			defer subtreeDataReader.Close()
 
-			// create a buffered reader to read the subtree data
-			bufferedReader = bufio.NewReaderSize(subtreeDataReader, 1024*512) // 512KB buffer size
+			// Reuse the same pooled reader for subtree data
+			bufferedReader.Reset(subtreeDataReader)
 
 			// the subtree data reader will make sure the data matches the transaction ids from the subtree
 			subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufferedReader)

@@ -7,6 +7,8 @@
 package subtreeprocessor
 
 import (
+	"context"
+
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -50,6 +52,10 @@ func (m *MockSubtreeProcessor) GetCurrentRunningState() State {
 func (m *MockSubtreeProcessor) GetCurrentLength() int {
 	args := m.Called()
 	return args.Int(0)
+}
+
+func (m *MockSubtreeProcessor) Start(ctx context.Context) {
+	m.Called(ctx)
 }
 
 func (m *MockSubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, isLegacySync bool, postProcess func() error) ResetResponse {
@@ -123,11 +129,11 @@ func (m *MockSubtreeProcessor) SubtreeCount() int {
 }
 
 // Add implements Interface.Add
-func (m *MockSubtreeProcessor) Add(node subtree.SubtreeNode, txInpoints subtree.TxInpoints) {
+func (m *MockSubtreeProcessor) Add(node subtree.Node, txInpoints subtree.TxInpoints) {
 	m.Called(node, txInpoints)
 }
 
-func (m *MockSubtreeProcessor) AddDirectly(node subtree.SubtreeNode, txInpoints subtree.TxInpoints, skipNotification bool) error {
+func (m *MockSubtreeProcessor) AddDirectly(node subtree.Node, txInpoints subtree.TxInpoints, skipNotification bool) error {
 	args := m.Called(node, txInpoints, skipNotification)
 
 	if args.Get(0) == nil {
@@ -156,8 +162,8 @@ func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks
 }
 
 // Remove implements Interface.Remove
-func (m *MockSubtreeProcessor) Remove(hash chainhash.Hash) error {
-	args := m.Called(hash)
+func (m *MockSubtreeProcessor) Remove(ctx context.Context, hash chainhash.Hash) error {
+	args := m.Called(ctx, hash)
 	return args.Error(0)
 }
 
@@ -170,4 +176,14 @@ func (m *MockSubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*subtr
 // InitCurrentBlockHeader implements Interface.InitCurrentBlockHeader
 func (m *MockSubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHeader) {
 	m.Called(blockHeader)
+}
+
+func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+// Stop implements Interface.Stop
+func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
+	m.Called(ctx)
 }
