@@ -6094,45 +6094,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#http-api" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        HTTP API
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="HTTP API">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#single-transaction" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Single Transaction
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#multiple-transactions-batch" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Multiple Transactions (Batch)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#grpc-api" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6326,17 +6287,6 @@
     <span class="md-ellipsis">
       
         4. Monitor Transaction Status
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#5-batch-submissions-for-high-volume" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        5. Batch Submissions for High Volume
       
     </span>
   </a>
@@ -6538,61 +6488,8 @@
 <span class="p">}</span>
 </code></pre></div>
 <h2 id="submission-methods">Submission Methods</h2>
-<h3 id="http-api">HTTP API</h3>
-<p>Teranode's Propagation Service provides HTTP endpoints for transaction submission.</p>
-<h4 id="single-transaction">Single Transaction</h4>
-<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8090/tx<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/octet-stream&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--data-binary<span class="w"> </span>@transaction.bin
-</code></pre></div>
-<p><strong>Response:</strong></p>
-<ul>
-<li><code>200 OK</code>: Transaction accepted</li>
-<li><code>400 Bad Request</code>: Malformed transaction</li>
-<li><code>422 Unprocessable Entity</code>: Transaction validation failed</li>
-</ul>
-<h4 id="multiple-transactions-batch">Multiple Transactions (Batch)</h4>
-<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8090/txs<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/octet-stream&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--data-binary<span class="w"> </span>@transactions.bin
-</code></pre></div>
-<p>The batch endpoint expects transactions concatenated together. Each transaction result is returned in order.</p>
-<p><strong>Go Example:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
-
-<span class="kn">import</span><span class="w"> </span><span class="p">(</span>
-<span class="w">    </span><span class="s">&quot;bytes&quot;</span>
-<span class="w">    </span><span class="s">&quot;context&quot;</span>
-<span class="w">    </span><span class="s">&quot;fmt&quot;</span>
-<span class="w">    </span><span class="s">&quot;io&quot;</span>
-<span class="w">    </span><span class="s">&quot;net/http&quot;</span>
-
-<span class="w">    </span><span class="s">&quot;github.com/libsv/go-bt/v2&quot;</span>
-<span class="p">)</span>
-
-<span class="kd">func</span><span class="w"> </span><span class="nx">submitTransaction</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">nodeURL</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">txBytes</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tx</span><span class="p">.</span><span class="nx">Bytes</span><span class="p">()</span>
-
-<span class="w">    </span><span class="nx">resp</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Post</span><span class="p">(</span>
-<span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;%s/tx&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">nodeURL</span><span class="p">),</span>
-<span class="w">        </span><span class="s">&quot;application/octet-stream&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nx">bytes</span><span class="p">.</span><span class="nx">NewReader</span><span class="p">(</span><span class="nx">txBytes</span><span class="p">),</span>
-<span class="w">    </span><span class="p">)</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;failed to submit transaction: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
-<span class="w">    </span><span class="p">}</span>
-<span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="nx">resp</span><span class="p">.</span><span class="nx">Body</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span>
-
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">resp</span><span class="p">.</span><span class="nx">StatusCode</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">StatusOK</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nx">body</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">io</span><span class="p">.</span><span class="nx">ReadAll</span><span class="p">(</span><span class="nx">resp</span><span class="p">.</span><span class="nx">Body</span><span class="p">)</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;transaction rejected: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nb">string</span><span class="p">(</span><span class="nx">body</span><span class="p">))</span>
-<span class="w">    </span><span class="p">}</span>
-
-<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
-<span class="p">}</span>
-</code></pre></div>
+<p>Teranode provides a gRPC API for transaction submission, offering high performance and low latency.</p>
 <h3 id="grpc-api">gRPC API</h3>
-<p>For higher performance and lower latency, use the gRPC API.</p>
 <p><strong>Go Example:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
 
@@ -6721,30 +6618,15 @@ curl<span class="w"> </span>http://localhost:8090/tx/abc123.../json
 <span class="c1"># Check UTXO status</span>
 curl<span class="w"> </span>http://localhost:8090/utxo/output_hash/json
 </code></pre></div>
-<h3 id="5-batch-submissions-for-high-volume">5. Batch Submissions for High Volume</h3>
-<p>For high-throughput applications, use batch submission:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">submitBatch</span><span class="p">(</span><span class="nx">txs</span><span class="w"> </span><span class="p">[]</span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">nodeURL</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">buffer</span><span class="w"> </span><span class="nx">bytes</span><span class="p">.</span><span class="nx">Buffer</span>
-
-<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">tx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">txs</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nx">buffer</span><span class="p">.</span><span class="nx">Write</span><span class="p">(</span><span class="nx">tx</span><span class="p">.</span><span class="nx">Bytes</span><span class="p">())</span>
-<span class="w">    </span><span class="p">}</span>
-
-<span class="w">    </span><span class="nx">resp</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">Post</span><span class="p">(</span>
-<span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Sprintf</span><span class="p">(</span><span class="s">&quot;%s/txs&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">nodeURL</span><span class="p">),</span>
-<span class="w">        </span><span class="s">&quot;application/octet-stream&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="o">&amp;</span><span class="nx">buffer</span><span class="p">,</span>
-<span class="w">    </span><span class="p">)</span>
-<span class="w">    </span><span class="c1">// ... handle response</span>
-<span class="p">}</span>
-</code></pre></div>
 <h2 id="transaction-lifecycle">Transaction Lifecycle</h2>
 <ol>
-<li><strong>Submission</strong>: Transaction sent to Propagation Service (HTTP/gRPC)</li>
+<li><strong>Submission</strong>: Transaction sent to Propagation Service (gRPC)</li>
 <li><strong>Storage</strong>: Transaction stored in blob store</li>
-<li><strong>Format Check</strong>: Validator checks if transaction is extended</li>
+<li><strong>Format Check</strong>: Validator checks if transaction is extended<ul>
 <li>If not extended: Automatically extended in-memory using UTXO store</li>
 <li>If extended: Proceeds directly to validation</li>
+</ul>
+</li>
 <li><strong>Validation</strong>: Full consensus and policy validation</li>
 <li><strong>UTXO Update</strong>: UTXOs marked as spent, new outputs created</li>
 <li><strong>Block Assembly</strong>: Valid transactions forwarded to mining</li>
@@ -6755,11 +6637,6 @@ curl<span class="w"> </span>http://localhost:8090/utxo/output_hash/json
 <h3 id="local-testing-setup">Local Testing Setup</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Start Teranode in development mode</span>
 <span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev<span class="w"> </span>make<span class="w"> </span>dev-teranode
-
-<span class="c1"># Submit a test transaction</span>
-curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8090/tx<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/octet-stream&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--data-binary<span class="w"> </span>@test_tx.bin
 </code></pre></div>
 <h3 id="integration-testing">Integration Testing</h3>
 <p>For automated testing with Teranode, refer to the test utilities in the codebase:</p>
