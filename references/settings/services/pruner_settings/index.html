@@ -5629,15 +5629,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#job-management-settings" class="md-nav__link">
+  <a href="#operation-timeout-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Job Management Settings
+        Operation Timeout Settings
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Job Management Settings">
+    <nav class="md-nav" aria-label="Operation Timeout Settings">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -5734,6 +5734,95 @@
     <span class="md-ellipsis">
       
         pruner_IndexName
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#chunk-processing-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chunk Processing Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Chunk Processing Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pruner_utxochunksize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_utxoChunkSize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pruner_utxochunkgrouplimit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_utxoChunkGroupLimit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pruner_utxoprogressloginterval" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_utxoProgressLogInterval
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#defensive-mode-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defensive Mode Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Defensive Mode Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pruner_utxodefensiveenabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_utxoDefensiveEnabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pruner_utxodefensivebatchreadsize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_utxoDefensiveBatchReadSize
       
     </span>
   </a>
@@ -6661,15 +6750,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#job-management-settings" class="md-nav__link">
+  <a href="#operation-timeout-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Job Management Settings
+        Operation Timeout Settings
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Job Management Settings">
+    <nav class="md-nav" aria-label="Operation Timeout Settings">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -6766,6 +6855,95 @@
     <span class="md-ellipsis">
       
         pruner_IndexName
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#chunk-processing-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chunk Processing Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Chunk Processing Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pruner_utxochunksize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_utxoChunkSize
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pruner_utxochunkgrouplimit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_utxoChunkGroupLimit
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pruner_utxoprogressloginterval" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_utxoProgressLogInterval
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#defensive-mode-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defensive Mode Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Defensive Mode Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pruner_utxodefensiveenabled" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_utxoDefensiveEnabled
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pruner_utxodefensivebatchreadsize" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        pruner_utxoDefensiveBatchReadSize
       
     </span>
   </a>
@@ -7133,26 +7311,19 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 <li><code>localhost:8096</code> - Listen only on localhost (more secure)</li>
 <li><code>0.0.0.0:8096</code> - Explicitly listen on all IPv4 interfaces</li>
 </ul>
-<h2 id="job-management-settings">Job Management Settings</h2>
+<h2 id="operation-timeout-settings">Operation Timeout Settings</h2>
 <h3 id="pruner_jobtimeout">pruner_jobTimeout</h3>
 <p><strong>Type</strong>: Duration</p>
 <p><strong>Default</strong>: <code>10m</code> (10 minutes)</p>
-<p><strong>Description</strong>: Timeout for waiting for pruning job completion before coordinator moves on</p>
+<p><strong>Description</strong>: Timeout for overall pruning operation completion</p>
 <p><strong>Format</strong>: Duration string (e.g., <code>5m</code>, <code>30s</code>, <code>1h</code>)</p>
 <p><strong>Example:</strong></p>
 <div class="highlight"><pre><span></span><code>pruner_jobTimeout = 10m
 </code></pre></div>
 <p><strong>Behavior:</strong></p>
 <ul>
-<li>Coordinator waits up to <code>jobTimeout</code> for job completion</li>
-<li>
-<p>On timeout:</p>
-<ul>
-<li>Coordinator moves on (non-error)</li>
-<li>Job continues running in background</li>
-<li>Will be re-queued immediately if needed</li>
-</ul>
-</li>
+<li>Pruning operation runs synchronously up to this timeout</li>
+<li>On timeout: Operation is logged as timed out but continues in background</li>
 </ul>
 <p><strong>Tuning Guidelines:</strong></p>
 <ul>
@@ -7163,8 +7334,8 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 </ul>
 <p><strong>Impact:</strong></p>
 <ul>
-<li>Too short: Frequent timeouts, coordinator moves on repeatedly</li>
-<li>Too long: Coordinator waits unnecessarily for long-running jobs</li>
+<li>Too short: Frequent timeouts logged</li>
+<li>Too long: Blocks other operations unnecessarily</li>
 </ul>
 <p><strong>Metrics</strong>: Monitor <code>pruner_duration_seconds</code> to determine appropriate timeout</p>
 <h2 id="utxo-store-settings">UTXO Store Settings</h2>
@@ -7279,6 +7450,87 @@ utxostore_parentPreservationBlocks = 14400  # 10 days
 <div class="highlight"><pre><span></span><code>Namespace   Set     Index Name        Bin Name          Type
 teranode    utxos   pruner_dah_index  deleteAtHeight    NUMERIC
 </code></pre></div>
+<h2 id="chunk-processing-settings">Chunk Processing Settings</h2>
+<p>These settings control parallel processing during UTXO pruning operations.</p>
+<h3 id="pruner_utxochunksize">pruner_utxoChunkSize</h3>
+<p><strong>Type</strong>: Integer</p>
+<p><strong>Default</strong>: <code>1000</code></p>
+<p><strong>Description</strong>: Number of records to process in each parallel chunk during pruning</p>
+<p>Controls the granularity of parallel processing. Records are accumulated into chunks of this size, then processed in parallel.</p>
+<p><strong>Example:</strong></p>
+<div class="highlight"><pre><span></span><code>pruner_utxoChunkSize = 1000
+</code></pre></div>
+<p><strong>Tuning:</strong></p>
+<ul>
+<li><strong>Higher values</strong>: Fewer chunks, less parallelism overhead, more memory per chunk</li>
+<li><strong>Lower values</strong>: More chunks, better parallelism, more overhead</li>
+</ul>
+<p><strong>Recommendation</strong>: Default value works well for most deployments.</p>
+<h3 id="pruner_utxochunkgrouplimit">pruner_utxoChunkGroupLimit</h3>
+<p><strong>Type</strong>: Integer</p>
+<p><strong>Default</strong>: <code>10</code></p>
+<p><strong>Description</strong>: Maximum number of chunks to process in parallel</p>
+<p>Limits concurrent chunk processing to prevent overwhelming Aerospike or exhausting system resources.</p>
+<p><strong>Example:</strong></p>
+<div class="highlight"><pre><span></span><code>pruner_utxoChunkGroupLimit = 10
+</code></pre></div>
+<p><strong>Tuning:</strong></p>
+<ul>
+<li><strong>Higher values</strong>: More parallelism, faster pruning, higher resource usage</li>
+<li><strong>Lower values</strong>: Less parallelism, slower pruning, lower resource usage</li>
+</ul>
+<p><strong>Constraint</strong>: Limited by Aerospike connection pool size. Setting too high causes connection contention.</p>
+<h3 id="pruner_utxoprogressloginterval">pruner_utxoProgressLogInterval</h3>
+<p><strong>Type</strong>: Duration</p>
+<p><strong>Default</strong>: <code>30s</code></p>
+<p><strong>Description</strong>: Interval for logging progress during long-running pruning operations</p>
+<p>When set, the pruner logs periodic progress updates showing records pruned and elapsed time.</p>
+<p><strong>Example:</strong></p>
+<div class="highlight"><pre><span></span><code>pruner_utxoProgressLogInterval = 30s
+</code></pre></div>
+<p><strong>Values:</strong></p>
+<ul>
+<li><code>0</code>: Disable progress logging</li>
+<li><code>30s</code>: Log every 30 seconds (default)</li>
+<li><code>1m</code>: Log every minute</li>
+</ul>
+<p><strong>Use Case</strong>: Monitor progress during large pruning operations or troubleshoot slow pruning.</p>
+<h2 id="defensive-mode-settings">Defensive Mode Settings</h2>
+<p>These settings control the defensive pruning mode, which adds safety checks before deleting parent transactions.</p>
+<h3 id="pruner_utxodefensiveenabled">pruner_utxoDefensiveEnabled</h3>
+<p><strong>Type</strong>: Boolean</p>
+<p><strong>Default</strong>: <code>false</code></p>
+<p><strong>Description</strong>: Enable defensive child verification before parent deletion</p>
+<p>When enabled, the pruner verifies that ALL spending children of a parent transaction are mined and stable (for at least <code>blockHeightRetention</code> blocks) before deleting the parent. This prevents orphaning children during chain reorganizations.</p>
+<p><strong>Example:</strong></p>
+<div class="highlight"><pre><span></span><code>pruner_utxoDefensiveEnabled = true
+</code></pre></div>
+<p><strong>Impact:</strong></p>
+<ul>
+<li><code>true</code>: Safer pruning with child verification, slightly slower due to batch verification</li>
+<li><code>false</code>: Faster pruning, relies on retention period alone for safety</li>
+</ul>
+<p><strong>When to Enable:</strong></p>
+<ul>
+<li>Production environments with high transaction resubmission rates</li>
+<li>Environments experiencing frequent chain reorganizations</li>
+<li>When data integrity is critical</li>
+</ul>
+<p><strong>Trade-off</strong>: Enabling adds Aerospike batch read operations to verify children, which increases pruning time but provides stronger safety guarantees.</p>
+<h3 id="pruner_utxodefensivebatchreadsize">pruner_utxoDefensiveBatchReadSize</h3>
+<p><strong>Type</strong>: Integer</p>
+<p><strong>Default</strong>: <code>10000</code></p>
+<p><strong>Description</strong>: Batch size for defensive child verification queries</p>
+<p>Controls how many child transactions are verified in a single Aerospike BatchGet call when defensive mode is enabled.</p>
+<p><strong>Example:</strong></p>
+<div class="highlight"><pre><span></span><code>pruner_utxoDefensiveBatchReadSize = 10000
+</code></pre></div>
+<p><strong>Tuning:</strong></p>
+<ul>
+<li><strong>Higher values</strong>: Fewer Aerospike round trips, more memory per batch</li>
+<li><strong>Lower values</strong>: More round trips, less memory per batch</li>
+</ul>
+<p><strong>Applies To</strong>: Only used when <code>pruner_utxoDefensiveEnabled = true</code></p>
 <h2 id="context-specific-configuration">Context-Specific Configuration</h2>
 <h3 id="development-context">Development Context</h3>
 <div class="highlight"><pre><span></span><code>[dev]
@@ -7329,7 +7581,8 @@ startPruner = true
 <div class="highlight"><pre><span></span><code># settings.conf
 startPruner = true
 pruner_jobTimeout = 5m  # Shorter timeout
-utxostore_prunerMaxConcurrentOperations = 16  # More workers
+pruner_utxoChunkSize = 2000  # Larger chunks
+pruner_utxoChunkGroupLimit = 20  # More parallel chunks
 utxostore_unminedTxRetention = 5000  # Prune sooner
 utxostore_parentPreservationBlocks = 10000  # Shorter preservation
 </code></pre></div>
@@ -7338,7 +7591,8 @@ utxostore_parentPreservationBlocks = 10000  # Shorter preservation
 <div class="highlight"><pre><span></span><code># settings.conf
 startPruner = true
 pruner_jobTimeout = 20m  # Longer timeout
-utxostore_prunerMaxConcurrentOperations = 4  # Fewer workers
+pruner_utxoChunkGroupLimit = 5  # Fewer parallel chunks
+pruner_utxoDefensiveEnabled = true  # Enable safety checks
 utxostore_unminedTxRetention = 10000  # Retain longer
 utxostore_parentPreservationBlocks = 20000  # Longer preservation
 </code></pre></div>
@@ -7407,8 +7661,9 @@ pruner_grpcListenAddress = :8097
 <p><strong>Solutions:</strong></p>
 <ol>
 <li>
-<p>Increase worker count:</p>
-<div class="highlight"><pre><span></span><code>utxostore_prunerMaxConcurrentOperations = 16
+<p>Increase parallel chunk processing:</p>
+<div class="highlight"><pre><span></span><code>pruner_utxoChunkGroupLimit = 20  # Process more chunks in parallel
+pruner_utxoChunkSize = 2000  # Larger chunks
 </code></pre></div>
 </li>
 <li>
@@ -7418,6 +7673,11 @@ pruner_grpcListenAddress = :8097
 </li>
 <li>
 <p>Check database performance</p>
+</li>
+<li>
+<p>If defensive mode is enabled and slowing pruning:</p>
+<div class="highlight"><pre><span></span><code>pruner_utxoDefensiveEnabled = false  # Disable if safety checks not needed
+</code></pre></div>
 </li>
 </ol>
 <h3 id="database-growth">Database Growth</h3>

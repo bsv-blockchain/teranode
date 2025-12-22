@@ -3393,10 +3393,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#25-job-queue-management" class="md-nav__link">
+  <a href="#25-defensive-mode-optional" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.5 Job Queue Management
+        2.5 Defensive Mode (Optional)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-external-transaction-pruning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.6 External Transaction Pruning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#27-channel-based-deduplication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.7 Channel-Based Deduplication
       
     </span>
   </a>
@@ -3609,6 +3631,28 @@
     <span class="md-ellipsis">
       
         Core Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chunk-processing-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chunk Processing Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#defensive-mode-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defensive Mode Settings
       
     </span>
   </a>
@@ -6766,10 +6810,32 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#25-job-queue-management" class="md-nav__link">
+  <a href="#25-defensive-mode-optional" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.5 Job Queue Management
+        2.5 Defensive Mode (Optional)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-external-transaction-pruning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.6 External Transaction Pruning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#27-channel-based-deduplication" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.7 Channel-Based Deduplication
       
     </span>
   </a>
@@ -6989,6 +7055,28 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#chunk-processing-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Chunk Processing Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#defensive-mode-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defensive Mode Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#utxo-store-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7113,7 +7201,9 @@
 <li><a href="#22-event-driven-trigger-mechanism">2.2 Event-Driven Trigger Mechanism</a></li>
 <li><a href="#23-two-phase-pruning-process">2.3 Two-Phase Pruning Process</a></li>
 <li><a href="#24-coordination-with-block-persister">2.4 Coordination with Block Persister</a></li>
-<li><a href="#25-job-queue-management">2.5 Job Queue Management</a></li>
+<li><a href="#25-defensive-mode-optional">2.5 Defensive Mode (Optional)</a></li>
+<li><a href="#26-external-transaction-pruning">2.6 External Transaction Pruning</a></li>
+<li><a href="#27-channel-based-deduplication">2.7 Channel-Based Deduplication</a></li>
 </ul>
 </li>
 <li><a href="#3-data-model">Data Model</a></li>
@@ -7360,57 +7450,38 @@
 <p><strong>Process:</strong></p>
 <ol>
 <li>
-<p>Job Manager receives <code>UpdateBlockHeight(height)</code> request</p>
+<p>Pruner service receives <code>Prune(height)</code> request</p>
 </li>
 <li>
 <p>Calculate safe height for deletion</p>
 <ul>
 <li>Get <code>persistedHeight</code> from Block Persister coordination</li>
-<li><code>safeHeight = min(currentHeight, persistedHeight)</code></li>
+<li><code>safeHeight = min(currentHeight, persistedHeight + blockHeightRetention)</code></li>
 <li>Ensures transaction data is in <code>.subtree_data</code> files before deletion</li>
 </ul>
 </li>
 <li>
-<p>Create pruning job</p>
-<ul>
-<li>Job includes <code>safeHeight</code> for deletion</li>
-<li>Added to job queue with LIFO prioritization</li>
-</ul>
-</li>
-<li>
-<p>Cancel superseded jobs</p>
-<ul>
-<li>Only newest pending job is processed</li>
-<li>Older jobs are marked as <code>Cancelled</code></li>
-</ul>
-</li>
-<li>
-<p>Worker pool executes pruning</p>
+<p>Query records for deletion</p>
 <ul>
 <li><strong>Aerospike</strong>: Query with filter <code>deleteAtHeight &lt;= safeHeight</code> using secondary index</li>
-<li><strong>SQL</strong>: <code>DELETE FROM utxos WHERE delete_at_height &lt;= safeHeight</code></li>
+<li><strong>SQL</strong>: <code>SELECT * FROM utxos WHERE delete_at_height &lt;= safeHeight</code></li>
+</ul>
+</li>
+<li>
+<p>Process records in parallel chunks</p>
+<ul>
+<li>Records accumulated into chunks (<code>pruner_utxoChunkSize</code>, default: 1000)</li>
+<li>Chunks processed in parallel (<code>pruner_utxoChunkGroupLimit</code>, default: 10)</li>
+<li>Deduplication ensures only latest height is processed during catchup</li>
 </ul>
 </li>
 <li>
 <p>For each record to delete:</p>
 <ul>
-<li>
-<p>If external transaction data exists:</p>
-<ul>
-<li>Delete <code>.tx</code> file from Blob Store (S3/filesystem)<ul>
+<li>If defensive mode enabled: Verify all spending children are stable</li>
+<li>If external transaction data exists: Delete <code>.tx</code> or <code>.outputs</code> file from Blob Store</li>
+<li>Update parent records with deleted children information</li>
 <li>Delete UTXO record from database</li>
-<li>Update metrics: <code>utxo_cleanup_batch_duration_seconds</code></li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-</li>
-<li>
-<p>Job completion</p>
-<ul>
-<li><strong>Timeout (10 minutes)</strong>: Non-error, job continues in background</li>
-<li><strong>Success</strong>: Job marked as <code>Completed</code></li>
 </ul>
 </li>
 <li>
@@ -7418,13 +7489,15 @@
 <ul>
 <li><code>pruner_duration_seconds{operation="dah_pruner"}</code></li>
 <li><code>pruner_processed_total</code></li>
+<li><code>utxo_cleanup_batch_duration_seconds</code></li>
 </ul>
 </li>
 </ol>
-<p><strong>Worker Pool Configuration:</strong></p>
+<p><strong>Chunk Processing Configuration:</strong></p>
 <ul>
-<li><strong>Aerospike</strong>: 4 workers (default), concurrent batch operations</li>
-<li><strong>SQL</strong>: 2 workers (default), simpler DELETE queries</li>
+<li><strong>Chunk Size</strong>: <code>pruner_utxoChunkSize</code> (default: 1000 records per chunk)</li>
+<li><strong>Parallel Chunks</strong>: <code>pruner_utxoChunkGroupLimit</code> (default: 10 concurrent chunks)</li>
+<li><strong>Progress Logging</strong>: <code>pruner_utxoProgressLogInterval</code> (default: 30s)</li>
 </ul>
 <h3 id="24-coordination-with-block-persister">2.4 Coordination with Block Persister</h3>
 <p>Critical coordination mechanism to prevent premature deletion of transaction data:</p>
@@ -7485,75 +7558,81 @@
 <li><strong>Catchup Support</strong>: Nodes can replay blocks from <code>.subtree_data</code> files</li>
 <li><strong>Graceful Degradation</strong>: Works with or without Block Persister</li>
 </ul>
-<h3 id="25-job-queue-management">2.5 Job Queue Management</h3>
-<p><img alt="pruner_job_queue.svg" src="../img/plantuml/pruner/pruner_job_queue.svg" /></p>
-<p><strong>LIFO (Last In, First Out) Pattern:</strong></p>
-<p>The Pruner uses a LIFO queue to efficiently handle pruning during catchup:</p>
-<p><strong>Why LIFO?</strong></p>
-<p>During blockchain catchup, blocks arrive rapidly. Processing every intermediate height is wasteful. LIFO ensures:</p>
+<h3 id="25-defensive-mode-optional">2.5 Defensive Mode (Optional)</h3>
+<p>Defensive mode adds an additional safety layer to prevent deleting parent transactions that have unstable spending children.</p>
+<p><strong>Purpose:</strong></p>
+<p>Prevent data loss by verifying that ALL spending children of a parent transaction are mined and stable (for at least <code>blockHeightRetention</code> blocks) before deleting the parent.</p>
+<p><strong>When to Enable:</strong></p>
 <ul>
-<li>Only the <strong>newest pending job</strong> is processed</li>
-<li>Intermediate heights are skipped automatically</li>
-<li>Efficient pruning during catchup</li>
+<li>Production environments with high transaction resubmission rates</li>
+<li>Environments experiencing frequent chain reorganizations</li>
+<li>When data integrity is critical</li>
 </ul>
-<p><strong>Job States:</strong></p>
+<p><strong>How It Works:</strong></p>
 <ol>
-<li><strong>Pending</strong>: Waiting for worker</li>
-<li><strong>Running</strong>: Currently being processed</li>
-<li><strong>Completed</strong>: Successfully finished</li>
-<li><strong>Failed</strong>: Error occurred</li>
-<li><strong>Cancelled</strong>: Superseded by newer job</li>
-</ol>
-<p><strong>Job Lifecycle:</strong></p>
-<ol>
+<li>Before deleting a parent transaction, extract all spending children from the parent's UTXOs</li>
 <li>
-<p>New job arrives (height 100)</p>
+<p>Batch verify that each spending child:</p>
 <ul>
-<li>Added to queue with status <code>Pending</code></li>
-<li>All workers busy</li>
-</ul>
-</li>
-<li>
-<p>Another job arrives (height 101)</p>
-<ul>
-<li>Added to queue with status <code>Pending</code></li>
-<li>Job Manager finds superseded jobs</li>
-<li>Job(100) status changed to <code>Cancelled</code></li>
-</ul>
-</li>
-<li>
-<p>Worker becomes available</p>
-<ul>
-<li>Gets newest pending job: Job(101)</li>
-<li>Job(101) status → <code>Running</code></li>
-<li>Worker executes pruning for height 101</li>
-</ul>
-</li>
-<li>
-<p>Job completes</p>
-<ul>
-<li>Job(101) status → <code>Completed</code></li>
-<li>Metrics updated</li>
+<li>Is mined (not in <code>UnminedSince</code> state)</li>
+<li>Has been stable for at least <code>blockHeightRetention</code> blocks</li>
+<li>If ANY child is unstable, skip deleting the parent (logged as "Defensive skip")</li>
+<li>If ALL children are stable, proceed with parent deletion</li>
 </ul>
 </li>
 </ol>
-<p><strong>Job History Retention:</strong></p>
+<p><strong>Configuration:</strong></p>
+<div class="highlight"><pre><span></span><code># Enable defensive mode
+pruner_utxoDefensiveEnabled = true
+
+# Batch size for child verification queries
+pruner_utxoDefensiveBatchReadSize = 10000
+</code></pre></div>
+<p><strong>Trade-offs:</strong></p>
 <ul>
-<li><strong>Aerospike</strong>: Last 1000 jobs</li>
-<li><strong>SQL</strong>: Last 10 jobs</li>
-<li>Older jobs automatically removed</li>
+<li><strong>Enabled</strong>: Safer pruning, additional Aerospike BatchGet operations, slightly slower</li>
+<li><strong>Disabled</strong>: Faster pruning, relies on retention period alone for safety</li>
 </ul>
-<p><strong>Timeout Handling:</strong></p>
+<h3 id="26-external-transaction-pruning">2.6 External Transaction Pruning</h3>
+<p>For large transactions stored externally in Blob Store (S3 or filesystem), the Pruner also cleans up the external files.</p>
+<p><strong>External File Types:</strong></p>
 <ul>
-<li>Default timeout: 10 minutes</li>
+<li><strong><code>.tx</code> files</strong>: Full transaction data (when transaction has inputs)</li>
+<li><strong><code>.outputs</code> files</strong>: Output-only data (when transaction has no inputs, e.g., coinbase)</li>
+</ul>
+<p><strong>Cleanup Process:</strong></p>
+<ol>
+<li>During Phase 2 pruning, check if record has <code>External = true</code></li>
 <li>
-<p>On timeout:</p>
+<p>Determine file type based on inputs:</p>
 <ul>
-<li>Coordinator moves on (non-error)</li>
-<li>Job continues in background</li>
-<li>Will be re-queued if needed</li>
+<li>Has inputs → FileTypeTx (<code>.tx</code> file)</li>
+<li>No inputs → FileTypeOutputs (<code>.outputs</code> file)</li>
+<li>Delete file from Blob Store before deleting Aerospike record</li>
+<li>If file already deleted (by previous cleanup), proceed with Aerospike deletion</li>
 </ul>
 </li>
+</ol>
+<p><strong>Error Handling:</strong></p>
+<ul>
+<li>If file deletion fails: Log error and skip Aerospike record deletion</li>
+<li>If file not found (ErrNotFound): Proceed with Aerospike deletion (file already cleaned up)</li>
+</ul>
+<h3 id="27-channel-based-deduplication">2.7 Channel-Based Deduplication</h3>
+<p>The Pruner uses a buffered channel (size 1) to handle pruning requests efficiently:</p>
+<p><strong>Mechanism:</strong></p>
+<ul>
+<li>Buffer size of 1 ensures non-blocking operation</li>
+<li>When channel full, new requests are dropped (deduplication)</li>
+<li>Processor drains channel to get latest height before processing</li>
+</ul>
+<p><strong>Benefits during Catchup:</strong></p>
+<p>During blockchain catchup, blocks arrive rapidly. The channel deduplication ensures:</p>
+<ul>
+<li>Only the latest height is processed</li>
+<li>Intermediate heights are automatically skipped</li>
+<li>No queue buildup or memory growth</li>
+<li>Efficient pruning without wasted work</li>
 </ul>
 <h2 id="3-data-model">3. Data Model</h2>
 <p>The Pruner service operates on the UTXO data model. Please refer to the <a href="../../datamodel/utxo_data_model/">UTXO Data Model documentation</a> for detailed information.</p>
@@ -7669,12 +7748,11 @@
 </code></pre></div>
 <h3 id="key-files">Key Files</h3>
 <ul>
-<li><strong><code>server.go</code></strong>: Service lifecycle, gRPC server, health checks</li>
-<li><strong><code>worker.go</code></strong>: Event handling, channel management, two-phase processing</li>
+<li><strong><code>server.go</code></strong>: Service lifecycle, gRPC server, health checks, event subscriptions</li>
+<li><strong><code>worker.go</code></strong>: Event handling, channel-based deduplication, two-phase processing</li>
 <li><strong><code>metrics.go</code></strong>: Prometheus metric definitions</li>
-<li><strong><code>interfaces.go</code></strong>: Store-agnostic interfaces for pruner implementations</li>
-<li><strong><code>job_processor.go</code></strong>: Generic job queue with LIFO pattern and worker pool</li>
-<li><strong><code>aerospike/pruner/pruner_service.go</code></strong> (900+ lines): Complete Aerospike implementation</li>
+<li><strong><code>interfaces.go</code></strong>: Store-agnostic interfaces for pruner implementations (<code>Prune()</code> method)</li>
+<li><strong><code>aerospike/pruner/pruner_service.go</code></strong> (1100+ lines): Complete Aerospike implementation with defensive mode</li>
 <li><strong><code>sql/pruner/pruner_service.go</code></strong>: Simplified SQL implementation</li>
 </ul>
 <h2 id="6-how-to-run">6. How to Run</h2>
@@ -7711,7 +7789,63 @@
 <td><code>pruner_jobTimeout</code></td>
 <td>duration</td>
 <td><code>10m</code></td>
-<td>Timeout for pruning job completion</td>
+<td>Timeout for pruning operation completion</td>
+</tr>
+</tbody>
+</table>
+<h3 id="chunk-processing-settings">Chunk Processing Settings</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pruner_utxoChunkSize</code></td>
+<td>int</td>
+<td><code>1000</code></td>
+<td>Records per parallel chunk</td>
+</tr>
+<tr>
+<td><code>pruner_utxoChunkGroupLimit</code></td>
+<td>int</td>
+<td><code>10</code></td>
+<td>Max parallel chunks</td>
+</tr>
+<tr>
+<td><code>pruner_utxoProgressLogInterval</code></td>
+<td>duration</td>
+<td><code>30s</code></td>
+<td>Progress logging interval (0 to disable)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="defensive-mode-settings">Defensive Mode Settings</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pruner_utxoDefensiveEnabled</code></td>
+<td>bool</td>
+<td><code>false</code></td>
+<td>Enable child verification before parent deletion</td>
+</tr>
+<tr>
+<td><code>pruner_utxoDefensiveBatchReadSize</code></td>
+<td>int</td>
+<td><code>10000</code></td>
+<td>Batch size for child verification queries</td>
 </tr>
 </tbody>
 </table>
@@ -7737,12 +7871,6 @@
 <td>uint32</td>
 <td><code>blocksInADayOnAverage*10</code></td>
 <td>Blocks to preserve parent transactions (≈14400)</td>
-</tr>
-<tr>
-<td><code>utxostore_prunerMaxConcurrentOperations</code></td>
-<td>int</td>
-<td>Connection pool size</td>
-<td>Max concurrent Aerospike operations</td>
 </tr>
 <tr>
 <td><code>utxostore_disableDAHCleaner</code></td>

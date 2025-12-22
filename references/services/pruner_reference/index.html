@@ -5064,17 +5064,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#job-status-api" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Job Status API
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#error-codes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5198,10 +5187,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#worker-pool-sizing" class="md-nav__link">
+  <a href="#chunk-processing-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Worker Pool Sizing
+        Chunk Processing Configuration
       
     </span>
   </a>
@@ -5209,10 +5198,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#job-timeout" class="md-nav__link">
+  <a href="#operation-timeout" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Job Timeout
+        Operation Timeout
       
     </span>
   </a>
@@ -5224,6 +5213,17 @@
     <span class="md-ellipsis">
       
         Channel Buffering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#defensive-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defensive Mode
       
     </span>
   </a>
@@ -6852,17 +6852,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#job-status-api" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Job Status API
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#error-codes" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6986,10 +6975,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#worker-pool-sizing" class="md-nav__link">
+  <a href="#chunk-processing-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Worker Pool Sizing
+        Chunk Processing Configuration
       
     </span>
   </a>
@@ -6997,10 +6986,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#job-timeout" class="md-nav__link">
+  <a href="#operation-timeout" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Job Timeout
+        Operation Timeout
       
     </span>
   </a>
@@ -7012,6 +7001,17 @@
     <span class="md-ellipsis">
       
         Channel Buffering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#defensive-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Defensive Mode
       
     </span>
   </a>
@@ -7200,7 +7200,9 @@ pruner_duration_seconds{operation=&quot;dah_pruner&quot;} 5.678
 <p><strong>Example:</strong></p>
 <div class="highlight"><pre><span></span><code>pruner_skipped_total{reason=&quot;not_running&quot;} 42
 pruner_skipped_total{reason=&quot;already_in_progress&quot;} 10
+pruner_skipped_total{reason=&quot;preserve_failed&quot;} 0
 </code></pre></div>
+<p><strong>Note</strong>: When defensive mode is enabled, skipped records are logged but not tracked as a separate metric label. Monitor logs for "Defensive skip" messages.</p>
 <h4 id="pruner_processed_total">pruner_processed_total</h4>
 <p><strong>Type</strong>: Counter</p>
 <p><strong>Description</strong>: Total number of pruning operations completed successfully</p>
@@ -7237,21 +7239,25 @@ pruner_errors_total{operation=&quot;state_check&quot;} 0
 <h3 id="service-interface">Service Interface</h3>
 <p>Located in <code>/stores/utxo/pruner/interfaces.go</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Service</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// Start begins the pruner service</span>
+<span class="w">    </span><span class="c1">// Start starts the pruner service.</span>
+<span class="w">    </span><span class="c1">// This should not block.</span>
+<span class="w">    </span><span class="c1">// The service should stop when the context is cancelled.</span>
 <span class="w">    </span><span class="nx">Start</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span>
 
-<span class="w">    </span><span class="c1">// UpdateBlockHeight triggers pruning for the given block height</span>
-<span class="w">    </span><span class="c1">// Optional doneCh allows waiting for job completion</span>
-<span class="w">    </span><span class="nx">UpdateBlockHeight</span><span class="p">(</span><span class="nx">height</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">doneCh</span><span class="w"> </span><span class="o">...</span><span class="kd">chan</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
+<span class="w">    </span><span class="c1">// Prune removes transactions marked for deletion at or before the specified height.</span>
+<span class="w">    </span><span class="c1">// Returns the number of records processed and any error encountered.</span>
+<span class="w">    </span><span class="c1">// This method is synchronous and blocks until pruning completes or context is cancelled.</span>
+<span class="w">    </span><span class="nx">Prune</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">height</span><span class="w"> </span><span class="kt">uint32</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">recordsProcessed</span><span class="w"> </span><span class="kt">int64</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 
-<span class="w">    </span><span class="c1">// SetPersistedHeightGetter sets the function to get persisted height</span>
-<span class="w">    </span><span class="c1">// from Block Persister for coordination</span>
+<span class="w">    </span><span class="c1">// SetPersistedHeightGetter sets the function used to get block persister progress.</span>
+<span class="w">    </span><span class="c1">// This allows pruner to coordinate with block persister to avoid premature deletion.</span>
 <span class="w">    </span><span class="nx">SetPersistedHeightGetter</span><span class="p">(</span><span class="nx">getter</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="kt">uint32</span><span class="p">)</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="provider-interface">Provider Interface</h3>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">PrunerServiceProvider</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// GetPrunerService returns the store-specific pruner implementation</span>
+<span class="w">    </span><span class="c1">// GetPrunerService returns a pruner service for the store.</span>
+<span class="w">    </span><span class="c1">// Returns nil if the store doesn&#39;t support pruner functionality.</span>
 <span class="w">    </span><span class="nx">GetPrunerService</span><span class="p">()</span><span class="w"> </span><span class="p">(</span><span class="nx">Service</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 <span class="p">}</span>
 </code></pre></div>
@@ -7281,28 +7287,6 @@ pruner_errors_total{operation=&quot;state_check&quot;} 0
 <span class="p">}</span>
 </code></pre></div>
 <p><strong>Handler</strong>: Triggers pruning if <code>mined_set == true</code></p>
-<h2 id="job-status-api">Job Status API</h2>
-<p>While not exposed via gRPC, the internal job status can be queried programmatically:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">JobStatus</span><span class="w"> </span><span class="kt">int</span>
-
-<span class="kd">const</span><span class="w"> </span><span class="p">(</span>
-<span class="w">    </span><span class="nx">JobStatusPending</span><span class="w"> </span><span class="nx">JobStatus</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">iota</span>
-<span class="w">    </span><span class="nx">JobStatusRunning</span>
-<span class="w">    </span><span class="nx">JobStatusCompleted</span>
-<span class="w">    </span><span class="nx">JobStatusFailed</span>
-<span class="w">    </span><span class="nx">JobStatusCancelled</span>
-<span class="p">)</span>
-
-<span class="kd">type</span><span class="w"> </span><span class="nx">Job</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nx">ID</span><span class="w">          </span><span class="kt">string</span>
-<span class="w">    </span><span class="nx">Height</span><span class="w">      </span><span class="kt">uint32</span>
-<span class="w">    </span><span class="nx">Status</span><span class="w">      </span><span class="nx">JobStatus</span>
-<span class="w">    </span><span class="nx">CreatedAt</span><span class="w">   </span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span>
-<span class="w">    </span><span class="nx">StartedAt</span><span class="w">   </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span>
-<span class="w">    </span><span class="nx">CompletedAt</span><span class="w"> </span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Time</span>
-<span class="w">    </span><span class="nx">Error</span><span class="w">       </span><span class="kt">error</span>
-<span class="p">}</span>
-</code></pre></div>
 <h2 id="error-codes">Error Codes</h2>
 <h3 id="phase-1-errors-critical">Phase 1 Errors (Critical)</h3>
 <table>
@@ -7415,28 +7399,29 @@ WARN  [Pruner] Pruning skipped: Block Assembly not running
 ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborting pruning
 </code></pre></div>
 <h2 id="performance-considerations">Performance Considerations</h2>
-<h3 id="worker-pool-sizing">Worker Pool Sizing</h3>
-<p><strong>Aerospike:</strong></p>
+<h3 id="chunk-processing-configuration">Chunk Processing Configuration</h3>
+<p><strong>Chunk Size (<code>pruner_utxoChunkSize</code>):</strong></p>
 <ul>
-<li>Default: 4 workers</li>
-<li>Increase for high-throughput nodes</li>
-<li>Limited by <code>prunerMaxConcurrentOperations</code></li>
+<li>Default: 1000 records per chunk</li>
+<li>Increase for faster pruning with more memory usage</li>
+<li>Decrease for lower memory footprint</li>
 </ul>
-<p><strong>SQL:</strong></p>
+<p><strong>Parallel Chunks (<code>pruner_utxoChunkGroupLimit</code>):</strong></p>
 <ul>
-<li>Default: 2 workers</li>
-<li>Increase cautiously (connection pool limits)</li>
+<li>Default: 10 parallel chunks</li>
+<li>Increase for high-throughput nodes with fast storage</li>
+<li>Limited by Aerospike connection pool size</li>
 </ul>
-<h3 id="job-timeout">Job Timeout</h3>
+<h3 id="operation-timeout">Operation Timeout</h3>
 <ul>
-<li>Default: 10 minutes</li>
-<li>On timeout: Job continues in background</li>
+<li>Default: 10 minutes (<code>pruner_jobTimeout</code>)</li>
+<li>On timeout: Operation continues in background</li>
 <li>
 <p>Adjust based on:</p>
 <ul>
 <li>Database size</li>
 <li>Network latency</li>
-<li>Worker pool size</li>
+<li>Chunk configuration</li>
 </ul>
 </li>
 </ul>
@@ -7444,7 +7429,14 @@ ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborti
 <ul>
 <li>Buffer size: 1 (non-blocking)</li>
 <li>Prevents queue buildup during catchup</li>
-<li>LIFO pattern ensures latest height processed</li>
+<li>Deduplication ensures only latest height processed</li>
+</ul>
+<h3 id="defensive-mode">Defensive Mode</h3>
+<ul>
+<li>Default: Disabled (<code>pruner_utxoDefensiveEnabled = false</code>)</li>
+<li>When enabled: Adds batch verification of spending children</li>
+<li>Performance impact: Additional Aerospike BatchGet operations</li>
+<li>Trade-off: Safer pruning vs. slower performance</li>
 </ul>
 <h3 id="secondary-index-aerospike">Secondary Index (Aerospike)</h3>
 <ul>
@@ -7526,8 +7518,14 @@ pruner_errors_total{operation=&quot;dah_pruner&quot;}
 </code></pre></div>
 </li>
 <li>
-<p>Increase worker pool:</p>
-<div class="highlight"><pre><span></span><code>utxostore_prunerMaxConcurrentOperations = 8  # Aerospike
+<p>Increase parallel chunk processing:</p>
+<div class="highlight"><pre><span></span><code>pruner_utxoChunkGroupLimit = 20  # More parallel chunks
+pruner_utxoChunkSize = 2000  # Larger chunks
+</code></pre></div>
+</li>
+<li>
+<p>If defensive mode is enabled, consider disabling:</p>
+<div class="highlight"><pre><span></span><code>pruner_utxoDefensiveEnabled = false
 </code></pre></div>
 </li>
 <li>
