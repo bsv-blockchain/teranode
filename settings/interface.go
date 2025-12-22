@@ -207,6 +207,7 @@ type BlockSettings struct {
 	BlockPersisterPersistAge                uint32
 	BlockPersisterPersistSleep              time.Duration
 	BlockPersisterEnableDefensiveReorgCheck bool
+	BlockPersisterProcessUTXOFiles          bool
 	UtxoStore                               *url.URL
 	FileStoreReadConcurrency                int
 	FileStoreWriteConcurrency               int

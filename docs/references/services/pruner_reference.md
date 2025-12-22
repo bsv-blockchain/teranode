@@ -104,7 +104,10 @@ pruner_duration_seconds{operation="dah_pruner"} 5.678
 ```prometheus
 pruner_skipped_total{reason="not_running"} 42
 pruner_skipped_total{reason="already_in_progress"} 10
+pruner_skipped_total{reason="preserve_failed"} 0
 ```
+
+**Note**: When defensive mode is enabled, skipped records are logged but not tracked as a separate metric label. Monitor logs for "Defensive skip" messages.
 
 #### pruner_processed_total
 
@@ -165,15 +168,18 @@ Located in `/stores/utxo/pruner/interfaces.go`:
 
 ```go
 type Service interface {
-    // Start begins the pruner service
+    // Start starts the pruner service.
+    // This should not block.
+    // The service should stop when the context is cancelled.
     Start(ctx context.Context)
 
-    // UpdateBlockHeight triggers pruning for the given block height
-    // Optional doneCh allows waiting for job completion
-    UpdateBlockHeight(height uint32, doneCh ...chan string) error
+    // Prune removes transactions marked for deletion at or before the specified height.
+    // Returns the number of records processed and any error encountered.
+    // This method is synchronous and blocks until pruning completes or context is cancelled.
+    Prune(ctx context.Context, height uint32) (recordsProcessed int64, err error)
 
-    // SetPersistedHeightGetter sets the function to get persisted height
-    // from Block Persister for coordination
+    // SetPersistedHeightGetter sets the function used to get block persister progress.
+    // This allows pruner to coordinate with block persister to avoid premature deletion.
     SetPersistedHeightGetter(getter func() uint32)
 }
 ```
@@ -182,7 +188,8 @@ type Service interface {
 
 ```go
 type PrunerServiceProvider interface {
-    // GetPrunerService returns the store-specific pruner implementation
+    // GetPrunerService returns a pruner service for the store.
+    // Returns nil if the store doesn't support pruner functionality.
     GetPrunerService() (Service, error)
 }
 ```
@@ -229,32 +236,6 @@ type BlockNotification struct {
 ```
 
 **Handler**: Triggers pruning if `mined_set == true`
-
-## Job Status API
-
-While not exposed via gRPC, the internal job status can be queried programmatically:
-
-```go
-type JobStatus int
-
-const (
-    JobStatusPending JobStatus = iota
-    JobStatusRunning
-    JobStatusCompleted
-    JobStatusFailed
-    JobStatusCancelled
-)
-
-type Job struct {
-    ID          string
-    Height      uint32
-    Status      JobStatus
-    CreatedAt   time.Time
-    StartedAt   *time.Time
-    CompletedAt *time.Time
-    Error       error
-}
-```
 
 ## Error Codes
 
@@ -329,34 +310,42 @@ ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborti
 
 ## Performance Considerations
 
-### Worker Pool Sizing
+### Chunk Processing Configuration
 
-**Aerospike:**
+**Chunk Size (`pruner_utxoChunkSize`):**
 
-- Default: 4 workers
-- Increase for high-throughput nodes
-- Limited by `prunerMaxConcurrentOperations`
+- Default: 1000 records per chunk
+- Increase for faster pruning with more memory usage
+- Decrease for lower memory footprint
 
-**SQL:**
+**Parallel Chunks (`pruner_utxoChunkGroupLimit`):**
 
-- Default: 2 workers
-- Increase cautiously (connection pool limits)
+- Default: 10 parallel chunks
+- Increase for high-throughput nodes with fast storage
+- Limited by Aerospike connection pool size
 
-### Job Timeout
+### Operation Timeout
 
-- Default: 10 minutes
-- On timeout: Job continues in background
+- Default: 10 minutes (`pruner_jobTimeout`)
+- On timeout: Operation continues in background
 - Adjust based on:
 
     - Database size
     - Network latency
-    - Worker pool size
+    - Chunk configuration
 
 ### Channel Buffering
 
 - Buffer size: 1 (non-blocking)
 - Prevents queue buildup during catchup
-- LIFO pattern ensures latest height processed
+- Deduplication ensures only latest height processed
+
+### Defensive Mode
+
+- Default: Disabled (`pruner_utxoDefensiveEnabled = false`)
+- When enabled: Adds batch verification of spending children
+- Performance impact: Additional Aerospike BatchGet operations
+- Trade-off: Safer pruning vs. slower performance
 
 ### Secondary Index (Aerospike)
 
@@ -443,13 +432,20 @@ ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborti
     curl http://localhost:8096/metrics | grep pruner_duration_seconds
     ```
 
-2. Increase worker pool:
+2. Increase parallel chunk processing:
 
     ```conf
-    utxostore_prunerMaxConcurrentOperations = 8  # Aerospike
+    pruner_utxoChunkGroupLimit = 20  # More parallel chunks
+    pruner_utxoChunkSize = 2000  # Larger chunks
     ```
 
-3. Verify secondary index exists (Aerospike):
+3. If defensive mode is enabled, consider disabling:
+
+    ```conf
+    pruner_utxoDefensiveEnabled = false
+    ```
+
+4. Verify secondary index exists (Aerospike):
 
     ```bash
     asadm -e "show indexes"

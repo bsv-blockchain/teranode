@@ -729,13 +729,18 @@ Returns information about a block header.
         "hash": "000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc",
         "version": 1,
         "versionHex": "00000001",
-        "previoushash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+        "previousblockhash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
         "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
         "time": 1231006505,
+        "mediantime": 1231006505,
         "nonce": 2083236893,
         "bits": "1d00ffff",
         "difficulty": 1,
-        "height": 1000
+        "chainwork": "0000000000000000000000000000000000000000000000000000000100010001",
+        "height": 1000,
+        "size": 285,
+        "num_tx": 1,
+        "status": "active"
     },
     "error": null,
     "id": "curltest"

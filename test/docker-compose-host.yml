@@ -45,14 +45,14 @@ services:
     container_name: postgres
     image: postgres:latest
     network_mode: "host"
+    command: postgres -p 15432 -c max_connections=1000 -c lock_timeout=0
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: really_strong_password_change_me
       POSTGRES_DB: postgres
     volumes:
-      - ./postgres/update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ../data/postgres:/var/lib/postgresql/data
+      - ../data/postgres:/var/lib/postgresql
     restart: on-failure
 
   kafka-shared:
@@ -239,7 +239,7 @@ services:
     depends_on:
       - teranode-1
     volumes:
-      - ./scripts/generate-blocks.sh:/generate-blocks.sh
+      - ../compose/scripts/generate-blocks.sh:/generate-blocks.sh
     entrypoint:
       [
         "/generate-blocks.sh",
@@ -337,7 +337,7 @@ services:
       - teranode-1
     network_mode: "host"
     volumes:
-      - ./scripts/generate-blocks.sh:/generate-blocks.sh
+      - ../compose/scripts/generate-blocks.sh:/generate-blocks.sh
     entrypoint:
       [
         "/generate-blocks.sh",
@@ -400,7 +400,7 @@ services:
       - "--web.listen-address=:19090"
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
-      - ./prometheus/prometheus-host-1.yml:/etc/prometheus/prometheus.yml
+      - ../compose/prometheus/prometheus-host-1.yml:/etc/prometheus/prometheus.yml
 
   prometheus-2:
     container_name: prometheus-2
@@ -411,7 +411,7 @@ services:
       - "--web.listen-address=:29090"
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
-      - ./prometheus/prometheus-host-2.yml:/etc/prometheus/prometheus.yml
+      - ../compose/prometheus/prometheus-host-2.yml:/etc/prometheus/prometheus.yml
 
   prometheus-3:
     container_name: prometheus-3
@@ -422,17 +422,17 @@ services:
       - "--web.listen-address=:39090"
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
-      - ./prometheus/prometheus-host-3.yml:/etc/prometheus/prometheus.yml
+      - ../compose/prometheus/prometheus-host-3.yml:/etc/prometheus/prometheus.yml
 
   grafana:
     container_name: grafana
     image: grafana/grafana:latest
     network_mode: "host"
     volumes:
-      - ./grafana/datasources/main-host.yaml:/etc/grafana/provisioning/datasources/main.yaml
-      - ./grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
-      - ./grafana/grafana.db:/var/lib/grafana
+      - ../compose/grafana/datasources/main-host.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ../compose/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ../compose/grafana/dashboards:/var/lib/grafana/dashboards
+      - ../compose/grafana/grafana.db:/var/lib/grafana
     depends_on:
       - prometheus-1
       - prometheus-2

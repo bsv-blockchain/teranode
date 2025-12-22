@@ -613,13 +613,18 @@ When verbose=true:
 - **hash**: The block hash (same as provided)
 - **version**: Block version
 - **versionHex**: Block version in hexadecimal
-- **previoushash**: Hash of the previous block
+- **previousblockhash**: Hash of the previous block
 - **merkleroot**: Root hash of the merkle tree
 - **time**: Block timestamp
+- **mediantime**: Median time of the previous 11 blocks
 - **nonce**: Block nonce value
 - **bits**: Target difficulty bits
 - **difficulty**: Calculated difficulty
+- **chainwork**: Total accumulated proof-of-work in the chain up to this block (hexadecimal)
 - **height**: Height of the block in the blockchain
+- **size**: Size of the block in bytes
+- **num_tx**: Number of transactions in the block
+- **status**: Block status (e.g., "active", "valid-fork", "valid-headers", "headers-only", "invalid")
 
 ### 3.12. Command: Get Difficulty
 
