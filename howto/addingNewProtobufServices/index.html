@@ -6462,18 +6462,20 @@
 <h4 id="example-using-shared-protobuf-models">Example: Using Shared Protobuf Models</h4>
 <p>Teranode already provides shared data models in <code>model/model.proto</code> that can be used across services. To use these in your new service:</p>
 <ol>
-<li><strong>Import the model</strong> in your service's <code>.proto</code> file:</li>
-</ol>
+<li>
+<p><strong>Import the model</strong> in your service's <code>.proto</code> file:</p>
 <div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="s">&quot;model/model.proto&quot;</span><span class="p">;</span>
 </code></pre></div>
-<ol>
-<li><strong>Reference the model types</strong> in your messages:</li>
-</ol>
+</li>
+<li>
+<p><strong>Reference the model types</strong> in your messages:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">message</span><span class="w"> </span><span class="nc">MyServiceRequest</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="n">model.MiningCandidate</span><span class="w"> </span><span class="na">candidate</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">additional_data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
 <span class="p">}</span>
 </code></pre></div>
+</li>
+</ol>
 <p>If you need to add new shared models, update <code>model/model.proto</code> directly. The Makefile already includes this file in the <code>gen</code> target, so running <code>make gen</code> will regenerate the code.</p>
 <p><strong>Existing shared proto files:</strong></p>
 <ul>

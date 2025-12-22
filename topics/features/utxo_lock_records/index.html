@@ -7018,48 +7018,56 @@
 <h3 id="41-phase-1-record-creation">4.1. Phase 1: Record Creation</h3>
 <p>The first phase creates all transaction records with the <code>creating</code> flag set to <code>true</code>:</p>
 <ol>
-<li><strong>Acquire Lock</strong></li>
+<li>
+<p><strong>Acquire Lock</strong></p>
+<ul>
 <li>Create lock record with CREATE_ONLY policy</li>
 <li>If lock exists, return <code>TxExistsError</code> (another process is creating)</li>
-<li>
-<p>Calculate dynamic TTL based on number of records</p>
+<li>Calculate dynamic TTL based on number of records</li>
+</ul>
 </li>
 <li>
 <p><strong>Store External Data</strong></p>
-</li>
+<ul>
 <li>Write transaction bytes to blob storage (S3/filesystem)</li>
-<li>
-<p>Use atomic write with existence check</p>
+<li>Use atomic write with existence check</li>
+</ul>
 </li>
 <li>
 <p><strong>Create Aerospike Records</strong></p>
-</li>
+<ul>
 <li>Prepare all record keys upfront (fail fast on key errors)</li>
 <li>Add <code>creating=true</code> to all bins</li>
 <li>Execute batch write with CREATE_ONLY policy</li>
-<li>
-<p>Handle KEY_EXISTS_ERROR as recovery case</p>
+<li>Handle KEY_EXISTS_ERROR as recovery case</li>
+</ul>
 </li>
 <li>
 <p><strong>Release Lock</strong></p>
-</li>
+<ul>
 <li>Delete lock record (always, even on partial failure)</li>
 <li>Partial records remain for next attempt to complete</li>
+</ul>
+</li>
 </ol>
 <h3 id="42-phase-2-flag-clearing">4.2. Phase 2: Flag Clearing</h3>
 <p>The second phase removes the <code>creating</code> flag in a specific order:</p>
 <ol>
-<li><strong>Clear Child Records First</strong> (indices 1, 2, ..., N-1)</li>
+<li>
+<p><strong>Clear Child Records First</strong> (indices 1, 2, ..., N-1)</p>
+<ul>
 <li>Batch operation with expression filter</li>
 <li>Only updates records where <code>creating</code> bin exists</li>
-<li>
-<p>Use UPDATE_ONLY policy</p>
+<li>Use UPDATE_ONLY policy</li>
+</ul>
 </li>
 <li>
 <p><strong>Clear Master Record Last</strong> (index 0)</p>
-</li>
+<ul>
 <li>Single record operation</li>
 <li>Master's flag absence = atomic completion indicator</li>
+</ul>
+</li>
 </ol>
 <p>This ordering ensures:</p>
 <ul>
@@ -7136,34 +7144,38 @@
 <h3 id="52-auto-recovery-mechanisms">5.2. Auto-Recovery Mechanisms</h3>
 <p>The system self-heals through multiple paths:</p>
 <ol>
-<li><strong>Retry Path</strong></li>
+<li>
+<p><strong>Retry Path</strong></p>
+<ul>
 <li>When transaction is re-submitted</li>
 <li>Finds all records exist (KEY_EXISTS_ERROR)</li>
-<li>
-<p>Attempts Phase 2 to clear creating flags</p>
+<li>Attempts Phase 2 to clear creating flags</li>
+</ul>
 </li>
 <li>
 <p><strong>Re-Encounter Path</strong></p>
-</li>
+<ul>
 <li>When transaction appears in block or subtree</li>
 <li><code>processTxMetaUsingStore.go</code> checks for <code>creating</code> flag</li>
-<li>
-<p>Triggers re-processing to complete commit</p>
+<li>Triggers re-processing to complete commit</li>
+</ul>
 </li>
 <li>
 <p><strong>Mining Path</strong></p>
-</li>
+<ul>
 <li>When block is mined containing the transaction</li>
 <li><code>SetMined</code> operation clears creating flags</li>
-<li>
-<p>Normal mining flow completes the commit</p>
+<li>Normal mining flow completes the commit</li>
+</ul>
 </li>
 <li>
 <p><strong>TTL-Based Lock Release</strong></p>
-</li>
+<ul>
 <li>Lock records automatically expire (30-300 seconds)</li>
 <li>Prevents permanent lock on process crash</li>
 <li>Allows other processes to retry</li>
+</ul>
+</li>
 </ol>
 <h3 id="53-storageerror-usage">5.3. StorageError Usage</h3>
 <p>The <code>StorageError</code> type is used specifically for external storage failures:</p>

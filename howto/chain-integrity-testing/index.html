@@ -6563,11 +6563,13 @@
 <h1 id="chain-integrity-testing">Chain Integrity Testing</h1>
 <p>This document explains how to run chain integrity tests locally using the Make jobs that replicate the GitHub workflow workflow.</p>
 <h2 id="overview">Overview</h2>
-<p>The chain integrity test verifies that multiple Teranode nodes maintain consistent blockchain state by:
-1. Starting 3 Teranode nodes with block generators
-2. Waiting for all nodes to reach a specified block height
-3. Running the chainintegrity tool to compare log file hashes across nodes
-4. Checking for consensus among the nodes</p>
+<p>The chain integrity test verifies that multiple Teranode nodes maintain consistent blockchain state by:</p>
+<ol>
+<li>Starting 3 Teranode nodes with block generators</li>
+<li>Waiting for all nodes to reach a specified block height</li>
+<li>Running the chainintegrity tool to compare log file hashes across nodes</li>
+<li>Checking for consensus among the nodes</li>
+</ol>
 <h2 id="prerequisites">Prerequisites</h2>
 <p>Before running the chain integrity tests, ensure you have:</p>
 <ul>
@@ -6654,12 +6656,12 @@
 <li>Viewing container logs: <code>docker compose -f compose/docker-compose-3blasters.yml logs</code></li>
 <li>
 <p>Checking individual node APIs:</p>
-</li>
-<li>
-<p>Node 1: http://localhost:18090/api/v1/bestblockheader/json</p>
-</li>
+<ul>
+<li>Node 1: http://localhost:18090/api/v1/bestblockheader/json</li>
 <li>Node 2: http://localhost:28090/api/v1/bestblockheader/json</li>
 <li>Node 3: http://localhost:38090/api/v1/bestblockheader/json</li>
+</ul>
+</li>
 </ul>
 <h2 id="output-files">Output Files</h2>
 <p>After a successful test, the following files are generated:</p>
@@ -6691,35 +6693,39 @@
 <h2 id="troubleshooting">Troubleshooting</h2>
 <h3 id="common-issues">Common Issues</h3>
 <ol>
-<li><strong>Timeout waiting for nodes to reach height</strong></li>
+<li>
+<p><strong>Timeout waiting for nodes to reach height</strong></p>
+<ul>
 <li>Increase <code>MAX_ATTEMPTS</code> or decrease <code>REQUIRED_HEIGHT</code></li>
 <li>Check system resources (CPU, memory, disk space)</li>
-<li>
-<p>Verify Docker containers are running: <code>docker ps</code></p>
+<li>Verify Docker containers are running: <code>docker ps</code></li>
+</ul>
 </li>
 <li>
 <p><strong>ECR login issues</strong></p>
-</li>
+<ul>
 <li>Ensure AWS CLI is installed and configured</li>
 <li>Check AWS credentials: <code>aws sts get-caller-identity</code></li>
 <li>Verify ECR access permissions</li>
-<li>
-<p>Run <code>make ecr-login</code> manually if needed</p>
+<li>Run <code>make ecr-login</code> manually if needed</li>
+</ul>
 </li>
 <li>
 <p><strong>Nodes not responding</strong></p>
-</li>
+<ul>
 <li>Check container logs: <code>docker compose -f compose/docker-compose-3blasters.yml logs teranode1</code></li>
 <li>Verify ports are not in use: <code>lsof -i :18090,28090,38090</code></li>
-<li>
-<p>Restart Docker if needed</p>
+<li>Restart Docker if needed</li>
+</ul>
 </li>
 <li>
 <p><strong>Chain integrity test fails</strong></p>
-</li>
+<ul>
 <li>Check the <code>chainintegrity_output.log</code> for detailed error messages</li>
 <li>Verify all nodes are in sync before running the test</li>
 <li>Consider running with debug mode for more verbose output</li>
+</ul>
+</li>
 </ol>
 <h3 id="debug-mode">Debug Mode</h3>
 <p>To get more detailed output, manually run the chainintegrity tool:</p>

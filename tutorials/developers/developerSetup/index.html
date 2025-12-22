@@ -6981,13 +6981,15 @@ If you receive an error <code>ModuleNotFoundError: No module named 'yaml'</code>
 <p>(or the equivalent for your shell).</p>
 <h3 id="53-verify">5.3 Verify</h3>
 <ol>
-<li><strong>Echo</strong> the environment variable to ensure it's set correctly:</li>
-</ol>
+<li>
+<p><strong>Echo</strong> the environment variable to ensure it's set correctly:</p>
 <div class="highlight"><pre><span></span><code><span class="nb">echo</span><span class="w"> </span><span class="nv">$SETTINGS_CONTEXT</span>
 </code></pre></div>
 <p>Should print <code>dev</code>.</p>
-<ol>
-<li><strong>Run</strong> or <strong>restart</strong> your node. Check logs or console output to confirm it's picking up the lines with <code>dev</code>.</li>
+</li>
+<li>
+<p><strong>Run</strong> or <strong>restart</strong> your node. Check logs or console output to confirm it's picking up the lines with <code>dev</code>.</p>
+</li>
 </ol>
 <h2 id="6-prerequisites-for-running-the-node">6. Prerequisites for Running the Node</h2>
 <h3 id="61-install-orbstack">6.1 Install OrbStack</h3>
@@ -7121,13 +7123,15 @@ If you receive an error <code>ModuleNotFoundError: No module named 'yaml'</code>
 <h4 id="local-development-debugging">Local Development Debugging</h4>
 <p>To debug Teranode during local development:</p>
 <ol>
-<li><strong>Build with debug symbols</strong>:</li>
-</ol>
+<li>
+<p><strong>Build with debug symbols</strong>:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">DEBUG</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span>make<span class="w"> </span>build
 </code></pre></div>
 <p>This enables debug flags (<code>-N -l</code>) that disable optimizations and inlining, making debugging easier.</p>
-<ol>
-<li><strong>Attach your debugger</strong> to the running Teranode process using your preferred IDE or tool.</li>
+</li>
+<li>
+<p><strong>Attach your debugger</strong> to the running Teranode process using your preferred IDE or tool.</p>
+</li>
 </ol>
 <h4 id="remote-debugging-kubernetes-deployments">Remote Debugging (Kubernetes Deployments)</h4>
 <p>For debugging Teranode running in Kubernetes environments:</p>

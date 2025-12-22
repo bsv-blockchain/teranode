@@ -6240,17 +6240,19 @@ data:
 </code></pre></div>
 <h3 id="step-3-create-bsva-catalogsource">Step 3: Create BSVA CatalogSource</h3>
 <ol>
-<li><strong>Clone the Teranode repository:</strong></li>
-</ol>
+<li>
+<p><strong>Clone the Teranode repository:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span><span class="nv">$YOUR_WORKING_DIR</span>
 git<span class="w"> </span>clone<span class="w"> </span>git@github.com:bsv-blockchain/teranode-operator.git
 <span class="nb">cd</span><span class="w"> </span>teranode-operator
 </code></pre></div>
-<ol>
-<li><strong>Create the BSVA CatalogSource in the OLM namespace:</strong></li>
-</ol>
+</li>
+<li>
+<p><strong>Create the BSVA CatalogSource in the OLM namespace:</strong></p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>olm/catalog-source.yaml
 </code></pre></div>
+</li>
+</ol>
 <h3 id="step-4-create-target-namespace">Step 4: Create Target Namespace</h3>
 <ol>
 <li><strong>Create the namespace where you want to install the Teranode operator</strong> (this example uses 'teranode-operator'):</li>
@@ -6259,20 +6261,22 @@ git<span class="w"> </span>clone<span class="w"> </span>git@github.com:bsv-block
 </code></pre></div>
 <h3 id="step-5-create-operatorgroup-and-subscription">Step 5: Create OperatorGroup and Subscription</h3>
 <ol>
-<li><strong>(Optional) If you're deploying to a namespace other than 'teranode-operator', modify the OperatorGroup to specify your installation namespace:</strong></li>
-</ol>
+<li>
+<p><strong>(Optional) If you're deploying to a namespace other than 'teranode-operator', modify the OperatorGroup to specify your installation namespace:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;  - &lt;your-namespace&gt;&quot;</span><span class="w"> </span>&gt;&gt;<span class="w"> </span>olm/og.yaml
 </code></pre></div>
-<ol>
-<li><strong>Create the OperatorGroup and Subscription resources:</strong></li>
-</ol>
+</li>
+<li>
+<p><strong>Create the OperatorGroup and Subscription resources:</strong></p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>olm/og.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
 kubectl<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>olm/subscription.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
 </code></pre></div>
+</li>
+</ol>
 <h3 id="step-6-verify-deployment">Step 6: Verify Deployment</h3>
 <ol>
-<li><strong>Check if all pods are running</strong> (your output should be similar to the below):</li>
-</ol>
+<li>
+<p><strong>Check if all pods are running</strong> (your output should be similar to the below):</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Check catalog source pod</span>
 kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>olm
 </code></pre></div>
@@ -6306,17 +6310,21 @@ subtree-validator-7879f559d5-9gg9c<span class="w">                              
 subtree-validator-7879f559d5-x2dd4<span class="w">                                </span><span class="m">1</span>/1<span class="w">     </span>Running<span class="w">     </span><span class="m">0</span><span class="w">          </span>3d11h
 teranode-operator-controller-manager-768f498c4d-mk49k<span class="w">             </span><span class="m">2</span>/2<span class="w">     </span>Running<span class="w">     </span><span class="m">0</span><span class="w">          </span>3d11h
 </code></pre></div>
-<ol>
-<li><strong>Ensure all services show a status of "Running" or "Completed".</strong></li>
+</li>
+<li>
+<p><strong>Ensure all services show a status of "Running" or "Completed".</strong></p>
+</li>
 </ol>
 <h3 id="step-7-configure-ingress-if-applicable">Step 7: Configure Ingress (if applicable)</h3>
 <ol>
-<li><strong>Verify that ingress resources are created for Asset, Peer, and Propagation services:</strong></li>
-</ol>
+<li>
+<p><strong>Verify that ingress resources are created for Asset, Peer, and Propagation services:</strong></p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>get<span class="w"> </span>ingress
 </code></pre></div>
-<ol>
-<li><strong>Configure your ingress controller or external load balancer as needed.</strong></li>
+</li>
+<li>
+<p><strong>Configure your ingress controller or external load balancer as needed.</strong></p>
+</li>
 </ol>
 <h3 id="step-8-access-teranode-services">Step 8: Access Teranode Services</h3>
 <ul>
@@ -6325,15 +6333,17 @@ teranode-operator-controller-manager-768f498c4d-mk49k<span class="w">           
 </ul>
 <h3 id="step-9-change-the-node-status-to-run-or-legacysync">Step 9: Change the node status to Run or LegacySync</h3>
 <ol>
-<li><strong>Force the node to transition to Run mode:</strong></li>
-</ol>
+<li>
+<p><strong>Force the node to transition to Run mode:</strong></p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>RUNNING
 </code></pre></div>
-<ol>
-<li><strong>Or LegacySync mode:</strong></li>
-</ol>
+</li>
+<li>
+<p><strong>Or LegacySync mode:</strong></p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>LEGACYSYNCING
 </code></pre></div>
+</li>
+</ol>
 <h3 id="step-10-access-monitoring-tools">Step 10: Access Monitoring Tools</h3>
 <p><strong>Teranode Blockchain Viewer</strong>: A basic blockchain viewer is available and can be accessed via the asset container. It provides an interface to browse blockchain data.</p>
 <ul>
@@ -6357,21 +6367,23 @@ teranode-operator-controller-manager-768f498c4d-mk49k<span class="w">           
 </code></pre></div>
 <h3 id="step-12-troubleshooting">Step 12: Troubleshooting</h3>
 <ol>
-<li>Check pod status:</li>
-</ol>
+<li>
+<p>Check pod status:</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>describe<span class="w"> </span>pod<span class="w"> </span>&lt;pod-name&gt;
 </code></pre></div>
-<ol>
-<li>View pod logs:</li>
-</ol>
+</li>
+<li>
+<p>View pod logs:</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>logs<span class="w"> </span>&lt;pod-name&gt;
 </code></pre></div>
-<ol>
-<li>Verify ConfigMaps and Secrets:</li>
-</ol>
+</li>
+<li>
+<p>Verify ConfigMaps and Secrets:</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>get<span class="w"> </span>configmaps
 kubectl<span class="w"> </span>get<span class="w"> </span>secrets
 </code></pre></div>
+</li>
+</ol>
 <p>Additional Notes:</p>
 <ul>
 <li>You can also refer to the <a href="https://github.com/bsv-blockchain/teranode-operator">teranode-operator repository</a> for up to date instructions.</li>

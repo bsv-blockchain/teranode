@@ -6668,8 +6668,8 @@
 <h3 id="database-backend-configuration">Database Backend Configuration</h3>
 <p>Teranode supports multiple database backends for UTXO storage, configured via settings rather than build tags:</p>
 <ol>
-<li><strong>PostgreSQL</strong> (Default for development):</li>
-</ol>
+<li>
+<p><strong>PostgreSQL</strong> (Default for development):</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Make sure PostgreSQL is running</span>
 ./scripts/postgres.sh
 
@@ -6679,18 +6679,18 @@ utxostore.dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span 
 <span class="c1"># Run with the PostgreSQL backend</span>
 <span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 </code></pre></div>
-<ol>
-<li><strong>SQLite</strong> (Lightweight option):</li>
-</ol>
+</li>
+<li>
+<p><strong>SQLite</strong> (Lightweight option):</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Your settings_local.conf should have an SQLite connection string</span>
 utxostore.dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span>sqlite:///utxostore?blockHeightRetention<span class="o">=</span><span class="m">5</span>
 
 <span class="c1"># Run with SQLite backend</span>
 <span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 </code></pre></div>
-<ol>
-<li><strong>Aerospike</strong> (High-performance option):</li>
-</ol>
+</li>
+<li>
+<p><strong>Aerospike</strong> (High-performance option):</p>
 <blockquote>
 <p><strong>Warning: Aerospike Requirements</strong></p>
 <ul>
@@ -6698,6 +6698,10 @@ utxostore.dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span 
 <li>See the Aerospike Integration section below</li>
 <li><strong>Important</strong>: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.</li>
 </ul>
+</blockquote>
+</li>
+</ol>
+<blockquote>
 <p><strong>Note:</strong> The database backend is determined by the connection string prefix in your settings:</p>
 <ul>
 <li>PostgreSQL: <code>postgres://</code></li>
@@ -6710,15 +6714,17 @@ utxostore.dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span 
 <h3 id="aerospike-integration">Aerospike Integration</h3>
 <p>To use Aerospike as the UTXO storage backend:</p>
 <ol>
-<li>First, start the Aerospike Docker container:</li>
-</ol>
+<li>
+<p>First, start the Aerospike Docker container:</p>
 <div class="highlight"><pre><span></span><code>./scripts/aerospike.sh
 </code></pre></div>
-<ol>
-<li>Run Teranode with the aerospike tag:</li>
-</ol>
+</li>
+<li>
+<p>Run Teranode with the aerospike tag:</p>
 <div class="highlight"><pre><span></span><code>rm<span class="w"> </span>-rf<span class="w"> </span>data<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>-tags<span class="w"> </span>aerospike<span class="w"> </span>.
 </code></pre></div>
+</li>
+</ol>
 <h3 id="transaction-metadata-cache-configurations">Transaction Metadata Cache Configurations</h3>
 <p>Teranode supports different transaction metadata cache sizes through build tags:</p>
 <ul>
@@ -6903,15 +6909,17 @@ utxostore.dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span 
 <h2 id="running-individual-services">🔧 Running Individual Services</h2>
 <p>You can also run each service on its own:</p>
 <ol>
-<li>Navigate to a service's directory:</li>
-</ol>
+<li>
+<p>Navigate to a service's directory:</p>
 <div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>services/validator
 </code></pre></div>
-<ol>
-<li>Run the service:</li>
-</ol>
+</li>
+<li>
+<p>Run the service:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 </code></pre></div>
+</li>
+</ol>
 <h2 id="running-specific-commands">📜 Running Specific Commands</h2>
 <p>For executing particular tasks, use commands found under the <em>cmd/</em> directory.</p>
 <h2 id="running-ui-dashboard">🖥 Running UI Dashboard</h2>

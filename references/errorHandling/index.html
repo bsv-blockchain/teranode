@@ -7769,16 +7769,24 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 </code></pre></div>
 <p>The <code>New</code> function operates as follows:</p>
 <ol>
-<li>It takes an error code, a message, and a variadic <code>params</code> slice which may include formatting parameters and optionally one error to be wrapped.</li>
+<li>
+<p>It takes an error code, a message, and a variadic <code>params</code> slice which may include formatting parameters and optionally one error to be wrapped.</p>
+</li>
 <li>
 <p>If the last parameter in <code>params</code> is an error of ANY type, it's treated as the error to be wrapped:</p>
 <ul>
 <li>If it's a <code>*Error</code> (Teranode error), it's wrapped directly</li>
 <li>If it's any other <code>error</code> type, it's converted to a Teranode error first</li>
-<li>Any additional parameters are used to format the message string using <code>fmt.Errorf</code>, allowing for dynamic message content based on runtime values.</li>
-<li>Stack trace information (file, line, function) is automatically captured using <code>runtime.Caller</code>.</li>
-<li>The function includes circular reference prevention using the <code>contains()</code> method to avoid infinite error chains.</li>
 </ul>
+</li>
+<li>
+<p>Any additional parameters are used to format the message string using <code>fmt.Errorf</code>, allowing for dynamic message content based on runtime values.</p>
+</li>
+<li>
+<p>Stack trace information (file, line, function) is automatically captured using <code>runtime.Caller</code>.</p>
+</li>
+<li>
+<p>The function includes circular reference prevention using the <code>contains()</code> method to avoid infinite error chains.</p>
 </li>
 </ol>
 <p>Here's a practical example of using the <code>New</code> function to create and wrap errors:</p>
@@ -8016,9 +8024,15 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 </code></pre></div>
 <p><strong>The <code>UnwrapGRPC</code> function</strong>:</p>
 <ol>
-<li><strong>Validates the error</strong> is a gRPC status error</li>
-<li><strong>Extracts all error details</strong> from the gRPC status</li>
-<li><strong>Iterates in reverse order</strong> (bottom-up) to properly reconstruct the error chain</li>
+<li>
+<p><strong>Validates the error</strong> is a gRPC status error</p>
+</li>
+<li>
+<p><strong>Extracts all error details</strong> from the gRPC status</p>
+</li>
+<li>
+<p><strong>Iterates in reverse order</strong> (bottom-up) to properly reconstruct the error chain</p>
+</li>
 <li>
 <p><strong>For each detail</strong>:</p>
 <ul>
@@ -8027,8 +8041,10 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 <li>Deserializes error data using <code>GetErrorData()</code> if present</li>
 <li>Restores stack trace info (file, line, function)</li>
 <li>Links to the previous error to rebuild the wrapped error chain</li>
-<li><strong>Returns the top-level error</strong> with the complete reconstructed chain</li>
 </ul>
+</li>
+<li>
+<p><strong>Returns the top-level error</strong> with the complete reconstructed chain</p>
 </li>
 </ol>
 <p>This process allows Teranode to fully reconstruct its internal error types from gRPC errors, preserving:</p>
@@ -8042,16 +8058,16 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 <h4 id="practical-example">Practical Example</h4>
 <p>Here's an end-to-end example of how gRPC error wrapping and unwrapping works in Teranode:</p>
 <ol>
-<li>In the Blockchain Server, when processing a <code>GetBlock</code> request:</li>
-</ol>
+<li>
+<p>In the Blockchain Server, when processing a <code>GetBlock</code> request:</p>
 <div class="highlight"><pre><span></span><code><span class="nx">blockHash</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">NewHash</span><span class="p">(</span><span class="nx">request</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span>
 <span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">WrapGRPC</span><span class="p">(</span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="nx">errors</span><span class="p">.</span><span class="nx">ERR_BLOCK_NOT_FOUND</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;[Blockchain] request&#39;s hash is not valid&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">))</span>
 <span class="p">}</span>
 </code></pre></div>
-<ol>
-<li>In the Blockchain Client, when handling the response:</li>
-</ol>
+</li>
+<li>
+<p>In the Blockchain Client, when handling the response:</p>
 <div class="highlight"><pre><span></span><code><span class="nx">resp</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">c</span><span class="p">.</span><span class="nx">client</span><span class="p">.</span><span class="nx">GetBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">GetBlockRequest</span><span class="p">{</span>
 <span class="w">   </span><span class="nx">Hash</span><span class="p">:</span><span class="w"> </span><span class="nx">blockHash</span><span class="p">[:],</span>
 <span class="p">})</span>
@@ -8059,6 +8075,8 @@ Using sentinel errors keeps error handling simple and explicit, requiring only b
 <span class="w">   </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">UnwrapGRPC</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
 <span class="p">}</span>
 </code></pre></div>
+</li>
+</ol>
 <p>In this example, if an error occurs in the server, it's wrapped as a gRPC error before being sent to the client. The client then unwraps the gRPC error, allowing it to handle the error as a standard Teranode error.</p>
 <h4 id="grpc-error-wrapping-best-practices">gRPC Error Wrapping Best Practices</h4>
 <ol>

@@ -6596,7 +6596,9 @@
 </ul>
 <p>The Validator performs comprehensive validation of each transaction:</p>
 <ol>
-<li><strong>Script Validation</strong>: Executes input scripts against referenced outputs using configurable script interpreters (Go-BT, Go-SDK, or Go-BDK)</li>
+<li>
+<p><strong>Script Validation</strong>: Executes input scripts against referenced outputs using configurable script interpreters (Go-BT, Go-SDK, or Go-BDK)</p>
+</li>
 <li>
 <p><strong>Consensus Rule Enforcement</strong>: Validates against Bitcoin consensus rules including:</p>
 <ul>
@@ -6605,17 +6607,21 @@
 <li>Non-dust output values</li>
 <li>Script operation count limits</li>
 <li>Signature verification</li>
+</ul>
+</li>
 <li>
 <p><strong>Policy Rule Enforcement</strong>: Applies configurable node policies such as:</p>
-</li>
-<li>
-<p>Minimum fee requirements</p>
-</li>
+<ul>
+<li>Minimum fee requirements</li>
 <li>Script complexity limits</li>
 <li>Custom validation rules</li>
-<li><strong>UTXO Verification</strong>: Checks that all inputs reference valid, unspent outputs</li>
-<li><strong>UTXO Management</strong>: Manages UTXO (Unspent Transaction Output) creation and spending</li>
 </ul>
+</li>
+<li>
+<p><strong>UTXO Verification</strong>: Checks that all inputs reference valid, unspent outputs</p>
+</li>
+<li>
+<p><strong>UTXO Management</strong>: Manages UTXO (Unspent Transaction Output) creation and spending</p>
 </li>
 </ol>
 <p>After validation:</p>

@@ -6076,15 +6076,15 @@
 <h1 id="remotely-debugging-a-teranode-operator">Remotely Debugging a Teranode Operator</h1>
 <p>For advanced users who need to debug a running Teranode operator, follow these steps:</p>
 <ol>
-<li><strong>Edit the Cluster Custom Resource (CR)</strong>:
-Use the following command, replacing <code>mainnet-1</code> with your namespace if different:</li>
-</ol>
+<li>
+<p><strong>Edit the Cluster Custom Resource (CR)</strong>:</p>
+<p>Use the following command, replacing <code>mainnet-1</code> with your namespace if different:</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>edit<span class="w"> </span>clusters.teranode.bsvblockchain.org<span class="w"> </span>-n<span class="w"> </span>mainnet-1<span class="w"> </span>mainnet-1
 </code></pre></div>
-<ol>
-<li><strong>Modify the Service Configuration</strong>:
-Find the service you want to debug (e.g., legacy) and override the <code>command</code> key under <code>deploymentOverrides</code>:</li>
-</ol>
+</li>
+<li>
+<p><strong>Modify the Service Configuration</strong>:</p>
+<p>Find the service you want to debug (e.g., legacy) and override the <code>command</code> key under <code>deploymentOverrides</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="nt">command</span><span class="p">:</span>
 
 <span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./dlv</span>
@@ -6098,21 +6098,21 @@ Find the service you want to debug (e.g., legacy) and override the <code>command
 <span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">--</span>
 </code></pre></div>
 <p>Note: If you need to debug multiple services, add this command to all necessary services.</p>
-<ol>
-<li><strong>Port Forward the Debugger</strong>:
-You have two options:</li>
-</ol>
-<p>a. Using kubectl (easier for a single port):
+</li>
+<li>
+<p><strong>Port Forward the Debugger</strong>:</p>
+<p>You have two options:</p>
+<p>a. Using kubectl (easier for a single port):</p>
 <div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>port-forward<span class="w"> </span>-n<span class="w"> </span>mainnet-1<span class="w"> </span>&lt;replace_with_pod_name&gt;<span class="w"> </span><span class="m">4040</span>:4040
 </code></pre></div>
-This will provide you with an IP:PORT (often localhost) to access the debugger.</p>
-<p>b. Using kubefwd (useful for multiple services):
+<p>This will provide you with an IP:PORT (often localhost) to access the debugger.</p>
+<p>b. Using kubefwd (useful for multiple services):</p>
 <div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>kubefwd<span class="w"> </span>svc<span class="w"> </span>-n<span class="w"> </span>mainnet-1
 </code></pre></div>
-This maps ports with service names (e.g., asset:4040, legacy:4040, blockchain:4040).</p>
-<ol>
-<li><strong>Connect Your IDE/Debugger</strong>:</li>
-</ol>
+<p>This maps ports with service names (e.g., asset:4040, legacy:4040, blockchain:4040).</p>
+</li>
+<li>
+<p><strong>Connect Your IDE/Debugger</strong>:</p>
 <p>Teranode uses Delve (dlv) as its debugger. You can connect using any IDE or tool that supports Delve:</p>
 <p><strong>VS Code:</strong></p>
 <ul>
@@ -6134,8 +6134,8 @@ This maps ports with service names (e.g., asset:4040, legacy:4040, blockchain:40
 <p><strong>Important Notes:</strong></p>
 <ul>
 <li>If using Cursor IDE (VS Code fork), be aware it may cause connection issues with the debugger</li>
-<li>
-<p>If using kubefwd, ensure your debugger IP points to the correct service (e.g., use <code>asset:4040</code> for the asset service)</p>
+<li>If using kubefwd, ensure your debugger IP points to the correct service (e.g., use <code>asset:4040</code> for the asset service)</li>
+</ul>
 </li>
 <li>
 <p><strong>Start Debugging</strong>:</p>
@@ -6144,7 +6144,7 @@ This maps ports with service names (e.g., asset:4040, legacy:4040, blockchain:40
 <li>Begin your debugging session.</li>
 </ul>
 </li>
-</ul>
+</ol>
 <p>Note: When debugging multiple services, make sure to use the correct local DNS (e.g., <code>asset:4040</code>) for each service you're debugging.</p>
 
 

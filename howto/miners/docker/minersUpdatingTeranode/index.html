@@ -6080,24 +6080,32 @@
 </li>
 <li>
 <p><strong>Update Docker Images</strong></p>
-</li>
-</ol>
 <p>Pull the latest versions of all images:</p>
-<p><div class="highlight"><pre><span></span><code>docker compose pull
+<div class="highlight"><pre><span></span><code>docker compose pull
 </code></pre></div>
-3. <strong>Stop the Current Stack</strong></p>
-<p><div class="highlight"><pre><span></span><code>docker compose down
+</li>
+<li>
+<p><strong>Stop the Current Stack</strong></p>
+<div class="highlight"><pre><span></span><code>docker compose down
 </code></pre></div>
-4. <strong>Start the Updated Stack</strong></p>
-<p><div class="highlight"><pre><span></span><code>docker compose up -d
+</li>
+<li>
+<p><strong>Start the Updated Stack</strong></p>
+<div class="highlight"><pre><span></span><code>docker compose up -d
 </code></pre></div>
-5. <strong>Verify the Update</strong></p>
+</li>
+<li>
+<p><strong>Verify the Update</strong></p>
 <p>Check that all services are running and healthy:</p>
-<p><div class="highlight"><pre><span></span><code>docker compose ps
+<div class="highlight"><pre><span></span><code>docker compose ps
 </code></pre></div>
-6. <strong>Check Logs for Any Issues</strong></p>
+</li>
+<li>
+<p><strong>Check Logs for Any Issues</strong></p>
 <div class="highlight"><pre><span></span><code>docker compose logs
 </code></pre></div>
+</li>
+</ol>
 <p><strong>Important Considerations:</strong></p>
 <ul>
 <li><strong>Data Persistence</strong>: The update process should not affect data stored in volumes (./data directory). However, it's always good practice to backup important data before updating.</li>

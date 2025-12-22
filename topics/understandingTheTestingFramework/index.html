@@ -7261,32 +7261,34 @@
 <h2 id="understanding-test-flow">Understanding Test Flow</h2>
 <h3 id="test-lifecycle">Test Lifecycle</h3>
 <ol>
-<li><strong>Setup</strong></li>
-</ol>
+<li>
+<p><strong>Setup</strong></p>
 <div class="highlight"><pre><span></span><code>Initialize Framework
 ├── Create Docker environment
 ├── Start services
 ├── Initialize clients
 └── Verify health
 </code></pre></div>
-<ol>
-<li><strong>Execution</strong></li>
-</ol>
+</li>
+<li>
+<p><strong>Execution</strong></p>
 <div class="highlight"><pre><span></span><code>Run Test
 ├── Prepare test state
 ├── Execute test actions
 ├── Verify results
 └── Cleanup
 </code></pre></div>
-<ol>
-<li><strong>Teardown</strong></li>
-</ol>
+</li>
+<li>
+<p><strong>Teardown</strong></p>
 <div class="highlight"><pre><span></span><code>Cleanup
 ├── Stop services
 ├── Remove containers
 ├── Clean data
 └── Release resources
 </code></pre></div>
+</li>
+</ol>
 <h2 id="running-tests">Running Tests</h2>
 <h3 id="makefile-targets">Makefile Targets</h3>
 <p>The project provides several make targets for different test scenarios:</p>

@@ -6551,48 +6551,50 @@
 <h2 id="setting-up-test-environment">Setting Up Test Environment</h2>
 <h3 id="how-to-set-up-your-local-test-environment">How to Set Up Your Local Test Environment</h3>
 <ol>
-<li>Prerequisites:</li>
-</ol>
+<li>
+<p>Prerequisites:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Install required tools</span>
 docker<span class="w"> </span>compose
 go<span class="w"> </span><span class="m">1</span>.21<span class="w"> </span>or<span class="w"> </span>higher
 make
 </code></pre></div>
-<ol>
-<li>Initial setup:</li>
-</ol>
+</li>
+<li>
+<p>Initial setup:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Clone and build</span>
 git<span class="w"> </span>clone<span class="w"> </span><span class="o">[</span>repository<span class="o">]</span>
 <span class="nb">cd</span><span class="w"> </span>teranode
 docker<span class="w"> </span>compose<span class="w"> </span>build
 </code></pre></div>
-<ol>
-<li>Verify setup:</li>
-</ol>
+</li>
+<li>
+<p>Verify setup:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Run smoke tests</span>
 make<span class="w"> </span>smoketest
 </code></pre></div>
+</li>
+</ol>
 <h3 id="how-to-configure-test-settings">How to Configure Test Settings</h3>
 <ol>
-<li>Create local settings:</li>
-</ol>
+<li>
+<p>Create local settings:</p>
 <div class="highlight"><pre><span></span><code>touch<span class="w"> </span>settings_local.conf
 </code></pre></div>
-<ol>
+</li>
 <li>
 <p>Add required settings for your specific testing activity. Common test contexts:</p>
-</li>
-<li>
-<p><code>test</code> - Standard testing environment</p>
-</li>
+<ul>
+<li><code>test</code> - Standard testing environment</li>
 <li><code>docker</code> - Docker-based testing</li>
 <li><code>docker.ci</code> - CI environment testing</li>
+</ul>
+</li>
 </ol>
 <h2 id="running-tests">Running Tests</h2>
 <h3 id="how-to-run-test-suites">How to Run Test Suites</h3>
 <ol>
-<li>Run all tests in a suite:</li>
-</ol>
+<li>
+<p>Run all tests in a suite:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Format</span>
 <span class="nb">cd</span><span class="w"> </span>/teranode/test/&lt;suite-name&gt;
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_&lt;suite-code&gt;
@@ -6610,18 +6612,18 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 <span class="nb">cd</span><span class="w"> </span>/teranode/test/tec
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tec
 </code></pre></div>
-<ol>
-<li>Run specific test:</li>
-</ol>
+</li>
+<li>
+<p>Run specific test:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Format</span>
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^&lt;TestSuiteName&gt;</span>$<span class="s2">/^&lt;TestName&gt;</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>&lt;test-tag&gt;
 
 <span class="c1"># Example: Run specific TNA test</span>
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">&quot;^TestTNA1TestSuite</span>$<span class="s2">/^TestBroadcastNewTxAllNodes</span>$<span class="s2">&quot;</span><span class="w"> </span>-tags<span class="w"> </span>test_tna
 </code></pre></div>
-<ol>
-<li>Run with different options:</li>
-</ol>
+</li>
+<li>
+<p>Run with different options:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># With timeout</span>
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tna<span class="w"> </span>-timeout<span class="w"> </span>10m
 
@@ -6631,35 +6633,39 @@ go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 <span class="c1"># With specific cache size</span>
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span><span class="s2">&quot;test_tna,testtxmetacache&quot;</span>
 </code></pre></div>
+</li>
+</ol>
 <h3 id="how-to-debug-failed-tests">How to Debug Failed Tests</h3>
 <ol>
-<li>Enable verbose logging:</li>
-</ol>
+<li>
+<p>Enable verbose logging:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Set log level to DEBUG</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">LOG_LEVEL</span><span class="o">=</span>DEBUG
 go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tna
 </code></pre></div>
-<ol>
-<li>Check container logs:</li>
-</ol>
+</li>
+<li>
+<p>Check container logs:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># View logs for specific node</span>
 docker<span class="w"> </span>logs<span class="w"> </span>teranode1
 docker<span class="w"> </span>logs<span class="w"> </span>teranode2
 docker<span class="w"> </span>logs<span class="w"> </span>teranode3
 </code></pre></div>
-<ol>
-<li>Inspect test state:</li>
-</ol>
+</li>
+<li>
+<p>Inspect test state:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Check node health (verify actual ports in your settings)</span>
 curl<span class="w"> </span>http://localhost:18090/api/v1/bestblockheader/json
 curl<span class="w"> </span>http://localhost:28090/api/v1/bestblockheader/json
 curl<span class="w"> </span>http://localhost:38090/api/v1/bestblockheader/json
 </code></pre></div>
+</li>
+</ol>
 <h2 id="adding-new-tests">Adding New Tests</h2>
 <h3 id="how-to-add-a-new-test-case">How to Add a New Test Case</h3>
 <ol>
-<li>Create test file with proper structure:</li>
-</ol>
+<li>
+<p>Create test file with proper structure:</p>
 <div class="highlight"><pre><span></span><code><span class="c1">//go:build test_tna || debug</span>
 
 <span class="c1">// How to run this test manually:</span>
@@ -6723,9 +6729,9 @@ curl<span class="w"> </span>http://localhost:38090/api/v1/bestblockheader/json
 <span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Log</span><span class="p">(</span><span class="s">&quot;Test completed successfully&quot;</span><span class="p">)</span>
 <span class="p">}</span>
 </code></pre></div>
-<ol>
-<li>Common test patterns:</li>
-</ol>
+</li>
+<li>
+<p>Common test patterns:</p>
 <div class="highlight"><pre><span></span><code><span class="c1">// Create and send transaction</span>
 <span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">CreateAndSendTx</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">node1</span><span class="p">)</span>
 <span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
@@ -6755,10 +6761,12 @@ curl<span class="w"> </span>http://localhost:38090/api/v1/bestblockheader/json
 <span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Nodes failed to sync: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
 <span class="p">}</span>
 </code></pre></div>
+</li>
+</ol>
 <h3 id="how-to-add-custom-test-configuration">How to Add Custom Test Configuration</h3>
 <ol>
-<li>Use TConfig system to customize settings:</li>
-</ol>
+<li>
+<p>Use TConfig system to customize settings:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">TestCustomTestSuite</span><span class="p">(</span><span class="nx">t</span><span class="w"> </span><span class="o">*</span><span class="nx">testing</span><span class="p">.</span><span class="nx">T</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nx">suite</span><span class="p">.</span><span class="nx">Run</span><span class="p">(</span><span class="nx">t</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">CustomTestSuite</span><span class="p">{</span>
 <span class="w">        </span><span class="nx">TeranodeTestSuite</span><span class="p">:</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">TeranodeTestSuite</span><span class="p">{</span>
@@ -6777,9 +6785,9 @@ curl<span class="w"> </span>http://localhost:38090/api/v1/bestblockheader/json
 <span class="w">    </span><span class="p">})</span>
 <span class="p">}</span>
 </code></pre></div>
-<ol>
-<li>Create custom docker compose override:</li>
-</ol>
+</li>
+<li>
+<p>Create custom docker compose override:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># docker-compose.custom.override.yml</span>
 <span class="nt">services</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">teranode1</span><span class="p">:</span>
@@ -6787,11 +6795,13 @@ curl<span class="w"> </span>http://localhost:38090/api/v1/bestblockheader/json
 
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CUSTOM_SETTING=value</span>
 </code></pre></div>
+</li>
+</ol>
 <h2 id="working-with-multiple-nodes">Working with Multiple Nodes</h2>
 <h3 id="how-to-test-node-communication">How to Test Node Communication</h3>
 <ol>
-<li>Setup multiple nodes:</li>
-</ol>
+<li>
+<p>Setup multiple nodes:</p>
 <div class="highlight"><pre><span></span><code><span class="c1">// Ensure all nodes are running</span>
 <span class="k">for</span><span class="w"> </span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">node</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nx">health</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">node</span><span class="p">.</span><span class="nx">BlockchainClient</span><span class="p">.</span><span class="nx">Health</span><span class="p">(</span><span class="nx">ctx</span><span class="p">)</span>
@@ -6803,9 +6813,9 @@ curl<span class="w"> </span>http://localhost:38090/api/v1/bestblockheader/json
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
 </code></pre></div>
-<ol>
-<li>Test transaction propagation:</li>
-</ol>
+</li>
+<li>
+<p>Test transaction propagation:</p>
 <div class="highlight"><pre><span></span><code><span class="c1">// Send transaction to node 0</span>
 <span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">CreateAndSendTx</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
 <span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
@@ -6821,22 +6831,24 @@ curl<span class="w"> </span>http://localhost:38090/api/v1/bestblockheader/json
 <span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Failed to get block from node 1: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
 <span class="p">}</span>
 </code></pre></div>
+</li>
+</ol>
 <h3 id="how-to-test-node-failure-scenarios">How to Test Node Failure Scenarios</h3>
 <ol>
-<li>Stop specific containers:</li>
-</ol>
+<li>
+<p>Stop specific containers:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Stop a specific node container</span>
 docker<span class="w"> </span>stop<span class="w"> </span>teranode2
 </code></pre></div>
-<ol>
-<li>Restart containers:</li>
-</ol>
+</li>
+<li>
+<p>Restart containers:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Restart the node</span>
 docker<span class="w"> </span>start<span class="w"> </span>teranode2
 </code></pre></div>
-<ol>
-<li>Test resilience in code:</li>
-</ol>
+</li>
+<li>
+<p>Test resilience in code:</p>
 <div class="highlight"><pre><span></span><code><span class="c1">// Send transaction before node failure</span>
 <span class="nx">tx1</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">helper</span><span class="p">.</span><span class="nx">CreateAndSendTx</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">testEnv</span><span class="p">.</span><span class="nx">Nodes</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
 
@@ -6849,23 +6861,25 @@ docker<span class="w"> </span>start<span class="w"> </span>teranode2
 <span class="w">    </span><span class="nx">t</span><span class="p">.</span><span class="nx">Fatalf</span><span class="p">(</span><span class="s">&quot;Remaining nodes should continue working: %v&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
 <span class="p">}</span>
 </code></pre></div>
+</li>
+</ol>
 <h2 id="cleanup-and-maintenance">Cleanup and Maintenance</h2>
 <h3 id="how-to-clean-test-environment">How to Clean Test Environment</h3>
 <ol>
-<li>Remove test data:</li>
-</ol>
+<li>
+<p>Remove test data:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Clean data directory</span>
 rm<span class="w"> </span>-rf<span class="w"> </span>data/test/*
 </code></pre></div>
-<ol>
-<li>Remove containers:</li>
-</ol>
+</li>
+<li>
+<p>Remove containers:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Remove all test containers</span>
 docker<span class="w"> </span>ps<span class="w"> </span>-a<span class="w"> </span>-q<span class="w"> </span>--filter<span class="w"> </span><span class="nv">label</span><span class="o">=</span>com.docker.compose.project<span class="o">=</span>e2e<span class="w"> </span><span class="p">|</span><span class="w"> </span>xargs<span class="w"> </span>docker<span class="w"> </span>rm<span class="w"> </span>-f
 </code></pre></div>
-<ol>
-<li>Full cleanup in test code:</li>
-</ol>
+</li>
+<li>
+<p>Full cleanup in test code:</p>
 <div class="highlight"><pre><span></span><code><span class="c1">// TearDown is handled automatically by TeranodeTestSuite</span>
 <span class="c1">// But you can add custom cleanup in TearDownTest:</span>
 <span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">suite</span><span class="w"> </span><span class="o">*</span><span class="nx">CustomTestSuite</span><span class="p">)</span><span class="w"> </span><span class="nx">TearDownTest</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
@@ -6873,33 +6887,37 @@ docker<span class="w"> </span>ps<span class="w"> </span>-a<span class="w"> </spa
 <span class="w">    </span><span class="nx">suite</span><span class="p">.</span><span class="nx">TeranodeTestSuite</span><span class="p">.</span><span class="nx">TearDownTest</span><span class="p">()</span><span class="w"> </span><span class="c1">// Call parent teardown</span>
 <span class="p">}</span>
 </code></pre></div>
+</li>
+</ol>
 <h3 id="how-to-handle-common-issues">How to Handle Common Issues</h3>
 <ol>
-<li>Port conflicts:</li>
-</ol>
+<li>
+<p>Port conflicts:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Check port usage</span>
 lsof<span class="w"> </span>-i<span class="w"> </span>:8087
 lsof<span class="w"> </span>-i<span class="w"> </span>:8090
 lsof<span class="w"> </span>-i<span class="w"> </span>:9292
 </code></pre></div>
-<ol>
-<li>Resource cleanup:</li>
-</ol>
+</li>
+<li>
+<p>Resource cleanup:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Force remove hanging containers</span>
 docker<span class="w"> </span>ps<span class="w"> </span>-a<span class="w"> </span>-q<span class="w"> </span>--filter<span class="w"> </span><span class="nv">label</span><span class="o">=</span>com.docker.compose.project<span class="o">=</span>e2e<span class="w"> </span><span class="p">|</span><span class="w"> </span>xargs<span class="w"> </span>docker<span class="w"> </span>rm<span class="w"> </span>-f
 
 <span class="c1"># Remove volumes</span>
 docker<span class="w"> </span>volume<span class="w"> </span>prune<span class="w"> </span>-f
 </code></pre></div>
-<ol>
-<li>Data persistence issues:</li>
-</ol>
+</li>
+<li>
+<p>Data persistence issues:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Reset all data (use sudo if needed)</span>
 rm<span class="w"> </span>-rf<span class="w"> </span>./data/test
 
 <span class="c1"># Or if permission issues:</span>
 sudo<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>./data/test
 </code></pre></div>
+</li>
+</ol>
 <h2 id="available-test-tags">Available Test Tags</h2>
 <p>Teranode uses build tags to control which tests run:</p>
 <ul>

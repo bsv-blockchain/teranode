@@ -6571,20 +6571,22 @@ p2p_share_private_addresses = true
 <h2 id="debugging">Debugging</h2>
 <p>To debug NAT traversal issues:</p>
 <ol>
-<li>Check the logs for warnings about unreachable nodes:</li>
-</ol>
+<li>
+<p>Check the logs for warnings about unreachable nodes:</p>
 <div class="highlight"><pre><span></span><code>grep<span class="w"> </span><span class="s2">&quot;No peers connected\|NAT\|observed\|advertise&quot;</span><span class="w"> </span>teranode.log
 </code></pre></div>
-<ol>
-<li>Verify your configuration:</li>
-</ol>
+</li>
+<li>
+<p>Verify your configuration:</p>
 <div class="highlight"><pre><span></span><code>grep<span class="w"> </span><span class="s2">&quot;p2p_enable_nat\|p2p_advertise&quot;</span><span class="w"> </span>settings_local.conf
 </code></pre></div>
-<ol>
-<li>Test connectivity from another node:</li>
-</ol>
+</li>
+<li>
+<p>Test connectivity from another node:</p>
 <div class="highlight"><pre><span></span><code>telnet<span class="w"> </span>&lt;your-public-ip&gt;<span class="w"> </span><span class="m">9905</span>
 </code></pre></div>
+</li>
+</ol>
 <h2 id="best-practices">Best Practices</h2>
 <ol>
 <li><strong>For Production</strong>: Always set explicit <code>p2p_advertise_addresses</code> with your public IP</li>

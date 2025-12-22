@@ -6952,25 +6952,27 @@ FSM state successfully set to: RUNNING
 <h2 id="common-development-workflows">Common Development Workflows</h2>
 <h3 id="starting-a-fresh-development-node">Starting a Fresh Development Node</h3>
 <ol>
-<li>Start your Teranode node:</li>
-</ol>
+<li>
+<p>Start your Teranode node:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.
 </code></pre></div>
-<ol>
-<li>Check the initial FSM state:</li>
-</ol>
+</li>
+<li>
+<p>Check the initial FSM state:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>getfsmstate
 </code></pre></div>
-<ol>
-<li>Transition to RUNNING state:</li>
-</ol>
+</li>
+<li>
+<p>Transition to RUNNING state:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>running
 </code></pre></div>
-<ol>
-<li>Verify the FSM state change:</li>
-</ol>
+</li>
+<li>
+<p>Verify the FSM state change:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>getfsmstate
 </code></pre></div>
+</li>
+</ol>
 <h3 id="debugging-tips">Debugging Tips</h3>
 <ul>
 <li>If your teranode-cli commands aren't working, ensure your <code>SETTINGS_CONTEXT</code> is correctly set</li>

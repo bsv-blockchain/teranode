@@ -6715,71 +6715,75 @@ listen_mode = listen_only
 <h2 id="behavior-in-listen-mode">Behavior in Listen Mode</h2>
 <h3 id="what-still-works">What Still Works</h3>
 <ol>
-<li><strong>Peer Discovery and Connections</strong></li>
+<li>
+<p><strong>Peer Discovery and Connections</strong></p>
+<ul>
 <li>Handshake messages are still sent (required for peer connections)</li>
 <li>Node maintains connections to peers</li>
-<li>
-<p>Receives peer announcements</p>
+<li>Receives peer announcements</li>
+</ul>
 </li>
 <li>
 <p><strong>Data Reception</strong></p>
-</li>
+<ul>
 <li>Receives all blocks</li>
 <li>Receives all transactions</li>
 <li>Receives all subtrees</li>
-<li>
-<p>Processes blockchain updates normally</p>
+<li>Processes blockchain updates normally</li>
+</ul>
 </li>
 <li>
 <p><strong>Local Operations</strong></p>
-</li>
+<ul>
 <li>RPC interface remains fully functional</li>
 <li>Mining operations work normally</li>
 <li>Block validation continues</li>
 <li>UTXO management unchanged</li>
+</ul>
+</li>
 </ol>
 <h3 id="what-is-disabled">What is Disabled</h3>
 <ol>
-<li><strong>Network Propagation</strong></li>
+<li>
+<p><strong>Network Propagation</strong></p>
+<ul>
 <li>Does not broadcast new blocks</li>
 <li>Does not propagate transactions</li>
 <li>Does not announce subtrees</li>
-<li>
-<p>Does not relay peer messages</p>
+<li>Does not relay peer messages</li>
+</ul>
 </li>
 <li>
 <p><strong>P2P Participation</strong></p>
-</li>
+<ul>
 <li>Does not contribute to network topology</li>
 <li>Does not help with message distribution</li>
 <li>Minimal bandwidth usage</li>
+</ul>
+</li>
 </ol>
 <h2 id="mining-considerations">Mining Considerations</h2>
 <h3 id="for-mining-pools">For Mining Pools</h3>
 <p>When running a mining pool with listen mode:</p>
 <ol>
-<li><strong>Primary Mining Node</strong>: Run in <code>full</code> mode</li>
-<li>This node submits mined blocks<ul>
-<li>Handles transaction propagation</li>
-</ul>
-</li>
 <li>
-<p>Participates fully in the network</p>
+<p><strong>Primary Mining Node</strong>: Run in <code>full</code> mode</p>
+<ul>
+<li>This node submits mined blocks</li>
+<li>Handles transaction propagation</li>
+<li>Participates fully in the network</li>
+</ul>
 </li>
 <li>
 <p><strong>Monitor Nodes</strong>: Run in <code>listen_only</code> mode</p>
-</li>
-<li>Track blockchain state<ul>
+<ul>
+<li>Track blockchain state</li>
 <li>Provide redundancy</li>
+<li>Reduce operational costs</li>
 </ul>
 </li>
 <li>
-<p>Reduce operational costs</p>
-</li>
-<li>
 <p><strong>Configuration Example</strong>:</p>
-</li>
-</ol>
 <div class="highlight"><pre><span></span><code># Primary miner (full mode)
 listen_mode = full
 p2p_port = 9906
@@ -6788,6 +6792,8 @@ p2p_port = 9906
 listen_mode = listen_only
 p2p_port = 9907  # Different port for each monitor
 </code></pre></div>
+</li>
+</ol>
 <h3 id="for-solo-miners">For Solo Miners</h3>
 <p>Solo miners typically should NOT use listen mode on their primary mining node because:</p>
 <ul>
@@ -6822,14 +6828,20 @@ p2p_port = 9907  # Different port for each monitor
 <h3 id="2-switching-modes">2. Switching Modes</h3>
 <p>To switch from listen mode to full mode:</p>
 <ol>
-<li>Stop the node</li>
-<li>Update configuration:</li>
-</ol>
+<li>
+<p>Stop the node</p>
+</li>
+<li>
+<p>Update configuration:</p>
 <div class="highlight"><pre><span></span><code>listen_mode = full
 </code></pre></div>
-<ol>
-<li>Restart the node</li>
-<li>Verify full participation via logs</li>
+</li>
+<li>
+<p>Restart the node</p>
+</li>
+<li>
+<p>Verify full participation via logs</p>
+</li>
 </ol>
 <h2 id="conclusion">Conclusion</h2>
 <p>Listen Mode provides miners with a powerful configuration option for:</p>
