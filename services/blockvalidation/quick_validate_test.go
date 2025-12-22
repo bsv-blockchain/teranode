@@ -26,6 +26,7 @@ func TestQuickValidateBlock(t *testing.T) {
 		// Mock blockchain AddBlock and check how it was called
 		suite.MockBlockchain.On("GetNextBlockID", mock.Anything).Return(uint64(1), nil).Once()
 		suite.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		suite.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 

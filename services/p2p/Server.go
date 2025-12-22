@@ -884,7 +884,7 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 	}
 }
 
-func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string) {
+func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID string) {
 	var nodeStatusMessage NodeStatusMessage
 
 	if err := json.Unmarshal(m, &nodeStatusMessage); err != nil {
@@ -893,31 +893,30 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 	}
 
 	// Check if this is our own message
-	isSelf := from == s.P2PClient.GetID()
+	isSelf := peerID == s.P2PClient.GetID()
 
-	// Log all received node_status messages for debugging
-	if from == nodeStatusMessage.PeerID {
-		s.logger.Debugf("[handleNodeStatusTopic] DIRECT node_status from %s (is_self: %v, version: %s, height: %d, storage: %q)",
-			nodeStatusMessage.PeerID, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight, nodeStatusMessage.Storage)
-	} else {
-		s.logger.Debugf("[handleNodeStatusTopic] RELAY  node_status (originator: %s, via: %s, is_self: %v, version: %s, height: %d, storage: %q)",
-			nodeStatusMessage.PeerID, from, isSelf, nodeStatusMessage.Version, nodeStatusMessage.BestHeight, nodeStatusMessage.Storage)
+	// If sender ID doesn't match node status ID log an error and return
+	// In future, consider banning this peer as they are maliciously spoofing
+	if peerID != nodeStatusMessage.PeerID {
+		s.logger.Errorf("[handleNodeStatusTopic] node_status peerID %s does not match message ID %s",
+			peerID, nodeStatusMessage.PeerID)
+		return
 	}
 
 	// Skip further processing for our own messages (peer height updates, etc.)
 	// but still forward to WebSocket
 	if !isSelf {
-		s.logger.Debugf("[handleNodeStatusTopic] Processing node_status from remote peer %s (peer_id: %s)", from, nodeStatusMessage.PeerID)
+		s.logger.Debugf("[handleNodeStatusTopic] Processing node_status from remote peer %s (peer_id: %s)", peerID, nodeStatusMessage.PeerID)
 
 		// Update last message time for the sender and originator with client name
-		s.updatePeerLastMessageTime(from, nodeStatusMessage.PeerID)
+		s.updatePeerLastMessageTime(peerID, nodeStatusMessage.PeerID)
 
 		// Track bytes received from this message
-		s.updateBytesReceived(from, nodeStatusMessage.PeerID, uint64(len(m)))
+		s.updateBytesReceived(peerID, nodeStatusMessage.PeerID, uint64(len(m)))
 
-		// Skip processing from unhealthy peers (but still forward to WebSocket for monitoring)
-		if s.shouldSkipUnhealthyPeer(from, "handleNodeStatusTopic") {
-			s.logger.Debugf("[handleNodeStatusTopic] Skipping peer data processing from unhealthy peer %s, but forwarding to WebSocket", from)
+		// Skip processing peerID unhealthy peers (but still forward to WebSocket for monitoring)
+		if s.shouldSkipUnhealthyPeer(peerID, "handleNodeStatusTopic") {
+			s.logger.Debugf("[handleNodeStatusTopic] Skipping peer data processing peerID unhealthy peer %s, but forwarding to WebSocket", peerID)
 			// Set isSelf to true to skip peer data updates below while still forwarding to WebSocket
 			isSelf = true
 		}
@@ -983,8 +982,8 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, from string)
 	}
 
 	// Also ensure the sender is in the registry
-	if !isSelf && from != "" {
-		if senderID, err := peer.Decode(from); err == nil {
+	if !isSelf && peerID != "" {
+		if senderID, err := peer.Decode(peerID); err == nil {
 			s.addPeer(senderID, "", 0, nil, "")
 		}
 	}

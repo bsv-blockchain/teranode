@@ -325,7 +325,37 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 								continue
 							}
 
-							if notification.Type == model.NotificationType_Block {
+							// IMPORTANT: We listen for BlockSubtreesSet, NOT NotificationType_Block.
+							//
+							// HOW THIS NOTIFICATION IS TRIGGERED:
+							// Both validation paths call updateSubtreesDAH() after validation completes:
+							//
+							// Normal Validation (ValidateBlock):
+							//   ValidateBlock() → updateSubtreesDAH() → SetBlockSubtreesSet() → notification
+							//
+							// Quick Validation (Catchup):
+							//   quickValidateBlock() → goroutines complete via errgroup.Wait()
+							//   → updateSubtreesDAH() → SetBlockSubtreesSet() → notification
+							//
+							// TIMING GUARANTEES:
+							// BlockSubtreesSet is sent AFTER:
+							// 1. Block validation completes (all consensus rules checked)
+							// 2. All goroutines that write to block.SubtreeSlices have finished (errgroup.Wait)
+							// 3. updateSubtreesDAH() has updated the DAH values for all subtrees
+							// 4. blockchainClient.SetBlockSubtreesSet() is called and sends this notification
+							//
+							// WHY THIS PREVENTS DATA RACES:
+							// Using NotificationType_Block (sent when block is added to chain) would trigger
+							// setTxMined too early, before validation goroutines complete. This caused:
+							// - Thread A (validation): Spawns goroutines writing to block.SubtreeSlices
+							// - Thread A: Caches the block with SubtreeSlices populated
+							// - Thread B (setTxMined): Retrieves the SAME block instance from cache
+							// - Thread B: Reads/modifies block.SubtreeSlices while Thread A's goroutines are still writing
+							// - Result: Data race on block.SubtreeSlices access (detected by race detector)
+							//
+							// By using BlockSubtreesSet (sent after goroutines complete), we ensure sequential
+							// access to block.SubtreeSlices without needing expensive locks everywhere.
+							if notification.Type == model.NotificationType_BlockSubtreesSet {
 								cHash := chainhash.Hash(notification.Hash)
 								bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification: %s", cHash.String())
 								// push block hash to the setMinedChan
@@ -1311,6 +1341,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// Update subtrees DAH now that we know the block is valid
 				if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
+					// Trigger revalidation to ensure block is retried
+					// This is consistent with other error handling in this goroutine
+					u.ReValidateBlock(block, baseURL)
+					return
 				}
 
 				// Block validation succeeded - now cache it with subtrees loaded
@@ -1349,6 +1383,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				reason := "unknown"
 				if err != nil {
 					reason = err.Error()
+				}
+
+				// Check if we had a storage error; if so do not mark the block as invalid
+				if errors.Is(err, errors.ErrStorageError) {
+					return err
 				}
 
 				u.storeInvalidBlock(ctx, block, baseURL, reason)
@@ -1422,7 +1461,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		if !useOptimisticMining {
 			// it's critical that we call updateSubtreesDAH() only when we know the block is valid
 			if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
-				u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
+				return errors.NewProcessingError("[ValidateBlock][%s] failed to update subtrees DAH", block.Hash().String(), err)
 			}
 		}
 
