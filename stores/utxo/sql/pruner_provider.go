@@ -3,7 +3,7 @@ package sql
 import (
 	"sync"
 
-	"github.com/bsv-blockchain/teranode/stores/pruner"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	sqlpruner "github.com/bsv-blockchain/teranode/stores/utxo/sql/pruner"
 )
 
