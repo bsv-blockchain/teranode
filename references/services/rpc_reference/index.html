@@ -5416,17 +5416,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#getrawmempool_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        getrawmempool
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#getchaintips" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7371,17 +7360,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#getrawmempool_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        getrawmempool
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#getchaintips" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8266,24 +8244,29 @@
 <p><code>parameters</code> (object, optional):</p>
 </li>
 <li>
-<p><code>coinbaseValue</code> (numeric, optional): Custom coinbase value in satoshis</p>
+<p><code>provideCoinbaseTx</code> (boolean, optional, default=false): If true, includes the coinbase transaction in the response</p>
 </li>
+<li><code>verbosity</code> (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes</li>
 </ol>
 <p><strong>Returns:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="p">,</span><span class="w">         </span><span class="c1">// Mining candidate ID</span>
-<span class="w">    </span><span class="nt">&quot;prevhash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="p">,</span><span class="w">   </span><span class="c1">// Previous block hash</span>
-<span class="w">    </span><span class="nt">&quot;coinbase&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="p">,</span><span class="w">   </span><span class="c1">// Coinbase transaction</span>
-<span class="w">    </span><span class="nt">&quot;coinbaseValue&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">  </span><span class="c1">// Coinbase value in satoshis</span>
-<span class="w">    </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">           </span><span class="c1">// Block version</span>
-<span class="w">    </span><span class="nt">&quot;nBits&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="p">,</span><span class="w">          </span><span class="c1">// Compressed difficulty target</span>
-<span class="w">    </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">             </span><span class="c1">// Current timestamp</span>
-<span class="w">    </span><span class="nt">&quot;height&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">           </span><span class="c1">// Block height</span>
-<span class="w">    </span><span class="nt">&quot;num_tx&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">           </span><span class="c1">// Number of transactions</span>
-<span class="w">    </span><span class="nt">&quot;merkleProof&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;string&quot;</span><span class="p">],</span><span class="w">  </span><span class="c1">// Merkle proof</span>
-<span class="w">    </span><span class="nt">&quot;merkleRoot&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="w">      </span><span class="c1">// Merkle root</span>
+<span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="p">,</span><span class="w">                </span><span class="c1">// Mining candidate ID</span>
+<span class="w">    </span><span class="nt">&quot;prevhash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="p">,</span><span class="w">          </span><span class="c1">// Previous block hash</span>
+<span class="w">    </span><span class="nt">&quot;coinbaseValue&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">       </span><span class="c1">// Coinbase value in satoshis</span>
+<span class="w">    </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">             </span><span class="c1">// Block version</span>
+<span class="w">    </span><span class="nt">&quot;nBits&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="p">,</span><span class="w">             </span><span class="c1">// Compressed difficulty target</span>
+<span class="w">    </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">                </span><span class="c1">// Current timestamp</span>
+<span class="w">    </span><span class="nt">&quot;height&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">              </span><span class="c1">// Block height</span>
+<span class="w">    </span><span class="nt">&quot;num_tx&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">              </span><span class="c1">// Number of transactions</span>
+<span class="w">    </span><span class="nt">&quot;sizeWithoutCoinbase&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w"> </span><span class="c1">// Block size excluding coinbase</span>
+<span class="w">    </span><span class="nt">&quot;merkleProof&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;string&quot;</span><span class="p">],</span><span class="w">     </span><span class="c1">// Merkle proof</span>
+<span class="w">    </span><span class="nt">&quot;coinbase&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="w">           </span><span class="c1">// Coinbase transaction (only if provideCoinbaseTx=true)</span>
 <span class="p">}</span>
 </code></pre></div>
+<p>When <code>verbosity=1</code>, the response also includes:</p>
+<ul>
+<li><code>subtreeHashes</code> (array of strings): Hashes of subtrees in the block assembly</li>
+</ul>
 <p><strong>Example Request (standard):</strong></p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;jsonrpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0&quot;</span><span class="p">,</span>
@@ -8292,12 +8275,12 @@
 <span class="w">    </span><span class="nt">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
 <span class="p">}</span>
 </code></pre></div>
-<p><strong>Example Request (with custom coinbase value):</strong></p>
+<p><strong>Example Request (with coinbase transaction and subtree hashes):</strong></p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;jsonrpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0&quot;</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;curltest&quot;</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;getminingcandidate&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;coinbaseValue&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5000000000</span><span class="p">}]</span>
+<span class="w">    </span><span class="nt">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;provideCoinbaseTx&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;verbosity&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">}]</span>
 <span class="p">}</span>
 </code></pre></div>
 <h3 id="submitminingsolution">submitminingsolution</h3>
@@ -8944,31 +8927,6 @@
 <span class="w">        </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1570747519</span><span class="p">,</span>
 <span class="w">        </span><span class="nt">&quot;blocktime&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1570747519</span>
 <span class="w">    </span><span class="p">},</span>
-<span class="w">    </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;curltest&quot;</span>
-<span class="p">}</span>
-</code></pre></div>
-<h3 id="getrawmempool_1">getrawmempool</h3>
-<p>Returns all transaction IDs currently available for block assembly. Note that Teranode uses a subtree-based architecture instead of a traditional mempool, but this command provides compatibility with standard Bitcoin RPC interfaces by returning transaction IDs from the block assembly service.</p>
-<p><strong>Parameters:</strong> none</p>
-<p><strong>Returns:</strong></p>
-<ul>
-<li><code>array</code> - Array of transaction IDs (strings) currently available for block assembly</li>
-</ul>
-<p><strong>Example Request:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;jsonrpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;curltest&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;getrawmempool&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
-<span class="p">}</span>
-</code></pre></div>
-<p><strong>Example Response:</strong></p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
-<span class="w">        </span><span class="s2">&quot;a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="s2">&quot;b19f7908eced4e820887efdc6e93f482c865fe949c5666e83f574679ef2bbef1&quot;</span>
-<span class="w">    </span><span class="p">],</span>
 <span class="w">    </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;curltest&quot;</span>
 <span class="p">}</span>

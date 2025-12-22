@@ -6407,7 +6407,6 @@
 
 
 <h1 id="how-to-interact-with-the-rpc-server">How to Interact with the RPC Server</h1>
-<p>Last Modified: 28-May-2025</p>
 <p>There are 2 primary ways to interact with the node, using the RPC Server, and using the Asset Server. This document will focus on the RPC Server. The RPC server provides a JSON-RPC interface for interacting with the node. Below is a list of implemented RPC methods with their parameters and return values.</p>
 <h2 id="teranode-rpc-http-api">Teranode RPC HTTP API</h2>
 <p>The Teranode RPC server provides a JSON-RPC interface for interacting with the node. Below is a list of implemented RPC methods:</p>
@@ -6460,13 +6459,14 @@
 <li>
 <p>Optional object containing:</p>
 <ul>
-<li><code>coinbaseValue</code> (numeric, optional): Custom coinbase value in satoshis</li>
+<li><code>provideCoinbaseTx</code> (boolean, optional, default=false): If true, includes the coinbase transaction in the response</li>
+<li><code>verbosity</code> (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes</li>
 </ul>
 </li>
 </ul>
 </li>
 <li>
-<p>Returns: Object containing candidate ID, previous block hash, coinbase transaction, and merkle branches</p>
+<p>Returns: Object containing candidate ID, previous block hash, coinbase value, and merkle proof</p>
 </li>
 <li>
 <p>Example Request:</p>
@@ -6479,12 +6479,12 @@
 </code></pre></div>
 </li>
 <li>
-<p>Example Request with custom coinbase value:</p>
+<p>Example Request with coinbase transaction and subtree hashes:</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
 <span class="w">    </span><span class="nt">&quot;jsonrpc&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;1.0&quot;</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mining&quot;</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;getminingcandidate&quot;</span><span class="p">,</span>
-<span class="w">    </span><span class="nt">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;coinbaseValue&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5000000000</span><span class="p">}]</span>
+<span class="w">    </span><span class="nt">&quot;params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;provideCoinbaseTx&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;verbosity&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">}]</span>
 <span class="p">}</span>
 </code></pre></div>
 </li>
@@ -6494,18 +6494,14 @@
 <span class="w">    </span><span class="nt">&quot;result&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;00000000000000000000000000000000...&quot;</span><span class="p">,</span>
 <span class="w">        </span><span class="nt">&quot;prevhash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;000000000000000004a1b6d6fdfa0d0a...&quot;</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;coinbase&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;01000000010000000000000000000000000000...&quot;</span><span class="p">,</span>
 <span class="w">        </span><span class="nt">&quot;coinbaseValue&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5000000000</span><span class="p">,</span>
 <span class="w">        </span><span class="nt">&quot;version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">536870912</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;merkleproof&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">...</span><span class="p">],</span>
+<span class="w">        </span><span class="nt">&quot;nBits&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;180d60e3&quot;</span><span class="p">,</span>
 <span class="w">        </span><span class="nt">&quot;time&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1621500000</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;bits&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;180d60e3&quot;</span><span class="p">,</span>
 <span class="w">        </span><span class="nt">&quot;height&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">700001</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;nBits&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">402947203</span><span class="p">,</span>
 <span class="w">        </span><span class="nt">&quot;num_tx&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5620</span><span class="p">,</span>
 <span class="w">        </span><span class="nt">&quot;sizeWithoutCoinbase&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2300000</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;minTime&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1621498888</span><span class="p">,</span>
-<span class="w">        </span><span class="nt">&quot;fullCurrentTime&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1621500000</span>
+<span class="w">        </span><span class="nt">&quot;merkleProof&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="err">...</span><span class="p">]</span>
 <span class="w">    </span><span class="p">},</span>
 <span class="w">    </span><span class="nt">&quot;error&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
 <span class="w">    </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;mining&quot;</span>
