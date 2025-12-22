@@ -281,11 +281,6 @@ func TestProcessNextBlock_GetBestBlockHeaderError(t *testing.T) {
 	mockBlockchainClient.AssertExpectations(t)
 }
 
-// Test processNextBlock - with direct blockchain store (skipped due to mock complexity)
-func TestProcessNextBlock_WithBlockchainStore_Skipped(t *testing.T) {
-	t.Skip("Skipping due to complex blockchain store mocking requirements")
-}
-
 // Test readLastHeight - file parsing error
 func TestReadLastHeight_ParseError(t *testing.T) {
 	ctx := context.Background()
