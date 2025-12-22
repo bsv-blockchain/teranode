@@ -1,4 +1,4 @@
-# 🌐 RPC Service
+# RPC Service
 
 ## Index
 
@@ -9,33 +9,32 @@
     - [Authentication](#authentication)
 2. [Architecture](#2-architecture)
 3. [Functionality](#3-functionality)
-    - [3.1. RPC Service Initialization and Configuration](#31-rpc-service-initialization-and-configuration)
-    - [3.2. Command: Create Raw Transaction](#32-command-create-raw-transaction)
-    - [3.3. Command: Freeze](#33-command-freeze)
-    - [3.4. Command: Generate](#34-command-generate)
-    - [3.5. Command: Generate to Address](#35-command-generate-to-address)
-    - [3.6. Command: Get Best Block Hash](#36-command-get-best-block-hash)
-    - [3.7. Command: Get Block](#37-command-get-block)
-    - [3.8. Command: Get Block By Height](#38-command-get-block-by-height)
-    - [3.9. Command: Get Blockchain Info](#39-command-get-blockchain-info)
-    - [3.10. Command: Get Block Hash](#310-command-get-block-hash)
-    - [3.11. Command: Get Block Header](#311-command-get-block-header)
-    - [3.12. Command: Get Difficulty](#312-command-get-difficulty)
-    - [3.13. Command: Get Info](#313-command-get-info)
-    - [3.14. Command: Get Mining Info](#314-command-get-mining-info)
-    - [3.15. Command: Get Mining Candidate](#315-command-get-mining-candidate)
-    - [3.16. Command: Get Peer Info](#316-command-get-peer-info)
-    - [3.17. Command: Get Raw Transaction](#317-command-get-raw-transaction)
-    - [3.18. Command: Invalidate Block](#318-command-invalidate-block)
-    - [3.19. Command: Is Banned](#319-command-is-banned)
-    - [3.20. Command: Reassign](#320-command-reassign)
-    - [3.21. Command: Reconsider Block](#321-command-reconsider-block)
-    - [3.22. Command: Send Raw Transaction](#322-command-send-raw-transaction)
-    - [3.23. Command: Set Ban](#323-command-set-ban)
-    - [3.24. Command: Stop](#324-command-stop)
-    - [3.25. Command: Submit Mining Solution](#325-command-submit-mining-solution)
-    - [3.26. Command: Unfreeze](#326-command-unfreeze)
-    - [3.27. Command: Version](#327-command-version)
+    - [3.1. Command: Create Raw Transaction](#31-command-create-raw-transaction)
+    - [3.2. Command: Freeze](#32-command-freeze)
+    - [3.3. Command: Generate](#33-command-generate)
+    - [3.4. Command: Generate to Address](#34-command-generate-to-address)
+    - [3.5. Command: Get Best Block Hash](#35-command-get-best-block-hash)
+    - [3.6. Command: Get Block](#36-command-get-block)
+    - [3.7. Command: Get Block By Height](#37-command-get-block-by-height)
+    - [3.8. Command: Get Blockchain Info](#38-command-get-blockchain-info)
+    - [3.9. Command: Get Block Hash](#39-command-get-block-hash)
+    - [3.10. Command: Get Block Header](#310-command-get-block-header)
+    - [3.11. Command: Get Difficulty](#311-command-get-difficulty)
+    - [3.12. Command: Get Info](#312-command-get-info)
+    - [3.13. Command: Get Mining Info](#313-command-get-mining-info)
+    - [3.14. Command: Get Mining Candidate](#314-command-get-mining-candidate)
+    - [3.15. Command: Get Peer Info](#315-command-get-peer-info)
+    - [3.16. Command: Get Raw Transaction](#316-command-get-raw-transaction)
+    - [3.17. Command: Invalidate Block](#317-command-invalidate-block)
+    - [3.18. Command: Is Banned](#318-command-is-banned)
+    - [3.19. Command: Reassign](#319-command-reassign)
+    - [3.20. Command: Reconsider Block](#320-command-reconsider-block)
+    - [3.21. Command: Send Raw Transaction](#321-command-send-raw-transaction)
+    - [3.22. Command: Set Ban](#322-command-set-ban)
+    - [3.23. Command: Stop](#323-command-stop)
+    - [3.24. Command: Submit Mining Solution](#324-command-submit-mining-solution)
+    - [3.25. Command: Unfreeze](#325-command-unfreeze)
+    - [3.26. Command: Version](#326-command-version)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
 6. [Configuration Settings](#6-configuration-settings)
@@ -163,9 +162,7 @@ Also, when a `generate` command is received, the server interacts with the miner
 
 ## 3. Functionality
 
-### 3.1. RPC Service Initialization and Configuration
-
-### 3.2. Command: Create Raw Transaction
+### 3.1. Command: Create Raw Transaction
 
 The `createrawtransaction` RPC method is used in Bitcoin to manually create a raw transaction. This transaction is not broadcast to the network but returned as a hex-encoded string. The created transaction could then be further modified, signed, and eventually broadcast using other RPC commands.
 
@@ -205,7 +202,7 @@ The CreateRawTransaction method constructs a transaction that spends a given set
 - **Success**: Returns a hex-encoded string representing the raw transaction.
 - **Error**: Returns an error if there are issues with the inputs, outputs, lock time, address decoding, or serialization.
 
-### 3.3. Command: Freeze
+### 3.2. Command: Freeze
 
 The `freeze` command allows administrators to freeze a specific UTXO, preventing it from being spent in future transactions.
 
@@ -258,7 +255,7 @@ The `freeze` command allows administrators to freeze a specific UTXO, preventing
 - This operation is reversible using the `unfreeze` command
 - Frozen UTXOs will be rejected if included in transaction inputs
 
-### 3.4. Command: Generate
+### 3.3. Command: Generate
 
 The `generate` command is used to generate a specified number of blocks on the blockchain. The RPC server processes this command by interacting with the blockchain service to create the requested number of blocks.
 
@@ -290,7 +287,7 @@ if err != nil {
 
 - Returns nil on success
 
-### 3.5. Command: Generate to Address
+### 3.4. Command: Generate to Address
 
 The `generatetoaddress` command mines blocks immediately to a specified address. This command is primarily used for testing purposes.
 
@@ -354,7 +351,7 @@ The `generatetoaddress` command mines blocks immediately to a specified address.
 - Can be used to test blockchain functionality or advance the chain state rapidly for testing
 - All generated blocks will send the block reward to the specified address
 
-### 3.6. Command: Get Best Block Hash
+### 3.5. Command: Get Best Block Hash
 
 The `getbestblockhash` command is used to retrieve the hash of the best (most recent) block on the blockchain. The RPC server processes this command by interacting with the blockchain service to fetch the hash of the best block.
 
@@ -364,7 +361,7 @@ The `getbestblockhash` command is used to retrieve the hash of the best (most re
 
 - **hash**: The hex-encoded hash of the best block in the main chain
 
-### 3.7. Command: Get Block
+### 3.6. Command: Get Block
 
 The `getblock` command is used to retrieve information about a specific block on the blockchain. The RPC server processes this command by interacting with the blockchain service to fetch the block data based on the provided block hash.
 
@@ -392,7 +389,7 @@ When verbosity=1 or 2:
 - **previousblockhash**: Hash of the previous block
 - **nextblockhash**: Hash of the next block (if available)
 
-### 3.8. Command: Get Block By Height
+### 3.7. Command: Get Block By Height
 
 The `getblockbyheight` command returns information about a block at a specific height in the blockchain. The response format varies based on the verbosity parameter.
 
@@ -464,7 +461,7 @@ When verbosity=1 or 2:
 - **nextblockhash**: Hash of next block (if available)
 - **tx**: Array of transaction IDs (verbosity=1) or full transaction data (verbosity=2)
 
-### 3.9. Command: Get Blockchain Info
+### 3.8. Command: Get Blockchain Info
 
 The `getblockchaininfo` command returns information about the current blockchain state, including network name, block count, and other blockchain-related data.
 
@@ -509,16 +506,16 @@ The `getblockchaininfo` command returns information about the current blockchain
 
 - **chain**: The name of the blockchain network (main, test, regtest)
 - **blocks**: The current number of blocks in the chain
-- **headers**: Number of headers in the chain (currently hardcoded to 863341)
+- **headers**: Number of headers in the chain
 - **bestblockhash**: Hash of the current best block
 - **difficulty**: Current mining difficulty
-- **mediantime**: Median time of the chain (currently 0)
-- **verificationprogress**: Chain verification progress (currently 0)
+- **mediantime**: Median time of the chain
+- **verificationprogress**: Chain verification progress
 - **chainwork**: Total accumulated work in the chain
-- **pruned**: Whether the node is running in pruned mode (currently false)
-- **softforks**: Array of active soft forks (currently empty)
+- **pruned**: Whether the node is running in pruned mode
+- **softforks**: Array of active soft forks
 
-### 3.10. Command: Get Block Hash
+### 3.9. Command: Get Block Hash
 
 The `getblockhash` command returns the hash of a block at a specific height in the blockchain.
 
@@ -557,7 +554,7 @@ The `getblockhash` command returns the hash of a block at a specific height in t
 
 - Returns string containing the hex-encoded hash of the block at the specified height
 
-### 3.11. Command: Get Block Header
+### 3.10. Command: Get Block Header
 
 The `getblockheader` command returns information about a block's header given its hash. The response format varies based on the verbose parameter.
 
@@ -626,7 +623,7 @@ When verbose=true:
 - **num_tx**: Number of transactions in the block
 - **status**: Block status (e.g., "active", "valid-fork", "valid-headers", "headers-only", "invalid")
 
-### 3.12. Command: Get Difficulty
+### 3.11. Command: Get Difficulty
 
 The `getdifficulty` command returns the proof-of-work difficulty as a multiple of the minimum difficulty.
 
@@ -659,7 +656,7 @@ The `getdifficulty` command returns the proof-of-work difficulty as a multiple o
 
     - Returns the difficulty value directly to the client
 
-### 3.13. Command: Get Info
+### 3.12. Command: Get Info
 
 The `getinfo` command returns general information about the node's state, including version information, network status, and blockchain details.
 
@@ -697,18 +694,18 @@ The `getinfo` command returns general information about the node's state, includ
 
 #### (Success) Response Fields
 
-- **version**: Server version (currently 1)
+- **version**: Server version
 - **protocolversion**: Protocol version being used
 - **blocks**: Current block height
-- **timeoffset**: Network time offset (currently 1)
-- **connections**: Number of peer connections (currently 1)
-- **proxy**: Proxy being used, if any (currently "host:port")
-- **difficulty**: Current mining difficulty (currently 1)
+- **timeoffset**: Network time offset
+- **connections**: Number of peer connections
+- **proxy**: Proxy being used, if any
+- **difficulty**: Current mining difficulty
 - **testnet**: Whether running on testnet
 - **stn**: Whether running on the Scaling Test Network
-- **relayfee**: Minimum relay fee for transactions (currently 100 sat/KB)
+- **relayfee**: Minimum relay fee for transactions
 
-### 3.14. Command: Get Mining Info
+### 3.13. Command: Get Mining Info
 
 The `getmininginfo` command returns various mining-related information including block chain state, current block statistics, and network mining parameters.
 
@@ -753,7 +750,7 @@ The `getmininginfo` command returns various mining-related information including
 - **networkhashps**: Estimated network hashes per second
 - **chain**: Current network name (main, test, regtest)
 
-### 3.15. Command: Get Mining Candidate
+### 3.14. Command: Get Mining Candidate
 
 The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candidate block for mining. This command allows miners to obtain the necessary information to attempt mining a new block.
 
@@ -773,7 +770,7 @@ The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candid
 
 #### Process Flow
 
-![rpc-get-mining-candidate.svg](img/plantuml/rpc/rpc-get-mining-solution.svg)
+![rpc-get-mining-candidate.svg](img/plantuml/rpc/rpc-get-mining-candidate.svg)
 
 1. **Mining Candidate Retrieval**:
 
@@ -802,7 +799,7 @@ The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candid
 - **merkleProof**: Array of merkle proof hashes
 - **coinbase**: Hex-encoded coinbase transaction (if requested)
 
-### 3.16. Command: Get Peer Info
+### 3.15. Command: Get Peer Info
 
 The `getpeerinfo` command returns data about each connected network peer as an array of JSON objects.
 
@@ -866,7 +863,7 @@ For each peer:
 
 The command aggregates peer information from both the legacy P2P service and the new P2P service, providing a comprehensive view of all connected peers.
 
-### 3.17. Command: Get Raw Transaction
+### 3.16. Command: Get Raw Transaction
 
 The `getrawtransaction` command retrieves raw transaction data for a specific transaction, either as a serialized hex string or as a detailed JSON object.
 
@@ -951,7 +948,7 @@ When verbose=true:
 - **time**: Block time
 - **blocktime**: Block time in seconds since epoch
 
-### 3.18. Command: Invalidate Block
+### 3.17. Command: Invalidate Block
 
 The `invalidateblock` command permanently marks a block as invalid, as if it violated a consensus rule.
 
@@ -993,7 +990,7 @@ The `invalidateblock` command permanently marks a block as invalid, as if it vio
 - This command should be used with extreme caution as it can cause chain reorganization
 - Invalidating a block also invalidates all blocks built on top of it
 
-### 3.19. Command: Is Banned
+### 3.18. Command: Is Banned
 
 The `isbanned` command checks if a specific network address is currently banned from connecting to the node.
 
@@ -1044,7 +1041,7 @@ The `isbanned` command checks if a specific network address is currently banned 
 - Address bans may have an expiration time
 - Works in conjunction with the `setban` command which is used to add or remove bans
 
-### 3.20. Command: Reassign
+### 3.19. Command: Reassign
 
 The `reassign` command allows administrators to change the ownership of a specific UTXO by reassigning it to a new Bitcoin address.
 
@@ -1100,7 +1097,7 @@ The `reassign` command allows administrators to change the ownership of a specif
 - Should only be used in specific regulatory or recovery scenarios
 - The operation creates a permanent record in the audit log
 
-### 3.21. Command: Reconsider Block
+### 3.20. Command: Reconsider Block
 
 The `reconsiderblock` command removes the invalid status of a block and its descendants, allowing them to be reconsidered for inclusion in the blockchain. This command is typically used to undo the effects of `invalidateblock`.
 
@@ -1143,7 +1140,7 @@ The `reconsiderblock` command removes the invalid status of a block and its desc
 - The block and its descendants will be reconsidered for inclusion in the best chain
 - May trigger chain reorganization if the reconsidered chain has more work
 
-### 3.22. Command: Send Raw Transaction
+### 3.21. Command: Send Raw Transaction
 
 The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-signed raw transaction to the network. This command broadcasts the raw transaction hex to the connected nodes in the blockchain network for inclusion in a block.
 
@@ -1194,7 +1191,7 @@ The `sendrawtransaction` RPC command in Bitcoin RPC is used to submit a pre-sign
 
     - If the transaction is successfully broadcast, the function returns a success response, which includes the transaction ID of the broadcast transaction
 
-### 3.23. Command: Set Ban
+### 3.22. Command: Set Ban
 
 The `setban` command adds or removes an IP address or subnet from the banned list. This command is used for network management and peer control.
 
@@ -1247,7 +1244,7 @@ The `setban` command adds or removes an IP address or subnet from the banned lis
 - The IP/subnet format must be valid
 - Removing a non-existent ban is considered an error
 
-### 3.24. Command: Stop
+### 3.23. Command: Stop
 
 The `stop` command initiates a clean shutdown of the node, stopping all services in an orderly fashion.
 
@@ -1301,7 +1298,7 @@ The `stop` command initiates a clean shutdown of the node, stopping all services
 - Any pending operations may be completed or aborted depending on their nature
 - Clients should expect to lose connection to the node shortly after receiving the response
 
-### 3.25. Command: Submit Mining Solution
+### 3.24. Command: Submit Mining Solution
 
 The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining solution to the network. This command allows miners to propose a potential new block to be added to the blockchain.
 
@@ -1342,7 +1339,7 @@ The `submitminingsolution` RPC command in Bitcoin RPC is used to submit a mining
 
 - Returns nil on success
 
-### 3.26. Command: Unfreeze
+### 3.25. Command: Unfreeze
 
 The `unfreeze` command removes the freeze status from a previously frozen UTXO, allowing it to be spent again in transactions.
 
@@ -1395,7 +1392,7 @@ The `unfreeze` command removes the freeze status from a previously frozen UTXO, 
 - After unfreezing, the UTXO becomes available for spending in transactions
 - This operation is an administrative function that should be used with appropriate authorization
 
-### 3.27. Command: Version
+### 3.26. Command: Version
 
 The `version` command is used to retrieve the version information of the RPC server. The RPC server processes this command by constructing a response with the server version information and returning it to the client.
 
@@ -1425,7 +1422,7 @@ The `version` command is used to retrieve the version information of the RPC ser
 The RPC service is located in the `services/rpc` directory. The main files and directories are as follows:
 
 ```text
-./servers/rpc
+./services/rpc
 ├── Server.go          # Main server application file: Initializes and runs the server, sets up configurations, and handles lifecycle events.
 └── handlers.go        # Request handlers: Defines functions that process incoming requests based on type and content.
 ```
