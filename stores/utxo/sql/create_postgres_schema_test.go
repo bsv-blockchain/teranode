@@ -585,12 +585,3 @@ func TestCreatePostgresSchemaTestWrapper_Error(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "could not create transactions table")
 }
-
-// Test that calls the ACTUAL createPostgresSchema function for real coverage
-func TestCreatePostgresSchema_WithRealFunctionCall_Success(t *testing.T) {
-	// Create a usql.DB with a nil *sql.DB - this will cause method calls to panic
-	// But we'll inject our mock behavior using a different approach
-
-	// Skip this test if we can't mock the embedded sql.DB easily
-	t.Skip("Requires complex sql.DB mocking - our wrapper approach provides equivalent coverage")
-}

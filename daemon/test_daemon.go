@@ -83,6 +83,7 @@ type TestDaemon struct {
 	d                     *Daemon
 	privKey               *bec.PrivateKey
 	rpcURL                *url.URL
+	skipContainerCleanup  bool
 }
 
 // TestOptions defines the options for creating a test daemon instance.
@@ -99,6 +100,13 @@ type TestOptions struct {
 	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres")
 	// If empty, defaults to "aerospike"
 	UTXOStoreType string
+	// ContainerManager allows reusing an existing container manager from a previous TestDaemon.
+	// When set, the daemon will use the existing container instead of creating a new one.
+	// This is useful for restart tests where you want to preserve data in external stores like Aerospike.
+	ContainerManager *containers.ContainerManager
+	// SkipContainerCleanup when true, prevents the container from being terminated when Stop is called.
+	// Use this when you plan to restart the daemon and reuse the same container.
+	SkipContainerCleanup bool
 }
 
 // JSONError represents a JSON error response from the RPC server.
@@ -315,7 +323,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	// Initialize container manager for UTXO store if UTXOStoreType is specified
 	var containerManager *containers.ContainerManager
-	if opts.UTXOStoreType != "" {
+	if opts.ContainerManager != nil {
+		// Reuse existing container manager (for restart tests)
+		containerManager = opts.ContainerManager
+		utxoStoreURL, err := url.Parse(containerManager.GetContainerURL())
+		require.NoError(t, err, "Failed to parse container URL")
+		appSettings.UtxoStore.UtxoStore = utxoStoreURL
+		t.Logf("Reusing existing %s container with URL: %s", containerManager.GetStoreType(), utxoStoreURL.String())
+	} else if opts.UTXOStoreType != "" {
 		containerManager, err = containers.NewContainerManager(containers.UTXOStoreType(opts.UTXOStoreType))
 		require.NoError(t, err, "Failed to create container manager")
 
@@ -323,11 +338,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		require.NoError(t, err, "Failed to initialize container")
 
 		// Register cleanup immediately to prevent resource leak if daemon initialization fails
-		t.Cleanup(func() {
-			if containerManager != nil {
-				_ = containerManager.Cleanup()
-			}
-		})
+		// Only register cleanup if we're not skipping it (for restart tests)
+		if !opts.SkipContainerCleanup {
+			t.Cleanup(func() {
+				if containerManager != nil {
+					_ = containerManager.Cleanup()
+				}
+			})
+		}
 
 		// Override the UTXO store URL in settings
 		appSettings.UtxoStore.UtxoStore = utxoStoreURL
@@ -507,6 +525,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		d:                     d,
 		privKey:               pk,
 		rpcURL:                appSettings.RPC.RPCListenerURL,
+		skipContainerCleanup:  opts.SkipContainerCleanup,
 	}
 }
 
@@ -528,8 +547,8 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 	// Cleanup daemon stores to reset singletons
 	td.d.daemonStores.Cleanup()
 
-	// Cleanup container manager if it exists
-	if td.containerManager != nil {
+	// Cleanup container manager if it exists and we're not skipping cleanup
+	if td.containerManager != nil && !td.skipContainerCleanup {
 		if err := td.containerManager.Cleanup(); err != nil {
 			t.Logf("Warning: Failed to cleanup container manager: %v", err)
 		}
@@ -1497,6 +1516,12 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 func (td *TestDaemon) ResetServiceManagerContext(t *testing.T) {
 	err := td.d.ServiceManager.ResetContext()
 	require.NoError(t, err)
+}
+
+// GetContainerManager returns the container manager used by this test daemon.
+// This is useful for restart tests where you want to pass the same container to a new daemon.
+func (td *TestDaemon) GetContainerManager() *containers.ContainerManager {
+	return td.containerManager
 }
 
 // WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
