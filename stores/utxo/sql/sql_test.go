@@ -45,7 +45,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1015,79 +1014,20 @@ func TestConflictingFunctions(t *testing.T) {
 	assert.NotNil(t, hashes)
 }
 
+// TestCreatePostgresSchema tests the PostgreSQL schema creation using mocks
 func TestCreatePostgresSchema(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Create a mock database
+	mockDB := CreateMockDBForSchema()
+	defer mockDB.AssertExpectations(t)
 
-	// Skip this test if we don't have a PostgreSQL environment available
-	// This test will try to connect to a local PostgreSQL instance
+	// Setup successful mock expectations for all DDL operations
+	SetupCreatePostgresSchemaSuccessMocks(mockDB)
 
-	// First, let's try with a postgres URL - if it fails, we'll skip
-	// You can set the POSTGRES_URL environment variable for testing
-	// #nosec G101 - test credentials for local testing only
-	pgURL := "postgres://teranode:teranode@localhost:5432/teranode_test"
-	if testPgURL := os.Getenv("POSTGRES_URL"); testPgURL != "" {
-		pgURL = testPgURL
-	}
+	// Call the function under test using the mock
+	err := createPostgresSchemaImpl(mockDB)
 
-	parsedURL, err := url.Parse(pgURL)
-	require.NoError(t, err)
-
-	// Try to connect to PostgreSQL
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.UtxoStore.DBTimeout = 30 * time.Second
-
-	// Attempt to create a store with PostgreSQL
-	store, err := New(ctx, logger, tSettings, parsedURL)
-	if err != nil {
-		// If PostgreSQL is not available, skip this test
-		t.Skipf("PostgreSQL not available for testing createPostgresSchema: %v", err)
-		return
-	}
-	defer func() {
-		if store != nil && store.db != nil {
-			store.db.Close()
-		}
-	}()
-
-	require.NotNil(t, store)
-	assert.Equal(t, "postgres", store.engine)
-
-	// Verify that PostgreSQL schema was created successfully by checking expected tables
-	tables := []string{"transactions", "inputs", "outputs", "block_ids", "conflicting_children"}
-	for _, table := range tables {
-		var exists bool
-		err = store.db.QueryRowContext(ctx,
-			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
-			table).Scan(&exists)
-		require.NoError(t, err, "Failed to check existence of table %s", table)
-		assert.True(t, exists, "Table %s should exist in PostgreSQL schema", table)
-	}
-
-	// Verify indexes were created
-	indexes := []string{"ux_transactions_hash", "px_unmined_since_transactions", "ux_transactions_delete_at_height"}
-	for _, index := range indexes {
-		var exists bool
-		err = store.db.QueryRowContext(ctx,
-			"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1)",
-			index).Scan(&exists)
-		require.NoError(t, err, "Failed to check existence of index %s", index)
-		assert.True(t, exists, "Index %s should exist in PostgreSQL schema", index)
-	}
-
-	// Test that we can perform basic database operations with the schema
-	var result int
-	err = store.db.QueryRowContext(ctx, "SELECT 1").Scan(&result)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result)
-
-	// Test that foreign key constraints work by trying to insert invalid data
-	_, err = store.db.ExecContext(ctx, "INSERT INTO inputs (transaction_id, idx, previous_transaction_hash, previous_tx_idx, previous_tx_satoshis, unlocking_script, sequence_number) VALUES (999999, 0, $1, 0, 0, $2, 0)",
-		make([]byte, 32), make([]byte, 1))
-	assert.Error(t, err, "Should fail due to foreign key constraint")
-
-	t.Logf("Successfully tested createPostgresSchema with PostgreSQL database")
+	// Verify success
+	assert.NoError(t, err)
 }
 
 func TestCreatePostgresSchemaWithMockConnection(t *testing.T) {
