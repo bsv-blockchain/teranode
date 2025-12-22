@@ -26,6 +26,9 @@ import (
 
 // initTestTracer initializes a test tracer that doesn't require external connections
 func initTestTracer() error {
+	// Enable tracing for tests
+	SetTracingEnabled(true)
+
 	// Create a no-op exporter for tests
 	exporter := tracetest.NewNoopExporter()
 
@@ -131,9 +134,6 @@ func TestUTracer_ChildSpans(t *testing.T) {
 }
 
 func TestSimpleTracing(t *testing.T) {
-	// skip tracing test, manually run it
-	t.Skip()
-
 	// Initialize tracer
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.TracingSampleRate = 1.0
@@ -156,21 +156,13 @@ func TestSimpleTracing(t *testing.T) {
 		WithLogMessage(logger, "Starting operation 1"),
 	)
 
-	time.Sleep(1 * time.Second)
-
 	_, _, childEndFn := tracer.Start(ctx, "operation 2")
-
-	time.Sleep(1 * time.Second)
 
 	childEndFn()
 
 	span.AddEvent("bang", trace.WithAttributes(attribute.String("foo", "bar")))
 
-	time.Sleep(1 * time.Second)
-
 	endFn()
-
-	time.Sleep(5 * time.Second)
 }
 
 type lineLogger struct {
