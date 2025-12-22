@@ -54,6 +54,30 @@ While Teranode uses the standard Bitcoin block header format, the Merkle root ca
 
 The resulting Merkle root is identical to what would be computed from individual transactions, just organized hierarchically.
 
+#### Coinbase Placeholder Handling in Subtree 0
+
+The first subtree in a block (the subtree in the 0'th position of the block) contains a placeholder transaction in position 0 of the subtree. This placeholder transaction exists to allow node operators to continue sharing subtrees maintaining a spot for the coinbase transaction to go when it exists as the block is mined.
+
+The merkle root for the block is calculated when this placeholder transaction is replaced with the real coinbase transaction; but the subtree hash *does not change* within the block. This means to calculate the merkle root of a block, you cannot simply use subtree hashes as nodes in a merkle tree.
+
+As a simple example using 2 subtrees `S0` and `S1` with a size of 2; the true merkle root for the block with 4 transactions `CT` (Coinbase Transaction), `T1`, `T2`, and `T3` is calculated via:
+```
+        ROOT = H(S0 + S1)
+       /                  \
+   S0 = H(H0 + H1)      S1 = H(H2 + H3)
+    /           \           /             \
+  H0 = H(CT)  H1 = H(T1)  H2 = H(T2)  H3 = H(T3)
+```
+
+But, the root subtree hash for `S0` is actually calculated with placeholder transaction `FF`; so the subtree that was actually broadcasted has a hash that looks like:
+```
+   S0 = H(H0 + H1)
+    /           \
+  H0 = H(FF)  H1 = H(T1)
+```
+
+To summarize, calculating the merkle root and/or calculating merkle proofs for transactions/subtrees in a block requires a user to replace Transaction 0 in Subtree 0 with the actual coinbase transaction and recompute the entire merkle tree.
+
 ### Block Header Usage in Teranode
 
 Block headers flow through several stages in Teranode's distributed architecture:
