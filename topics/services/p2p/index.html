@@ -3476,6 +3476,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="4. Data Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#p2p-network-message-structures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        P2P Network Message Structures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#websocket-notification-structures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WebSocket Notification Structures
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6769,6 +6797,34 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="4. Data Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#p2p-network-message-structures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        P2P Network Message Structures
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#websocket-notification-structures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WebSocket Notification Structures
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6862,14 +6918,14 @@
 <li><a href="#286-recovery-mechanisms">2.8.6. Recovery Mechanisms</a></li>
 </ul>
 </li>
-<li><a href="#3-technology">3. Technology</a></li>
-<li><a href="#4-data-model">4. Data Model</a></li>
-<li><a href="#5-directory-structure-and-main-files">5. Directory Structure and Main Files</a></li>
-<li><a href="#6-how-to-run">6. How to run</a></li>
-<li><a href="#7-configuration-options-settings-flags">7. Configuration options (settings flags)</a></li>
-<li><a href="#8-other-resources">8. Other Resources</a></li>
 </ul>
 </li>
+<li><a href="#3-technology">Technology</a></li>
+<li><a href="#4-data-model">Data Model</a></li>
+<li><a href="#5-directory-structure-and-main-files">Directory Structure and Main Files</a></li>
+<li><a href="#6-how-to-run">How to run</a></li>
+<li><a href="#7-configuration-options-settings-flags">Configuration options (settings flags)</a></li>
+<li><a href="#8-other-resources">Other Resources</a></li>
 </ol>
 <h2 id="1-description">1. Description</h2>
 <p>The p2p package implements a peer-to-peer (P2P) server using <code>libp2p</code> (<code>github.com/libp2p/go-libp2p</code>, <code>https://libp2p.io</code>), a modular network stack that allows for direct peer-to-peer communication. The implementation follows an interface-based design pattern using the public <code>github.com/bsv-blockchain/go-p2p</code> package, with <code>p2p.NodeI</code> interface abstracting the concrete P2P node implementation to allow for better testability and modularity. This public package enables external developers to create custom P2P implementations that integrate with Teranode.</p>
@@ -6898,15 +6954,14 @@
 <li>The server uses Kademlia for peer discovery, implementing both standard and private DHT (Distributed Hash Table) modes based on configuration.</li>
 <li>The server uses GossipSub for PubSub messaging, with automated topic subscription and management.</li>
 <li>Peers identify themselves using a user agent string in format <code>teranode/bitcoin/{version}</code> where the version is dynamically determined at build time from Git tags (e.g., "v1.2.3") or generated as a pseudo-version (e.g., "v0.0.0-20250731141601-18714b9").</li>
-<li><code>handleBlockchainMessage</code>, <code>handleBestBlockTopic</code>, <code>handleBlockTopic</code>, <code>handleSubtreeTopic</code>, and <code>handleMiningOnTopic</code> are functions to handle incoming messages for different topics.</li>
-<li><code>sendBestBlockMessage</code> and <code>sendPeerMessage</code> are used for sending messages to peers in the network.</li>
+<li>The server implements topic handlers <code>handleBlockTopic()</code>, <code>handleSubtreeTopic()</code>, <code>handleRejectedTxTopic()</code>, and <code>handleNodeStatusTopic()</code> in <code>server_helpers.go</code> and <code>Server.go</code> to process incoming messages for different topics.</li>
 <li>The implementation includes error handling and retry mechanisms for peer connections to enhance network resilience.</li>
 </ul>
 </li>
 <li>
 <p><strong>Peer Discovery and Connection</strong>:</p>
 <ul>
-<li><code>discoverPeers</code> function is responsible for discovering peers in the network and attempting to establish connections with them.</li>
+<li>The server discovers peers in the network through DHT routing discovery and attempts to establish connections with them.</li>
 <li>The system implements an intelligent retry mechanism that tracks failed connection attempts and manages reconnection policies based on error types.</li>
 <li>A dedicated mechanism for connecting to static peers runs in a separate goroutine, ensuring that mission-critical peers are always connected when available.</li>
 </ul>
@@ -6915,7 +6970,7 @@
 <p><strong>HTTP Server and WebSockets</strong>:</p>
 <ul>
 <li>An HTTP server is started using <code>echo</code>, a Go web framework, providing routes for health checks and WebSocket connections.</li>
-<li><code>HandleWebSocket</code> is used to handle incoming WebSocket connections and manage the communication with connected clients.</li>
+<li>The <code>HandleWebSocket()</code> method in <code>HandleWebsocket.go</code> handles incoming WebSocket connections and manages the communication with connected clients.</li>
 </ul>
 </li>
 <li>
@@ -6961,19 +7016,19 @@
 <p><strong>Private Key Management</strong>:</p>
 <ul>
 <li>
-<p>The server tries to read an existing private key from the blockchain store through the <code>readPrivateKey()</code> function:</p>
+<p>The server tries to read an existing private key from the blockchain store:</p>
 <ul>
-<li><code>readPrivateKey</code> calls <code>blockchainClient.GetState(ctx, "p2p.privateKey")</code> to retrieve the serialized key data</li>
+<li>It calls <code>blockchainClient.GetState(ctx, "p2p.privateKey")</code> to retrieve the serialized key data</li>
 <li>
 <p>If found, it deserializes the key using <code>crypto.UnmarshalPrivateKey()</code></p>
 <ul>
-<li>If no key is specified in the configuration and no key exists in the blockchain store, it automatically generates and stores a new one using the <code>generateAndStorePrivateKey()</code> function:</li>
+<li>If no key is specified in the configuration and no key exists in the blockchain store, it automatically generates and stores a new one:</li>
 </ul>
 </li>
 <li>
-<p><code>generateAndStorePrivateKey</code> creates a new Ed25519 key pair using <code>crypto.GenerateEd25519Key()</code></p>
+<p>A new Ed25519 key pair is created using <code>crypto.GenerateEd25519Key()</code></p>
 </li>
-<li>It serializes the private key with <code>crypto.MarshalPrivateKey()</code></li>
+<li>The private key is serialized with <code>crypto.MarshalPrivateKey()</code></li>
 <li>It stores the serialized key in the blockchain store using <code>blockchainClient.SetState(ctx, "p2p.privateKey", privBytes)</code></li>
 <li>The generated key is automatically persisted to ensure the node maintains the same peer ID across restarts</li>
 </ul>
@@ -7108,22 +7163,22 @@
 <li>
 <p><strong>Advertising and Searching for Peers</strong>:</p>
 <ul>
-<li>The node then advertises itself for the configured topics and looks for peers associated with these topics. This is conducted through the <code>discoverPeers</code> method, which iterates over the topic names and uses the routing discovery to advertise and find peers interested in the same topics.</li>
+<li>The node advertises itself for the configured topics and looks for peers associated with these topics using the routing discovery system, which iterates over the topic names and advertises the node's presence while discovering peers interested in the same topics.</li>
 </ul>
 </li>
 <li>
 <p><strong>Connecting to Discovered and Static Peers</strong>:</p>
 <ul>
 <li>
-<p>The <code>discoverPeers</code> method includes sophisticated filtering and error handling mechanisms:</p>
+<p>The server includes sophisticated filtering and error handling mechanisms for peer connections:</p>
 <ul>
-<li><code>shouldSkipPeer</code>: Determines if connection attempts should be skipped based on various criteria</li>
-<li><code>shouldSkipBasedOnErrors</code>: Manages retry logic for previously failed connections</li>
-<li><code>shouldSkipNoGoodAddresses</code>: Special handling for peers with address resolution issues</li>
+<li>Determines if connection attempts should be skipped based on various criteria</li>
+<li>Manages retry logic for previously failed connections</li>
+<li>Special handling for peers with address resolution issues</li>
 </ul>
 </li>
 <li>
-<p>The <code>connectToStaticPeers</code> method runs in a dedicated goroutine to periodically attempt connections with a predefined list of peers (static peers), ensuring critical network infrastructure remains connected even after temporary failures.</p>
+<p>A dedicated goroutine periodically attempts connections with a predefined list of peers (static peers), ensuring critical network infrastructure remains connected even after temporary failures.</p>
 </li>
 <li>Connection errors are carefully tracked to avoid network congestion from repeated failed connection attempts.</li>
 </ul>
@@ -7141,23 +7196,22 @@
 <li>
 <p><strong>Node (Peer 1) Starts</strong>:</p>
 <ul>
-<li>The server's <code>Start()</code> method is invoked. Within <code>Start()</code>, <code>s.sendBestBlockMessage(ctx)</code> is called to send the best block message.</li>
-<li>This message is published to a topic using <code>s.topics[bestBlockTopicName].Publish(ctx, msgBytes)</code>.</li>
+<li>The server's <code>Start()</code> method is invoked and publishes a node status message to announce its presence to the network.</li>
+<li>This message is published to a topic using the P2P messaging system.</li>
 </ul>
 </li>
 <li>
-<p><strong>Peer 2 Receives the Best Block Topic Message</strong>:</p>
+<p><strong>Peer 2 Receives the Node Status Message</strong>:</p>
 <ul>
-<li>Peer 2's server handles the best block topic through <code>s.handleBestBlockTopic(ctx)</code>.</li>
-<li>A peer message is sent using <code>s.sendPeerMessage(ctx, peer, msgBytes)</code>. A new stream to the Peer 1 LibP2P host is established with <code>s.host.NewStream(ctx, peer.ID, protocol.ID(s.bitcoinProtocolId))</code>.</li>
+<li>Peer 2's server handles the node status topic through its topic handler.</li>
+<li>Peers can communicate and exchange blockchain state information through the P2P network.</li>
 </ul>
 </li>
 <li>
-<p><strong>Node (Peer 1) Receives the Stream Response from Peer 2</strong>:</p>
+<p><strong>Peers Exchange Blockchain Information</strong>:</p>
 <ul>
-<li>The LibP2P host sends the response stream to Node (Peer 1).</li>
-<li>Node (Peer 1) handles the blockchain message using <code>s.handleBlockchainMessage(ctx, stream)</code>.</li>
-<li>The message received is logged with <code>s.logger.Debugf("Received block topic message: %s", string(buf))</code> (at the time of writing, the <code>handleBlockchainMessage</code> function simply logs block topic messages).</li>
+<li>Peers communicate blockchain state through various message types including blocks, subtrees, and node status updates.</li>
+<li>Messages are processed by the appropriate topic handlers in the receiving nodes.</li>
 </ul>
 </li>
 </ol>
@@ -7219,24 +7273,22 @@
 <ul>
 <li>
 <p>WebSocket Request Handling:</p>
-</li>
-<li>
-<p>An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.</p>
-</li>
+<ul>
+<li>An HTTP request is upgraded to a WebSocket connection. A new client channel is associated to this Websocket client.</li>
 <li>Data is sent over the WebSocket, using its dedicated client channel.</li>
-<li>
-<p>If there's an error in sending data, the channel is removed from the <code>clientChannels</code>.</p>
+<li>If there's an error in sending data, the channel is removed from the <code>clientChannels</code>.</li>
+</ul>
 </li>
 <li>
 <p>The server listens for various types of events in a concurrent process:</p>
-</li>
-<li>
-<p>The server tracks all active client channels (<code>clientChannels</code>).</p>
-</li>
+<ul>
+<li>The server tracks all active client channels (<code>clientChannels</code>).</li>
 <li>When a new client connects, it is added to the <code>clientChannels</code>.</li>
 <li>If a client disconnects, it is removed from <code>clientChannels</code>.</li>
 <li>Periodically, we ping all connected clients. Any error would have the client removed from the list of clients.</li>
 <li>When a notification is received (from the block validation or transaction listeners described in the previous sections), it is sent to all connected clients.</li>
+</ul>
+</li>
 </ul>
 <p>As a sequence:</p>
 <p><img alt="p2p_websocket_sequence_diagram.svg" src="../img/plantuml/p2p/p2p_websocket_sequence_diagram.svg" /></p>
@@ -7252,8 +7304,8 @@
 <h4 id="271-ban-list-management">2.7.1. Ban List Management</h4>
 <p>The ban system consists of two main components:</p>
 <ol>
-<li><strong>BanList</strong>: A thread-safe data structure that maintains banned IP addresses and subnets</li>
-<li><strong>BanChan</strong>: A channel that broadcasts ban-related events to system components</li>
+<li><strong>BanList</strong> - A thread-safe data structure that maintains banned IP addresses and subnets</li>
+<li><strong>BanChan</strong> - A channel that broadcasts ban-related events to system components</li>
 </ol>
 <p>The ban list supports:</p>
 <ul>
@@ -7275,11 +7327,40 @@
 </ol>
 <h4 id="274-configuration">2.7.4. Configuration</h4>
 <p>Ban-related settings in the configuration:</p>
-<ul>
-<li><code>banlist_db</code>: Database connection string for ban storage</li>
-<li><code>ban_default_duration</code>: Default duration for bans (24 hours if not specified)</li>
-<li><code>ban_max_entries</code>: Maximum number of banned entries to maintain</li>
-</ul>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Description</th>
+<th>Impact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>banlist_db</code></td>
+<td>string</td>
+<td>""</td>
+<td>Database connection string for ban storage</td>
+<td>Required for ban list persistence across restarts</td>
+</tr>
+<tr>
+<td><code>ban_default_duration</code></td>
+<td>duration</td>
+<td>24h</td>
+<td>Default duration for bans</td>
+<td>Controls how long banned peers are excluded from the network</td>
+</tr>
+<tr>
+<td><code>ban_max_entries</code></td>
+<td>int</td>
+<td>1000</td>
+<td>Maximum number of banned entries to maintain</td>
+<td>Prevents unbounded memory growth in ban list</td>
+</tr>
+</tbody>
+</table>
 <h3 id="28-peer-registry-and-reputation-system">2.8. Peer Registry and Reputation System</h3>
 <p>The P2P service includes a comprehensive peer management system that tracks peer behavior, calculates reputation scores, and selects optimal peers for network operations.</p>
 <h4 id="281-overview">2.8.1. Overview</h4>
@@ -7316,8 +7397,8 @@
 <h4 id="284-peer-selection">2.8.4. Peer Selection</h4>
 <p>The peer selector uses a two-phase approach:</p>
 <ol>
-<li><strong>Phase 1 - Full Nodes</strong>: Filter for peers announcing "full" storage mode, sort by reputation</li>
-<li><strong>Phase 2 - Pruned Fallback</strong>: If no full nodes available, select youngest pruned node</li>
+<li><strong>Phase 1 - Full Nodes</strong> - Filter for peers announcing "full" storage mode, sort by reputation</li>
+<li><strong>Phase 2 - Pruned Fallback</strong> - If no full nodes available, select youngest pruned node</li>
 </ol>
 <p>Selection criteria include:</p>
 <ul>
@@ -7431,7 +7512,37 @@
 <li><a href="../../datamodel/block_data_model/">Block Data Model</a>: Contain lists of subtree identifiers.</li>
 <li><a href="../../datamodel/subtree_data_model/">Subtree Data Model</a>: Contain lists of transaction IDs and their Merkle root.</li>
 </ul>
-<p>Within the P2P service, notifications are sent to the Websocket clients using the following data model:</p>
+<h3 id="p2p-network-message-structures">P2P Network Message Structures</h3>
+<p>The following message structures (defined in <code>services/p2p/message_types.go</code>) are exchanged between peers over the P2P network:</p>
+<p><strong>BlockMessage</strong> - Published when a new block is found:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">BlockMessage</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">PeerID</span><span class="w">     </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Identifier of the peer announcing the block</span>
+<span class="w">    </span><span class="nx">ClientName</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Name of the client software announcing the block</span>
+<span class="w">    </span><span class="nx">DataHubURL</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="c1">// URL where the complete block data can be retrieved</span>
+<span class="w">    </span><span class="nx">Hash</span><span class="w">       </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Unique hash identifier of the block</span>
+<span class="w">    </span><span class="nx">Height</span><span class="w">     </span><span class="kt">uint32</span><span class="w">  </span><span class="c1">// Position of the block in the blockchain</span>
+<span class="w">    </span><span class="nx">Header</span><span class="w">     </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Hexadecimal representation of the block header</span>
+<span class="w">    </span><span class="nx">Coinbase</span><span class="w">   </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Hexadecimal representation of the coinbase transaction</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>SubtreeMessage</strong> - Published when a new subtree is validated:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">SubtreeMessage</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">PeerID</span><span class="w">     </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Identifier of the peer announcing the subtree</span>
+<span class="w">    </span><span class="nx">ClientName</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Name of the client software announcing the subtree</span>
+<span class="w">    </span><span class="nx">DataHubURL</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="c1">// URL where the subtree data can be retrieved</span>
+<span class="w">    </span><span class="nx">Hash</span><span class="w">       </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Unique hash identifier of the subtree</span>
+<span class="p">}</span>
+</code></pre></div>
+<p><strong>RejectedTxMessage</strong> - Published when a transaction is rejected by validation:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">RejectedTxMessage</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">PeerID</span><span class="w">     </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Identifier of the peer reporting the rejection</span>
+<span class="w">    </span><span class="nx">ClientName</span><span class="w"> </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Name of the client software reporting the rejection</span>
+<span class="w">    </span><span class="nx">TxID</span><span class="w">       </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Identifier of the rejected transaction</span>
+<span class="w">    </span><span class="nx">Reason</span><span class="w">     </span><span class="kt">string</span><span class="w">  </span><span class="c1">// Reason for the transaction rejection</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="websocket-notification-structures">WebSocket Notification Structures</h3>
+<p>Within the P2P service, notifications are sent to WebSocket clients using the following internal data model:</p>
 <ul>
 <li>Block notifications:</li>
 </ul>
@@ -7472,10 +7583,45 @@
 <h2 id="5-directory-structure-and-main-files">5. Directory Structure and Main Files</h2>
 <div class="highlight"><pre><span></span><code>./services/p2p
 │
-├── HandleWebsocket.go   - Manages WebSocket connections and communications.
-├── Server.go            - Main server logic for the P2P service, including network handling and peer interactions.
-├── client.html          - A client-side HTML file for testing or interacting with the WebSocket server.
-└── dht.go               - Implements the Distributed Hash Table (DHT) functionality for the P2P network.
+├── Server.go                           - Main server logic for the P2P service, peer interactions, and network handling
+├── Server_test.go                      - Unit tests for Server.go functionalities
+├── server_helpers.go                   - Helper functions for server message handling
+├── Client.go                           - Client-side API for interacting with the P2P service
+├── Client_test.go                      - Unit tests for Client.go functionalities
+├── Interface.go                        - Defines the P2P service interface
+├── BanList.go                          - Thread-safe ban list management for IP addresses and subnets
+├── BanList_test.go                     - Unit tests for ban list functionalities
+├── BanManager.go                       - Ban management system coordinating ban operations and persistence
+├── BanManager_test.go                  - Unit tests for ban manager
+├── HandleWebsocket.go                  - WebSocket connection and communication management
+├── HandleWebsocket_test.go             - Unit tests for WebSocket handling
+├── sync_coordinator.go                 - Synchronization coordination between peers
+├── sync_coordinator_test.go            - Unit tests for sync coordinator
+├── sync_coordinator_fsm_ban_test.go    - Tests for FSM state transitions during ban events
+├── sync_integration_test.go            - Integration tests for peer synchronization
+├── peer_registry.go                    - Maintains registry of known and connected peers
+├── peer_registry_test.go               - Unit tests for peer registry
+├── peer_registry_cache.go              - Persistent cache for peer registry data
+├── peer_registry_cache_test.go         - Unit tests for peer registry cache
+├── peer_registry_reputation_test.go    - Tests for peer reputation scoring
+├── peer_selector.go                    - Peer selection logic for connection prioritization
+├── peer_selector_test.go               - Unit tests for peer selector
+├── handle_catchup_metrics.go           - Handles catchup performance metrics and reputation updates
+├── catchup_metrics_integration_test.go - Integration tests for catchup metrics tracking
+├── message_types.go                    - Message type definitions for P2P communication
+├── advertise_config_test.go            - Tests for peer advertisement configuration
+├── peer_cache_config_test.go           - Tests for peer cache configuration
+├── report_invalid_block_test.go        - Tests for invalid block reporting to peers
+├── asset_websocket_integration_test.go - Integration tests for Asset service WebSocket connectivity
+├── websocket_integration_test.go       - General WebSocket integration tests
+├── websocket_live_integration_test.go  - Live WebSocket integration tests
+├── mock.go                             - Mock implementations for testing
+├── test_helpers.go                     - Helper functions for test setup and utilities
+├── README.md                           - P2P service documentation
+└── p2p_api/                            - gRPC API definitions for P2P service
+    ├── p2p_api.proto                   - Protocol Buffers definition for P2P API
+    ├── p2p_api.pb.go                   - Auto-generated protobuf Go bindings
+    └── p2p_api_grpc.pb.go              - gRPC-specific generated code
 </code></pre></div>
 <h2 id="6-how-to-run">6. How to run</h2>
 <p>To run the P2P Service locally, you can execute the following command:</p>
