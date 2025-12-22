@@ -17,6 +17,8 @@
 
 ## Asset Service HTTP Metrics
 
+All metrics are CounterVec type with labels: `function` (handler function name), `operation` (operation result).
+
 | Metric Name                                 | Type       | Description                         |
 |---------------------------------------------|------------|-------------------------------------|
 | `teranode_asset_http_get_transaction`       | CounterVec | Number of Get transactions ops      |
@@ -280,6 +282,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 
 ## Aerospike Service Metrics
 
+CounterVec metrics use labels: `function` (function name), `error` (error type).
+
 | Metric Name                                       | Type       | Description                                                     |
 |---------------------------------------------------|------------|-----------------------------------------------------------------|
 | `teranode_aerospike_txmeta_get`                   | Counter    | Number of txmeta get calls done to aerospike                    |
@@ -310,6 +314,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_aerospike_operation_retries`             | Counter    | Number of operation retries in aerospike                        |
 
 ## SQL Service Metrics
+
+CounterVec metrics use labels: `function` (function name), `error` (error type).
 
 | Metric Name                | Type       | Description                             |
 |----------------------------|------------|-----------------------------------------|

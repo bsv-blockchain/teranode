@@ -8,7 +8,9 @@
     - [2.2 Event-Driven Trigger Mechanism](#22-event-driven-trigger-mechanism)
     - [2.3 Two-Phase Pruning Process](#23-two-phase-pruning-process)
     - [2.4 Coordination with Block Persister](#24-coordination-with-block-persister)
-    - [2.5 Job Queue Management](#25-job-queue-management)
+    - [2.5 Defensive Mode (Optional)](#25-defensive-mode-optional)
+    - [2.6 External Transaction Pruning](#26-external-transaction-pruning)
+    - [2.7 Channel-Based Deduplication](#27-channel-based-deduplication)
 3. [Data Model](#3-data-model)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)
@@ -215,45 +217,39 @@ When a transaction remains unmined for a long time, its parent transactions (UTX
 
 **Process:**
 
-1. Job Manager receives `UpdateBlockHeight(height)` request
+1. Pruner service receives `Prune(height)` request
 
 2. Calculate safe height for deletion
     - Get `persistedHeight` from Block Persister coordination
-    - `safeHeight = min(currentHeight, persistedHeight)`
+    - `safeHeight = min(currentHeight, persistedHeight + blockHeightRetention)`
     - Ensures transaction data is in `.subtree_data` files before deletion
 
-3. Create pruning job
-    - Job includes `safeHeight` for deletion
-    - Added to job queue with LIFO prioritization
-
-4. Cancel superseded jobs
-    - Only newest pending job is processed
-    - Older jobs are marked as `Cancelled`
-
-5. Worker pool executes pruning
+3. Query records for deletion
     - **Aerospike**: Query with filter `deleteAtHeight <= safeHeight` using secondary index
-    - **SQL**: `DELETE FROM utxos WHERE delete_at_height <= safeHeight`
+    - **SQL**: `SELECT * FROM utxos WHERE delete_at_height <= safeHeight`
 
-6. For each record to delete:
+4. Process records in parallel chunks
+    - Records accumulated into chunks (`pruner_utxoChunkSize`, default: 1000)
+    - Chunks processed in parallel (`pruner_utxoChunkGroupLimit`, default: 10)
+    - Deduplication ensures only latest height is processed during catchup
 
-    - If external transaction data exists:
+5. For each record to delete:
 
-        - Delete `.tx` file from Blob Store (S3/filesystem)
+    - If defensive mode enabled: Verify all spending children are stable
+    - If external transaction data exists: Delete `.tx` or `.outputs` file from Blob Store
+    - Update parent records with deleted children information
     - Delete UTXO record from database
-    - Update metrics: `utxo_cleanup_batch_duration_seconds`
 
-7. Job completion
-    - **Timeout (10 minutes)**: Non-error, job continues in background
-    - **Success**: Job marked as `Completed`
-
-8. Pruner updates metrics
+6. Pruner updates metrics
     - `pruner_duration_seconds{operation="dah_pruner"}`
     - `pruner_processed_total`
+    - `utxo_cleanup_batch_duration_seconds`
 
-**Worker Pool Configuration:**
+**Chunk Processing Configuration:**
 
-- **Aerospike**: 4 workers (default), concurrent batch operations
-- **SQL**: 2 workers (default), simpler DELETE queries
+- **Chunk Size**: `pruner_utxoChunkSize` (default: 1000 records per chunk)
+- **Parallel Chunks**: `pruner_utxoChunkGroupLimit` (default: 10 concurrent chunks)
+- **Progress Logging**: `pruner_utxoProgressLogInterval` (default: 30s)
 
 ### 2.4 Coordination with Block Persister
 
@@ -300,64 +296,87 @@ Block Persister creates `.subtree_data` files containing transaction data needed
 - **Catchup Support**: Nodes can replay blocks from `.subtree_data` files
 - **Graceful Degradation**: Works with or without Block Persister
 
-### 2.5 Job Queue Management
+### 2.5 Defensive Mode (Optional)
 
-![pruner_job_queue.svg](img/plantuml/pruner/pruner_job_queue.svg)
+Defensive mode adds an additional safety layer to prevent deleting parent transactions that have unstable spending children.
 
-**LIFO (Last In, First Out) Pattern:**
+**Purpose:**
 
-The Pruner uses a LIFO queue to efficiently handle pruning during catchup:
+Prevent data loss by verifying that ALL spending children of a parent transaction are mined and stable (for at least `blockHeightRetention` blocks) before deleting the parent.
 
-**Why LIFO?**
+**When to Enable:**
 
-During blockchain catchup, blocks arrive rapidly. Processing every intermediate height is wasteful. LIFO ensures:
+- Production environments with high transaction resubmission rates
+- Environments experiencing frequent chain reorganizations
+- When data integrity is critical
 
-- Only the **newest pending job** is processed
-- Intermediate heights are skipped automatically
-- Efficient pruning during catchup
+**How It Works:**
 
-**Job States:**
+1. Before deleting a parent transaction, extract all spending children from the parent's UTXOs
+2. Batch verify that each spending child:
 
-1. **Pending**: Waiting for worker
-2. **Running**: Currently being processed
-3. **Completed**: Successfully finished
-4. **Failed**: Error occurred
-5. **Cancelled**: Superseded by newer job
+    - Is mined (not in `UnminedSince` state)
+    - Has been stable for at least `blockHeightRetention` blocks
+3. If ANY child is unstable, skip deleting the parent (logged as "Defensive skip")
+4. If ALL children are stable, proceed with parent deletion
 
-**Job Lifecycle:**
+**Configuration:**
 
-1. New job arrives (height 100)
-    - Added to queue with status `Pending`
-    - All workers busy
+```conf
+# Enable defensive mode
+pruner_utxoDefensiveEnabled = true
 
-2. Another job arrives (height 101)
-    - Added to queue with status `Pending`
-    - Job Manager finds superseded jobs
-    - Job(100) status changed to `Cancelled`
+# Batch size for child verification queries
+pruner_utxoDefensiveBatchReadSize = 10000
+```
 
-3. Worker becomes available
-    - Gets newest pending job: Job(101)
-    - Job(101) status → `Running`
-    - Worker executes pruning for height 101
+**Trade-offs:**
 
-4. Job completes
-    - Job(101) status → `Completed`
-    - Metrics updated
+- **Enabled**: Safer pruning, additional Aerospike BatchGet operations, slightly slower
+- **Disabled**: Faster pruning, relies on retention period alone for safety
 
-**Job History Retention:**
+### 2.6 External Transaction Pruning
 
-- **Aerospike**: Last 1000 jobs
-- **SQL**: Last 10 jobs
-- Older jobs automatically removed
+For large transactions stored externally in Blob Store (S3 or filesystem), the Pruner also cleans up the external files.
 
-**Timeout Handling:**
+**External File Types:**
 
-- Default timeout: 10 minutes
-- On timeout:
+- **`.tx` files**: Full transaction data (when transaction has inputs)
+- **`.outputs` files**: Output-only data (when transaction has no inputs, e.g., coinbase)
 
-    - Coordinator moves on (non-error)
-    - Job continues in background
-    - Will be re-queued if needed
+**Cleanup Process:**
+
+1. During Phase 2 pruning, check if record has `External = true`
+2. Determine file type based on inputs:
+
+    - Has inputs → FileTypeTx (`.tx` file)
+    - No inputs → FileTypeOutputs (`.outputs` file)
+3. Delete file from Blob Store before deleting Aerospike record
+4. If file already deleted (by previous cleanup), proceed with Aerospike deletion
+
+**Error Handling:**
+
+- If file deletion fails: Log error and skip Aerospike record deletion
+- If file not found (ErrNotFound): Proceed with Aerospike deletion (file already cleaned up)
+
+### 2.7 Channel-Based Deduplication
+
+The Pruner uses a buffered channel (size 1) to handle pruning requests efficiently:
+
+**Mechanism:**
+
+- Buffer size of 1 ensures non-blocking operation
+- When channel full, new requests are dropped (deduplication)
+- Processor drains channel to get latest height before processing
+
+**Benefits during Catchup:**
+
+During blockchain catchup, blocks arrive rapidly. The channel deduplication ensures:
+
+- Only the latest height is processed
+- Intermediate heights are automatically skipped
+- No queue buildup or memory growth
+- Efficient pruning without wasted work
 
 ## 3. Data Model
 
@@ -484,12 +503,11 @@ For large transactions stored externally:
 
 ### Key Files
 
-- **`server.go`**: Service lifecycle, gRPC server, health checks
-- **`worker.go`**: Event handling, channel management, two-phase processing
+- **`server.go`**: Service lifecycle, gRPC server, health checks, event subscriptions
+- **`worker.go`**: Event handling, channel-based deduplication, two-phase processing
 - **`metrics.go`**: Prometheus metric definitions
-- **`interfaces.go`**: Store-agnostic interfaces for pruner implementations
-- **`job_processor.go`**: Generic job queue with LIFO pattern and worker pool
-- **`aerospike/pruner/pruner_service.go`** (900+ lines): Complete Aerospike implementation
+- **`interfaces.go`**: Store-agnostic interfaces for pruner implementations (`Prune()` method)
+- **`aerospike/pruner/pruner_service.go`** (1100+ lines): Complete Aerospike implementation with defensive mode
 - **`sql/pruner/pruner_service.go`**: Simplified SQL implementation
 
 ## 6. How to Run
@@ -512,7 +530,22 @@ For complete settings reference, see [Pruner Settings Reference](../../reference
 |---------|------|---------|-------------|
 | `startPruner` | bool | `true` | Enable/disable Pruner service |
 | `pruner_grpcPort` | int | `8096` | gRPC server port |
-| `pruner_jobTimeout` | duration | `10m` | Timeout for pruning job completion |
+| `pruner_jobTimeout` | duration | `10m` | Timeout for pruning operation completion |
+
+### Chunk Processing Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `pruner_utxoChunkSize` | int | `1000` | Records per parallel chunk |
+| `pruner_utxoChunkGroupLimit` | int | `10` | Max parallel chunks |
+| `pruner_utxoProgressLogInterval` | duration | `30s` | Progress logging interval (0 to disable) |
+
+### Defensive Mode Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `pruner_utxoDefensiveEnabled` | bool | `false` | Enable child verification before parent deletion |
+| `pruner_utxoDefensiveBatchReadSize` | int | `10000` | Batch size for child verification queries |
 
 ### UTXO Store Settings
 
@@ -520,7 +553,6 @@ For complete settings reference, see [Pruner Settings Reference](../../reference
 |---------|------|---------|-------------|
 | `utxostore_unminedTxRetention` | uint32 | `globalBlockHeightRetention/2` | Blocks to retain unmined transactions |
 | `utxostore_parentPreservationBlocks` | uint32 | `blocksInADayOnAverage*10` | Blocks to preserve parent transactions (≈14400) |
-| `utxostore_prunerMaxConcurrentOperations` | int | Connection pool size | Max concurrent Aerospike operations |
 | `utxostore_disableDAHCleaner` | bool | `false` | Disable DAH pruning (testing only) |
 
 ### Context-Specific Settings
