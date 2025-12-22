@@ -1112,6 +1112,45 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#interactive-monitoring-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive Monitoring Tools
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Interactive Monitoring Tools">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#log-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log Viewer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#node-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Node Monitor
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6635,6 +6674,45 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#interactive-monitoring-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Interactive Monitoring Tools
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Interactive Monitoring Tools">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#log-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Log Viewer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#node-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Node Monitor
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6750,9 +6828,9 @@
 <h4 id="getting-the-current-state">Getting the Current State</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>getfsmstate
 </code></pre></div>
-<p>Typical output:
+<p>Typical output:</p>
 <div class="highlight"><pre><span></span><code>Current FSM State: IDLE
-</code></pre></div></p>
+</code></pre></div>
 <h4 id="setting-a-new-state">Setting a New State</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>&lt;state&gt;
 </code></pre></div>
@@ -6761,13 +6839,13 @@
 <li><code>running</code> - Normal operation mode (processes transactions and creates blocks)</li>
 <li><code>idle</code> - Idle mode (default startup state)</li>
 </ul>
-<p>Example to switch to RUNNING state:
+<p>Example to switch to RUNNING state:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>running
-</code></pre></div></p>
-<p>Expected output:
+</code></pre></div>
+<p>Expected output:</p>
 <div class="highlight"><pre><span></span><code>Setting FSM state to: running
 FSM state successfully set to: RUNNING
-</code></pre></div></p>
+</code></pre></div>
 <h3 id="view-system-configuration">View System Configuration</h3>
 <p>To inspect your current system settings:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>settings
@@ -6830,6 +6908,47 @@ FSM state successfully set to: RUNNING
 <p>Check if the current block template is valid:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>checkblocktemplate
 </code></pre></div>
+<h3 id="interactive-monitoring-tools">Interactive Monitoring Tools</h3>
+<p>The CLI includes two TUI (Terminal User Interface) tools for real-time monitoring and debugging.</p>
+<h4 id="log-viewer">Log Viewer</h4>
+<p>View and filter logs in real-time with the interactive log viewer:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>logs
+</code></pre></div>
+<p>Options:</p>
+<ul>
+<li><code>--file</code> - Path to log file (default: <code>./logs/teranode.log</code>)</li>
+<li><code>--buffer</code> - Number of log entries to keep in memory (default: 10000)</li>
+</ul>
+<p>Key features for debugging:</p>
+<ul>
+<li><strong>Service filtering</strong> (<code>s</code>): Filter logs by specific services (e.g., <code>p2p,validator</code>)</li>
+<li><strong>Log level filtering</strong> (<code>+</code>/<code>-</code>): Adjust minimum severity level</li>
+<li><strong>Text search</strong> (<code>/</code>): Search for specific text in messages</li>
+<li><strong>Transaction tracking</strong> (<code>t</code>): Track a transaction ID across all services</li>
+<li><strong>Error summary</strong> (<code>e</code>): View error counts by service</li>
+<li><strong>Pause/resume</strong> (<code>p</code> or <code>space</code>): Pause auto-scroll to examine specific entries</li>
+</ul>
+<p>Press <code>?</code> for full keyboard shortcuts or <code>q</code> to quit.</p>
+<h4 id="node-monitor">Node Monitor</h4>
+<p>Monitor node status with a live dashboard:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>./teranode-cli<span class="w"> </span>monitor
+</code></pre></div>
+<p>The monitor displays:</p>
+<ul>
+<li>Blockchain state (height, block count, transactions)</li>
+<li>FSM state with color-coded status</li>
+<li>Connected peers and their reputation scores</li>
+<li>Service health status with latency measurements</li>
+<li>Aerospike cluster statistics</li>
+</ul>
+<p>Views:</p>
+<ul>
+<li><strong>Dashboard</strong> (default): Overview of all node metrics</li>
+<li><strong>Settings</strong> (<code>s</code>): View current configuration</li>
+<li><strong>Health</strong> (<code>h</code>): Detailed service health table</li>
+<li><strong>Aerospike</strong> (<code>a</code>): Cluster and namespace statistics</li>
+</ul>
+<p>Press <code>r</code> to refresh manually or <code>q</code> to quit.</p>
 <h2 id="common-development-workflows">Common Development Workflows</h2>
 <h3 id="starting-a-fresh-development-node">Starting a Fresh Development Node</h3>
 <ol>

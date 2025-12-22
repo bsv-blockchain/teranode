@@ -9979,13 +9979,18 @@
 <li><strong>hash</strong>: The block hash (same as provided)</li>
 <li><strong>version</strong>: Block version</li>
 <li><strong>versionHex</strong>: Block version in hexadecimal</li>
-<li><strong>previoushash</strong>: Hash of the previous block</li>
+<li><strong>previousblockhash</strong>: Hash of the previous block</li>
 <li><strong>merkleroot</strong>: Root hash of the merkle tree</li>
 <li><strong>time</strong>: Block timestamp</li>
+<li><strong>mediantime</strong>: Median time of the previous 11 blocks</li>
 <li><strong>nonce</strong>: Block nonce value</li>
 <li><strong>bits</strong>: Target difficulty bits</li>
 <li><strong>difficulty</strong>: Calculated difficulty</li>
+<li><strong>chainwork</strong>: Total accumulated proof-of-work in the chain up to this block (hexadecimal)</li>
 <li><strong>height</strong>: Height of the block in the blockchain</li>
+<li><strong>size</strong>: Size of the block in bytes</li>
+<li><strong>num_tx</strong>: Number of transactions in the block</li>
+<li><strong>status</strong>: Block status (e.g., "active", "valid-fork", "valid-headers", "headers-only", "invalid")</li>
 </ul>
 <h3 id="312-command-get-difficulty">3.12. Command: Get Difficulty</h3>
 <p>The <code>getdifficulty</code> command returns the proof-of-work difficulty as a multiple of the minimum difficulty.</p>
