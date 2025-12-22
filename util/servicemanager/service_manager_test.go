@@ -630,14 +630,6 @@ func TestServiceManagerConcurrentAccess(t *testing.T) {
 	})
 }
 
-func TestServiceManagerServiceDependencyTimeout(t *testing.T) {
-	t.Run("dependency timeout", func(t *testing.T) {
-		// This test verifies the timeout logic in waitForPreviousServiceToStart
-		// which is already tested in the waitForPreviousServiceToStart test above
-		t.Skip("Complex dependency timeout test skipped - core timeout logic tested elsewhere")
-	})
-}
-
 // Benchmark tests
 func BenchmarkServiceManagerAddService(b *testing.B) {
 	ctx := context.Background()

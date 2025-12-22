@@ -1476,12 +1476,16 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 func findFilesByExtension(root, ext string) ([]string, error) {
 	var a []string
 
+	// Normalize extension: remove leading dot if present for 'find' command
+	// filepath.Ext returns extension with leading dot, but find pattern needs "*.<ext>"
+	extForFind := strings.TrimPrefix(ext, ".")
+
 	useFind := runtime.GOOS == "linux" || runtime.GOOS == "darwin"
 
 	// Check if 'find' is available
 	if useFind {
 		if _, err := exec.LookPath("find"); err == nil {
-			pattern := "*." + ext
+			pattern := "*." + extForFind
 			cmd := exec.Command("find", root, "-type", "f", "-name", pattern)
 
 			var out bytes.Buffer
@@ -1501,12 +1505,20 @@ func findFilesByExtension(root, ext string) ([]string, error) {
 		}
 	}
 
+	// Normalize extension: ensure it has a leading dot for filepath.Ext comparison
+	extForWalk := ext
+	if !strings.HasPrefix(extForWalk, ".") {
+		extForWalk = "." + extForWalk
+	}
+
 	err := filepath.Walk(root, func(s string, d os.FileInfo, e error) error {
 		if e != nil {
 			return e
 		}
 
-		if filepath.Ext(d.Name()) == ext {
+		// Use HasSuffix instead of filepath.Ext to support multi-dot extensions
+		// filepath.Ext("file.dah.tmp") returns ".tmp", not ".dah.tmp"
+		if strings.HasSuffix(d.Name(), extForWalk) {
 			a = append(a, s)
 		}
 
