@@ -36,8 +36,8 @@ func TestGetBlocksMinedNotSet(t *testing.T) {
 		require.NoError(t, err)
 		defer subStore.Close()
 
-		// Store block with mined_set=false
-		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithMinedSet(false))
+		// Store block with subtrees_set=true and mined_set=false
+		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(true), options.WithMinedSet(false))
 		require.NoError(t, err)
 
 		blocks, err := subStore.GetBlocksMinedNotSet(context.Background())
@@ -61,8 +61,8 @@ func TestGetBlocksMinedNotSet(t *testing.T) {
 		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithMinedSet(true))
 		require.NoError(t, err)
 
-		// Store block with mined_set=false
-		_, _, err = subStore.StoreBlock(context.Background(), block2, "test", options.WithMinedSet(false))
+		// Store block with subtrees_set=true and mined_set=false
+		_, _, err = subStore.StoreBlock(context.Background(), block2, "test", options.WithSubtreesSet(true), options.WithMinedSet(false))
 		require.NoError(t, err)
 
 		blocks, err := subStore.GetBlocksMinedNotSet(context.Background())
@@ -80,10 +80,10 @@ func TestGetBlocksMinedNotSet(t *testing.T) {
 		require.NoError(t, err)
 		defer subStore.Close()
 
-		// Store blocks with mined_set=false
-		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithMinedSet(false))
+		// Store blocks with subtrees_set=true and mined_set=false
+		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(true), options.WithMinedSet(false))
 		require.NoError(t, err)
-		_, _, err = subStore.StoreBlock(context.Background(), block2, "test", options.WithMinedSet(false))
+		_, _, err = subStore.StoreBlock(context.Background(), block2, "test", options.WithSubtreesSet(true), options.WithMinedSet(false))
 		require.NoError(t, err)
 
 		blocks, err := subStore.GetBlocksMinedNotSet(context.Background())
@@ -105,8 +105,8 @@ func TestGetBlocksMinedNotSet(t *testing.T) {
 		require.NoError(t, err)
 		defer subStore.Close()
 
-		// Store block with mined_set=false
-		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithMinedSet(false))
+		// Store block with subtrees_set=true and mined_set=false
+		_, _, err = subStore.StoreBlock(context.Background(), block1, "test", options.WithSubtreesSet(true), options.WithMinedSet(false))
 		require.NoError(t, err)
 
 		blocks, err := subStore.GetBlocksMinedNotSet(context.Background())

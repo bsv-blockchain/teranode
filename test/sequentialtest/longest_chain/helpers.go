@@ -23,7 +23,6 @@ func setupLongestChainTest(t *testing.T, utxoStoreType string) (td *daemon.TestD
 	}
 
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
-		// EnableFullLogging: true,
 		UTXOStoreType: utxoStoreType,
 		SettingsOverrideFunc: test.ComposeSettings(
 			test.SystemTestSettings(),

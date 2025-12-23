@@ -729,13 +729,18 @@ Returns information about a block header.
         "hash": "000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc",
         "version": 1,
         "versionHex": "00000001",
-        "previoushash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+        "previousblockhash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
         "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
         "time": 1231006505,
+        "mediantime": 1231006505,
         "nonce": 2083236893,
         "bits": "1d00ffff",
         "difficulty": 1,
-        "height": 1000
+        "chainwork": "0000000000000000000000000000000000000000000000000000000100010001",
+        "height": 1000,
+        "size": 285,
+        "num_tx": 1,
+        "status": "active"
     },
     "error": null,
     "id": "curltest"
@@ -864,25 +869,30 @@ Returns information for creating a new block.
 
 1. `parameters` (object, optional):
 
-   - `coinbaseValue` (numeric, optional): Custom coinbase value in satoshis
+   - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response
+   - `verbosity` (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes
 
 **Returns:**
 
 ```json
 {
-    "id": "string",         // Mining candidate ID
-    "prevhash": "string",   // Previous block hash
-    "coinbase": "string",   // Coinbase transaction
-    "coinbaseValue": number,  // Coinbase value in satoshis
-    "version": number,           // Block version
-    "nBits": "string",          // Compressed difficulty target
-    "time": number,             // Current timestamp
-    "height": number,           // Block height
-    "num_tx": number,           // Number of transactions
-    "merkleProof": ["string"],  // Merkle proof
-    "merkleRoot": "string"      // Merkle root
+    "id": "string",                // Mining candidate ID
+    "prevhash": "string",          // Previous block hash
+    "coinbaseValue": number,       // Coinbase value in satoshis
+    "version": number,             // Block version
+    "nBits": "string",             // Compressed difficulty target
+    "time": number,                // Current timestamp
+    "height": number,              // Block height
+    "num_tx": number,              // Number of transactions
+    "sizeWithoutCoinbase": number, // Block size excluding coinbase
+    "merkleProof": ["string"],     // Merkle proof
+    "coinbase": "string"           // Coinbase transaction (only if provideCoinbaseTx=true)
 }
 ```
+
+When `verbosity=1`, the response also includes:
+
+- `subtreeHashes` (array of strings): Hashes of subtrees in the block assembly
 
 **Example Request (standard):**
 
@@ -895,14 +905,14 @@ Returns information for creating a new block.
 }
 ```
 
-**Example Request (with custom coinbase value):**
+**Example Request (with coinbase transaction and subtree hashes):**
 
 ```json
 {
     "jsonrpc": "1.0",
     "id": "curltest",
     "method": "getminingcandidate",
-    "params": [{"coinbaseValue": 5000000000}]
+    "params": [{"provideCoinbaseTx": true, "verbosity": 1}]
 }
 ```
 
@@ -1723,40 +1733,6 @@ Returns raw transaction data for a specific transaction.
         "time": 1570747519,
         "blocktime": 1570747519
     },
-    "error": null,
-    "id": "curltest"
-}
-```
-
-### getrawmempool
-
-Returns all transaction IDs currently available for block assembly. Note that Teranode uses a subtree-based architecture instead of a traditional mempool, but this command provides compatibility with standard Bitcoin RPC interfaces by returning transaction IDs from the block assembly service.
-
-**Parameters:** none
-
-**Returns:**
-
-- `array` - Array of transaction IDs (strings) currently available for block assembly
-
-**Example Request:**
-
-```json
-{
-    "jsonrpc": "1.0",
-    "id": "curltest",
-    "method": "getrawmempool",
-    "params": []
-}
-```
-
-**Example Response:**
-
-```json
-{
-    "result": [
-        "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
-        "b19f7908eced4e820887efdc6e93f482c865fe949c5666e83f574679ef2bbef1"
-    ],
     "error": null,
     "id": "curltest"
 }
