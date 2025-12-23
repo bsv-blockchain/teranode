@@ -14,6 +14,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// utxoItem represents a spendable UTXO with its transaction and output index
+type utxoItem struct {
+	tx          *bt.Tx
+	outputIndex uint32
+}
+
 // Blaster generates transactions continuously for chain integrity testing
 type Blaster struct {
 	t               *testing.T
@@ -24,7 +30,7 @@ type Blaster struct {
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
 	totalTxCount    atomic.Uint64
-	utxoQueue       chan *bt.Tx
+	utxoQueue       chan utxoItem
 	initialCoinbase *bt.Tx
 }
 
@@ -39,7 +45,7 @@ func NewBlaster(t *testing.T, td *daemon.TestDaemon, coinbaseTx *bt.Tx, numWorke
 		numWorkers:      numWorkers,
 		txsPerBlock:     txsPerBlock,
 		stopCh:          make(chan struct{}),
-		utxoQueue:       make(chan *bt.Tx, 1000), // Buffer for UTXOs
+		utxoQueue:       make(chan utxoItem, 1000), // Buffer for UTXOs
 		initialCoinbase: coinbaseTx,
 	}
 }
@@ -89,10 +95,10 @@ func (b *Blaster) createInitialUTXOs(ctx context.Context) {
 
 	b.t.Logf("Split transaction submitted: %s", tx.TxIDChainHash().String())
 
-	// Queue all outputs as spendable UTXOs (each output index maps to a UTXO)
+	// Queue all outputs as spendable UTXOs with their specific output index
 	for i := 0; i < numInitialUTXOs; i++ {
 		select {
-		case b.utxoQueue <- tx:
+		case b.utxoQueue <- utxoItem{tx: tx, outputIndex: uint32(i)}:
 		case <-b.stopCh:
 			return
 		}
@@ -111,9 +117,9 @@ func (b *Blaster) worker(ctx context.Context, workerID int) {
 			return
 		case <-ctx.Done():
 			return
-		case parentTx := <-b.utxoQueue:
-			// Create a child transaction spending from parent
-			b.createAndSubmitTransaction(ctx, parentTx, workerID)
+		case utxo := <-b.utxoQueue:
+			// Create a child transaction spending from the specific UTXO
+			b.createAndSubmitTransaction(ctx, utxo, workerID)
 		case <-time.After(100 * time.Millisecond):
 			// Timeout to prevent blocking
 			continue
@@ -122,23 +128,15 @@ func (b *Blaster) worker(ctx context.Context, workerID int) {
 }
 
 // createAndSubmitTransaction creates and submits a transaction, then queues the output
-func (b *Blaster) createAndSubmitTransaction(ctx context.Context, parentTx *bt.Tx, workerID int) {
-	// Find a spendable output from parent
-	var outputIndex uint32
-	var outputAmount uint64
-	found := false
-
-	for i, output := range parentTx.Outputs {
-		if output.Satoshis > 1000 { // Must have enough for fee
-			outputIndex = uint32(i)
-			outputAmount = output.Satoshis
-			found = true
-			break
-		}
+func (b *Blaster) createAndSubmitTransaction(ctx context.Context, utxo utxoItem, workerID int) {
+	// Get the output amount from the specific UTXO
+	if int(utxo.outputIndex) >= len(utxo.tx.Outputs) {
+		return
 	}
 
-	if !found {
-		// No spendable output, skip
+	outputAmount := utxo.tx.Outputs[utxo.outputIndex].Satoshis
+	if outputAmount <= 1000 {
+		// Not enough for fee
 		return
 	}
 
@@ -152,7 +150,7 @@ func (b *Blaster) createAndSubmitTransaction(ctx context.Context, parentTx *bt.T
 	}
 
 	childTx := b.td.CreateTransactionWithOptions(b.t,
-		transactions.WithInput(parentTx, outputIndex),
+		transactions.WithInput(utxo.tx, utxo.outputIndex),
 		transactions.WithP2PKHOutputs(1, childAmount),
 	)
 
@@ -167,9 +165,9 @@ func (b *Blaster) createAndSubmitTransaction(ctx context.Context, parentTx *bt.T
 	// Increment counter
 	b.totalTxCount.Add(1)
 
-	// Queue the child transaction for further spending
+	// Queue the child transaction's output for further spending
 	select {
-	case b.utxoQueue <- childTx:
+	case b.utxoQueue <- utxoItem{tx: childTx, outputIndex: 0}:
 	case <-b.stopCh:
 		return
 	default:
