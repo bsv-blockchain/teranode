@@ -185,15 +185,20 @@ sequentialtest-aerospike:
 testall: test longtest sequentialtest
 
 # run tests in the test/e2e/daemon directory
+# Tests run in parallel by default - each test gets unique ports and data directories
 .PHONY: smoketest
 smoketest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=5m -parallel 1 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=5m -parallel 2 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
 
-	# cd test/e2e/daemon && go test -race -tags "testtxmetacache" -count=1 -timeout=5m -parallel 1 -coverprofile=coverage.out ./test/e2e/daemon/ready/... 2>&1 | grep -v "ld: warning:"
-	# cd test/e2e/daemon/ready && go test -v -count=1 -race -timeout=5m -parallel 1 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
-
+# run chain integrity tests - multi-node tests with deep chain verification
+# This test mines blocks across multiple nodes and verifies chain consistency
+.PHONY: chainintegrity
+chainintegrity:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/e2e/chainintegrity && gotestsum --format pkgname -- -v -count=1 -race -timeout=35m -run . 2>&1 | tee /tmp/teranode-test-results/chainintegrity-results.txt
 
 .PHONY: nightly-tests
 nightly-tests:

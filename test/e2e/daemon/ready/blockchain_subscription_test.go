@@ -13,9 +13,6 @@ import (
 )
 
 func TestBlockchainSubscriptionReconnection(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	node := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
 		EnableP2P:     true,

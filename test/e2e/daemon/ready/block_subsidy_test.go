@@ -16,9 +16,6 @@ import (
 // TNJ4-4
 
 func TestBlockSubsidy(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,

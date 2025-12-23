@@ -19,9 +19,6 @@ import (
 // This test verifies that transactions can be successfully submitted via RPC and validates that
 // the txStore and validatorClient dependencies are properly initialized.
 func TestSendRawTransaction(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// Create test daemon with RPC and validator enabled
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
@@ -95,9 +92,6 @@ func TestSendRawTransaction(t *testing.T) {
 
 // TestSendRawTransactionInvalidTx tests that sendrawtransaction properly rejects invalid transactions.
 func TestSendRawTransactionInvalidTx(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// aerospike
 	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
 	require.NoError(t, err, "Failed to setup Aerospike container")
@@ -135,9 +129,6 @@ func TestSendRawTransactionInvalidTx(t *testing.T) {
 
 // TestSendRawTransactionDoubleSpend tests that sendrawtransaction rejects double-spend attempts.
 func TestSendRawTransactionDoubleSpend(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// aerospike
 	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
 	require.NoError(t, err, "Failed to setup Aerospike container")

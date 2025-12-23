@@ -132,6 +132,7 @@ type KafkaSettings struct {
 	TLSKeyFile    string
 	// Debug logging
 	EnableDebugLogging bool
+	Scheme             string
 }
 
 type AerospikeSettings struct {

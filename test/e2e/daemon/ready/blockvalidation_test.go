@@ -10,9 +10,6 @@ import (
 )
 
 func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
@@ -93,9 +90,6 @@ func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
 }
 
 func TestBlockValidationWithDoubleSpend(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
@@ -176,9 +170,6 @@ func TestBlockValidationWithDoubleSpend(t *testing.T) {
 }
 
 func TestBlockValidationWithDuplicateTransaction(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
