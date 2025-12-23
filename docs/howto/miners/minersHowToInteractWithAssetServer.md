@@ -1,7 +1,5 @@
 # How to Interact with the Asset Server
 
-Last Modified: 28-May-2025
-
 There are 2 primary ways to interact with the node, using the RPC Server, and using the Asset Server. This document will focus on the Asset Server. The Asset Server provides an HTTP API for interacting with the node. Below is a list of implemented endpoints with their parameters and return values.
 
 ## Teranode Asset Server HTTP API
@@ -430,7 +428,7 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Description: Searches for blockchain entities by hash or height
     - Parameters:
 
-        - `query` (required): Search query (hash or block height)
+        - `q` (required): Search query (hash or block height)
 
     - Returns: JSON object with search results and entity type
 

@@ -110,14 +110,6 @@ func TestK8sBuilder_Build_InvalidTarget(t *testing.T) {
 	assert.Contains(t, err.Error(), "missing address")
 }
 
-func TestK8sBuilder_Build_ParseTargetError(t *testing.T) {
-	// Test with target ending with colon - parseTarget is called with target.Endpoint()
-	// We need to create a Target that will produce an endpoint ending with colon
-	// Since we can't easily construct a Target with specific Endpoint(),
-	// we'll skip this specific test case for now as it requires internal knowledge
-	t.Skip("Skipping - requires constructing Target with specific Endpoint() which is complex")
-}
-
 func TestK8sBuilder_Build_InClusterConfigError(t *testing.T) {
 	// This test verifies that Build returns an error when not running in a K8s cluster
 	logger := &MockLogger{}
