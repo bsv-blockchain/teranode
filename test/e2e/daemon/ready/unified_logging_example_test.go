@@ -24,8 +24,6 @@ import (
 //
 //	go test -v -run TestUnifiedLoggingExample ./test/e2e/daemon/ready/
 func TestUnifiedLoggingExample(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
 
 	// Create daemon with unified logging enabled
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -89,8 +87,6 @@ func TestUnifiedLoggingExample(t *testing.T) {
 //
 // Compare the output of this test with TestUnifiedLoggingExample to see the difference.
 func TestUnifiedLoggingComparisonOldStyle(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
 
 	// Create daemon WITHOUT unified logging (backward compatible - default behavior)
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
