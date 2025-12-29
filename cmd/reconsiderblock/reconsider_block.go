@@ -43,7 +43,7 @@ func ReconsiderBlock(logger ulogger.Logger, settings *settings.Settings, blockHa
 
 	err = blockValidationClient.RevalidateBlock(ctx, *blockHash)
 	if err != nil {
-		return errors.NewProcessingError("failed to reconsider block %s: %v", blockHash.String(), err)
+		return err
 	}
 
 	fmt.Printf("Successfully reconsidered block %s\n", blockHash.String())
