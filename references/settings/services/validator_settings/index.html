@@ -6630,6 +6630,7 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Impact</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
@@ -6637,21 +6638,25 @@
 <td>GRPCListenAddress</td>
 <td>Service startup conditional</td>
 <td>Service availability</td>
+<td>During daemon startup</td>
 </tr>
 <tr>
 <td>HTTPListenAddress</td>
 <td>HTTP server startup conditional</td>
 <td>API availability</td>
+<td>During service initialization</td>
 </tr>
 <tr>
 <td>VerboseDebug</td>
 <td>Controls logging verbosity</td>
 <td>Performance and diagnostics</td>
+<td>During validation operations</td>
 </tr>
 <tr>
 <td>HTTPRateLimit</td>
 <td>Rate limiting enforcement</td>
 <td>Resource protection</td>
+<td>During HTTP middleware setup</td>
 </tr>
 </tbody>
 </table>

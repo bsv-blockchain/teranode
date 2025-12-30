@@ -6721,12 +6721,14 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>A distributed lock is created in the shared storage with automatic heartbeat</li>
 <li>
 <p>All other pods check <code>isPauseActive()</code> before processing subtrees:</p>
+<ul>
+<li>First checks local atomic flag (fast path)</li>
+<li>If local flag is false, checks for distributed lock</li>
+</ul>
 </li>
 <li>
-<p>First checks local atomic flag (fast path)</p>
+<p>If pause is active, subtree processing is skipped</p>
 </li>
-<li>If local flag is false, checks for distributed lock</li>
-<li>If pause is active, subtree processing is skipped</li>
 <li>When block validation completes, the lock is released</li>
 <li>If a pod crashes during validation, the lock becomes stale after the timeout period and is automatically cleaned up by other pods</li>
 </ol>

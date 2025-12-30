@@ -5451,10 +5451,32 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#service-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#catchup-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
         Catchup Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optimistic-mining" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optimistic Mining
       
     </span>
   </a>
@@ -6284,10 +6306,32 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#service-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#catchup-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
         Catchup Mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#optimistic-mining" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Optimistic Mining
       
     </span>
   </a>
@@ -6461,7 +6505,7 @@
 <td>string</td>
 <td>":8088"</td>
 <td>blockvalidation_grpcListenAddress</td>
-<td><strong>CRITICAL</strong> - gRPC server binding, health checks only run if not empty</td>
+<td><strong>CRITICAL</strong> - gRPC server binding (service skipped if empty)</td>
 </tr>
 <tr>
 <td>KafkaWorkers</td>
@@ -6744,6 +6788,13 @@
 <td><strong>CRITICAL</strong> - Max blocks behind block assembly</td>
 </tr>
 <tr>
+<td>PeriodicProcessingInterval</td>
+<td>time.Duration</td>
+<td>1m</td>
+<td>blockvalidation_periodic_processing_interval</td>
+<td>Periodic processing interval</td>
+</tr>
+<tr>
 <td>MaxParallelForks</td>
 <td>int</td>
 <td>4</td>
@@ -6802,11 +6853,24 @@
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies</h2>
+<h3 id="service-startup">Service Startup</h3>
+<ul>
+<li>Service skipped (not added to ServiceManager) if <code>GRPCListenAddress</code> is empty</li>
+<li>Kafka consumer created for block processing</li>
+</ul>
 <h3 id="catchup-mode">Catchup Mode</h3>
 <ul>
 <li>When <code>UseCatchupWhenBehind = true</code>, all catchup settings control behavior</li>
 <li><code>CatchupMaxAccumulatedHeaders</code> prevents memory exhaustion</li>
 <li>Timeout settings control iteration and operation limits</li>
+<li>Catchup automatically engages when node falls behind</li>
+</ul>
+<h3 id="optimistic-mining">Optimistic Mining</h3>
+<ul>
+<li><code>OptimisticMining = true</code>: Enables background validation for performance</li>
+<li>Block validation proceeds while subtree validation runs in background</li>
+<li>Can be overridden per-validation via DisableOptimisticMining option</li>
+<li>Disabled during catchup mode for better performance</li>
 </ul>
 <h3 id="transaction-metadata-processing">Transaction Metadata Processing</h3>
 <ul>
@@ -6871,28 +6935,33 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Impact</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>GRPCListenAddress</td>
-<td>Health checks only if not empty</td>
-<td>Service monitoring</td>
+<td>Must not be empty</td>
+<td>Service skipped if empty</td>
+<td>During daemon startup</td>
 </tr>
 <tr>
 <td>UseCatchupWhenBehind</td>
 <td>Controls catchup mode activation</td>
 <td>Chain synchronization</td>
+<td></td>
 </tr>
 <tr>
 <td>CatchupMaxAccumulatedHeaders</td>
 <td>Limits memory usage</td>
 <td>Memory protection</td>
+<td></td>
 </tr>
 <tr>
 <td>SecretMiningThreshold</td>
 <td>Enables attack detection</td>
 <td>Security</td>
+<td></td>
 </tr>
 </tbody>
 </table>

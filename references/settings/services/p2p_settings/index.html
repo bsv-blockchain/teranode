@@ -5540,6 +5540,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#peer-map-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Map Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#network-scanning-prevention" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6350,6 +6361,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#peer-map-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Peer Map Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#network-scanning-prevention" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6555,7 +6577,7 @@
 <td>string</td>
 <td>"full"</td>
 <td>listen_mode</td>
-<td>Node operation mode</td>
+<td>Node operation mode ("full" or "listen_only")</td>
 </tr>
 <tr>
 <td>PeerID</td>
@@ -6697,6 +6719,27 @@
 <td>p2p_sync_coordinator_periodic_evaluation_interval</td>
 <td>Sync coordinator evaluation interval</td>
 </tr>
+<tr>
+<td>PeerMapMaxSize</td>
+<td>int</td>
+<td>100000</td>
+<td>N/A</td>
+<td><strong>INTERNAL</strong> - Maximum entries in peer maps (hardcoded default)</td>
+</tr>
+<tr>
+<td>PeerMapTTL</td>
+<td>time.Duration</td>
+<td>30m</td>
+<td>N/A</td>
+<td><strong>INTERNAL</strong> - Peer map entry time-to-live (hardcoded default)</td>
+</tr>
+<tr>
+<td>PeerMapCleanupInterval</td>
+<td>time.Duration</td>
+<td>5m</td>
+<td>N/A</td>
+<td><strong>INTERNAL</strong> - Peer map cleanup frequency (hardcoded default)</td>
+</tr>
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies</h2>
@@ -6715,6 +6758,13 @@
 <ul>
 <li><code>StaticPeers</code> ensures persistent connections</li>
 <li><code>PeerCacheDir</code> for peer persistence</li>
+</ul>
+<h3 id="peer-map-management">Peer Map Management</h3>
+<ul>
+<li><code>PeerMapMaxSize</code> limits memory usage for block/subtree peer tracking</li>
+<li><code>PeerMapTTL</code> controls peer map entry expiration (30 minutes)</li>
+<li><code>PeerMapCleanupInterval</code> sets cleanup frequency (5 minutes)</li>
+<li>These settings use hardcoded defaults and are not configurable via environment variables</li>
 </ul>
 <h3 id="network-scanning-prevention">Network Scanning Prevention</h3>
 <ul>
@@ -6771,28 +6821,39 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Impact</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
 <tr>
+<td>ListenMode</td>
+<td>Must be "full" or "listen_only"</td>
+<td>Service fails to start if invalid</td>
+<td>During server initialization</td>
+</tr>
+<tr>
 <td>GRPCListenAddress</td>
 <td>Used for gRPC server binding</td>
 <td>Service communication</td>
+<td>During server start</td>
 </tr>
 <tr>
 <td>ForceSyncPeer</td>
 <td>Overrides automatic peer selection</td>
 <td>Sync behavior</td>
+<td>During sync coordinator initialization</td>
 </tr>
 <tr>
 <td>EnableNAT</td>
 <td>Triggers network scanning on shared hosting</td>
 <td>Security alerts</td>
+<td>During libp2p host initialization</td>
 </tr>
 <tr>
 <td>EnableMDNS</td>
 <td>Triggers network scanning on shared hosting</td>
 <td>Security alerts</td>
+<td>During libp2p host initialization</td>
 </tr>
 </tbody>
 </table>

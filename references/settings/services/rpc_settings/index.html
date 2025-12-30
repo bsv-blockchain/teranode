@@ -6589,6 +6589,7 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Impact</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
@@ -6596,21 +6597,25 @@
 <td>RPCListenerURL</td>
 <td>Must be valid URL format</td>
 <td>Server binding</td>
+<td>During service initialization</td>
 </tr>
 <tr>
 <td>CacheEnabled</td>
 <td>Controls response caching behavior</td>
 <td>Performance</td>
+<td>During RPC method execution</td>
 </tr>
 <tr>
 <td>RPCTimeout</td>
 <td>Must be positive duration</td>
 <td>Request handling</td>
+<td>During RPC call execution</td>
 </tr>
 <tr>
 <td>ClientCallTimeout</td>
 <td>Must be positive duration</td>
 <td>Service calls</td>
+<td>During client service calls</td>
 </tr>
 </tbody>
 </table>

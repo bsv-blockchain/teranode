@@ -5546,6 +5546,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#service-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#grpc-server-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6295,6 +6306,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#service-startup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Startup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#grpc-server-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6510,7 +6532,7 @@
 <td>string</td>
 <td>""</td>
 <td>propagation_grpcListenAddress</td>
-<td><strong>CRITICAL</strong> - gRPC server binding, health checks only run if not empty</td>
+<td><strong>CRITICAL</strong> - gRPC server binding (service skipped if empty)</td>
 </tr>
 </tbody>
 </table>
@@ -6520,10 +6542,14 @@
 <li>When <code>HTTPListenAddress</code> is not empty, HTTP server starts</li>
 <li><code>HTTPRateLimit</code> controls request rate limiting when HTTP server is active</li>
 </ul>
+<h3 id="service-startup">Service Startup</h3>
+<ul>
+<li>Service skipped (not added to ServiceManager) if <code>GRPCListenAddress</code> is empty</li>
+<li>Service requires gRPC server to be configured for operation</li>
+</ul>
 <h3 id="grpc-server-management">gRPC Server Management</h3>
 <ul>
 <li>When <code>GRPCListenAddress</code> is not empty, gRPC server starts with connection age management</li>
-<li>Health checks only run if address is configured</li>
 <li><code>GRPCMaxConnectionAge</code> controls connection lifecycle</li>
 </ul>
 <h3 id="transport-selection">Transport Selection</h3>
@@ -6575,23 +6601,27 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Impact</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>GRPCListenAddress</td>
-<td>Health checks only if not empty</td>
-<td>Service monitoring</td>
+<td>Must not be empty</td>
+<td>Service skipped if empty</td>
+<td>During daemon startup</td>
 </tr>
 <tr>
 <td>HTTPListenAddress</td>
-<td>Health checks only if not empty</td>
-<td>Service monitoring</td>
+<td>Optional for HTTP server</td>
+<td>HTTP server not started if empty</td>
+<td>During service initialization</td>
 </tr>
 <tr>
 <td>IPv6Interface</td>
 <td>Defaults to "en0" if empty</td>
 <td>Network interface selection</td>
+<td>During IPv6 listener setup</td>
 </tr>
 </tbody>
 </table>

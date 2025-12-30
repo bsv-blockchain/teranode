@@ -5327,6 +5327,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#concurrency-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Concurrency Settings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#global-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6294,6 +6305,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#concurrency-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Concurrency Settings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#global-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6505,21 +6527,35 @@
 <td>string</td>
 <td>"http://localhost:8090/api/v1"</td>
 <td>asset_httpAddress</td>
-<td><strong>Required when Centrifuge enabled</strong> - Must be valid URL</td>
+<td><strong>Required when Centrifuge enabled</strong> - Must be non-empty and valid URL format</td>
 </tr>
 <tr>
 <td>HTTPListenAddress</td>
 <td>string</td>
 <td>":8090"</td>
 <td>asset_httpListenAddress</td>
-<td><strong>CRITICAL</strong> - HTTP server binding (fails if empty)</td>
+<td><strong>CRITICAL</strong> - HTTP server binding (fails during Init() if empty)</td>
+</tr>
+<tr>
+<td>HTTPPort</td>
+<td>int</td>
+<td>8090</td>
+<td>ASSET_HTTP_PORT</td>
+<td><strong>UNUSED</strong> - HTTPListenAddress is used instead</td>
+</tr>
+<tr>
+<td>HTTPPublicAddress</td>
+<td>string</td>
+<td>""</td>
+<td>asset_httpPublicAddress</td>
+<td><strong>UNUSED</strong> - Reserved for future use</td>
 </tr>
 <tr>
 <td>SignHTTPResponses</td>
 <td>bool</td>
 <td>false</td>
 <td>asset_sign_http_responses</td>
-<td>Adds X-Signature header (requires P2P.PrivateKey)</td>
+<td>Adds X-Signature header (requires P2P.PrivateKey, non-fatal if invalid)</td>
 </tr>
 <tr>
 <td>EchoDebug</td>
@@ -6530,6 +6566,89 @@
 </tr>
 </tbody>
 </table>
+<h2 id="concurrency-settings">Concurrency Settings</h2>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ConcurrencyGetTransaction</td>
+<td>int</td>
+<td>0</td>
+<td>asset_concurrency_get_transaction</td>
+<td>Rate limit for GetTransaction (0=unlimited, -1=NumCPU, &gt;0=exact)</td>
+</tr>
+<tr>
+<td>ConcurrencyGetTransactionMeta</td>
+<td>int</td>
+<td>0</td>
+<td>asset_concurrency_get_transaction_meta</td>
+<td>Rate limit for GetTransactionMeta</td>
+</tr>
+<tr>
+<td>ConcurrencyGetSubtreeData</td>
+<td>int</td>
+<td>0</td>
+<td>asset_concurrency_get_subtree_data</td>
+<td>Rate limit for GetSubtreeData</td>
+</tr>
+<tr>
+<td>ConcurrencyGetSubtreeDataReader</td>
+<td>int</td>
+<td>0</td>
+<td>asset_concurrency_get_subtree_data_reader</td>
+<td>Rate limit for GetSubtreeDataReader</td>
+</tr>
+<tr>
+<td>ConcurrencyGetSubtreeTransactions</td>
+<td>int</td>
+<td>0</td>
+<td>asset_concurrency_get_subtree_transactions</td>
+<td>Rate limit for GetSubtreeTransactions</td>
+</tr>
+<tr>
+<td>ConcurrencyGetSubtreeExists</td>
+<td>int</td>
+<td>0</td>
+<td>asset_concurrency_get_subtree_exists</td>
+<td>Rate limit for GetSubtreeExists</td>
+</tr>
+<tr>
+<td>ConcurrencyGetSubtreeHead</td>
+<td>int</td>
+<td>0</td>
+<td>asset_concurrency_get_subtree_head</td>
+<td>Rate limit for GetSubtreeHead</td>
+</tr>
+<tr>
+<td>ConcurrencyGetUtxo</td>
+<td>int</td>
+<td>0</td>
+<td>asset_concurrency_get_utxo</td>
+<td>Rate limit for GetUtxo</td>
+</tr>
+<tr>
+<td>ConcurrencyGetLegacyBlockReader</td>
+<td>int</td>
+<td>-1</td>
+<td>asset_concurrency_get_legacy_block_reader</td>
+<td>Rate limit for GetLegacyBlockReader (default: NumCPU)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Concurrency Control:</strong></p>
+<ul>
+<li><code>0</code> = Unlimited concurrency (no rate limiting)</li>
+<li><code>-1</code> = Dynamic limit based on runtime.NumCPU()</li>
+<li><code>&gt;0</code> = Exact concurrency limit</li>
+</ul>
 <h2 id="global-settings">Global Settings</h2>
 <table>
 <thead>
@@ -6591,13 +6710,13 @@
 <ul>
 <li><code>CentrifugeDisable = false</code> enables WebSocket server</li>
 <li><code>CentrifugeListenAddress</code> must be non-empty</li>
-<li><code>HTTPAddress</code> must be valid URL (fails during Init() if invalid)</li>
+<li><code>HTTPAddress</code> must be non-empty and valid URL format (validated via url.Parse(), fails Init() if invalid)</li>
 </ul>
 <h3 id="http-response-signing">HTTP Response Signing</h3>
 <ul>
 <li><code>SignHTTPResponses = true</code> enables signing</li>
 <li>Requires <code>P2P.PrivateKey</code> (hex-encoded Ed25519 format)</li>
-<li>Invalid key logs error but continues without signing (non-fatal)</li>
+<li>Invalid P2P.PrivateKey logs error but service continues without signing (non-fatal)</li>
 <li>Adds <code>X-Signature</code> header to responses</li>
 </ul>
 <h3 id="https-support">HTTPS Support</h3>

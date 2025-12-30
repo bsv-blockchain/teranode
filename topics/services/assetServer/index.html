@@ -7632,10 +7632,12 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><code>offset</code> (integer, optional, default: 0) - Number of blocks to skip from tip</li>
 <li><code>limit</code> (integer, optional, default: 20, max: 100) - Maximum blocks to return</li>
 <li><code>includeOrphans</code> (boolean, optional, default: false) - Include orphaned blocks</li>
-<li><strong>Response Format</strong>: JSON with pagination metadata</li>
-<li><strong>Content</strong>: Block list with pagination information</li>
 </ul>
 </li>
+<li>
+<p><strong>Response Format</strong>: JSON with pagination metadata</p>
+</li>
+<li><strong>Content</strong>: Block list with pagination information</li>
 </ul>
 <p><strong>GetLastNBlocks</strong> - Get most recent N blocks:</p>
 <ul>
@@ -7647,10 +7649,12 @@ GET /api/v1/tx/{hash}/json  # JSON object
 <li><code>n</code> (integer, optional, default: 10) - Number of blocks to retrieve</li>
 <li><code>fromHeight</code> (unsigned integer, optional, default: 0) - Starting block height</li>
 <li><code>includeOrphans</code> (boolean, optional, default: false) - Include orphaned blocks</li>
-<li><strong>Response Format</strong>: JSON</li>
-<li><strong>Content</strong>: Array of recent blocks in descending order (newest first)</li>
 </ul>
 </li>
+<li>
+<p><strong>Response Format</strong>: JSON</p>
+</li>
+<li><strong>Content</strong>: Array of recent blocks in descending order (newest first)</li>
 </ul>
 <p><img alt="asset_server_http_get_block.svg" src="../img/plantuml/assetserver/asset_server_http_get_block.svg" /></p>
 <p>Supports multiple response formats through URL path suffixes. Binary response returns raw block data, hex returns hexadecimal string, and JSON returns structured block data with metadata.</p>

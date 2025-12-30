@@ -5434,6 +5434,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#state-file-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        State File Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#concurrency-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6306,6 +6317,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#state-file-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        State File Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#concurrency-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6467,9 +6489,9 @@
 <tr>
 <td>StateFile</td>
 <td>string</td>
-<td>"file://./data/blockpersister_state.txt"</td>
+<td>""</td>
 <td>blockPersister_stateFile</td>
-<td><strong>CRITICAL</strong> - Tracks last persisted block for recovery</td>
+<td><strong>CRITICAL</strong> - Tracks last persisted block for recovery (auto-derived for file:// stores)</td>
 </tr>
 <tr>
 <td>PersisterHTTPListenAddress</td>
@@ -6504,7 +6526,14 @@
 <td>bool</td>
 <td>false</td>
 <td>blockpersister_skipUTXODelete</td>
-<td>UTXO deletion behavior</td>
+<td><strong>UNUSED</strong> - Not referenced in BlockPersister service</td>
+</tr>
+<tr>
+<td>BlockPersisterProcessUTXOFiles</td>
+<td>bool</td>
+<td>true</td>
+<td>blockpersister_processUTXOFiles</td>
+<td><strong>POTENTIALLY UNUSED</strong> - May control UTXO file processing</td>
 </tr>
 <tr>
 <td>BlockPersisterPersistAge</td>
@@ -6530,7 +6559,7 @@
 <tr>
 <td>BlockStore</td>
 <td>*url.URL</td>
-<td>""</td>
+<td>"file://./data/blockstore"</td>
 <td>blockstore</td>
 <td>Required when HTTP server enabled</td>
 </tr>
@@ -6541,6 +6570,12 @@
 <ul>
 <li>When <code>PersisterHTTPListenAddress</code> is not empty, HTTP server starts</li>
 <li>Requires valid <code>BlockStore</code> URL or returns configuration error</li>
+</ul>
+<h3 id="state-file-management">State File Management</h3>
+<ul>
+<li>For file:// stores, <code>StateFile</code> auto-derived from <code>PersisterStore</code> path if not explicitly set</li>
+<li>For non-file stores (S3, etc.), explicit <code>StateFile</code> required or configuration error occurs</li>
+<li>Auto-derived path: <code>{PersisterStore_path}/blockpersister_state.txt</code></li>
 </ul>
 <h3 id="concurrency-management">Concurrency Management</h3>
 <ul>

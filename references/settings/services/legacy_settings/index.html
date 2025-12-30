@@ -5522,6 +5522,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#block-priority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Priority
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6327,6 +6338,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#block-priority" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Block Priority
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6517,7 +6539,7 @@
 <td>string</td>
 <td>""</td>
 <td>legacy_grpcAddress</td>
-<td>gRPC client connections</td>
+<td><strong>CRITICAL</strong> - gRPC client connections (required for client, returns error if empty)</td>
 </tr>
 <tr>
 <td>AllowBlockPriority</td>
@@ -6575,7 +6597,9 @@
 <ul>
 <li><code>ListenAddresses</code> controls incoming connections (falls back to external IP:8333 if empty)</li>
 <li><code>ConnectPeers</code> forces outgoing connections to specific peers</li>
-<li><code>SavePeers</code> controls peer information persistence</li>
+<li>When <code>ConnectPeers</code> is set, <code>MaxPeers</code> automatically set to match count (exclusive mode)</li>
+<li><code>ConnectPeers</code> disables DNS seeding</li>
+<li><code>SavePeers</code> controls peer information persistence to disk</li>
 </ul>
 <h3 id="batch-processing-performance">Batch Processing Performance</h3>
 <ul>
@@ -6589,7 +6613,13 @@
 </ul>
 <h3 id="sync-candidate-selection">Sync Candidate Selection</h3>
 <ul>
-<li>When <code>AllowSyncCandidateFromLocalPeers = false</code>, only non-local peers can be sync candidates</li>
+<li>When <code>AllowSyncCandidateFromLocalPeers = false</code>, only non-localhost peers can be sync candidates</li>
+<li>Prevents local peers from being selected as blockchain sync source</li>
+</ul>
+<h3 id="block-priority">Block Priority</h3>
+<ul>
+<li><code>AllowBlockPriority = true</code>: Enables block priority messages via connection streaming</li>
+<li>Sent via Protoconf message during peer handshake</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies</h2>
 <table>
@@ -6650,23 +6680,33 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Impact</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
 <tr>
+<td>GRPCAddress</td>
+<td>Must not be empty</td>
+<td>Client creation fails</td>
+<td>During client initialization</td>
+</tr>
+<tr>
 <td>ListenAddresses</td>
 <td>Falls back to external IP:8333 if empty</td>
 <td>Network connectivity</td>
+<td>During server start</td>
 </tr>
 <tr>
 <td>PeerIdleTimeout</td>
 <td>Must accommodate ping/pong intervals</td>
 <td>Peer stability</td>
+<td>During peer connection</td>
 </tr>
 <tr>
 <td>PeerProcessingTimeout</td>
 <td>Must allow for block processing time</td>
 <td>Message handling</td>
+<td>During message processing</td>
 </tr>
 </tbody>
 </table>

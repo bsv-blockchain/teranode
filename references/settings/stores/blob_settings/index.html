@@ -6604,6 +6604,7 @@
 <th>Parameter</th>
 <th>Validation</th>
 <th>Impact</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
@@ -6611,31 +6612,37 @@
 <td>batch</td>
 <td>Boolean string check</td>
 <td>Batch wrapper creation</td>
+<td>During store initialization</td>
 </tr>
 <tr>
 <td>sizeInBytes</td>
 <td>ParseInt validation</td>
 <td>Batch memory allocation</td>
+<td>During batcher creation</td>
 </tr>
 <tr>
 <td>writeKeys</td>
 <td>Boolean string check</td>
 <td>Key indexing behavior</td>
+<td>During batcher creation</td>
 </tr>
 <tr>
 <td>localDAHStore</td>
 <td>Non-empty string check</td>
 <td>DAH functionality</td>
+<td>During store initialization</td>
 </tr>
 <tr>
 <td>hashPrefix</td>
 <td>ParseInt validation</td>
 <td>Directory structure</td>
+<td>During file store creation</td>
 </tr>
 <tr>
 <td>hashSuffix</td>
 <td>ParseInt validation</td>
 <td>Directory structure</td>
+<td>During file store creation</td>
 </tr>
 </tbody>
 </table>

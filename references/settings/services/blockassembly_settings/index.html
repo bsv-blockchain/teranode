@@ -5454,6 +5454,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#parent-chain-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parent Chain Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6415,6 +6426,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#parent-chain-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parent Chain Validation
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6542,7 +6564,7 @@
 <td>string</td>
 <td>":8085"</td>
 <td>blockassembly_grpcListenAddress</td>
-<td><strong>CRITICAL</strong> - gRPC server binding (service won't start if empty)</td>
+<td><strong>CRITICAL</strong> - gRPC server binding (service skipped if empty)</td>
 </tr>
 <tr>
 <td>GRPCMaxRetries</td>
@@ -6559,46 +6581,53 @@
 <td>Retry delay timing</td>
 </tr>
 <tr>
+<td>LocalDAHCache</td>
+<td>string</td>
+<td>""</td>
+<td>blockassembly_localDAHCache</td>
+<td><strong>UNUSED</strong> - Reserved for future DAH caching</td>
+</tr>
+<tr>
 <td>MaxBlockReorgCatchup</td>
 <td>int</td>
 <td>100</td>
 <td>blockassembly_maxBlockReorgCatchup</td>
-<td>Reorganization processing limit</td>
+<td>Map capacity for current chain tracking</td>
 </tr>
 <tr>
 <td>MaxBlockReorgRollback</td>
 <td>int</td>
 <td>100</td>
 <td>blockassembly_maxBlockReorgRollback</td>
-<td>Reorganization rollback limit</td>
+<td><strong>UNUSED</strong> - Defined but not referenced in code</td>
 </tr>
 <tr>
 <td>MoveBackBlockConcurrency</td>
 <td>int</td>
 <td>375</td>
 <td>blockassembly_moveBackBlockConcurrency</td>
-<td>Block rollback parallelism</td>
+<td>Concurrency limit for reorg processing (SubtreeProcessor)</td>
 </tr>
 <tr>
 <td>ProcessRemainderTxHashesConcurrency</td>
 <td>int</td>
 <td>375</td>
 <td>blockassembly_processRemainderTxHashesConcurrency</td>
-<td>Transaction hash processing parallelism</td>
+<td>Concurrency limit for remainder tx hash processing</td>
 </tr>
 <tr>
 <td>SendBatchSize</td>
 <td>int</td>
 <td>100</td>
 <td>blockassembly_sendBatchSize</td>
-<td>Batch operation size</td>
+<td>Client batch size for sending transactions</td>
 </tr>
 <tr>
 <td>SendBatchTimeout</td>
 <td>int</td>
 <td>2</td>
 <td>blockassembly_sendBatchTimeout</td>
-<td>Batch operation timeout</td>
+<td>Client batch timeout in milliseconds</td>
 </tr>
 <tr>
 <td>SubtreeProcessorBatcherSize</td>
@@ -6633,7 +6662,7 @@
 <td>bool</td>
 <td>true</td>
 <td>blockassembly_SubmitMiningSolution_waitForResponse</td>
-<td><strong>CRITICAL</strong> - Synchronous mining solution processing</td>
+<td><strong>CRITICAL</strong> - Sync (true) vs async (false) mining solution processing</td>
 </tr>
 <tr>
 <td>InitialMerkleItemsPerSubtree</td>
@@ -6682,7 +6711,7 @@
 <td>bool</td>
 <td>true</td>
 <td>blockassembly_difficultyCache</td>
-<td>Difficulty calculation caching</td>
+<td>Enables difficulty calculation caching (Blockchain service)</td>
 </tr>
 <tr>
 <td>UseDynamicSubtreeSize</td>
@@ -6710,7 +6739,49 @@
 <td>time.Duration</td>
 <td>5m</td>
 <td>blockassembly_blockchainSubscriptionTimeout</td>
-<td>Blockchain subscription timeout</td>
+<td>Blockchain event subscription timeout</td>
+</tr>
+<tr>
+<td>OnRestartValidateParentChain</td>
+<td>bool</td>
+<td>true</td>
+<td>blockassembly_onRestartValidateParentChain</td>
+<td>Enables parent chain validation on restart</td>
+</tr>
+<tr>
+<td>ParentValidationBatchSize</td>
+<td>int</td>
+<td>1000</td>
+<td>blockassembly_parentValidationBatchSize</td>
+<td>Parent validation batch size</td>
+</tr>
+<tr>
+<td>OnRestartRemoveInvalidParentChainTxs</td>
+<td>bool</td>
+<td>false</td>
+<td>blockassembly_onRestartRemoveInvalidParentChainTxs</td>
+<td>Filters transactions with invalid parent chains</td>
+</tr>
+<tr>
+<td>GetMiningCandidateSendTimeout</td>
+<td>time.Duration</td>
+<td>1s</td>
+<td>blockassembly_getMiningCandidate_send_timeout</td>
+<td>Timeout sending request on internal channel</td>
+</tr>
+<tr>
+<td>GetMiningCandidateResponseTimeout</td>
+<td>time.Duration</td>
+<td>10s</td>
+<td>blockassembly_getMiningCandidate_response_timeout</td>
+<td>Timeout waiting for mining candidate response</td>
+</tr>
+<tr>
+<td>SubtreeAnnouncementInterval</td>
+<td>time.Duration</td>
+<td>10s</td>
+<td>blockassembly_subtreeAnnouncementInterval</td>
+<td>Subtree announcement frequency</td>
 </tr>
 </tbody>
 </table>
@@ -6721,46 +6792,20 @@
 <th>Setting</th>
 <th>Value</th>
 <th>Usage</th>
-<th>Code Reference</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>GetMiningCandidateResponseTimeout</td>
-<td>Not configurable</td>
-<td>Mining candidate generation timeout</td>
-<td>BlockAssembler.go:980</td>
-</tr>
-<tr>
-<td>GetMiningCandidateSendTimeout</td>
-<td>Not configurable</td>
-<td>Mining candidate send timeout</td>
-<td>BlockAssembler.go:1049</td>
-</tr>
-<tr>
-<td>ParentValidationBatchSize</td>
-<td>Not configurable</td>
-<td>Parent chain validation batch size</td>
-<td>BlockAssembler.go:1609</td>
-</tr>
-<tr>
-<td>OnRestartRemoveInvalidParentChainTxs</td>
-<td>Not configurable</td>
-<td>Filter invalid txs on restart</td>
-<td>BlockAssembler.go:1695</td>
-</tr>
-<tr>
 <td>jobTTL</td>
 <td>10 minutes</td>
 <td>Mining job cache TTL</td>
-<td>Server.go:57</td>
 </tr>
 </tbody>
 </table>
 <h2 id="configuration-dependencies">Configuration Dependencies</h2>
 <h3 id="service-startup">Service Startup</h3>
 <ul>
-<li>Service skipped if <code>GRPCListenAddress</code> is empty</li>
+<li>Service skipped (not added to ServiceManager) if <code>GRPCListenAddress</code> is empty</li>
 <li>Channel buffers allocated during Init() based on configured sizes</li>
 </ul>
 <h3 id="service-disable">Service Disable</h3>
@@ -6781,8 +6826,9 @@
 </ul>
 <h3 id="mining-solution-processing">Mining Solution Processing</h3>
 <ul>
-<li><code>SubmitMiningSolutionWaitForResponse</code> controls synchronous vs asynchronous processing</li>
-<li>Affects response handling and mining candidate cache behavior</li>
+<li><code>SubmitMiningSolutionWaitForResponse = true</code>: gRPC call blocks until submission completes</li>
+<li><code>SubmitMiningSolutionWaitForResponse = false</code>: Returns immediately for async processing</li>
+<li>Significantly affects mining pool integration behavior</li>
 </ul>
 <h3 id="reorganization-handling">Reorganization Handling</h3>
 <ul>
@@ -6791,7 +6837,16 @@
 </ul>
 <h3 id="dynamic-subtree-sizing">Dynamic Subtree Sizing</h3>
 <ul>
-<li>When <code>UseDynamicSubtreeSize = true</code>, uses <code>InitialMerkleItemsPerSubtree</code>, <code>MinimumMerkleItemsPerSubtree</code>, <code>MaximumMerkleItemsPerSubtree</code></li>
+<li>When <code>UseDynamicSubtreeSize = true</code>, subtree size adjusts based on transaction volume</li>
+<li>Uses <code>InitialMerkleItemsPerSubtree</code> as starting size</li>
+<li>Adjusts within <code>MinimumMerkleItemsPerSubtree</code> and <code>MaximumMerkleItemsPerSubtree</code> bounds</li>
+</ul>
+<h3 id="parent-chain-validation">Parent Chain Validation</h3>
+<ul>
+<li><code>OnRestartValidateParentChain = true</code>: Validates transaction parent chains after service restart</li>
+<li><code>ParentValidationBatchSize</code>: Controls batch processing size (default: 1000)</li>
+<li><code>OnRestartRemoveInvalidParentChainTxs = true</code>: Filters out transactions with invalid parent chains</li>
+<li><code>OnRestartRemoveInvalidParentChainTxs = false</code> (default): Keeps transactions despite invalid parents</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies</h2>
 <table>
@@ -6839,7 +6894,7 @@
 <tr>
 <td>GRPCListenAddress</td>
 <td>Must not be empty</td>
-<td>Service won't start if empty</td>
+<td>Service skipped if empty</td>
 <td>During daemon startup</td>
 </tr>
 <tr>

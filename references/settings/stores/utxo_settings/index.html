@@ -6876,6 +6876,7 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Impact</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
@@ -6883,21 +6884,25 @@
 <td>UtxoStore</td>
 <td>Must be valid URL</td>
 <td>Store initialization</td>
+<td>During store factory initialization</td>
 </tr>
 <tr>
 <td>DBTimeout</td>
 <td>Used for context timeout</td>
 <td>Operation reliability</td>
+<td>During SQL operations</td>
 </tr>
 <tr>
 <td>BlockHeightRetentionAdjustment</td>
 <td>Bounds checking applied</td>
 <td>Retention calculation</td>
+<td>During DAH calculations</td>
 </tr>
 <tr>
 <td>logging</td>
 <td>Boolean string check</td>
 <td>Logging wrapper creation</td>
+<td>During store initialization</td>
 </tr>
 </tbody>
 </table>

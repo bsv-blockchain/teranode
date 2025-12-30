@@ -7048,6 +7048,7 @@
 <th>Setting</th>
 <th>Validation</th>
 <th>Impact</th>
+<th>When Checked</th>
 </tr>
 </thead>
 <tbody>
@@ -7055,36 +7056,43 @@
 <td>Host</td>
 <td>Must be valid hostname/IP</td>
 <td>Connection failure if invalid</td>
+<td>During store initialization</td>
 </tr>
 <tr>
 <td>Port</td>
 <td>Must be valid port number (1-65535)</td>
 <td>Connection failure if invalid</td>
+<td>During store initialization</td>
 </tr>
 <tr>
 <td>BatchPolicyURL</td>
 <td>Must be valid URL with aerospike:// scheme</td>
 <td>Policy parsing failure</td>
+<td>During policy configuration</td>
 </tr>
 <tr>
 <td>ReadPolicyURL</td>
 <td>Must be valid URL with aerospike:// scheme</td>
 <td>Policy parsing failure</td>
+<td>During policy configuration</td>
 </tr>
 <tr>
 <td>WritePolicyURL</td>
 <td>Must be valid URL with aerospike:// scheme</td>
 <td>Policy parsing failure</td>
+<td>During policy configuration</td>
 </tr>
 <tr>
 <td>QueryPolicyURL</td>
 <td>Must be valid URL with aerospike:// scheme</td>
 <td>Policy parsing failure</td>
+<td>During policy configuration</td>
 </tr>
 <tr>
 <td>StatsRefreshDuration</td>
 <td>Must be positive duration</td>
 <td>Statistics update frequency</td>
+<td>During store initialization</td>
 </tr>
 </tbody>
 </table>

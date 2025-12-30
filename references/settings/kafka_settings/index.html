@@ -5329,6 +5329,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#consumer-group-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consumer Group Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tls-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6672,6 +6683,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#consumer-group-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consumer Group Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tls-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7304,6 +7326,61 @@
 </tr>
 </tbody>
 </table>
+<h3 id="consumer-group-settings">Consumer Group Settings</h3>
+<p><strong>Consumer Group ID Pattern:</strong> <code>{serviceName}.{clientName}</code></p>
+<p>Examples:
+- <code>blockvalidation.defaultClientName</code>
+- <code>subtreevalidation.mynode</code>
+- <code>p2p.node1</code></p>
+<p><strong>Special Case - Block Persister TxMeta:</strong> <code>{serviceName}.{clientName}.{random16chars}</code></p>
+<p>The Block Persister appends a random 16-character suffix to its TxMeta consumer group ID, allowing multiple instances to independently process all messages.</p>
+<p><strong>Auto-Commit Behavior:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Topic</th>
+<th>Auto-Commit</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Blocks</td>
+<td>Disabled</td>
+<td>Critical - must not miss messages</td>
+</tr>
+<tr>
+<td>RejectedTx</td>
+<td>Enabled</td>
+<td>Can tolerate message loss</td>
+</tr>
+<tr>
+<td>Subtrees</td>
+<td>Enabled</td>
+<td>Can tolerate message loss</td>
+</tr>
+<tr>
+<td>TxMeta</td>
+<td>Enabled</td>
+<td>Cache population - can tolerate loss</td>
+</tr>
+<tr>
+<td>ValidatorTxs</td>
+<td>Enabled</td>
+<td>Optional feature</td>
+</tr>
+<tr>
+<td>InvalidBlocks</td>
+<td>Enabled</td>
+<td>Optional feature</td>
+</tr>
+<tr>
+<td>InvalidSubtrees</td>
+<td>Enabled</td>
+<td>Optional feature</td>
+</tr>
+</tbody>
+</table>
 <h3 id="tls-settings">TLS Settings</h3>
 <table>
 <thead>
@@ -7541,6 +7618,7 @@
 <span class="nv">KAFKA_TLS_KEY_FILE</span><span class="o">=</span>/path/to/client-key.pem
 <span class="nv">kafka_blocksConfig</span><span class="o">=</span>kafka://broker1:9093,broker2:9093/blocks?partitions<span class="o">=</span><span class="m">4</span>
 </code></pre></div></p>
+<p><strong>Note:</strong> <code>KAFKA_TLS_CERT_FILE</code> and <code>KAFKA_TLS_KEY_FILE</code> must both be provided for mutual TLS authentication. Omit both for server-only TLS.</p>
 <h3 id="memory-testing">Memory Testing</h3>
 <div class="highlight"><pre><span></span><code>memory://test_blocks?partitions=2&amp;replay=1
 </code></pre></div>

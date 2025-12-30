@@ -8191,10 +8191,12 @@ Teranode microservices make use of the Lustre file system in order to share subt
 <li>Searches for parent transactions within same block first</li>
 <li>Falls back to UTXO store for external parents</li>
 <li>Waits for parent extension if it's being processed concurrently</li>
-<li><strong>Input Population</strong>: Sets <code>PreviousTxSatoshis</code> and <code>PreviousTxScript</code> for each input</li>
-<li><strong>Concurrency Control</strong>: Uses errgroup with configurable limits (<code>GetBlockTransactionsConcurrency</code>)</li>
 </ul>
 </li>
+<li>
+<p><strong>Input Population</strong>: Sets <code>PreviousTxSatoshis</code> and <code>PreviousTxScript</code> for each input</p>
+</li>
+<li><strong>Concurrency Control</strong>: Uses errgroup with configurable limits (<code>GetBlockTransactionsConcurrency</code>)</li>
 </ol>
 <p><strong>Merkle Root Verification:</strong></p>
 <p>After processing all transactions, the system verifies:</p>
