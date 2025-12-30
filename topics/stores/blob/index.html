@@ -6788,6 +6788,12 @@
 <li>
 <p><strong>SetCurrentBlockHeight</strong>: <code>SetCurrentBlockHeight(height uint32)</code> - Sets the current block height for the store, used for DAH functionality.</p>
 </li>
+<li>
+<p><strong>SetCurrentBlockHeight</strong>: <code>SetCurrentBlockHeight(height)</code></p>
+<ul>
+<li><strong>Purpose</strong>: Sets the current block height for the store, used by the DAH (Delete-At-Height) mechanism.</li>
+</ul>
+</li>
 </ul>
 <h2 id="2-architecture">2. Architecture</h2>
 <p>The Blob Store is a store interface, with implementations for Tx Store and Subtree Store.</p>
