@@ -6982,6 +6982,15 @@
 </ol>
 <h3 id="22-receiving-and-processing-a-new-utxo-set">2.2 Receiving and Processing a new UTXO Set</h3>
 <p><img alt="utxo_persister_processing_blocks.svg" src="../img/plantuml/utxopersister/utxo_persister_processing_blocks.svg" /></p>
+<p>The service processes new blocks through the following workflow:</p>
+<ol>
+<li>The service is triggered to process blocks either through blockchain notifications, a timer, or at startup.</li>
+<li>It verifies that the next block to process is sufficiently behind the current blockchain tip (at least 100 blocks) to ensure block finality.</li>
+<li>The service retrieves the necessary block headers and verifies chain continuity.</li>
+<li>For each block, it consolidates UTXO additions and deletions across the block range.</li>
+<li>The service creates a new UTXO set by applying additions and deletions to the previous block's UTXO set.</li>
+<li>The resulting UTXO set is written to storage, and the last processed height is updated.</li>
+</ol>
 <h3 id="23-processing-blocks-and-creating-utxo-sets">2.3 Processing Blocks and Creating UTXO Sets</h3>
 <p>The UTXO Persister processes blocks and creates UTXO sets as follows:</p>
 <ol>
@@ -7084,14 +7093,20 @@
 <li><strong>Coinbase</strong>: A flag indicating whether this UTXO is from a coinbase transaction (1 bit, packed with Height)</li>
 </ul>
 <h3 id="33-binary-encoding">3.3 Binary Encoding</h3>
-<p>The UTXO is encoded into a binary format for efficient storage and retrieval:</p>
+<p>UTXOs are encoded into a binary format for efficient storage and retrieval. The encoding differs between individual UTXOs and UTXO wrappers:</p>
+<p><strong>UTXO Encoding</strong> (individual output within a transaction):</p>
 <ul>
-<li>32 bytes: TxID</li>
 <li>4 bytes: Index (little-endian)</li>
 <li>8 bytes: Value (little-endian)</li>
-<li>4 bytes: Height and Coinbase flag (Height &lt;&lt; 1 | CoinbaseFlag)</li>
 <li>4 bytes: Script length (little-endian)</li>
 <li>Variable bytes: Script</li>
+</ul>
+<p><strong>UTXOWrapper Encoding</strong> (transaction-level wrapper):</p>
+<ul>
+<li>32 bytes: TxID</li>
+<li>4 bytes: Encoded height and coinbase flag (Height &lt;&lt; 1 | CoinbaseFlag)</li>
+<li>4 bytes: Number of UTXOs</li>
+<li>Variable bytes: Serialized UTXOs (each UTXO encoded as above)</li>
 </ul>
 <h3 id="34-utxo-set-file">3.4 UTXO Set File</h3>
 <p>The UTXO set for each block is stored in a file with the extension <code>utxo-set</code>. This file contains a series of encoded UTXOs representing all unspent outputs up to that block.</p>
@@ -7145,8 +7160,18 @@
 </li>
 </ol>
 <h2 id="5-directory-structure-and-main-files">5. Directory Structure and Main Files</h2>
-<p>The Block Persister service is located in the <code>services/utxopersister</code> directory.</p>
+<p>The UTXO Persister service is located in the <code>services/utxopersister</code> directory.</p>
 <div class="highlight"><pre><span></span><code>./services/utxopersister/
+│
+├── consolidator.go
+│   Manages consolidation of UTXO additions and deletions across multiple blocks
+│   to create accurate UTXO sets.
+│
+├── Footers.go
+│   Handles footer operations for UTXO files, including transaction and UTXO counts.
+│
+├── Headers.go
+│   Handles header parsing and validation for UTXO files.
 │
 ├── Server.go
 │   Main implementation of the UTXO Persister server. It contains the core logic for
@@ -7155,14 +7180,13 @@
 ├── UTXO.go
 │   Defines the UTXO (Unspent Transaction Output) data structure and related methods.
 │
+├── UTXODeletion.go
+│   Implements the logic for UTXO deletions, which occur when UTXOs are spent in a transaction.
+│
 ├── UTXOSet.go
 │   Implements the UTXOSet structure and related methods.
 │
-├── UTXODeletion.go
-│   Implements the logic for UTXO deletions, which occur when UTXOs are spent in a transaction.
-|
 └── filestorer/
-    │
     └── FileStorer.go
         Implements a custom file storage mechanism, optimized for the specific
         needs of storing and retrieving UTXO data efficiently.
