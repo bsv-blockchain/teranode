@@ -3816,23 +3816,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="8. Running the Store Locally">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#how-to-run" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How to run
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -6922,23 +6905,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="8. Running the Store Locally">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#how-to-run" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How to run
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
       
         <li class="md-nav__item">
@@ -6980,7 +6946,7 @@
 
 
 
-<h1 id="utxo-store">🗃️ UTXO Store</h1>
+<h1 id="utxo-store">UTXO Store</h1>
 <h2 id="index">Index</h2>
 <ol>
 <li><a href="#1-description">Description</a></li>
@@ -7050,14 +7016,14 @@
 <li>Teranode must be able to re-assign (a set of) UTXO(s) to another (specified) address at a specified block height.</li>
 </ul>
 <h2 id="2-architecture">2. Architecture</h2>
-<p>The UTXO Store is a micro-service that is used by other micro-services to retrieve or store / modify UTXOs.</p>
+<p>The UTXO Store is a shared library component that is used by multiple Teranode services to retrieve, store, and modify UTXOs.</p>
 <p><img alt="UTXO_Store_Container_Context_Diagram.png" src="../../services/img/UTXO_Store_Container_Context_Diagram.png" /></p>
 <p>The UTXO Store uses a number of different datastores, either in-memory or persistent, to store the UTXOs.</p>
 <p><img alt="UTXO_Store_Component_Context_Diagram.png" src="../../services/img/UTXO_Store_Component_Context_Diagram.png" /></p>
 <h3 id="utxo-store-operations-flow">UTXO Store Operations Flow</h3>
 <p>The following diagram illustrates the complete flow of UTXO operations across all services, including transaction validation, conflict resolution, block mining, reorganization handling, alert system operations, and subtree validation:</p>
 <p><img alt="utxo_operations_flow.svg" src="../../services/img/plantuml/utxo/utxo_operations_flow.svg" /></p>
-<p>The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (<code>utxostore</code>), as it can be seen in the following code fragment (<code>main.go</code>):</p>
+<p>The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (<code>utxostore</code>), as it can be seen in the following code example:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">getUtxoStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">)</span><span class="w"> </span><span class="nx">utxostore</span><span class="p">.</span><span class="nx">Interface</span><span class="w"> </span><span class="p">{</span>
 <span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">utxoStore</span>
@@ -7106,7 +7072,7 @@
 <ul>
 <li><strong>Transaction Outputs</strong>: When a transaction occurs on the blockchain, it creates "transaction outputs," which are essentially chunks of cryptocurrency value. Each output specifies an amount and a condition under which it can be spent (a cryptographic script key that the receiver owns).</li>
 </ul>
-<p>Under the external library <code>github.com/ordishs/go-bt/output.go</code>, we can see the structure of a transaction output.</p>
+<p>Under the external library <code>github.com/bsv-blockchain/go-bt/v2</code>, we can see the structure of a transaction output.</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Output</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 <span class="w"> </span><span class="nx">Satoshis</span><span class="w">      </span><span class="kt">uint64</span><span class="w">          </span><span class="s">`json:&quot;satoshis&quot;`</span>
 <span class="w"> </span><span class="nx">LockingScript</span><span class="w"> </span><span class="o">*</span><span class="nx">bscript</span><span class="p">.</span><span class="nx">Script</span><span class="w"> </span><span class="s">`json:&quot;locking_script&quot;`</span>
@@ -7130,7 +7096,7 @@
 </ul>
 </li>
 </ol>
-<p>Equally, we can see how a list of outputs is part of a transaction (<code>github.com/ordishs/go-bt/tx.go</code>):</p>
+<p>Equally, we can see how a list of outputs is part of a transaction (<code>github.com/bsv-blockchain/go-bt/v2</code>):</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Tx</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 <span class="w"> </span><span class="nx">Inputs</span><span class="w">   </span><span class="p">[]</span><span class="o">*</span><span class="nx">Input</span><span class="w">  </span><span class="s">`json:&quot;inputs&quot;`</span>
 <span class="w"> </span><span class="nx">Outputs</span><span class="w">  </span><span class="p">[]</span><span class="o">*</span><span class="nx">Output</span><span class="w"> </span><span class="s">`json:&quot;outputs&quot;`</span>
@@ -7188,31 +7154,23 @@
 <p>To compute the hash of the key, the caller must know the complete data and calculate the hash before calling the API.</p>
 </li>
 <li>
-<p>The hashing logic can be found in <code>UTXOHash.go</code>:</p>
+<p>The hashing logic can be found in <code>util/utxo_hash.go</code>:</p>
 </li>
 </ul>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">UTXOHash</span><span class="p">(</span><span class="nx">previousTxid</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">index</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">lockingScript</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">,</span><span class="w"> </span><span class="nx">satoshis</span><span class="w"> </span><span class="kt">uint64</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="nx">lockingScript</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;locking script is nil&quot;</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
-
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">satoshis</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;satoshis is 0&quot;</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">UTXOHash</span><span class="p">(</span><span class="nx">previousTxid</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">index</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">lockingScript</span><span class="w"> </span><span class="o">*</span><span class="nx">bscript</span><span class="p">.</span><span class="nx">Script</span><span class="p">,</span><span class="w"> </span><span class="nx">satoshis</span><span class="w"> </span><span class="kt">uint64</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">lockingScript</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewProcessingError</span><span class="p">(</span><span class="s">&quot;locking script is nil&quot;</span><span class="p">)</span>
 <span class="w"> </span><span class="p">}</span>
 
 <span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nb">make</span><span class="p">([]</span><span class="kt">byte</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">256</span><span class="p">)</span>
 <span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">previousTxid</span><span class="p">.</span><span class="nx">CloneBytes</span><span class="p">()</span><span class="o">...</span><span class="p">)</span>
 <span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">bt</span><span class="p">.</span><span class="nx">VarInt</span><span class="p">(</span><span class="nx">index</span><span class="p">).</span><span class="nx">Bytes</span><span class="p">()</span><span class="o">...</span><span class="p">)</span>
-<span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">lockingScript</span><span class="o">...</span><span class="p">)</span>
+<span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="o">*</span><span class="nx">lockingScript</span><span class="o">...</span><span class="p">)</span>
 <span class="w"> </span><span class="nx">utxoHash</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nb">append</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">,</span><span class="w"> </span><span class="nx">bt</span><span class="p">.</span><span class="nx">VarInt</span><span class="p">(</span><span class="nx">satoshis</span><span class="p">).</span><span class="nx">Bytes</span><span class="p">()</span><span class="o">...</span><span class="p">)</span>
 
-<span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">crypto</span><span class="p">.</span><span class="nx">Sha256</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">)</span>
-<span class="w"> </span><span class="nx">chHash</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">NewHash</span><span class="p">(</span><span class="nx">hash</span><span class="p">)</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
-<span class="w"> </span><span class="p">}</span>
+<span class="w"> </span><span class="nx">chHash</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">HashH</span><span class="p">(</span><span class="nx">utxoHash</span><span class="p">)</span>
 
-<span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">chHash</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+<span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">chHash</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
 <span class="p">}</span>
 </code></pre></div>
 <ul>
@@ -7264,7 +7222,7 @@
 </ol>
 <p>Coinbase Transaction deletion (UTXO step):</p>
 <ol>
-<li>The <strong>Block Assembly</strong> service (see <code>SubtreeProcessor.go</code>, `` method)  deletes the Coinbase transaction. This is done when blocks are reorganised and previously tracked coinbase transactions lose validity.</li>
+<li>The <strong>Block Assembly</strong> service (see <code>SubtreeProcessor.go</code>, <code>removeCoinbaseUtxos</code> method)  deletes the Coinbase transaction. This is done when blocks are reorganised and previously tracked coinbase transactions lose validity.</li>
 <li>The <strong>Block Assembly</strong> service sends a request to the <strong>UTXO Store</strong> to delete the Coinbase UTXO.</li>
 <li>The <strong>UTXO Store</strong> interacts with the underlying <strong>Datastore</strong> implementation to delete the Coinbase UTXO.</li>
 </ol>
@@ -7396,7 +7354,7 @@ A statically typed, compiled language known for its simplicity and efficiency, e
 The primary language used for implementing the service's logic.</p>
 </li>
 <li>
-<p><strong>Bitcoin Transaction (BT) GoLang library</strong>: <code>github.com/ordishs/go-bt/</code> - a full featured Bitcoin transactions and transaction manipulation/functionality Go Library.</p>
+<p><strong>Bitcoin Transaction (BT) GoLang library</strong>: <code>github.com/bsv-blockchain/go-bt/v2</code> - a full featured Bitcoin transactions and transaction manipulation/functionality Go Library.</p>
 </li>
 </ol>
 <h3 id="52-data-stores">5.2. Data Stores</h3>
@@ -7409,7 +7367,7 @@ The primary language used for implementing the service's logic.</p>
 <li>Suitable for environments requiring high throughput and low latency.</li>
 <li>Handles large volumes of UTXO data with fast read/write capabilities.</li>
 <li>Aerospike is the reference datastore. Teranode has been guaranteed to process 1 million tps with Aerospike.</li>
-<li>Aerospike records can contain up to 1024 bytes.
+<li>Aerospike records can contain up to 1MB.
    <img alt="AerospikeRecord.png" src="../../services/img/AerospikeRecord.png" /></li>
 <li>For more information, please refer to the official Aerospike documentation: <a href="https://aerospike.com">https://aerospike.com</a>.</li>
 </ul>
@@ -7560,9 +7518,16 @@ The primary language used for implementing the service's logic.</p>
 └── utils_test.go                   # Tests for utility functions
 </code></pre></div>
 <h2 id="8-running-the-store-locally">8. Running the Store Locally</h2>
-<h3 id="how-to-run">How to run</h3>
+<ul>
+<li><strong>Validator</strong>: For validating transactions and managing UTXO state</li>
+<li><strong>Block Assembly</strong>: For creating new blocks and managing coinbase UTXOs</li>
+<li><strong>Block Validation</strong>: For validating blocks and storing coinbase transactions</li>
+<li><strong>Subtree Validation</strong>: For retrieving UTXO metadata during subtree validation</li>
+<li><strong>Asset Server</strong>: For serving UTXO data to external clients</li>
+<li><strong>Block Persister</strong>: For retrieving UTXO metadata when persisting blocks</li>
+</ul>
 <p>The UTXO Store is a data store component that is used by various services. It is not run independently. To use the UTXO Store locally, run services that depend on it, such as the Validator or UTXO Persister:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>-utxopersister<span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><span class="nv">SETTINGS_CONTEXT</span><span class="o">=</span>dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>.<span class="w"> </span>-validator<span class="o">=</span><span class="m">1</span><span class="w"> </span>
 </code></pre></div>
 <p>Please refer to the <a href="../../../howto/locallyRunningServices/">Locally Running Services Documentation</a> document for more information on running services locally.</p>
 <h2 id="9-configuration-and-settings">9. Configuration and Settings</h2>

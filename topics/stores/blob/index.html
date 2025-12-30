@@ -3427,6 +3427,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="1. Description">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#store-interface-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Store Interface Methods
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6416,6 +6433,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="1. Description">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#store-interface-methods" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Store Interface Methods
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6717,106 +6751,117 @@
 <li><a href="#9-other-resources">9. Other Resources</a></li>
 </ul>
 <h2 id="1-description">1. Description</h2>
-<p>The Blob Server is a generic datastore that can be used for any specific data model. In the current Teranode implementation, it is used to store transactions (extended tx) and subtrees.</p>
-<p>The Blob Server provides a set of methods to interact with the TX and Subtree storage implementations.</p>
-<ol>
-<li>
-<p><strong>Health</strong>: <code>Health(ctx)</code></p>
+<p>The Blob Store is a generic datastore that can be used for any specific data model. In the current Teranode implementation, it is used to store transactions (extended tx) and subtrees.</p>
+<p>The Blob Store provides a set of methods to interact with the TX and Subtree storage implementations:</p>
+<h3 id="store-interface-methods">Store Interface Methods</h3>
 <ul>
-<li><strong>Purpose</strong>: Checks the health status of the Blob Server.</li>
-</ul>
+<li>
+<p><strong>Health</strong>: <code>Health(ctx, checkLiveness bool) (int, string, error)</code> - Checks the health status of the blob store, returning HTTP status code, description, and any error.</p>
 </li>
 <li>
-<p><strong>Exists</strong>: <code>Exists(ctx, key)</code></p>
-<ul>
-<li><strong>Purpose</strong>: Determines if a given key exists in the store.</li>
-</ul>
+<p><strong>Exists</strong>: <code>Exists(ctx, key, fileType, opts...) (bool, error)</code> - Determines if a given key exists in the store.</p>
 </li>
 <li>
-<p><strong>Get</strong>: <code>Get(ctx, key)</code></p>
-<ul>
-<li><strong>Purpose</strong>: Retrieves the value associated with a given key.</li>
-</ul>
+<p><strong>Get</strong>: <code>Get(ctx, key, fileType, opts...) ([]byte, error)</code> - Retrieves the blob data associated with a given key.</p>
 </li>
 <li>
-<p><strong>GetIoReader</strong>: <code>GetIoReader(ctx, key)</code></p>
-<ul>
-<li><strong>Purpose</strong>: Retrieves an <code>io.ReadCloser</code> for the value associated with a given key, useful for streaming large data.</li>
-</ul>
+<p><strong>GetIoReader</strong>: <code>GetIoReader(ctx, key, fileType, opts...) (io.ReadCloser, error)</code> - Retrieves an <code>io.ReadCloser</code> for the blob associated with a given key, useful for streaming large data.</p>
 </li>
 <li>
-<p><strong>Set</strong>: <code>Set(ctx, key, value, opts...)</code></p>
-<ul>
-<li><strong>Purpose</strong>: Sets a key-value pair in the store.</li>
-</ul>
+<p><strong>Set</strong>: <code>Set(ctx, key, fileType, value, opts...) error</code> - Stores a key-value pair in the store.</p>
 </li>
 <li>
-<p><strong>SetFromReader</strong>: <code>SetFromReader(ctx, key, value, opts...)</code></p>
-<ul>
-<li><strong>Purpose</strong>: Sets a key-value pair in the store from an <code>io.ReadCloser</code>, useful for streaming large data.</li>
-</ul>
+<p><strong>SetFromReader</strong>: <code>SetFromReader(ctx, key, fileType, reader, opts...) error</code> - Stores a key-value pair in the store from an <code>io.ReadCloser</code>, useful for streaming large data.</p>
 </li>
 <li>
-<p><strong>SetTTL</strong>: <code>SetTTL(ctx, key, ttl)</code></p>
-<ul>
-<li><strong>Purpose</strong>: Sets a Time-To-Live for a given key.</li>
-</ul>
+<p><strong>SetDAH</strong>: <code>SetDAH(ctx, key, fileType, dah, opts...) error</code> - Sets a Delete-At-Height value for a given key for automatic blockchain-based expiration.</p>
 </li>
 <li>
-<p><strong>Del</strong>: <code>Del(ctx, key)</code></p>
-<ul>
-<li><strong>Purpose</strong>: Deletes a key and its associated value from the store.</li>
-</ul>
+<p><strong>GetDAH</strong>: <code>GetDAH(ctx, key, fileType, opts...) (uint32, error)</code> - Retrieves the Delete-At-Height value for a given key.</p>
 </li>
 <li>
-<p><strong>Close</strong>: <code>Close(ctx)</code></p>
-<ul>
-<li><strong>Purpose</strong>: Closes the Blob Server connection or any associated resources.</li>
-</ul>
+<p><strong>Del</strong>: <code>Del(ctx, key, fileType, opts...) error</code> - Deletes a key and its associated value from the store.</p>
 </li>
-</ol>
+<li>
+<p><strong>Close</strong>: <code>Close(ctx) error</code> - Closes the Blob Store connection and releases any associated resources.</p>
+</li>
+<li>
+<p><strong>SetCurrentBlockHeight</strong>: <code>SetCurrentBlockHeight(height uint32)</code> - Sets the current block height for the store, used for DAH functionality.</p>
+</li>
+</ul>
 <h2 id="2-architecture">2. Architecture</h2>
-<p>The Blob Server is a store interface, with implementations for Tx Store and Subtree Store.</p>
+<p>The Blob Store is a store interface, with implementations for Tx Store and Subtree Store.</p>
 <p><img alt="Blob_Store_Component_Context_Diagram.png" src="../../services/img/Blob_Store_Component_Context_Diagram.png" /></p>
-<p>The Blob Server implementations for Tx Store and Subtree Store are injected into the various services that require them. They are initialised in the <code>daemon/daemon_stores.go</code> file and passed into the services as a dependency. See below:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">getTxStore</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">)</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="w"> </span><span class="p">{</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">txStore</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">txStore</span>
-<span class="w"> </span><span class="p">}</span>
+<p>The Blob Store implementations for Tx Store and Subtree Store are injected into the various services that require them. They are initialized in <code>daemon/daemon_stores.go</code> and passed into the services as dependencies. See example below:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// GetTxStore returns the main transaction store instance. If the store hasn&#39;t been initialized yet,</span>
+<span class="c1">// it creates a new one using the configured URL from settings.</span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">GetTxStore</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">d</span><span class="p">.</span><span class="nx">mainTxStore</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">d</span><span class="p">.</span><span class="nx">mainTxStore</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+<span class="w">    </span><span class="p">}</span>
 
-<span class="w"> </span><span class="nx">txStoreUrl</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Config</span><span class="p">().</span><span class="nx">GetURL</span><span class="p">(</span><span class="s">&quot;txstore&quot;</span><span class="p">)</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">found</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="s">&quot;txstore config not found&quot;</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
-<span class="w"> </span><span class="nx">txStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">NewStore</span><span class="p">(</span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">txStoreUrl</span><span class="p">,</span><span class="w"> </span><span class="nx">options</span><span class="p">.</span><span class="nx">WithHashPrefix</span><span class="p">(</span><span class="mi">10</span><span class="p">))</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="nx">txStoreURL</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">appSettings</span><span class="p">.</span><span class="nx">Block</span><span class="p">.</span><span class="nx">TxStore</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">txStoreURL</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewConfigurationError</span><span class="p">(</span><span class="s">&quot;txstore config not found&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
 
-<span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">txStore</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span>
+<span class="w">    </span><span class="nx">hashPrefix</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">2</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">txStoreURL</span><span class="p">.</span><span class="nx">Query</span><span class="p">().</span><span class="nx">Get</span><span class="p">(</span><span class="s">&quot;hashPrefix&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">hashPrefix</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">strconv</span><span class="p">.</span><span class="nx">Atoi</span><span class="p">(</span><span class="nx">txStoreURL</span><span class="p">.</span><span class="nx">Query</span><span class="p">().</span><span class="nx">Get</span><span class="p">(</span><span class="s">&quot;hashPrefix&quot;</span><span class="p">))</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewConfigurationError</span><span class="p">(</span><span class="s">&quot;txstore hashPrefix config error&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nx">d</span><span class="p">.</span><span class="nx">mainTxStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">NewStore</span><span class="p">(</span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">txStoreURL</span><span class="p">,</span><span class="w"> </span><span class="nx">options</span><span class="p">.</span><span class="nx">WithHashPrefix</span><span class="p">(</span><span class="nx">hashPrefix</span><span class="p">))</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewServiceError</span><span class="p">(</span><span class="s">&quot;could not create tx store&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">d</span><span class="p">.</span><span class="nx">mainTxStore</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
 <span class="p">}</span>
 
-<span class="kd">func</span><span class="w"> </span><span class="nx">getSubtreeStore</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">)</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="w"> </span><span class="p">{</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">subtreeStore</span>
-<span class="w"> </span><span class="p">}</span>
+<span class="c1">// GetSubtreeStore returns the main subtree store instance. If the store hasn&#39;t been initialized yet,</span>
+<span class="c1">// it creates a new one using the URL from settings.</span>
+<span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">d</span><span class="w"> </span><span class="o">*</span><span class="nx">Stores</span><span class="p">)</span><span class="w"> </span><span class="nx">GetSubtreeStore</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">d</span><span class="p">.</span><span class="nx">mainSubtreeStore</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">d</span><span class="p">.</span><span class="nx">mainSubtreeStore</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+<span class="w">    </span><span class="p">}</span>
 
-<span class="w"> </span><span class="nx">subtreeStoreUrl</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">found</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">gocore</span><span class="p">.</span><span class="nx">Config</span><span class="p">().</span><span class="nx">GetURL</span><span class="p">(</span><span class="s">&quot;subtreestore&quot;</span><span class="p">)</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">found</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="s">&quot;subtreestore config not found&quot;</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
-<span class="w"> </span><span class="nx">subtreeStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">NewStore</span><span class="p">(</span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeStoreUrl</span><span class="p">,</span><span class="w"> </span><span class="nx">options</span><span class="p">.</span><span class="nx">WithHashPrefix</span><span class="p">(</span><span class="mi">10</span><span class="p">))</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-<span class="w"> </span><span class="p">}</span>
+<span class="w">    </span><span class="kd">var</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span>
+<span class="w">    </span><span class="nx">subtreeStoreURL</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">appSettings</span><span class="p">.</span><span class="nx">SubtreeValidation</span><span class="p">.</span><span class="nx">SubtreeStore</span>
 
-<span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nx">subtreeStore</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">subtreeStoreURL</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewConfigurationError</span><span class="p">(</span><span class="s">&quot;subtreestore config not found&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nx">hashPrefix</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">2</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">subtreeStoreURL</span><span class="p">.</span><span class="nx">Query</span><span class="p">().</span><span class="nx">Get</span><span class="p">(</span><span class="s">&quot;hashPrefix&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">hashPrefix</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">strconv</span><span class="p">.</span><span class="nx">Atoi</span><span class="p">(</span><span class="nx">subtreeStoreURL</span><span class="p">.</span><span class="nx">Query</span><span class="p">().</span><span class="nx">Get</span><span class="p">(</span><span class="s">&quot;hashPrefix&quot;</span><span class="p">))</span>
+<span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewConfigurationError</span><span class="p">(</span><span class="s">&quot;subtreestore hashPrefix config error&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nx">blockchainClient</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">d</span><span class="p">.</span><span class="nx">GetBlockchainClient</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">appSettings</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;subtree&quot;</span><span class="p">)</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewServiceError</span><span class="p">(</span><span class="s">&quot;could not create blockchain client for subtree store&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nx">ch</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">getBlockHeightTrackerCh</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="p">)</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewServiceError</span><span class="p">(</span><span class="s">&quot;could not create block height tracker channel&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="nx">d</span><span class="p">.</span><span class="nx">mainSubtreeStore</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">NewStore</span><span class="p">(</span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeStoreURL</span><span class="p">,</span>
+<span class="w">        </span><span class="nx">options</span><span class="p">.</span><span class="nx">WithHashPrefix</span><span class="p">(</span><span class="nx">hashPrefix</span><span class="p">),</span>
+<span class="w">        </span><span class="nx">options</span><span class="p">.</span><span class="nx">WithBlockHeightCh</span><span class="p">(</span><span class="nx">ch</span><span class="p">))</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">NewServiceError</span><span class="p">(</span><span class="s">&quot;could not create subtree store&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">d</span><span class="p">.</span><span class="nx">mainSubtreeStore</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>The following diagram provides a deeper level of detail into the Blob Store's internal components and their interactions:</p>
@@ -6846,7 +6891,7 @@
 <p><strong>HTTP</strong>: Implements an HTTP client for interacting with a remote blob storage server.</p>
 </li>
 <li>
-<p><strong>Local TTL</strong>: Provides local Time-to-Live (TTL) functionality for managing data expiration.</p>
+<p><strong>Local DAH</strong>: Provides local Delete-At-Height (DAH) functionality for managing blockchain-based data expiration.</p>
 </li>
 <li>
 <p><strong>Memory</strong>: In-memory storage for temporary and fast data access.</p>
@@ -6882,16 +6927,15 @@
 </code></pre></div>
 <p>The <code>ConcurrentBlob</code> wrapper is particularly useful for services that need to fetch the same data concurrently, such as block validation or transaction processing services.</p>
 <h3 id="34-http-rest-api-server">3.4 HTTP REST API Server</h3>
-<p>The Blob Server includes a comprehensive HTTP REST API server implementation (<code>HTTPBlobServer</code>) that provides full HTTP access to blob storage operations. This server implements the standard <code>http.Handler</code> interface and can be easily integrated into existing HTTP server infrastructure.</p>
+<p>The Blob Store includes a comprehensive HTTP REST API server implementation (<code>HTTPBlobServer</code>) that provides full HTTP access to blob storage operations. This server implements the standard <code>http.Handler</code> interface and can be easily integrated into existing HTTP server infrastructure.</p>
 <h4 id="supported-http-endpoints">Supported HTTP Endpoints</h4>
 <ul>
 <li><strong>GET /health</strong>: Health check endpoint returning server status</li>
-<li><strong>GET /{key}</strong>: Retrieve blob by key with optional range support</li>
-<li><strong>POST /{key}</strong>: Store new blob data</li>
-<li><strong>PUT /{key}</strong>: Update existing blob data</li>
-<li><strong>DELETE /{key}</strong>: Delete blob by key</li>
-<li><strong>GET /{key}/dah</strong>: Get Delete-At-Height information for a blob</li>
-<li><strong>POST /{key}/dah</strong>: Set Delete-At-Height for a blob</li>
+<li><strong>HEAD /blob/{key}.{fileType}</strong>: Check if a blob exists without retrieving content</li>
+<li><strong>GET /blob/{key}.{fileType}</strong>: Retrieve blob by key with optional Range header support for partial content</li>
+<li><strong>POST /blob/{key}.{fileType}</strong>: Store new blob data with streaming support</li>
+<li><strong>PATCH /blob/{key}.{fileType}</strong>: Update blob's Delete-At-Height value via <code>dah</code> query parameter</li>
+<li><strong>DELETE /blob/{key}.{fileType}</strong>: Delete blob by key</li>
 </ul>
 <h4 id="usage-example">Usage Example</h4>
 <div class="highlight"><pre><span></span><code><span class="c1">// Create HTTP blob server</span>
@@ -6930,19 +6974,24 @@
 <p><img alt="txStore_propagation_set.svg" src="../../services/img/plantuml/assetserver/txStore_propagation_set.svg" /></p>
 <h2 id="6-directory-structure-and-main-files">6. Directory Structure and Main Files</h2>
 <div class="highlight"><pre><span></span><code>./stores/blob/
-├── Interface.go                # Interface definitions for the project.
+├── Interface.go                # Interface definitions for the blob store.
 ├── batcher                     # Batching functionality for efficient processing.
 │   └── batcher.go              # Main batcher functionality.
-├── factory.go                  # Factory methods for creating instances.
+├── concurrent_blob.go          # Concurrent blob access implementation.
+├── concurrent_blob_test.go     # Test cases for concurrent blob access.
+├── factory.go                  # Factory methods for creating store instances.
 ├── file                        # File system based implementations.
 │   ├── file.go                 # File system handling.
 │   └── file_test.go            # Test cases for file system functions.
 ├── http                        # HTTP client implementation for remote blob storage.
 │   └── http.go                 # HTTP specific functionality.
-├── localttl                    # Local Time-to-Live functionality.
-│   └── localttl.go             # Local TTL handling.
+├── localdah                    # Local Delete-At-Height functionality.
+│   ├── localDAH.go             # Local DAH implementation.
+│   └── localDAH_test.go        # Test cases for local DAH.
+├── logger                      # Logging wrapper for blob store operations.
 ├── memory                      # In-memory implementation.
 │   └── memory.go               # In-memory data handling.
+├── mock.go                     # Mock implementation for testing.
 ├── null                        # Null implementation (no-op).
 │   └── null.go                 # Null pattern implementation.
 ├── options                     # Options and configurations.
@@ -6954,7 +7003,7 @@
 └── server_test.go              # Test cases for the server implementation.
 </code></pre></div>
 <h2 id="7-locally-running-the-store">7. Locally Running the store</h2>
-<p>The Blob Server cannot be run independently. It is instantiated as part of the main.go initialization and directly used by the services that require it.</p>
+<p>The Blob Store cannot be run independently. It is instantiated as part of the main.go initialization and directly used by the services that require it.</p>
 <h2 id="8-configuration-options">8. Configuration Options</h2>
 <p>For comprehensive configuration documentation including all settings, defaults, and interactions, see the <a href="../../../references/settings/stores/blob_settings/">ublob Store Settings Reference</a>.</p>
 <h2 id="9-other-resources">9. Other Resources</h2>
