@@ -6907,14 +6907,18 @@
 <li><a href="#2-functionality">Functionality</a><ul>
 <li><a href="#21-starting-the-validator-as-a-service">2.1. Starting the Validator as a service</a></li>
 <li><a href="#22-receiving-transaction-validation-requests">2.2. Receiving Transaction Validation Requests</a></li>
-<li><a href="#23-validating-the-transaction">2.3. Validating the Transaction</a></li>
+<li><a href="#23-validating-the-transaction">2.3. Validating the Transaction</a><ul>
 <li><a href="#231-consensus-rules-vs-policy-checks">2.3.1. Consensus Rules vs Policy Checks</a></li>
 <li><a href="#232-transaction-format-extension">2.3.2. Transaction Format Extension</a></li>
+</ul>
+</li>
 <li><a href="#24-script-verification">2.4. Script Verification</a></li>
 <li><a href="#25-error-handling-and-transaction-rejection">2.5. Error Handling and Transaction Rejection</a></li>
 <li><a href="#26-concurrent-processing">2.6. Concurrent Processing</a></li>
-<li><a href="#27-post-validation-updating-stores-and-propagating-the-transaction">2.7. Post-validation: Updating stores and propagating the transaction</a></li>
+<li><a href="#27-post-validation-updating-stores-and-propagating-the-transaction">2.7. Post-validation: Updating stores and propagating the transaction</a><ul>
 <li><a href="#271-two-phase-transaction-commit-process">2.7.1. Two-Phase Transaction Commit Process</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li><a href="#3-grpc-protobuf-definitions">gRPC Protobuf Definitions</a></li>
@@ -6928,7 +6932,7 @@
 <h2 id="1-description">1. Description</h2>
 <p>The <code>Validator</code> (also called <code>Transaction Validator</code> or <code>Tx Validator</code>) is a go component responsible for:</p>
 <ol>
-<li>Receiving new transactions from the <code>Propagation</code>service,</li>
+<li>Receiving new transactions from the <code>Propagation</code> service,</li>
 <li>Validating them,</li>
 <li>Persisting the data into the utxo store,</li>
 <li>
@@ -7118,9 +7122,9 @@ However, the Validator can also be started as a service, allowing to interact wi
 </ul>
 </li>
 </ol>
-<p>New Txs are validated by the <code>ValidateTransaction()</code> function. To ensure the validity of the extended Tx, this is delegated to a BSV library: <code>github.com/TAAL-GmbH/arc/validator/default</code> (the default validator).</p>
+<p>Transactions are validated by the <code>ValidateTransaction()</code> function using Teranode's internal validation logic and libraries from the BSV Blockchain organization (<code>github.com/bsv-blockchain/go-bt</code>). The implementation uses pluggable script interpreters (GoBT, GoSDK, or GoBDK) for script verification.</p>
 <p>We can see the exact steps being executed as part of the validation process below:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">tv</span><span class="w"> </span><span class="o">*</span><span class="nx">TxValidator</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateTransaction</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">tv</span><span class="w"> </span><span class="o">*</span><span class="nx">TxValidator</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateTransaction</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="w"> </span><span class="p">[]</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">*</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
 <span class="w"> </span><span class="c1">//</span>
 <span class="w"> </span><span class="c1">// Each node will verify every transaction against a long checklist of criteria:</span>
 <span class="w"> </span><span class="c1">//</span>
@@ -7146,7 +7150,7 @@ However, the Validator can also be started as a service, allowing to interact wi
 
 <span class="w"> </span><span class="c1">// 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,</span>
 <span class="w"> </span><span class="c1">//    more than the dust threshold if 1 unless it&#39;s OP_RETURN, which is allowed to be 0)</span>
-<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">checkOutputs</span><span class="p">(</span><span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">checkOutputs</span><span class="p">(</span><span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
 <span class="w"> </span><span class="p">}</span>
 
@@ -7165,7 +7169,7 @@ However, the Validator can also be started as a service, allowing to interact wi
 <span class="w"> </span><span class="c1">// 10) Reject if the sum of input values is less than sum of output values</span>
 <span class="w"> </span><span class="c1">// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.</span>
 <span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">validationOptions</span><span class="p">.</span><span class="nx">SkipPolicyChecks</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">checkFees</span><span class="p">(</span><span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">feesToBtFeeQuote</span><span class="p">(</span><span class="nx">tv</span><span class="p">.</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Policy</span><span class="p">.</span><span class="nx">GetMinMiningTxFee</span><span class="p">()));</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">tv</span><span class="p">.</span><span class="nx">checkFees</span><span class="p">(</span><span class="nx">tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoHeights</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 <span class="w">   </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="w"> </span><span class="p">}</span>

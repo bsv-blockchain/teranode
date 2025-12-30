@@ -6057,6 +6057,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Block Validation Service Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-operation-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catchup Operation Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6377,6 +6394,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Block Validation Service Metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-operation-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catchup Operation Metrics
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -7061,15 +7095,133 @@
 <td>Gauge</td>
 <td>Number of subtrees in the subtree exists cache</td>
 </tr>
+</tbody>
+</table>
+<h3 id="catchup-operation-metrics">Catchup Operation Metrics</h3>
+<p>CounterVec and HistogramVec metrics use labels: <code>peer_id</code>, <code>success</code>, <code>error_type</code>, <code>priority</code>, <code>result</code>, <code>fork_id</code>, <code>reason</code>.</p>
+<table>
+<thead>
 <tr>
-<td><code>teranode_blockvalidation_catchup_duration</code></td>
-<td>Histogram</td>
-<td>Duration of catchup operations</td>
+<th>Metric Name</th>
+<th>Type</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>teranode_blockvalidation_catchup_duration_seconds</code></td>
+<td>HistogramVec</td>
+<td>Duration of catchup operations in seconds</td>
 </tr>
 <tr>
-<td><code>teranode_blockvalidation_catchup_blocks_processed</code></td>
+<td><code>teranode_blockvalidation_catchup_blocks_fetched_total</code></td>
+<td>CounterVec</td>
+<td>Total number of blocks fetched during catchup</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_catchup_headers_fetched_total</code></td>
+<td>CounterVec</td>
+<td>Total number of headers fetched during catchup</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_catchup_errors_total</code></td>
+<td>CounterVec</td>
+<td>Total number of errors during catchup operations</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_catchup_active</code></td>
+<td>Gauge</td>
+<td>Number of active catchup operations (0 or 1)</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_priority_queue_size</code></td>
+<td>GaugeVec</td>
+<td>Current size of the block priority queue by priority level</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_priority_queue_added_total</code></td>
+<td>CounterVec</td>
+<td>Total number of blocks added to priority queue by priority level</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_priority_queue_processed_total</code></td>
+<td>CounterVec</td>
+<td>Total number of blocks processed from priority queue</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_count</code></td>
+<td>Gauge</td>
+<td>Current number of active forks being tracked</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_processing_workers</code></td>
+<td>Gauge</td>
+<td>Current number of active fork processing workers</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_blocks_processed_total</code></td>
+<td>CounterVec</td>
+<td>Total number of blocks processed on forks by fork ID</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_created_total</code></td>
+<td>CounterVec</td>
+<td>Total number of forks created</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_lifetime_seconds</code></td>
+<td>Histogram</td>
+<td>Lifetime of forks in seconds</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_depth_blocks</code></td>
+<td>Histogram</td>
+<td>Depth of forks in blocks</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_resolved_total</code></td>
+<td>CounterVec</td>
+<td>Total number of forks resolved</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_resolution_depth_blocks</code></td>
+<td>Histogram</td>
+<td>Depth at which forks were resolved in blocks</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_orphaned_total</code></td>
 <td>Counter</td>
-<td>Total number of blocks processed during catchup</td>
+<td>Total number of forks marked as orphaned</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_processing_blocks_stuck</code></td>
+<td>Gauge</td>
+<td>Number of blocks stuck in processing state</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_average_depth</code></td>
+<td>Gauge</td>
+<td>Average depth of active forks in blocks</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_longest_depth</code></td>
+<td>Gauge</td>
+<td>Longest active fork depth in blocks</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_fork_average_lifetime_seconds</code></td>
+<td>Gauge</td>
+<td>Average lifetime of active forks in seconds</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_queue_skip_count</code></td>
+<td>Histogram</td>
+<td>Number of times blocks were skipped before processing</td>
+</tr>
+<tr>
+<td><code>teranode_blockvalidation_queue_wait_seconds</code></td>
+<td>Histogram</td>
+<td>Time blocks spend in queue before processing</td>
 </tr>
 </tbody>
 </table>
