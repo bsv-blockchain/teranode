@@ -89,10 +89,6 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 		filename = fmt.Sprintf("file:%s?mode=memory&cache=shared", random.String(16))
 	} else {
 		folder := tSettings.DataFolder
-		if err = os.MkdirAll(folder, 0755); err != nil {
-			return nil, errors.NewServiceError("failed to create data folder %s", folder, err)
-		}
-
 		dbName := storeURL.Path[1:]
 
 		filename, err = filepath.Abs(path.Join(folder, fmt.Sprintf("%s.db", dbName)))
@@ -100,7 +96,11 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 			return nil, errors.NewServiceError("failed to get absolute path for sqlite DB", err)
 		}
 
-		// filename = fmt.Sprintf("file:%s?cache=shared&mode=rwc", filename)
+		// Create the directory containing the database file (handles nested paths like teranode1/blockchain1.db)
+		dbDir := filepath.Dir(filename)
+		if err = os.MkdirAll(dbDir, 0755); err != nil {
+			return nil, errors.NewServiceError("failed to create data folder %s", dbDir, err)
+		}
 
 		/* Don't be tempted by a large busy_timeout. Just masks a bigger problem.
 		Fail fast. This is 'dev mode' sqlite after all */

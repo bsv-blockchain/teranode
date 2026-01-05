@@ -189,6 +189,7 @@ Retrieves a single block by its hash.
     - `offset` (integer, optional, default: 0) - Number of blocks to skip from tip
     - `limit` (integer, optional, default: 20, max: 100) - Maximum blocks to return
     - `includeOrphans` (boolean, optional, default: false) - Include orphaned blocks
+
 - **Response Format**: JSON with pagination metadata
 - **Content**: Block list with pagination information
 
@@ -201,6 +202,7 @@ Retrieves a single block by its hash.
     - `n` (integer, optional, default: 10) - Number of blocks to retrieve
     - `fromHeight` (unsigned integer, optional, default: 0) - Starting block height
     - `includeOrphans` (boolean, optional, default: false) - Include orphaned blocks
+
 - **Response Format**: JSON
 - **Content**: Array of recent blocks in descending order (newest first)
 

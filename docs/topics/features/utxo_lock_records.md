@@ -137,36 +137,42 @@ Transaction with N batches:
 The first phase creates all transaction records with the `creating` flag set to `true`:
 
 1. **Acquire Lock**
-   - Create lock record with CREATE_ONLY policy
-   - If lock exists, return `TxExistsError` (another process is creating)
-   - Calculate dynamic TTL based on number of records
+
+    - Create lock record with CREATE_ONLY policy
+    - If lock exists, return `TxExistsError` (another process is creating)
+    - Calculate dynamic TTL based on number of records
 
 2. **Store External Data**
-   - Write transaction bytes to blob storage (S3/filesystem)
-   - Use atomic write with existence check
+
+    - Write transaction bytes to blob storage (S3/filesystem)
+    - Use atomic write with existence check
 
 3. **Create Aerospike Records**
-   - Prepare all record keys upfront (fail fast on key errors)
-   - Add `creating=true` to all bins
-   - Execute batch write with CREATE_ONLY policy
-   - Handle KEY_EXISTS_ERROR as recovery case
+
+    - Prepare all record keys upfront (fail fast on key errors)
+    - Add `creating=true` to all bins
+    - Execute batch write with CREATE_ONLY policy
+    - Handle KEY_EXISTS_ERROR as recovery case
 
 4. **Release Lock**
-   - Delete lock record (always, even on partial failure)
-   - Partial records remain for next attempt to complete
+
+    - Delete lock record (always, even on partial failure)
+    - Partial records remain for next attempt to complete
 
 ### 4.2. Phase 2: Flag Clearing
 
 The second phase removes the `creating` flag in a specific order:
 
 1. **Clear Child Records First** (indices 1, 2, ..., N-1)
-   - Batch operation with expression filter
-   - Only updates records where `creating` bin exists
-   - Use UPDATE_ONLY policy
+
+    - Batch operation with expression filter
+    - Only updates records where `creating` bin exists
+    - Use UPDATE_ONLY policy
 
 2. **Clear Master Record Last** (index 0)
-   - Single record operation
-   - Master's flag absence = atomic completion indicator
+
+    - Single record operation
+    - Master's flag absence = atomic completion indicator
 
 This ordering ensures:
 
@@ -220,24 +226,28 @@ The protocol provides the following guarantees:
 The system self-heals through multiple paths:
 
 1. **Retry Path**
-   - When transaction is re-submitted
-   - Finds all records exist (KEY_EXISTS_ERROR)
-   - Attempts Phase 2 to clear creating flags
+
+    - When transaction is re-submitted
+    - Finds all records exist (KEY_EXISTS_ERROR)
+    - Attempts Phase 2 to clear creating flags
 
 2. **Re-Encounter Path**
-   - When transaction appears in block or subtree
-   - `processTxMetaUsingStore.go` checks for `creating` flag
-   - Triggers re-processing to complete commit
+
+    - When transaction appears in block or subtree
+    - `processTxMetaUsingStore.go` checks for `creating` flag
+    - Triggers re-processing to complete commit
 
 3. **Mining Path**
-   - When block is mined containing the transaction
-   - `SetMined` operation clears creating flags
-   - Normal mining flow completes the commit
+
+    - When block is mined containing the transaction
+    - `SetMined` operation clears creating flags
+    - Normal mining flow completes the commit
 
 4. **TTL-Based Lock Release**
-   - Lock records automatically expire (30-300 seconds)
-   - Prevents permanent lock on process crash
-   - Allows other processes to retry
+
+    - Lock records automatically expire (30-300 seconds)
+    - Prevents permanent lock on process crash
+    - Allows other processes to retry
 
 ### 5.3. StorageError Usage
 

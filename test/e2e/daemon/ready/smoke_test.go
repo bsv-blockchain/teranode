@@ -29,9 +29,7 @@ import (
 )
 
 func TestTracing(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	tSettings := settings.NewSettings()
 	tSettings.TracingEnabled = true
 	tSettings.TracingSampleRate = 1.0
@@ -63,9 +61,7 @@ func TestTracing(t *testing.T) {
 }
 
 func TestSendTxAndCheckState(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
@@ -261,9 +257,6 @@ func TestSendTxAndCheckState(t *testing.T) {
 
 func TestSendTxDeleteParentResendTx(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	var err error
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -348,9 +341,7 @@ func TestSendTxDeleteParentResendTx(t *testing.T) {
 }
 
 func TestSendTxAndCheckStateWithDuplicateTxSentSimultaneously(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	var err error
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -582,9 +573,7 @@ func TestSendTxAndCheckStateWithDuplicateTxSentSimultaneously(t *testing.T) {
 }
 
 func TestDuplicateTransactionAfterMining(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	var err error
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -672,9 +661,7 @@ func TestDuplicateTransactionAfterMining(t *testing.T) {
 }
 
 func TestShouldNotProcessNonFinalTx(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
 		UTXOStoreType: "aerospike",
@@ -763,9 +750,7 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 }
 
 func TestShouldRejectOversizedTx(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
 		UTXOStoreType: "aerospike",
@@ -865,9 +850,6 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 
 func TestShouldRejectOversizedScript(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
 		UTXOStoreType: "aerospike",
@@ -957,9 +939,7 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 }
 
 func TestDoubleInput(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -999,9 +979,7 @@ func TestDoubleInput(t *testing.T) {
 }
 
 func TestGetBestBlockHash(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1036,9 +1014,7 @@ func TestGetBestBlockHash(t *testing.T) {
 }
 
 func TestGetPeerInfo(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1071,9 +1047,7 @@ func TestGetPeerInfo(t *testing.T) {
 }
 
 func TestGetMiningInfo(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1112,9 +1086,7 @@ func TestGetMiningInfo(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1153,9 +1125,7 @@ func TestVersion(t *testing.T) {
 }
 
 func TestGetBlockVerbosity(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1241,9 +1211,7 @@ func TestGetBlockVerbosity(t *testing.T) {
 }
 
 func TestGetBlockHeaderVerbose(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1329,8 +1297,7 @@ func TestGetBlockHeaderVerbose(t *testing.T) {
 }
 
 func TestGetRawTransactionVerbose(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
+	// t.Parallel()
 	// t.Skip("Skipping getrawtransaction verbose test, covered by TestSendTxAndCheckState")
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -1467,9 +1434,7 @@ func TestGetRawTransactionVerbose(t *testing.T) {
 }
 
 func TestCreateAndSendRawTransaction(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	// aerospike
 	// utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
 	// require.NoError(t, err, "Failed to setup Aerospike container")
@@ -1620,9 +1585,7 @@ func TestCreateAndSendRawTransaction(t *testing.T) {
 }
 
 func TestGetMiningCandidate(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1747,9 +1710,7 @@ func generateRandomAddress(network string) (string, error) {
 }
 
 func TestGenerateToAddress(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1805,9 +1766,7 @@ func TestGenerateToAddress(t *testing.T) {
 }
 
 func TestBlockManagement(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1869,9 +1828,6 @@ func TestBlockManagement(t *testing.T) {
 
 func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// aerospike
 	// utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
 	// require.NoError(t, err, "Failed to setup Aerospike container")
@@ -2153,9 +2109,6 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 
 func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	var err error
 
 	// Start NodeA

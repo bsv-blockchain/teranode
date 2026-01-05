@@ -127,7 +127,7 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 - `localhost:8096` - Listen only on localhost (more secure)
 - `0.0.0.0:8096` - Explicitly listen on all IPv4 interfaces
 
-## Job Management Settings
+## Operation Timeout Settings
 
 ### pruner_jobTimeout
 
@@ -135,7 +135,7 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 
 **Default**: `10m` (10 minutes)
 
-**Description**: Timeout for waiting for pruning job completion before coordinator moves on
+**Description**: Timeout for overall pruning operation completion
 
 **Format**: Duration string (e.g., `5m`, `30s`, `1h`)
 
@@ -147,12 +147,8 @@ pruner_jobTimeout = 10m
 
 **Behavior:**
 
-- Coordinator waits up to `jobTimeout` for job completion
-- On timeout:
-
-    - Coordinator moves on (non-error)
-    - Job continues running in background
-    - Will be re-queued immediately if needed
+- Pruning operation runs synchronously up to this timeout
+- On timeout: Operation is logged as timed out but continues in background
 
 **Tuning Guidelines:**
 
@@ -163,8 +159,8 @@ pruner_jobTimeout = 10m
 
 **Impact:**
 
-- Too short: Frequent timeouts, coordinator moves on repeatedly
-- Too long: Coordinator waits unnecessarily for long-running jobs
+- Too short: Frequent timeouts logged
+- Too long: Blocks other operations unnecessarily
 
 **Metrics**: Monitor `pruner_duration_seconds` to determine appropriate timeout
 
@@ -350,6 +346,136 @@ Namespace   Set     Index Name        Bin Name          Type
 teranode    utxos   pruner_dah_index  deleteAtHeight    NUMERIC
 ```
 
+## Chunk Processing Settings
+
+These settings control parallel processing during UTXO pruning operations.
+
+### pruner_utxoChunkSize
+
+**Type**: Integer
+
+**Default**: `1000`
+
+**Description**: Number of records to process in each parallel chunk during pruning
+
+Controls the granularity of parallel processing. Records are accumulated into chunks of this size, then processed in parallel.
+
+**Example:**
+
+```conf
+pruner_utxoChunkSize = 1000
+```
+
+**Tuning:**
+
+- **Higher values**: Fewer chunks, less parallelism overhead, more memory per chunk
+- **Lower values**: More chunks, better parallelism, more overhead
+
+**Recommendation**: Default value works well for most deployments.
+
+### pruner_utxoChunkGroupLimit
+
+**Type**: Integer
+
+**Default**: `10`
+
+**Description**: Maximum number of chunks to process in parallel
+
+Limits concurrent chunk processing to prevent overwhelming Aerospike or exhausting system resources.
+
+**Example:**
+
+```conf
+pruner_utxoChunkGroupLimit = 10
+```
+
+**Tuning:**
+
+- **Higher values**: More parallelism, faster pruning, higher resource usage
+- **Lower values**: Less parallelism, slower pruning, lower resource usage
+
+**Constraint**: Limited by Aerospike connection pool size. Setting too high causes connection contention.
+
+### pruner_utxoProgressLogInterval
+
+**Type**: Duration
+
+**Default**: `30s`
+
+**Description**: Interval for logging progress during long-running pruning operations
+
+When set, the pruner logs periodic progress updates showing records pruned and elapsed time.
+
+**Example:**
+
+```conf
+pruner_utxoProgressLogInterval = 30s
+```
+
+**Values:**
+
+- `0`: Disable progress logging
+- `30s`: Log every 30 seconds (default)
+- `1m`: Log every minute
+
+**Use Case**: Monitor progress during large pruning operations or troubleshoot slow pruning.
+
+## Defensive Mode Settings
+
+These settings control the defensive pruning mode, which adds safety checks before deleting parent transactions.
+
+### pruner_utxoDefensiveEnabled
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Description**: Enable defensive child verification before parent deletion
+
+When enabled, the pruner verifies that ALL spending children of a parent transaction are mined and stable (for at least `blockHeightRetention` blocks) before deleting the parent. This prevents orphaning children during chain reorganizations.
+
+**Example:**
+
+```conf
+pruner_utxoDefensiveEnabled = true
+```
+
+**Impact:**
+
+- `true`: Safer pruning with child verification, slightly slower due to batch verification
+- `false`: Faster pruning, relies on retention period alone for safety
+
+**When to Enable:**
+
+- Production environments with high transaction resubmission rates
+- Environments experiencing frequent chain reorganizations
+- When data integrity is critical
+
+**Trade-off**: Enabling adds Aerospike batch read operations to verify children, which increases pruning time but provides stronger safety guarantees.
+
+### pruner_utxoDefensiveBatchReadSize
+
+**Type**: Integer
+
+**Default**: `10000`
+
+**Description**: Batch size for defensive child verification queries
+
+Controls how many child transactions are verified in a single Aerospike BatchGet call when defensive mode is enabled.
+
+**Example:**
+
+```conf
+pruner_utxoDefensiveBatchReadSize = 10000
+```
+
+**Tuning:**
+
+- **Higher values**: Fewer Aerospike round trips, more memory per batch
+- **Lower values**: More round trips, less memory per batch
+
+**Applies To**: Only used when `pruner_utxoDefensiveEnabled = true`
+
 ## Context-Specific Configuration
 
 ### Development Context
@@ -423,7 +549,8 @@ All other settings use defaults.
 # settings.conf
 startPruner = true
 pruner_jobTimeout = 5m  # Shorter timeout
-utxostore_prunerMaxConcurrentOperations = 16  # More workers
+pruner_utxoChunkSize = 2000  # Larger chunks
+pruner_utxoChunkGroupLimit = 20  # More parallel chunks
 utxostore_unminedTxRetention = 5000  # Prune sooner
 utxostore_parentPreservationBlocks = 10000  # Shorter preservation
 ```
@@ -436,7 +563,8 @@ utxostore_parentPreservationBlocks = 10000  # Shorter preservation
 # settings.conf
 startPruner = true
 pruner_jobTimeout = 20m  # Longer timeout
-utxostore_prunerMaxConcurrentOperations = 4  # Fewer workers
+pruner_utxoChunkGroupLimit = 5  # Fewer parallel chunks
+pruner_utxoDefensiveEnabled = true  # Enable safety checks
 utxostore_unminedTxRetention = 10000  # Retain longer
 utxostore_parentPreservationBlocks = 20000  # Longer preservation
 ```
@@ -532,10 +660,11 @@ pruner_jobTimeout = 20m  # or higher
 
 **Solutions:**
 
-1. Increase worker count:
+1. Increase parallel chunk processing:
 
     ```conf
-    utxostore_prunerMaxConcurrentOperations = 16
+    pruner_utxoChunkGroupLimit = 20  # Process more chunks in parallel
+    pruner_utxoChunkSize = 2000  # Larger chunks
     ```
 
 2. Verify Aerospike index exists:
@@ -545,6 +674,12 @@ pruner_jobTimeout = 20m  # or higher
     ```
 
 3. Check database performance
+
+4. If defensive mode is enabled and slowing pruning:
+
+    ```conf
+    pruner_utxoDefensiveEnabled = false  # Disable if safety checks not needed
+    ```
 
 ### Database Growth
 

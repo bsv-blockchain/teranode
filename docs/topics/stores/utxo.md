@@ -1,4 +1,4 @@
-# 🗃️ UTXO Store
+# UTXO Store
 
 ## Index
 
@@ -63,7 +63,7 @@ The UTXO Store includes functionality to **freeze** and **unfreeze** UTXOs, as w
 
 ## 2. Architecture
 
-The UTXO Store is a micro-service that is used by other micro-services to retrieve or store / modify UTXOs.
+The UTXO Store is a shared library component that is used by multiple Teranode services to retrieve, store, and modify UTXOs.
 
 ![UTXO_Store_Container_Context_Diagram.png](../services/img/UTXO_Store_Container_Context_Diagram.png)
 
@@ -77,7 +77,7 @@ The following diagram illustrates the complete flow of UTXO operations across al
 
 ![utxo_operations_flow.svg](../services/img/plantuml/utxo/utxo_operations_flow.svg)
 
-The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (`utxostore`), as it can be seen in the following code fragment (`main.go`):
+The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (`utxostore`), as it can be seen in the following code example:
 
 ```go
 
@@ -130,7 +130,7 @@ The Teranode UTXO is no different from Bitcoin UTXO. The following is a descript
 
 - **Transaction Outputs**: When a transaction occurs on the blockchain, it creates "transaction outputs," which are essentially chunks of cryptocurrency value. Each output specifies an amount and a condition under which it can be spent (a cryptographic script key that the receiver owns).
 
-Under the external library `github.com/ordishs/go-bt/output.go`, we can see the structure of a transaction output.
+Under the external library `github.com/bsv-blockchain/go-bt/v2`, we can see the structure of a transaction output.
 
 ```go
 type Output struct {
@@ -152,7 +152,7 @@ Components of the `Output` struct:
     - The `LockingScript`, often referred to as the "scriptPubKey" in Bitcoin's technical documentation, is a script written in Bitcoin's scripting language.
     - This script contains cryptographic conditions to unlock the funds.
 
-Equally, we can see how a list of outputs is part of a transaction (`github.com/ordishs/go-bt/tx.go`):
+Equally, we can see how a list of outputs is part of a transaction (`github.com/bsv-blockchain/go-bt/v2`):
 
 ```go
 type Tx struct {
@@ -207,31 +207,23 @@ Once the UTXO is spent, the spending tx_id will be saved.
 
 - To compute the hash of the key, the caller must know the complete data and calculate the hash before calling the API.
 
-- The hashing logic can be found in `UTXOHash.go`:
+- The hashing logic can be found in `util/utxo_hash.go`:
 
 ```go
-func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript []byte, satoshis uint64) (*chainhash.Hash, error) {
- if len(lockingScript) == 0 {
-  return nil, fmt.Errorf("locking script is nil")
- }
-
- if satoshis == 0 {
-  return nil, fmt.Errorf("satoshis is 0")
+func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript *bscript.Script, satoshis uint64) (*chainhash.Hash, error) {
+ if lockingScript == nil {
+  return nil, errors.NewProcessingError("locking script is nil")
  }
 
  utxoHash := make([]byte, 0, 256)
  utxoHash = append(utxoHash, previousTxid.CloneBytes()...)
  utxoHash = append(utxoHash, bt.VarInt(index).Bytes()...)
- utxoHash = append(utxoHash, lockingScript...)
+ utxoHash = append(utxoHash, *lockingScript...)
  utxoHash = append(utxoHash, bt.VarInt(satoshis).Bytes()...)
 
- hash := crypto.Sha256(utxoHash)
- chHash, err := chainhash.NewHash(hash)
- if err != nil {
-  return nil, err
- }
+ chHash := chainhash.HashH(utxoHash)
 
- return chHash, nil
+ return &chHash, nil
 }
 ```
 
@@ -292,7 +284,7 @@ Coinbase Transaction creation (UTXO step):
 
 Coinbase Transaction deletion (UTXO step):
 
-1. The **Block Assembly** service (see `SubtreeProcessor.go`, `` method)  deletes the Coinbase transaction. This is done when blocks are reorganised and previously tracked coinbase transactions lose validity.
+1. The **Block Assembly** service (see `SubtreeProcessor.go`, `removeCoinbaseUtxos` method)  deletes the Coinbase transaction. This is done when blocks are reorganised and previously tracked coinbase transactions lose validity.
 2. The **Block Assembly** service sends a request to the **UTXO Store** to delete the Coinbase UTXO.
 3. The **UTXO Store** interacts with the underlying **Datastore** implementation to delete the Coinbase UTXO.
 
@@ -440,7 +432,7 @@ The UTXO Store tracks unmined transactions to support transaction recovery and c
 A statically typed, compiled language known for its simplicity and efficiency, especially in concurrent operations and networked services.
 The primary language used for implementing the service's logic.
 
-2. **Bitcoin Transaction (BT) GoLang library**: `github.com/ordishs/go-bt/` - a full featured Bitcoin transactions and transaction manipulation/functionality Go Library.
+2. **Bitcoin Transaction (BT) GoLang library**: `github.com/bsv-blockchain/go-bt/v2` - a full featured Bitcoin transactions and transaction manipulation/functionality Go Library.
 
 ### 5.2. Data Stores
 
@@ -452,7 +444,7 @@ The following datastores are supported (either in development / experimental or 
     - Suitable for environments requiring high throughput and low latency.
     - Handles large volumes of UTXO data with fast read/write capabilities.
     - Aerospike is the reference datastore. Teranode has been guaranteed to process 1 million tps with Aerospike.
-    - Aerospike records can contain up to 1024 bytes.
+    - Aerospike records can contain up to 1MB.
    ![AerospikeRecord.png](../services/img/AerospikeRecord.png)
     - For more information, please refer to the official Aerospike documentation: <https://aerospike.com>.
 
@@ -604,12 +596,17 @@ UTXO Store Package Structure (stores/utxo)
 
 ## 8. Running the Store Locally
 
-### How to run
+- **Validator**: For validating transactions and managing UTXO state
+- **Block Assembly**: For creating new blocks and managing coinbase UTXOs
+- **Block Validation**: For validating blocks and storing coinbase transactions
+- **Subtree Validation**: For retrieving UTXO metadata during subtree validation
+- **Asset Server**: For serving UTXO data to external clients
+- **Block Persister**: For retrieving UTXO metadata when persisting blocks
 
 The UTXO Store is a data store component that is used by various services. It is not run independently. To use the UTXO Store locally, run services that depend on it, such as the Validator or UTXO Persister:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -validator=1 -utxopersister=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -validator=1 
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running services locally.

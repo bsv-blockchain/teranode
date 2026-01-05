@@ -13,7 +13,7 @@
 | HTTPListenAddress | string | "" | p2p_httpListenAddress | HTTP server binding |
 | ListenAddresses | []string | [] | p2p_listen_addresses | P2P network interfaces |
 | AdvertiseAddresses | []string | [] | p2p_advertise_addresses | Address advertisement to peers |
-| ListenMode | string | "full" | listen_mode | Node operation mode |
+| ListenMode | string | "full" | listen_mode | Node operation mode ("full" or "listen_only") |
 | PeerID | string | "" | p2p_peer_id | Peer network identifier |
 | Port | int | 9906 | p2p_port | Default P2P communication port |
 | PrivateKey | string | "" | p2p_private_key | **CRITICAL** - Cryptographic peer identity |
@@ -34,6 +34,9 @@
 | EnableMDNS | bool | false | p2p_enable_mdns | **CRITICAL** - mDNS peer discovery (triggers network scanning) |
 | AllowPrivateIPs | bool | false | p2p_allow_private_ips | **CRITICAL** - Allow RFC1918 private IP connections |
 | SyncCoordinatorPeriodicEvaluationInterval | time.Duration | 30s | p2p_sync_coordinator_periodic_evaluation_interval | Sync coordinator evaluation interval |
+| PeerMapMaxSize | int | 100000 | N/A | **INTERNAL** - Maximum entries in peer maps (hardcoded default) |
+| PeerMapTTL | time.Duration | 30m | N/A | **INTERNAL** - Peer map entry time-to-live (hardcoded default) |
+| PeerMapCleanupInterval | time.Duration | 5m | N/A | **INTERNAL** - Peer map cleanup frequency (hardcoded default) |
 
 ## Configuration Dependencies
 
@@ -52,6 +55,13 @@
 
 - `StaticPeers` ensures persistent connections
 - `PeerCacheDir` for peer persistence
+
+### Peer Map Management
+
+- `PeerMapMaxSize` limits memory usage for block/subtree peer tracking
+- `PeerMapTTL` controls peer map entry expiration (30 minutes)
+- `PeerMapCleanupInterval` sets cleanup frequency (5 minutes)
+- These settings use hardcoded defaults and are not configurable via environment variables
 
 ### Network Scanning Prevention
 
@@ -72,12 +82,13 @@
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| GRPCListenAddress | Used for gRPC server binding | Service communication |
-| ForceSyncPeer | Overrides automatic peer selection | Sync behavior |
-| EnableNAT | Triggers network scanning on shared hosting | Security alerts |
-| EnableMDNS | Triggers network scanning on shared hosting | Security alerts |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| ListenMode | Must be "full" or "listen_only" | Service fails to start if invalid | During server initialization |
+| GRPCListenAddress | Used for gRPC server binding | Service communication | During server start |
+| ForceSyncPeer | Overrides automatic peer selection | Sync behavior | During sync coordinator initialization |
+| EnableNAT | Triggers network scanning on shared hosting | Security alerts | During libp2p host initialization |
+| EnableMDNS | Triggers network scanning on shared hosting | Security alerts | During libp2p host initialization |
 
 ## Configuration Examples
 

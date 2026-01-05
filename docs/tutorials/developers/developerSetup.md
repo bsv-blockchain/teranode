@@ -183,11 +183,11 @@ source ~/.zprofile
 
 1. **Echo** the environment variable to ensure it's set correctly:
 
-   ```bash
-   echo $SETTINGS_CONTEXT
-   ```
+    ```bash
+    echo $SETTINGS_CONTEXT
+    ```
 
-   Should print `dev`.
+    Should print `dev`.
 
 2. **Run** or **restart** your node. Check logs or console output to confirm it's picking up the lines with `dev`.
 
@@ -329,11 +329,11 @@ To debug Teranode during local development:
 
 1. **Build with debug symbols**:
 
-   ```bash
-   DEBUG=true make build
-   ```
+    ```bash
+    DEBUG=true make build
+    ```
 
-   This enables debug flags (`-N -l`) that disable optimizations and inlining, making debugging easier.
+    This enables debug flags (`-N -l`) that disable optimizations and inlining, making debugging easier.
 
 2. **Attach your debugger** to the running Teranode process using your preferred IDE or tool.
 

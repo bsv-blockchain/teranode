@@ -108,10 +108,13 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 
 	// 3. Process all transactions through UTXO diff to track additions and deletions
 	// This always happens regardless of whether subtreeData already existed
-	for _, tx := range subtreeData.Txs {
-		if tx != nil {
-			if err := utxoDiff.ProcessTx(tx); err != nil {
-				return errors.NewProcessingError("error processing tx for UTXO", err)
+	// Only process UTXO changes if utxoDiff is provided (i.e., UTXO file processing is enabled)
+	if utxoDiff != nil {
+		for _, tx := range subtreeData.Txs {
+			if tx != nil {
+				if err := utxoDiff.ProcessTx(tx); err != nil {
+					return errors.NewProcessingError("error processing tx for UTXO", err)
+				}
 			}
 		}
 	}

@@ -31,6 +31,7 @@ func StartKafkaControlledListener(ctx context.Context, logger ulogger.Logger, gr
 			if kafkaCancel != nil {
 				kafkaCancel()
 			}
+			return
 		case control := <-kafkaControlChan:
 			if control { // Start signal
 				if kafkaCancel != nil {

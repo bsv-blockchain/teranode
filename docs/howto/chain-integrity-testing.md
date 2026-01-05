@@ -5,6 +5,7 @@ This document explains how to run chain integrity tests locally using the Make j
 ## Overview
 
 The chain integrity test verifies that multiple Teranode nodes maintain consistent blockchain state by:
+
 1. Starting 3 Teranode nodes with block generators
 2. Waiting for all nodes to reach a specified block height
 3. Running the chainintegrity tool to compare log file hashes across nodes
@@ -118,9 +119,9 @@ During the test, you can monitor progress by:
 - Viewing container logs: `docker compose -f compose/docker-compose-3blasters.yml logs`
 - Checking individual node APIs:
 
-  - Node 1: http://localhost:18090/api/v1/bestblockheader/json
-  - Node 2: http://localhost:28090/api/v1/bestblockheader/json
-  - Node 3: http://localhost:38090/api/v1/bestblockheader/json
+    - Node 1: http://localhost:18090/api/v1/bestblockheader/json
+    - Node 2: http://localhost:28090/api/v1/bestblockheader/json
+    - Node 3: http://localhost:38090/api/v1/bestblockheader/json
 
 ## Output Files
 
@@ -162,25 +163,29 @@ The hash comparison helps verify that nodes are maintaining consistent blockchai
 ### Common Issues
 
 1. **Timeout waiting for nodes to reach height**
-   - Increase `MAX_ATTEMPTS` or decrease `REQUIRED_HEIGHT`
-   - Check system resources (CPU, memory, disk space)
-   - Verify Docker containers are running: `docker ps`
+
+    - Increase `MAX_ATTEMPTS` or decrease `REQUIRED_HEIGHT`
+    - Check system resources (CPU, memory, disk space)
+    - Verify Docker containers are running: `docker ps`
 
 2. **ECR login issues**
-   - Ensure AWS CLI is installed and configured
-   - Check AWS credentials: `aws sts get-caller-identity`
-   - Verify ECR access permissions
-   - Run `make ecr-login` manually if needed
 
-2. **Nodes not responding**
-   - Check container logs: `docker compose -f compose/docker-compose-3blasters.yml logs teranode1`
-   - Verify ports are not in use: `lsof -i :18090,28090,38090`
-   - Restart Docker if needed
+    - Ensure AWS CLI is installed and configured
+    - Check AWS credentials: `aws sts get-caller-identity`
+    - Verify ECR access permissions
+    - Run `make ecr-login` manually if needed
 
-3. **Chain integrity test fails**
-   - Check the `chainintegrity_output.log` for detailed error messages
-   - Verify all nodes are in sync before running the test
-   - Consider running with debug mode for more verbose output
+3. **Nodes not responding**
+
+    - Check container logs: `docker compose -f compose/docker-compose-3blasters.yml logs teranode1`
+    - Verify ports are not in use: `lsof -i :18090,28090,38090`
+    - Restart Docker if needed
+
+4. **Chain integrity test fails**
+
+    - Check the `chainintegrity_output.log` for detailed error messages
+    - Verify all nodes are in sync before running the test
+    - Consider running with debug mode for more verbose output
 
 ### Debug Mode
 
