@@ -284,6 +284,55 @@ func TestInitSQLiteDBDataFolderCreation(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestInitSQLiteDBNestedPath(t *testing.T) {
+	logger := &mockLogger{}
+
+	// Use a non-existent directory with nested subdirectory in the path
+	// This tests the multi-node scenario where paths are like "teranode1/blockchain1"
+	tempDir := filepath.Join(os.TempDir(), "teranode-test", "nested-sql-test", time.Now().Format("20060102-150405"))
+	testSettings := &settings.Settings{
+		DataFolder: tempDir,
+		UtxoStore: settings.UtxoStoreSettings{
+			PostgresMaxIdleConns: 10,
+			PostgresMaxOpenConns: 80,
+		},
+	}
+
+	// This simulates sqlite:///teranode1/blockchain1 used by MultiNodeSettings
+	storeURL := &url.URL{
+		Scheme: "sqlite",
+		Path:   "/teranode1/blockchain1",
+	}
+
+	// Ensure the directory doesn't exist initially
+	_, err := os.Stat(tempDir)
+	assert.True(t, os.IsNotExist(err), "Test directory should not exist initially")
+
+	db, err := util.InitSQLiteDB(logger, storeURL, testSettings)
+	assert.NoError(t, err, "Should handle nested paths like teranode1/blockchain1")
+	assert.NotNil(t, db)
+
+	// Verify the nested directory was created
+	nestedDir := filepath.Join(tempDir, "teranode1")
+	stat, err := os.Stat(nestedDir)
+	assert.NoError(t, err)
+	assert.True(t, stat.IsDir(), "Nested data folder teranode1 should be created")
+
+	// Verify the database file exists
+	dbFile := filepath.Join(nestedDir, "blockchain1.db")
+	_, err = os.Stat(dbFile)
+	assert.NoError(t, err, "Database file should exist")
+
+	if db != nil {
+		err := db.Close()
+		assert.NoError(t, err)
+	}
+
+	// Cleanup
+	err = os.RemoveAll(filepath.Dir(tempDir))
+	assert.NoError(t, err)
+}
+
 func TestInitSQLiteDBInvalidDataFolder(t *testing.T) {
 	logger := &mockLogger{}
 

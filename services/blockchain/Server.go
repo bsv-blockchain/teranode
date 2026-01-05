@@ -1918,6 +1918,16 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 		b.logger.Errorf("[Blockchain] Error sending notification for best block %s: %v", blockHash, err)
 	}
 
+	// send BlockMinedUnset notification to trigger immediate processing by BlockValidation
+	// This ensures transaction status is updated immediately for invalidated blocks
+	// instead of waiting for the periodic job (which runs every 1 minute in production)
+	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: model.NotificationType_BlockMinedUnset,
+		Hash: blockHash.CloneBytes(),
+	}); err != nil {
+		b.logger.Errorf("[Blockchain] Error sending BlockMinedUnset notification for %s: %v", blockHash, err)
+	}
+
 	return &blockchain_api.InvalidateBlockResponse{
 		InvalidatedBlocks: invalidatedHashBytes,
 	}, nil

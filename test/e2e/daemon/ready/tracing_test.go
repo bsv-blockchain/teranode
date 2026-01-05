@@ -14,8 +14,6 @@ import (
 )
 
 func TestCheckSpanPropagation(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,

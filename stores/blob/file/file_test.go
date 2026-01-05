@@ -1926,7 +1926,6 @@ func TestDAHZeroHandling(t *testing.T) {
 	})
 
 	t.Run("loadDAHs handles invalid DAH files", func(t *testing.T) {
-		t.Skip("Skipping flaky test for now")
 		tempDir, err := os.MkdirTemp("", "test-load-dah-invalid")
 		require.NoError(t, err)
 		defer os.RemoveAll(tempDir)
@@ -1944,19 +1943,23 @@ func TestDAHZeroHandling(t *testing.T) {
 		err = os.WriteFile(invalidDAHFile2, []byte(""), 0o600)
 		require.NoError(t, err)
 
-		// Create file store through normal initialization
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
+		// Create File struct directly to test loadDAHs without the New() function's
+		// fileCleanerOnce mechanism, which can prevent loadDAHs from running if another
+		// test has already registered a URL (package-level sync.Map is never cleared)
+		f := &File{
+			path:     tempDir,
+			logger:   ulogger.TestLogger{},
+			fileDAHs: make(map[string]uint32),
+		}
 
-		f, err := New(ulogger.TestLogger{}, u)
+		// Call loadDAHs directly
+		err = f.loadDAHs()
 		require.NoError(t, err)
-
-		// Wait a moment for the background loadDAHs to complete
-		time.Sleep(500 * time.Millisecond)
 
 		// Verify valid DAH is loaded
+		validDAHKey := filepath.Join(tempDir, "valid.tx")
 		f.fileDAHsMu.Lock()
-		validDAH, exists := f.fileDAHs[filepath.Join(tempDir, "valid.tx")]
+		validDAH, exists := f.fileDAHs[validDAHKey]
 		f.fileDAHsMu.Unlock()
 		require.True(t, exists, "Valid DAH should be loaded")
 		require.Equal(t, uint32(100), validDAH)

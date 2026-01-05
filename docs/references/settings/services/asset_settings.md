@@ -9,10 +9,32 @@
 | APIPrefix | string | "/api/v1" | asset_apiPrefix | URL prefix for API endpoints |
 | CentrifugeListenAddress | string | ":8892" | asset_centrifugeListenAddress | WebSocket server binding address |
 | CentrifugeDisable | bool | false | asset_centrifuge_disable | Disables WebSocket server |
-| HTTPAddress | string | "http://localhost:8090/api/v1" | asset_httpAddress | **Required when Centrifuge enabled** - Must be valid URL |
-| HTTPListenAddress | string | ":8090" | asset_httpListenAddress | **CRITICAL** - HTTP server binding (fails if empty) |
-| SignHTTPResponses | bool | false | asset_sign_http_responses | Adds X-Signature header (requires P2P.PrivateKey) |
+| HTTPAddress | string | "http://localhost:8090/api/v1" | asset_httpAddress | **Required when Centrifuge enabled** - Must be non-empty and valid URL format |
+| HTTPListenAddress | string | ":8090" | asset_httpListenAddress | **CRITICAL** - HTTP server binding (fails during Init() if empty) |
+| HTTPPort | int | 8090 | ASSET_HTTP_PORT | **UNUSED** - HTTPListenAddress is used instead |
+| HTTPPublicAddress | string | "" | asset_httpPublicAddress | **UNUSED** - Reserved for future use |
+| SignHTTPResponses | bool | false | asset_sign_http_responses | Adds X-Signature header (requires P2P.PrivateKey, non-fatal if invalid) |
 | EchoDebug | bool | false | ECHO_DEBUG | Enables verbose logging and request middleware |
+
+## Concurrency Settings
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| ConcurrencyGetTransaction | int | 0 | asset_concurrency_get_transaction | Rate limit for GetTransaction (0=unlimited, -1=NumCPU, >0=exact) |
+| ConcurrencyGetTransactionMeta | int | 0 | asset_concurrency_get_transaction_meta | Rate limit for GetTransactionMeta |
+| ConcurrencyGetSubtreeData | int | 0 | asset_concurrency_get_subtree_data | Rate limit for GetSubtreeData |
+| ConcurrencyGetSubtreeDataReader | int | 0 | asset_concurrency_get_subtree_data_reader | Rate limit for GetSubtreeDataReader |
+| ConcurrencyGetSubtreeTransactions | int | 0 | asset_concurrency_get_subtree_transactions | Rate limit for GetSubtreeTransactions |
+| ConcurrencyGetSubtreeExists | int | 0 | asset_concurrency_get_subtree_exists | Rate limit for GetSubtreeExists |
+| ConcurrencyGetSubtreeHead | int | 0 | asset_concurrency_get_subtree_head | Rate limit for GetSubtreeHead |
+| ConcurrencyGetUtxo | int | 0 | asset_concurrency_get_utxo | Rate limit for GetUtxo |
+| ConcurrencyGetLegacyBlockReader | int | -1 | asset_concurrency_get_legacy_block_reader | Rate limit for GetLegacyBlockReader (default: NumCPU) |
+
+**Concurrency Control:**
+
+- `0` = Unlimited concurrency (no rate limiting)
+- `-1` = Dynamic limit based on runtime.NumCPU()
+- `>0` = Exact concurrency limit
 
 ## Global Settings
 
@@ -31,13 +53,13 @@
 
 - `CentrifugeDisable = false` enables WebSocket server
 - `CentrifugeListenAddress` must be non-empty
-- `HTTPAddress` must be valid URL (fails during Init() if invalid)
+- `HTTPAddress` must be non-empty and valid URL format (validated via url.Parse(), fails Init() if invalid)
 
 ### HTTP Response Signing
 
 - `SignHTTPResponses = true` enables signing
 - Requires `P2P.PrivateKey` (hex-encoded Ed25519 format)
-- Invalid key logs error but continues without signing (non-fatal)
+- Invalid P2P.PrivateKey logs error but service continues without signing (non-fatal)
 - Adds `X-Signature` header to responses
 
 ### HTTPS Support

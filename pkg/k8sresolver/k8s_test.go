@@ -83,16 +83,6 @@ func createTestEndpointSlices(serviceName string, endpoints []string) *discovery
 	}
 }
 
-func TestNewInClusterClient_Success(t *testing.T) {
-	// This test will skip if not running in a cluster since we can't mock rest.InClusterConfig() easily
-	t.Skip("Skipping test that requires in-cluster config - integration test would be needed")
-}
-
-func TestNewInClusterClient_ConfigError(t *testing.T) {
-	// This is more of an integration test - we'll test the behavior indirectly through serviceClient tests
-	t.Skip("Skipping test that requires mocking rest.InClusterConfig() - testing via serviceClient")
-}
-
 func TestServiceClient_Resolve_Success(t *testing.T) {
 	// Create fake clientset with endpoint slices
 	endpointSlices := createTestEndpointSlices("test-service", []string{"10.0.0.1", "10.0.0.2"})
@@ -287,18 +277,6 @@ func TestServiceClient_Resolve_DifferentNamespaces(t *testing.T) {
 	assert.Equal(t, []string{"10.0.0.1:8080"}, endpoints)
 }
 
-func TestServiceClient_Watch_Success(t *testing.T) {
-	// This test is known to have issues with the fake Kubernetes client causing
-	// nil pointer dereferences in the reflector when run in CI environments.
-	// The issue is in the interaction between client-go fake client and the reflector.
-	t.Skip("Skipping due to known issue with fake client and reflector in CI - see GitHub issue for k8s client-go")
-}
-
-func TestServiceClient_Watch_ChannelBehavior(t *testing.T) {
-	// This test has the same issue as TestServiceClient_Watch_Success
-	t.Skip("Skipping due to known issue with fake client and reflector in CI")
-}
-
 // Error cases and edge cases
 
 func TestServiceClient_Resolve_EmptyHost(t *testing.T) {
@@ -330,11 +308,6 @@ func TestServiceClient_Resolve_EmptyPort(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"10.0.0.1:"}, endpoints) // Port will be empty
-}
-
-func TestServiceClient_Watch_EmptyHost(t *testing.T) {
-	// This test has the same issue as other Watch tests
-	t.Skip("Skipping due to known issue with fake client and reflector in CI")
 }
 
 // Integration-style tests

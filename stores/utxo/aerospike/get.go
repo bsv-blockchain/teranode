@@ -1446,16 +1446,31 @@ func (s *Store) GetTxInpointsFromExternalStore(ctx context.Context, txHash chain
 	return subtree.NewTxInpointsFromInputs(inputs)
 }
 
-// ParseInputReferencesOnly parses Bitcoin wire format from a reader to extract only input references
-// (prevTxID + prevOutIndex), skipping all scripts to minimize memory usage.
-// This is used for TxInpoints computation where scripts are not needed.
+// ParseInputReferencesOnly parses Extended Format Bitcoin transactions from a reader to extract only input references
+// (prevTxID + prevOutIndex), skipping all scripts and Extended Format metadata to minimize memory usage.
+// This is used for TxInpoints computation where scripts and previous output data are not needed.
 // The reader is consumed only up to the end of inputs - outputs are never read from disk/network.
+// Extended Format includes PreviousTxSatoshis and PreviousTxScript which are skipped for efficiency.
 func ParseInputReferencesOnly(reader io.Reader) ([]*bt.Input, error) {
 
 	// Skip version (4 bytes)
 	_, err := io.CopyN(io.Discard, reader, 4)
 	if err != nil {
 		return nil, errors.NewTxInvalidError("failed to skip version", err)
+	}
+
+	// Extended Format: Verify the extended format marker (6 bytes: 0x00 0x00 0x00 0x00 0x00 0xEF)
+	// External transactions are stored with ExtendedBytes() which includes this marker after version
+	extendedMarker := make([]byte, 6)
+	if _, err := io.ReadFull(reader, extendedMarker); err != nil {
+		return nil, errors.NewTxInvalidError("failed to read extended format marker", err)
+	}
+
+	// Verify the marker matches the expected extended format
+	expectedMarker := []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0xEF}
+	if !bytes.Equal(extendedMarker, expectedMarker) {
+		return nil, errors.NewTxInvalidError("transaction is not in extended format (expected marker 0x00 0x00 0x00 0x00 0x00 0xEF, got 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x)",
+			extendedMarker[0], extendedMarker[1], extendedMarker[2], extendedMarker[3], extendedMarker[4], extendedMarker[5])
 	}
 
 	// Parse input count
@@ -1494,6 +1509,22 @@ func ParseInputReferencesOnly(reader io.Reader) ([]*bt.Input, error) {
 		// Skip sequence number (4 bytes) - not needed for TxInpoints
 		if _, err := io.CopyN(io.Discard, reader, 4); err != nil {
 			return nil, errors.NewTxInvalidError("failed to skip sequence for input %d/%d", i, inputCount, err)
+		}
+
+		// Extended Format: Skip PreviousTxSatoshis (8 bytes)
+		// External transactions are stored with ExtendedBytes() which appends this metadata AFTER standard input
+		if _, err := io.CopyN(io.Discard, reader, 8); err != nil {
+			return nil, errors.NewTxInvalidError("failed to skip PreviousTxSatoshis for input %d/%d", i, inputCount, err)
+		}
+
+		// Extended Format: Skip PreviousTxScript (varint length + script bytes)
+		var prevScriptLenVarInt bt.VarInt
+		if _, err := prevScriptLenVarInt.ReadFrom(reader); err != nil {
+			return nil, errors.NewTxInvalidError("failed to read PreviousTxScript length for input %d/%d", i, inputCount, err)
+		}
+		prevScriptLen := int64(prevScriptLenVarInt)
+		if _, err := io.CopyN(io.Discard, reader, prevScriptLen); err != nil {
+			return nil, errors.NewTxInvalidError("failed to skip PreviousTxScript (%d bytes) for input %d/%d", prevScriptLen, i, inputCount, err)
 		}
 
 		// Create input with minimal data for TxInpoints

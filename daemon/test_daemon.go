@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,6 +84,8 @@ type TestDaemon struct {
 	d                     *Daemon
 	privKey               *bec.PrivateKey
 	rpcURL                *url.URL
+	skipContainerCleanup  bool
+	t                     *testing.T // Reference to testing.T for unified logging
 }
 
 // TestOptions defines the options for creating a test daemon instance.
@@ -99,6 +102,24 @@ type TestOptions struct {
 	// UTXOStoreType specifies which UTXO store backend to use ("aerospike", "postgres")
 	// If empty, defaults to "aerospike"
 	UTXOStoreType string
+	// ContainerManager allows reusing an existing container manager from a previous TestDaemon.
+	// When set, the daemon will use the existing container instead of creating a new one.
+	// This is useful for restart tests where you want to preserve data in external stores like Aerospike.
+	ContainerManager *containers.ContainerManager
+	// SkipContainerCleanup when true, prevents the container from being terminated when Stop is called.
+	// Use this when you plan to restart the daemon and reuse the same container.
+	SkipContainerCleanup bool
+	// PreserveDataDir when true, prevents the data directory from being cleaned up after the test.
+	// Useful for debugging failed tests - the data will remain in data/test_<name>/.
+	PreserveDataDir bool
+	// DataDir allows specifying a custom data directory path. When set, this exact path is used
+	// instead of generating a unique one. Useful for restart tests where the new daemon needs
+	// to use the same data directory as the previous daemon.
+	DataDir string
+	// UseUnifiedLogger when true, routes all application logs through t.Logf for unified test output.
+	// Log format: [TestName:serviceName] LEVEL: message
+	// This provides consistent formatting and ensures all logs are captured by go test.
+	UseUnifiedLogger bool
 }
 
 // JSONError represents a JSON error response from the RPC server.
@@ -112,6 +133,9 @@ func (je *JSONError) Error() string {
 	return fmt.Sprintf("code: %d, message: %s", je.Code, je.Message)
 }
 
+// testDaemonCounter is used to generate unique context names for each TestDaemon
+var testDaemonCounter uint64
+
 // NewTestDaemon creates a new TestDaemon instance with the provided options.
 func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	ctx, cancel := context.WithCancel(t.Context())
@@ -123,13 +147,11 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 
-	// Dynamically allocate free ports for all relevant services
-	allocatePort := func(schema string) (listenAddr string, clientAddr string, addrPort int) {
-		port, err := getFreePort()
-		require.NoError(t, err)
-
-		return fmt.Sprintf("0.0.0.0:%d", port), fmt.Sprintf("%slocalhost:%d", schema, port), port
-	}
+	// Generate a unique context for this TestDaemon to ensure util.GetListener
+	// creates unique listeners instead of returning cached ones from another TestDaemon.
+	// The counter ensures uniqueness even when tests run in quick succession.
+	uniqueID := atomic.AddUint64(&testDaemonCounter, 1)
+	appSettings.Context = fmt.Sprintf("%s-testdaemon-%d", appSettings.Context, uniqueID)
 
 	var (
 		listenAddr string
@@ -153,28 +175,31 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		appSettings.Legacy.GRPCAddress = clientAddr
 	}
 
-	// Propagation
+	// Propagation gRPC
 	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "propagation", "", ":0")
 	require.NoError(t, err)
 	appSettings.Propagation.GRPCListenAddress = listenAddr
 	appSettings.Propagation.GRPCAddresses = []string{clientAddr}
 
+	// Propagation HTTP
 	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "propagation", "http://", ":0")
 	require.NoError(t, err)
 	appSettings.Propagation.HTTPListenAddress = listenAddr
 	appSettings.Propagation.HTTPAddresses = []string{clientAddr}
 
-	// Coinbase - check the services list to see if coinbase is included
-	listenAddr, clientAddr, _ = allocatePort("")
+	// Coinbase
+	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "coinbase", "", ":0")
+	require.NoError(t, err)
 	appSettings.Coinbase.GRPCListenAddress = listenAddr
 	appSettings.Coinbase.GRPCAddress = clientAddr
 
-	// BlockChain - always enabled since it's a core service
+	// BlockChain gRPC - always enabled since it's a core service
 	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "blockchain", "", ":0")
 	require.NoError(t, err)
 	appSettings.BlockChain.GRPCListenAddress = listenAddr
 	appSettings.BlockChain.GRPCAddress = clientAddr
 
+	// BlockChain HTTP
 	_, listenAddr, _, err = util.GetListener(appSettings.Context, "blockchain", "http://", ":0")
 	require.NoError(t, err)
 	appSettings.BlockChain.HTTPListenAddress = listenAddr
@@ -196,7 +221,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.BlockValidation.GRPCListenAddress = listenAddr
 	appSettings.BlockValidation.GRPCAddress = clientAddr
 
-	// Validator
+	// Validator gRPC
 	if opts.EnableValidator {
 		_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "validator", "", ":0")
 		require.NoError(t, err)
@@ -204,17 +229,20 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		appSettings.Validator.GRPCAddress = clientAddr
 	}
 
+	// Validator HTTP
 	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "validator", "http://", ":0")
 	require.NoError(t, err)
 	appSettings.Validator.HTTPListenAddress = listenAddr
 	appSettings.Validator.HTTPAddress, _ = url.Parse(clientAddr)
 
-	// P2P
-	_, _, p2pPort := allocatePort("") // libp2p doesn't support pre-created listeners
+	// P2P - allocate port for libp2p (doesn't support pre-created listeners)
+	p2pPort, err := getFreePort()
+	require.NoError(t, err)
 	appSettings.P2P.StaticPeers = nil
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
 	appSettings.P2P.Port = p2pPort
 
+	// P2P gRPC
 	if opts.EnableP2P {
 		_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "p2p", "", ":0")
 		require.NoError(t, err)
@@ -222,6 +250,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		appSettings.P2P.GRPCAddress = clientAddr
 	}
 
+	// P2P HTTP
 	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "p2p", "http://", ":0")
 	require.NoError(t, err)
 	appSettings.P2P.HTTPListenAddress = listenAddr
@@ -255,20 +284,43 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.HealthCheckHTTPListenAddress = listenAddr
 
 	// Create a unique data directory per test
-	// Use test name and timestamp to ensure uniqueness across sequential test runs
+	// Use test name to ensure each test has its own isolated directory
 	testName := strings.ReplaceAll(t.Name(), "/", "_")
 	appSettings.ClientName = testName
-	path := filepath.Join("data")
 
-	// path := filepath.Join("data", fmt.Sprintf("test_%s_%d", testName, time.Now().UnixNano()))
+	// Determine the data directory path
+	var path string
+	if opts.DataDir != "" {
+		// Use the custom data directory (for restart tests)
+		path = opts.DataDir
+	} else {
+		// Data directory is deterministic per test name to enable:
+		// 1. Parallel test execution (each test gets its own isolated directory)
+		// 2. Restart tests (new daemon instances within the same test reuse the same directory)
+		// Multi-node tests use MultiNodeSettings which creates subfolders per node within this path.
+		path = filepath.Join("data", fmt.Sprintf("test_%s", testName))
+	}
 
-	if !opts.SkipRemoveDataDir && opts.SkipRemoveDataDir == false {
+	// For restart scenarios (SkipRemoveDataDir=true), don't remove the existing data
+	// For fresh tests, remove any stale data from previous runs
+	if !opts.SkipRemoveDataDir {
 		absPath, err := filepath.Abs(path)
 		require.NoError(t, err)
 
 		t.Logf("Removing data directory: %s", absPath)
 		err = os.RemoveAll(absPath)
 		require.NoError(t, err)
+	}
+
+	// Register cleanup to remove data directory after test completes (unless PreserveDataDir is set)
+	if !opts.PreserveDataDir {
+		t.Cleanup(func() {
+			absPath, err := filepath.Abs(path)
+			if err != nil {
+				return
+			}
+			_ = os.RemoveAll(absPath)
+		})
 	}
 
 	// if opts.StartDaemonDependencies {
@@ -315,7 +367,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	// Initialize container manager for UTXO store if UTXOStoreType is specified
 	var containerManager *containers.ContainerManager
-	if opts.UTXOStoreType != "" {
+	if opts.ContainerManager != nil {
+		// Reuse existing container manager (for restart tests)
+		containerManager = opts.ContainerManager
+		utxoStoreURL, err := url.Parse(containerManager.GetContainerURL())
+		require.NoError(t, err, "Failed to parse container URL")
+		appSettings.UtxoStore.UtxoStore = utxoStoreURL
+		t.Logf("Reusing existing %s container with URL: %s", containerManager.GetStoreType(), utxoStoreURL.String())
+	} else if opts.UTXOStoreType != "" {
 		containerManager, err = containers.NewContainerManager(containers.UTXOStoreType(opts.UTXOStoreType))
 		require.NoError(t, err, "Failed to create container manager")
 
@@ -323,11 +382,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		require.NoError(t, err, "Failed to initialize container")
 
 		// Register cleanup immediately to prevent resource leak if daemon initialization fails
-		t.Cleanup(func() {
-			if containerManager != nil {
-				_ = containerManager.Cleanup()
-			}
-		})
+		// Only register cleanup if we're not skipping it (for restart tests)
+		if !opts.SkipContainerCleanup {
+			t.Cleanup(func() {
+				if containerManager != nil {
+					_ = containerManager.Cleanup()
+				}
+			})
+		}
 
 		// Override the UTXO store URL in settings
 		appSettings.UtxoStore.UtxoStore = utxoStoreURL
@@ -342,7 +404,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		loggerFactory Option
 	)
 
-	if opts.EnableFullLogging {
+	if opts.UseUnifiedLogger {
+		// Unified logger routes all output through t.Logf with consistent formatting
+		// Format: [TestName:serviceName] LEVEL: message
+		logger = ulogger.NewUnifiedTestLogger(t, testName, "", cancel)
+		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
+			return ulogger.NewUnifiedTestLogger(t, testName, serviceName, cancel)
+		})
+	} else if opts.EnableFullLogging {
 		logger = ulogger.New(appSettings.ClientName)
 		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
 			return ulogger.New(appSettings.ClientName+"-"+serviceName, ulogger.WithLevel("DEBUG"))
@@ -507,6 +576,8 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		d:                     d,
 		privKey:               pk,
 		rpcURL:                appSettings.RPC.RPCListenerURL,
+		skipContainerCleanup:  opts.SkipContainerCleanup,
+		t:                     t,
 	}
 }
 
@@ -525,11 +596,15 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 		errorTestLogger.Shutdown()
 	}
 
+	if unifiedTestLogger, ok := td.Logger.(*ulogger.UnifiedTestLogger); ok {
+		unifiedTestLogger.Shutdown()
+	}
+
 	// Cleanup daemon stores to reset singletons
 	td.d.daemonStores.Cleanup()
 
-	// Cleanup container manager if it exists
-	if td.containerManager != nil {
+	// Cleanup container manager if it exists and we're not skipping cleanup
+	if td.containerManager != nil && !td.skipContainerCleanup {
 		if err := td.containerManager.Cleanup(); err != nil {
 			t.Logf("Warning: Failed to cleanup container manager: %v", err)
 		}
@@ -544,6 +619,21 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 	}
 
 	t.Logf("Daemon %s stopped successfully", td.Settings.ClientName)
+}
+
+// Log logs a message with the test name prefix for consistent test output.
+// Format: [TestName] message
+// This method is useful when UseUnifiedLogger is enabled to maintain consistent
+// formatting between test code and application code logs.
+func (td *TestDaemon) Log(format string, args ...interface{}) {
+	td.t.Helper()
+	td.t.Logf("[%s] %s", td.Settings.ClientName, fmt.Sprintf(format, args...))
+}
+
+// Logf is an alias for Log for familiarity with t.Logf.
+func (td *TestDaemon) Logf(format string, args ...interface{}) {
+	td.t.Helper()
+	td.Log(format, args...)
 }
 
 // StopDaemonDependencies stops the daemon dependencies if they were started.
@@ -1497,6 +1587,12 @@ func storeSubtreeFiles(ctx context.Context, subtreeStore blob.Store, subtree *su
 func (td *TestDaemon) ResetServiceManagerContext(t *testing.T) {
 	err := td.d.ServiceManager.ResetContext()
 	require.NoError(t, err)
+}
+
+// GetContainerManager returns the container manager used by this test daemon.
+// This is useful for restart tests where you want to pass the same container to a new daemon.
+func (td *TestDaemon) GetContainerManager() *containers.ContainerManager {
+	return td.containerManager
 }
 
 // WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.

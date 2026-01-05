@@ -129,6 +129,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			TLSKeyFile:    getString("KAFKA_TLS_KEY_FILE", "", alternativeContext...),
 			// Debug logging
 			EnableDebugLogging: getBool("kafka_enable_debug_logging", false, alternativeContext...),
+			Scheme:             getString("KAFKA_SCHEMA", "http", alternativeContext...),
 		},
 		Aerospike: AerospikeSettings{
 			Debug:                  getBool("aerospike_debug", false, alternativeContext...),
@@ -200,6 +201,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlockPersisterPersistAge:                uint32(getInt("blockpersister_persistAge", 2, alternativeContext...)), //nolint:gosec // G115: integer overflow conversion int -> uint32 (gosec)
 			BlockPersisterPersistSleep:              getDuration("blockPersister_persistSleep", time.Minute, alternativeContext...),
 			BlockPersisterEnableDefensiveReorgCheck: getBool("blockpersister_enableDefensiveReorgCheck", true, alternativeContext...),
+			BlockPersisterProcessUTXOFiles:          getBool("blockpersister_processUTXOFiles", true, alternativeContext...),
 			UtxoStore:                               getURL("txmeta_store", "", alternativeContext...),
 			FileStoreReadConcurrency:                getInt("filestore_read_concurrency", 768, alternativeContext...),
 			FileStoreWriteConcurrency:               getInt("filestore_write_concurrency", 256, alternativeContext...),
@@ -293,6 +295,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SecretMiningThreshold:                     getUint32("blockvalidation_secret_mining_threshold", uint32(params.CoinbaseMaturity-1), alternativeContext...), // golint:nolint
 			PreviousBlockHeaderCount:                  getUint64("blockvalidation_previous_block_header_count", 100, alternativeContext...),
 			MaxBlocksBehindBlockAssembly:              getInt("blockvalidation_maxBlocksBehindBlockAssembly", 20, alternativeContext...),
+			PeriodicProcessingInterval:                getDuration("blockvalidation_periodic_processing_interval", 1*time.Minute, alternativeContext...),
 			// Catchup configuration
 			CatchupMaxRetries:            getInt("blockvalidation_catchup_max_retries", 3, alternativeContext...),
 			CatchupIterationTimeout:      getInt("blockvalidation_catchup_iteration_timeout", 30, alternativeContext...),

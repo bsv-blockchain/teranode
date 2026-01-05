@@ -7,16 +7,17 @@
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | PersisterStore | *url.URL | "file://./data/blockstore" | blockPersisterStore | **CRITICAL** - Block data storage location |
-| StateFile | string | "file://./data/blockpersister_state.txt" | blockPersister_stateFile | **CRITICAL** - Tracks last persisted block for recovery |
+| StateFile | string | "" | blockPersister_stateFile | **CRITICAL** - Tracks last persisted block for recovery (auto-derived for file:// stores) |
 | PersisterHTTPListenAddress | string | ":8083" | blockPersister_httpListenAddress | HTTP server for blob store access |
 | BlockPersisterConcurrency | int | 8 | blockpersister_concurrency | **CRITICAL** - Parallel processing, reduced by half in all-in-one mode |
 | BatchMissingTransactions | bool | true | blockpersister_batchMissingTransactions | Transaction processing batching |
 | ProcessTxMetaUsingStoreBatchSize | int | 1024 | blockvalidation_processTxMetaUsingStore_BatchSize | **SHARED** - Transaction metadata batch size (shared with Block Validation service) |
-| SkipUTXODelete | bool | false | blockpersister_skipUTXODelete | UTXO deletion behavior |
+| SkipUTXODelete | bool | false | blockpersister_skipUTXODelete | **UNUSED** - Not referenced in BlockPersister service |
+| BlockPersisterProcessUTXOFiles | bool | true | blockpersister_processUTXOFiles | **POTENTIALLY UNUSED** - May control UTXO file processing |
 | BlockPersisterPersistAge | uint32 | 2 | blockpersister_persistAge | **CRITICAL** - Blocks behind tip to avoid reorgs |
 | BlockPersisterPersistSleep | time.Duration | 1m | blockPersister_persistSleep | Sleep when no blocks available |
 | BlockPersisterEnableDefensiveReorgCheck | bool | true | blockpersister_enableDefensiveReorgCheck | **CRITICAL** - Enables defensive reorg detection checks |
-| BlockStore | *url.URL | "" | blockstore | Required when HTTP server enabled |
+| BlockStore | *url.URL | "file://./data/blockstore" | blockstore | Required when HTTP server enabled |
 
 ## Configuration Dependencies
 
@@ -24,6 +25,12 @@
 
 - When `PersisterHTTPListenAddress` is not empty, HTTP server starts
 - Requires valid `BlockStore` URL or returns configuration error
+
+### State File Management
+
+- For file:// stores, `StateFile` auto-derived from `PersisterStore` path if not explicitly set
+- For non-file stores (S3, etc.), explicit `StateFile` required or configuration error occurs
+- Auto-derived path: `{PersisterStore_path}/blockpersister_state.txt`
 
 ### Concurrency Management
 

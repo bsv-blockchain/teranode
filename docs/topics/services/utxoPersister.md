@@ -88,6 +88,15 @@ The following diagram provides a deeper level of detail into the UTXO Persister 
 
 ![utxo_persister_processing_blocks.svg](img/plantuml/utxopersister/utxo_persister_processing_blocks.svg)
 
+The service processes new blocks through the following workflow:
+
+1. The service is triggered to process blocks either through blockchain notifications, a timer, or at startup.
+2. It verifies that the next block to process is sufficiently behind the current blockchain tip (at least 100 blocks) to ensure block finality.
+3. The service retrieves the necessary block headers and verifies chain continuity.
+4. For each block, it consolidates UTXO additions and deletions across the block range.
+5. The service creates a new UTXO set by applying additions and deletions to the previous block's UTXO set.
+6. The resulting UTXO set is written to storage, and the last processed height is updated.
+
 ### 2.3 Processing Blocks and Creating UTXO Sets
 
 The UTXO Persister processes blocks and creates UTXO sets as follows:
@@ -182,14 +191,21 @@ type UTXO struct {
 
 ### 3.3 Binary Encoding
 
-The UTXO is encoded into a binary format for efficient storage and retrieval:
+UTXOs are encoded into a binary format for efficient storage and retrieval. The encoding differs between individual UTXOs and UTXO wrappers:
 
-- 32 bytes: TxID
+**UTXO Encoding** (individual output within a transaction):
+
 - 4 bytes: Index (little-endian)
 - 8 bytes: Value (little-endian)
-- 4 bytes: Height and Coinbase flag (Height << 1 | CoinbaseFlag)
 - 4 bytes: Script length (little-endian)
 - Variable bytes: Script
+
+**UTXOWrapper Encoding** (transaction-level wrapper):
+
+- 32 bytes: TxID
+- 4 bytes: Encoded height and coinbase flag (Height << 1 | CoinbaseFlag)
+- 4 bytes: Number of UTXOs
+- Variable bytes: Serialized UTXOs (each UTXO encoded as above)
 
 ### 3.4 UTXO Set File
 
@@ -238,10 +254,20 @@ The UTXO set is persisted using a _FileStorer_, which writes the data to a blob 
 
 ## 5. Directory Structure and Main Files
 
-The Block Persister service is located in the `services/utxopersister` directory.
+The UTXO Persister service is located in the `services/utxopersister` directory.
 
 ```text
 ./services/utxopersister/
+│
+├── consolidator.go
+│   Manages consolidation of UTXO additions and deletions across multiple blocks
+│   to create accurate UTXO sets.
+│
+├── Footers.go
+│   Handles footer operations for UTXO files, including transaction and UTXO counts.
+│
+├── Headers.go
+│   Handles header parsing and validation for UTXO files.
 │
 ├── Server.go
 │   Main implementation of the UTXO Persister server. It contains the core logic for
@@ -250,14 +276,13 @@ The Block Persister service is located in the `services/utxopersister` directory
 ├── UTXO.go
 │   Defines the UTXO (Unspent Transaction Output) data structure and related methods.
 │
+├── UTXODeletion.go
+│   Implements the logic for UTXO deletions, which occur when UTXOs are spent in a transaction.
+│
 ├── UTXOSet.go
 │   Implements the UTXOSet structure and related methods.
 │
-├── UTXODeletion.go
-│   Implements the logic for UTXO deletions, which occur when UTXOs are spent in a transaction.
-|
 └── filestorer/
-    │
     └── FileStorer.go
         Implements a custom file storage mechanism, optimized for the specific
         needs of storing and retrieving UTXO data efficiently.

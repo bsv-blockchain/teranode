@@ -100,12 +100,12 @@
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| UtxoStore | Must be valid URL | Store initialization |
-| DBTimeout | Used for context timeout | Operation reliability |
-| BlockHeightRetentionAdjustment | Bounds checking applied | Retention calculation |
-| logging | Boolean string check | Logging wrapper creation |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| UtxoStore | Must be valid URL | Store initialization | During store factory initialization |
+| DBTimeout | Used for context timeout | Operation reliability | During SQL operations |
+| BlockHeightRetentionAdjustment | Bounds checking applied | Retention calculation | During DAH calculations |
+| logging | Boolean string check | Logging wrapper creation | During store initialization |
 
 ## Configuration Examples
 

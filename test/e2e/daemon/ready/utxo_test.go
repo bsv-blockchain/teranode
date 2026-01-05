@@ -183,8 +183,6 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 }
 
 func TestDeleteAtHeightHappyPath(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
@@ -422,8 +420,6 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 
 func TestDeleteAtHeightHappyPath2(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
 	// Initialize test daemon with required services
 	// init aerospike
 	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()

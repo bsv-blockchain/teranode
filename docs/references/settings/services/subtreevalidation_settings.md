@@ -30,6 +30,8 @@
 | OrphanageMaxSize | int | 100000 | subtreevalidation_orphanageMaxSize | **CRITICAL** - Maximum orphanage transactions |
 | CheckBlockSubtreesConcurrency | int | 32 | subtreevalidation_check_block_subtrees_concurrency | **CRITICAL** - Block subtree checking concurrency |
 | PauseTimeout | time.Duration | 5m | subtreevalidation_pauseTimeout | **CRITICAL** - Maximum pause duration |
+| TxBatchSize | int | 1048576 | subtreevalidation_check_block_subtrees_tx_batch_size | Transaction batch size for CheckBlockSubtrees (0 = no batching) |
+| UseOrderedLevelAlgorithm | bool | true | subtreevalidation_useOrderedLevelAlgorithm | **CRITICAL** - Optimized O(V*I) algorithm for ordered transactions |
 
 ## Configuration Dependencies
 
@@ -45,6 +47,11 @@
 - `CheckBlockSubtreesConcurrency` controls block subtree checking operations
 - `SpendBatcherSize` controls spend operation batch processing and concurrency limits
 - `GetMissingTransactions` controls missing transaction retrieval concurrency
+- `TxBatchSize` controls transaction batching for CheckBlockSubtrees (0 disables batching)
+
+### Algorithm Optimization
+- `UseOrderedLevelAlgorithm` enables optimized O(V*I) algorithm assuming transactions are ordered
+- When true, improves performance for ordered transaction processing
 
 ### gRPC Server Management
 - When `GRPCListenAddress` is not empty, gRPC server starts and health checks are enabled
@@ -60,12 +67,13 @@
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| GRPCListenAddress | Health checks only if not empty | Service monitoring |
-| SubtreeStore | Must be valid URL format | Storage access |
-| TxMetaCacheEnabled | Controls cache usage | Performance |
-| PauseTimeout | Controls maximum pause duration | Processing control |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| GRPCListenAddress | Health checks only if not empty | Service monitoring | During service initialization |
+| SubtreeStore | Must be valid URL format | Storage access | During service initialization |
+| TxMetaCacheEnabled | Controls cache usage | Performance | During transaction processing |
+| PauseTimeout | Controls maximum pause duration | Processing control | During block validation |
+| UseOrderedLevelAlgorithm | Controls algorithm selection | Performance optimization | During subtree validation |
 
 ## Configuration Examples
 
