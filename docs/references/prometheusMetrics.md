@@ -131,8 +131,36 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockvalidation_last_validated_blocks_cache` | Gauge     | Number of blocks in the last validated blocks cache               |
 | `teranode_blockvalidation_block_exists_cache`          | Gauge     | Number of blocks in the block exists cache                        |
 | `teranode_blockvalidation_subtree_exists_cache`        | Gauge     | Number of subtrees in the subtree exists cache                    |
-| `teranode_blockvalidation_catchup_duration`            | Histogram | Duration of catchup operations                                    |
-| `teranode_blockvalidation_catchup_blocks_processed`    | Counter   | Total number of blocks processed during catchup                   |
+
+### Catchup Operation Metrics
+
+CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_type`, `priority`, `result`, `fork_id`, `reason`.
+
+| Metric Name                                                  | Type         | Description                                                      |
+|--------------------------------------------------------------|--------------|------------------------------------------------------------------|
+| `teranode_blockvalidation_catchup_duration_seconds`          | HistogramVec | Duration of catchup operations in seconds                        |
+| `teranode_blockvalidation_catchup_blocks_fetched_total`      | CounterVec   | Total number of blocks fetched during catchup                    |
+| `teranode_blockvalidation_catchup_headers_fetched_total`     | CounterVec   | Total number of headers fetched during catchup                   |
+| `teranode_blockvalidation_catchup_errors_total`              | CounterVec   | Total number of errors during catchup operations                 |
+| `teranode_blockvalidation_catchup_active`                    | Gauge        | Number of active catchup operations (0 or 1)                     |
+| `teranode_blockvalidation_priority_queue_size`               | GaugeVec     | Current size of the block priority queue by priority level       |
+| `teranode_blockvalidation_priority_queue_added_total`        | CounterVec   | Total number of blocks added to priority queue by priority level |
+| `teranode_blockvalidation_priority_queue_processed_total`    | CounterVec   | Total number of blocks processed from priority queue             |
+| `teranode_blockvalidation_fork_count`                        | Gauge        | Current number of active forks being tracked                     |
+| `teranode_blockvalidation_fork_processing_workers`           | Gauge        | Current number of active fork processing workers                 |
+| `teranode_blockvalidation_fork_blocks_processed_total`       | CounterVec   | Total number of blocks processed on forks by fork ID             |
+| `teranode_blockvalidation_fork_created_total`                | CounterVec   | Total number of forks created                                    |
+| `teranode_blockvalidation_fork_lifetime_seconds`             | Histogram    | Lifetime of forks in seconds                                     |
+| `teranode_blockvalidation_fork_depth_blocks`                 | Histogram    | Depth of forks in blocks                                         |
+| `teranode_blockvalidation_fork_resolved_total`               | CounterVec   | Total number of forks resolved                                   |
+| `teranode_blockvalidation_fork_resolution_depth_blocks`      | Histogram    | Depth at which forks were resolved in blocks                     |
+| `teranode_blockvalidation_fork_orphaned_total`               | Counter      | Total number of forks marked as orphaned                         |
+| `teranode_blockvalidation_processing_blocks_stuck`           | Gauge        | Number of blocks stuck in processing state                       |
+| `teranode_blockvalidation_fork_average_depth`                | Gauge        | Average depth of active forks in blocks                          |
+| `teranode_blockvalidation_fork_longest_depth`                | Gauge        | Longest active fork depth in blocks                              |
+| `teranode_blockvalidation_fork_average_lifetime_seconds`     | Gauge        | Average lifetime of active forks in seconds                      |
+| `teranode_blockvalidation_queue_skip_count`                  | Histogram    | Number of times blocks were skipped before processing            |
+| `teranode_blockvalidation_queue_wait_seconds`                | Histogram    | Time blocks spend in queue before processing                     |
 
 ## Legacy Peer Server Metrics
 

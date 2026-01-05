@@ -120,6 +120,31 @@ kafka://localhost:9092/blocks?partitions=4&replication=3&retention=3600000&flush
 | Partitions | 1 | KAFKA_PARTITIONS | Default partition count |
 | ReplicationFactor | 1 | KAFKA_REPLICATION_FACTOR | Default replication factor |
 
+### Consumer Group Settings
+
+**Consumer Group ID Pattern:** `{serviceName}.{clientName}`
+
+Examples:
+- `blockvalidation.defaultClientName`
+- `subtreevalidation.mynode`
+- `p2p.node1`
+
+**Special Case - Block Persister TxMeta:** `{serviceName}.{clientName}.{random16chars}`
+
+The Block Persister appends a random 16-character suffix to its TxMeta consumer group ID, allowing multiple instances to independently process all messages.
+
+**Auto-Commit Behavior:**
+
+| Topic | Auto-Commit | Reason |
+|-------|-------------|--------|
+| Blocks | Disabled | Critical - must not miss messages |
+| RejectedTx | Enabled | Can tolerate message loss |
+| Subtrees | Enabled | Can tolerate message loss |
+| TxMeta | Enabled | Cache population - can tolerate loss |
+| ValidatorTxs | Enabled | Optional feature |
+| InvalidBlocks | Enabled | Optional feature |
+| InvalidSubtrees | Enabled | Optional feature |
+
 ### TLS Settings
 
 | Setting | Default | Environment Variable | Usage |
@@ -284,6 +309,8 @@ KAFKA_TLS_CERT_FILE=/path/to/client-cert.pem
 KAFKA_TLS_KEY_FILE=/path/to/client-key.pem
 kafka_blocksConfig=kafka://broker1:9093,broker2:9093/blocks?partitions=4
 ```
+
+**Note:** `KAFKA_TLS_CERT_FILE` and `KAFKA_TLS_KEY_FILE` must both be provided for mutual TLS authentication. Omit both for server-only TLS.
 
 ### Memory Testing
 

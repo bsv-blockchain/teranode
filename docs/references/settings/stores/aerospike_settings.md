@@ -140,15 +140,15 @@ utxostore = aerospike://${aerospike_host}:${aerospike_port}/namespace?set=utxo&p
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| Host | Must be valid hostname/IP | Connection failure if invalid |
-| Port | Must be valid port number (1-65535) | Connection failure if invalid |
-| BatchPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure |
-| ReadPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure |
-| WritePolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure |
-| QueryPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure |
-| StatsRefreshDuration | Must be positive duration | Statistics update frequency |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| Host | Must be valid hostname/IP | Connection failure if invalid | During store initialization |
+| Port | Must be valid port number (1-65535) | Connection failure if invalid | During store initialization |
+| BatchPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
+| ReadPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
+| WritePolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
+| QueryPolicyURL | Must be valid URL with aerospike:// scheme | Policy parsing failure | During policy configuration |
+| StatsRefreshDuration | Must be positive duration | Statistics update frequency | During store initialization |
 
 ## Configuration Examples
 

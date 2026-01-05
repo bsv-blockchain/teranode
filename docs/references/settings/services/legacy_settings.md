@@ -17,7 +17,7 @@
 | OutpointBatcherSize | int | 1024 | legacy_outpointBatcherSize | **CRITICAL** - Outpoint operation batch size |
 | OutpointBatcherConcurrency | int | 32 | legacy_outpointBatcherConcurrency | Outpoint operation parallelism |
 | PrintInvMessages | bool | false | legacy_printInvMessages | Debug logging for inventory messages |
-| GRPCAddress | string | "" | legacy_grpcAddress | gRPC client connections |
+| GRPCAddress | string | "" | legacy_grpcAddress | **CRITICAL** - gRPC client connections (required for client, returns error if empty) |
 | AllowBlockPriority | bool | false | legacy_allowBlockPriority | Block priority handling |
 | GRPCListenAddress | string | "" | legacy_grpcListenAddress | gRPC server binding |
 | SavePeers | bool | false | legacy_savePeers | Peer information persistence |
@@ -29,9 +29,12 @@
 ## Configuration Dependencies
 
 ### Peer Connection Management
+
 - `ListenAddresses` controls incoming connections (falls back to external IP:8333 if empty)
 - `ConnectPeers` forces outgoing connections to specific peers
-- `SavePeers` controls peer information persistence
+- When `ConnectPeers` is set, `MaxPeers` automatically set to match count (exclusive mode)
+- `ConnectPeers` disables DNS seeding
+- `SavePeers` controls peer information persistence to disk
 
 ### Batch Processing Performance
 - Batch sizes and concurrency settings work together for memory and performance control
@@ -42,7 +45,14 @@
 - `PeerProcessingTimeout` set to 3m for block processing (largest operations)
 
 ### Sync Candidate Selection
-- When `AllowSyncCandidateFromLocalPeers = false`, only non-local peers can be sync candidates
+
+- When `AllowSyncCandidateFromLocalPeers = false`, only non-localhost peers can be sync candidates
+- Prevents local peers from being selected as blockchain sync source
+
+### Block Priority
+
+- `AllowBlockPriority = true`: Enables block priority messages via connection streaming
+- Sent via Protoconf message during peer handshake
 
 ## Service Dependencies
 
@@ -59,11 +69,12 @@
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| ListenAddresses | Falls back to external IP:8333 if empty | Network connectivity |
-| PeerIdleTimeout | Must accommodate ping/pong intervals | Peer stability |
-| PeerProcessingTimeout | Must allow for block processing time | Message handling |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| GRPCAddress | Must not be empty | Client creation fails | During client initialization |
+| ListenAddresses | Falls back to external IP:8333 if empty | Network connectivity | During server start |
+| PeerIdleTimeout | Must accommodate ping/pong intervals | Peer stability | During peer connection |
+| PeerProcessingTimeout | Must allow for block processing time | Message handling | During message processing |
 
 ## Configuration Examples
 

@@ -9,7 +9,7 @@
 | MaxRetries | int | 3 | blockValidationMaxRetries | General retry behavior |
 | RetrySleep | time.Duration | 1s | blockValidationRetrySleep | Retry delay timing |
 | GRPCAddress | string | "localhost:8088" | blockvalidation_grpcAddress | Client connection address |
-| GRPCListenAddress | string | ":8088" | blockvalidation_grpcListenAddress | **CRITICAL** - gRPC server binding, health checks only run if not empty |
+| GRPCListenAddress | string | ":8088" | blockvalidation_grpcListenAddress | **CRITICAL** - gRPC server binding (service skipped if empty) |
 | KafkaWorkers | int | 0 | blockvalidation_kafkaWorkers | Kafka consumer parallelism |
 | LocalSetTxMinedConcurrency | int | 8 | blockvalidation_localSetTxMinedConcurrency | Transaction mining concurrency |
 | MaxPreviousBlockHeadersToCheck | uint64 | 100 | blockvalidation_maxPreviousBlockHeadersToCheck | Block header validation depth |
@@ -50,6 +50,7 @@
 | CircuitBreakerSuccessThreshold | int | 2 | blockvalidation_circuit_breaker_success_threshold | Circuit breaker recovery |
 | CircuitBreakerTimeoutSeconds | int | 30 | blockvalidation_circuit_breaker_timeout_seconds | Circuit breaker timeout |
 | MaxBlocksBehindBlockAssembly | int | 20 | blockvalidation_maxBlocksBehindBlockAssembly | **CRITICAL** - Max blocks behind block assembly |
+| PeriodicProcessingInterval | time.Duration | 1m | blockvalidation_periodic_processing_interval | Periodic processing interval |
 | MaxParallelForks | int | 4 | blockvalidation_max_parallel_forks | Maximum parallel fork processing |
 | MaxTrackedForks | int | 1000 | blockvalidation_max_tracked_forks | Maximum total forks tracked |
 | NearForkThreshold | int | 0 | blockvalidation_near_fork_threshold | Near fork detection (0=coinbase maturity/2) |
@@ -61,10 +62,24 @@
 
 ## Configuration Dependencies
 
+### Service Startup
+
+- Service skipped (not added to ServiceManager) if `GRPCListenAddress` is empty
+- Kafka consumer created for block processing
+
 ### Catchup Mode
+
 - When `UseCatchupWhenBehind = true`, all catchup settings control behavior
 - `CatchupMaxAccumulatedHeaders` prevents memory exhaustion
 - Timeout settings control iteration and operation limits
+- Catchup automatically engages when node falls behind
+
+### Optimistic Mining
+
+- `OptimisticMining = true`: Enables background validation for performance
+- Block validation proceeds while subtree validation runs in background
+- Can be overridden per-validation via DisableOptimisticMining option
+- Disabled during catchup mode for better performance
 
 ### Transaction Metadata Processing
 - Cache and store processing work together with threshold-based fallback
@@ -90,9 +105,9 @@
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| GRPCListenAddress | Health checks only if not empty | Service monitoring |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| GRPCListenAddress | Must not be empty | Service skipped if empty | During daemon startup |
 | UseCatchupWhenBehind | Controls catchup mode activation | Chain synchronization |
 | CatchupMaxAccumulatedHeaders | Limits memory usage | Memory protection |
 | SecretMiningThreshold | Enables attack detection | Security |

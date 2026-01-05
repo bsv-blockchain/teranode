@@ -7,13 +7,13 @@
     - [2.1. Starting the Validator as a service](#21-starting-the-validator-as-a-service)
     - [2.2. Receiving Transaction Validation Requests](#22-receiving-transaction-validation-requests)
     - [2.3. Validating the Transaction](#23-validating-the-transaction)
-    - [2.3.1. Consensus Rules vs Policy Checks](#231-consensus-rules-vs-policy-checks)
-    - [2.3.2. Transaction Format Extension](#232-transaction-format-extension)
+        - [2.3.1. Consensus Rules vs Policy Checks](#231-consensus-rules-vs-policy-checks)
+        - [2.3.2. Transaction Format Extension](#232-transaction-format-extension)
     - [2.4. Script Verification](#24-script-verification)
     - [2.5. Error Handling and Transaction Rejection](#25-error-handling-and-transaction-rejection)
     - [2.6. Concurrent Processing](#26-concurrent-processing)
     - [2.7. Post-validation: Updating stores and propagating the transaction](#27-post-validation-updating-stores-and-propagating-the-transaction)
-    - [2.7.1. Two-Phase Transaction Commit Process](#271-two-phase-transaction-commit-process)
+        - [2.7.1. Two-Phase Transaction Commit Process](#271-two-phase-transaction-commit-process)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -26,7 +26,7 @@
 
 The `Validator` (also called `Transaction Validator` or `Tx Validator`) is a go component responsible for:
 
-1. Receiving new transactions from the `Propagation`service,
+1. Receiving new transactions from the `Propagation` service,
 2. Validating them,
 3. Persisting the data into the utxo store,
 4. Propagating the transactions to other services based on validation results:
@@ -201,12 +201,12 @@ The validation process includes several stages:
     - Ensure inputs are unspent (prevent double-spending)
     - Validate input script format
 
-New Txs are validated by the `ValidateTransaction()` function. To ensure the validity of the extended Tx, this is delegated to a BSV library: `github.com/TAAL-GmbH/arc/validator/default` (the default validator).
+Transactions are validated by the `ValidateTransaction()` function using Teranode's internal validation logic and libraries from the BSV Blockchain organization (`github.com/bsv-blockchain/go-bt`). The implementation uses pluggable script interpreters (GoBT, GoSDK, or GoBDK) for script verification.
 
 We can see the exact steps being executed as part of the validation process below:
 
 ```go
-func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
+func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
  //
  // Each node will verify every transaction against a long checklist of criteria:
  //
@@ -232,7 +232,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, valida
 
  // 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
  //    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
- if err := tv.checkOutputs(tx, blockHeight); err != nil {
+ if err := tv.checkOutputs(tx, blockHeight, validationOptions); err != nil {
   return err
  }
 
@@ -251,7 +251,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, valida
  // 10) Reject if the sum of input values is less than sum of output values
  // 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
  if !validationOptions.SkipPolicyChecks {
-  if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
+  if err := tv.checkFees(tx, blockHeight, utxoHeights); err != nil {
    return err
   }
  }

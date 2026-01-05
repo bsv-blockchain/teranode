@@ -571,6 +571,31 @@ Many endpoints support multiple response formats, indicated by the URL path or a
           ]
           ```
 
+### Peer Management Endpoints
+
+- GET `/api/v1/peers`
+    - Description: Retrieves information about connected peers
+    - Parameters:
+        None
+
+    - Returns: JSON array of peer information
+
+### Synchronization Endpoints
+
+- GET `/api/v1/catchup/status`
+    - Description: Returns current blockchain catchup/synchronization status
+    - Parameters:
+        None
+
+    - Returns: JSON object with sync progress information
+
+- GET `/api/v1/service/heights`
+    - Description: Returns block heights across different services
+    - Parameters:
+        None
+
+    - Returns: JSON object with service height information
+
 ## Error Handling
 
 All endpoints return appropriate HTTP status codes to indicate success or failure:
