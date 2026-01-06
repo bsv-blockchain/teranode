@@ -363,6 +363,10 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	appSettings.SubtreeValidation.SubtreeStore = blobStoreURL
 	appSettings.Legacy.TempStore = blobStoreURL
 
+	// Set state file for block persister (required for non-file store types)
+	tempDir := t.TempDir()
+	appSettings.Block.StateFile = tempDir + "/blockpersister_state.txt"
+
 	// Manually set Kafka topic URL schemes to 'memory' for in-memory provider
 	const newConst = "memory"
 	if appSettings.Kafka.BlocksConfig != nil {
