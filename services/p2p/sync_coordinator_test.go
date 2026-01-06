@@ -777,11 +777,11 @@ func TestSyncCoordinator_IsCaughtUp(t *testing.T) {
 	registry.Put(peer2, "", 90, peerHash2, "")
 	assert.True(t, sc.isCaughtUp(), "Should be caught up when peers are behind")
 
-	// Add peer ahead of us - should NOT be caught up
+	// Add peer significantly ahead of us (more than 10 block tolerance) - should NOT be caught up
 	peer3 := peer.ID("peer3")
 	peerHash3, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peer3, "", 110, peerHash3, "")
-	assert.False(t, sc.isCaughtUp(), "Should NOT be caught up when a peer is ahead")
+	registry.Put(peer3, "", 120, peerHash3, "http://peer3:8080") // 20 blocks ahead, beyond 10 block tolerance
+	assert.False(t, sc.isCaughtUp(), "Should NOT be caught up when a peer is significantly ahead")
 }
 
 func TestSyncCoordinator_SendSyncTriggerToKafka(t *testing.T) {
