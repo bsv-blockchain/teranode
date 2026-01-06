@@ -117,10 +117,21 @@ func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 		wg.Add(1)
 		go func(ch chan []byte) {
 			defer wg.Done()
+			timer := time.NewTimer(time.Second)
+			defer func() {
+				// Ensure timer resources are released promptly when the send succeeds.
+				if !timer.Stop() {
+					// If the timer already fired concurrently, drain to avoid keeping the value queued on timer.C.
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			}()
 			select {
 			case ch <- data:
 				// Data sent successfully
-			case <-time.After(time.Second):
+			case <-timer.C:
 				logger.Errorf("Timeout sending data to client")
 				// Remove timed out client
 				cm.remove(ch)
