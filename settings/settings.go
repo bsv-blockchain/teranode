@@ -179,7 +179,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 		Block: BlockSettings{
 			MinedCacheMaxMB:                         getInt("blockMinedCacheMaxMB", 256, alternativeContext...),
 			PersisterStore:                          getURL("blockPersisterStore", "file://./data/blockstore", alternativeContext...),
-			StateFile:                               getString("blockPersister_stateFile", "", alternativeContext...),
 			PersisterHTTPListenAddress:              getString("blockPersister_httpListenAddress", ":8083", alternativeContext...),
 			CheckDuplicateTransactionsConcurrency:   getInt("block_checkDuplicateTransactionsConcurrency", -1, alternativeContext...),
 			GetAndValidateSubtreesConcurrency:       getInt("block_getAndValidateSubtreesConcurrency", -1, alternativeContext...),
@@ -198,9 +197,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UTXOPersisterBufferSize:                 getString("utxoPersister_buffer_size", "4KB", alternativeContext...),
 			UTXOPersisterDirect:                     getBool("direct", true, alternativeContext...),
 			TxStore:                                 getURL("txstore", "", alternativeContext...),
-			BlockPersisterPersistAge:                uint32(getInt("blockpersister_persistAge", 2, alternativeContext...)), //nolint:gosec // G115: integer overflow conversion int -> uint32 (gosec)
 			BlockPersisterPersistSleep:              getDuration("blockPersister_persistSleep", time.Minute, alternativeContext...),
-			BlockPersisterEnableDefensiveReorgCheck: getBool("blockpersister_enableDefensiveReorgCheck", true, alternativeContext...),
 			BlockPersisterProcessUTXOFiles:          getBool("blockpersister_processUTXOFiles", true, alternativeContext...),
 			UtxoStore:                               getURL("txmeta_store", "", alternativeContext...),
 			FileStoreReadConcurrency:                getInt("filestore_read_concurrency", 768, alternativeContext...),

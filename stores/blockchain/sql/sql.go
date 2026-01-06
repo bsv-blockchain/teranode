@@ -215,6 +215,7 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
     	,peer_id	    TEXT NOT NULL
     	,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		,processed_at   TIMESTAMPTZ NULL
+		,persisted_at   TIMESTAMPTZ NULL
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -235,6 +236,20 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 			}
 		} else {
 			return errors.NewStorageError("could not check for processed_at column in blocks table", err)
+		}
+	}
+
+	// add the persisted_at column to the blocks table if it does not exist
+	err = db.QueryRow("SELECT column_name FROM information_schema.columns WHERE table_name='blocks' AND column_name='persisted_at'").Scan(new(string))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err := db.Exec(`ALTER TABLE blocks ADD COLUMN persisted_at TIMESTAMPTZ NULL;`)
+			if err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add persisted_at column to blocks table", err)
+			}
+		} else {
+			return errors.NewStorageError("could not check for persisted_at column in blocks table", err)
 		}
 	}
 
@@ -277,6 +292,11 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_parent_id index", err)
+		}
+
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_persisted_at ON blocks (persisted_at) WHERE persisted_at IS NULL;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_persisted_at index", err)
 		}
 	}
 
@@ -348,6 +368,7 @@ func createSqliteSchema(db *usql.DB) error {
      	,peer_id	    TEXT NOT NULL
         ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 		,processed_at   TEXT NULL
+		,persisted_at   TEXT NULL
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -365,6 +386,20 @@ func createSqliteSchema(db *usql.DB) error {
 			}
 		} else {
 			return errors.NewStorageError("could not check for processed_at column in blocks table", err)
+		}
+	}
+
+	// add the persisted_at column to the blocks table if it does not exist
+	err = db.QueryRow("SELECT name FROM pragma_table_info('blocks') WHERE name='persisted_at'").Scan(new(string))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err := db.Exec(`ALTER TABLE blocks ADD COLUMN persisted_at TEXT NULL;`)
+			if err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add persisted_at column to blocks table", err)
+			}
+		} else {
+			return errors.NewStorageError("could not check for persisted_at column in blocks table", err)
 		}
 	}
 
@@ -396,6 +431,11 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_set ON blocks (subtrees_set) WHERE subtrees_set = false;`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_subtrees_set index", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_persisted_at ON blocks (persisted_at) WHERE persisted_at IS NULL;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_persisted_at index", err)
 	}
 
 	return nil

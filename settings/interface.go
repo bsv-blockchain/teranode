@@ -187,7 +187,6 @@ type BlockSettings struct {
 	MinedCacheMaxMB                         int
 	PersisterStore                          *url.URL
 	PersisterHTTPListenAddress              string
-	StateFile                               string
 	CheckDuplicateTransactionsConcurrency   int
 	GetAndValidateSubtreesConcurrency       int
 	KafkaWorkers                            int
@@ -205,9 +204,7 @@ type BlockSettings struct {
 	UTXOPersisterBufferSize                 string
 	TxStore                                 *url.URL
 	UTXOPersisterDirect                     bool
-	BlockPersisterPersistAge                uint32
 	BlockPersisterPersistSleep              time.Duration
-	BlockPersisterEnableDefensiveReorgCheck bool
 	BlockPersisterProcessUTXOFiles          bool
 	UtxoStore                               *url.URL
 	FileStoreReadConcurrency                int

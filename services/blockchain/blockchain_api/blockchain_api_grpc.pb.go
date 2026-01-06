@@ -65,6 +65,8 @@ const (
 	BlockchainAPI_SetBlockSubtreesSet_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
 	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
 	BlockchainAPI_SetBlockProcessedAt_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetBlockProcessedAt"
+	BlockchainAPI_SetBlockPersistedAt_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetBlockPersistedAt"
+	BlockchainAPI_GetBlocksNotPersisted_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBlocksNotPersisted"
 	BlockchainAPI_SendFSMEvent_FullMethodName                         = "/blockchain_api.BlockchainAPI/SendFSMEvent"
 	BlockchainAPI_GetFSMCurrentState_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
 	BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName      = "/blockchain_api.BlockchainAPI/WaitFSMToTransitionToGivenState"
@@ -170,6 +172,10 @@ type BlockchainAPIClient interface {
 	GetBlocksSubtreesNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksSubtreesNotSetResponse, error)
 	// SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
 	SetBlockProcessedAt(ctx context.Context, in *SetBlockProcessedAtRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// SetBlockPersistedAt updates the persisted_at timestamp for a block.
+	SetBlockPersistedAt(ctx context.Context, in *SetBlockPersistedAtRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+	GetBlocksNotPersisted(ctx context.Context, in *GetBlocksNotPersistedRequest, opts ...grpc.CallOption) (*GetBlocksNotPersistedResponse, error)
 	// SendFSMEvent sends an event to the blockchain FSM.
 	SendFSMEvent(ctx context.Context, in *SendFSMEventRequest, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	// GetFSMCurrentState retrieves the current state of the FSM.
@@ -633,6 +639,26 @@ func (c *blockchainAPIClient) SetBlockProcessedAt(ctx context.Context, in *SetBl
 	return out, nil
 }
 
+func (c *blockchainAPIClient) SetBlockPersistedAt(ctx context.Context, in *SetBlockPersistedAtRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_SetBlockPersistedAt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetBlocksNotPersisted(ctx context.Context, in *GetBlocksNotPersistedRequest, opts ...grpc.CallOption) (*GetBlocksNotPersistedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlocksNotPersistedResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlocksNotPersisted_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockchainAPIClient) SendFSMEvent(ctx context.Context, in *SendFSMEventRequest, opts ...grpc.CallOption) (*GetFSMStateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetFSMStateResponse)
@@ -844,6 +870,10 @@ type BlockchainAPIServer interface {
 	GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error)
 	// SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
 	SetBlockProcessedAt(context.Context, *SetBlockProcessedAtRequest) (*emptypb.Empty, error)
+	// SetBlockPersistedAt updates the persisted_at timestamp for a block.
+	SetBlockPersistedAt(context.Context, *SetBlockPersistedAtRequest) (*emptypb.Empty, error)
+	// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+	GetBlocksNotPersisted(context.Context, *GetBlocksNotPersistedRequest) (*GetBlocksNotPersistedResponse, error)
 	// SendFSMEvent sends an event to the blockchain FSM.
 	SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error)
 	// GetFSMCurrentState retrieves the current state of the FSM.
@@ -1003,6 +1033,12 @@ func (UnimplementedBlockchainAPIServer) GetBlocksSubtreesNotSet(context.Context,
 }
 func (UnimplementedBlockchainAPIServer) SetBlockProcessedAt(context.Context, *SetBlockProcessedAtRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetBlockProcessedAt not implemented")
+}
+func (UnimplementedBlockchainAPIServer) SetBlockPersistedAt(context.Context, *SetBlockPersistedAtRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetBlockPersistedAt not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetBlocksNotPersisted(context.Context, *GetBlocksNotPersistedRequest) (*GetBlocksNotPersistedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBlocksNotPersisted not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SendFSMEvent not implemented")
@@ -1810,6 +1846,42 @@ func _BlockchainAPI_SetBlockProcessedAt_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_SetBlockPersistedAt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetBlockPersistedAtRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).SetBlockPersistedAt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_SetBlockPersistedAt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).SetBlockPersistedAt(ctx, req.(*SetBlockPersistedAtRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetBlocksNotPersisted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlocksNotPersistedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetBlocksNotPersisted(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetBlocksNotPersisted_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetBlocksNotPersisted(ctx, req.(*GetBlocksNotPersistedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockchainAPI_SendFSMEvent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SendFSMEventRequest)
 	if err := dec(in); err != nil {
@@ -2196,6 +2268,14 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetBlockProcessedAt",
 			Handler:    _BlockchainAPI_SetBlockProcessedAt_Handler,
+		},
+		{
+			MethodName: "SetBlockPersistedAt",
+			Handler:    _BlockchainAPI_SetBlockPersistedAt_Handler,
+		},
+		{
+			MethodName: "GetBlocksNotPersisted",
+			Handler:    _BlockchainAPI_GetBlocksNotPersisted_Handler,
 		},
 		{
 			MethodName: "SendFSMEvent",

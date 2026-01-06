@@ -381,4 +381,18 @@ type Store interface {
 	//   - clear: Boolean flag to determine if the timestamp should be cleared
 	// Returns: Any error encountered
 	SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error
+
+	// SetBlockPersistedAt updates the persisted_at timestamp for a block.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - blockHash: Hash of the block to update
+	// Returns: Any error encountered
+	SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error
+
+	// GetBlocksNotPersisted retrieves blocks that haven't been persisted yet.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - limit: Maximum number of blocks to return
+	// Returns: Slice of unpersisted blocks and any error encountered
+	GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error)
 }

@@ -56,10 +56,9 @@ The following diagram provides a deeper level of detail into the Block Persister
 The service initializes through the following sequence:
 
 1. Loads configuration settings
-2. Initializes state management
-3. Establishes connection with blockchain client
-4. Waits for FSM transition from IDLE state
-5. Starts block processing loop
+2. Establishes connection with blockchain client
+3. Waits for FSM transition from IDLE state
+4. Starts block processing loop
 
 ### 2.2 Block Discovery and Processing
 
@@ -68,9 +67,9 @@ The service initializes through the following sequence:
 The service processes blocks through a **continuous polling mechanism**:
 
 1. **Block Discovery**
-    - Retrieves last persisted block height from the local state
-    - Polls the Blockchain service to get the current best block header
-    - Determines if new blocks need processing based on `BlockPersisterPersistAge`. Blocks are only processed when `(currentTip - lastPersistedHeight) > BlockPersisterPersistAge`. This means the service intentionally stays at least `BlockPersisterPersistAge` blocks behind the tip to avoid reorgs and ensure block finality.
+    - Queries the database for blocks where `persisted_at IS NULL` and `invalid = false`
+    - Retrieves blocks in ascending height order to ensure sequential processing
+    - Returns immediately if no unpersisted blocks are found
 
 2. **Processing Flow**
     - Retrieves the next block to process from the Blockchain service
@@ -82,7 +81,7 @@ The service processes blocks through a **continuous polling mechanism**:
     - A Subtree file for each subtree in the block (.subtree), including the number of transactions in the subtree, and the decorated transactions (with UTXO meta data).
     - UTXO additions (.utxo-additions), containing the UTXOs created in the block. This represents a list of new transaction outputs, including the Coinbase transaction outputs.
     - UTXO deletions (.utxo-deletions), containing the UTXOs spent in the block. This represents a list of transaction inputs that reference and spend previous outputs.
-    - Updates the local state with the new block height
+    - Updates the block's `persisted_at` timestamp in the database
 
 3. **Sleep Mechanisms**
     - On error: the service sleeps for a 1-minute period before retrying
@@ -214,7 +213,6 @@ The Block Persister service is located in the `services/blockpersister` director
 
 ```text
 services/blockpersister/
-├── state/                      # State management
 ├── Server.go                   # Main service implementation
 ├── Server_test.go              # Service tests
 ├── persist_block.go            # Block persistence logic

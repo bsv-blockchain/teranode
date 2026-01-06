@@ -46,26 +46,14 @@ type Server struct {
     // blockchainClient interfaces with the blockchain service to retrieve block data
     // and coordinate persistence operations with blockchain state
     blockchainClient blockchain.ClientI
-
-    // state manages the persister's internal state, tracking which blocks have been
-    // successfully persisted and allowing for recovery after interruptions
-    state *state.State
 }
 ```
 
-The `Server` type is the main structure for the Block Persister Service. It contains components for managing stores, blockchain interactions, and state management.
+The `Server` type is the main structure for the Block Persister Service. It contains components for managing stores and blockchain interactions.
 
 ## Functions
 
 ### Server Management
-
-#### WithSetInitialState
-
-```go
-func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server)
-```
-
-WithSetInitialState is an optional configuration function that sets the initial state of the block persister server. This can be used during initialization to establish a known starting point for block persistence operations.
 
 #### New
 
@@ -84,7 +72,7 @@ func New(
 
 Creates a new instance of the `Server` with the provided dependencies.
 
-This constructor initializes all components required for block persistence operations, including stores, state management, and client connections. It accepts optional configuration functions to customize the server instance after construction.
+This constructor initializes all components required for block persistence operations, including stores and client connections. It accepts optional configuration functions to customize the server instance after construction.
 
 Parameters:
 
@@ -98,21 +86,6 @@ Parameters:
 - opts: Optional configuration functions to apply after construction
 
 Returns a fully constructed and configured Server instance ready for initialization.
-
-#### WithSetInitialState
-
-```go
-func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server)
-```
-
-WithSetInitialState is an optional configuration function that sets the initial state of the block persister server. This can be used during initialization to establish a known starting point for block persistence operations.
-
-Parameters:
-
-- height: The blockchain height to set as the initial state
-- hash: The block hash corresponding to the specified height
-
-Returns a function that, when called with a Server instance, will set the initial state of that server. If the state cannot be set, an error is logged but not returned.
 
 #### Health
 
@@ -253,17 +226,16 @@ This is a core function of the blockpersister service that handles the complete 
 func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error)
 ```
 
-Retrieves the next block that needs to be processed based on the current state and configuration.
+Retrieves the next block that needs to be persisted to blob storage.
 
-This method determines the next block to persist by comparing the last persisted block height with the current blockchain tip. It ensures blocks are persisted in sequence without gaps and respects the configured persistence age policy to control how far behind persistence can lag.
+This method queries the database for blocks that haven't been persisted yet (persisted_at IS NULL) and aren't marked as invalid. The database stores block metadata and tracks persistence status, eliminating the need for external state files.
 
 !!! info "Processing Logic"
     The method follows these steps:
 
-    1. **Get the last persisted block height** from the state
-    2. **Get the current best block** from the blockchain
-    3. **If the difference exceeds BlockPersisterPersistAge**, return the next block
-    4. **Otherwise, return nil** to indicate no blocks need processing yet
+    1. **Query database** for blocks where `persisted_at IS NULL AND invalid = false`
+    2. **Retrieve one block** (limit=1) in ascending height order
+    3. **Return the block** if found, or nil if no blocks need processing
 
 **Parameters:**
 
@@ -436,7 +408,6 @@ The service uses settings from the `settings.Settings` structure, primarily focu
 
 #### Storage Configuration
 
-- **`Block.StateFile`**: File path for state storage. This file maintains persistence state across service restarts.
 - **`Block.BlockStore`**: Block store URL. Defines the location of the blob store used for block data.
 
 #### Network Configuration
@@ -445,7 +416,6 @@ The service uses settings from the `settings.Settings` structure, primarily focu
 
 #### Processing Configuration
 
-- **`Block.BlockPersisterPersistAge`**: Age threshold (in blocks) for block persistence. Controls how far behind the current tip blocks will be persisted. Higher values allow more blocks to accumulate before persistence occurs.
 - **`Block.BlockPersisterPersistSleep`**: Sleep duration between processing attempts when no blocks are available to process. Specified in milliseconds.
 - **`Block.BatchMissingTransactions`**: When true, enables batched retrieval of transaction metadata, which improves performance for high transaction volumes by reducing individual store requests.
 
@@ -459,15 +429,6 @@ The service uses settings from the `settings.Settings` structure, primarily focu
     - **Subtree Store**: Storage for block subtrees containing transaction references
     - **UTXO Store**: Storage for the current UTXO set and processing changes
 
-## State Management
-
-The service maintains persistence state through the `state.State` component:
-
-!!! gear "State Management Features"
-    - **Tracks last persisted block height** for sequential processing
-    - **Manages block hash records** for integrity verification
-    - **Provides atomic state updates** for consistency
-
 ## Error Handling
 
 !!! warning "Error Handling Strategy"
@@ -476,7 +437,7 @@ The service maintains persistence state through the `state.State` component:
     - **Storage errors**: Trigger retries after delay
     - **Processing errors**: Logged with context for debugging
     - **Configuration errors**: Prevent service startup
-    - **State management errors**: Trigger recovery procedures
+    - **Database errors**: Logged and service retries after delay
 
 ## Metrics
 
@@ -503,10 +464,10 @@ Required components:
 ### Block Processing Loop
 
 !!! abstract "Block Processing Steps"
-    1. **Check for next block** to process based on persistence age
+    1. **Query database** for blocks not yet persisted
     2. **Retrieve block data** if available
     3. **Persist block data** to storage
-    4. **Update state** with successful persistence
+    4. **Mark block as persisted** in database via `SetBlockPersistedAt`
     5. **Sleep** if no blocks available or on error
 
 ### Subtree Processing Flow

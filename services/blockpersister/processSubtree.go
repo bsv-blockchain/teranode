@@ -59,18 +59,20 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	var subtreeData *subtreepkg.Data
 
 	if subtreeDataExists {
-		// Subtree data already exists, load it to process UTXOs
-		u.logger.Debugf("[BlockPersister] Subtree data for %s already exists, loading for UTXO processing", subtreeHash.String())
-
-		subtreeData, err = u.readSubtreeData(ctx, subtreeHash)
-		if err != nil {
-			return err
-		}
-
 		// Update DAH (Delete-At-Height) to persist the file
 		err = u.subtreeStore.SetDAH(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData, 0)
 		if err != nil {
 			return errors.NewStorageError("[BlockPersister] error setting subtree data DAH for %s", subtreeHash.String(), err)
+		}
+
+		if utxoDiff != nil {
+			// Subtree data already exists, load it to process UTXOs
+			u.logger.Debugf("[BlockPersister] Subtree data for %s already exists, loading for UTXO processing", subtreeHash.String())
+
+			subtreeData, err = u.readSubtreeData(ctx, subtreeHash)
+			if err != nil {
+				return err
+			}
 		}
 	} else {
 		// Subtree data doesn't exist, create it
@@ -100,8 +102,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 			return errors.NewProcessingError("[BlockPersister] error serializing subtree data for %s", subtreeHash.String(), err)
 		}
 
-		err = u.subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData, subtreeDataBytes)
-		if err != nil {
+		if err = u.subtreeStore.Set(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData, subtreeDataBytes); err != nil {
 			return errors.NewStorageError("[BlockPersister] error storing subtree data for %s", subtreeHash.String(), err)
 		}
 	}
@@ -112,7 +113,7 @@ func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash
 	if utxoDiff != nil {
 		for _, tx := range subtreeData.Txs {
 			if tx != nil {
-				if err := utxoDiff.ProcessTx(tx); err != nil {
+				if err = utxoDiff.ProcessTx(tx); err != nil {
 					return errors.NewProcessingError("error processing tx for UTXO", err)
 				}
 			}

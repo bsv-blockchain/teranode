@@ -2132,6 +2132,52 @@ func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty)
 	}, nil
 }
 
+// SetBlockPersistedAt marks a block as persisted in blob storage.
+func (b *Blockchain) SetBlockPersistedAt(ctx context.Context, req *blockchain_api.SetBlockPersistedAtRequest) (*emptypb.Empty, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "SetBlockPersistedAt",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainSetBlockPersistedAt),
+		tracing.WithDebugLogMessage(b.logger, "[SetBlockPersistedAt] called with hash %x", req.BlockHash),
+	)
+	defer deferFn()
+
+	blockHash := chainhash.Hash(req.BlockHash)
+
+	err := b.store.SetBlockPersistedAt(ctx, &blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+func (b *Blockchain) GetBlocksNotPersisted(ctx context.Context, req *blockchain_api.GetBlocksNotPersistedRequest) (*blockchain_api.GetBlocksNotPersistedResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocksNotPersisted",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlocksNotPersisted),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlocksNotPersisted] called with limit %d", req.Limit),
+	)
+	defer deferFn()
+
+	blocks, err := b.store.GetBlocksNotPersisted(ctx, int(req.Limit))
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockBytes := make([][]byte, len(blocks))
+	for i, block := range blocks {
+		blockBytes[i], err = block.Bytes()
+		if err != nil {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlocksNotPersisted] failed to serialize block", err))
+		}
+	}
+
+	return &blockchain_api.GetBlocksNotPersistedResponse{
+		BlockBytes: blockBytes,
+	}, nil
+}
+
 // SetBlockSubtreesSet marks a block's subtrees as set in the blockchain.
 func (b *Blockchain) SetBlockSubtreesSet(ctx context.Context, req *blockchain_api.SetBlockSubtreesSetRequest) (*emptypb.Empty, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "SetBlockSubtreesSet",

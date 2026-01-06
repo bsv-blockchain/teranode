@@ -20,17 +20,13 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net/http"
-	"net/url"
-	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
-	"github.com/bsv-blockchain/teranode/services/blockpersister/state"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -72,62 +68,13 @@ type Server struct {
 	// blockchainClient interfaces with the blockchain service to retrieve block data
 	// and coordinate persistence operations with blockchain state
 	blockchainClient blockchain.ClientI
-
-	// state manages the persister's internal state, tracking which blocks have been
-	// successfully persisted and allowing for recovery after interruptions
-	state *state.State
-}
-
-// deriveStateFilePath determines the state file path based on the PersisterStore URL.
-// For file:// URLs, it derives the path from the store location.
-// For other store types (S3, etc.), it requires the blockPersister_stateFile setting.
-func deriveStateFilePath(persisterStore *url.URL, stateFile string) (string, error) {
-	// If state file is provided, use it
-	if stateFile != "" {
-		return stateFile, nil
-	}
-
-	// Try to derive from PersisterStore if it's a file:// URL
-	if persisterStore != nil && persisterStore.Scheme == "file" {
-		// Extract the path from file:// URL, matching file store logic
-		var storePath string
-		if persisterStore.Host == "." {
-			storePath = persisterStore.Path[1:] // relative path
-		} else {
-			storePath = persisterStore.Path // absolute path
-		}
-
-		// Place state file in the same directory as the store
-		return filepath.Join(storePath, "blockpersister_state.txt"), nil
-	}
-
-	// Non-file store without explicit state file - return error
-	return "", errors.NewConfigurationError("blockPersister_stateFile is required for non-file store types")
-}
-
-// WithSetInitialState is an optional configuration function that sets the initial state
-// of the block persister server. This can be used during initialization to establish
-// a known starting point for block persistence operations.
-//
-// Parameters:
-//   - height: The blockchain height to set as the initial state
-//   - hash: The block hash corresponding to the specified height
-//
-// Returns a function that, when called with a Server instance, will set the initial state
-// of that server. If the state cannot be set, an error is logged but not returned.
-func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server) {
-	return func(s *Server) {
-		if err := s.state.AddBlock(height, hash.String()); err != nil {
-			s.logger.Errorf("Failed to set initial state: %v", err)
-		}
-	}
 }
 
 // New creates a new block persister server instance with the provided dependencies.
 //
 // This constructor initializes all components required for block persistence operations,
-// including stores, state management, and client connections. It accepts optional
-// configuration functions to customize the server instance after construction.
+// including stores and client connections. It accepts optional configuration functions
+// to customize the server instance after construction.
 //
 // Parameters:
 //   - ctx: Context for controlling the server lifecycle
@@ -150,17 +97,6 @@ func New(
 	blockchainClient blockchain.ClientI,
 	opts ...func(*Server),
 ) *Server {
-	// Determine state file path
-	stateFilePath, err := deriveStateFilePath(tSettings.Block.PersisterStore, tSettings.Block.StateFile)
-	if err != nil {
-		logger.Errorf("Failed to determine state file path: %v", err)
-
-		// panic - as we cannot continue without a state file
-		panic(err)
-	}
-
-	state := state.New(logger, stateFilePath)
-
 	u := &Server{
 		ctx:              ctx,
 		logger:           logger,
@@ -170,7 +106,6 @@ func New(
 		utxoStore:        utxoStore,
 		stats:            gocore.NewStat("blockpersister"),
 		blockchainClient: blockchainClient,
-		state:            state,
 	}
 
 	// Apply optional configuration functions
@@ -248,16 +183,11 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-// getNextBlockToProcess retrieves the next block that needs to be processed
-// based on the current state and configuration.
+// getNextBlockToProcess retrieves the next block that needs to be persisted to blob storage.
 //
-// This method determines the next block to persist by comparing the last persisted block height
-// with the current blockchain tip. It ensures blocks are persisted in sequence without gaps
-// and respects the configured persistence age policy to control how far behind persistence
-// can lag.
-//
-// The method includes reorg detection by verifying that the last persisted block is still
-// on the current chain, and validates parent hash continuity when retrieving the next block.
+// This method queries the database for blocks that haven't been persisted yet (persisted_at IS NULL)
+// and aren't marked as invalid. The database stores block metadata and tracks persistence status,
+// eliminating the need for external state files.
 //
 // Parameters:
 //   - ctx: Context for coordinating the block retrieval operation
@@ -265,122 +195,17 @@ func (u *Server) Init(ctx context.Context) (err error) {
 // Returns:
 //   - *model.Block: The next block to process, or nil if no block needs processing yet
 //   - error: Any error encountered during the operation
-//
-// The method follows these steps:
-//  1. Get the last persisted block height and hash from the state
-//  2. If we have a persisted block, check if it's still on the current chain (reorg detection)
-//  3. Get the current best block from the blockchain
-//  4. If the difference between them exceeds BlockPersisterPersistAge, return the next block
-//  5. Validate that the retrieved block's parent hash matches the last persisted block hash
-//  6. Otherwise, return nil to indicate no blocks need processing yet
 func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error) {
-	lastPersistedHeight, lastPersistedHash, err := u.state.GetLastPersistedBlock()
+	blocks, err := u.blockchainClient.GetBlocksNotPersisted(ctx, 1)
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to get last persisted block", err)
+		return nil, errors.NewProcessingError("failed to get blocks not persisted", err)
 	}
 
-	// REORG DETECTION: Check if the last persisted block is still on the current chain
-	// This detects blockchain reorganizations that may have occurred since the last persistence
-	// This check can be disabled via settings for testing or special scenarios
-	if u.settings.Block.BlockPersisterEnableDefensiveReorgCheck && lastPersistedHeight > 0 && lastPersistedHash != nil {
-		needsRecovery := false
-		var recoveryReason string
-
-		// Get the block to obtain its ID
-		lastBlock, err := u.blockchainClient.GetBlock(ctx, lastPersistedHash)
-		if err != nil {
-			// If we can't retrieve the block, it's likely been pruned because it's on an orphaned chain
-			needsRecovery = true
-			recoveryReason = fmt.Sprintf("last persisted block %s not found in blockchain store (likely pruned orphan)", lastPersistedHash.String())
-		} else {
-			// Check if this block is still on the current chain using its ID
-			onCurrentChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{lastBlock.ID})
-			if err != nil {
-				return nil, errors.NewProcessingError("failed to check if block is on current chain", err)
-			}
-
-			if !onCurrentChain {
-				needsRecovery = true
-				recoveryReason = fmt.Sprintf("last persisted block %s at height %d is no longer on current chain", lastPersistedHash.String(), lastPersistedHeight)
-			}
-		}
-
-		if needsRecovery {
-			// Reorg detected - trigger recovery
-			u.logger.Infof("[BlockPersister] Detected reorg: %s. Starting recovery...", recoveryReason)
-
-			// Find common ancestor by walking backward and trying to rollback to each current chain block
-			// This approach works even if the orphaned blocks have been pruned from the blockchain store
-			var commonAncestorHeight uint32
-			var commonAncestorHash *chainhash.Hash
-
-			// Walk backward from last persisted height
-			for height := lastPersistedHeight; height > 0; height-- {
-				// Get the block from the current chain at this height
-				currentChainBlock, err := u.blockchainClient.GetBlockByHeight(ctx, height)
-				if err != nil {
-					// Blockchain service should be reliable during recovery
-					// If it's failing, there's likely a real infrastructure problem that needs attention
-					return nil, errors.NewProcessingError("blockchain service unavailable during reorg recovery at height %d", height, err)
-				}
-
-				// Try to rollback to this block's hash
-				// This will succeed if the hash exists in our state file (meaning it's a common ancestor)
-				if err := u.state.RollbackToHash(currentChainBlock.Hash()); err == nil {
-					// Success - found common ancestor
-					commonAncestorHeight = height
-					commonAncestorHash = currentChainBlock.Hash()
-					break
-				}
-				// If rollback failed, this block isn't in our state file, continue backward
-			}
-
-			if commonAncestorHash == nil {
-				return nil, errors.NewProcessingError("no common ancestor found during reorg recovery - could not find any current chain block in state file", nil)
-			}
-
-			// Calculate how many blocks we rolled back
-			blocksRolledBack := lastPersistedHeight - commonAncestorHeight
-
-			u.logger.Infof("[BlockPersister] Reorg recovery complete: rolled back %d blocks from height %d to common ancestor at height %d (hash: %s). Will resume processing from height %d.",
-				blocksRolledBack, lastPersistedHeight, commonAncestorHeight, commonAncestorHash.String(), commonAncestorHeight+1)
-
-			// Return nil to trigger next iteration, which will start processing from common ancestor + 1
-			return nil, nil
-		}
+	if len(blocks) == 0 {
+		return nil, nil
 	}
 
-	_, blockMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil {
-		return nil, errors.NewProcessingError("failed to get best block header", err)
-	}
-
-	if blockMeta.Height > lastPersistedHeight+u.settings.Block.BlockPersisterPersistAge {
-		block, err := u.blockchainClient.GetBlockByHeight(ctx, lastPersistedHeight+1)
-		if err != nil {
-			return nil, errors.NewProcessingError("failed to get block headers by height", err)
-		}
-
-		// PARENT HASH VALIDATION: Verify chain continuity
-		// This provides early detection of chain inconsistencies or reorgs that occurred
-		// between the reorg check above and this block retrieval
-		// This check can be disabled via settings for testing or special scenarios
-		if u.settings.Block.BlockPersisterEnableDefensiveReorgCheck && lastPersistedHeight > 0 && lastPersistedHash != nil {
-			// Get the parent hash from the retrieved block's header
-			parentHash := block.Header.HashPrevBlock
-			if !parentHash.IsEqual(lastPersistedHash) {
-				u.logger.Infof("[BlockPersister] Chain discontinuity detected: block %s at height %d has parent %s, expected %s. Reorg likely occurred during processing. Will retry and recover on next iteration.",
-					block.Hash().String(), block.Height, parentHash.String(), lastPersistedHash.String())
-				// Return nil to skip this block and retry on next iteration
-				// GetBlockByHeight will return the correct block from the current chain on the next attempt
-				return nil, nil
-			}
-		}
-
-		return block, nil
-	}
-
-	return nil, nil
+	return blocks[0], nil
 }
 
 // Start initializes and begins the block persister service operations.
@@ -478,14 +303,17 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	//
 	// By publishing state on startup, BlockAssembler can initialize immediately from this state.
 	// During runtime, BlockPersisted notifications keep the height current.
-	if lastHeight, err := u.state.GetLastPersistedBlockHeight(); err == nil && lastHeight > 0 {
-		if u.blockchainClient != nil {
-			heightBytes := binary.LittleEndian.AppendUint32(nil, lastHeight)
-			if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
-				u.logger.Warnf("[BlockPersister] Failed to publish initial state: %v", err)
-			} else {
-				u.logger.Infof("[BlockPersister] Published initial state: height %d", lastHeight)
-			}
+	blocks, err := u.blockchainClient.GetBlocksNotPersisted(ctx, 1)
+	if err != nil {
+		u.logger.Warnf("[BlockPersister] Failed to query initial state: %v", err)
+	} else if len(blocks) > 0 && blocks[0].Height > 0 {
+		// GetBlocksNotPersisted returns blocks in ascending height order, so blocks[0] is the lowest unpersisted block
+		lastHeight := blocks[0].Height - 1
+		heightBytes := binary.LittleEndian.AppendUint32(nil, lastHeight)
+		if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
+			u.logger.Warnf("[BlockPersister] Failed to publish initial state: %v", err)
+		} else {
+			u.logger.Infof("[BlockPersister] Published initial state: height %d", lastHeight)
 		}
 	}
 
@@ -537,9 +365,9 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 					}
 				}
 
-				// Add this after successful persistence
-				if err := u.state.AddBlock(block.Height, block.Hash().String()); err != nil {
-					u.logger.Errorf("Failed to record block %s: %v", block.Hash(), err)
+				// Mark block as persisted in database
+				if err := u.blockchainClient.SetBlockPersistedAt(ctx, block.Hash()); err != nil {
+					u.logger.Errorf("Failed to mark block %s as persisted: %v", block.Hash(), err)
 					time.Sleep(time.Minute)
 
 					continue
@@ -556,28 +384,26 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 				// to calculate safe deletion bounds: min(requested_height, persisted_height + retention)
 				//
 				// See BlockAssembler.startChannelListeners for the notification handler.
-				if u.blockchainClient != nil {
-					notification := &blockchain_api.Notification{
-						Type: model.NotificationType_BlockPersisted,
-						Hash: block.Hash().CloneBytes(),
-						Metadata: &blockchain_api.NotificationMetadata{
-							Metadata: map[string]string{
-								"height": fmt.Sprintf("%d", block.Height),
-							},
-						},
-					}
-					if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
-						u.logger.Warnf("[BlockPersister] Failed to send persisted notification for block %s at height %d: %v",
-							block.Hash().String(), block.Height, err)
-					}
+				notification := &blockchain_api.Notification{
+				Type: model.NotificationType_BlockPersisted,
+				Hash: block.Hash().CloneBytes(),
+				Metadata: &blockchain_api.NotificationMetadata{
+					Metadata: map[string]string{
+						"height": fmt.Sprintf("%d", block.Height),
+					},
+				},
+			}
+			if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
+				u.logger.Warnf("[BlockPersister] Failed to send persisted notification for block %s at height %d: %v",
+					block.Hash().String(), block.Height, err)
+			}
 
-					// Update BlockPersisterHeight state for P2P storage mode determination
-					heightBytes := binary.LittleEndian.AppendUint32(nil, block.Height)
-					if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
-						u.logger.Warnf("[BlockPersister] Failed to update BlockPersisterHeight state for block %s at height %d: %v",
-							block.Hash().String(), block.Height, err)
-					}
-				}
+			// Update BlockPersisterHeight state for P2P storage mode determination
+			heightBytes := binary.LittleEndian.AppendUint32(nil, block.Height)
+			if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
+				u.logger.Warnf("[BlockPersister] Failed to update BlockPersisterHeight state for block %s at height %d: %v",
+					block.Hash().String(), block.Height, err)
+			}
 
 				u.logger.Infof("Successfully processed block %s", block.Hash())
 			}

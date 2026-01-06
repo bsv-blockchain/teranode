@@ -2079,3 +2079,35 @@ func (c *Client) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.H
 
 	return nil
 }
+
+// SetBlockPersistedAt updates the persisted_at timestamp for a block.
+// This marks the block as having been persisted to blob storage.
+func (c *Client) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.SetBlockPersistedAt(ctx, &blockchain_api.SetBlockPersistedAtRequest{
+		BlockHash: blockHash.CloneBytes(),
+	})
+
+	return err
+}
+
+// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+func (c *Client) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	resp, err := c.client.GetBlocksNotPersisted(ctx, &blockchain_api.GetBlocksNotPersistedRequest{
+		Limit: int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	blocks := make([]*model.Block, len(resp.BlockBytes))
+
+	for i, blockBytes := range resp.BlockBytes {
+		block, err := model.NewBlockFromBytes(blockBytes)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to deserialize block", err)
+		}
+		blocks[i] = block
+	}
+
+	return blocks, nil
+}

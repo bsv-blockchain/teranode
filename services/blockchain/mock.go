@@ -369,6 +369,23 @@ func (m *Mock) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Has
 	return args.Error(0)
 }
 
+// SetBlockPersistedAt mocks the SetBlockPersistedAt method
+func (m *Mock) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
+// GetBlocksNotPersisted mocks the GetBlocksNotPersisted method
+func (m *Mock) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	args := m.Called(ctx, limit)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.Block), args.Error(1)
+}
+
 // GetBlockIsMined mocks the GetBlockIsMined method
 func (m *Mock) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	args := m.Called(ctx, blockHash)
