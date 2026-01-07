@@ -293,9 +293,10 @@ func TestInitSQLiteDBNestedPath(t *testing.T) {
 	tempDir := filepath.Join(os.TempDir(), "teranode-test", "nested-sql-test", time.Now().Format("20060102-150405"))
 	testSettings := &settings.Settings{
 		DataFolder: tempDir,
-		UtxoStore: settings.UtxoStoreSettings{
-			PostgresMaxIdleConns: 10,
-			PostgresMaxOpenConns: 80,
+		// Not used by InitSQLiteDB, but set for consistency with other DB init tests.
+		Postgres: settings.PostgresSettings{
+			MaxIdleConns: 10,
+			MaxOpenConns: 80,
 		},
 	}
 

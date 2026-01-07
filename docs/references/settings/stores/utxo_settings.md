@@ -36,8 +36,6 @@
 | UseExternalTxCache | bool | true | utxostore_useExternalTxCache | External transaction cache usage |
 | ExternalizeAllTransactions | bool | false | utxostore_externalizeAllTransactions | Transaction externalization control |
 | VerboseDebug | bool | false | utxostore_verbose_debug | Verbose debug logging |
-
-**Note**: PostgreSQL connection pool settings (MaxOpenConns, MaxIdleConns, ConnMaxLifetime, ConnMaxIdleTime) are now configured globally via `PostgresSettings`. See [Global Settings](../global_settings.md) for details.
 | UpdateTxMinedStatus | bool | true | utxostore_updateTxMinedStatus | Transaction mined status updates |
 | MaxMinedRoutines | int | 128 | utxostore_maxMinedRoutines | Max mined transaction routines |
 | MaxMinedBatchSize | int | 1024 | utxostore_maxMinedBatchSize | Max mined transaction batch size |
@@ -46,6 +44,7 @@
 | PrunerParentUpdateBatcherSize | int | 2000 | utxostore_prunerParentUpdateBatcherSize | Pruner parent update batch size |
 | PrunerParentUpdateBatcherDurationMillis | int | 100 | utxostore_prunerParentUpdateBatcherDurationMillis | Pruner parent update batch duration |
 | PrunerDeleteBatcherSize | int | 5000 | utxostore_prunerDeleteBatcherSize | Pruner delete batch size |
+**Note**: PostgreSQL connection pool settings (MaxOpenConns, MaxIdleConns, ConnMaxLifetime, ConnMaxIdleTime) are now configured globally via `PostgresSettings`. See [Global Settings](../global_settings.md) for details.
 | PrunerDeleteBatcherDurationMillis | int | 100 | utxostore_prunerDeleteBatcherDurationMillis | Pruner delete batch duration |
 | PrunerMaxConcurrentOperations | int | 0 | utxostore_prunerMaxConcurrentOperations | Pruner max concurrent operations (0=use queue size) |
 
