@@ -4512,7 +4512,6 @@ func TestHandleGetchaintipsComprehensive(t *testing.T) {
 	})
 }
 
-
 // mockBlockValidationClient is a mock implementation of blockvalidation.Interface for testing
 type mockBlockValidationClient struct {
 	validateBlockFunc   func(context.Context, *model.Block, *blockvalidation.ValidateBlockOptions) error
