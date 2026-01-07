@@ -1740,5 +1740,449 @@ test/sequentialtest/double_spend/
 ├── 02_multiple_conflicting_external_tx_test.go
 ├── 03_conflicting_chains_external_tx_test.go
 ├── 04_double_spend_fork_external_tx_test.go
-└── 05_triple_forked_chain_external_tx_test.go
+├── 05_triple_forked_chain_external_tx_test.go
+├── 06_grandparent_child_conflict_test.go
+├── 07_grandparent_multi_output_conflict_test.go
+├── 08_same_chain_grandparent_double_spend_test.go
+└── 09_forked_chain_grandparent_double_spend_test.go
 ```
+
+## Complete Guide to Writing Double Spend Tests
+
+This section provides comprehensive instructions for LLMs to write double spend tests based on plain English descriptions.
+
+### Understanding Double Spend Scenarios
+
+Double spend tests verify that the system correctly:
+1. **Rejects invalid transactions** that spend already-spent outputs
+2. **Tracks conflicting transactions** across competing chains
+3. **Updates conflict status** during chain reorganizations
+4. **Cascades conflicts** to dependent transactions
+
+### Test Structure Template
+
+All double spend tests follow this structure:
+
+```go
+package doublespendtest
+
+import (
+	"testing"
+
+	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/test/utils/transactions"
+	"github.com/stretchr/testify/require"
+)
+
+// Test with PostgreSQL
+func TestMyScenarioPostgres(t *testing.T) {
+	t.Run("scenario_name", func(t *testing.T) {
+		testMyScenario(t, "postgres")
+	})
+}
+
+// Test with Aerospike
+func TestMyScenarioAerospike(t *testing.T) {
+	t.Run("scenario_name", func(t *testing.T) {
+		testMyScenario(t, "aerospike")
+	})
+}
+
+func testMyScenario(t *testing.T, utxoStore string) {
+	// Setup
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		UTXOStoreType:        utxoStore,
+		SettingsOverrideFunc: externalTxSettingsFunc(),
+	})
+	defer func() {
+		td.Stop(t)
+	}()
+
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	// Get spendable coinbase (CoinbaseMaturity=1, so this mines 2 blocks)
+	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
+
+	// Test implementation...
+}
+```
+
+### Key Constants and Helpers
+
+```go
+const (
+	lowUtxoBatchSize        = 2              // Triggers external storage
+	numOutputsForExternalTx = 5              // Creates external transactions
+	outputAmount            = uint64(100000) // Satoshis per output
+	blockWait               = 5 * time.Second
+)
+
+// externalTxSettingsFunc configures low batch size for external TX testing
+func externalTxSettingsFunc() func(*settings.Settings) {
+	return test.ComposeSettings(
+		test.SystemTestSettings(),
+		func(s *settings.Settings) {
+			s.UtxoStore.UtxoBatchSize = lowUtxoBatchSize
+		},
+	)
+}
+```
+
+### Block Height Reference
+
+With `CoinbaseMaturity = 1` (set by TestDaemon):
+- `MineToMaturityAndGetSpendableCoinbaseTx` mines 2 blocks (heights 1, 2)
+- Returns coinbase from block 1
+- Next mined block will be height 3
+
+### Common Patterns
+
+#### Pattern 1: Creating Multi-Output Transactions
+
+```go
+// Grandparent with 5 outputs (external transaction)
+grandparent := td.CreateTransactionWithOptions(t,
+	transactions.WithInput(coinbaseTx, 0),
+	transactions.WithP2PKHOutputs(numOutputsForExternalTx,
+		coinbaseTx.Outputs[0].Satoshis/numOutputsForExternalTx-100),
+)
+
+// Parent spending specific grandparent outputs
+parent := td.CreateTransactionWithOptions(t,
+	transactions.WithInput(grandparent, 0), // Spend output 0
+	transactions.WithInput(grandparent, 1), // Spend output 1
+	transactions.WithP2PKHOutputs(numOutputsForExternalTx,
+		grandparent.Outputs[0].Satoshis/numOutputsForExternalTx-100),
+)
+```
+
+#### Pattern 2: Creating Conflicting Transactions
+
+```go
+// txA and txB both spend the same output - they conflict!
+txA := td.CreateTransactionWithOptions(t,
+	transactions.WithInput(parentTx, 0),  // Spends output 0
+	transactions.WithP2PKHOutputs(numOutputsForExternalTx, amount),
+)
+
+txB := td.CreateTransactionWithOptions(t,
+	transactions.WithInput(parentTx, 0),  // Also spends output 0 - CONFLICT!
+	transactions.WithP2PKHOutputs(numOutputsForExternalTx, amount),
+)
+```
+
+#### Pattern 3: Creating Forked Chains
+
+```go
+// Get the fork point block
+forkPoint, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, forkHeight)
+require.NoError(t, err)
+
+// Create block on chain A (main chain via propagation + mining)
+require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, txA))
+td.MineAndWait(t, 1)
+blockA, _ := td.BlockchainClient.GetBlockByHeight(td.Ctx, forkHeight+1)
+
+// Create block on chain B (fork via CreateTestBlock)
+_, blockB := td.CreateTestBlock(t, forkPoint, nonce, txB)
+require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, blockB, blockB.Height, "", "legacy"))
+```
+
+#### Pattern 4: Making a Fork Win (Trigger Reorg)
+
+```go
+// Chain A is at height 5, Chain B is at height 4
+// Add empty blocks to Chain B to make it longer
+
+_, block5b := td.CreateTestBlock(t, block4b, 10502)
+require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"))
+
+_, block6b := td.CreateTestBlock(t, block5b, 10602)
+require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy"))
+
+// Wait for reorg to complete
+td.WaitForBlockHeight(t, block6b, blockWait, true)
+```
+
+### Verification Methods
+
+```go
+// Verify transaction is on longest chain (not conflicting)
+td.VerifyOnLongestChainInUtxoStore(t, tx)
+
+// Verify transaction conflict status in UTXO store
+td.VerifyConflictingInUtxoStore(t, true, conflictingTx)   // Should be conflicting
+td.VerifyConflictingInUtxoStore(t, false, winningTx)      // Should NOT be conflicting
+
+// Verify transaction is NOT in block assembly (mined or conflicting)
+td.VerifyNotInBlockAssembly(t, tx)
+
+// Verify conflict status in subtrees
+td.VerifyConflictingInSubtrees(t, block.Subtrees[0], conflictingTxs...)
+
+// Wait for specific block height
+td.WaitForBlockHeight(t, block, blockWait, true)
+```
+
+### Translating Plain English to Test Code
+
+#### "Grandparent has N outputs"
+```go
+grandparent := td.CreateTransactionWithOptions(t,
+	transactions.WithInput(coinbaseTx, 0),
+	transactions.WithP2PKHOutputs(N, amountPerOutput),
+)
+```
+
+#### "Parent spends grandparent outputs X and Y"
+```go
+parent := td.CreateTransactionWithOptions(t,
+	transactions.WithInput(grandparent, X),
+	transactions.WithInput(grandparent, Y),
+	transactions.WithP2PKHOutputs(numOutputs, amount),
+)
+```
+
+#### "Child spends parent output A and grandparent outputs B, C"
+```go
+child := td.CreateTransactionWithOptions(t,
+	transactions.WithInput(parent, A),
+	transactions.WithInput(grandparent, B),
+	transactions.WithInput(grandparent, C),
+	transactions.WithP2PKHOutputs(numOutputs, amount),
+)
+```
+
+#### "Transaction should be rejected / invalid"
+```go
+err = td.PropagationClient.ProcessTransaction(td.Ctx, invalidTx)
+require.Error(t, err, "Expected transaction to be rejected")
+
+// Or for blocks:
+err = td.BlockValidationClient.ProcessBlock(td.Ctx, invalidBlock, invalidBlock.Height, "", "legacy")
+require.Error(t, err, "Expected block to be rejected")
+```
+
+#### "Create a fork at block N"
+```go
+forkPoint, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, N)
+require.NoError(t, err)
+
+_, forkBlock := td.CreateTestBlock(t, forkPoint, nonce, txs...)
+require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, forkBlock, forkBlock.Height, "", "legacy"))
+```
+
+#### "Make chain B win / longer"
+```go
+// Add enough empty blocks to make chain B longer than chain A
+for i := 0; i < numBlocksNeeded; i++ {
+	_, nextBlock := td.CreateTestBlock(t, previousBlock, nonce+uint32(i))
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, nextBlock, nextBlock.Height, "", "legacy"))
+	previousBlock = nextBlock
+}
+td.WaitForBlockHeight(t, previousBlock, blockWait, true)
+```
+
+#### "Verify X is conflicting / not conflicting"
+```go
+td.VerifyConflictingInUtxoStore(t, true, conflictingTx)   // Is conflicting
+td.VerifyConflictingInUtxoStore(t, false, validTx)        // Not conflicting
+```
+
+### Complex Scenario Example: Grandparent Multi-Output Conflict
+
+**Plain English:**
+> Create a test where grandparent has 5 outputs. Parent spends GP:0 and GP:4.
+> Child1 spends parent:0 and GP:1. Child2 spends parent:1 and GP:2.
+> ParentSibling spends GP:3. Then a fork where parentB spends GP:0,1,3,4 wins.
+
+**Test Structure:**
+
+```go
+func testComplexForkGrandparentConflict(t *testing.T, utxoStore string) {
+	// Setup daemon
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		UTXOStoreType:        utxoStore,
+		SettingsOverrideFunc: externalTxSettingsFunc(),
+	})
+	defer td.Stop(t)
+
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
+
+	// Create grandparent with 5 outputs
+	grandparent := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(5, coinbaseTx.Outputs[0].Satoshis/5-100),
+	)
+
+	// Mine grandparent
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, grandparent))
+	td.MineAndWait(t, 1)
+
+	block3gp, _ := td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
+
+	// Chain A: parent spends GP:0, GP:4
+	parent := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(grandparent, 0),
+		transactions.WithInput(grandparent, 4),
+		transactions.WithP2PKHOutputs(5, grandparent.Outputs[0].Satoshis/5-100),
+	)
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
+	td.MineAndWait(t, 1)
+
+	// Chain A: child1 spends parent:0, GP:1
+	child1 := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(parent, 0),
+		transactions.WithInput(grandparent, 1),
+		transactions.WithP2PKHOutputs(5, parent.Outputs[0].Satoshis/5-100),
+	)
+
+	// Chain A: child2 spends parent:1, GP:2
+	child2 := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(parent, 1),
+		transactions.WithInput(grandparent, 2),
+		transactions.WithP2PKHOutputs(5, parent.Outputs[1].Satoshis/5-100),
+	)
+
+	// Chain A: parentSibling spends GP:3
+	parentSibling := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(grandparent, 3),
+		transactions.WithP2PKHOutputs(5, grandparent.Outputs[3].Satoshis/5-100),
+	)
+
+	// Submit and mine Chain A transactions
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, child1))
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, child2))
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parentSibling))
+	td.MineAndWait(t, 1)
+
+	block5a, _ := td.BlockchainClient.GetBlockByHeight(td.Ctx, 5)
+
+	// Verify Chain A is winning
+	td.VerifyOnLongestChainInUtxoStore(t, parent)
+	td.WaitForBlockHeight(t, block5a, blockWait, true)
+
+	// Chain B: parentB spends GP:0,1,3,4 (conflicts with parent, child1, parentSibling)
+	parentB := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(grandparent, 0),
+		transactions.WithInput(grandparent, 1),
+		transactions.WithInput(grandparent, 3),
+		transactions.WithInput(grandparent, 4),
+		transactions.WithP2PKHOutputs(5, grandparent.Outputs[0].Satoshis/5-100),
+	)
+
+	// Create fork from block 3 (grandparent block)
+	_, block4b := td.CreateTestBlock(t, block3gp, 10302, parentB)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy"))
+
+	// Verify parentB is conflicting (losing chain)
+	td.VerifyConflictingInUtxoStore(t, true, parentB)
+
+	// Make Chain B longer to trigger reorg
+	_, block5b := td.CreateTestBlock(t, block4b, 10402)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"))
+
+	_, block6b := td.CreateTestBlock(t, block5b, 10502)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block6b, block6b.Height, "", "legacy"))
+
+	td.WaitForBlockHeight(t, block6b, blockWait, true)
+
+	// After reorg: verify conflict status
+	td.VerifyConflictingInUtxoStore(t, false, parentB)         // Now winning
+	td.VerifyConflictingInUtxoStore(t, true, parent)           // GP:0,4 conflict
+	td.VerifyConflictingInUtxoStore(t, true, child1)           // GP:1 conflict + cascade
+	td.VerifyConflictingInUtxoStore(t, true, child2)           // Cascade (parent:1 gone)
+	td.VerifyConflictingInUtxoStore(t, true, parentSibling)    // GP:3 conflict
+	td.VerifyConflictingInUtxoStore(t, false, grandparent)     // In both chains
+}
+```
+
+### Same-Chain Double Spend Test (Invalid Transaction)
+
+**Plain English:**
+> Test where parent spends GP:0,1 and child tries to spend parent:0 + GP:0 + GP:4.
+> The child should be rejected because GP:0 is already spent by parent.
+
+```go
+func testSameChainGrandparentDoubleSpend(t *testing.T, utxoStore string) {
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		UTXOStoreType:        utxoStore,
+		SettingsOverrideFunc: externalTxSettingsFunc(),
+	})
+	defer td.Stop(t)
+
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err)
+
+	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
+
+	// Grandparent with 5 outputs
+	grandparent := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(5, coinbaseTx.Outputs[0].Satoshis/5-100),
+	)
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, grandparent))
+	td.MineAndWait(t, 1)
+
+	// Parent spends GP:0 and GP:1
+	parent := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(grandparent, 0),
+		transactions.WithInput(grandparent, 1),
+		transactions.WithP2PKHOutputs(5, grandparent.Outputs[0].Satoshis/5-100),
+	)
+	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
+	td.MineAndWait(t, 1)
+
+	// Invalid child: tries to spend parent:0 + GP:0 (already spent!) + GP:4
+	invalidChild := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(parent, 0),
+		transactions.WithInput(grandparent, 0),  // INVALID: already spent by parent!
+		transactions.WithInput(grandparent, 4),
+		transactions.WithP2PKHOutputs(5, grandparent.Outputs[0].Satoshis/5-100),
+	)
+
+	// Should be rejected via propagation
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, invalidChild)
+	require.Error(t, err, "Expected rejection - GP:0 already spent")
+
+	// Should also be rejected as a block
+	block4, _ := td.BlockchainClient.GetBlockByHeight(td.Ctx, 4)
+	_, invalidBlock := td.CreateTestBlock(t, block4, 10501, invalidChild)
+	err = td.BlockValidationClient.ProcessBlock(td.Ctx, invalidBlock, invalidBlock.Height, "", "legacy")
+	require.Error(t, err, "Expected block rejection - contains double spend")
+}
+```
+
+### Checklist for Writing Double Spend Tests
+
+1. **Setup:**
+   - [ ] Use `externalTxSettingsFunc()` for external transaction tests
+   - [ ] Call `td.BlockchainClient.Run(td.Ctx, "test")`
+   - [ ] Use `MineToMaturityAndGetSpendableCoinbaseTx` for spendable coins
+   - [ ] Always `defer td.Stop(t)`
+
+2. **Transaction Creation:**
+   - [ ] Use correct output indices when spending
+   - [ ] Calculate amounts properly (input amount / num outputs - fee)
+   - [ ] Log transaction IDs and output counts for debugging
+
+3. **Chain Building:**
+   - [ ] Use `PropagationClient.ProcessTransaction` + `MineAndWait` for main chain
+   - [ ] Use `CreateTestBlock` + `ProcessBlock` for forks
+   - [ ] Use unique nonces for each block (increment by test ID + block number)
+
+4. **Verification:**
+   - [ ] Verify winning chain with `WaitForBlockHeight`
+   - [ ] Check conflict status with `VerifyConflictingInUtxoStore`
+   - [ ] Verify mined transactions with `VerifyNotInBlockAssembly`
+   - [ ] Check cascade conflicts (transactions depending on conflicting parents)
+
+5. **Documentation:**
+   - [ ] Add clear ASCII art showing chain structure
+   - [ ] Document which outputs each transaction spends
+   - [ ] Explain the conflict (which outputs are double-spent)
+   - [ ] Note cascade effects (child becomes conflicting when parent does)

@@ -52,30 +52,33 @@ func testSingleDoubleSpendExternalTx(t *testing.T, utxoStore string) {
 	t.Logf("External txA0: %s (%d outputs)", txA0.TxIDChainHash().String(), len(txA0.Outputs))
 	t.Logf("External txB0 (double spend): %s (%d outputs)", txB0.TxIDChainHash().String(), len(txB0.Outputs))
 
-	// 0 -> 1 ... 101 -> 102a (*)
-	// block102a contains txA0 (external tx with 5 outputs)
-
-	// Create block 102b with a double spend external transaction
-	block102b := createConflictingExternalBlock(t, td, block102a, []*bt.Tx{txB0}, []*bt.Tx{txA0}, 10202)
-
-	//                   / 102a (*) [txA0 - external]
-	// 0 -> 1 ... 101 ->
-	//                   \ 102b [txB0 - external, double spend]
-
-	// Create block 103b to make the longest chain...
-	_, block103b := td.CreateTestBlock(t, block102b, 10302) // Empty block
-
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"),
+	// create 103A
+	// 0 -> 1 ... 101 -> 102a -> 103a (*)
+	_, block103a := td.CreateTestBlock(t, block102a, 10301, txA0)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"),
 		"Failed to process block")
 
-	td.WaitForBlockHeight(t, block103b, blockWait, true)
+	// Create block 102b with a double spend external transaction
+	block103b := createConflictingBlockUseExternalRecords(t, td, block103a, []*bt.Tx{txB0}, []*bt.Tx{txA0}, 10202)
 
-	//                   / 102a [txA0 - external]
+	//                   / 102a (*) [txA0 - external] -> 103a (*)
 	// 0 -> 1 ... 101 ->
-	//                   \ 102b [txB0 - external] -> 103b (*)
+	//                                                \ 103b [txB0 - external, double spend]
+
+	// Create block 103b to make the longest chain...
+	_, block104b := td.CreateTestBlock(t, block103b, 10402) // Empty block
+
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"),
+		"Failed to process block")
+
+	td.WaitForBlockHeight(t, block104b, blockWait, true)
+
+	//                   / 102a [txA0 - external] -> 103a
+	// 0 -> 1 ... 101 ->
+	//                   \ 102b [txB0 - external] -> 103b -> 104b (*)
 
 	// Check the txA0 (external tx) is marked as conflicting
-	td.VerifyConflictingInSubtrees(t, block102a.Subtrees[0], txA0)
+	td.VerifyConflictingInSubtrees(t, block103a.Subtrees[0], txA0)
 	td.VerifyConflictingInUtxoStore(t, true, txA0)
 
 	// Check the txA0 has been removed from block assembly
@@ -83,26 +86,26 @@ func testSingleDoubleSpendExternalTx(t *testing.T, utxoStore string) {
 
 	// Check the txB0 (external tx) is no longer marked as conflicting
 	// It should still be marked as conflicting in the subtree
-	td.VerifyConflictingInSubtrees(t, block102b.Subtrees[0], txB0)
+	td.VerifyConflictingInSubtrees(t, block103b.Subtrees[0], txB0)
 	td.VerifyConflictingInUtxoStore(t, false, txB0)
 
 	// Check that the txB0 is not in block assembly, it should have been mined and removed
 	td.VerifyNotInBlockAssembly(t, txB0)
 
 	// Fork back to the original chain and check that everything is processed properly
-	_, block103a := td.CreateTestBlock(t, block102a, 10301) // Empty block
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"),
-		"Failed to process block")
-
 	_, block104a := td.CreateTestBlock(t, block103a, 10401) // Empty block
 	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"),
 		"Failed to process block")
 
-	td.WaitForBlockHeight(t, block104a, blockWait)
+	_, block105a := td.CreateTestBlock(t, block104a, 10501) // Empty block
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105a, block105a.Height, "", "legacy"),
+		"Failed to process block")
 
-	//                   / 102a [txA0] -> 103a -> 104a (*)
+	td.WaitForBlock(t, block105a, blockWait)
+
+	//                   / 102a [txA0] -> 103a -> 104a -> 105a (*)
 	// 0 -> 1 ... 101 ->
-	//                   \ 102b [txB0] -> 103b
+	//                   \ 102b [txB0] -> 103b -> 104b 
 
 	// Check that the txB0 is not in block assembly, it should have been removed
 	td.VerifyNotInBlockAssembly(t, txB0)
@@ -112,8 +115,8 @@ func testSingleDoubleSpendExternalTx(t *testing.T, utxoStore string) {
 	td.VerifyConflictingInUtxoStore(t, true, txB0)
 
 	// Check that both transactions are still marked as conflicting in the subtrees
-	td.VerifyConflictingInSubtrees(t, block102a.Subtrees[0], txA0)
-	td.VerifyConflictingInSubtrees(t, block102b.Subtrees[0], txB0)
+	td.VerifyConflictingInSubtrees(t, block103a.Subtrees[0], txA0)
+	td.VerifyConflictingInSubtrees(t, block103b.Subtrees[0], txB0)
 
 	t.Log("Successfully verified double spend handling with external transactions")
 }

@@ -29,18 +29,19 @@ func TestDoubleSpendForkExternalTxAerospike(t *testing.T) {
 //
 // Transaction Chains (all external with 5 outputs each):
 //   - Chain A: txA0 -> txA1 -> txA2 -> txA3 -> txA4
-//   - Chain B: txB0 -> txB1 -> txB2 -> txB3
+//   - Chain B: txB0 -> txB1 -> txB2 -> txB3 (txA0 and txB0 are double spends)
 //
 // Block Structure:
 //
-//	                / 102a [txA0] -> 103a [txA1..txA4]
-//	0 -> 1 ... 101
-//	                \ 102b -> 103b [txB0..txB3] -> 104b (*)
+//	                   / 102a -> 103a [txA0] -> 104a [txA1..txA4]
+//	0 -> 1 ... 101 ->
+//	                          \ 103b [txB0..txB3] -> 104b -> 105b (*)
 //
 // Test Flow:
-//  1. Initially chain A (102a->103a) is winning
-//  2. Then chain B (102b->103b->104b) becomes winning
-//  3. Verify external transactions in losing chain are marked as conflicting
+//  1. Mine txA0 in block 103a, then mine txA1-txA4 in block 104a
+//  2. Create competing chain B with txB0-txB3 in block 103b (forks from 102a)
+//  3. Mine blocks 104b and 105b to make chain B the longest
+//  4. Verify external transactions in losing chain A are marked as conflicting
 //
 // Multi-input spending pattern:
 //   - Each chain transaction spends from multiple outputs of the parent
@@ -48,12 +49,22 @@ func TestDoubleSpendForkExternalTxAerospike(t *testing.T) {
 func testDoubleSpendForkExternalTx(t *testing.T, utxoStore string) {
 	// Setup test environment with external transactions
 	td, _, txA0, txB0, block102a, _ := setupExternalTxDoubleSpendTest(t, utxoStore, 20)
-	defer td.Stop(t)
+	defer func() {
+		td.Stop(t)
+	}()
 
 	t.Logf("External txA0: %s (%d outputs)", txA0.TxIDChainHash().String(), len(txA0.Outputs))
 	t.Logf("External txB0 (double spend): %s (%d outputs)", txB0.TxIDChainHash().String(), len(txB0.Outputs))
 
-	// Create chain A external transactions with multi-input spending
+	// First, mine txA0 so its outputs can be spent
+	// 0 -> 1 ... 101 -> 102a [parentTx] -> 103a [txA0]
+	_, block103a := td.CreateTestBlock(t, block102a, 10301, txA0)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"),
+		"Failed to process block103a")
+
+	td.WaitForBlockHeight(t, block103a, blockWait, true)
+
+	// Now create chain A external transactions with multi-input spending
 	// Each transaction spends from multiple outputs to test UTXO record handling
 	txA1 := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(txA0, 0),                               // Spend output 0
@@ -81,36 +92,23 @@ func testDoubleSpendForkExternalTx(t *testing.T, utxoStore string) {
 	t.Logf("Chain A txA3: %s (%d outputs)", txA3.TxIDChainHash().String(), len(txA3.Outputs))
 	t.Logf("Chain A txA4: %s (%d outputs)", txA4.TxIDChainHash().String(), len(txA4.Outputs))
 
-	// Submit chain A transactions via propagation
-	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, txA1))
-	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, txA2))
-	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, txA3))
-	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, txA4))
+	// Create block 104a with chain A external transactions
+	subtree104a, block104a := td.CreateTestBlock(t, block103a, 10401, txA1, txA2, txA3, txA4)
 
-	// Create block 103a with chain A external transactions
-	subtree103a, block103a := td.CreateTestBlock(t, block102a, 10301, txA1, txA2, txA3, txA4)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104a, block104a.Height, "", "legacy"),
+		"Failed to process block104a")
 
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103a, block103a.Height, "", "legacy"),
-		"Failed to process block103a")
+	td.WaitForBlockHeight(t, block104a, blockWait, true)
 
-	// 0 -> 1 ... 101 -> 102a [txA0] -> 103a [txA1..txA4]
+	// 0 -> 1 ... 101 -> 102a -> 103a [txA0] -> 104a [txA1..txA4] (*)
 
 	// Create chain B (double spend chain)
-	block101, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 101)
+	// Get block 102a to fork from (chain B forks after 102a, before 103a)
+	block102aRefetch, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 102)
 	require.NoError(t, err)
 
-	// Create block102b from block101
-	_, block102b := td.CreateTestBlock(t, block101, 10202) // Empty block
-
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block102b, block102b.Height, "", "legacy"),
-		"Failed to process block102b")
-
-	//                / 102a [txA0] -> 103a [txA1..txA4] (*)
-	// 0 -> 1 ... 101
-	//                \ 102b
-
 	// Create chain B external transactions with multi-input spending
-	// txB0 has 6 outputs (from setup), spend from multiple outputs
+	// txB0 has 5 outputs (from setup), spend from multiple outputs
 	txB1 := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(txB0, 0),
 		transactions.WithInput(txB0, 4),
@@ -131,33 +129,37 @@ func testDoubleSpendForkExternalTx(t *testing.T, utxoStore string) {
 	t.Logf("Chain B txB2: %s (%d outputs)", txB2.TxIDChainHash().String(), len(txB2.Outputs))
 	t.Logf("Chain B txB3: %s (%d outputs)", txB3.TxIDChainHash().String(), len(txB3.Outputs))
 
-	// Create block103b with chain B external transactions
-	_, block103b := td.CreateTestBlock(t, block102b, 10302, txB0, txB1, txB2, txB3)
+	// Create block103b with chain B external transactions (forks from 102a)
+	_, block103b := td.CreateTestBlock(t, block102aRefetch, 10302, txB0, txB1, txB2, txB3)
 	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block103b, block103b.Height, "", "legacy"),
 		"Failed to process block103b")
 
-	//                / 102a [txA0] -> 103a [txA1..txA4] (*)
-	// 0 -> 1 ... 101
-	//                \ 102b -> 103b [txB0..txB3]
+	//                   / 102a -> 103a [txA0] -> 104a [txA1..txA4] (*)
+	// 0 -> 1 ... 101 ->
+	//                          \ 103b [txB0..txB3]
 
-	// Verify 103a is still the valid block
-	td.WaitForBlockHeight(t, block103a, blockWait)
+	// Verify 104a is still the valid block
+	td.WaitForBlockHeight(t, block104a, blockWait, true)
 
-	// Switch forks by mining 104b
+	// Switch forks by mining 104b and 105b to make chain B longer
 	_, block104b := td.CreateTestBlock(t, block103b, 10402) // Empty block
 	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block104b, block104b.Height, "", "legacy"),
 		"Failed to process block104b")
 
-	//                / 102a [txA0] -> 103a [txA1..txA4]
-	// 0 -> 1 ... 101
-	//                \ 102b -> 103b [txB0..txB3] -> 104b (*)
+	_, block105b := td.CreateTestBlock(t, block104b, 10502) // Empty block
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block105b, block105b.Height, "", "legacy"),
+		"Failed to process block105b")
 
-	// Wait for block assembly to reach height 104
-	td.WaitForBlockHeight(t, block104b, blockWait)
+	//                   / 102a -> 103a [txA0] -> 104a [txA1..txA4]
+	// 0 -> 1 ... 101 ->
+	//                          \ 103b [txB0..txB3] -> 104b -> 105b (*)
 
-	// Verify all external txs in chain A (103a) have been marked as conflicting
-	td.VerifyConflictingInUtxoStore(t, true, txA1, txA2, txA3, txA4)
-	td.VerifyConflictingInSubtrees(t, subtree103a.RootHash(), txA1, txA2, txA3, txA4)
+	// Wait for block assembly to reach height 105
+	td.WaitForBlockHeight(t, block105b, blockWait, true)
+
+	// Verify all external txs in chain A (104a) have been marked as conflicting
+	td.VerifyConflictingInUtxoStore(t, true, txA0, txA1, txA2, txA3, txA4)
+	td.VerifyConflictingInSubtrees(t, subtree104a.RootHash(), txA1, txA2, txA3, txA4)
 
 	// Verify all external txs in chain B (103b) are not marked as conflicting
 	td.VerifyConflictingInUtxoStore(t, false, txB0, txB1, txB2, txB3)

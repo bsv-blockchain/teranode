@@ -8,13 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestGrandparentChildConflict tests a complex double-spend scenario where:
+// TestGrandparentChildConflict tests a double-spend scenario where:
 // - Grandparent transaction has multiple outputs
-// - Parent transaction spends one output of grandparent
-// - Child transaction (in a fork) spends the SAME grandparent output AND an output of parent
+// - Parent transaction spends one output of grandparent (output 0)
+// - ConflictingChild transaction (in a fork) spends the SAME grandparent output (0) AND another grandparent output (1)
 //
-// This creates an interesting conflict where the child transaction depends on the parent
-// but also conflicts with it by spending the same grandparent output.
+// This creates a conflict where parent and conflictingChild both try to spend grandparent:0.
 func TestGrandparentChildConflictPostgres(t *testing.T) {
 	t.Run("grandparent_child_conflict", func(t *testing.T) {
 		testGrandparentChildConflict(t, "postgres")
@@ -33,25 +32,25 @@ func TestGrandparentChildConflictAerospike(t *testing.T) {
 //
 //	grandparent (5 outputs) -> parent (spends grandparent:0)
 //	                       \
-//	                        -> conflictingChild (spends grandparent:0 AND parent:0)
+//	                        -> conflictingChild (spends grandparent:0 AND grandparent:1)
 //
 // Block Structure:
 //
-//	        / 2a [grandparent] -> 3a [parent] (*)
-//	0 -> 1
-//	        \ 2b -> 3b [conflictingChild] -> 4b (*)
+//	            / 3a [grandparent] -> 4a [parent] (*)
+//	0 -> 1 -> 2
+//	            \ 3b [grandparent] -> 4b [conflictingChild] -> 5b (*)
 //
-// The conflictingChild is interesting because:
-// 1. It conflicts with parent on grandparent:0 (both spend same output)
-// 2. It also spends parent:0, creating a dependency on parent
-// 3. But parent is in the other chain, so this creates an invalid situation
+// The conflict is on grandparent:0 - both parent and conflictingChild spend it.
 //
-// Expected behavior: The fork with conflictingChild should fail validation
-// because it tries to spend from a parent that doesn't exist in that chain.
+// Expected behavior:
+// - When chain A wins: parent is valid, conflictingChild is conflicting
+// - When chain B wins: parent is conflicting, conflictingChild is valid
 func testGrandparentChildConflict(t *testing.T, utxoStore string) {
 	// Setup test environment with external transactions
 	td := setupExternalTxDaemon(t, utxoStore)
-	defer td.Stop(t)
+	defer func() {
+		td.Stop(t)
+	}()
 
 	// Initialize blockchain
 	err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -63,7 +62,7 @@ func testGrandparentChildConflict(t *testing.T, utxoStore string) {
 	// Create grandparent with 5 outputs (external tx)
 	grandparent := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(coinbaseTx, 0),
-		transactions.WithP2PKHOutputs(numOutputsForExternalTx, outputAmount),
+		transactions.WithP2PKHOutputs(numOutputsForExternalTx, coinbaseTx.Outputs[0].Satoshis/numOutputsForExternalTx-1000),
 	)
 	t.Logf("Grandparent: %s (%d outputs)", grandparent.TxIDChainHash().String(), len(grandparent.Outputs))
 
@@ -71,8 +70,10 @@ func testGrandparentChildConflict(t *testing.T, utxoStore string) {
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, grandparent))
 	td.MineAndWait(t, 1)
 
-	block2a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 2)
+	block3a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
 	require.NoError(t, err)
+
+	td.VerifyOnLongestChainInUtxoStore(t, grandparent)
 
 	// Create parent that spends grandparent output 0
 	parent := td.CreateTransactionWithOptions(t,
@@ -85,45 +86,47 @@ func testGrandparentChildConflict(t *testing.T, utxoStore string) {
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
 	td.MineAndWait(t, 1)
 
-	block3a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
+	td.VerifyOnLongestChainInUtxoStore(t, parent)
+
+	block4a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 4)
 	require.NoError(t, err)
 
-	// 0 -> 1 -> 2a [grandparent] -> 3a [parent] (*)
+	// 0 -> 1 -> 2 -> 3a [grandparent] -> 4a [parent] (*)
 
-	t.Logf("Chain A: block2a [grandparent] -> block3a [parent]")
+	t.Logf("Chain A: block3a [grandparent] -> block4a [parent]")
 
 	// Now create a conflicting child that:
 	// 1. Spends grandparent:0 (same as parent - CONFLICT!)
-	// 2. Spends grandparent:1 (different output)
-	// This tests the case where child conflicts with parent on the same grandparent output
+	// 2. Spends grandparent:1 (additional output, no conflict)
+	// This tests the case where child conflicts with parent on grandparent:0
 	conflictingChild := td.CreateTransactionWithOptions(t,
-		transactions.WithInput(grandparent, 0), // CONFLICT with parent!
-		transactions.WithInput(parent, 1),      // Additional output
+		transactions.WithInput(grandparent, 0), // CONFLICT with parent on grandparent:0!
+		transactions.WithInput(grandparent, 1), // Additional grandparent output
 		transactions.WithP2PKHOutputs(numOutputsForExternalTx, outputAmount/numOutputsForExternalTx-1000),
 	)
 	t.Logf("ConflictingChild: %s (%d outputs) - spends grandparent:0 (CONFLICT) and grandparent:1",
 		conflictingChild.TxIDChainHash().String(), len(conflictingChild.Outputs))
 
-	// Create fork: block2b from block1
-	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
+	// Create fork: block3b from block2
+	block2, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 2)
 	require.NoError(t, err)
 
-	// Create block2b with grandparent (same as 2a content)
-	_, block2b := td.CreateTestBlock(t, block1, 10202, grandparent)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block2b, block2b.Height, "", "legacy"),
-		"Failed to process block2b")
-
-	// Create block3b with conflictingChild
-	_, block3b := td.CreateTestBlock(t, block2b, 10302, conflictingChild)
+	// Create block3b with grandparent (same as 3a content)
+	_, block3b := td.CreateTestBlock(t, block2, 10302, grandparent)
 	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block3b, block3b.Height, "", "legacy"),
 		"Failed to process block3b")
 
-	//        / 2a [grandparent] -> 3a [parent] (*)
-	// 0 -> 1
-	//        \ 2b [grandparent] -> 3b [conflictingChild]
+	// Create block4b with conflictingChild
+	_, block4b := td.CreateTestBlock(t, block3b, 10402, conflictingChild)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy"),
+		"Failed to process block4b")
+
+	//            / 3a [grandparent] -> 4a [parent] (*)
+	// 0 -> 1 -> 2
+	//            \ 3b [grandparent] -> 4b [conflictingChild]
 
 	// Verify chain A is still winning
-	td.WaitForBlockHeight(t, block3a, blockWait)
+	td.WaitForBlockHeight(t, block4a, blockWait, true)
 
 	// Verify parent is not conflicting (it's in the winning chain)
 	td.VerifyConflictingInUtxoStore(t, false, parent)
@@ -133,16 +136,16 @@ func testGrandparentChildConflict(t *testing.T, utxoStore string) {
 
 	t.Log("Verified initial state: parent valid, conflictingChild conflicting")
 
-	// Now make chain B longer by mining block4b
-	_, block4b := td.CreateTestBlock(t, block3b, 10402)
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4b, block4b.Height, "", "legacy"),
-		"Failed to process block4b")
+	// Now make chain B longer by mining block5b
+	_, block5b := td.CreateTestBlock(t, block4b, 10502)
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block5b, block5b.Height, "", "legacy"),
+		"Failed to process block5b")
 
-	//        / 2a [grandparent] -> 3a [parent]
-	// 0 -> 1
-	//        \ 2b [grandparent] -> 3b [conflictingChild] -> 4b (*)
+	//            / 3a [grandparent] -> 4a [parent]
+	// 0 -> 1 -> 2
+	//            \ 3b [grandparent] -> 4b [conflictingChild] -> 5b (*)
 
-	td.WaitForBlockHeight(t, block4b, blockWait)
+	td.WaitForBlockHeight(t, block5b, blockWait, true)
 
 	// Now chain B is winning
 	// Parent should be marked as conflicting
@@ -154,8 +157,8 @@ func testGrandparentChildConflict(t *testing.T, utxoStore string) {
 	t.Log("Verified after reorg: parent conflicting, conflictingChild valid")
 
 	// Verify grandparent is in both chains (should not be conflicting)
-	td.VerifyConflictingInSubtrees(t, block2a.Subtrees[0], grandparent)
-	td.VerifyConflictingInSubtrees(t, block2b.Subtrees[0], grandparent)
+	td.VerifyConflictingInSubtrees(t, block3a.Subtrees[0])
+	td.VerifyConflictingInSubtrees(t, block3b.Subtrees[0])
 
 	t.Log("Successfully verified grandparent-child conflict scenario")
 }
