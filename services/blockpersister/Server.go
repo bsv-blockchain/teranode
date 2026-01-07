@@ -385,25 +385,25 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 				//
 				// See BlockAssembler.startChannelListeners for the notification handler.
 				notification := &blockchain_api.Notification{
-				Type: model.NotificationType_BlockPersisted,
-				Hash: block.Hash().CloneBytes(),
-				Metadata: &blockchain_api.NotificationMetadata{
-					Metadata: map[string]string{
-						"height": fmt.Sprintf("%d", block.Height),
+					Type: model.NotificationType_BlockPersisted,
+					Hash: block.Hash().CloneBytes(),
+					Metadata: &blockchain_api.NotificationMetadata{
+						Metadata: map[string]string{
+							"height": fmt.Sprintf("%d", block.Height),
+						},
 					},
-				},
-			}
-			if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
-				u.logger.Warnf("[BlockPersister] Failed to send persisted notification for block %s at height %d: %v",
-					block.Hash().String(), block.Height, err)
-			}
+				}
+				if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
+					u.logger.Warnf("[BlockPersister] Failed to send persisted notification for block %s at height %d: %v",
+						block.Hash().String(), block.Height, err)
+				}
 
-			// Update BlockPersisterHeight state for P2P storage mode determination
-			heightBytes := binary.LittleEndian.AppendUint32(nil, block.Height)
-			if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
-				u.logger.Warnf("[BlockPersister] Failed to update BlockPersisterHeight state for block %s at height %d: %v",
-					block.Hash().String(), block.Height, err)
-			}
+				// Update BlockPersisterHeight state for P2P storage mode determination
+				heightBytes := binary.LittleEndian.AppendUint32(nil, block.Height)
+				if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
+					u.logger.Warnf("[BlockPersister] Failed to update BlockPersisterHeight state for block %s at height %d: %v",
+						block.Hash().String(), block.Height, err)
+				}
 
 				u.logger.Infof("Successfully processed block %s", block.Hash())
 			}
