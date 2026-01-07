@@ -6667,7 +6667,6 @@
 <p>The service initializes through the following sequence:</p>
 <ol>
 <li>Loads configuration settings</li>
-<li>Initializes state management</li>
 <li>Establishes connection with blockchain client</li>
 <li>Waits for FSM transition from IDLE state</li>
 <li>Starts block processing loop</li>
@@ -6679,9 +6678,9 @@
 <li>
 <p><strong>Block Discovery</strong></p>
 <ul>
-<li>Retrieves last persisted block height from the local state</li>
-<li>Polls the Blockchain service to get the current best block header</li>
-<li>Determines if new blocks need processing based on <code>BlockPersisterPersistAge</code>. Blocks are only processed when <code>(currentTip - lastPersistedHeight) &gt; BlockPersisterPersistAge</code>. This means the service intentionally stays at least <code>BlockPersisterPersistAge</code> blocks behind the tip to avoid reorgs and ensure block finality.</li>
+<li>Queries the database for blocks where <code>persisted_at IS NULL</code> and <code>invalid = false</code></li>
+<li>Retrieves blocks in ascending height order to ensure sequential processing</li>
+<li>Returns immediately if no unpersisted blocks are found</li>
 </ul>
 </li>
 <li>
@@ -6699,7 +6698,7 @@
 <li>A Subtree file for each subtree in the block (.subtree), including the number of transactions in the subtree, and the decorated transactions (with UTXO meta data).</li>
 <li>UTXO additions (.utxo-additions), containing the UTXOs created in the block. This represents a list of new transaction outputs, including the Coinbase transaction outputs.</li>
 <li>UTXO deletions (.utxo-deletions), containing the UTXOs spent in the block. This represents a list of transaction inputs that reference and spend previous outputs.</li>
-<li>Updates the local state with the new block height</li>
+<li>Updates the block's <code>persisted_at</code> timestamp in the database</li>
 </ul>
 </li>
 <li>
@@ -6844,7 +6843,6 @@
 <h2 id="5-directory-structure-and-main-files">5. Directory Structure and Main Files</h2>
 <p>The Block Persister service is located in the <code>services/blockpersister</code> directory.</p>
 <div class="highlight"><pre><span></span><code>services/blockpersister/
-├── state/                      # State management
 ├── Server.go                   # Main service implementation
 ├── Server_test.go              # Service tests
 ├── persist_block.go            # Block persistence logic

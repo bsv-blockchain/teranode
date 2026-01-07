@@ -5434,17 +5434,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#state-file-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        State File Management
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#concurrency-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5460,17 +5449,6 @@
     <span class="md-ellipsis">
       
         Block Processing Strategy
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reorg-detection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reorg Detection
       
     </span>
   </a>
@@ -5562,6 +5540,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#migration-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration Notes
+      
+    </span>
+  </a>
   
 </li>
       
@@ -6317,17 +6306,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#state-file-management" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        State File Management
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#concurrency-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6343,17 +6321,6 @@
     <span class="md-ellipsis">
       
         Block Processing Strategy
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#reorg-detection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reorg Detection
       
     </span>
   </a>
@@ -6448,6 +6415,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#migration-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration Notes
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6485,13 +6463,6 @@
 <td>"file://./data/blockstore"</td>
 <td>blockPersisterStore</td>
 <td><strong>CRITICAL</strong> - Block data storage location</td>
-</tr>
-<tr>
-<td>StateFile</td>
-<td>string</td>
-<td>""</td>
-<td>blockPersister_stateFile</td>
-<td><strong>CRITICAL</strong> - Tracks last persisted block for recovery (auto-derived for file:// stores)</td>
 </tr>
 <tr>
 <td>PersisterHTTPListenAddress</td>
@@ -6536,25 +6507,11 @@
 <td><strong>POTENTIALLY UNUSED</strong> - May control UTXO file processing</td>
 </tr>
 <tr>
-<td>BlockPersisterPersistAge</td>
-<td>uint32</td>
-<td>2</td>
-<td>blockpersister_persistAge</td>
-<td><strong>CRITICAL</strong> - Blocks behind tip to avoid reorgs</td>
-</tr>
-<tr>
 <td>BlockPersisterPersistSleep</td>
 <td>time.Duration</td>
 <td>1m</td>
 <td>blockPersister_persistSleep</td>
 <td>Sleep when no blocks available</td>
-</tr>
-<tr>
-<td>BlockPersisterEnableDefensiveReorgCheck</td>
-<td>bool</td>
-<td>true</td>
-<td>blockpersister_enableDefensiveReorgCheck</td>
-<td><strong>CRITICAL</strong> - Enables defensive reorg detection checks</td>
 </tr>
 <tr>
 <td>BlockStore</td>
@@ -6571,12 +6528,6 @@
 <li>When <code>PersisterHTTPListenAddress</code> is not empty, HTTP server starts</li>
 <li>Requires valid <code>BlockStore</code> URL or returns configuration error</li>
 </ul>
-<h3 id="state-file-management">State File Management</h3>
-<ul>
-<li>For file:// stores, <code>StateFile</code> auto-derived from <code>PersisterStore</code> path if not explicitly set</li>
-<li>For non-file stores (S3, etc.), explicit <code>StateFile</code> required or configuration error occurs</li>
-<li>Auto-derived path: <code>{PersisterStore_path}/blockpersister_state.txt</code></li>
-</ul>
 <h3 id="concurrency-management">Concurrency Management</h3>
 <ul>
 <li><code>BlockPersisterConcurrency</code> reduced by half when <code>IsAllInOneMode</code> is true</li>
@@ -6584,15 +6535,8 @@
 </ul>
 <h3 id="block-processing-strategy">Block Processing Strategy</h3>
 <ul>
-<li><code>BlockPersisterPersistAge</code> determines safety margin from chain tip</li>
 <li><code>BlockPersisterPersistSleep</code> controls polling frequency when idle</li>
-</ul>
-<h3 id="reorg-detection">Reorg Detection</h3>
-<ul>
-<li><code>BlockPersisterEnableDefensiveReorgCheck</code> enables defensive checks for blockchain reorganizations</li>
-<li>Validates last persisted block is still on current chain</li>
-<li>Validates parent hash consistency during block retrieval</li>
-<li>Can be disabled for testing or special scenarios</li>
+<li>Database <code>persisted_at</code> column tracks which blocks have been persisted</li>
 </ul>
 <h3 id="transaction-processing">Transaction Processing</h3>
 <ul>
@@ -6647,11 +6591,6 @@
 <td>"blockstore setting error"</td>
 </tr>
 <tr>
-<td>StateFile</td>
-<td>Must be valid file path</td>
-<td>State initialization failure</td>
-</tr>
-<tr>
 <td>PersisterStore</td>
 <td>Must be valid URL format</td>
 <td>Store creation failure</td>
@@ -6661,9 +6600,7 @@
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
 <div class="highlight"><pre><span></span><code><span class="nv">blockPersisterStore</span><span class="o">=</span>file://./data/blockstore
-<span class="nv">blockPersister_stateFile</span><span class="o">=</span>file://./data/blockpersister_state.txt
-<span class="nv">blockpersister_persistAge</span><span class="o">=</span><span class="m">2</span>
-<span class="nv">blockpersister_enableDefensiveReorgCheck</span><span class="o">=</span><span class="nb">true</span>
+<span class="nv">blockPersister_persistSleep</span><span class="o">=</span>1m
 </code></pre></div>
 <h3 id="high-performance-configuration">High Performance Configuration</h3>
 <div class="highlight"><pre><span></span><code><span class="nv">blockpersister_concurrency</span><span class="o">=</span><span class="m">16</span>
@@ -6674,6 +6611,14 @@
 <div class="highlight"><pre><span></span><code><span class="nv">blockPersister_httpListenAddress</span><span class="o">=</span>:8083
 <span class="nv">blockstore</span><span class="o">=</span>file://./data/blockstore
 </code></pre></div>
+<h2 id="migration-notes">Migration Notes</h2>
+<p>The following settings have been <strong>removed</strong> in the current version as persistence state is now tracked in the database:</p>
+<ul>
+<li><code>blockPersister_stateFile</code> - No longer needed, persistence tracked in database <code>persisted_at</code> column</li>
+<li><code>blockpersister_persistAge</code> - No longer needed, blocks processed as soon as they're available</li>
+<li><code>blockpersister_enableDefensiveReorgCheck</code> - No longer needed, reorg handling simplified</li>
+</ul>
+<p>If you have these settings in your configuration files, they can be safely removed.</p>
 
 
 
