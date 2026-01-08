@@ -5230,6 +5230,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#utxoset-error-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UTXOSet Error Recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#createutxoset-error-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CreateUTXOSet Error Recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filestorer-abort-mechanism" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FileStorer Abort Mechanism
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6818,6 +6868,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#error-handling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Error Handling
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Error Handling">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#utxoset-error-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UTXOSet Error Recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#createutxoset-error-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CreateUTXOSet Error Recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filestorer-abort-mechanism" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FileStorer Abort Mechanism
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6995,6 +7095,9 @@
 </li>
 <li>
 <p><code>Close() error</code>: Finalizes the UTXO set by writing footers and closing storers. It writes EOFMarkers and count information to the addition and deletion files.</p>
+</li>
+<li>
+<p><code>Abort(err error) error</code>: Aborts the UTXO set without finalizing files. This method should be called when an error occurs during processing to ensure incomplete files are not saved. It calls <code>Abort()</code> on both the additions and deletions storers, which removes any temporary files without renaming them to their final names.</p>
 </li>
 <li>
 <p><code>GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, error)</code>: Returns a reader for accessing UTXO additions. It creates a reader for the additions file of the current block or a specified block.</p>
@@ -7188,6 +7291,43 @@ For each output:
 <li><code>UnpadSlice[T any](padded []*T) []*T</code>: Removes nil values from a padded slice. It creates a new slice containing only the non-nil elements from the input slice.</li>
 <li><code>checkMagic(r io.Reader, magic string) error</code>: Verifies the magic number in a file header. It reads and validates that the magic identifier in the header matches the expected value.</li>
 </ul>
+<h2 id="error-handling">Error Handling</h2>
+<h3 id="utxoset-error-recovery">UTXOSet Error Recovery</h3>
+<p>The <code>UTXOSet</code> uses <code>FileStorer</code> for streaming writes of UTXO additions and deletions. To prevent incomplete files from being saved when errors occur during processing, callers should use the success-flag pattern:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">utxoDiff</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">utxopersister</span><span class="p">.</span><span class="nx">NewUTXOSet</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">logger</span><span class="p">,</span><span class="w"> </span><span class="nx">settings</span><span class="p">,</span><span class="w"> </span><span class="nx">store</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHash</span><span class="p">,</span><span class="w"> </span><span class="nx">height</span><span class="p">)</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+<span class="p">}</span>
+
+<span class="kd">var</span><span class="w"> </span><span class="nx">writeSucceeded</span><span class="w"> </span><span class="kt">bool</span>
+<span class="k">defer</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">writeSucceeded</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">utxoDiff</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// Finalizes files with footers</span>
+<span class="w">    </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">utxoDiff</span><span class="p">.</span><span class="nx">Abort</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w">  </span><span class="c1">// Removes temp files</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}()</span>
+
+<span class="c1">// Process transactions...</span>
+<span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">tx</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">txs</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">utxoDiff</span><span class="p">.</span><span class="nx">ProcessTx</span><span class="p">(</span><span class="nx">tx</span><span class="p">);</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span><span class="w">  </span><span class="c1">// Abort will be called via defer</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="nx">writeSucceeded</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">true</span>
+<span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
+</code></pre></div>
+<h3 id="createutxoset-error-recovery">CreateUTXOSet Error Recovery</h3>
+<p>The <code>CreateUTXOSet</code> method, which generates complete UTXO set files, also implements the success-flag pattern internally. If any error occurs while writing the UTXO set, the temporary file is automatically cleaned up and no incomplete file is left in storage.</p>
+<h3 id="filestorer-abort-mechanism">FileStorer Abort Mechanism</h3>
+<p>The underlying <code>FileStorer</code> provides an <code>Abort()</code> method that:</p>
+<ol>
+<li>Closes the <code>io.PipeWriter</code> with an error via <code>CloseWithError()</code></li>
+<li>Signals to the blob store's <code>SetFromReader</code> that the write failed</li>
+<li>Triggers cleanup of the temporary file</li>
+<li>Ensures no incomplete UTXO data is persisted</li>
+</ol>
 
 
 

@@ -5408,6 +5408,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Configuration Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#related-settings-from-block-struct" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Settings (from Block struct)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -5460,6 +5477,17 @@
     <span class="md-ellipsis">
       
         Transaction Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#utxo-file-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UTXO File Processing
       
     </span>
   </a>
@@ -5538,6 +5566,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#disable-utxo-file-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable UTXO File Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -5551,6 +5590,34 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Migration Notes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#settings-reorganization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings Reorganization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -6280,6 +6347,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Configuration Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#related-settings-from-block-struct" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Settings (from Block struct)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6332,6 +6416,17 @@
     <span class="md-ellipsis">
       
         Transaction Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#utxo-file-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UTXO File Processing
       
     </span>
   </a>
@@ -6410,6 +6505,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#disable-utxo-file-processing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Disable UTXO File Processing
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6423,6 +6529,34 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Migration Notes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#settings-reorganization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings Reorganization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#removed-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed Settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -6446,6 +6580,7 @@
 <h1 id="block-persister-service-settings">Block Persister Service Settings</h1>
 <p><strong>Related Topic</strong>: <a href="../../../../topics/services/blockPersister/">Block Persister Service</a></p>
 <h2 id="configuration-settings">Configuration Settings</h2>
+<p>Settings are organized under the <code>BlockPersister</code> struct in <code>settings.Settings</code>.</p>
 <table>
 <thead>
 <tr>
@@ -6458,60 +6593,74 @@
 </thead>
 <tbody>
 <tr>
-<td>PersisterStore</td>
+<td>Store</td>
 <td>*url.URL</td>
 <td>"file://./data/blockstore"</td>
-<td>blockPersisterStore</td>
+<td>blockpersister_store</td>
 <td><strong>CRITICAL</strong> - Block data storage location</td>
 </tr>
 <tr>
-<td>PersisterHTTPListenAddress</td>
+<td>HTTPListenAddress</td>
 <td>string</td>
 <td>":8083"</td>
-<td>blockPersister_httpListenAddress</td>
+<td>blockpersister_httpListenAddress</td>
 <td>HTTP server for blob store access</td>
 </tr>
 <tr>
-<td>BlockPersisterConcurrency</td>
+<td>Concurrency</td>
 <td>int</td>
 <td>8</td>
 <td>blockpersister_concurrency</td>
-<td><strong>CRITICAL</strong> - Parallel processing, reduced by half in all-in-one mode</td>
+<td><strong>CRITICAL</strong> - Parallel subtree processing, reduced by half in all-in-one mode</td>
 </tr>
 <tr>
 <td>BatchMissingTransactions</td>
 <td>bool</td>
 <td>true</td>
 <td>blockpersister_batchMissingTransactions</td>
-<td>Transaction processing batching</td>
-</tr>
-<tr>
-<td>ProcessTxMetaUsingStoreBatchSize</td>
-<td>int</td>
-<td>1024</td>
-<td>blockvalidation_processTxMetaUsingStore_BatchSize</td>
-<td><strong>SHARED</strong> - Transaction metadata batch size (shared with Block Validation service)</td>
+<td>Enable batched transaction metadata retrieval</td>
 </tr>
 <tr>
 <td>SkipUTXODelete</td>
 <td>bool</td>
 <td>false</td>
 <td>blockpersister_skipUTXODelete</td>
-<td><strong>UNUSED</strong> - Not referenced in BlockPersister service</td>
+<td>Skip UTXO deletion processing</td>
 </tr>
 <tr>
-<td>BlockPersisterProcessUTXOFiles</td>
+<td>PersistSleep</td>
+<td>time.Duration</td>
+<td>10s</td>
+<td>blockpersister_persistSleep</td>
+<td>Sleep duration when no blocks available or after errors</td>
+</tr>
+<tr>
+<td>ProcessUTXOFiles</td>
 <td>bool</td>
 <td>true</td>
 <td>blockpersister_processUTXOFiles</td>
-<td><strong>POTENTIALLY UNUSED</strong> - May control UTXO file processing</td>
+<td>Enable UTXO additions/deletions file generation</td>
 </tr>
+</tbody>
+</table>
+<h3 id="related-settings-from-block-struct">Related Settings (from Block struct)</h3>
+<table>
+<thead>
 <tr>
-<td>BlockPersisterPersistSleep</td>
-<td>time.Duration</td>
-<td>1m</td>
-<td>blockPersister_persistSleep</td>
-<td>Sleep when no blocks available</td>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ProcessTxMetaUsingStoreBatchSize</td>
+<td>int</td>
+<td>1024</td>
+<td>blockvalidation_processTxMetaUsingStore_BatchSize</td>
+<td><strong>SHARED</strong> - Transaction metadata batch size (shared with Block Validation service)</td>
 </tr>
 <tr>
 <td>BlockStore</td>
@@ -6525,23 +6674,29 @@
 <h2 id="configuration-dependencies">Configuration Dependencies</h2>
 <h3 id="http-server">HTTP Server</h3>
 <ul>
-<li>When <code>PersisterHTTPListenAddress</code> is not empty, HTTP server starts</li>
-<li>Requires valid <code>BlockStore</code> URL or returns configuration error</li>
+<li>When <code>HTTPListenAddress</code> is not empty, HTTP server starts</li>
+<li>Requires valid <code>Block.BlockStore</code> URL or returns configuration error</li>
 </ul>
 <h3 id="concurrency-management">Concurrency Management</h3>
 <ul>
-<li><code>BlockPersisterConcurrency</code> reduced by half when <code>IsAllInOneMode</code> is true</li>
+<li><code>Concurrency</code> reduced by half when <code>IsAllInOneMode</code> is true</li>
 <li>Minimum concurrency of 1 enforced</li>
 </ul>
 <h3 id="block-processing-strategy">Block Processing Strategy</h3>
 <ul>
-<li><code>BlockPersisterPersistSleep</code> controls polling frequency when idle</li>
+<li><code>PersistSleep</code> controls polling frequency when idle and after errors</li>
 <li>Database <code>persisted_at</code> column tracks which blocks have been persisted</li>
 </ul>
 <h3 id="transaction-processing">Transaction Processing</h3>
 <ul>
 <li>When <code>BatchMissingTransactions</code> is true, uses <code>ProcessTxMetaUsingStoreBatchSize</code></li>
 <li><strong>Note</strong>: <code>ProcessTxMetaUsingStoreBatchSize</code> uses the <code>blockvalidation_</code> prefix (not <code>blockpersister_</code>) as it's a shared setting with the Block Validation service. Both services use the same batch size for consistent transaction metadata processing.</li>
+</ul>
+<h3 id="utxo-file-processing">UTXO File Processing</h3>
+<ul>
+<li>When <code>ProcessUTXOFiles</code> is true (default), generates <code>.utxo-additions</code> and <code>.utxo-deletions</code> files for each block</li>
+<li>These files are used by the UTXO Persister service to maintain UTXO sets</li>
+<li>Set to false to disable UTXO file generation for performance in scenarios where UTXO sets are not needed</li>
 </ul>
 <h2 id="service-dependencies">Service Dependencies</h2>
 <table>
@@ -6566,7 +6721,7 @@
 <tr>
 <td>UTXOStore</td>
 <td>utxo.Store</td>
-<td><strong>CRITICAL</strong> - UTXO operations</td>
+<td><strong>CRITICAL</strong> - UTXO operations and transaction metadata</td>
 </tr>
 <tr>
 <td>BlockchainClient</td>
@@ -6586,12 +6741,12 @@
 </thead>
 <tbody>
 <tr>
-<td>BlockStore</td>
+<td>Block.BlockStore</td>
 <td>Required when HTTP server enabled</td>
 <td>"blockstore setting error"</td>
 </tr>
 <tr>
-<td>PersisterStore</td>
+<td>Store</td>
 <td>Must be valid URL format</td>
 <td>Store creation failure</td>
 </tr>
@@ -6599,8 +6754,8 @@
 </table>
 <h2 id="configuration-examples">Configuration Examples</h2>
 <h3 id="basic-configuration">Basic Configuration</h3>
-<div class="highlight"><pre><span></span><code><span class="nv">blockPersisterStore</span><span class="o">=</span>file://./data/blockstore
-<span class="nv">blockPersister_persistSleep</span><span class="o">=</span>1m
+<div class="highlight"><pre><span></span><code><span class="nv">blockpersister_store</span><span class="o">=</span>file://./data/blockstore
+<span class="nv">blockpersister_persistSleep</span><span class="o">=</span>10s
 </code></pre></div>
 <h3 id="high-performance-configuration">High Performance Configuration</h3>
 <div class="highlight"><pre><span></span><code><span class="nv">blockpersister_concurrency</span><span class="o">=</span><span class="m">16</span>
@@ -6608,10 +6763,38 @@
 <span class="nv">blockvalidation_processTxMetaUsingStore_BatchSize</span><span class="o">=</span><span class="m">2048</span>
 </code></pre></div>
 <h3 id="http-server-configuration">HTTP Server Configuration</h3>
-<div class="highlight"><pre><span></span><code><span class="nv">blockPersister_httpListenAddress</span><span class="o">=</span>:8083
+<div class="highlight"><pre><span></span><code><span class="nv">blockpersister_httpListenAddress</span><span class="o">=</span>:8083
 <span class="nv">blockstore</span><span class="o">=</span>file://./data/blockstore
 </code></pre></div>
+<h3 id="disable-utxo-file-processing">Disable UTXO File Processing</h3>
+<div class="highlight"><pre><span></span><code><span class="nv">blockpersister_processUTXOFiles</span><span class="o">=</span><span class="nb">false</span>
+</code></pre></div>
 <h2 id="migration-notes">Migration Notes</h2>
+<h3 id="settings-reorganization">Settings Reorganization</h3>
+<p>The Block Persister settings have been reorganized into a dedicated <code>BlockPersisterSettings</code> struct. The following environment variable names have changed:</p>
+<table>
+<thead>
+<tr>
+<th>Old Variable</th>
+<th>New Variable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>blockPersisterStore</td>
+<td>blockpersister_store</td>
+</tr>
+<tr>
+<td>blockPersister_httpListenAddress</td>
+<td>blockpersister_httpListenAddress</td>
+</tr>
+<tr>
+<td>blockPersister_persistSleep</td>
+<td>blockpersister_persistSleep</td>
+</tr>
+</tbody>
+</table>
+<h3 id="removed-settings">Removed Settings</h3>
 <p>The following settings have been <strong>removed</strong> in the current version as persistence state is now tracked in the database:</p>
 <ul>
 <li><code>blockPersister_stateFile</code> - No longer needed, persistence tracked in database <code>persisted_at</code> column</li>

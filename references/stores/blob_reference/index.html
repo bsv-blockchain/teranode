@@ -5116,6 +5116,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#streaming-write-safety-setfromreader" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streaming Write Safety (SetFromReader)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Streaming Write Safety (SetFromReader)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#atomic-write-pattern" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Atomic Write Pattern
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#abort-support-via-iopipe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Abort Support via io.Pipe
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stale-temporary-file-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stale Temporary File Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6404,6 +6454,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#streaming-write-safety-setfromreader" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Streaming Write Safety (SetFromReader)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Streaming Write Safety (SetFromReader)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#atomic-write-pattern" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Atomic Write Pattern
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#abort-support-via-iopipe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Abort Support via io.Pipe
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stale-temporary-file-cleanup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stale Temporary File Cleanup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6576,6 +6676,7 @@
 <li><strong>DAH Management</strong>: Allows setting and retrieving Delete-At-Height values for blob lifecycle management.</li>
 <li><strong>Streaming</strong>: Supports streaming for both storing and retrieving blobs.</li>
 <li><strong>Metadata Support</strong>: Allows retrieving header and footer metadata from blobs.</li>
+<li><strong>Atomic Writes with Error Recovery</strong>: <code>SetFromReader</code> uses temporary files and atomic rename, with automatic cleanup on errors.</li>
 </ol>
 <h2 id="error-handling">Error Handling</h2>
 <p>The service uses HTTP status codes to indicate the result of operations:</p>
@@ -6614,6 +6715,37 @@
 <li>Shutdown timeout: 5 seconds</li>
 </ul>
 <p>Query parameters are automatically converted to <code>options.FileOption</code> using <code>options.QueryToFileOptions()</code> for per-request configuration.</p>
+<h2 id="streaming-write-safety-setfromreader">Streaming Write Safety (SetFromReader)</h2>
+<p>The <code>SetFromReader</code> method provides safe streaming writes with automatic error recovery:</p>
+<h3 id="atomic-write-pattern">Atomic Write Pattern</h3>
+<p>The file-based blob store implements atomic writes using temporary files:</p>
+<ol>
+<li>Data is written to a temporary file (<code>.tmp</code> extension)</li>
+<li>On success, the temp file is atomically renamed to the final filename</li>
+<li>On error (including reader errors), the temp file is automatically deleted</li>
+</ol>
+<h3 id="abort-support-via-iopipe">Abort Support via io.Pipe</h3>
+<p>When using <code>io.Pipe</code> for streaming writes, callers can abort the write by calling <code>pipeWriter.CloseWithError(err)</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">reader</span><span class="p">,</span><span class="w"> </span><span class="nx">writer</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">io</span><span class="p">.</span><span class="nx">Pipe</span><span class="p">()</span>
+
+<span class="k">go</span><span class="w"> </span><span class="kd">func</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Write data...</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">someOperation</span><span class="p">();</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="c1">// Abort: temp file will be cleaned up</span>
+<span class="w">        </span><span class="nx">writer</span><span class="p">.</span><span class="nx">CloseWithError</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="nx">writer</span><span class="p">.</span><span class="nx">Close</span><span class="p">()</span><span class="w">  </span><span class="c1">// Success: file will be finalized</span>
+<span class="p">}()</span>
+
+<span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">store</span><span class="p">.</span><span class="nx">SetFromReader</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">fileType</span><span class="p">,</span><span class="w"> </span><span class="nx">reader</span><span class="p">)</span>
+</code></pre></div>
+<p>When the pipe is closed with an error:
+- <code>io.Copy</code> inside <code>SetFromReader</code> receives the error
+- The defer cleanup removes the temporary file
+- No incomplete data is left in storage</p>
+<h3 id="stale-temporary-file-cleanup">Stale Temporary File Cleanup</h3>
+<p>During store initialization, the file store automatically cleans up stale <code>.tmp</code> files that are older than 10 minutes. This handles cases where the process crashed during a write operation.</p>
 
 
 

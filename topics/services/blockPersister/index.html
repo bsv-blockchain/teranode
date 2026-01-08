@@ -3220,13 +3220,41 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#23-subtree-processing-details" class="md-nav__link">
+  <a href="#23-subtree-processing-details-two-phase-architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.3 Subtree Processing Details
+        2.3 Subtree Processing Details (Two-Phase Architecture)
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="2.3 Subtree Processing Details (Two-Phase Architecture)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-create-subtree-data-files-parallel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: Create Subtree Data Files (Parallel)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-process-utxo-changes-sequential" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Process UTXO Changes (Sequential)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -6432,13 +6460,41 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#23-subtree-processing-details" class="md-nav__link">
+  <a href="#23-subtree-processing-details-two-phase-architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.3 Subtree Processing Details
+        2.3 Subtree Processing Details (Two-Phase Architecture)
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="2.3 Subtree Processing Details (Two-Phase Architecture)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-create-subtree-data-files-parallel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: Create Subtree Data Files (Parallel)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-process-utxo-changes-sequential" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Process UTXO Changes (Sequential)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -6716,41 +6772,69 @@
 </ul>
 </li>
 </ol>
-<h3 id="23-subtree-processing-details">2.3 Subtree Processing Details</h3>
+<h3 id="23-subtree-processing-details-two-phase-architecture">2.3 Subtree Processing Details (Two-Phase Architecture)</h3>
 <p><img alt="block_persister_receive_new_blocks_subtrees.svg" src="../img/plantuml/blockpersister/block_persister_receive_new_blocks_subtrees.svg" /></p>
-<p>The detailed subtree processing workflow includes:</p>
+<p>The Block Persister uses a <strong>two-phase architecture</strong> for efficient subtree processing:</p>
+<h4 id="phase-1-create-subtree-data-files-parallel">Phase 1: Create Subtree Data Files (Parallel)</h4>
+<p>Multiple subtrees are processed concurrently with configurable concurrency:</p>
 <ol>
 <li>
 <p><strong>Subtree Retrieval</strong></p>
 <ul>
-<li>Retrieves subtree data from the blockchain service</li>
-<li>Deserializes transaction data within the subtree</li>
+<li>Retrieves subtree structure from the subtree store</li>
+<li>Checks if subtree data already exists (skips if present)</li>
 </ul>
 </li>
 <li>
 <p><strong>Transaction Metadata Loading</strong></p>
 <ul>
 <li>Loads transaction metadata in batches for efficiency</li>
-<li>Decorates transactions with UTXO metadata</li>
-<li>Processes transactions individually if batch processing fails</li>
+<li>Decorates transactions with UTXO metadata from the store</li>
+<li>Falls back to individual processing if batch fails</li>
 </ul>
 </li>
 <li>
-<p><strong>File Creation</strong></p>
+<p><strong>Streaming File Creation</strong></p>
 <ul>
+<li>Uses <code>SubtreeDataWriter</code> for ordered batch writes</li>
+<li>Streams data directly to storage without buffering entire file</li>
 <li>Stores decorated subtree files (.subtree extension)</li>
-<li>Calculates and stores UTXO changes (additions and deletions)</li>
-<li>Updates the UTXO difference tracking</li>
 </ul>
 </li>
 <li>
-<p><strong>Concurrency</strong></p>
+<p><strong>Error Recovery</strong></p>
 <ul>
-<li>Processes multiple subtrees concurrently using configurable concurrency limits</li>
-<li>Uses error groups to handle concurrent processing errors</li>
+<li>Uses success-flag pattern to ensure incomplete files are never finalized</li>
+<li>On error, <code>Abort()</code> is called instead of <code>Close()</code> to remove temporary files</li>
+<li>No incomplete subtree files are left in storage after failures</li>
 </ul>
 </li>
 </ol>
+<h4 id="phase-2-process-utxo-changes-sequential">Phase 2: Process UTXO Changes (Sequential)</h4>
+<p>UTXO processing runs sequentially to maintain correct ordering:</p>
+<ol>
+<li>
+<p><strong>Read Subtree Data Files</strong></p>
+<ul>
+<li>Opens each subtree data file for streaming read</li>
+<li>Processes subtrees in order</li>
+</ul>
+</li>
+<li>
+<p><strong>UTXO Diff Processing</strong></p>
+<ul>
+<li>Processes each transaction through the UTXO diff tracker</li>
+<li>Records additions (new outputs) and deletions (spent outputs)</li>
+<li>Writes to <code>.utxo-additions</code> and <code>.utxo-deletions</code> files</li>
+</ul>
+</li>
+</ol>
+<p>This two-phase approach provides:</p>
+<ul>
+<li><strong>Maximum parallelism</strong> for I/O-bound subtree file creation</li>
+<li><strong>Correct ordering</strong> for UTXO state updates</li>
+<li><strong>Memory efficiency</strong> through streaming reads/writes</li>
+</ul>
 <h2 id="3-data-model">3. Data Model</h2>
 <p>The Block Persister service data model is identical in scope to the Block Validation model. Please refer to the <a href="../blockValidation/#4-data-model">Block Validation documentation</a> for more information.</p>
 <p>In addition to blocks and subtrees, utxo additions and deletions files are created for each block, containing the newly created and spent UTXOs, respectively.</p>
@@ -6843,13 +6927,15 @@
 <h2 id="5-directory-structure-and-main-files">5. Directory Structure and Main Files</h2>
 <p>The Block Persister service is located in the <code>services/blockpersister</code> directory.</p>
 <div class="highlight"><pre><span></span><code>services/blockpersister/
-├── Server.go                   # Main service implementation
-├── Server_test.go              # Service tests
-├── persist_block.go            # Block persistence logic
-├── persist_block_test.go       # Block persistence tests
-├── processSubtree.go           # Subtree processing logic
-├── processTxMetaUsingStore.go  # Transaction metadata processing
-└── metrics.go                  # Prometheus metrics
+├── Server.go                          # Main service implementation
+├── Server_test.go                     # Service tests
+├── persist_block.go                   # Block persistence logic
+├── persist_block_test.go              # Block persistence tests
+├── streaming_process_subtree.go       # Subtree processing with streaming writes
+├── streaming_process_subtree_test.go  # Subtree processing tests
+├── subtree_data_writer.go             # Ordered batch writer for subtree data
+├── processTxMetaUsingStore.go         # Transaction metadata processing
+└── metrics.go                         # Prometheus metrics
 </code></pre></div>
 <h2 id="6-how-to-run">6. How to run</h2>
 <p>To run the Block Persister Service locally, you can execute the following command:</p>
