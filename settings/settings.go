@@ -264,7 +264,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			PostgresPool:          getPostgresPoolSettings("blockchain", alternativeContext...),
 		},
 		BlockValidation: BlockValidationSettings{
-			MaxRetries:                                getInt("blockV	alidationMaxRetries", 3, alternativeContext...),
+			MaxRetries:                                getInt("blockValidationMaxRetries", 3, alternativeContext...),
 			RetrySleep:                                getDuration("blockValidationRetrySleep", 1*time.Second, alternativeContext...),
 			GRPCAddress:                               getString("blockvalidation_grpcAddress", "localhost:8088", alternativeContext...),
 			GRPCListenAddress:                         getString("blockvalidation_grpcListenAddress", ":8088", alternativeContext...),
