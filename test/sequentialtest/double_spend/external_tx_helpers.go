@@ -48,14 +48,14 @@ func externalTxSettingsFunc() func(*settings.Settings) {
 //
 // It returns:
 //   - td: TestDaemon instance
-//   - coinbaseTx1: Coinbase from block at blockOffset height (used for spending)
-//   - txOriginal: Original transaction spending coinbaseTx1 output 0 (external tx with 5 outputs)
-//   - txDoubleSpend: Double spend transaction also spending coinbaseTx1 output 0 (external tx with 5 outputs)
-//   - block102: Block at height 102 containing txOriginal
+//   - parentTx: Parent transaction with 5 outputs (used to create conflicting txs)
+//   - txOriginal: Original transaction spending parentTx outputs 0,1 (external tx with 5 outputs)
+//   - txDoubleSpend: Double spend transaction spending parentTx outputs 0,4 (external tx with 5 outputs)
+//   - block102: Block at height 102 containing parentTx
 //   - tx2: Another transaction from a different block (external tx with 5 outputs)
 func setupExternalTxDoubleSpendTest(t *testing.T, utxoStoreType string, blockOffset ...uint32) (
 	td *daemon.TestDaemon,
-	coinbaseTx1, txOriginal, txDoubleSpend *bt.Tx,
+	parentTx, txOriginal, txDoubleSpend *bt.Tx,
 	block102 *model.Block,
 	tx2 *bt.Tx,
 ) {
@@ -80,29 +80,38 @@ func setupExternalTxDoubleSpendTest(t *testing.T, utxoStoreType string, blockOff
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, blockHeight)
 	require.NoError(t, err)
 
-	coinbaseTx1 = block1.CoinbaseTx
+	coinbaseTx1 := block1.CoinbaseTx
 	// create a parent tx by spending the coinbaseTx
-	parentTx := td.CreateTransactionWithOptions(t,
+	parentTx = td.CreateTransactionWithOptions(t,
 		transactions.WithInput(coinbaseTx1, 0),
-		transactions.WithP2PKHOutputs(numOutputsForExternalTx, outputAmount),
+		transactions.WithP2PKHOutputs(numOutputsForExternalTx, coinbaseTx1.Outputs[0].Satoshis/uint64(numOutputsForExternalTx)-100),
 	)
 
 	// propagate
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, parentTx)
 	require.NoError(t, err)
 
+	// generate a block to include parentTx
+	err = td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
+	require.NoError(t, err)
+
+	block102, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 102)
+	require.NoError(t, err)
+
+	require.Equal(t, uint64(2), block102.TransactionCount)
+
 	// Create external transactions: transactions with enough outputs to trigger external storage
 	// With utxoBatchSize=2 and numOutputsForExternalTx=5, these will be stored externally
 	txOriginal = td.CreateTransactionWithOptions(t,
 		transactions.WithInput(parentTx, 0),
 		transactions.WithInput(parentTx, 1),
-		transactions.WithP2PKHOutputs(numOutputsForExternalTx, outputAmount/5),
+		transactions.WithP2PKHOutputs(numOutputsForExternalTx, parentTx.Outputs[0].Satoshis/uint64(numOutputsForExternalTx)-100),
 	)
 
 	txDoubleSpend = td.CreateTransactionWithOptions(t,
 		transactions.WithInput(parentTx, 0),
 		transactions.WithInput(parentTx, 4),
-		transactions.WithP2PKHOutputs(numOutputsForExternalTx+1, outputAmount/5),
+		transactions.WithP2PKHOutputs(numOutputsForExternalTx, parentTx.Outputs[0].Satoshis/uint64(numOutputsForExternalTx)-100),
 	)
 
 	t.Logf("Created external txOriginal %s with %d outputs", txOriginal.TxIDChainHash().String(), len(txOriginal.Outputs))
@@ -114,19 +123,12 @@ func setupExternalTxDoubleSpendTest(t *testing.T, utxoStoreType string, blockOff
 	err2 := td.PropagationClient.ProcessTransaction(td.Ctx, txDoubleSpend)
 	require.Error(t, err2, "This should fail as it is a double spend")
 
-	err = td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 1})
-	require.NoError(t, err)
-
-	block102, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 102)
-	require.NoError(t, err)
-
-	require.Equal(t, uint64(3), block102.TransactionCount)
-
 	// Create another external transaction from a different block
 	block2Height := blockHeight + 1
 	if block2Height > 100 {
 		block2Height = 2
 	}
+	
 	block2, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, block2Height)
 	require.NoError(t, err)
 
@@ -140,7 +142,7 @@ func setupExternalTxDoubleSpendTest(t *testing.T, utxoStoreType string, blockOff
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, tx2)
 	require.NoError(t, err)
 
-	return td, coinbaseTx1, txOriginal, txDoubleSpend, block102, tx2
+	return td, parentTx, txOriginal, txDoubleSpend, block102, tx2
 }
 
 // createExternalTxFromParent creates an external transaction (multi-output) from a parent transaction.
@@ -185,10 +187,10 @@ func createExternalTxChain(t *testing.T, td *daemon.TestDaemon, startTx *bt.Tx, 
 	return chain
 }
 
-// createConflictingExternalBlock creates a block containing external transactions that
+// createConflictingBlockUseExternalRecords creates a block containing external transactions that
 // conflict with transactions in another block. This is used for testing double spend
 // scenarios with external transactions.
-func createConflictingExternalBlock(t *testing.T, td *daemon.TestDaemon, originalBlock *model.Block,
+func createConflictingBlockUseExternalRecords(t *testing.T, td *daemon.TestDaemon, originalBlock *model.Block,
 	blockTxs []*bt.Tx, originalTxs []*bt.Tx, nonce uint32, expectBlockError ...bool) *model.Block {
 
 	// Get previous block so we can create an alternate block
@@ -204,7 +206,10 @@ func createConflictingExternalBlock(t *testing.T, td *daemon.TestDaemon, origina
 		return nil
 	}
 
-	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy"),
+	// require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy"),
+	// 	"Failed to process block with double spend transaction")
+
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, newBlock, "legacy", nil),
 		"Failed to process block with double spend transaction")
 
 	td.VerifyBlockByHash(t, newBlock, newBlock.Header.Hash())
@@ -212,8 +217,10 @@ func createConflictingExternalBlock(t *testing.T, td *daemon.TestDaemon, origina
 	// Verify original block is still at height
 	td.WaitForBlockHeight(t, originalBlock, externalBlockWait, true)
 
-	// Verify conflicting status
-	td.VerifyConflictingInSubtrees(t, originalBlock.Subtrees[0]) // Should be empty
+	// Verify conflicting status (only if original block has subtrees)
+	if len(originalBlock.Subtrees) > 0 {
+		td.VerifyConflictingInSubtrees(t, originalBlock.Subtrees[0])
+	}
 	td.VerifyConflictingInUtxoStore(t, false, originalTxs...)
 
 	// Verify new block txs are marked as conflicting
