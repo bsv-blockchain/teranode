@@ -303,15 +303,60 @@ This internal method handles the two-stage process of loading subtree informatio
 
 ### Subtree Processing
 
-#### readSubtreeData
+Block persistence uses a **two-phase approach** to process subtrees efficiently while maintaining data integrity:
+
+#### Phase 1: CreateSubtreeDataFileStreaming
 
 ```go
-func (u *Server) readSubtreeData(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.SubtreeData, error)
+func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash chainhash.Hash, block *model.Block, subtreeIndex int) error
 ```
 
-Reads and deserializes subtree data from the subtree store. This method retrieves a subtree by its hash, deserializes it into a structured format, and returns the transaction data contained within. It handles both regular subtrees and subtrees marked for checking.
+Creates subtree data files using streaming writes. This phase runs **in parallel** across all subtrees with configurable concurrency.
 
-#### readSubtree
+!!! note "Processing Steps"
+    1. **Check if subtree data already exists** - if it does, just set DAH and skip processing
+    2. **Retrieve the subtree** from the subtree store using its hash
+    3. **Load transaction metadata** from the UTXO store (batched or individual)
+    4. **Stream write** the subtree data file using `SubtreeDataWriter`
+    5. **Abort on error** - incomplete files are automatically cleaned up
+
+#### Phase 2: ProcessSubtreeUTXOStreaming
+
+```go
+func (u *Server) ProcessSubtreeUTXOStreaming(ctx context.Context, subtreeHash chainhash.Hash, utxoDiff *utxopersister.UTXOSet) error
+```
+
+Processes UTXO changes by reading from the subtree data files. This phase runs **sequentially** to maintain UTXO ordering.
+
+!!! note "Processing Steps"
+    1. **Open subtree data file** for streaming read
+    2. **Process each transaction** through the UTXO diff tracker
+    3. **Record additions and deletions** to the UTXO set
+
+#### SubtreeDataWriter
+
+```go
+type SubtreeDataWriter struct {
+    storer      *filestorer.FileStorer
+    nextBatchID int
+    // ... additional fields
+}
+```
+
+The `SubtreeDataWriter` provides **ordered batch writes** for subtree data. It ensures batches are written in the correct order even when produced concurrently.
+
+**Key Methods:**
+
+- `WriteBatch(batchID int, txData [][]byte) error`: Writes a batch of transaction data at the specified position
+- `Close() error`: Finalizes the file (aborts if batches are pending)
+- `Abort(err error)`: Aborts the write operation without finalizing
+
+!!! tip "Error Safety"
+    If `Close()` is called while batches are still pending (gaps in batch sequence), the writer automatically aborts instead of finalizing an incomplete file.
+
+#### Helper Functions
+
+##### readSubtree
 
 ```go
 func (u *Server) readSubtree(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Subtree, error)
@@ -319,7 +364,7 @@ func (u *Server) readSubtree(ctx context.Context, subtreeHash chainhash.Hash) (*
 
 Reads a subtree from the subtree store by its hash. This method attempts to retrieve the subtree from storage, trying both regular subtree files and subtrees marked for checking if the primary lookup fails.
 
-#### processTxMetaUsingStore
+##### processTxMetaUsingStore
 
 ```go
 func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData) error
@@ -327,42 +372,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepk
 
 Processes transaction metadata using the UTXO store. This method handles the retrieval and processing of transaction metadata for all transactions in a subtree, with support for both batched and individual transaction processing modes.
 
-#### ProcessSubtree
-
-```go
-func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx, utxoDiff *utxopersister.UTXOSet) error
-```
-
-Processes a subtree of transactions, validating and storing them.
-
-A subtree represents a hierarchical structure containing transaction references that make up part of a block. This method retrieves a subtree from the subtree store, processes all the transactions it contains, and writes them to the block store while updating the UTXO set differences.
-
-!!! note "Processing Steps"
-    The process follows these key steps:
-
-    1. **Check if subtree data already exists** - if it does, just set DAH and skip processing
-    2. **Retrieve the subtree** from the subtree store using its hash
-    3. **Create subtree data** from the subtree structure
-    4. **Add coinbase transaction** if the first node is a coinbase placeholder
-    5. **Process transaction metadata** using the store
-    6. **Serialize and store** the complete subtree data
-
-!!! tip "Performance Optimization"
-    The method includes an optimization to skip processing if subtree data already exists, only updating the Delete-At-Height (DAH) setting for persistence.
-
-**Parameters:**
-
-- `pCtx`: Parent context for the operation, used for cancellation and tracing
-- `subtreeHash`: Hash identifier of the subtree to process
-- `coinbaseTx`: The coinbase transaction for the block containing this subtree
-- `utxoDiff`: UTXO set difference tracker for processing transaction changes
-
-**Returns** an error if any part of the subtree processing fails. Errors are wrapped with appropriate context to identify the specific failure point (storage, processing, etc.).
-
-!!! warning "Atomicity Note"
-    Processing is not atomic across multiple subtrees - each subtree is processed individually, allowing partial block processing to succeed even if some subtrees fail.
-
-#### WriteTxs
+#### Legacy: WriteTxs
 
 ```go
 func WriteTxs(_ context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txs []*bt.Tx, utxoDiff *utxopersister.UTXOSet) error
@@ -439,6 +449,53 @@ The service uses settings from the `settings.Settings` structure, primarily focu
     - **Configuration errors**: Prevent service startup
     - **Database errors**: Logged and service retries after delay
 
+### Streaming Write Error Recovery
+
+The Block Persister uses streaming writes via `FileStorer` and `SubtreeDataWriter` to efficiently handle large files without loading them entirely into memory. These streaming writers implement a **success-flag pattern** to ensure incomplete files are never finalized:
+
+!!! abstract "Abort Mechanism"
+    When an error occurs during streaming writes (e.g., missing transaction metadata, store failures):
+
+    1. **FileStorer.Abort()** is called instead of `Close()`
+    2. The underlying `io.PipeWriter` is closed with an error via `CloseWithError()`
+    3. The blob store's `SetFromReader` detects the error and **removes the temporary file**
+    4. No incomplete file is left in the blob store
+
+**Pattern used in Block Persister:**
+
+```go
+storer, err := filestorer.NewFileStorer(ctx, logger, settings, store, key, fileType)
+if err != nil {
+    return err
+}
+
+var writeSucceeded bool
+defer func() {
+    if writeSucceeded {
+        storer.Close(ctx)  // Finalizes the file
+    } else {
+        storer.Abort(err)  // Removes temp file, no incomplete data saved
+    }
+}()
+
+// ... streaming write operations ...
+
+writeSucceeded = true
+return nil
+```
+
+!!! tip "SubtreeDataWriter"
+    The `SubtreeDataWriter` wraps `FileStorer` and provides an `Abort()` method that propagates to the underlying storer. If `Close()` is called while batches are still pending (indicating incomplete processing), it automatically aborts instead of finalizing.
+
+### Temporary File Cleanup
+
+The file-based blob store implements automatic cleanup of stale temporary files:
+
+- Temporary files use `.tmp` extension during writes
+- On successful write, temp files are atomically renamed to final names
+- On error/abort, temp files are immediately deleted
+- During store initialization, stale `.tmp` files older than 10 minutes are automatically cleaned up
+
 ## Metrics
 
 The service provides Prometheus metrics for monitoring:
@@ -470,14 +527,22 @@ Required components:
     4. **Mark block as persisted** in database via `SetBlockPersistedAt`
     5. **Sleep** if no blocks available or on error
 
-### Subtree Processing Flow
+### Subtree Processing Flow (Two-Phase)
 
-!!! abstract "Subtree Processing Steps"
-    1. **Retrieve subtree data** from store
-    2. **Process transaction metadata** for all transactions
-    3. **Write transactions** to storage
-    4. **Update UTXO set** with changes
-    5. **Handle errors** with appropriate recovery
+!!! abstract "Phase 1: Create Subtree Data Files (Parallel)"
+    1. **Check if subtree data exists** - skip if already created
+    2. **Retrieve subtree structure** from subtree store
+    3. **Load transaction metadata** from UTXO store (batched)
+    4. **Stream write subtree data** using `SubtreeDataWriter`
+    5. **Abort on error** - incomplete files are cleaned up automatically
+
+!!! abstract "Phase 2: Process UTXO Changes (Sequential)"
+    1. **Open subtree data file** for streaming read
+    2. **Process each transaction** through UTXO diff tracker
+    3. **Record additions and deletions** to UTXO set files
+
+!!! tip "Performance Benefit"
+    Phase 1 runs in parallel across all subtrees with configurable concurrency, while Phase 2 runs sequentially to maintain UTXO ordering. This separation allows maximum parallelism for I/O-bound file creation while ensuring correct UTXO state.
 
 ## Health Checks
 
