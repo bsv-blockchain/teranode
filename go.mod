@@ -13,7 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.29.9
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.17.66
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.78.2
-	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0-beta11
+	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0
 	github.com/bitcoin-sv/go-sdk v1.1.21
 	github.com/bsv-blockchain/go-bt/v2 v2.5.1
 	github.com/bsv-blockchain/go-chaincfg v1.4.0
@@ -62,15 +62,15 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0
 	go.opentelemetry.io/otel/trace v1.38.0
 	go.uber.org/atomic v1.11.0
-	golang.org/x/crypto v0.45.0
+	golang.org/x/crypto v0.46.0
 	golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6
-	golang.org/x/sync v0.18.0
-	golang.org/x/sys v0.38.0
-	golang.org/x/term v0.37.0
-	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/sync v0.19.0
+	golang.org/x/sys v0.39.0
+	golang.org/x/term v0.38.0
+	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/time v0.14.0
 	google.golang.org/grpc v1.75.0
-	google.golang.org/protobuf v1.36.10
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/DataDog/dd-trace-go.v1 v1.67.0
 	k8s.io/api v0.33.3
 	k8s.io/apimachinery v0.33.3
@@ -192,9 +192,9 @@ require (
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.7
 	github.com/bsv-blockchain/go-safe-conversion v1.1.0
-	github.com/bsv-blockchain/go-sdk v1.2.11
+	github.com/bsv-blockchain/go-sdk v1.2.13
 	github.com/bsv-blockchain/go-tx-map v1.2.1
-	github.com/bsv-blockchain/go-wire v1.0.6
+	github.com/bsv-blockchain/go-wire v1.1.1
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
