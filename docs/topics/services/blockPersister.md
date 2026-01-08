@@ -91,29 +91,53 @@ The service processes blocks through a **continuous polling mechanism**:
     - **FSM State Dependency**: The service waits for the blockchain FSM (Finite State Machine) to transition from the IDLE state to RUNNING before beginning block processing operations
     - **No gRPC API**: Unlike other Teranode services, the Block Persister does not expose a gRPC API and operates purely as a background processing service
 
-### 2.3 Subtree Processing Details
+### 2.3 Subtree Processing Details (Two-Phase Architecture)
 
 ![block_persister_receive_new_blocks_subtrees.svg](img/plantuml/blockpersister/block_persister_receive_new_blocks_subtrees.svg)
 
-The detailed subtree processing workflow includes:
+The Block Persister uses a **two-phase architecture** for efficient subtree processing:
+
+#### Phase 1: Create Subtree Data Files (Parallel)
+
+Multiple subtrees are processed concurrently with configurable concurrency:
 
 1. **Subtree Retrieval**
-    - Retrieves subtree data from the blockchain service
-    - Deserializes transaction data within the subtree
+    - Retrieves subtree structure from the subtree store
+    - Checks if subtree data already exists (skips if present)
 
 2. **Transaction Metadata Loading**
     - Loads transaction metadata in batches for efficiency
-    - Decorates transactions with UTXO metadata
-    - Processes transactions individually if batch processing fails
+    - Decorates transactions with UTXO metadata from the store
+    - Falls back to individual processing if batch fails
 
-3. **File Creation**
+3. **Streaming File Creation**
+    - Uses `SubtreeDataWriter` for ordered batch writes
+    - Streams data directly to storage without buffering entire file
     - Stores decorated subtree files (.subtree extension)
-    - Calculates and stores UTXO changes (additions and deletions)
-    - Updates the UTXO difference tracking
 
-4. **Concurrency**
-    - Processes multiple subtrees concurrently using configurable concurrency limits
-    - Uses error groups to handle concurrent processing errors
+4. **Error Recovery**
+    - Uses success-flag pattern to ensure incomplete files are never finalized
+    - On error, `Abort()` is called instead of `Close()` to remove temporary files
+    - No incomplete subtree files are left in storage after failures
+
+#### Phase 2: Process UTXO Changes (Sequential)
+
+UTXO processing runs sequentially to maintain correct ordering:
+
+1. **Read Subtree Data Files**
+    - Opens each subtree data file for streaming read
+    - Processes subtrees in order
+
+2. **UTXO Diff Processing**
+    - Processes each transaction through the UTXO diff tracker
+    - Records additions (new outputs) and deletions (spent outputs)
+    - Writes to `.utxo-additions` and `.utxo-deletions` files
+
+This two-phase approach provides:
+
+- **Maximum parallelism** for I/O-bound subtree file creation
+- **Correct ordering** for UTXO state updates
+- **Memory efficiency** through streaming reads/writes
 
 ## 3. Data Model
 
@@ -213,13 +237,15 @@ The Block Persister service is located in the `services/blockpersister` director
 
 ```text
 services/blockpersister/
-├── Server.go                   # Main service implementation
-├── Server_test.go              # Service tests
-├── persist_block.go            # Block persistence logic
-├── persist_block_test.go       # Block persistence tests
-├── processSubtree.go           # Subtree processing logic
-├── processTxMetaUsingStore.go  # Transaction metadata processing
-└── metrics.go                  # Prometheus metrics
+├── Server.go                          # Main service implementation
+├── Server_test.go                     # Service tests
+├── persist_block.go                   # Block persistence logic
+├── persist_block_test.go              # Block persistence tests
+├── streaming_process_subtree.go       # Subtree processing with streaming writes
+├── streaming_process_subtree_test.go  # Subtree processing tests
+├── subtree_data_writer.go             # Ordered batch writer for subtree data
+├── processTxMetaUsingStore.go         # Transaction metadata processing
+└── metrics.go                         # Prometheus metrics
 ```
 
 ## 6. How to run

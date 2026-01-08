@@ -3,8 +3,6 @@ package pruner
 import (
 	"context"
 	"time"
-
-	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
 // checkBlockAssemblySafeForPruner verifies that block assembly is in "running" state
@@ -28,15 +26,23 @@ func (s *Server) checkBlockAssemblySafeForPruner(ctx context.Context, phase stri
 
 // prunerProcessor processes pruner requests from the pruner channel.
 // It drains the channel to get the latest height (deduplication), then performs
-// pruner in two sequential steps:
-// 1. Preserve parents of old unmined transactions
-// 2. Delete-at-height (DAH) pruner
+// Delete-at-height (DAH) pruning to remove old transaction records from storage.
 //
-// Safety checks (block assembly state) are performed immediately before each phase
-// to prevent race conditions where state could change between queueing and execution.
+// PARENT PRESERVATION:
+// Parent preservation of unmined transactions is handled in Block Assembly/Validation, not here:
+// - During FSMStateRUNNING: Preserved per-block in BlockValidation after UpdateTxMinedStatus
+// - During FSMStateCATCHINGBLOCKS: Preserved once at Block Assembly startup
 //
-// This goroutine ensures only one pruner operation runs at a time by processing
-// from a buffered channel (size 1).
+// This separation keeps the pruner focused on deletion while Block Assembly manages the
+// unmined transaction lifecycle (where parent preservation logically belongs).
+//
+// SAFETY CHECKS:
+// Block assembly state is checked before pruning to ensure it's safe to proceed. This prevents
+// pruning during reorgs or other state transitions.
+//
+// DEDUPLICATION:
+// Only one pruner operation runs at a time. The channel is drained to process only the latest
+// height, which is important during catchup when multiple heights may be queued.
 func (s *Server) prunerProcessor(ctx context.Context) {
 	s.logger.Infof("Starting pruner processor")
 
@@ -66,36 +72,17 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				s.logger.Debugf("Deduplicating pruner operations, skipping to height %d", latestHeight)
 			}
 
-			// Safety check before preserve parents phase
-			if !s.checkBlockAssemblySafeForPruner(ctx, "preserve parents", latestHeight) {
+			// Safety check before DAH pruning
+			if !s.checkBlockAssemblySafeForPruner(ctx, "DAH pruner", latestHeight) {
 				continue
 			}
 
-			// Step 1: Preserve parents of old unmined transactions FIRST
-			// This ensures parents of old unmined transactions are not deleted by DAH pruner
-			// CRITICAL: If this phase fails, we MUST NOT proceed to subsequent phases,
-			// as DAH pruner could delete parents that should be preserved.
-			s.logger.Infof("Starting pruner for height %d: preserving parents", latestHeight)
-			startTime := time.Now()
-
-			if s.utxoStore != nil {
-				_, err := utxo.PreserveParentsOfOldUnminedTransactions(
-					ctx, s.utxoStore, latestHeight, s.settings, s.logger)
-				if err != nil {
-					s.logger.Errorf("CRITICAL: Failed to preserve parents at height %d, ABORTING pruner to prevent data loss: %v", latestHeight, err)
-					prunerErrors.WithLabelValues("preserve_parents_failed").Inc()
-					prunerSkipped.WithLabelValues("preserve_failed").Inc()
-					// ABORT: Do not proceed to Phase 2 (DAH pruner) - could cause data loss
-					continue
-				}
-				prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTime).Seconds())
-			}
-
-			// Step 2: Call DAH pruner directly (synchronous)
+			// Call DAH pruner directly (synchronous)
 			// DAH pruner deletes transactions marked for deletion at or before the current height
+			// Parent preservation now happens in Block Assembly, not here
 			if s.prunerService != nil {
 				s.logger.Infof("Starting pruner for height %d: DAH pruner", latestHeight)
-				startTime = time.Now()
+				startTime := time.Now()
 
 				recordsProcessed, err := s.prunerService.Prune(ctx, latestHeight)
 				if err != nil {

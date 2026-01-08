@@ -65,7 +65,12 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 		return 0, errors.NewStorageError("failed to query old unmined transactions", err)
 	}
 
-	logger.Debugf("[PreserveParents] Found %d old unmined transactions to process for parent preservation", len(oldUnminedTxHashes))
+	// Log if we found zero old unmined txs - may indicate timing issue during/after catchup
+	if len(oldUnminedTxHashes) == 0 {
+		logger.Infof("[PreserveParents] Found 0 old unmined transactions at cutoff height %d (this is normal during steady-state operation)", cutoffBlockHeight)
+	} else {
+		logger.Infof("[PreserveParents] Found %d old unmined transactions to process for parent preservation", len(oldUnminedTxHashes))
+	}
 
 	// Process each transaction for parent preservation
 	for _, txHash := range oldUnminedTxHashes {

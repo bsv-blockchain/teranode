@@ -15,8 +15,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.78.2
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0
 	github.com/bitcoin-sv/go-sdk v1.1.21
-	github.com/bsv-blockchain/go-bt/v2 v2.5.1
-	github.com/bsv-blockchain/go-chaincfg v1.4.0
+	github.com/bsv-blockchain/go-bt/v2 v2.5.2
+	github.com/bsv-blockchain/go-chaincfg v1.5.3
 	github.com/bsv-blockchain/go-subtree v1.1.2
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.3.2
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
@@ -192,7 +192,7 @@ require (
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.7
 	github.com/bsv-blockchain/go-safe-conversion v1.1.0
-	github.com/bsv-blockchain/go-sdk v1.2.13
+	github.com/bsv-blockchain/go-sdk v1.2.14
 	github.com/bsv-blockchain/go-tx-map v1.2.1
 	github.com/bsv-blockchain/go-wire v1.1.1
 	github.com/charmbracelet/bubbles v0.21.0
@@ -439,7 +439,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	golang.org/x/mod v0.30.0 // indirect
-	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/oauth2 v0.32.0 // indirect
 	golang.org/x/tools v0.39.0 // indirect
 	gonum.org/v1/gonum v0.16.0 // indirect

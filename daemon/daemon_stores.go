@@ -372,7 +372,7 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 		return d.mainBlockPersisterStore, nil
 	}
 
-	blockStoreURL := appSettings.Block.PersisterStore
+	blockStoreURL := appSettings.BlockPersister.Store
 
 	if blockStoreURL == nil {
 		return nil, errors.NewConfigurationError("blockPersisterStore config not found")

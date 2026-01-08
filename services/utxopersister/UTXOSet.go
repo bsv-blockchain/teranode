@@ -148,22 +148,32 @@ func NewUTXOSet(ctx context.Context, logger ulogger.Logger, tSettings *settings.
 
 	deletionsStorer, err := filestorer.NewFileStorer(ctx, logger, tSettings, store, blockHash[:], fileformat.FileTypeUtxoDeletions)
 	if err != nil {
+		// Abort the additions storer to prevent incomplete file
+		additionsStorer.Abort(errors.NewStorageError("error creating deletions file", err))
 		return nil, errors.NewStorageError("error creating deletions file", err)
 	}
 
 	if err := binary.Write(additionsStorer, binary.LittleEndian, blockHash[:]); err != nil {
+		additionsStorer.Abort(err)
+		deletionsStorer.Abort(err)
 		return nil, errors.NewStorageError("error writing block hash to additions header", err)
 	}
 
 	if err := binary.Write(additionsStorer, binary.LittleEndian, blockHeight); err != nil {
+		additionsStorer.Abort(err)
+		deletionsStorer.Abort(err)
 		return nil, errors.NewStorageError("error writing block height to additions header", err)
 	}
 
 	if err := binary.Write(deletionsStorer, binary.LittleEndian, blockHash[:]); err != nil {
+		additionsStorer.Abort(err)
+		deletionsStorer.Abort(err)
 		return nil, errors.NewStorageError("error writing block hash to deletions header", err)
 	}
 
 	if err := binary.Write(deletionsStorer, binary.LittleEndian, blockHeight); err != nil {
+		additionsStorer.Abort(err)
+		deletionsStorer.Abort(err)
 		return nil, errors.NewStorageError("error writing block height to deletions header", err)
 	}
 
@@ -354,6 +364,17 @@ func (us *UTXOSet) Close() error {
 	return nil
 }
 
+// Abort aborts both the additions and deletions storers to prevent incomplete files from being finalized.
+// This should be called instead of Close() when an error occurs during UTXO processing.
+func (us *UTXOSet) Abort(err error) {
+	if us.additionsStorer != nil {
+		us.additionsStorer.Abort(err)
+	}
+	if us.deletionsStorer != nil {
+		us.deletionsStorer.Abort(err)
+	}
+}
+
 type readCloserWrapper struct {
 	*bufio.Reader
 	io.Closer
@@ -504,6 +525,17 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 		return errors.NewStorageError("error creating utxo-set file", err)
 	}
 
+	// Track whether write succeeded to determine whether to close or abort
+	var writeSucceeded bool
+	defer func() {
+		if writeSucceeded {
+			// Success - file already closed below
+			return
+		}
+		// Error path - abort to prevent incomplete file from being finalized
+		storer.Abort(errors.NewProcessingError("[CreateUTXOSet] write failed for block %s", c.lastBlockHash.String()))
+	}()
+
 	_, err = storer.Write(c.lastBlockHash[:])
 	if err != nil {
 		return errors.NewProcessingError("Couldn't write previous block hash to file", err)
@@ -643,6 +675,9 @@ func (us *UTXOSet) CreateUTXOSet(ctx context.Context, c *consolidator) (err erro
 	if err = storer.Close(ctx); err != nil {
 		return errors.NewStorageError("error flushing utxoset writer", err)
 	}
+
+	// Mark as successful so defer doesn't abort
+	writeSucceeded = true
 
 	return nil
 }
