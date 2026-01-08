@@ -387,9 +387,9 @@ func TestInitPostgresDB_PoolSettings(t *testing.T) {
 		globalSettings       *settings.Settings
 		servicePoolSettings  *settings.PostgresSettings
 		expectedMaxOpenConns int
-		expectedMaxIdleConns  int
-		expectedLifetime      time.Duration
-		expectedIdleTime      time.Duration
+		expectedMaxIdleConns int
+		expectedLifetime     time.Duration
+		expectedIdleTime     time.Duration
 		description          string
 	}{
 		{
@@ -398,12 +398,12 @@ func TestInitPostgresDB_PoolSettings(t *testing.T) {
 			servicePoolSettings:  nil,
 			expectedMaxOpenConns: 50,
 			expectedMaxIdleConns: 10,
-			expectedLifetime:      5 * time.Minute,
+			expectedLifetime:     5 * time.Minute,
 			expectedIdleTime:     1 * time.Minute,
 			description:          "When no service-specific settings, use global defaults",
 		},
 		{
-			name:   "service settings fully override global",
+			name:           "service settings fully override global",
 			globalSettings: createSettingsWithGlobalDefaults(),
 			servicePoolSettings: &settings.PostgresSettings{
 				MaxOpenConns:    80,
@@ -413,12 +413,12 @@ func TestInitPostgresDB_PoolSettings(t *testing.T) {
 			},
 			expectedMaxOpenConns: 80,
 			expectedMaxIdleConns: 20,
-			expectedLifetime:      10 * time.Minute,
+			expectedLifetime:     10 * time.Minute,
 			expectedIdleTime:     2 * time.Minute,
 			description:          "All service settings override global defaults",
 		},
 		{
-			name:   "partial override - only MaxOpenConns",
+			name:           "partial override - only MaxOpenConns",
 			globalSettings: createSettingsWithGlobalDefaults(),
 			servicePoolSettings: &settings.PostgresSettings{
 				MaxOpenConns:    100,
@@ -427,13 +427,13 @@ func TestInitPostgresDB_PoolSettings(t *testing.T) {
 				ConnMaxIdleTime: 0, // Zero value - should use global
 			},
 			expectedMaxOpenConns: 100,
-			expectedMaxIdleConns: 10, // From global
-			expectedLifetime:      5 * time.Minute, // From global
+			expectedMaxIdleConns: 10,              // From global
+			expectedLifetime:     5 * time.Minute, // From global
 			expectedIdleTime:     1 * time.Minute, // From global
 			description:          "Only MaxOpenConns overridden, others use global",
 		},
 		{
-			name:   "partial override - only MaxIdleConns",
+			name:           "partial override - only MaxIdleConns",
 			globalSettings: createSettingsWithGlobalDefaults(),
 			servicePoolSettings: &settings.PostgresSettings{
 				MaxOpenConns:    0, // Zero value - should use global
@@ -443,12 +443,12 @@ func TestInitPostgresDB_PoolSettings(t *testing.T) {
 			},
 			expectedMaxOpenConns: 50, // From global
 			expectedMaxIdleConns: 25,
-			expectedLifetime:      5 * time.Minute, // From global
+			expectedLifetime:     5 * time.Minute, // From global
 			expectedIdleTime:     1 * time.Minute, // From global
 			description:          "Only MaxIdleConns overridden, others use global",
 		},
 		{
-			name:   "partial override - only ConnMaxLifetime",
+			name:           "partial override - only ConnMaxLifetime",
 			globalSettings: createSettingsWithGlobalDefaults(),
 			servicePoolSettings: &settings.PostgresSettings{
 				MaxOpenConns:    0, // Zero value - should use global
@@ -458,12 +458,12 @@ func TestInitPostgresDB_PoolSettings(t *testing.T) {
 			},
 			expectedMaxOpenConns: 50, // From global
 			expectedMaxIdleConns: 10, // From global
-			expectedLifetime:      3 * time.Minute,
+			expectedLifetime:     3 * time.Minute,
 			expectedIdleTime:     1 * time.Minute, // From global
 			description:          "Only ConnMaxLifetime overridden, others use global",
 		},
 		{
-			name:   "partial override - only ConnMaxIdleTime",
+			name:           "partial override - only ConnMaxIdleTime",
 			globalSettings: createSettingsWithGlobalDefaults(),
 			servicePoolSettings: &settings.PostgresSettings{
 				MaxOpenConns:    0, // Zero value - should use global
@@ -471,14 +471,14 @@ func TestInitPostgresDB_PoolSettings(t *testing.T) {
 				ConnMaxLifetime: 0, // Zero value - should use global
 				ConnMaxIdleTime: 30 * time.Second,
 			},
-			expectedMaxOpenConns: 50, // From global
-			expectedMaxIdleConns: 10, // From global
-			expectedLifetime:      5 * time.Minute, // From global
+			expectedMaxOpenConns: 50,              // From global
+			expectedMaxIdleConns: 10,              // From global
+			expectedLifetime:     5 * time.Minute, // From global
 			expectedIdleTime:     30 * time.Second,
 			description:          "Only ConnMaxIdleTime overridden, others use global",
 		},
 		{
-			name:   "mixed override - some settings",
+			name:           "mixed override - some settings",
 			globalSettings: createSettingsWithGlobalDefaults(),
 			servicePoolSettings: &settings.PostgresSettings{
 				MaxOpenConns:    75,
@@ -488,7 +488,7 @@ func TestInitPostgresDB_PoolSettings(t *testing.T) {
 			},
 			expectedMaxOpenConns: 75,
 			expectedMaxIdleConns: 10, // From global
-			expectedLifetime:      7 * time.Minute,
+			expectedLifetime:     7 * time.Minute,
 			expectedIdleTime:     1 * time.Minute, // From global
 			description:          "Mixed override - MaxOpenConns and ConnMaxLifetime, others use global",
 		},
@@ -502,22 +502,22 @@ func TestInitPostgresDB_PoolSettings(t *testing.T) {
 			// We can't actually connect to PostgreSQL, but we can test the logic
 			// by checking that InitPostgresDB processes the settings correctly
 			// The function will fail at connection, but we can verify the settings merging logic
-			
+
 			// Since we can't verify the actual DB settings without a connection,
 			// we'll test the helper function that determines pool settings
 			// by creating a mock that captures what would be set
-			
+
 			// Test the merging logic by calling InitPostgresDB
 			// It will fail to connect, but we can verify the error is about connection, not settings
 			db, err := util.InitPostgresDB(logger, storeURL, tt.globalSettings, tt.servicePoolSettings)
-			
+
 			// We expect a connection error, not a configuration error
 			if err != nil {
 				// Verify it's a connection error, not a settings error
 				assert.Contains(t, err.Error(), "failed to open postgres DB")
 				assert.Nil(t, db)
 			}
-			
+
 			// To actually verify the pool settings were applied correctly,
 			// we would need a real PostgreSQL connection. For unit tests,
 			// we verify the logic by testing the settings merging function separately.
@@ -535,20 +535,20 @@ func TestPostgresPoolSettingsMerging(t *testing.T) {
 	}
 
 	tests := []struct {
-		name                string
-		serviceSettings     *settings.PostgresSettings
-		expectedMaxOpen     int
-		expectedMaxIdle     int
-		expectedLifetime   time.Duration
-		expectedIdleTime   time.Duration
+		name             string
+		serviceSettings  *settings.PostgresSettings
+		expectedMaxOpen  int
+		expectedMaxIdle  int
+		expectedLifetime time.Duration
+		expectedIdleTime time.Duration
 	}{
 		{
-			name:                "nil service settings uses global",
-			serviceSettings:     nil,
-			expectedMaxOpen:     50,
-			expectedMaxIdle:     10,
-			expectedLifetime:    5 * time.Minute,
-			expectedIdleTime:   1 * time.Minute,
+			name:             "nil service settings uses global",
+			serviceSettings:  nil,
+			expectedMaxOpen:  50,
+			expectedMaxIdle:  10,
+			expectedLifetime: 5 * time.Minute,
+			expectedIdleTime: 1 * time.Minute,
 		},
 		{
 			name: "full override",
@@ -558,8 +558,8 @@ func TestPostgresPoolSettingsMerging(t *testing.T) {
 				ConnMaxLifetime: 10 * time.Minute,
 				ConnMaxIdleTime: 2 * time.Minute,
 			},
-			expectedMaxOpen:   80,
-			expectedMaxIdle:   20,
+			expectedMaxOpen:  80,
+			expectedMaxIdle:  20,
 			expectedLifetime: 10 * time.Minute,
 			expectedIdleTime: 2 * time.Minute,
 		},
@@ -571,9 +571,9 @@ func TestPostgresPoolSettingsMerging(t *testing.T) {
 				ConnMaxLifetime: 0, // Should use global
 				ConnMaxIdleTime: 0, // Should use global
 			},
-			expectedMaxOpen:   100,
-			expectedMaxIdle:   10, // From global
-			expectedLifetime:  5 * time.Minute, // From global
+			expectedMaxOpen:  100,
+			expectedMaxIdle:  10,              // From global
+			expectedLifetime: 5 * time.Minute, // From global
 			expectedIdleTime: 1 * time.Minute, // From global
 		},
 	}
