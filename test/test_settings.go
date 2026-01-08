@@ -176,7 +176,7 @@ func MultiNodeSettings(nodeNumber int) func(*settings.Settings) {
 		blockStorePath := filepath.Join(s.DataFolder, fmt.Sprintf("teranode%d", nodeNumber), "blockstore")
 		blockStoreURL := mustParseURL(fmt.Sprintf("file://./%s", blockStorePath))
 		s.Block.BlockStore = blockStoreURL
-		s.Block.PersisterStore = blockStoreURL // Both stores should use the same per-node path
+		s.BlockPersister.Store = blockStoreURL // Both stores should use the same per-node path
 
 		// NOTE: Do NOT override listen addresses here.
 		// TestDaemon pre-allocates listeners on dynamic ports before calling SettingsOverrideFunc.

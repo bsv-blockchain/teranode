@@ -237,7 +237,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return err
 	}
 
-	blockPersisterHTTPListenAddress := u.settings.Block.PersisterHTTPListenAddress
+	blockPersisterHTTPListenAddress := u.settings.BlockPersister.HTTPListenAddress
 
 	if blockPersisterHTTPListenAddress != "" {
 		blockStoreURL := u.settings.Block.BlockStore
@@ -322,53 +322,51 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		for {
 			select {
 			case <-ctx.Done():
-				u.logger.Infof("Shutting down block processing loop")
+				u.logger.Infof("[BlockPersister] Shutting down block processing loop")
 				return
 			default:
 				block, err := u.getNextBlockToProcess(ctx)
 				if err != nil {
-					u.logger.Errorf("Error getting next block to process: %v", err)
-					time.Sleep(time.Minute) // Sleep after error
+					u.logger.Errorf("[BlockPersister] Error getting next block to process: %v", err)
+					time.Sleep(u.settings.BlockPersister.PersistSleep) // Sleep after error
 
 					continue
 				}
 
 				if block == nil {
-					if u.settings.Block.BlockPersisterPersistSleep >= time.Minute {
-						u.logger.Infof("No new blocks to process, waiting...")
-					}
-
-					time.Sleep(u.settings.Block.BlockPersisterPersistSleep) // Sleep when no blocks available
+					time.Sleep(u.settings.BlockPersister.PersistSleep) // Sleep when no blocks available
 
 					continue
 				}
 
+				startTime := time.Now()
+
+				u.logger.Infof("[BlockPersister] Processing block %s", block.String())
+
 				// Get block bytes
 				blockBytes, err := block.Bytes()
 				if err != nil {
-					u.logger.Errorf("Failed to get block bytes: %v", err)
-					time.Sleep(time.Minute)
+					u.logger.Errorf("[BlockPersister] Failed to get block bytes: %v", err)
+					time.Sleep(u.settings.BlockPersister.PersistSleep)
 
 					continue
 				}
 
 				// Process the block
-				if err := u.persistBlock(ctx, block.Hash(), blockBytes); err != nil {
+				if err = u.persistBlock(ctx, block.Hash(), blockBytes); err != nil {
 					if errors.Is(err, errors.NewBlobAlreadyExistsError("")) {
 						// We log the error but continue processing
-						u.logger.Infof("Block %s already exists, skipping...", block.Hash())
+						u.logger.Infof("[BlockPersister] Block %s already exists, skipping...", block.String())
 					} else {
-						u.logger.Errorf("Failed to persist block %s: %v", block.Hash(), err)
-						time.Sleep(time.Minute)
+						u.logger.Errorf("[BlockPersister] Failed to persist block %s: %v", block.String(), err)
 
 						continue
 					}
 				}
 
 				// Mark block as persisted in database
-				if err := u.blockchainClient.SetBlockPersistedAt(ctx, block.Hash()); err != nil {
-					u.logger.Errorf("Failed to mark block %s as persisted: %v", block.Hash(), err)
-					time.Sleep(time.Minute)
+				if err = u.blockchainClient.SetBlockPersistedAt(ctx, block.Hash()); err != nil {
+					u.logger.Errorf("[BlockPersister] Failed to mark block %s as persisted: %v", block.String(), err)
 
 					continue
 				}
@@ -393,19 +391,19 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 						},
 					},
 				}
-				if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
-					u.logger.Warnf("[BlockPersister] Failed to send persisted notification for block %s at height %d: %v",
-						block.Hash().String(), block.Height, err)
+				if err = u.blockchainClient.SendNotification(ctx, notification); err != nil {
+					u.logger.Warnf("[BlockPersister] Failed to send persisted notification for block %s: %v",
+						block.String(), err)
 				}
 
 				// Update BlockPersisterHeight state for P2P storage mode determination
 				heightBytes := binary.LittleEndian.AppendUint32(nil, block.Height)
-				if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
-					u.logger.Warnf("[BlockPersister] Failed to update BlockPersisterHeight state for block %s at height %d: %v",
-						block.Hash().String(), block.Height, err)
+				if err = u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
+					u.logger.Warnf("[BlockPersister] Failed to update BlockPersisterHeight state for block %s: %v",
+						block.String(), err)
 				}
 
-				u.logger.Infof("Successfully processed block %s", block.Hash())
+				u.logger.Infof("[BlockPersister] Successfully processed block %s in %s", block.String(), time.Since(startTime))
 			}
 		}
 	}()

@@ -4,16 +4,16 @@
 
 ## Configuration Settings
 
-| Setting | Type | Default | Environment Variable | Usage |
-|---------|------|---------|---------------------|-------|
+| Setting | Type | Default                    | Environment Variable | Usage |
+|---------|------|----------------------------|---------------------|-------|
 | PersisterStore | *url.URL | "file://./data/blockstore" | blockPersisterStore | **CRITICAL** - Block data storage location |
-| PersisterHTTPListenAddress | string | ":8083" | blockPersister_httpListenAddress | HTTP server for blob store access |
-| BlockPersisterConcurrency | int | 8 | blockpersister_concurrency | **CRITICAL** - Parallel processing, reduced by half in all-in-one mode |
-| BatchMissingTransactions | bool | true | blockpersister_batchMissingTransactions | Transaction processing batching |
-| ProcessTxMetaUsingStoreBatchSize | int | 1024 | blockvalidation_processTxMetaUsingStore_BatchSize | **SHARED** - Transaction metadata batch size (shared with Block Validation service) |
-| SkipUTXODelete | bool | false | blockpersister_skipUTXODelete | **UNUSED** - Not referenced in BlockPersister service |
-| BlockPersisterProcessUTXOFiles | bool | true | blockpersister_processUTXOFiles | **POTENTIALLY UNUSED** - May control UTXO file processing |
-| BlockPersisterPersistSleep | time.Duration | 1m | blockPersister_persistSleep | Sleep when no blocks available |
+| PersisterHTTPListenAddress | string | ":8083"                    | blockPersister_httpListenAddress | HTTP server for blob store access |
+| BlockPersisterConcurrency | int | 8                          | blockpersister_concurrency | **CRITICAL** - Parallel processing, reduced by half in all-in-one mode |
+| BatchMissingTransactions | bool | true                       | blockpersister_batchMissingTransactions | Transaction processing batching |
+| ProcessTxMetaUsingStoreBatchSize | int | 1024                       | blockvalidation_processTxMetaUsingStore_BatchSize | **SHARED** - Transaction metadata batch size (shared with Block Validation service) |
+| SkipUTXODelete | bool | false                      | blockpersister_skipUTXODelete | **UNUSED** - Not referenced in BlockPersister service |
+| BlockPersisterProcessUTXOFiles | bool | true                       | blockpersister_processUTXOFiles | **POTENTIALLY UNUSED** - May control UTXO file processing |
+| BlockPersisterPersistSleep | time.Duration | 10s                   | blockPersister_persistSleep | Sleep when no blocks available |
 | BlockStore | *url.URL | "file://./data/blockstore" | blockstore | Required when HTTP server enabled |
 
 ## Configuration Dependencies
@@ -60,7 +60,7 @@
 
 ```bash
 blockPersisterStore=file://./data/blockstore
-blockPersister_persistSleep=1m
+blockPersister_persistSleep=10s
 ```
 
 ### High Performance Configuration

@@ -546,6 +546,126 @@ func TestFileSetFromReaderAndGetIoReader(t *testing.T) {
 	})
 }
 
+// errorAfterNBytesReader returns an error after reading n bytes
+type errorAfterNBytesReader struct {
+	data          []byte
+	pos           int
+	errorAt       int
+	errorToReturn error
+}
+
+func (r *errorAfterNBytesReader) Read(p []byte) (int, error) {
+	if r.pos >= r.errorAt {
+		return 0, r.errorToReturn
+	}
+	remaining := r.errorAt - r.pos
+	if len(p) > remaining {
+		p = p[:remaining]
+	}
+	n := copy(p, r.data[r.pos:r.pos+len(p)])
+	r.pos += n
+	if r.pos >= r.errorAt {
+		return n, r.errorToReturn
+	}
+	return n, nil
+}
+
+func (r *errorAfterNBytesReader) Close() error {
+	return nil
+}
+
+func TestSetFromReader_CleansUpTempFileOnError(t *testing.T) {
+	t.Run("temp file is removed when reader returns error", func(t *testing.T) {
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test-cleanup")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
+		require.NoError(t, err)
+
+		key := []byte("cleanup-test-key")
+
+		// Create a reader that returns an error after some data
+		testData := make([]byte, 1000)
+		for i := range testData {
+			testData[i] = byte(i % 256)
+		}
+		readErr := errors.NewProcessingError("simulated reader error")
+		errorReader := &errorAfterNBytesReader{
+			data:          testData,
+			errorAt:       500, // Error after 500 bytes
+			errorToReturn: readErr,
+		}
+
+		// SetFromReader should fail with the reader error
+		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, errorReader)
+		require.Error(t, err, "SetFromReader should return an error when reader fails")
+
+		// Verify no temp files remain in the directory
+		files, err := os.ReadDir(tempDir)
+		require.NoError(t, err)
+
+		for _, file := range files {
+			assert.False(t, strings.HasSuffix(file.Name(), ".tmp"),
+				"Temp file should be cleaned up on error: %s", file.Name())
+		}
+
+		// Verify the final file was NOT created
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
+		require.NoError(t, err)
+		assert.False(t, exists, "File should not exist after failed SetFromReader")
+	})
+}
+
+func TestSetFromReader_CleansUpTempFileOnPipeClose(t *testing.T) {
+	t.Run("temp file is removed when pipe is closed with error", func(t *testing.T) {
+		// Get a temporary directory
+		tempDir, err := os.MkdirTemp("", "test-pipe-cleanup")
+		require.NoError(t, err)
+		defer os.RemoveAll(tempDir)
+
+		u, err := url.Parse("file://" + tempDir)
+		require.NoError(t, err)
+
+		f, err := New(ulogger.TestLogger{}, u)
+		require.NoError(t, err)
+
+		key := []byte("pipe-cleanup-test-key")
+
+		// Create a pipe and close it with an error to simulate abort
+		pr, pw := io.Pipe()
+
+		// Start writing some data in a goroutine
+		go func() {
+			_, _ = pw.Write([]byte("some initial data"))
+			// Close the pipe with an error to simulate abort
+			_ = pw.CloseWithError(errors.NewProcessingError("simulated abort"))
+		}()
+
+		// SetFromReader should fail with the pipe error
+		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, pr)
+		require.Error(t, err, "SetFromReader should return an error when pipe is closed with error")
+
+		// Verify no temp files remain
+		files, err := os.ReadDir(tempDir)
+		require.NoError(t, err)
+
+		for _, file := range files {
+			assert.False(t, strings.HasSuffix(file.Name(), ".tmp"),
+				"Temp file should be cleaned up on pipe error: %s", file.Name())
+		}
+
+		// Verify the final file was NOT created
+		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
+		require.NoError(t, err)
+		assert.False(t, exists, "File should not exist after aborted SetFromReader")
+	})
+}
+
 func TestFileGetHead(t *testing.T) {
 	t.Run("get head of content", func(t *testing.T) {
 		// Get a temporary directory

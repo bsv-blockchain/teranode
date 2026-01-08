@@ -145,7 +145,7 @@ services:
   # Aerospike Enterprise Edition, single node in evaluation mode
   aerospike-ee:
     container_name: aerospike
-    image: aerospike/aerospike-server-enterprise:8.1
+    image: aerospike:custom
     networks:
       - teranode-network
     ports:
