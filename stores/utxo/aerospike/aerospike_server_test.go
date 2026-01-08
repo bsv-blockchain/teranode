@@ -2217,6 +2217,7 @@ func TestDeleteByBin(t *testing.T) {
 			return false
 		}
 
+<<<<<<< HEAD
 	require.Eventually(t, func() bool {
 		recordSet, err = client.Query(nil, statement)
 		if err != nil {
@@ -2242,6 +2243,13 @@ func TestDeleteByBin(t *testing.T) {
 	for result := range recordSet.Results() {
 		if result != nil {
 			count++
+=======
+		count := 0
+		for result := range recordSet.Results() {
+			if result != nil {
+				count++
+			}
+>>>>>>> a73826134 (fix)
 		}
 
 		return count == 1
