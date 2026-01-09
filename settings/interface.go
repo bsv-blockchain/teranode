@@ -296,6 +296,7 @@ type BlockValidationSettings struct {
 	PreviousBlockHeaderCount                  uint64
 	MaxBlocksBehindBlockAssembly              int
 	PeriodicProcessingInterval                time.Duration // Interval for periodic processing of blocks with mined_set=false (default: 1 minute)
+	RecentBlockIDsLimit                       uint64        // Maximum number of recent block IDs to load for double-spend checking (default: 50000)
 	// Catchup configuration
 	CatchupMaxRetries            int // Maximum number of retries for catchup operations
 	CatchupIterationTimeout      int // Timeout in seconds for each catchup iteration

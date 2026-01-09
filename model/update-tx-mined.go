@@ -22,16 +22,22 @@ type txMinedStatus interface {
 	SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error)
 }
 
+// blockchainClientI defines minimal blockchain client interface for double-spend checking
+type blockchainClientI interface {
+	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
+}
+
 type txMinedMessage struct {
-	ctx            context.Context
-	logger         ulogger.Logger
-	txMetaStore    txMinedStatus
-	block          *Block
-	blockID        uint32
-	chainBlockIDs  []uint32
-	onLongestChain bool
-	unsetMined     bool
-	done           chan error
+	ctx              context.Context
+	logger           ulogger.Logger
+	txMetaStore      txMinedStatus
+	block            *Block
+	blockID          uint32
+	chainBlockIDs    []uint32
+	onLongestChain   bool
+	blockchainClient blockchainClientI
+	unsetMined       bool
+	done             chan error
 }
 
 var (
@@ -108,6 +114,7 @@ func initWorker(tSettings *settings.Settings) {
 					msg.blockID,
 					chainBlockIDsMap,
 					msg.onLongestChain,
+					msg.blockchainClient,
 					msg.unsetMined,
 				); err != nil {
 					msg.done <- err
@@ -122,7 +129,7 @@ func initWorker(tSettings *settings.Settings) {
 }
 
 func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, txMetaStore txMinedStatus,
-	block *Block, blockID uint32, chainBlockIDs []uint32, onLongestChain bool, unsetMined ...bool) error {
+	block *Block, blockID uint32, chainBlockIDs []uint32, onLongestChain bool, blockchainClient blockchainClientI, unsetMined ...bool) error {
 	// start the worker, if not already started
 	txMinedOnce.Do(func() { initWorker(tSettings) })
 
@@ -139,15 +146,16 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	}
 
 	txMinedChan <- &txMinedMessage{
-		ctx:            ctx,
-		logger:         logger,
-		txMetaStore:    txMetaStore,
-		block:          block,
-		blockID:        blockID,
-		chainBlockIDs:  chainBlockIDs,
-		onLongestChain: onLongestChain,
-		unsetMined:     unsetTxMined, // whether to unset the mined status
-		done:           done,
+		ctx:              ctx,
+		logger:           logger,
+		txMetaStore:      txMetaStore,
+		block:            block,
+		blockID:          blockID,
+		chainBlockIDs:    chainBlockIDs,
+		onLongestChain:   onLongestChain,
+		blockchainClient: blockchainClient,
+		unsetMined:       unsetTxMined, // whether to unset the mined status
+		done:             done,
 	}
 
 	prometheusUpdateTxMinedCh.Inc()
@@ -156,7 +164,7 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 }
 
 func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, txMetaStore txMinedStatus,
-	block *Block, blockID uint32, chainBlockIDsMap map[uint32]bool, onLongestChain, unsetMined bool) (err error) {
+	block *Block, blockID uint32, chainBlockIDsMap map[uint32]bool, onLongestChain bool, blockchainClient blockchainClientI, unsetMined bool) (err error) {
 	ctx, _, endSpan := tracing.Tracer("model").Start(ctx, "updateTxMinedStatus",
 		tracing.WithHistogram(prometheusUpdateTxMinedDuration),
 		tracing.WithTag("txid", block.Hash().String()),
@@ -177,6 +185,8 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		blockInvalidError   error
 		blockInvalidErrorMu = sync.Mutex{}
 		setMinedErrorCount  = atomic.Uint64{}
+		oldBlockIDs         = make([]uint32, 0) // Collect old block IDs for slow-path
+		oldBlockIDsMu       sync.Mutex
 	)
 
 	for subtreeIdx, subtree := range block.SubtreeSlices {
@@ -235,16 +245,27 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 						setMinedErrorCount.Add(1)
 					} else {
 						if !minedBlockInfo.UnsetMined {
-							// check that all blockIDs are not already on our chain
+							// Phase 1 (Fast Path): Check against recent block IDs in memory
+							// Phase 2 (Slow Path): Collect older block IDs for batch blockchain query
 							if len(chainBlockIDsMap) > 0 {
 								for hash, bIDs := range blockIDsMap {
 									for _, bID := range bIDs {
-										if _, exists := chainBlockIDsMap[bID]; exists && bID != blockID {
-											// this transaction is already on our chain, the block is invalid
-											blockInvalidErrorMu.Lock()
-											blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d", block.Hash().String(), hash.String(), bID)
-											blockInvalidErrorMu.Unlock()
+										if bID == blockID {
+											continue // Skip same block being mined
 										}
+
+										// Phase 1: Fast path - check in-memory recent block IDs
+										if _, exists := chainBlockIDsMap[bID]; exists {
+											blockInvalidErrorMu.Lock()
+											blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d (fast path)", block.Hash().String(), hash.String(), bID)
+											blockInvalidErrorMu.Unlock()
+											continue
+										}
+
+										// Phase 2: Slow path - collect old block IDs for batch query
+										oldBlockIDsMu.Lock()
+										oldBlockIDs = append(oldBlockIDs, bID)
+										oldBlockIDsMu.Unlock()
 									}
 								}
 							}
@@ -272,16 +293,27 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 					setMinedErrorCount.Add(1)
 				} else {
 					if !minedBlockInfo.UnsetMined {
-						// check that all blockIDs are not already on our chain
+						// Phase 1 (Fast Path): Check against recent block IDs in memory
+						// Phase 2 (Slow Path): Collect older block IDs for batch blockchain query
 						if len(chainBlockIDsMap) > 0 {
 							for hash, bIDs := range blockIDsMap {
 								for _, bID := range bIDs {
-									if _, exists := chainBlockIDsMap[bID]; exists && bID != blockID {
-										// this transaction is already on our chain, the block is invalid
-										blockInvalidErrorMu.Lock()
-										blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d", block.Hash().String(), hash.String(), bID)
-										blockInvalidErrorMu.Unlock()
+									if bID == blockID {
+										continue // Skip same block being mined
 									}
+
+									// Phase 1: Fast path - check in-memory recent block IDs
+									if _, exists := chainBlockIDsMap[bID]; exists {
+										blockInvalidErrorMu.Lock()
+										blockInvalidError = errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain: %s, blockID %d (fast path)", block.Hash().String(), hash.String(), bID)
+										blockInvalidErrorMu.Unlock()
+										continue
+									}
+
+									// Phase 2: Slow path - collect old block IDs for batch query
+									oldBlockIDsMu.Lock()
+									oldBlockIDs = append(oldBlockIDs, bID)
+									oldBlockIDsMu.Unlock()
 								}
 							}
 						}
@@ -296,6 +328,35 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 
 	if err = g.Wait(); err != nil {
 		return errors.NewProcessingError("[UpdateTxMinedStatus][%s] error updating tx mined status", block.Hash().String(), err)
+	}
+
+	// Phase 2 (Slow Path): Check collected old block IDs via blockchain service
+	if len(oldBlockIDs) > 0 && blockchainClient != nil && !unsetMined {
+		logger.Debugf("[UpdateTxMinedStatus][%s] checking %d old block IDs via blockchain service (slow path)", block.Hash().String(), len(oldBlockIDs))
+
+		// Deduplicate block IDs
+		uniqueOldBlockIDs := make(map[uint32]bool, len(oldBlockIDs))
+		for _, bID := range oldBlockIDs {
+			uniqueOldBlockIDs[bID] = true
+		}
+
+		// Convert to slice
+		oldBlockIDsSlice := make([]uint32, 0, len(uniqueOldBlockIDs))
+		for bID := range uniqueOldBlockIDs {
+			oldBlockIDsSlice = append(oldBlockIDsSlice, bID)
+		}
+
+		// Query blockchain: returns true if ANY block ID is in current chain
+		isInCurrentChain, err := blockchainClient.CheckBlockIsInCurrentChain(ctx, oldBlockIDsSlice)
+		if err != nil {
+			return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to check old block IDs against blockchain: %v (queried %d unique IDs)", block.Hash().String(), err, len(oldBlockIDsSlice))
+		}
+
+		if isInCurrentChain {
+			return errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain (slow path detected, checked %d unique old block IDs)", block.Hash().String(), len(oldBlockIDsSlice))
+		}
+
+		logger.Debugf("[UpdateTxMinedStatus][%s] slow path check passed - %d old block IDs not on current chain", block.Hash().String(), len(oldBlockIDsSlice))
 	}
 
 	// Check if there were any SetMinedMulti errors
