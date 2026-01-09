@@ -260,7 +260,7 @@ main() {
     log_success "Aerospike started with PID: $AEROSPIKE_PID"
 
     # Wait for Aerospike to become ready (increased timeout for ASMT restore)
-    local ready_timeout=300  # 5 minutes to handle large index restores
+    local ready_timeout=900  # 15 minutes to handle large data files and secondary index building
     local ready_count=0
     log_info "Waiting for Aerospike to become ready (max ${ready_timeout}s)..."
 
@@ -276,10 +276,11 @@ main() {
 
         # Test if asinfo command works without causing issues
         local asinfo_result
+        local asinfo_exit
         asinfo_result=$(asinfo -v "status" -p 3000 2>&1)
-        local asinfo_exit=$?
+        asinfo_exit=$?
 
-        if [ $asinfo_exit -eq 0 ] && echo "$asinfo_result" | grep -q "ok"; then
+        if [ $asinfo_exit -eq 0 ] && echo "$asinfo_result" | grep -q "ok" 2>/dev/null; then
             log_success "Aerospike is ready and accepting connections after $((ready_count + 5))s"
 
             # Clean up stale backup after successful warm start
@@ -298,7 +299,7 @@ main() {
         fi
 
         sleep 1
-        ((ready_count++))
+        ready_count=$((ready_count + 1))
     done
 
     if [ $ready_count -ge $ready_timeout ]; then

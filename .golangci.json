@@ -31,13 +31,7 @@
     ],
     "disable": [
       "wsl_v5",
-      "whitespace",
-      "unused",
-      "unconvert",
-      "staticcheck",
-      "gocognit",
-      "goconst",
-      "gocritic"
+      "unused"
     ],
     "exclusions": {
       "generated": "lax",
