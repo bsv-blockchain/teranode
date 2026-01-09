@@ -3106,7 +3106,7 @@ func TestMoveForwardBlock_BlockHeaderValidation(t *testing.T) {
 		}
 
 		// moveForwardBlock should fail with parent mismatch
-		_, err := stp.moveForwardBlock(context.Background(), invalidBlock, false, map[chainhash.Hash]bool{}, false, true)
+		_, _, err := stp.moveForwardBlock(context.Background(), invalidBlock, false, map[chainhash.Hash]bool{}, false, true)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "does not match the current block header")
 	})

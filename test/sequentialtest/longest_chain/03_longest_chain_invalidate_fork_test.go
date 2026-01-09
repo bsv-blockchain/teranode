@@ -22,7 +22,6 @@ func TestLongestChainAerospikeInvalidateFork(t *testing.T) {
 	})
 }
 
-
 func testLongestChainInvalidateFork(t *testing.T, utxoStore string) {
 	// Setup test environment
 	td, block3 := setupLongestChainTest(t, utxoStore)
@@ -35,14 +34,14 @@ func testLongestChainInvalidateFork(t *testing.T, utxoStore string) {
 	block1, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 1)
 	require.NoError(t, err)
 
-	parentTxWith3Outputs := td.CreateTransactionWithOptions(t, transactions.WithInput(block1.CoinbaseTx, 0), transactions.WithP2PKHOutputs(3, 100000) )
+	parentTxWith3Outputs := td.CreateTransactionWithOptions(t, transactions.WithInput(block1.CoinbaseTx, 0), transactions.WithP2PKHOutputs(3, 100000))
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parentTxWith3Outputs))
 
-	childTx1 := td.CreateTransactionWithOptions(t, transactions.WithInput(parentTxWith3Outputs, 0), transactions.WithP2PKHOutputs(1, 100000) )
-	childTx2 := td.CreateTransactionWithOptions(t, transactions.WithInput(parentTxWith3Outputs, 1), transactions.WithP2PKHOutputs(1, 100000) )
-	childTx3 := td.CreateTransactionWithOptions(t, transactions.WithInput(parentTxWith3Outputs, 2), transactions.WithP2PKHOutputs(1, 100000) )
+	childTx1 := td.CreateTransactionWithOptions(t, transactions.WithInput(parentTxWith3Outputs, 0), transactions.WithP2PKHOutputs(1, 100000))
+	childTx2 := td.CreateTransactionWithOptions(t, transactions.WithInput(parentTxWith3Outputs, 1), transactions.WithP2PKHOutputs(1, 100000))
+	childTx3 := td.CreateTransactionWithOptions(t, transactions.WithInput(parentTxWith3Outputs, 2), transactions.WithP2PKHOutputs(1, 100000))
 	// create a double spend of tx3
-	childTx3DS := td.CreateTransactionWithOptions(t, transactions.WithInput(parentTxWith3Outputs, 2), transactions.WithP2PKHOutputs(2, 50000) )
+	childTx3DS := td.CreateTransactionWithOptions(t, transactions.WithInput(parentTxWith3Outputs, 2), transactions.WithP2PKHOutputs(2, 50000))
 
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, childTx1))
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, childTx2))
@@ -53,10 +52,9 @@ func testLongestChainInvalidateFork(t *testing.T, utxoStore string) {
 	td.WaitForBlockBeingMined(t, block4a)
 	t.Logf("WaitForBlock(t, block4a, blockWait): %s", block4a.Hash().String())
 	td.WaitForBlock(t, block4a, blockWait)
-	
 
 	// 0 -> 1 ... 2 -> 3 -> 4a (*)
-	
+
 	td.VerifyNotInBlockAssembly(t, parentTxWith3Outputs)
 	td.VerifyNotInBlockAssembly(t, childTx1)
 	td.VerifyNotInBlockAssembly(t, childTx2)
@@ -116,7 +114,7 @@ func testLongestChainInvalidateFork(t *testing.T, utxoStore string) {
 	td.VerifyOnLongestChainInUtxoStore(t, childTx1)
 	td.VerifyOnLongestChainInUtxoStore(t, childTx2)
 	td.VerifyNotOnLongestChainInUtxoStore(t, childTx3)
-	td.VerifyOnLongestChainInUtxoStore(t, childTx3DS)// 0 -> 1 ... 2 -> 3 -> 4a -> 6a (*)
+	td.VerifyOnLongestChainInUtxoStore(t, childTx3DS) // 0 -> 1 ... 2 -> 3 -> 4a -> 6a (*)
 
 	_, err = td.BlockchainClient.InvalidateBlock(t.Context(), block4b.Hash())
 	require.NoError(t, err)
@@ -128,7 +126,7 @@ func testLongestChainInvalidateFork(t *testing.T, utxoStore string) {
 	td.WaitForBlockBeingMined(t, block6a)
 	t.Logf("WaitForBlock(t, block6a, blockWait): %s", block6a.Hash().String())
 	td.WaitForBlock(t, block6a, blockWait)
-	
+
 	t.Logf("FINAL VERIFICATIONS:")
 	td.VerifyNotInBlockAssembly(t, childTx1)
 	td.VerifyNotInBlockAssembly(t, childTx2)
