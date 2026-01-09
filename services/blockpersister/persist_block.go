@@ -91,7 +91,8 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	if len(block.Subtrees) == 0 {
 		// No subtrees to process, just write the coinbase UTXO to the diff and continue
-		if utxoDiff != nil {
+		// If starting from a seed, blocks may not contain a CoinbaseTx; if so skip
+		if utxoDiff != nil && block.CoinbaseTx != nil {
 			if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
 				return errors.NewProcessingError("[persistBlock][%s] error processing coinbase tx", block.String(), err)
 			}
