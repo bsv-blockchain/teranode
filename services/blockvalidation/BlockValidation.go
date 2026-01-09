@@ -17,7 +17,6 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
-	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -918,7 +917,7 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		u.utxoStore,
 		block,
 		ids[0],
-		ids[0:],           // recent ancestor block IDs - older blocks checked via blockchain client
+		ids[0:], // recent ancestor block IDs - older blocks checked via blockchain client
 		onLongestChain,
 		u.blockchainClient, // blockchain client for slow-path checks of older block IDs
 		unsetMined...,
