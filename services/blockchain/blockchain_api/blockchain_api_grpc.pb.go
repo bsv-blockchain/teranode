@@ -61,6 +61,7 @@ const (
 	BlockchainAPI_SetState_FullMethodName                             = "/blockchain_api.BlockchainAPI/SetState"
 	BlockchainAPI_GetBlockIsMined_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockIsMined"
 	BlockchainAPI_SetBlockMinedSet_FullMethodName                     = "/blockchain_api.BlockchainAPI/SetBlockMinedSet"
+	BlockchainAPI_ClearBlockMinedSet_FullMethodName                   = "/blockchain_api.BlockchainAPI/ClearBlockMinedSet"
 	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
 	BlockchainAPI_SetBlockSubtreesSet_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
 	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
@@ -164,6 +165,8 @@ type BlockchainAPIClient interface {
 	GetBlockIsMined(ctx context.Context, in *GetBlockIsMinedRequest, opts ...grpc.CallOption) (*GetBlockIsMinedResponse, error)
 	// SetBlockMinedSet marks a block as mined.
 	SetBlockMinedSet(ctx context.Context, in *SetBlockMinedSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// ClearBlockMinedSet resets the mined_set flag to false for a block.
+	ClearBlockMinedSet(ctx context.Context, in *ClearBlockMinedSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// GetBlocksMinedNotSet retrieves blocks not marked as mined.
 	GetBlocksMinedNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksMinedNotSetResponse, error)
 	// SetBlockSubtreesSet marks a block's subtrees as set.
@@ -599,6 +602,16 @@ func (c *blockchainAPIClient) SetBlockMinedSet(ctx context.Context, in *SetBlock
 	return out, nil
 }
 
+func (c *blockchainAPIClient) ClearBlockMinedSet(ctx context.Context, in *ClearBlockMinedSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_ClearBlockMinedSet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockchainAPIClient) GetBlocksMinedNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksMinedNotSetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlocksMinedNotSetResponse)
@@ -862,6 +875,8 @@ type BlockchainAPIServer interface {
 	GetBlockIsMined(context.Context, *GetBlockIsMinedRequest) (*GetBlockIsMinedResponse, error)
 	// SetBlockMinedSet marks a block as mined.
 	SetBlockMinedSet(context.Context, *SetBlockMinedSetRequest) (*emptypb.Empty, error)
+	// ClearBlockMinedSet resets the mined_set flag to false for a block.
+	ClearBlockMinedSet(context.Context, *ClearBlockMinedSetRequest) (*emptypb.Empty, error)
 	// GetBlocksMinedNotSet retrieves blocks not marked as mined.
 	GetBlocksMinedNotSet(context.Context, *emptypb.Empty) (*GetBlocksMinedNotSetResponse, error)
 	// SetBlockSubtreesSet marks a block's subtrees as set.
@@ -1021,6 +1036,9 @@ func (UnimplementedBlockchainAPIServer) GetBlockIsMined(context.Context, *GetBlo
 }
 func (UnimplementedBlockchainAPIServer) SetBlockMinedSet(context.Context, *SetBlockMinedSetRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetBlockMinedSet not implemented")
+}
+func (UnimplementedBlockchainAPIServer) ClearBlockMinedSet(context.Context, *ClearBlockMinedSetRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearBlockMinedSet not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlocksMinedNotSet(context.Context, *emptypb.Empty) (*GetBlocksMinedNotSetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlocksMinedNotSet not implemented")
@@ -1774,6 +1792,24 @@ func _BlockchainAPI_SetBlockMinedSet_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_ClearBlockMinedSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearBlockMinedSetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).ClearBlockMinedSet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_ClearBlockMinedSet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).ClearBlockMinedSet(ctx, req.(*ClearBlockMinedSetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockchainAPI_GetBlocksMinedNotSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -2252,6 +2288,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetBlockMinedSet",
 			Handler:    _BlockchainAPI_SetBlockMinedSet_Handler,
+		},
+		{
+			MethodName: "ClearBlockMinedSet",
+			Handler:    _BlockchainAPI_ClearBlockMinedSet_Handler,
 		},
 		{
 			MethodName: "GetBlocksMinedNotSet",

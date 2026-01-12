@@ -3,7 +3,9 @@ package blockpersister
 import (
 	"context"
 	"encoding/hex"
+	"io"
 	"net/http"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -15,9 +17,15 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
@@ -465,9 +473,939 @@ type MockBlockchainClient struct {
 	getBestBlockHeaderCalls     int
 	getBlockByHeightCalls       int
 	waitUntilFSMTransitionCalls int
+	getBlocksNotPersistedCalls  int
 
 	// Expected calls for verification
 	expectedGetBlockByHeightHeight uint32
+
+	// Blocks to return from GetBlocksNotPersisted
+	blocksNotPersisted []*model.Block
+}
+
+func NewMockBlockchainClient() *MockBlockchainClient {
+	// Create default best block header
+	hash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+
+	return &MockBlockchainClient{
+		fsmState: blockchain.FSMStateIDLE,
+		bestBlockHeader: &model.BlockHeader{
+			HashMerkleRoot: hash,
+		},
+		bestBlockHeaderMeta: &model.BlockHeaderMeta{
+			Height: 100,
+		},
+		blocks:        make(map[uint32]*model.Block),
+		healthStatus:  http.StatusOK,
+		healthMessage: "OK",
+	}
+}
+
+// SetFSMState sets the current FSM state
+func (m *MockBlockchainClient) SetFSMState(state blockchain.FSMStateType) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fsmState = state
+}
+
+// SetBestBlockHeight sets the height of the best block
+func (m *MockBlockchainClient) SetBestBlockHeight(height uint32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.bestBlockHeaderMeta.Height = height
+}
+
+// SetBlock adds a block at the specified height
+func (m *MockBlockchainClient) SetBlock(height uint32, block *model.Block) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.blocks[height] = block
+}
+
+// SetHealthError sets an error to return from Health calls
+func (m *MockBlockchainClient) SetHealthError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.healthErr = err
+}
+
+// SetGetBestBlockHeaderError sets an error to return from GetBestBlockHeader calls
+func (m *MockBlockchainClient) SetGetBestBlockHeaderError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getBestBlockHeaderErr = err
+}
+
+// SetGetBlockByHeightError sets an error to return from GetBlockByHeight calls
+func (m *MockBlockchainClient) SetGetBlockByHeightError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getBlockByHeightErr = err
+}
+
+// SetFSMTransitionFromIdleError sets an error to return from WaitUntilFSMTransitionFromIdleState
+func (m *MockBlockchainClient) SetFSMTransitionFromIdleError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fsmTransitionFromIdleErr = err
+}
+
+// SetFSMTransitionWaitTime sets how long FSM transition should wait before succeeding
+func (m *MockBlockchainClient) SetFSMTransitionWaitTime(duration time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fsmTransitionWaitTime = duration
+}
+
+// GetCallCounts returns the number of times methods were called
+func (m *MockBlockchainClient) GetCallCounts() (health, bestHeader, blockByHeight, fsmTransition, getBlocksNotPersisted int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.healthCalls, m.getBestBlockHeaderCalls, m.getBlockByHeightCalls, m.waitUntilFSMTransitionCalls, m.getBlocksNotPersistedCalls
+}
+
+// Health implements blockchain.ClientI
+func (m *MockBlockchainClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.healthCalls++
+
+	if m.healthErr != nil {
+		return http.StatusServiceUnavailable, "error", m.healthErr
+	}
+
+	return m.healthStatus, m.healthMessage, nil
+}
+
+// GetBestBlockHeader implements blockchain.ClientI
+func (m *MockBlockchainClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getBestBlockHeaderCalls++
+
+	if m.getBestBlockHeaderErr != nil {
+		return nil, nil, m.getBestBlockHeaderErr
+	}
+
+	return m.bestBlockHeader, m.bestBlockHeaderMeta, nil
+}
+
+// GetBlockByHeight implements blockchain.ClientI
+func (m *MockBlockchainClient) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getBlockByHeightCalls++
+	m.expectedGetBlockByHeightHeight = height
+
+	if m.getBlockByHeightErr != nil {
+		return nil, m.getBlockByHeightErr
+	}
+
+	if block, exists := m.blocks[height]; exists {
+		return block, nil
+	}
+
+	return nil, errors.NewError("block not found at height %d", height)
+}
+
+// WaitUntilFSMTransitionFromIdleState implements blockchain.ClientI
+func (m *MockBlockchainClient) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitUntilFSMTransitionCalls++
+
+	if m.fsmTransitionFromIdleErr != nil {
+		return m.fsmTransitionFromIdleErr
+	}
+
+	// Simulate the wait time
+	if m.fsmTransitionWaitTime > 0 {
+		select {
+		case <-time.After(m.fsmTransitionWaitTime):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	// Transition from IDLE to RUNNING after wait completes
+	if m.fsmState == blockchain.FSMStateIDLE {
+		m.fsmState = blockchain.FSMStateRUNNING
+	}
+
+	return nil
+}
+
+// Mock implementations for all other required methods (minimal implementations)
+func (m *MockBlockchainClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error {
+	return nil
+}
+func (m *MockBlockchainClient) GetNextBlockID(ctx context.Context) (uint64, error) { return 0, nil }
+func (m *MockBlockchainClient) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
+	return nil
+}
+func (m *MockBlockchainClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Return a basic block with ID matching the hash
+	// This is a simple implementation for testing purposes
+	return &model.Block{
+		ID:     100, // Default ID
+		Height: 100,
+		Header: &model.BlockHeader{
+			HashPrevBlock: blockHash,
+		},
+	}, nil
+}
+func (m *MockBlockchainClient) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash, currentBlockTime int64) (*model.NBit, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	return false, nil
+}
+func (m *MockBlockchainClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
+func (m *MockBlockchainClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
+func (m *MockBlockchainClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
+func (m *MockBlockchainClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
+func (m *MockBlockchainClient) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
+func (m *MockBlockchainClient) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
+func (m *MockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
+func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
+func (m *MockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
+func (m *MockBlockchainClient) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	return nil
+}
+func (m *MockBlockchainClient) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetState(ctx context.Context, key string) ([]byte, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) SetState(ctx context.Context, key string, data []byte) error {
+	return nil
+}
+func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	return nil
+}
+func (m *MockBlockchainClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	return nil
+}
+func (m *MockBlockchainClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+	return false, nil
+}
+func (m *MockBlockchainClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	return nil
+}
+func (m *MockBlockchainClient) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
+	return nil
+}
+func (m *MockBlockchainClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
+	return 0, 0, nil
+}
+func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	// Default to true - blocks are on the current chain unless specifically testing reorg scenarios
+	return true, nil
+}
+func (m *MockBlockchainClient) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) GetFSMCurrentState(ctx context.Context) (*blockchain.FSMStateType, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return &m.fsmState, nil
+}
+func (m *MockBlockchainClient) IsFSMCurrentState(ctx context.Context, state blockchain.FSMStateType) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.fsmState == state, nil
+}
+func (m *MockBlockchainClient) WaitForFSMtoTransitionToGivenState(context.Context, blockchain.FSMStateType) error {
+	return nil
+}
+func (m *MockBlockchainClient) GetFSMCurrentStateForE2ETestMode() blockchain.FSMStateType {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.fsmState
+}
+func (m *MockBlockchainClient) IsFullyReady(ctx context.Context) (bool, error) { return true, nil }
+func (m *MockBlockchainClient) Run(ctx context.Context, source string) error   { return nil }
+func (m *MockBlockchainClient) CatchUpBlocks(ctx context.Context) error        { return nil }
+func (m *MockBlockchainClient) LegacySync(ctx context.Context) error           { return nil }
+func (m *MockBlockchainClient) Idle(ctx context.Context) error                 { return nil }
+func (m *MockBlockchainClient) SendFSMEvent(ctx context.Context, event blockchain.FSMEventType) error {
+	return nil
+}
+func (m *MockBlockchainClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
+	return nil, nil
+}
+func (m *MockBlockchainClient) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error {
+	return nil
+}
+func (m *MockBlockchainClient) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getBlocksNotPersistedCalls++
+
+	if len(m.blocksNotPersisted) == 0 {
+		return []*model.Block{}, nil
+	}
+
+	// Return up to 'limit' blocks
+	if limit > len(m.blocksNotPersisted) {
+		limit = len(m.blocksNotPersisted)
+	}
+
+	result := make([]*model.Block, limit)
+	copy(result, m.blocksNotPersisted[:limit])
+	return result, nil
+}
+func (m *MockBlockchainClient) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	return nil
+}
+
+// MockStore implements basic store interfaces for testing
+type MockBlobStore struct {
+	data      map[string][]byte
+	healthErr error
+}
+
+func NewMockBlobStore() *MockBlobStore {
+	return &MockBlobStore{
+		data: make(map[string][]byte),
+	}
+}
+
+func (m *MockBlobStore) SetHealthError(err error) {
+	m.healthErr = err
+}
+
+func (m *MockBlobStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if m.healthErr != nil {
+		return http.StatusServiceUnavailable, "error", m.healthErr
+	}
+	return http.StatusOK, "OK", nil
+}
+
+func (m *MockBlobStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, data []byte, opts ...bloboptions.FileOption) error {
+	m.data[string(key)] = data
+	return nil
+}
+
+func (m *MockBlobStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) ([]byte, error) {
+	if data, exists := m.data[string(key)]; exists {
+		return data, nil
+	}
+	return nil, errors.NewError("key not found")
+}
+
+func (m *MockBlobStore) Delete(ctx context.Context, key []byte) error { return nil }
+func (m *MockBlobStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) error {
+	return nil
+}
+func (m *MockBlobStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (bool, error) {
+	return false, nil
+}
+func (m *MockBlobStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (io.ReadCloser, error) {
+	return nil, nil
+}
+func (m *MockBlobStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...bloboptions.FileOption) error {
+	return nil
+}
+func (m *MockBlobStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...bloboptions.FileOption) error {
+	return nil
+}
+func (m *MockBlobStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (uint32, error) {
+	return 0, nil
+}
+func (m *MockBlobStore) GetPartial(ctx context.Context, key []byte, fileType fileformat.FileType, offset, length int64, opts ...bloboptions.FileOption) ([]byte, error) {
+	return nil, nil
+}
+func (m *MockBlobStore) GetRange(ctx context.Context, key []byte, fileType fileformat.FileType, offset, length int64, opts ...bloboptions.FileOption) (io.ReadCloser, error) {
+	return nil, nil
+}
+func (m *MockBlobStore) GetSize(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (int64, error) {
+	return 0, nil
+}
+func (m *MockBlobStore) Close(ctx context.Context) error     { return nil }
+func (m *MockBlobStore) SetCurrentBlockHeight(height uint32) {}
+
+// MockUTXOStore implements basic UTXO store interface for testing
+type MockUTXOStore struct {
+	healthErr error
+}
+
+func NewMockUTXOStore() *MockUTXOStore {
+	return &MockUTXOStore{}
+}
+
+func (m *MockUTXOStore) SetHealthError(err error) {
+	m.healthErr = err
+}
+
+func (m *MockUTXOStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
+	if m.healthErr != nil {
+		return http.StatusServiceUnavailable, "error", m.healthErr
+	}
+	return http.StatusOK, "OK", nil
+}
+
+// Required interface methods for utxo.Store
+func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error { return nil }
+func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
+	return nil
+}
+func (m *MockUTXOStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) { return nil, nil }
+func (m *MockUTXOStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+	return nil
+}
+func (m *MockUTXOStore) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
+	return nil
+}
+func (m *MockUTXOStore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
+	return nil
+}
+func (m *MockUTXOStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error { return nil }
+func (m *MockUTXOStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
+	return nil
+}
+func (m *MockUTXOStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
+	return nil
+}
+func (m *MockUTXOStore) ReAssignUTXO(ctx context.Context, utxoSpend *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
+	return nil
+}
+func (m *MockUTXOStore) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	return nil, nil, nil
+}
+func (m *MockUTXOStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
+	return nil
+}
+func (m *MockUTXOStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
+	return nil
+}
+func (m *MockUTXOStore) SetBlockHeight(height uint32) error     { return nil }
+func (m *MockUTXOStore) GetBlockHeight() uint32                 { return 0 }
+func (m *MockUTXOStore) SetMedianBlockTime(height uint32) error { return nil }
+func (m *MockUTXOStore) GetMedianBlockTime() uint32             { return 0 }
+
+func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     m.GetBlockHeight(),
+		MedianTime: m.GetMedianBlockTime(),
+	}
+}
+
+// Comprehensive tests for Start method
+
+// TestStart_FSMTransitionError tests error handling when FSM transition fails
+func TestStart_FSMTransitionError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// StateFile no longer used
+
+	// Create mock blockchain client with FSM transition error
+	mockClient := NewMockBlockchainClient()
+	mockClient.SetFSMTransitionFromIdleError(errors.NewError("FSM transition failed"))
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+
+	// Channel to signal when ready
+	readyCh := make(chan struct{})
+
+	// Start server
+	err := server.Start(ctx, readyCh)
+
+	// Should return the FSM transition error
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "FSM transition failed")
+
+	// Ready channel should be closed even on error
+	select {
+	case <-readyCh:
+		// Expected - channel should be closed
+	default:
+		t.Fatal("Ready channel should be closed on error")
+	}
+}
+
+// TestStart_HTTPServerSetup tests HTTP server setup when configured
+func TestStart_HTTPServerSetup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// StateFile no longer used
+
+	// Set HTTP listen address to trigger HTTP server setup
+	tSettings.BlockPersister.HTTPListenAddress = "127.0.0.1:0"
+	// Use a simple memory store URL for HTTP server
+	memoryURL, err := url.Parse("memory://")
+	require.NoError(t, err)
+	tSettings.Block.BlockStore = memoryURL
+
+	// Create mock blockchain client
+	mockClient := NewMockBlockchainClient()
+	mockClient.SetFSMState(blockchain.FSMStateIDLE)
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+
+	// Channel to signal when ready
+	readyCh := make(chan struct{})
+
+	// Channel to receive the start error
+	startErrCh := make(chan error, 1)
+
+	// Start server in goroutine
+	go func() {
+		err := server.Start(ctx, readyCh)
+		startErrCh <- err
+	}()
+
+	// Wait for ready signal or timeout
+	select {
+	case <-readyCh:
+		// Server started successfully
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Timeout waiting for server to be ready")
+	}
+
+	// Cancel context to stop server
+	cancel()
+
+	// Wait for server to complete and get the error
+	var startErr error
+	select {
+	case startErr = <-startErrCh:
+		// Server completed
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Timeout waiting for server to complete")
+	}
+
+	// Should succeed even with HTTP server
+	assert.NoError(t, startErr)
+}
+
+// TestStart_HTTPServerConfigurationError tests error handling when block store is not configured
+func TestStart_HTTPServerConfigurationError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// StateFile no longer used
+
+	// Set HTTP listen address but no block store URL
+	tSettings.BlockPersister.HTTPListenAddress = "127.0.0.1:0"
+	tSettings.Block.BlockStore = nil // This will cause configuration error
+
+	// Create mock blockchain client
+	mockClient := NewMockBlockchainClient()
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+
+	// Channel to signal when ready
+	readyCh := make(chan struct{})
+
+	// Start server
+	err := server.Start(ctx, readyCh)
+
+	// Should return configuration error
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "blockstore setting error")
+
+	// Ready channel should be closed even on error
+	select {
+	case <-readyCh:
+		// Expected - channel should be closed
+	default:
+		t.Fatal("Ready channel should be closed on error")
+	}
+}
+
+// TestStart_BlockProcessingLoop tests the main block processing loop
+func TestStart_BlockProcessingLoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Set short sleep time for testing
+	tSettings.BlockPersister.PersistSleep = 10 * time.Millisecond
+	// PersistAge no longer used
+
+	// StateFile no longer used
+
+	// Don't set HTTP listen address
+	tSettings.BlockPersister.HTTPListenAddress = ""
+
+	// Create mock blockchain client
+	mockClient := NewMockBlockchainClient()
+	mockClient.SetFSMState(blockchain.FSMStateIDLE)
+	mockClient.SetBestBlockHeight(20) // Set tip high enough to process blocks
+
+	// Create a test block to be processed
+	testHash, _ := chainhash.NewHashFromStr(txIds[0])
+	prevHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
+	testBlockHeader := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  prevHash,
+		HashMerkleRoot: testHash,
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
+	testBlock, err := model.NewBlock(testBlockHeader, coinbaseTx, nil, 0, 0, 1, 0)
+	require.NoError(t, err)
+	mockClient.SetBlock(1, testBlock)
+
+	// Create mock stores
+	mockBlockStore := NewMockBlobStore()
+	mockSubtreeStore := NewMockBlobStore()
+	mockUTXOStore := NewMockUTXOStore()
+
+	server := New(ctx, logger, tSettings, mockBlockStore, mockSubtreeStore, mockUTXOStore, mockClient)
+
+	// Set initial state to height 0 (so next block is 1)
+	// Don't set any initial state - height will be 0 by default
+
+	// Channel to signal when ready
+	readyCh := make(chan struct{})
+
+	// Start server in goroutine
+	go func() {
+		_ = server.Start(ctx, readyCh)
+	}()
+
+	// Wait for ready signal
+	select {
+	case <-readyCh:
+		// Server started successfully
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Timeout waiting for server to be ready")
+	}
+
+	// Give the processing loop time to run a few iterations
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel context to stop server
+	cancel()
+
+	// Wait for server to stop
+	time.Sleep(20 * time.Millisecond)
+
+	// Verify that blockchain client methods were called
+	_, _, _, fsmTransitionCalls, getBlocksNotPersistedCalls := mockClient.GetCallCounts()
+	assert.Equal(t, 1, fsmTransitionCalls)
+	assert.GreaterOrEqual(t, getBlocksNotPersistedCalls, 1) // Should have been called at least once
+}
+
+// TestStart_BlockProcessingNoBlocks tests processing loop when no blocks need processing
+func TestStart_BlockProcessingNoBlocks(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Set short sleep time for testing
+	tSettings.BlockPersister.PersistSleep = 5 * time.Millisecond
+	// PersistAge no longer used
+
+	// StateFile no longer used
+
+	// Don't set HTTP listen address
+	tSettings.BlockPersister.HTTPListenAddress = ""
+
+	// Create mock blockchain client
+	mockClient := NewMockBlockchainClient()
+	mockClient.SetBestBlockHeight(20) // Set tip but not high enough to process
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+
+	// Channel to signal when ready
+	readyCh := make(chan struct{})
+
+	// Start server in goroutine
+	go func() {
+		_ = server.Start(ctx, readyCh)
+	}()
+
+	// Wait for ready signal
+	select {
+	case <-readyCh:
+		// Server started successfully
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Timeout waiting for server to be ready")
+	}
+
+	// Give the processing loop time to run a few iterations
+	time.Sleep(30 * time.Millisecond)
+
+	// Cancel context to stop server
+	cancel()
+
+	// Wait for server to stop
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify that blockchain client was called
+	_, _, _, _, getBlocksNotPersistedCalls := mockClient.GetCallCounts()
+	assert.GreaterOrEqual(t, getBlocksNotPersistedCalls, 1) // Should have been called
+}
+
+// TestStart_ContextCancellation tests proper context cancellation handling
+func TestStart_ContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// StateFile no longer used
+
+	// Don't set HTTP listen address
+	tSettings.BlockPersister.HTTPListenAddress = ""
+
+	// Create mock blockchain client that takes some time to transition
+	mockClient := NewMockBlockchainClient()
+	mockClient.SetFSMTransitionWaitTime(50 * time.Millisecond)
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+
+	// Channel to signal when ready
+	readyCh := make(chan struct{})
+
+	// Channel to receive the start error
+	startErrCh := make(chan error, 1)
+
+	// Start server in goroutine
+	go func() {
+		err := server.Start(ctx, readyCh)
+		startErrCh <- err
+	}()
+
+	// Cancel context immediately
+	cancel()
+
+	// Wait for operation to complete
+	select {
+	case <-readyCh:
+		// Ready channel should be closed
+	case <-time.After(200 * time.Millisecond):
+		// Timeout is acceptable for cancellation test
+	}
+
+	// Wait for server to complete and get the error
+	var startErr error
+	select {
+	case startErr = <-startErrCh:
+		// Server completed
+	case <-time.After(200 * time.Millisecond):
+		// Timeout is acceptable for cancellation test - server might not complete due to cancellation
+	}
+
+	// Error should be context cancellation or nil
+	if startErr != nil {
+		assert.Contains(t, startErr.Error(), "context canceled")
+	}
+}
+
+// TestStart_ConcurrentReadyChannelClose tests that ready channel is closed exactly once
+func TestStart_ConcurrentReadyChannelClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// StateFile no longer used
+
+	// Don't set HTTP listen address
+	tSettings.BlockPersister.HTTPListenAddress = ""
+
+	// Create mock blockchain client
+	mockClient := NewMockBlockchainClient()
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+
+	// Channel to signal when ready
+	readyCh := make(chan struct{})
+
+	// Start server in goroutine
+	go func() {
+		_ = server.Start(ctx, readyCh)
+	}()
+
+	// Wait for ready signal
+	select {
+	case <-readyCh:
+		// Server started successfully
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Timeout waiting for server to be ready")
+	}
+
+	// Try to read from channel again - should not block (channel should be closed)
+	select {
+	case <-readyCh:
+		// Expected - closed channel allows immediate read
+	case <-time.After(10 * time.Millisecond):
+		t.Fatal("Ready channel should be closed and allow immediate read")
+	}
+
+	// Cancel to clean up
+	cancel()
+	time.Sleep(10 * time.Millisecond)
+}
+
+// TestStart_ProcessingLoopErrorHandling tests error handling in processing loop
+func TestStart_ProcessingLoopErrorHandling(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	// Set short sleep time for testing
+	tSettings.BlockPersister.PersistSleep = 5 * time.Millisecond
+	// PersistAge no longer used
+
+	// StateFile no longer used
+
+	// Don't set HTTP listen address
+	tSettings.BlockPersister.HTTPListenAddress = ""
+
+	// Create mock blockchain client that will return errors
+	mockClient := NewMockBlockchainClient()
+	mockClient.SetBestBlockHeight(100) // High enough to trigger processing
+	mockClient.SetGetBestBlockHeaderError(errors.NewProcessingError("blockchain error"))
+
+	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
+
+	// Channel to signal when ready
+	readyCh := make(chan struct{})
+
+	// Start server in goroutine
+	go func() {
+		_ = server.Start(ctx, readyCh)
+	}()
+
+	// Wait for ready signal
+	select {
+	case <-readyCh:
+		// Server started successfully
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Timeout waiting for server to be ready")
+	}
+
+	// Give the processing loop time to encounter errors and retry
+	time.Sleep(30 * time.Millisecond)
+
+	// Cancel context to stop server
+	cancel()
+
+	// Wait for server to stop
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify that blockchain client was called multiple times (retries)
+	_, _, _, _, getBlocksNotPersistedCalls := mockClient.GetCallCounts()
+	assert.GreaterOrEqual(t, getBlocksNotPersistedCalls, 1)
+
+	// The processing loop should handle errors and continue running until context is cancelled
 }
 
 // Enhanced Health method tests for 100% coverage

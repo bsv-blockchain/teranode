@@ -583,6 +583,21 @@ type ClientI interface {
 	// - Error if the operation fails, nil on success
 	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
 
+	// ClearBlockMinedSet resets the mined_set flag to false for a block.
+	//
+	// This method resets a block's mined_set flag, triggering background job processing
+	// to re-evaluate and update transaction states. Used during fork handling when blocks
+	// move from the main chain to a side chain, ensuring transactions are correctly marked
+	// as unmined and allowing the background job to re-process them based on current chain state.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - blockHash: Hash of the block to reset
+	//
+	// Returns:
+	// - Error if the operation fails, nil on success
+	ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+
 	// GetBlockIsMined retrieves whether a block has been marked as mined
 	//
 	// This method checks if a specific block has been flagged as successfully mined

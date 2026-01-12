@@ -301,6 +301,15 @@ type Store interface {
 	// Returns: Any error encountered
 	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
 
+	// ClearBlockMinedSet resets the mined_set flag to false for a block,
+	// triggering background job processing to update transaction states.
+	// Used during fork handling to re-process transactions on orphaned chains.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - blockHash: Hash of the block to reset
+	// Returns: Any error encountered
+	ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+
 	// GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 	// Parameters:
 	//   - ctx: Context for the operation

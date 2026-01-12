@@ -1364,6 +1364,17 @@ func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash
 	return nil
 }
 
+func (c *Client) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.ClearBlockMinedSet(ctx, &blockchain_api.ClearBlockMinedSetRequest{
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
 // GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 // This method identifies and returns blocks that have been processed and stored
 // but have not yet completed the mining pipeline and been marked as mined.

@@ -2,25 +2,90 @@ package pruner
 
 import (
 	"context"
+	"fmt"
 	"time"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/util/retry"
 )
 
 // checkBlockAssemblySafeForPruner verifies that block assembly is in "running" state
 // and safe to proceed with pruner operations. Returns true if safe, false otherwise.
+// This function will retry checking the block assembly state until the configured
+// timeout is reached, allowing for temporary state transitions (e.g., brief reorgs).
 func (s *Server) checkBlockAssemblySafeForPruner(ctx context.Context, phase string, height uint32) bool {
-	state, err := s.blockAssemblyClient.GetBlockAssemblyState(ctx)
+	// Create a context with timeout based on settings
+	timeoutCtx, cancel := context.WithTimeout(ctx, s.settings.Pruner.BlockAssemblyWaitTimeout)
+	defer cancel()
+
+	// Use retry logic to wait for Block Assembly to be in "running" state
+	_, err := retry.Retry(timeoutCtx, s.logger, func() (bool, error) {
+		state, err := s.blockAssemblyClient.GetBlockAssemblyState(timeoutCtx)
+		if err != nil {
+			return false, errors.NewProcessingError("failed to get block assembly state", err)
+		}
+
+		if state.BlockAssemblyState != "running" {
+			return false, errors.NewProcessingError("block assembly state is %s (not running)", state.BlockAssemblyState)
+		}
+
+		// State is "running", success!
+		return true, nil
+	},
+		retry.WithBackoffDurationType(1*time.Second),
+		retry.WithBackoffMultiplier(2),
+		retry.WithRetryCount(1000), // High count - timeout context will stop retries after BlockAssemblyWaitTimeout
+		retry.WithMessage(fmt.Sprintf("[Pruner] Waiting for block assembly to be ready for %s at height %d", phase, height)),
+	)
+
 	if err != nil {
-		s.logger.Errorf("Failed to get block assembly state before %s: %v", phase, err)
-		prunerErrors.WithLabelValues("state_check").Inc()
+		// Timeout or persistent error - log and skip pruning
+		s.logger.Warnf("Skipping %s for height %d: block assembly wait timeout or error: %v", phase, height, err)
+		prunerSkipped.WithLabelValues("block_assembly_timeout").Inc()
 		return false
 	}
 
-	if state.BlockAssemblyState != "running" {
-		s.logger.Infof("Skipping %s for height %d: block assembly state is %s (not running)", phase, height, state.BlockAssemblyState)
-		prunerSkipped.WithLabelValues("not_running").Inc()
+	// Block Assembly is ready
+	return true
+}
+
+// waitForBlockMinedStatus waits for the block to have mined_set=true, indicating that
+// block validation has completed. Returns true if mined, false otherwise.
+// This function will retry checking the mined status until the configured timeout is reached,
+// allowing time for block validation to complete.
+func (s *Server) waitForBlockMinedStatus(ctx context.Context, blockHash *chainhash.Hash) bool {
+	// Create a context with timeout based on settings
+	timeoutCtx, cancel := context.WithTimeout(ctx, s.settings.Pruner.BlockAssemblyWaitTimeout)
+	defer cancel()
+
+	// Use retry logic to wait for block to have mined_set=true
+	_, err := retry.Retry(timeoutCtx, s.logger, func() (bool, error) {
+		isMined, err := s.blockchainClient.GetBlockIsMined(timeoutCtx, blockHash)
+		if err != nil {
+			return false, errors.NewProcessingError("failed to check mined_set status", err)
+		}
+
+		if !isMined {
+			return false, errors.NewProcessingError("block has mined_set=false")
+		}
+
+		// Block has mined_set=true, success!
+		return true, nil
+	},
+		retry.WithBackoffDurationType(1*time.Second),
+		retry.WithBackoffMultiplier(2),
+		retry.WithRetryCount(1000), // High count - timeout context will stop retries after BlockAssemblyWaitTimeout
+		retry.WithMessage(fmt.Sprintf("[Pruner] Waiting for block %s to have mined_set=true", blockHash)),
+	)
+
+	if err != nil {
+		// Timeout or persistent error - log and skip
+		s.logger.Debugf("Block %s mined_set wait timeout or error: %v", blockHash, err)
 		return false
 	}
 
+	// Block has mined_set=true
 	return true
 }
 

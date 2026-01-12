@@ -126,6 +126,9 @@ service BlockchainAPI {
   // SetBlockMinedSet marks a block as mined.
   rpc SetBlockMinedSet(SetBlockMinedSetRequest) returns (google.protobuf.Empty) {}
 
+  // ClearBlockMinedSet resets the mined_set flag to false for a block.
+  rpc ClearBlockMinedSet(ClearBlockMinedSetRequest) returns (google.protobuf.Empty) {}
+
   // GetBlocksMinedNotSet retrieves blocks not marked as mined.
   rpc GetBlocksMinedNotSet(google.protobuf.Empty) returns (GetBlocksMinedNotSetResponse) {}
 
@@ -527,6 +530,10 @@ message GetNextWorkRequiredResponse {
 // SetBlockMinedSetRequest marks a block as mined.
 message SetBlockMinedSetRequest {
   bytes blockHash = 1;  // Hash of the mined block
+}
+
+message ClearBlockMinedSetRequest {
+  bytes blockHash = 1;  // Hash of the block to reset
 }
 
 // GetBlocksMinedNotSetResponse contains blocks not marked as mined.

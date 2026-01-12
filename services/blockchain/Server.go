@@ -2105,6 +2105,18 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 	return &emptypb.Empty{}, nil
 }
 
+// ClearBlockMinedSet resets the mined_set flag to false for a block.
+func (b *Blockchain) ClearBlockMinedSet(ctx context.Context, req *blockchain_api.ClearBlockMinedSetRequest) (*emptypb.Empty, error) {
+	blockHash := chainhash.Hash(req.BlockHash)
+
+	err := b.store.ClearBlockMinedSet(ctx, &blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 // GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksMinedNotSetResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocksMinedNotSet",

@@ -369,6 +369,10 @@ func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash
 	return c.store.SetBlockMinedSet(ctx, blockHash)
 }
 
+func (c *LocalClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.ClearBlockMinedSet(ctx, blockHash)
+}
+
 func (c *LocalClient) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
 	return c.store.SetBlockProcessedAt(ctx, blockHash, clear...)
 }

@@ -822,7 +822,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID())
 		require.NoError(t, err)
 
-		expected := []uint32{1000, 1000, 1000}
+		expected := []uint32{1001, 1001, 1001}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
@@ -860,7 +860,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID())
 		require.NoError(t, err)
 
-		expected := []uint32{125, 1000, 768}
+		expected := []uint32{125, 1001, 768}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
@@ -927,7 +927,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, txNonExtended, txNonExtended.TxID())
 		require.NoError(t, err)
 
-		expected := []uint32{125, 1000, 768}
+		expected := []uint32{125, 1001, 768}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)

@@ -1766,25 +1766,19 @@ func (b *BlockAssembler) validateParentChain(
 					break
 				}
 
-				// Parent exists in UTXO store - check if it's on the best chain
-				if len(parentMeta.BlockIDs) > 0 {
-					onBestChain := false
-					for _, blockID := range parentMeta.BlockIDs {
-						if bestBlockHeaderIDsMap[blockID] {
-							onBestChain = true
-							break
-						}
-					}
-					if !onBestChain {
-						allParentsValid = false
-						invalidReason = fmt.Sprintf("parent tx %s is on wrong chain (blocks: %v)",
-							parentTxID.String(), parentMeta.BlockIDs)
-						b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
-						break
-					}
-				} else {
-					// Parent exists but has no BlockIDs - it's unmined
-					// Check if it's in our unmined list by seeing if it has an index
+				// CRITICAL: Check UnminedSince FIRST (authoritative indicator of mined status)
+				// UnminedSince is the authoritative indicator:
+				//   - UnminedSince == 0: Transaction is mined on the longest chain
+				//   - UnminedSince > 0: Transaction is NOT mined on the longest chain (value is block height when unmarked)
+				// BlockIDs is a historical record of ALL blocks containing this tx (can include forks)
+				//
+				// The key insight: After a reorg, a parent tx may have:
+				//   - BlockIDs = [5640] (block on wrong chain)
+				//   - UnminedSince = 5650 (marked unmined because 5640 is not on longest chain)
+				// We must check UnminedSince FIRST to avoid false "wrong chain" warnings
+				if parentMeta.UnminedSince > 0 {
+					// Parent is unmined (confirmed by UnminedSince field)
+					// Check if it's in our unmined list
 					if _, isInUnminedList := parentIndexMap[parentTxID]; isInUnminedList {
 						// It's in our list - track it for ordering validation
 						unminedParents = append(unminedParents, parentTxID)
@@ -1795,6 +1789,35 @@ func (b *BlockAssembler) validateParentChain(
 						b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
 						break
 					}
+				} else if len(parentMeta.BlockIDs) > 0 {
+					// Parent should be mined (UnminedSince == 0)
+					// Verify BlockIDs are on best chain for data consistency
+					onBestChain := false
+					for _, blockID := range parentMeta.BlockIDs {
+						if bestBlockHeaderIDsMap[blockID] {
+							onBestChain = true
+							break
+						}
+					}
+
+					if !onBestChain {
+						// Data inconsistency: unmined_since=0 BUT block_ids not on best chain
+						// This indicates transactions weren't properly marked as unmined during a fork
+						// This is a data integrity issue that must be fixed at the source (catchup.go)
+						allParentsValid = false
+						invalidReason = fmt.Sprintf("parent tx %s is on wrong chain (blocks: %v) and not in unmined list - data integrity issue from fork handling",
+							parentTxID.String(), parentMeta.BlockIDs)
+						b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
+						break
+					}
+					// else: parent is mined on best chain - all good, continue
+				} else {
+					// No BlockIDs and UnminedSince=0 - data inconsistency
+					// This should never happen - a tx with unmined_since=0 should have BlockIDs
+					allParentsValid = false
+					invalidReason = fmt.Sprintf("parent tx %s has data inconsistency (unmined_since=0 but no block_ids)", parentTxID.String())
+					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
+					break
 				}
 			}
 
