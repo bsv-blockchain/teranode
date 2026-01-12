@@ -6683,20 +6683,6 @@
 <td>Transaction externalization control</td>
 </tr>
 <tr>
-<td>PostgresMaxIdleConns</td>
-<td>int</td>
-<td>10</td>
-<td>utxostore_postgresMaxIdleConns</td>
-<td>PostgreSQL idle connection pool</td>
-</tr>
-<tr>
-<td>PostgresMaxOpenConns</td>
-<td>int</td>
-<td>80</td>
-<td>utxostore_utxo_postgresMaxOpenConns</td>
-<td>PostgreSQL max open connections</td>
-</tr>
-<tr>
 <td>VerboseDebug</td>
 <td>bool</td>
 <td>false</td>
@@ -6758,6 +6744,13 @@
 <td>5000</td>
 <td>utxostore_prunerDeleteBatcherSize</td>
 <td>Pruner delete batch size</td>
+</tr>
+<tr>
+<td><strong>Note</strong>: PostgreSQL connection pool settings (MaxOpenConns, MaxIdleConns, ConnMaxLifetime, ConnMaxIdleTime) are now configured globally via <code>PostgresSettings</code>. See <a href="../../global_settings/">Global Settings</a> for details.</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
 </tr>
 <tr>
 <td>PrunerDeleteBatcherDurationMillis</td>
