@@ -64,7 +64,7 @@ func testSameChainGrandparentDoubleSpend(t *testing.T, utxoStore string) {
 	// Create grandparent with 5 outputs (external tx due to low utxoBatchSize)
 	grandparent := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(coinbaseTx, 0),
-		transactions.WithP2PKHOutputs(numOutputsForExternalTx, coinbaseTx.Outputs[0].Satoshis/numOutputsForExternalTx - 100),
+		transactions.WithP2PKHOutputs(numOutputsForExternalTx, coinbaseTx.Outputs[0].Satoshis/numOutputsForExternalTx-100),
 	)
 	t.Logf("Grandparent: %s (%d outputs)", grandparent.TxIDChainHash().String(), len(grandparent.Outputs))
 	t.Logf("  Outputs: [0]=%d, [1]=%d, [2]=%d, [3]=%d, [4]=%d sats",
@@ -90,7 +90,7 @@ func testSameChainGrandparentDoubleSpend(t *testing.T, utxoStore string) {
 	parent := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(grandparent, 0), // Spend output 0
 		transactions.WithInput(grandparent, 1), // Spend output 1
-		transactions.WithP2PKHOutputs(numOutputsForExternalTx, grandparent.Outputs[0].Satoshis/numOutputsForExternalTx - 100),
+		transactions.WithP2PKHOutputs(numOutputsForExternalTx, grandparent.Outputs[0].Satoshis/numOutputsForExternalTx-100),
 	)
 	t.Logf("Parent: %s (%d outputs) - spends grandparent:0 and grandparent:1",
 		parent.TxIDChainHash().String(), len(parent.Outputs))
@@ -121,7 +121,7 @@ func testSameChainGrandparentDoubleSpend(t *testing.T, utxoStore string) {
 		transactions.WithInput(parent, 0),      // Valid: parent output 0
 		transactions.WithInput(grandparent, 0), // INVALID: already spent by parent!
 		transactions.WithInput(grandparent, 4), // Valid: still unspent
-		transactions.WithP2PKHOutputs(numOutputsForExternalTx, grandparent.Outputs[0].Satoshis/numOutputsForExternalTx - 100),
+		transactions.WithP2PKHOutputs(numOutputsForExternalTx, grandparent.Outputs[0].Satoshis/numOutputsForExternalTx-100),
 	)
 	t.Logf("InvalidChild: %s (%d outputs) - attempts to spend parent:0, grandparent:0 (INVALID!), grandparent:3",
 		invalidChild.TxIDChainHash().String(), len(invalidChild.Outputs))

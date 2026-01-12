@@ -20,15 +20,11 @@ import (
 // - tx1Conflicting is placed in BOTH block6a AND block6b (same tx, two forks)
 // - Tests that conflict detection handles identical transactions in competing blocks
 func TestSameTxBothForksPostgres(t *testing.T) {
-	t.Skip("same_tx_both_forks", func(t *testing.T) {
-		testSameTxBothForks(t, "postgres")
-	})
+	t.Skip("same_tx_both_forks: test disabled pending implementation")
 }
 
 func TestSameTxBothForksAerospike(t *testing.T) {
-	t.Skip("same_tx_both_forks", func(t *testing.T) {
-		testSameTxBothForks(t, "aerospike")
-	})
+	t.Skip("same_tx_both_forks: test disabled pending implementation")
 }
 
 // testSameTxBothForks tests conflict handling when the same transaction appears
@@ -123,9 +119,9 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 	// Conflicts with tx1 on outputs 2 and 3
 	// Total: 3 * 95000 = 285000 satoshis
 	tx1Conflicting := td.CreateTransactionWithOptions(t,
-		transactions.WithInput(txOriginal, 2), // CONFLICT with tx1!
-		transactions.WithInput(txOriginal, 3), // CONFLICT with tx1!
-		transactions.WithInput(txOriginal, 4), // No conflict
+		transactions.WithInput(txOriginal, 2),    // CONFLICT with tx1!
+		transactions.WithInput(txOriginal, 3),    // CONFLICT with tx1!
+		transactions.WithInput(txOriginal, 4),    // No conflict
 		transactions.WithP2PKHOutputs(2, 140000), // 2 * 140000 = 280000
 	)
 	t.Logf("tx1Conflicting: %s (%d outputs) - spends txOriginal:2,3,4 (conflicts on 2,3)",

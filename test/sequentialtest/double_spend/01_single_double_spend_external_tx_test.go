@@ -105,7 +105,7 @@ func testSingleDoubleSpendExternalTx(t *testing.T, utxoStore string) {
 
 	//                   / 102a [txA0] -> 103a -> 104a -> 105a (*)
 	// 0 -> 1 ... 101 ->
-	//                   \ 102b [txB0] -> 103b -> 104b 
+	//                   \ 102b [txB0] -> 103b -> 104b
 
 	// Check that the txB0 is not in block assembly, it should have been removed
 	td.VerifyNotInBlockAssembly(t, txB0)

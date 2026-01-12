@@ -128,7 +128,7 @@ func setupExternalTxDoubleSpendTest(t *testing.T, utxoStoreType string, blockOff
 	if block2Height > 100 {
 		block2Height = 2
 	}
-	
+
 	block2, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, block2Height)
 	require.NoError(t, err)
 
