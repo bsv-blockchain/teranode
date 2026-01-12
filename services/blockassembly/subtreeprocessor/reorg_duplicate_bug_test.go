@@ -224,8 +224,8 @@ func countTransactionInSubtreesForTest(stp *SubtreeProcessor, txHash chainhash.H
 	}
 
 	// Check current subtree
-	if stp.currentSubtree != nil {
-		for _, node := range stp.currentSubtree.Nodes {
+	if currentSubtree := stp.currentSubtree.Load(); currentSubtree != nil {
+		for _, node := range currentSubtree.Nodes {
 			if node.Hash.Equal(txHash) {
 				count++
 			}

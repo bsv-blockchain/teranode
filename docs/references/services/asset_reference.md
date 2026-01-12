@@ -699,6 +699,18 @@ Error responses include a JSON object with an error message:
         - `limit` (integer, optional, default: 20, max: 100) - Maximum subtrees to return
     - Returns: Subtree data array (JSON) with pagination metadata
 
+### P2P and Network Endpoints
+
+- **GET `/api/p2p/peers`**
+    - Purpose: Get peer registry information from P2P service
+    - Returns: Peer list (JSON) with reputation metrics, connection status, and catchup statistics
+    - Response includes: peer ID, client name, blockchain height, reputation score, catchup metrics, ban status
+
+- **GET `/api/catchup/status`**
+    - Purpose: Get current blockchain synchronization status
+    - Returns: Catchup status (JSON) with progress metrics and peer information
+    - Response includes: current/target heights, blocks fetched/validated, peer details, fork depth, previous attempt data
+
 ### Search Endpoints
 
 - **GET `/api/v1/search`**

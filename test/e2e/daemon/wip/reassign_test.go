@@ -8,6 +8,7 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/require"
@@ -19,9 +20,9 @@ func TestShouldAllowReassign(t *testing.T) {
 
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableValidator: true,
-		SettingsContext: "dev.system.test",
+		EnableRPC:            true,
+		EnableValidator:      true,
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t)

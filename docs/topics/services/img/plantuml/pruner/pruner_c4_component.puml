@@ -1,0 +1,66 @@
+@startuml Pruner_Service_Component_Diagram
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+LAYOUT_WITH_LEGEND()
+
+title Component Diagram for Pruner Service
+
+Container_Boundary(pruner, "Pruner Service") {
+    Component(server, "Server Component", "Go", "Manages gRPC server, health checks, service initialization")
+    Component(worker, "Worker Component", "Go", "Handles events, channel management, two-phase processing")
+    Component(metrics, "Metrics Component", "Go", "Exports Prometheus metrics")
+    Component(jobmgr, "Job Manager", "Go", "LIFO queue, worker pool, status tracking")
+}
+
+Container_Boundary(stores, "Store Implementations") {
+    Component(aerospike_pruner, "Aerospike Pruner", "Go", "Secondary index queries, batch operations, 4 workers")
+    Component(sql_pruner, "SQL Pruner", "Go", "DELETE queries, 2 workers")
+    Component(common_pruner, "Common Logic", "Go", "PreserveParentsOfOldUnminedTransactions")
+}
+
+Container(blockchain, "Blockchain Service", "Go, gRPC", "Blockchain state and notifications")
+Container(blockassembly, "Block Assembly", "Go, gRPC", "Block assembly state")
+ContainerDb(db, "Database", "Aerospike/SQL", "UTXO data")
+ContainerDb(blobstore, "Blob Store", "S3/File", "Transaction blobs")
+
+Rel(blockchain, worker, "BlockPersisted/Block", "gRPC notification")
+Rel(worker, blockassembly, "Check state", "gRPC")
+Rel(worker, jobmgr, "UpdateBlockHeight", "Function call")
+Rel(worker, metrics, "Update counters", "Function call")
+Rel(server, worker, "Manages lifecycle", "")
+
+Rel(jobmgr, aerospike_pruner, "Execute pruning", "Interface")
+Rel(jobmgr, sql_pruner, "Execute pruning", "Interface")
+
+Rel(aerospike_pruner, common_pruner, "PreserveParents", "Function call")
+Rel(sql_pruner, common_pruner, "PreserveParents", "Function call")
+
+Rel(aerospike_pruner, db, "Query/Delete", "Aerospike API")
+Rel(aerospike_pruner, blobstore, "Delete .tx files", "S3/File API")
+Rel(sql_pruner, db, "DELETE query", "SQL")
+Rel(common_pruner, db, "Update PreserveUntil", "Aerospike/SQL")
+
+note right of worker
+**Event Handler**
+- Buffered channel (size 1)
+- Deduplicate requests
+- Safety checks
+end note
+
+note right of jobmgr
+**LIFO Pattern**
+- Process newest only
+- Cancel superseded
+- Timeout: 10min
+- History: 1000 (Aero) / 10 (SQL)
+end note
+
+note right of aerospike_pruner
+**Phase 1**: PreserveParents
+**Phase 2**: DAH Pruning
+- Secondary index: deleteAtHeight
+- Batch operations
+- External storage cleanup
+end note
+
+@enduml

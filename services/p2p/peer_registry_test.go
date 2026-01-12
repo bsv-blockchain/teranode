@@ -262,6 +262,39 @@ func TestPeerRegistry_GetPeerReturnsCopy(t *testing.T) {
 	assert.Equal(t, uint32(100), info3.Height)
 }
 
+func TestPeerRegistry_ClearAllSyncAttempts(t *testing.T) {
+	pr := NewPeerRegistry()
+
+	peer1 := peer.ID("peer-1")
+	peer2 := peer.ID("peer-2")
+	peer3 := peer.ID("peer-3")
+
+	pr.Put(peer1, "", 0, nil, "")
+	pr.Put(peer2, "", 0, nil, "")
+	pr.Put(peer3, "", 0, nil, "")
+
+	// Set LastSyncAttempt for peer1 and peer2
+	pr.RecordSyncAttempt(peer1)
+	pr.RecordSyncAttempt(peer2)
+
+	info1, _ := pr.Get(peer1)
+	info2, _ := pr.Get(peer2)
+	info3, _ := pr.Get(peer3)
+	require.False(t, info1.LastSyncAttempt.IsZero())
+	require.False(t, info2.LastSyncAttempt.IsZero())
+	require.True(t, info3.LastSyncAttempt.IsZero())
+
+	cleared := pr.ClearAllSyncAttempts()
+	assert.Equal(t, 2, cleared, "Should clear sync attempts for peers with non-zero LastSyncAttempt")
+
+	info1, _ = pr.Get(peer1)
+	info2, _ = pr.Get(peer2)
+	info3, _ = pr.Get(peer3)
+	assert.True(t, info1.LastSyncAttempt.IsZero())
+	assert.True(t, info2.LastSyncAttempt.IsZero())
+	assert.True(t, info3.LastSyncAttempt.IsZero())
+}
+
 // Catchup-related tests
 
 func TestPeerRegistry_RecordCatchupAttempt(t *testing.T) {

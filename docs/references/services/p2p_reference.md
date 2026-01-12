@@ -255,6 +255,219 @@ func (s *Server) IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*
 
 Checks if a specific peer ID is currently banned.
 
+```go
+func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ListBannedResponse, error)
+```
+
+Returns a list of all currently banned peer IDs and IP addresses.
+
+```go
+func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ClearBannedResponse, error)
+```
+
+Clears all bans from the ban list, allowing all previously banned peers to reconnect.
+
+```go
+func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreRequest) (*p2p_api.AddBanScoreResponse, error)
+```
+
+Increments a peer's ban score. When the ban score reaches a threshold, the peer is automatically banned.
+
+```go
+func (s *Server) ConnectPeer(ctx context.Context, req *p2p_api.ConnectPeerRequest) (*p2p_api.ConnectPeerResponse, error)
+```
+
+Initiates a connection to a peer using multiaddr format.
+
+```go
+func (s *Server) DisconnectPeer(ctx context.Context, req *p2p_api.DisconnectPeerRequest) (*p2p_api.DisconnectPeerResponse, error)
+```
+
+Disconnects from a currently connected peer.
+
+#### Catchup Metrics and Reputation Endpoints
+
+```go
+func (s *Server) RecordCatchupAttempt(ctx context.Context, req *p2p_api.RecordCatchupAttemptRequest) (*p2p_api.RecordCatchupAttemptResponse, error)
+```
+
+Records that a catchup attempt was initiated with a peer. This increments the interaction attempt counter.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+```go
+func (s *Server) RecordCatchupSuccess(ctx context.Context, req *p2p_api.RecordCatchupSuccessRequest) (*p2p_api.RecordCatchupSuccessResponse, error)
+```
+
+Records a successful catchup operation with a peer. This increments success counters and updates the peer's reputation score positively.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `duration_ms` (int64): Duration of the catchup operation in milliseconds
+
+```go
+func (s *Server) RecordCatchupFailure(ctx context.Context, req *p2p_api.RecordCatchupFailureRequest) (*p2p_api.RecordCatchupFailureResponse, error)
+```
+
+Records a failed catchup attempt with a peer. This increments failure counters and reduces reputation.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+**Impact**: Decreases peer reputation score and applies recent failure penalty.
+
+```go
+func (s *Server) RecordCatchupMalicious(ctx context.Context, req *p2p_api.RecordCatchupMaliciousRequest) (*p2p_api.RecordCatchupMaliciousResponse, error)
+```
+
+Marks a peer as malicious after detecting invalid data during catchup. This severely penalizes the peer's reputation.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+```go
+func (s *Server) UpdateCatchupReputation(ctx context.Context, req *p2p_api.UpdateCatchupReputationRequest) (*p2p_api.UpdateCatchupReputationResponse, error)
+```
+
+Directly sets a peer's reputation score. Use sparingly as this bypasses the normal reputation calculation algorithm.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `score` (double): Reputation score value (0-100 range)
+
+```go
+func (s *Server) UpdateCatchupError(ctx context.Context, req *p2p_api.UpdateCatchupErrorRequest) (*p2p_api.UpdateCatchupErrorResponse, error)
+```
+
+Records the last error message from a catchup attempt with a peer.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `error_msg` (string): Error message describing the failure
+
+```go
+func (s *Server) ResetReputation(ctx context.Context, req *p2p_api.ResetReputationRequest) (*p2p_api.ResetReputationResponse, error)
+```
+
+Resets reputation for one or all peers back to neutral (50.0). This implements the reputation recovery mechanism.
+
+**Parameters**:
+
+- `peer_id` (string, optional): If provided, resets reputation for specific peer. If omitted, resets all peers
+
+```go
+func (s *Server) GetPeersForCatchup(ctx context.Context, req *p2p_api.GetPeersForCatchupRequest) (*p2p_api.GetPeersForCatchupResponse, error)
+```
+
+Returns a list of peers suitable for catchup operations, ranked by reputation and filtered by selection criteria.
+
+**Parameters**: None (can optionally filter in the future)
+
+**Returns**: Array of `PeerInfoForCatchup` containing peer ID, height, block hash, data hub URL, catchup metrics
+
+#### Validation Reporting Endpoints
+
+```go
+func (s *Server) ReportValidSubtree(ctx context.Context, req *p2p_api.ReportValidSubtreeRequest) (*p2p_api.ReportValidSubtreeResponse, error)
+```
+
+Reports that a peer provided a valid subtree. This increments the peer's positive interaction counters.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `subtree_hash` (string): Hash of the validated subtree
+
+**Returns**: `success` (bool) and `message` (string) indicating validation result
+
+```go
+func (s *Server) ReportValidBlock(ctx context.Context, req *p2p_api.ReportValidBlockRequest) (*p2p_api.ReportValidBlockResponse, error)
+```
+
+Reports that a peer provided a valid block. This increments the peer's positive interaction counters.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+- `block_hash` (string): Hash of the validated block
+
+**Returns**: `success` (bool) and `message` (string) indicating validation result
+
+#### Peer Status and Query Endpoints
+
+```go
+func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMaliciousRequest) (*p2p_api.IsPeerMaliciousResponse, error)
+```
+
+Checks if a peer has been marked as malicious.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+**Returns**: `is_malicious` (bool) and optional `reason` (string) explaining why peer is malicious
+
+```go
+func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealthyRequest) (*p2p_api.IsPeerUnhealthyResponse, error)
+```
+
+Checks if a peer is considered unhealthy based on reputation score and recent failures.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier
+
+**Returns**: `is_unhealthy` (bool), optional `reason` (string), and `reputation_score` (float)
+
+```go
+func (s *Server) GetPeerRegistry(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeerRegistryResponse, error)
+```
+
+Returns comprehensive information about all peers in the registry, including full reputation metrics and interaction history.
+
+**Returns**: Array of `PeerRegistryInfo` containing:
+
+- **Identity**: ID, client name, connection status
+- **Blockchain**: Height, block hash, storage mode, data hub URL
+- **Ban Info**: Ban score, is banned status
+- **Connection**: Connected at timestamp, bytes received
+- **Timing**: Last block time, last message time
+- **Metrics**: Interaction attempts/successes/failures, malicious count, average response time
+- **Reputation**: Reputation score (0-100)
+- **Errors**: Last catchup error message and timestamp
+
+```go
+func (s *Server) GetPeer(ctx context.Context, req *p2p_api.GetPeerRequest) (*p2p_api.GetPeerResponse, error)
+```
+
+Returns detailed information for a single peer by peer ID.
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier to query
+
+**Returns**: `PeerRegistryInfo` object with full peer details, and `found` (bool) indicating if peer exists
+
+#### Metrics Tracking Endpoints
+
+```go
+func (s *Server) RecordBytesDownloaded(ctx context.Context, req *p2p_api.RecordBytesDownloadedRequest) (*p2p_api.RecordBytesDownloadedResponse, error)
+```
+
+Records bytes downloaded from a peer via HTTP (typically from their DataHub).
+
+**Parameters**:
+
+- `peer_id` (string): The peer identifier that provided the data
+- `bytes_downloaded` (uint64): Number of bytes downloaded from the peer
+
 ### Message Handlers
 
 - `handleBlockTopic`: Handles incoming block messages and validates block announcements.

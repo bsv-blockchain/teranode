@@ -262,10 +262,14 @@ func TestSetBlockSubtreesSet(t *testing.T) {
 		})
 	})
 
-	t.Run("empty block hash", func(t *testing.T) {
-		// Skip this test as genesis block has hash with all zeros
-		// and would cause this test to pass even though we want to test non-existent blocks
-		t.Skip("Genesis block may have empty hash, making this test unreliable")
+	t.Run("non-existent block hash", func(t *testing.T) {
+		// Use a hash that definitely doesn't exist in the database
+		// Note: We can't use an empty/zero hash because a previous test
+		// ("multiple blocks can be updated") inserts a block with all-zero hash when i=0
+		nonExistentHash, err := chainhash.NewHashFromStr("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+		require.NoError(t, err)
+		err = store.SetBlockSubtreesSet(context.Background(), nonExistentHash)
+		require.Error(t, err, "Should return error for non-existent block")
 	})
 
 	t.Run("genesis block", func(t *testing.T) {

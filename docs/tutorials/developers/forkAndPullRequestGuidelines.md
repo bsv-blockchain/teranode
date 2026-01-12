@@ -58,10 +58,10 @@ Forking allows you to:
 
 3. Configure your fork:
 
-   - **Owner**: Select your GitHub account
-   - **Repository name**: Keep it as `teranode` (or customize if needed)
-   - **Description**: Optional—you can add a custom description
-   - **Copy the main branch only**: ✓ Check this box (recommended for cleaner setup)
+      - **Owner**: Select your GitHub account
+      - **Repository name**: Keep it as `teranode` (or customize if needed)
+      - **Description**: Optional—you can add a custom description
+      - **Copy the main branch only**: ✓ Check this box (recommended for cleaner setup)
 
     ![creating-a-github-fork-step2.png](img/creating-a-github-fork-step2.png)
 
@@ -315,15 +315,17 @@ git push
 3. Alternatively, go to **"Branches"** → find your feature branch → click **"New pull request"**
 4. Ensure:
 
-   - **Base repository**: `bsv-blockchain/teranode`
-   - **Base branch**: `main`
-   - **Head repository**: `YOUR_USERNAME/teranode`
-   - **Compare branch**: `feature/your-feature-name`
+      - **Base repository**: `bsv-blockchain/teranode`
+      - **Base branch**: `main`
+      - **Head repository**: `YOUR_USERNAME/teranode`
+      - **Compare branch**: `feature/your-feature-name`
+
 5. Fill in the PR title and description:
 
-   - Clearly explain what changes you made
-   - Reference any related issues (e.g., "Fixes #123")
-   - Describe testing performed
+      - Clearly explain what changes you made
+      - Reference any related issues (e.g., "Fixes #123")
+      - Describe testing performed
+
 6. Click **"Create pull request"**
 
 ---

@@ -573,6 +573,10 @@ func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.H
 	panic(implementMe)
 }
 
+func (m *MockStore) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	panic(implementMe)
+}
+
 func (m *MockStore) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
 	panic(implementMe)
 }
@@ -589,6 +593,16 @@ func (m *MockStore) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhas
 
 // GetBlocksSubtreesNotSet retrieves blocks whose subtrees haven't been processed.
 func (m *MockStore) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
+	return []*model.Block{}, nil
+}
+
+// SetBlockPersistedAt marks a block as persisted to blob storage.
+func (m *MockStore) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	return nil
+}
+
+// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+func (m *MockStore) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
 	return []*model.Block{}, nil
 }
 

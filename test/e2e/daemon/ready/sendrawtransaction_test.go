@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/require"
@@ -18,29 +19,19 @@ import (
 // This test verifies that transactions can be successfully submitted via RPC and validates that
 // the txStore and validatorClient dependencies are properly initialized.
 func TestSendRawTransaction(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	// Create test daemon with RPC and validator enabled
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.TracingEnabled = true
-			s.TracingSampleRate = 1.0
-			s.ChainCfgParams.CoinbaseMaturity = 2
-			s.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.TracingEnabled = true
+				s.TracingSampleRate = 1.0
+				s.ChainCfgParams.CoinbaseMaturity = 2
+			},
+		),
 		FSMState: blockchain.FSMStateRUNNING,
 	})
 
@@ -101,9 +92,6 @@ func TestSendRawTransaction(t *testing.T) {
 
 // TestSendRawTransactionInvalidTx tests that sendrawtransaction properly rejects invalid transactions.
 func TestSendRawTransactionInvalidTx(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// aerospike
 	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
 	require.NoError(t, err, "Failed to setup Aerospike container")
@@ -116,10 +104,12 @@ func TestSendRawTransactionInvalidTx(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.UtxoStore.UtxoStore = parsedURL
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.UtxoStore.UtxoStore = parsedURL
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
@@ -139,9 +129,6 @@ func TestSendRawTransactionInvalidTx(t *testing.T) {
 
 // TestSendRawTransactionDoubleSpend tests that sendrawtransaction rejects double-spend attempts.
 func TestSendRawTransactionDoubleSpend(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// aerospike
 	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
 	require.NoError(t, err, "Failed to setup Aerospike container")
@@ -155,13 +142,15 @@ func TestSendRawTransactionDoubleSpend(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.TracingEnabled = true
-			s.TracingSampleRate = 1.0
-			s.ChainCfgParams.CoinbaseMaturity = 2
-			s.UtxoStore.UtxoStore = parsedURL
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.TracingEnabled = true
+				s.TracingSampleRate = 1.0
+				s.ChainCfgParams.CoinbaseMaturity = 2
+				s.UtxoStore.UtxoStore = parsedURL
+			},
+		),
 		FSMState: blockchain.FSMStateRUNNING,
 	})
 

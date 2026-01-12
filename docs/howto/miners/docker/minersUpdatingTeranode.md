@@ -4,33 +4,37 @@
 
 2. **Update Docker Images**
 
-Pull the latest versions of all images:
+    Pull the latest versions of all images:
 
-```
-docker compose pull
-```
+    ```
+    docker compose pull
+    ```
+
 3. **Stop the Current Stack**
 
-```
-docker compose down
-```
+    ```
+    docker compose down
+    ```
+
 4. **Start the Updated Stack**
 
-```
-docker compose up -d
-```
+    ```
+    docker compose up -d
+    ```
+
 5. **Verify the Update**
 
-Check that all services are running and healthy:
+    Check that all services are running and healthy:
 
-```
-docker compose ps
-```
+    ```
+    docker compose ps
+    ```
+
 6. **Check Logs for Any Issues**
 
-```
-docker compose logs
-```
+    ```
+    docker compose logs
+    ```
 
 
 

@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/util"
@@ -88,19 +89,21 @@ func runReorgScenario(t *testing.T, storeType, scenario string, expectedBefore, 
 	testOpts := daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			if s.ChainCfgParams != nil {
-				chainParams := *s.ChainCfgParams
-				chainParams.CoinbaseMaturity = testCoinbaseMaturity
-				s.ChainCfgParams = &chainParams
-			}
-			s.UtxoStore.UnminedTxRetention = 5
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				if s.ChainCfgParams != nil {
+					chainParams := *s.ChainCfgParams
+					chainParams.CoinbaseMaturity = testCoinbaseMaturity
+					s.ChainCfgParams = &chainParams
+				}
+				s.UtxoStore.UnminedTxRetention = 5
 
-			if storeType == "aerospike" && aerospikeURL != nil {
-				s.UtxoStore.UtxoStore = aerospikeURL
-			}
-		},
+				if storeType == "aerospike" && aerospikeURL != nil {
+					s.UtxoStore.UtxoStore = aerospikeURL
+				}
+			},
+		),
 		FSMState: blockchain.FSMStateRUNNING,
 	}
 

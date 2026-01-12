@@ -56,14 +56,14 @@
 
 ## Validation Rules
 
-| Parameter | Validation | Impact |
-|-----------|------------|--------|
-| batch | Boolean string check | Batch wrapper creation |
-| sizeInBytes | ParseInt validation | Batch memory allocation |
-| writeKeys | Boolean string check | Key indexing behavior |
-| localDAHStore | Non-empty string check | DAH functionality |
-| hashPrefix | ParseInt validation | Directory structure |
-| hashSuffix | ParseInt validation | Directory structure |
+| Parameter | Validation | Impact | When Checked |
+|-----------|------------|--------|-------------|
+| batch | Boolean string check | Batch wrapper creation | During store initialization |
+| sizeInBytes | ParseInt validation | Batch memory allocation | During batcher creation |
+| writeKeys | Boolean string check | Key indexing behavior | During batcher creation |
+| localDAHStore | Non-empty string check | DAH functionality | During store initialization |
+| hashPrefix | ParseInt validation | Directory structure | During file store creation |
+| hashSuffix | ParseInt validation | Directory structure | During file store creation |
 
 ## Configuration Examples
 

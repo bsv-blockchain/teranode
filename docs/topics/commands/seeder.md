@@ -31,7 +31,7 @@ Key features:
 
 ### 2.1 Command Initialization
 
-![seeder_initialization.svg](img/plantuml/seeder/seeder_initialization2.svg)
+![seeder_initialization.svg](img/plantuml/seeder/seeder_initialization.svg)
 
 1. The command starts by parsing command-line flags to determine the input directory, target hash, and processing options.
 2. It verifies the existence of required input files (headers and UTXO set).

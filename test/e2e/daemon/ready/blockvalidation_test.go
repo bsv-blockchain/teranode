@@ -1,40 +1,26 @@
 package smoke
 
 import (
-	"net/url"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/daemon"
-	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 	defer td.Stop(t)
 
-	err = td.BlockchainClient.Run(td.Ctx, "test")
+	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err, "failed to initialize blockchain")
 
 	t.Log("Mining to coinbase maturity...")
@@ -104,29 +90,17 @@ func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
 }
 
 func TestBlockValidationWithDoubleSpend(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 	defer td.Stop(t)
 
-	err = td.BlockchainClient.Run(td.Ctx, "test")
+	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err, "failed to initialize blockchain")
 
 	t.Log("Mining to coinbase maturity...")
@@ -196,29 +170,17 @@ func TestBlockValidationWithDoubleSpend(t *testing.T) {
 }
 
 func TestBlockValidationWithDuplicateTransaction(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
-	// aerospike
-	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
-	require.NoError(t, err, "Failed to setup Aerospike container")
-	parsedURL, err := url.Parse(utxoStoreURL)
-	require.NoError(t, err, "Failed to parse UTXO store URL")
-	t.Cleanup(func() {
-		_ = teardown()
-	})
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.UtxoStore.UtxoStore = parsedURL
-		},
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 	defer td.Stop(t)
 
-	err = td.BlockchainClient.Run(td.Ctx, "test")
+	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err, "failed to initialize blockchain")
 
 	t.Log("Mining to coinbase maturity...")

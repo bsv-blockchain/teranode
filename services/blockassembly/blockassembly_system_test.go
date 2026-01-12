@@ -146,7 +146,6 @@ func TestHealth(t *testing.T) {
 
 // TestCoinbaseSubsidyHeight verifies correct coinbase subsidy calculation at different heights.
 func Test_CoinbaseSubsidyHeight(t *testing.T) {
-	t.Skip("Skipping coinbase subsidy height test")
 	_, ba, ctx, cancel, cleanup := setupTest(t)
 
 	defer cancel()
@@ -156,8 +155,13 @@ func Test_CoinbaseSubsidyHeight(t *testing.T) {
 	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
 	require.NoError(t, err)
 
+	// Get initial mining candidate and verify coinbase value
 	miningCandidate, err := baClient.GetMiningCandidate(ctx)
 	require.NoError(t, err, "Failed to get mining candidate")
+	t.Logf("Initial coinbase value at height %d: %d", miningCandidate.Height, miningCandidate.CoinbaseValue)
+
+	// Verify coinbase value is set (should be block subsidy for this height)
+	assert.Greater(t, miningCandidate.CoinbaseValue, uint64(0), "Coinbase value should be greater than 0")
 
 	coinbase, err := CreateCoinbaseTxCandidate(t, miningCandidate)
 	require.NoError(t, err, "Failed to create coinbase tx")
@@ -193,451 +197,29 @@ func Test_CoinbaseSubsidyHeight(t *testing.T) {
 	err = baClient.SubmitMiningSolution(ctx, &solution)
 	require.NoError(t, err, "Failed to submit mining solution")
 
-	h, m, _ := ba.blockchainClient.GetBestBlockHeader(ctx)
+	// Verify the block was added to the blockchain
+	h, m, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err, "Failed to get best block header")
 	assert.NotNil(t, h, "Best block header should not be nil")
 	assert.NotNil(t, m, "Best block metadata should not be nil")
-	t.Logf("Best block header: %v", h)
+	t.Logf("Best block header after mining: %v at height %d", h, m.Height)
 
-	ba.blockAssembler.setBestBlockHeader(h, m.Height)
-	baBestBlockHeader, _ := ba.blockAssembler.CurrentBlock()
-	ba.blockAssembler.subtreeProcessor.InitCurrentBlockHeader(baBestBlockHeader)
-	mc, st, err := ba.blockAssembler.getMiningCandidate()
-	require.NoError(t, err, "Failed to get mining candidate")
-	assert.NotNil(t, mc, "Mining candidate should not be nil")
-	assert.NotNil(t, st, "Subtree should not be nil")
-	t.Logf("Coinbase: %v", mc.CoinbaseValue)
-}
+	// Wait for block assembly to process the new block
+	time.Sleep(100 * time.Millisecond)
 
-// TestDifficultyAdjustment verifies the difficulty adjustment mechanism.
-func TestDifficultyAdjustment(t *testing.T) {
-	t.Skip("Skipping difficulty adjustment test")
-	_, ba, ctx, cancel, cleanup := setupTest(t)
+	// Get a new mining candidate at the new height via the public API
+	newMiningCandidate, err := baClient.GetMiningCandidate(ctx)
+	require.NoError(t, err, "Failed to get new mining candidate")
 
-	defer cancel()
+	t.Logf("New coinbase value at height %d: %d", newMiningCandidate.Height, newMiningCandidate.CoinbaseValue)
 
-	defer cleanup()
-
-	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
-	require.NotNil(t, ba)
-	require.NoError(t, err)
-
-	err = ba.Init(ctx)
-	require.NoError(t, err)
-
-	readyCh := make(chan struct{}, 1)
-
-	go func() {
-		err = ba.Start(ctx, readyCh)
-		if err != nil {
-			panic(err)
-		}
-	}()
-
-	<-readyCh
-
-	ba.blockAssembler.settings.ChainCfgParams.NoDifficultyAdjustment = false
-	ba.blockAssembler.settings.ChainCfgParams.TargetTimePerBlock = 30 * time.Second
-
-	// Generate initial blocks
-	miningCandidate, err := baClient.GetMiningCandidate(ctx)
-	require.NoError(t, err, "Failed to get mining candidate")
-
-	coinbase, err := CreateCoinbaseTxCandidate(t, miningCandidate)
-	require.NoError(t, err, "Failed to create coinbase tx")
-
-	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
-	require.NoError(t, err, "Failed to create block header from mining candidate")
-
-	var nonce uint32
-
-	for ; nonce < math.MaxUint32; nonce++ {
-		blockHeaderFromMC.Nonce = nonce
-
-		headerValid, hash, err := blockHeaderFromMC.HasMetTargetDifficulty()
-		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
-			t.Error(err)
-			t.FailNow()
-		}
-
-		if headerValid {
-			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
-			break
-		}
-	}
-
-	solution := model.MiningSolution{
-		Id:       miningCandidate.Id,
-		Nonce:    nonce,
-		Time:     &blockHeaderFromMC.Timestamp,
-		Version:  &blockHeaderFromMC.Version,
-		Coinbase: coinbase.Bytes(),
-	}
-
-	err = baClient.SubmitMiningSolution(ctx, &solution)
-	require.NoError(t, err, "Failed to submit mining solution")
-
-	// Get initial block height
-	_, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err, "Failed to get initial block header")
-
-	initialHeight := initialMetadata.Height
-	t.Logf("Initial block height: %d", initialHeight)
-
-	// Monitor block generation for 60 seconds
-	startTime := time.Now()
-	endTime := startTime.Add(60 * time.Second)
-	lastHeight := initialHeight
-
-	for time.Now().Before(endTime) {
-		_, m, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-		require.NoError(t, err, "Failed to get best block header")
-
-		if m.Height > lastHeight {
-			t.Logf("New block at height %d, time since start: %v", m.Height, time.Since(startTime))
-			lastHeight = m.Height
-		}
-
-		time.Sleep(5 * time.Second)
-	}
-
-	blocksGenerated := lastHeight - initialHeight
-	t.Logf("Total blocks generated: %d", blocksGenerated)
-
-	// Assert that some blocks were generated
-	assert.True(t, blocksGenerated > 0, "Expected some blocks to be generated")
-
-	// Calculate blocks per minute
-	blocksPerMinute := float64(blocksGenerated) / time.Since(startTime).Minutes()
-	t.Logf("Blocks per minute: %.2f", blocksPerMinute)
-
-	// Assert that the block generation rate is within an acceptable range
-	// Expecting roughly 2 blocks per minute (30 seconds per block)
-	assert.InDelta(t, 1.0, blocksPerMinute, 1.0, "Block generation rate should be roughly 2 blocks per minute")
-}
-
-// TestShouldFollowLongerChain verifies chain selection logic.
-func TestShouldFollowLongerChain(t *testing.T) {
-	t.Skip("This test is flaky")
-	_, ba, ctx, cancel, cleanup := setupTest(t)
-	defer cancel()
-	defer cleanup()
-
-	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
-	require.NoError(t, err)
-
-	miningCandidate, err := baClient.GetMiningCandidate(ctx)
-	require.NoError(t, err, "Failed to get mining candidate")
-
-	coinbase, err := CreateCoinbaseTxCandidate(t, miningCandidate)
-	require.NoError(t, err, "Failed to create coinbase tx")
-
-	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
-	require.NoError(t, err, "Failed to create block header from mining candidate")
-
-	var nonce uint32
-
-	for ; nonce < math.MaxUint32; nonce++ {
-		blockHeaderFromMC.Nonce = nonce
-
-		headerValid, hash, err := blockHeaderFromMC.HasMetTargetDifficulty()
-		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
-			t.Error(err)
-			t.FailNow()
-		}
-
-		if headerValid {
-			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
-			break
-		}
-	}
-
-	solution := model.MiningSolution{
-		Id:       miningCandidate.Id,
-		Nonce:    nonce,
-		Time:     &blockHeaderFromMC.Timestamp,
-		Version:  &blockHeaderFromMC.Version,
-		Coinbase: coinbase.Bytes(),
-	}
-
-	err = baClient.SubmitMiningSolution(ctx, &solution)
-	require.NoError(t, err, "Failed to submit mining solution")
-
-	// Get initial block height and hash
-	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err, "Failed to get initial block header")
-
-	initialHeight := initialMetadata.Height
-
-	t.Logf("Initial block height: %d", initialHeight)
-
-	// Create chain A (higher difficulty) - use deterministic timestamp
-	chainABits, _ := model.NewNBitFromString("1d00ffff")
-	baseTimestamp := uint32(1234567890) // Fixed timestamp for deterministic testing
-	chainAHeader1 := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  initialHeader.Hash(),
-		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:          1,
-		Bits:           *chainABits,
-		Timestamp:      baseTimestamp,
-	}
-
-	// Create chain B (lower difficulty) - use deterministic timestamp
-	chainBBits, _ := model.NewNBitFromString("207fffff") // Lower difficulty
-	chainBHeader1 := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  initialHeader.Hash(),
-		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:          2,
-		Bits:           *chainBBits,
-		Timestamp:      baseTimestamp + 1, // Slightly different timestamp
-	}
-
-	// Store blocks from both chains
-	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
-
-	// Store Chain A block
-	blockA := &model.Block{
-		Header:           chainAHeader1,
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{},
-	}
-	err = ba.blockchainClient.AddBlock(ctx, blockA, "")
-	require.NoError(t, err, "Failed to add Chain A block")
-
-	// Store Chain B block
-	blockB := &model.Block{
-		Header:           chainBHeader1,
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{},
-	}
-	err = ba.blockchainClient.AddBlock(ctx, blockB, "")
-	require.NoError(t, err, "Failed to add Chain B block")
-
-	// Get the best block header from the new block assembler
-	bestHeader, _, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, bestHeader)
-
-	// Assert that it followed chain A (higher difficulty)
-	assert.Equal(t, chainAHeader1.Hash(), bestHeader.Hash(), "Blockchain should show the higher chain")
-
-	WaitForBlock(t, blockA, 10*time.Second, ba.blockchainClient, ba.blockAssembler)
-
-	baBestBlock, _ := ba.blockAssembler.CurrentBlock()
-	require.NotNil(t, baBestBlock)
-	assert.Equal(t, chainAHeader1.Hash(), baBestBlock.Hash(), "Block assembler should follow the chain with higher difficulty")
-}
-
-// waitForBlock waits until the expected block is found in the blockchain and verifies the chain integrity.
-// TODO remove this function and use the testdaemon, or refactor that to use this function
-func WaitForBlock(t *testing.T, expectedBlock *model.Block, timeout time.Duration, blockchainClient blockchain.ClientI, blockassembly *BlockAssembler) {
-	deadline := time.Now().Add(timeout)
-
-	var (
-		err         error
-		currentHash chainhash.Hash
-	)
-
-finished:
-	for {
-		switch {
-		case time.Now().After(deadline):
-			t.Fatalf("Timeout waiting for block %s", expectedBlock.Header.Hash().String())
-		default:
-			_, err = blockchainClient.GetBlock(t.Context(), expectedBlock.Header.Hash())
-			if err == nil {
-				break finished
-			}
-
-			if !errors.Is(err, errors.ErrBlockNotFound) {
-				t.Fatalf("Failed to get block at hash %s: %v", expectedBlock.Header.Hash().String(), err)
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	for currentHash.String() != expectedBlock.Header.Hash().String() {
-		currentBlockHeader, _ := blockassembly.CurrentBlock()
-		if currentBlockHeader != nil {
-			currentHash = *currentBlockHeader.Hash()
-		}
-
-		if time.Now().After(deadline) {
-			t.Logf("Timeout waiting for block %s", expectedBlock.Header.Hash().String())
-			break
-		}
-
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	require.Equal(t, expectedBlock.Header.Hash().String(), currentHash.String(), "Expected block assembly to reach hash %s but got %s", expectedBlock.Header.Hash().String(), currentHash)
-}
-
-// This testcase tests TNA-3: Teranode must work on finding a difficult proof-of-work for its block
-func TestShouldFollowChainWithMoreChainwork(t *testing.T) {
-	t.Skip("This test is flaky")
-	_, ba, ctx, cancel, cleanup := setupTest(t)
-	defer cancel()
-	defer cleanup()
-
-	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
-	require.NoError(t, err)
-	require.NotNil(t, baClient)
-
-	miningCandidate, err := baClient.GetMiningCandidate(ctx)
-	require.NoError(t, err, "Failed to get mining candidate")
-
-	coinbase, err := CreateCoinbaseTxCandidate(t, miningCandidate)
-	require.NoError(t, err, "Failed to create coinbase tx")
-
-	blockHeaderFromMC, err := model.NewBlockHeaderFromMiningCandidate(miningCandidate, coinbase)
-	require.NoError(t, err, "Failed to create block header from mining candidate")
-
-	var nonce uint32
-
-	for ; nonce < math.MaxUint32; nonce++ {
-		blockHeaderFromMC.Nonce = nonce
-
-		headerValid, hash, err := blockHeaderFromMC.HasMetTargetDifficulty()
-		if err != nil && !strings.Contains(err.Error(), "block header does not meet target") {
-			t.Error(err)
-			t.FailNow()
-		}
-
-		if headerValid {
-			t.Logf("Found valid nonce: %d, hash: %s", nonce, hash)
-			break
-		}
-	}
-
-	solution := model.MiningSolution{
-		Id:       miningCandidate.Id,
-		Nonce:    nonce,
-		Time:     &blockHeaderFromMC.Timestamp,
-		Version:  &blockHeaderFromMC.Version,
-		Coinbase: coinbase.Bytes(),
-	}
-
-	err = baClient.SubmitMiningSolution(ctx, &solution)
-	require.NoError(t, err, "Failed to submit mining solution")
-
-	// Get initial block height and hash
-	initialHeader, initialMetadata, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err, "Failed to get initial block header")
-
-	initialHeight := initialMetadata.Height
-
-	t.Logf("Initial block height: %d", initialHeight)
-
-	// Create chain A (higher difficulty)
-	chainABits, _ := model.NewNBitFromString("1d00ffff")
-	chainAHeader1 := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  initialHeader.Hash(),
-		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:          1,
-		Bits:           *chainABits,
-		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-	}
-
-	// Create chain B (lower difficulty) with multiple blocks
-	chainBBits, _ := model.NewNBitFromString("207fffff") // Much lower difficulty
-	chainBHeader1 := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  initialHeader.Hash(),
-		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:          2,
-		Bits:           *chainBBits,
-		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-	}
-
-	chainBHeader2 := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  chainBHeader1.Hash(),
-		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:          3,
-		Bits:           *chainBBits,
-		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-	}
-
-	chainBHeader3 := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  chainBHeader2.Hash(),
-		HashMerkleRoot: &chainhash.Hash{},
-		Nonce:          4,
-		Bits:           *chainBBits,
-		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-	}
-
-	// Store blocks from both chains
-	coinbaseTx, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030200002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
-
-	// Store Chain A block (higher difficulty)
-	blockA := &model.Block{
-		Header:           chainAHeader1,
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{},
-	}
-	err = ba.blockchainClient.AddBlock(ctx, blockA, "")
-	require.NoError(t, err, "Failed to add Chain A block")
-
-	// Store Chain B blocks (lower difficulty but longer)
-	blockB1 := &model.Block{
-		Header:           chainBHeader1,
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{},
-	}
-	err = ba.blockchainClient.AddBlock(ctx, blockB1, "")
-	require.NoError(t, err, "Failed to add Chain B block 1")
-
-	blockB2 := &model.Block{
-		Header:           chainBHeader2,
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{},
-	}
-	err = ba.blockchainClient.AddBlock(ctx, blockB2, "")
-	require.NoError(t, err, "Failed to add Chain B block 2")
-
-	blockB3 := &model.Block{
-		Header:           chainBHeader3,
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{},
-	}
-	err = ba.blockchainClient.AddBlock(ctx, blockB3, "")
-	require.NoError(t, err, "Failed to add Chain B block 3")
-
-	t.Logf("Chain A: 1 block with difficulty %s", chainABits.String())
-	t.Logf("Chain B: 3 blocks with difficulty %s", chainBBits.String())
-
-	// Create new block assembler to check which chain it follows
-	newBA := New(ulogger.TestLogger{}, ba.settings, ba.txStore, ba.utxoStore, ba.subtreeStore, ba.blockchainClient)
-	require.NotNil(t, newBA)
-
-	err = newBA.Init(ctx)
-	require.NoError(t, err)
-
-	// Get the best block header from the new block assembler
-	bestHeader, _, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
-	require.NotNil(t, bestHeader)
-
-	// Assert that it followed chain A (higher difficulty) despite chain B being longer
-	assert.Equal(t, chainAHeader1.Hash(), bestHeader.Hash(),
-		"Block assembler should follow Chain A (more chainwork) despite Chain B being longer (3 blocks)")
+	// Verify coinbase value is still valid at the new height
+	assert.Greater(t, newMiningCandidate.CoinbaseValue, uint64(0), "Coinbase value should be greater than 0 at new height")
 }
 
 // This testcase tests TNA-3: Teranode must work on finding a difficult proof-of-work for its block
 // This testcase tests TNA-6: Teranode must express its acceptance of the block by working on creating the next block in the chain, using the hash of the accepted block as previous hash.
 func TestShouldAddSubtreesToLongerChain(t *testing.T) {
-	t.Skip("This test should pass")
-
 	_, ba, ctx, cancel, cleanup := setupTest(t)
 	defer cancel()
 	defer cleanup()
@@ -735,24 +317,44 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 
 	t.Log("Waiting for transactions to be processed...")
 
+	// Wait for transactions to be processed by the subtree processor.
+	// Transactions must age for at least DoubleSpendWindow before being dequeued.
+	var s []*subtree.Subtree
+	require.Eventually(t, func() bool {
+		// Use internal method to get subtrees directly (gRPC client doesn't return SubtreeSlices)
+		_, subtrees, err := ba.blockAssembler.getMiningCandidate()
+		if err != nil {
+			return false
+		}
+
+		// Count transactions in subtrees
+		foundTxs := 0
+		for _, st := range subtrees {
+			for _, node := range st.Nodes {
+				if node.Hash.Equal(*testHash1) || node.Hash.Equal(*testHash2) || node.Hash.Equal(*testHash3) {
+					foundTxs++
+				}
+			}
+		}
+
+		if foundTxs == 3 {
+			s = subtrees
+			return true
+		}
+		return false
+	}, 5*time.Second, 100*time.Millisecond, "Timeout waiting for transactions to be processed")
+
 	// Get mining candidate with timeout context
 	t.Log("Getting mining candidate...")
-
-	var miningCandidate *model.MiningCandidate
 
 	baClient, err := NewClient(ctx, ulogger.TestLogger{}, ba.settings)
 	require.NoError(t, err)
 
+	var miningCandidate *model.MiningCandidate
+
 	// Get mining candidate with subtree hashes included
 	miningCandidate, mcErr := baClient.GetMiningCandidate(ctx, true)
 	require.NoError(t, mcErr)
-
-	// Get the block candidate which contains the actual subtrees
-	blockCandidate, err := baClient.GetBlockAssemblyBlockCandidate(ctx)
-	require.NoError(t, err)
-
-	// Get subtrees from the block candidate
-	s := blockCandidate.SubtreeSlices
 
 	// Verify the mining candidate is built on Chain A
 	prevHash, _ := chainhash.NewHash(miningCandidate.PreviousHash)

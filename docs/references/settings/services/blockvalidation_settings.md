@@ -9,7 +9,7 @@
 | MaxRetries | int | 3 | blockValidationMaxRetries | General retry behavior |
 | RetrySleep | time.Duration | 1s | blockValidationRetrySleep | Retry delay timing |
 | GRPCAddress | string | "localhost:8088" | blockvalidation_grpcAddress | Client connection address |
-| GRPCListenAddress | string | ":8088" | blockvalidation_grpcListenAddress | **CRITICAL** - gRPC server binding, health checks only run if not empty |
+| GRPCListenAddress | string | ":8088" | blockvalidation_grpcListenAddress | **CRITICAL** - gRPC server binding (service skipped if empty) |
 | KafkaWorkers | int | 0 | blockvalidation_kafkaWorkers | Kafka consumer parallelism |
 | LocalSetTxMinedConcurrency | int | 8 | blockvalidation_localSetTxMinedConcurrency | Transaction mining concurrency |
 | MaxPreviousBlockHeadersToCheck | uint64 | 100 | blockvalidation_maxPreviousBlockHeadersToCheck | Block header validation depth |
@@ -32,7 +32,7 @@
 | IsParentMinedRetryBackoffDuration | time.Duration | 20ms | blockvalidation_isParentMined_retry_backoff_duration | Parent mining retry backoff base duration |
 | SubtreeGroupConcurrency | int | 1 | blockvalidation_subtreeGroupConcurrency | Subtree group processing concurrency |
 | BlockFoundChBufferSize | int | 1000 | blockvalidation_blockFoundCh_buffer_size | Block discovery pipeline buffer |
-| CatchupChBufferSize | int | 10 | blockvalidation_catchupCh_buffer_size | Catchup processing pipeline buffer |
+| CatchupChBufferSize | int | 100 | blockvalidation_catchupCh_buffer_size | Catchup processing pipeline buffer |
 | UseCatchupWhenBehind | bool | false | blockvalidation_useCatchupWhenBehind | **CRITICAL** - Catchup mode enablement |
 | CatchupConcurrency | int | max(4, CPU/2) | blockvalidation_catchupConcurrency | Catchup processing concurrency |
 | ValidationWarmupCount | int | 128 | blockvalidation_validation_warmup_count | Validation warmup behavior |
@@ -49,13 +49,37 @@
 | CircuitBreakerFailureThreshold | int | 5 | blockvalidation_circuit_breaker_failure_threshold | Circuit breaker failure detection |
 | CircuitBreakerSuccessThreshold | int | 2 | blockvalidation_circuit_breaker_success_threshold | Circuit breaker recovery |
 | CircuitBreakerTimeoutSeconds | int | 30 | blockvalidation_circuit_breaker_timeout_seconds | Circuit breaker timeout |
+| MaxBlocksBehindBlockAssembly | int | 20 | blockvalidation_maxBlocksBehindBlockAssembly | **CRITICAL** - Max blocks behind block assembly |
+| PeriodicProcessingInterval | time.Duration | 1m | blockvalidation_periodic_processing_interval | Periodic processing interval |
+| MaxParallelForks | int | 4 | blockvalidation_max_parallel_forks | Maximum parallel fork processing |
+| MaxTrackedForks | int | 1000 | blockvalidation_max_tracked_forks | Maximum total forks tracked |
+| NearForkThreshold | int | 0 | blockvalidation_near_fork_threshold | Near fork detection (0=coinbase maturity/2) |
+| FetchLargeBatchSize | int | 100 | blockvalidation_fetch_large_batch_size | Block fetch batch size |
+| FetchNumWorkers | int | 16 | blockvalidation_fetch_num_workers | Block fetch worker goroutines |
+| FetchBufferSize | int | 50 | blockvalidation_fetch_buffer_size | Block fetch channel buffer |
+| SubtreeFetchConcurrency | int | 8 | blockvalidation_subtree_fetch_concurrency | Concurrent subtree fetches per block |
+| GetBlockTransactionsConcurrency | int | 64 | blockvalidation_get_block_transactions_concurrency | Block transaction fetch concurrency |
 
 ## Configuration Dependencies
 
+### Service Startup
+
+- Service skipped (not added to ServiceManager) if `GRPCListenAddress` is empty
+- Kafka consumer created for block processing
+
 ### Catchup Mode
+
 - When `UseCatchupWhenBehind = true`, all catchup settings control behavior
 - `CatchupMaxAccumulatedHeaders` prevents memory exhaustion
 - Timeout settings control iteration and operation limits
+- Catchup automatically engages when node falls behind
+
+### Optimistic Mining
+
+- `OptimisticMining = true`: Enables background validation for performance
+- Block validation proceeds while subtree validation runs in background
+- Can be overridden per-validation via DisableOptimisticMining option
+- Disabled during catchup mode for better performance
 
 ### Transaction Metadata Processing
 - Cache and store processing work together with threshold-based fallback
@@ -81,9 +105,9 @@
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| GRPCListenAddress | Health checks only if not empty | Service monitoring |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| GRPCListenAddress | Must not be empty | Service skipped if empty | During daemon startup |
 | UseCatchupWhenBehind | Controls catchup mode activation | Chain synchronization |
 | CatchupMaxAccumulatedHeaders | Limits memory usage | Memory protection |
 | SecretMiningThreshold | Enables attack detection | Security |
@@ -92,24 +116,25 @@
 
 ### Basic Configuration
 
-```text
-blockvalidation_grpcListenAddress = ":8088"
-blockvalidation_useCatchupWhenBehind = false
+```bash
+blockvalidation_grpcListenAddress=:8088
+blockvalidation_useCatchupWhenBehind=false
 ```
 
 ### High Performance Configuration
 
-```text
-blockvalidation_validateBlockSubtreesConcurrency = 16
-blockvalidation_processTxMetaUsingStoreBatchSize = 2048
-blockvalidation_catchupConcurrency = 8
+```bash
+blockvalidation_validateBlockSubtreesConcurrency=16
+blockvalidation_processTxMetaUsingStoreBatchSize=2048
+blockvalidation_catchupConcurrency=8
+blockvalidation_fetch_num_workers=32
 ```
 
 ### Catchup Mode Configuration
 
-```text
-blockvalidation_useCatchupWhenBehind = true
-blockvalidation_catchup_max_retries = 5
-blockvalidation_catchup_iteration_timeout = 60
-blockvalidation_max_accumulated_headers = 50000
+```bash
+blockvalidation_useCatchupWhenBehind=true
+blockvalidation_catchup_max_retries=5
+blockvalidation_catchup_iteration_timeout=60
+blockvalidation_max_accumulated_headers=50000
 ```

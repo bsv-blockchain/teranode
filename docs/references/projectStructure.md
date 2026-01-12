@@ -45,6 +45,7 @@ teranode/
 │   ├── legacy/                   # Legacy services
 │   ├── p2p/                      # Peer-to-peer networking service
 │   ├── propagation/              # Transaction propagation service
+│   ├── pruner/                   # Pruner service
 │   ├── rpc/                      # RPC service
 │   ├── subtreevalidation/        # Subtree validation service
 │   ├── utxopersister/            # UTXO persister service
@@ -53,7 +54,6 @@ teranode/
 ├── stores/                       # Data storage implementations
 │   ├── blob/                     # Blob storage implementation
 │   ├── blockchain/               # Blockchain storage implementation
-│   ├── pruner/                   # Pruner storage utilities
 │   ├── txmetacache/             # Transaction metadata cache implementation
 │   └── utxo/                     # UTXO storage implementation
 │

@@ -236,7 +236,7 @@ func (m *MockStmt) Close() error {
 }
 
 func (m *MockStmt) NumInput() int {
-	return 1
+	return -1 // -1 means don't check argument count
 }
 
 func (m *MockStmt) Exec(args []driver.Value) (driver.Result, error) {

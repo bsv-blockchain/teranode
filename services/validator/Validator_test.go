@@ -33,7 +33,6 @@ import (
 	"testing"
 	"time"
 
-	aeroTest "github.com/bitcoin-sv/testcontainers-aerospike-go"
 	bt "github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -57,6 +56,7 @@ import (
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -822,7 +822,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID())
 		require.NoError(t, err)
 
-		expected := []uint32{1000, 1000, 1000}
+		expected := []uint32{1001, 1001, 1001}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
@@ -860,7 +860,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID())
 		require.NoError(t, err)
 
-		expected := []uint32{125, 1000, 768}
+		expected := []uint32{125, 1001, 768}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)
@@ -927,7 +927,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, txNonExtended, txNonExtended.TxID())
 		require.NoError(t, err)
 
-		expected := []uint32{125, 1000, 768}
+		expected := []uint32{125, 1001, 768}
 
 		if !reflect.DeepEqual(utxoHashes, expected) {
 			t.Errorf("getUtxoBlockHeightsAndExtendTx() got = %v, want %v", utxoHashes, expected)

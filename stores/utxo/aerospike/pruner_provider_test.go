@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/stores/pruner"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

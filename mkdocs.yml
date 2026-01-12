@@ -96,6 +96,7 @@ nav:
           - Block Persister: topics/services/blockPersister.md
           - P2P: topics/services/p2p.md
           - P2P NAT Traversal: P2P_NAT_TRAVERSAL.md
+          - Pruner: topics/services/pruner.md
           - Legacy: topics/services/legacy.md
           - RPC: topics/services/rpc.md
           - UTXO Persister: topics/services/utxoPersister.md
@@ -141,6 +142,7 @@ nav:
           - Block Persister: references/services/blockpersister_reference.md
           - P2P: references/services/p2p_reference.md
           - P2P Legacy Service: references/services/legacy_reference.md
+          - Pruner: references/services/pruner_reference.md
           - RPC: references/services/rpc_reference.md
           - UTXO Persister: references/services/utxopersister_reference.md
       - Stores:
@@ -162,6 +164,7 @@ nav:
               - Legacy: references/settings/services/legacy_settings.md
               - P2P: references/settings/services/p2p_settings.md
               - Propagation: references/settings/services/propagation_settings.md
+              - Pruner: references/settings/services/pruner_settings.md
               - RPC: references/settings/services/rpc_settings.md
               - Subtree Validation: references/settings/services/subtreevalidation_settings.md
               - UTXO Persister: references/settings/services/utxopersister_settings.md

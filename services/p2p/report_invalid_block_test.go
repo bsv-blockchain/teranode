@@ -24,12 +24,16 @@ func TestReportInvalidBlock(t *testing.T) {
 	// Create a mock P2P node with the test peer ID
 	mockNode := &MockServerP2PClient{peerID: testPeerID}
 
+	// Create peer registry
+	peerRegistry := NewPeerRegistry()
+
 	// Create test server with minimal required fields
 	server := &Server{
 		blockPeerMap:   sync.Map{},
 		logger:         ulogger.TestLogger{},
 		notificationCh: make(chan *notificationMsg, 10),
 		P2PClient:      mockNode,
+		peerRegistry:   peerRegistry,
 	}
 
 	// Initialize ban manager with test handler
@@ -44,17 +48,22 @@ func TestReportInvalidBlock(t *testing.T) {
 		decayInterval: time.Hour,
 		decayAmount:   1,
 		handler:       &myBanEventHandler{server: server},
+		peerRegistry:  peerRegistry,
 	}
 
 	// Test case 1: Successful report
 	t.Run("successful report", func(t *testing.T) {
-		t.Skip("skipping until we actually report block")
 		blockHash := "0000000000000000000000000000000000000000000000000000000000000000"
-		peerID := "test-peer-1"
+		peerIDStr := testPeerID.String()
+
+		// Register the peer in the peer registry using the string representation
+		// Note: ReportInvalidBlock uses peer.ID(string) which is the raw string cast,
+		// so we need to register with the same key it will look up
+		peerRegistry.Put(peer.ID(peerIDStr), "", 0, nil, "")
 
 		// Store the peer ID in the blockPeerMap with timestamp
 		entry := peerMapEntry{
-			peerID:    peerID,
+			peerID:    peerIDStr,
 			timestamp: time.Now(),
 		}
 		server.blockPeerMap.Store(blockHash, entry)
@@ -65,6 +74,11 @@ func TestReportInvalidBlock(t *testing.T) {
 		// Verify the block was removed from the map
 		_, exists := server.blockPeerMap.Load(blockHash)
 		assert.False(t, exists, "Block should be removed from map after reporting")
+
+		// Verify the peer was marked as having malicious interaction
+		peerInfo, found := peerRegistry.Get(peer.ID(peerIDStr))
+		require.True(t, found, "Peer should exist in registry")
+		assert.Equal(t, int64(1), peerInfo.MaliciousCount, "Peer should have 1 malicious interaction recorded")
 	})
 
 	// Test case 2: Block not found

@@ -481,3 +481,176 @@ func TestHandleWebSocket(t *testing.T) {
 		assert.Equal(t, testNotification.BaseURL, received.BaseURL)
 	})
 }
+
+func TestBroadcast_SequentialTimeoutDoS(t *testing.T) {
+	s := &Server{
+		logger: &ulogger.TestLogger{},
+		settings: &settings.Settings{
+			P2P: settings.P2PSettings{
+				ListenMode: settings.ListenModeFull,
+				EnableNAT:  false,
+			},
+		},
+	}
+
+	clientChannels := newClientChannelMap()
+	newClientCh := make(chan chan []byte, 100)
+	deadClientCh := make(chan chan []byte, 100)
+	notificationCh := make(chan *notificationMsg, 100)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	processorDone := make(chan struct{})
+	go func() {
+		s.startNotificationProcessor(clientChannels, newClientCh, deadClientCh, notificationCh, ctx)
+		close(processorDone)
+	}()
+
+	// Wait for processor to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Number of malicious clients (channels that won't be read)
+	numMaliciousClients := 5
+
+	// Create malicious clients - unbuffered channels that will block
+	// This simulates clients that stop reading: when broadcast tries to send,
+	// it will block for 1 second per client before timing out
+	maliciousChannels := make([]chan []byte, numMaliciousClients)
+	for i := 0; i < numMaliciousClients; i++ {
+		// Create unbuffered channel that will block when trying to send
+		maliciousChannels[i] = make(chan []byte)
+		newClientCh <- maliciousChannels[i]
+	}
+
+	// Wait for all clients to be added
+	time.Sleep(100 * time.Millisecond)
+	require.Equal(t, numMaliciousClients, clientChannels.count(), "All malicious clients should be added")
+
+	// Add one legitimate client that will read messages
+	// Add it AFTER malicious clients to ensure it's processed last in the broadcast loop
+	legitimateCh := make(chan []byte, 100)
+	newClientCh <- legitimateCh
+	time.Sleep(50 * time.Millisecond)
+
+	// Start reading from legitimate client in background
+	legitimateReceived := make(chan []byte, 1)
+	go func() {
+		select {
+		case msg := <-legitimateCh:
+			legitimateReceived <- msg
+		case <-time.After(10 * time.Second):
+			// Timeout - legitimate client didn't receive message
+		}
+	}()
+
+	// Send a notification and measure the time it takes for broadcast to complete
+	// With parallel processing, broadcast should complete in ~1 second (all timeouts happen concurrently)
+	// instead of N seconds (sequential timeouts)
+	testNotification := &notificationMsg{
+		Type:    "test_dos",
+		BaseURL: baseURL,
+	}
+
+	startTime := time.Now()
+	notificationCh <- testNotification
+
+	// Wait for legitimate client to receive the message
+	select {
+	case <-legitimateReceived:
+		t.Logf("Legitimate client received message")
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timeout waiting for legitimate client to receive message")
+	}
+
+	// Now wait for ALL malicious clients to be processed and removed
+	// With parallel processing, this should take ~1 second (all timeouts happen concurrently)
+	// instead of N seconds (sequential timeouts)
+	timeout := time.After(time.Duration(numMaliciousClients+2) * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	var removedCount int
+	var broadcastCompleteTime time.Duration
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("Timeout waiting for all malicious clients to be removed. Only %d/%d removed", removedCount, numMaliciousClients)
+		case <-ticker.C:
+			removedCount = 0
+			for _, ch := range maliciousChannels {
+				if !clientChannels.contains(ch) {
+					removedCount++
+				}
+			}
+
+			if removedCount == numMaliciousClients {
+				broadcastCompleteTime = time.Since(startTime)
+				t.Logf("All %d malicious clients removed after %v", removedCount, broadcastCompleteTime)
+				goto broadcastComplete
+			}
+		}
+	}
+
+broadcastComplete:
+	// Verify the broadcast completed quickly due to parallel processing
+	// With parallel processing, all timeouts happen concurrently, so total time should be ~1 second
+	// instead of N seconds (sequential timeouts)
+	expectedMaxDelay := 2 * time.Second // Allow some overhead for goroutine scheduling
+
+	if broadcastCompleteTime > expectedMaxDelay {
+		t.Errorf("Broadcast took too long (%v). Expected at most %v with parallel processing. Sequential processing would take ~%d seconds",
+			broadcastCompleteTime, expectedMaxDelay, numMaliciousClients)
+	} else {
+		t.Logf("Broadcast completed in %v (parallel processing working correctly)", broadcastCompleteTime)
+	}
+
+	// Verify all malicious clients were removed
+	assert.Equal(t, numMaliciousClients, removedCount,
+		"All malicious client channels should be removed after timeout")
+
+	// Verify the notification processor can process new notifications after broadcast completes
+	// Drain any remaining messages from legitimate client first
+	select {
+	case <-legitimateCh:
+		// Drain any buffered message
+	default:
+		// No message to drain
+	}
+
+	startTime2 := time.Now()
+	testNotification2 := &notificationMsg{
+		Type:    "test_dos_2",
+		BaseURL: baseURL,
+	}
+	notificationCh <- testNotification2
+
+	select {
+	case msg := <-legitimateCh:
+		elapsed2 := time.Since(startTime2)
+		t.Logf("Second notification received after %v", elapsed2)
+		var received notificationMsg
+		err := json.Unmarshal(msg, &received)
+		require.NoError(t, err)
+		assert.Equal(t, "test_dos_2", received.Type, "Second notification should be processed correctly")
+		// Second notification should be fast since malicious clients are already removed
+		if elapsed2 > 500*time.Millisecond {
+			t.Errorf("Second notification took too long (%v). Should be fast since malicious clients are removed", elapsed2)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for second notification - processor may still be blocked")
+	}
+
+	// Cancel context to stop processor
+	cancel()
+
+	// Wait for processor to finish (give it time to process any pending operations)
+	select {
+	case <-processorDone:
+		t.Logf("Processor stopped successfully")
+	case <-time.After(5 * time.Second):
+		t.Logf("Warning: Processor did not stop within timeout, but this may be acceptable if it's still processing")
+		// Don't fail the test - the important part is demonstrating the DoS vulnerability is fixed
+	}
+}

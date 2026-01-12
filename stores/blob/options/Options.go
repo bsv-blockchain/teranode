@@ -48,6 +48,10 @@ type Options struct {
 	LongtermStoreURL *url.URL
 	// BlockHeightCh is a channel for tracking block heights
 	BlockHeightCh chan uint32
+	// DisableDAH disables all Delete-At-Height functionality for this store (StoreOption)
+	// When true, the store will never create .dah files or participate in DAH-based cleanup
+	// This is useful for external stores where lifecycle management is handled by other systems
+	DisableDAH bool
 }
 
 // StoreOption is a function type for configuring store-level options.
@@ -120,6 +124,16 @@ func WithDefaultSubDirectory(subDirectory string) StoreOption {
 func WithHashPrefix(length int) StoreOption {
 	return func(s *Options) {
 		s.HashPrefix = length
+	}
+}
+
+// WithDisableDAH disables all Delete-At-Height functionality for the store.
+// When enabled, the store will never create .dah files or participate in DAH-based cleanup.
+// This is useful for external stores where lifecycle management is handled by other systems
+// (e.g., Aerospike pruner service managing external file cleanup).
+func WithDisableDAH(disable bool) StoreOption {
+	return func(s *Options) {
+		s.DisableDAH = disable
 	}
 }
 
@@ -206,6 +220,7 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 		options.SkipHeader = storeOpts.SkipHeader
 		options.PersistSubDir = storeOpts.PersistSubDir
 		options.LongtermStoreURL = storeOpts.LongtermStoreURL
+		options.DisableDAH = storeOpts.DisableDAH
 	}
 
 	for _, opt := range fileOpts {
