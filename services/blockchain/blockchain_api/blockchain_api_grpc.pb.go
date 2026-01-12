@@ -61,10 +61,13 @@ const (
 	BlockchainAPI_SetState_FullMethodName                             = "/blockchain_api.BlockchainAPI/SetState"
 	BlockchainAPI_GetBlockIsMined_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockIsMined"
 	BlockchainAPI_SetBlockMinedSet_FullMethodName                     = "/blockchain_api.BlockchainAPI/SetBlockMinedSet"
+	BlockchainAPI_ClearBlockMinedSet_FullMethodName                   = "/blockchain_api.BlockchainAPI/ClearBlockMinedSet"
 	BlockchainAPI_GetBlocksMinedNotSet_FullMethodName                 = "/blockchain_api.BlockchainAPI/GetBlocksMinedNotSet"
 	BlockchainAPI_SetBlockSubtreesSet_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetBlockSubtreesSet"
 	BlockchainAPI_GetBlocksSubtreesNotSet_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBlocksSubtreesNotSet"
 	BlockchainAPI_SetBlockProcessedAt_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetBlockProcessedAt"
+	BlockchainAPI_SetBlockPersistedAt_FullMethodName                  = "/blockchain_api.BlockchainAPI/SetBlockPersistedAt"
+	BlockchainAPI_GetBlocksNotPersisted_FullMethodName                = "/blockchain_api.BlockchainAPI/GetBlocksNotPersisted"
 	BlockchainAPI_SendFSMEvent_FullMethodName                         = "/blockchain_api.BlockchainAPI/SendFSMEvent"
 	BlockchainAPI_GetFSMCurrentState_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetFSMCurrentState"
 	BlockchainAPI_WaitFSMToTransitionToGivenState_FullMethodName      = "/blockchain_api.BlockchainAPI/WaitFSMToTransitionToGivenState"
@@ -162,6 +165,8 @@ type BlockchainAPIClient interface {
 	GetBlockIsMined(ctx context.Context, in *GetBlockIsMinedRequest, opts ...grpc.CallOption) (*GetBlockIsMinedResponse, error)
 	// SetBlockMinedSet marks a block as mined.
 	SetBlockMinedSet(ctx context.Context, in *SetBlockMinedSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// ClearBlockMinedSet resets the mined_set flag to false for a block.
+	ClearBlockMinedSet(ctx context.Context, in *ClearBlockMinedSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// GetBlocksMinedNotSet retrieves blocks not marked as mined.
 	GetBlocksMinedNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksMinedNotSetResponse, error)
 	// SetBlockSubtreesSet marks a block's subtrees as set.
@@ -170,6 +175,10 @@ type BlockchainAPIClient interface {
 	GetBlocksSubtreesNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksSubtreesNotSetResponse, error)
 	// SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
 	SetBlockProcessedAt(ctx context.Context, in *SetBlockProcessedAtRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// SetBlockPersistedAt updates the persisted_at timestamp for a block.
+	SetBlockPersistedAt(ctx context.Context, in *SetBlockPersistedAtRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+	GetBlocksNotPersisted(ctx context.Context, in *GetBlocksNotPersistedRequest, opts ...grpc.CallOption) (*GetBlocksNotPersistedResponse, error)
 	// SendFSMEvent sends an event to the blockchain FSM.
 	SendFSMEvent(ctx context.Context, in *SendFSMEventRequest, opts ...grpc.CallOption) (*GetFSMStateResponse, error)
 	// GetFSMCurrentState retrieves the current state of the FSM.
@@ -593,6 +602,16 @@ func (c *blockchainAPIClient) SetBlockMinedSet(ctx context.Context, in *SetBlock
 	return out, nil
 }
 
+func (c *blockchainAPIClient) ClearBlockMinedSet(ctx context.Context, in *ClearBlockMinedSetRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_ClearBlockMinedSet_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockchainAPIClient) GetBlocksMinedNotSet(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlocksMinedNotSetResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlocksMinedNotSetResponse)
@@ -627,6 +646,26 @@ func (c *blockchainAPIClient) SetBlockProcessedAt(ctx context.Context, in *SetBl
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, BlockchainAPI_SetBlockProcessedAt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) SetBlockPersistedAt(ctx context.Context, in *SetBlockPersistedAtRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, BlockchainAPI_SetBlockPersistedAt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetBlocksNotPersisted(ctx context.Context, in *GetBlocksNotPersistedRequest, opts ...grpc.CallOption) (*GetBlocksNotPersistedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBlocksNotPersistedResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlocksNotPersisted_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -836,6 +875,8 @@ type BlockchainAPIServer interface {
 	GetBlockIsMined(context.Context, *GetBlockIsMinedRequest) (*GetBlockIsMinedResponse, error)
 	// SetBlockMinedSet marks a block as mined.
 	SetBlockMinedSet(context.Context, *SetBlockMinedSetRequest) (*emptypb.Empty, error)
+	// ClearBlockMinedSet resets the mined_set flag to false for a block.
+	ClearBlockMinedSet(context.Context, *ClearBlockMinedSetRequest) (*emptypb.Empty, error)
 	// GetBlocksMinedNotSet retrieves blocks not marked as mined.
 	GetBlocksMinedNotSet(context.Context, *emptypb.Empty) (*GetBlocksMinedNotSetResponse, error)
 	// SetBlockSubtreesSet marks a block's subtrees as set.
@@ -844,6 +885,10 @@ type BlockchainAPIServer interface {
 	GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error)
 	// SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
 	SetBlockProcessedAt(context.Context, *SetBlockProcessedAtRequest) (*emptypb.Empty, error)
+	// SetBlockPersistedAt updates the persisted_at timestamp for a block.
+	SetBlockPersistedAt(context.Context, *SetBlockPersistedAtRequest) (*emptypb.Empty, error)
+	// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+	GetBlocksNotPersisted(context.Context, *GetBlocksNotPersistedRequest) (*GetBlocksNotPersistedResponse, error)
 	// SendFSMEvent sends an event to the blockchain FSM.
 	SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error)
 	// GetFSMCurrentState retrieves the current state of the FSM.
@@ -992,6 +1037,9 @@ func (UnimplementedBlockchainAPIServer) GetBlockIsMined(context.Context, *GetBlo
 func (UnimplementedBlockchainAPIServer) SetBlockMinedSet(context.Context, *SetBlockMinedSetRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetBlockMinedSet not implemented")
 }
+func (UnimplementedBlockchainAPIServer) ClearBlockMinedSet(context.Context, *ClearBlockMinedSetRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearBlockMinedSet not implemented")
+}
 func (UnimplementedBlockchainAPIServer) GetBlocksMinedNotSet(context.Context, *emptypb.Empty) (*GetBlocksMinedNotSetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlocksMinedNotSet not implemented")
 }
@@ -1003,6 +1051,12 @@ func (UnimplementedBlockchainAPIServer) GetBlocksSubtreesNotSet(context.Context,
 }
 func (UnimplementedBlockchainAPIServer) SetBlockProcessedAt(context.Context, *SetBlockProcessedAtRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetBlockProcessedAt not implemented")
+}
+func (UnimplementedBlockchainAPIServer) SetBlockPersistedAt(context.Context, *SetBlockPersistedAtRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetBlockPersistedAt not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetBlocksNotPersisted(context.Context, *GetBlocksNotPersistedRequest) (*GetBlocksNotPersistedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBlocksNotPersisted not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SendFSMEvent not implemented")
@@ -1738,6 +1792,24 @@ func _BlockchainAPI_SetBlockMinedSet_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_ClearBlockMinedSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearBlockMinedSetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).ClearBlockMinedSet(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_ClearBlockMinedSet_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).ClearBlockMinedSet(ctx, req.(*ClearBlockMinedSetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockchainAPI_GetBlocksMinedNotSet_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -1806,6 +1878,42 @@ func _BlockchainAPI_SetBlockProcessedAt_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).SetBlockProcessedAt(ctx, req.(*SetBlockProcessedAtRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_SetBlockPersistedAt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetBlockPersistedAtRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).SetBlockPersistedAt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_SetBlockPersistedAt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).SetBlockPersistedAt(ctx, req.(*SetBlockPersistedAtRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetBlocksNotPersisted_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBlocksNotPersistedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetBlocksNotPersisted(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetBlocksNotPersisted_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetBlocksNotPersisted(ctx, req.(*GetBlocksNotPersistedRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2182,6 +2290,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BlockchainAPI_SetBlockMinedSet_Handler,
 		},
 		{
+			MethodName: "ClearBlockMinedSet",
+			Handler:    _BlockchainAPI_ClearBlockMinedSet_Handler,
+		},
+		{
 			MethodName: "GetBlocksMinedNotSet",
 			Handler:    _BlockchainAPI_GetBlocksMinedNotSet_Handler,
 		},
@@ -2196,6 +2308,14 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetBlockProcessedAt",
 			Handler:    _BlockchainAPI_SetBlockProcessedAt_Handler,
+		},
+		{
+			MethodName: "SetBlockPersistedAt",
+			Handler:    _BlockchainAPI_SetBlockPersistedAt_Handler,
+		},
+		{
+			MethodName: "GetBlocksNotPersisted",
+			Handler:    _BlockchainAPI_GetBlocksNotPersisted_Handler,
 		},
 		{
 			MethodName: "SendFSMEvent",

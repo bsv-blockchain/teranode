@@ -717,6 +717,14 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 		mockBlockchainClient.On("ValidateBlock", mock.Anything, mock.Anything, mock.Anything).
 			Return(nil).Maybe()
 
+		// Mock GetBlockHeadersByHeight for fork block retrieval (returns empty for this test)
+		mockBlockchainClient.On("GetBlockHeadersByHeight", mock.Anything, mock.Anything, mock.Anything).
+			Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
+
+		// Mock ClearBlockMinedSet for fork block processing
+		mockBlockchainClient.On("ClearBlockMinedSet", mock.Anything, mock.Anything).
+			Return(nil).Maybe()
+
 		// Mock FSM state transitions (required for catchup)
 		currentState := blockchain.FSMStateRUNNING
 		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&currentState, nil).Maybe()

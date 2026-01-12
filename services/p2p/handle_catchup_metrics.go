@@ -246,28 +246,11 @@ func (s *Server) IsPeerMalicious(_ context.Context, req *p2p_api.IsPeerMalicious
 		}, nil
 	}
 
-	// Check peer registry for malicious behavior
-	if s.peerRegistry != nil {
-		peerId, err := peer.Decode(req.PeerId)
-		if err != nil {
-			return &p2p_api.IsPeerMaliciousResponse{
-				IsMalicious: false,
-				Reason:      "invalid peer ID",
-			}, nil
-		}
-		peerInfo, exists := s.peerRegistry.Get(peerId)
-		if exists {
-			// A peer is considered malicious if:
-			// 1. They have a very low reputation score (below 20)
-			// 2. They have multiple failed interactions
-			if peerInfo.ReputationScore < 20 {
-				return &p2p_api.IsPeerMaliciousResponse{
-					IsMalicious: true,
-					Reason:      fmt.Sprintf("very low reputation score: %.2f", peerInfo.ReputationScore),
-				}, nil
-			}
-		}
-	}
+	// A peer is ONLY considered malicious if they are explicitly banned.
+	// Low reputation scores are handled by IsPeerUnhealthy(), not here.
+	// This distinction is critical: malicious = serving invalid data, unhealthy = poor performance.
+	// During catchup, we should still try unhealthy peers if they're our only option,
+	// but never try truly malicious (banned) peers.
 
 	return &p2p_api.IsPeerMaliciousResponse{
 		IsMalicious: false,
@@ -297,7 +280,7 @@ func (s *Server) IsPeerUnhealthy(_ context.Context, req *p2p_api.IsPeerUnhealthy
 		}
 		peerInfo, exists := s.peerRegistry.Get(peerId)
 		if !exists {
-			// Unknown peer - consider unhealthy
+			// Unknown peer - consider unhealthy since we have no information about them
 			return &p2p_api.IsPeerUnhealthyResponse{
 				IsUnhealthy:     true,
 				Reason:          "unknown peer",

@@ -213,7 +213,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	// BlockPersister
 	_, listenAddr, _, err = util.GetListener(appSettings.Context, "blockpersister", "", ":0")
 	require.NoError(t, err)
-	appSettings.Block.PersisterHTTPListenAddress = listenAddr
+	appSettings.BlockPersister.HTTPListenAddress = listenAddr
 
 	// BlockValidation - always started by default
 	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "blockvalidation", "", ":0")
@@ -651,7 +651,7 @@ func GetPorts(appSettings *settings.Settings) []int {
 	ports := []int{
 		getPortFromString(appSettings.Asset.CentrifugeListenAddress),
 		getPortFromString(appSettings.Asset.HTTPListenAddress),
-		getPortFromString(appSettings.Block.PersisterHTTPListenAddress),
+		getPortFromString(appSettings.BlockPersister.HTTPListenAddress),
 		getPortFromString(appSettings.BlockAssembly.GRPCListenAddress),
 		getPortFromString(appSettings.BlockChain.GRPCListenAddress),
 		getPortFromString(appSettings.BlockChain.HTTPListenAddress),

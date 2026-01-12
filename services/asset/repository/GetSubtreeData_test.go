@@ -7,7 +7,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockpersister"
 	"github.com/bsv-blockchain/teranode/services/utxopersister/filestorer"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/stretchr/testify/require"
@@ -24,8 +23,10 @@ func TestGetSubtreeDataWithReader(t *testing.T) {
 		storer, err := filestorer.NewFileStorer(t.Context(), ctx.logger, ctx.settings, ctx.repo.SubtreeStore, subtree.RootHash()[:], fileformat.FileTypeSubtreeData)
 		require.NoError(t, err)
 
-		err = blockpersister.WriteTxs(t.Context(), ctx.logger, storer, txs, nil)
-		require.NoError(t, err)
+		for _, tx := range txs {
+			_, err = storer.Write(tx.Bytes())
+			require.NoError(t, err)
+		}
 
 		require.NoError(t, storer.Close(t.Context()))
 

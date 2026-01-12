@@ -497,7 +497,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	s.lastHeight = c.lastBlockHeight
 
 	// Remove the previous block's UTXOSet
-	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.Block.SkipUTXODelete {
+	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.BlockPersister.SkipUTXODelete {
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
 		}

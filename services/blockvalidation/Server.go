@@ -595,7 +595,15 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				{
 					// Check if peer is bad or malicious before attempting catchup
 					if u.isPeerBad(c.peerID) || u.isPeerMalicious(ctx, c.peerID) {
-						u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad or malicious, skipping", c.block.Hash().String(), c.peerID, c.baseURL)
+						u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad or malicious, trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL)
+
+						// Try alternative peers from P2P service instead of just skipping
+						if !u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
+							blockHash := c.block.Hash()
+							u.logger.Warnf("[catchup] All alternative peers failed for block %s, clearing processing marker for retry", blockHash.String())
+							u.processBlockNotify.Delete(*blockHash)
+							u.catchupAlternatives.Delete(*blockHash)
+						}
 						continue
 					}
 
@@ -632,42 +640,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 						// Try alternative sources for catchup
 						blockHash := c.block.Hash()
-						// Clean up alternatives after processing (no defer in loop)
 
-						// First, try to get intelligent peer selection from P2P service
-						bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, c.block.Height)
-						if peerErr != nil {
-							u.logger.Warnf("[catchup] Failed to get best peers from P2P service: %v", peerErr)
-						}
-
-						// Try best peers from P2P service first
-						if len(bestPeers) > 0 {
-							u.logger.Infof("[catchup] Trying %d peers from P2P service for block %s after primary peer %s failed", len(bestPeers), blockHash.String(), c.peerID)
-
-							for _, bestPeer := range bestPeers {
-								// Skip the same peer that just failed
-								if bestPeer.ID == c.peerID {
-									continue
-								}
-
-								u.logger.Infof("[catchup] Trying peer %s (score: %.2f) for block %s", bestPeer.ID, bestPeer.CatchupReputationScore, blockHash.String())
-
-								// Try catchup with this peer
-								if altErr := u.catchup(ctx, c.block, bestPeer.ID, bestPeer.DataHubURL); altErr == nil {
-									u.logger.Infof("[catchup] Successfully processed block %s from peer %s (via P2P service)", blockHash.String(), bestPeer.ID)
-									// Clear processing marker and alternatives
-									u.processBlockNotify.Delete(*blockHash)
-									u.catchupAlternatives.Delete(*blockHash)
-									break // Success, exit the peer loop
-								} else {
-									u.logger.Warnf("[catchup] Peer %s also failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
-									u.reportCatchupFailure(ctx, bestPeer.ID)
-									// Failure will be reported by the catchup function itself
-								}
-							}
+						// First, try intelligent peer selection from P2P service
+						if u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
+							continue
 						}
 
 						// If P2P service peers didn't work, fall back to cached alternatives
+						catchupSucceeded := false
 						alternatives := u.catchupAlternatives.Get(*blockHash)
 						if alternatives != nil && alternatives.Value() != nil {
 							altList := alternatives.Value()
@@ -680,9 +660,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 									continue
 								}
 
-								// Check if peer is bad or malicious
-								if u.isPeerBad(alt.peerID) || u.isPeerMalicious(ctx, alt.peerID) {
-									u.logger.Warnf("[catchup] Skipping alternative peer %s - marked as bad or malicious", alt.peerID)
+								// Check if peer is truly malicious (serving invalid blocks)
+								// Don't filter by isPeerBad - low reputation peers might still work for catchup
+								if u.isPeerMalicious(ctx, alt.peerID) {
+									u.logger.Warnf("[catchup] Skipping alternative peer %s - marked as malicious", alt.peerID)
 									continue
 								}
 
@@ -694,6 +675,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 									// Clear processing marker and alternatives
 									u.processBlockNotify.Delete(*blockHash)
 									u.catchupAlternatives.Delete(*blockHash)
+									catchupSucceeded = true
 									break
 								} else {
 									u.logger.Warnf("[catchup] Alternative peer %s also failed for block %s: %v", alt.peerID, blockHash.String(), altErr)
@@ -704,9 +686,11 @@ func (u *Server) Init(ctx context.Context) (err error) {
 							u.logger.Infof("[catchup] No cached alternative sources available for block %s", blockHash.String())
 						}
 
-						// Clear processing marker and alternatives to allow retries
-						u.processBlockNotify.Delete(*blockHash)
-						u.catchupAlternatives.Delete(*blockHash)
+						if !catchupSucceeded {
+							// Clear processing marker and alternatives to allow retries
+							u.processBlockNotify.Delete(*blockHash)
+							u.catchupAlternatives.Delete(*blockHash)
+						}
 					} else {
 						// Success - clear alternatives for this block
 						u.catchupAlternatives.Delete(*c.block.Hash())

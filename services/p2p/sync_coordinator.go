@@ -93,10 +93,16 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 	// Get all peers
 	peers := sc.registry.GetAll()
 
-	// Check if any peer is significantly ahead of us and has a good reputation
+	// Check if any eligible peer is significantly ahead of us.
+	// This must align with sync peer selection criteria; otherwise, a low-quality
+	// peer we would never select could cause us to think we're perpetually behind.
 	for _, p := range peers {
-		if p.Height > localHeight && p.ReputationScore > 20 {
-			return false // At least one peer is ahead
+		// Only consider peers that are viable sync candidates
+		if p.IsBanned || p.DataHubURL == "" || p.Height == 0 || p.ReputationScore < 20 {
+			continue
+		}
+		if p.Height > localHeight+10 { // Allow some tolerance
+			return false // At least one peer is significantly ahead
 		}
 	}
 
@@ -302,7 +308,7 @@ func (sc *SyncCoordinator) checkFSMState(ctx context.Context) {
 	}
 
 	// Check if we're in backoff mode
-	if sc.isInBackoffPeriod() {
+	if sc.checkAndClearExpiredBackoff() {
 		return
 	}
 
@@ -606,10 +612,12 @@ func (sc *SyncCoordinator) UpdateBanStatus(peerID peer.ID) {
 	}
 }
 
-// isInBackoffPeriod checks if we're currently in a backoff period
-func (sc *SyncCoordinator) isInBackoffPeriod() bool {
-	sc.mu.RLock()
-	defer sc.mu.RUnlock()
+// checkAndClearExpiredBackoff checks if we're currently in a backoff period.
+// If the backoff has expired, it clears the backoff state and increases the multiplier
+// for the next time we exhaust all peers. Returns true if still in backoff.
+func (sc *SyncCoordinator) checkAndClearExpiredBackoff() bool {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
 
 	if !sc.allPeersAttempted {
 		return false // Not in backoff if we haven't tried all peers
@@ -626,7 +634,8 @@ func (sc *SyncCoordinator) isInBackoffPeriod() bool {
 		return true
 	}
 
-	// Backoff period expired, increase multiplier for next time
+	// Backoff period expired; clear backoff state and increase multiplier for next time.
+	sc.allPeersAttempted = false
 	if sc.backoffMultiplier < sc.maxBackoffMultiplier {
 		sc.backoffMultiplier *= 2
 	}
@@ -647,18 +656,28 @@ func (sc *SyncCoordinator) resetBackoff() {
 	}
 }
 
-// enterBackoffMode marks that all peers have been attempted
+// enterBackoffMode marks that all peers have been attempted.
+// We enter a backoff period to avoid hammering peers when no eligible peer can be selected.
+// We also clear sync attempts so that once backoff expires, peers can be retried immediately.
 func (sc *SyncCoordinator) enterBackoffMode() {
 	sc.mu.Lock()
-	defer sc.mu.Unlock()
-
-	if !sc.allPeersAttempted {
-		sc.allPeersAttempted = true
-		sc.lastAllPeersAttemptTime = time.Now()
-		backoffDuration := time.Duration(sc.backoffMultiplier) * fastMonitorInterval
-		sc.logger.Warnf("[SyncCoordinator] All eligible peers have been attempted, entering backoff for %v",
-			backoffDuration)
+	if sc.allPeersAttempted {
+		sc.mu.Unlock()
+		return
 	}
+
+	sc.allPeersAttempted = true
+	sc.lastAllPeersAttemptTime = time.Now()
+
+	// Capture for logging while holding the lock
+	backoffDuration := time.Duration(sc.backoffMultiplier) * fastMonitorInterval
+	currentMultiplier := sc.backoffMultiplier
+
+	sc.mu.Unlock()
+
+	peersCleared := sc.registry.ClearAllSyncAttempts()
+	sc.logger.Warnf("[SyncCoordinator] All eligible peers attempted, entering backoff for %v (multiplier: %dx). Cleared sync attempts for %d peers.",
+		backoffDuration, currentMultiplier, peersCleared)
 }
 
 // checkAllPeersAttempted checks if all eligible peers have been attempted recently
@@ -672,9 +691,11 @@ func (sc *SyncCoordinator) checkAllPeersAttempted() {
 	syncAttemptCooldown := 1 * time.Minute // Don't retry a peer for at least 1 minute
 
 	for _, p := range peers {
-		// Count peers that would normally be eligible
-		if p.Height > localHeight && !p.IsBanned &&
-			p.DataHubURL != "" && p.ReputationScore >= 20 {
+		// Count peers that are viable sync candidates (must match isCaughtUp criteria)
+		if p.IsBanned || p.DataHubURL == "" || p.Height == 0 || p.ReputationScore < 20 {
+			continue
+		}
+		if p.Height > localHeight+10 { // Same tolerance as isCaughtUp
 			eligibleCount++
 
 			// Check if attempted recently

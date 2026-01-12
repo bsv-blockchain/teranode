@@ -152,6 +152,7 @@ func TestSubtreeReader(t *testing.T) {
 	// Get the subtree node bytes from the repository
 	reader, err := repo.GetSubtreeTxIDsReader(context.Background(), key)
 	require.NoError(t, err)
+	defer reader.Close()
 
 	b, err := subtree.DeserializeNodesFromReader(reader)
 	require.NoError(t, err)

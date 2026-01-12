@@ -118,3 +118,25 @@ func getIntSlice(key string, defaultValue []int, alternativeContext ...string) [
 
 	return result
 }
+
+// getPostgresPoolSettings reads service-specific PostgreSQL pool settings.
+// Returns nil if no service-specific settings are configured (will use global defaults).
+// Only returns a PostgresSettings pointer if at least one setting is explicitly configured.
+func getPostgresPoolSettings(servicePrefix string, alternativeContext ...string) *PostgresSettings {
+	maxOpenConns := getInt(servicePrefix+"_postgres_maxOpenConns", 0, alternativeContext...)
+	maxIdleConns := getInt(servicePrefix+"_postgres_maxIdleConns", 0, alternativeContext...)
+	connMaxLifetime := getDuration(servicePrefix+"_postgres_connMaxLifetime", 0, alternativeContext...)
+	connMaxIdleTime := getDuration(servicePrefix+"_postgres_connMaxIdleTime", 0, alternativeContext...)
+
+	// Only return settings if at least one is configured (non-zero)
+	if maxOpenConns == 0 && maxIdleConns == 0 && connMaxLifetime == 0 && connMaxIdleTime == 0 {
+		return nil
+	}
+
+	return &PostgresSettings{
+		MaxOpenConns:    maxOpenConns,
+		MaxIdleConns:    maxIdleConns,
+		ConnMaxLifetime: connMaxLifetime,
+		ConnMaxIdleTime: connMaxIdleTime,
+	}
+}

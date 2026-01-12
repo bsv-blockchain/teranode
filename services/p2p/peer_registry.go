@@ -500,6 +500,23 @@ func (pr *PeerRegistry) RecordSyncAttempt(id peer.ID) {
 	}
 }
 
+// ClearAllSyncAttempts clears the LastSyncAttempt time for all peers,
+// allowing them to be retried immediately. This is used when all peers
+// have been attempted and we want to refresh and try again.
+func (pr *PeerRegistry) ClearAllSyncAttempts() int {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	peersCleared := 0
+	for _, info := range pr.peers {
+		if !info.LastSyncAttempt.IsZero() {
+			info.LastSyncAttempt = time.Time{}
+			peersCleared++
+		}
+	}
+	return peersCleared
+}
+
 // ReconsiderBadPeers resets reputation for peers that have been bad for a while
 // Returns the number of peers that had their reputation recovered
 func (pr *PeerRegistry) ReconsiderBadPeers(cooldownPeriod time.Duration) int {

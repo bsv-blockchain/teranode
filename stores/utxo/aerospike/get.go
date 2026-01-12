@@ -556,7 +556,7 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 
 	err = s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("error in aerospike map store batch records:\n%#v\n%v", batchRecords, err)
+		s.logger.Errorf("error in aerospike map store batch records:\n%v\n%v", batchRecords, err)
 		return errors.NewStorageError("error in aerospike map store batch records", err)
 	}
 

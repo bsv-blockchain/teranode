@@ -23,8 +23,6 @@ func TestLongestChainPostgres(t *testing.T) {
 }
 
 func TestLongestChainAerospike(t *testing.T) {
-	t.Skip("Skipping due to known data race in BlockValidation.setTxMinedStatus - see issue #296")
-
 	t.Run("simple", func(t *testing.T) {
 		testLongestChainSimple(t, "aerospike")
 	})
