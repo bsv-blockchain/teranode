@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 )
 
 // PeerForCatchup represents a peer suitable for catchup operations with its metadata
@@ -89,4 +90,47 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 	}
 
 	return peers, nil
+}
+
+// tryAlternativePeersForCatchup attempts catchup with alternative peers from the P2P service.
+// It skips the excludePeerID and any peers marked as malicious.
+// Returns true if catchup succeeded with any peer.
+func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model.Block, excludePeerID string) bool {
+	blockHash := block.Hash()
+	bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, block.Height)
+	if peerErr != nil {
+		u.logger.Warnf("[catchup] Failed to get best peers from P2P service: %v", peerErr)
+	}
+
+	if len(bestPeers) == 0 {
+		return false
+	}
+
+	u.logger.Infof("[catchup] Trying %d alternative peers for block %s", len(bestPeers), blockHash.String())
+
+	for _, bestPeer := range bestPeers {
+		if bestPeer.ID == excludePeerID {
+			continue
+		}
+
+		if u.isPeerMalicious(ctx, bestPeer.ID) {
+			u.logger.Debugf("[catchup] Skipping peer %s - marked as malicious", bestPeer.ID)
+			continue
+		}
+
+		u.logger.Infof("[catchup] Trying peer %s (score: %.2f) for block %s", bestPeer.ID, bestPeer.CatchupReputationScore, blockHash.String())
+
+		altErr := u.catchup(ctx, block, bestPeer.ID, bestPeer.DataHubURL)
+		if altErr == nil {
+			u.logger.Infof("[catchup] Successfully processed block %s from peer %s", blockHash.String(), bestPeer.ID)
+			u.processBlockNotify.Delete(*blockHash)
+			u.catchupAlternatives.Delete(*blockHash)
+			return true
+		}
+
+		u.logger.Warnf("[catchup] Peer %s failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
+		u.reportCatchupFailure(ctx, bestPeer.ID)
+	}
+
+	return false
 }

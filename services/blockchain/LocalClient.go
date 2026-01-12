@@ -369,8 +369,20 @@ func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash
 	return c.store.SetBlockMinedSet(ctx, blockHash)
 }
 
+func (c *LocalClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.ClearBlockMinedSet(ctx, blockHash)
+}
+
 func (c *LocalClient) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
 	return c.store.SetBlockProcessedAt(ctx, blockHash, clear...)
+}
+
+func (c *LocalClient) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.SetBlockPersistedAt(ctx, blockHash)
+}
+
+func (c *LocalClient) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	return c.store.GetBlocksNotPersisted(ctx, limit)
 }
 
 func (c *LocalClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {

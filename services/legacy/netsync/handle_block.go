@@ -374,6 +374,14 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			return errors.NewStorageError("[writeSubtree][%s] failed to create subtree file", subtree.RootHash().String(), err)
 		}
 
+		// Track whether write succeeded to determine whether to close or abort
+		var writeSucceeded bool
+		defer func() {
+			if !writeSucceeded {
+				storer.Abort(errors.NewProcessingError("[writeSubtree] write failed for subtree %s", subtree.RootHash().String()))
+			}
+		}()
+
 		// TODO Write header extra - *subtree.RootHash(), uint32(block.Height())
 
 		if _, err = storer.Write(subtreeBytes); err != nil {
@@ -383,6 +391,8 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 		if err = storer.Close(ctx); err != nil {
 			return errors.NewStorageError("error closing subtree file", err)
 		}
+
+		writeSucceeded = true
 
 		return nil
 	})
@@ -412,6 +422,14 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			return errors.NewStorageError("[writeSubtree][%s] failed to create subtree data file", subtree.RootHash().String(), err)
 		}
 
+		// Track whether write succeeded to determine whether to close or abort
+		var writeSucceeded bool
+		defer func() {
+			if !writeSucceeded {
+				storer.Abort(errors.NewProcessingError("[writeSubtree] write failed for subtree data %s", subtree.RootHash().String()))
+			}
+		}()
+
 		// TODO Write header extra - , *subtreeData.RootHash(), uint32(block.Height())
 
 		if _, err := storer.Write(subtreeDataBytes); err != nil {
@@ -421,6 +439,8 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 		if err = storer.Close(ctx); err != nil {
 			return errors.NewStorageError("error closing subtree data file", err)
 		}
+
+		writeSucceeded = true
 
 		return nil
 	})
@@ -453,6 +473,14 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 				return errors.NewStorageError("[writeSubtree][%s] failed to store subtree meta data", subtree.RootHash().String(), err)
 			}
 
+			// Track whether write succeeded to determine whether to close or abort
+			var writeSucceeded bool
+			defer func() {
+				if !writeSucceeded {
+					storer.Abort(errors.NewProcessingError("[writeSubtree] write failed for subtree meta %s", subtree.RootHash().String()))
+				}
+			}()
+
 			// TODO Write header extra - , *subtree.RootHash(), uint32(block.Height())
 
 			if _, err = storer.Write(subtreeBytes); err != nil {
@@ -462,6 +490,8 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			if err = storer.Close(gCtx); err != nil {
 				return errors.NewStorageError("error closing subtree meta file", err)
 			}
+
+			writeSucceeded = true
 
 			return nil
 		})

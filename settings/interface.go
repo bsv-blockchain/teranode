@@ -38,6 +38,7 @@ type Settings struct {
 	UseDatadogProfiler           bool
 	LocalTestStartFromState      string
 	PostgresCheckAddress         string
+	Postgres                     PostgresSettings
 	UseCgoVerifier               bool
 	GRPCResolver                 string
 	GRPCMaxRetries               int
@@ -52,6 +53,7 @@ type Settings struct {
 	Alert                        AlertSettings
 	Asset                        AssetSettings
 	Block                        BlockSettings
+	BlockPersister               BlockPersisterSettings
 	BlockAssembly                BlockAssemblySettings
 	BlockChain                   BlockChainSettings
 	BlockValidation              BlockValidationSettings
@@ -184,35 +186,25 @@ type AssetSettings struct {
 }
 
 type BlockSettings struct {
-	MinedCacheMaxMB                         int
-	PersisterStore                          *url.URL
-	PersisterHTTPListenAddress              string
-	StateFile                               string
-	CheckDuplicateTransactionsConcurrency   int
-	GetAndValidateSubtreesConcurrency       int
-	KafkaWorkers                            int
-	ValidOrderAndBlessedConcurrency         int
-	MaxSize                                 int
-	BlockStore                              *url.URL
-	FailFastValidation                      bool
-	FinalizeBlockValidationConcurrency      int
-	GetMissingTransactions                  int
-	QuorumTimeout                           time.Duration
-	BlockPersisterConcurrency               int
-	BatchMissingTransactions                bool
-	ProcessTxMetaUsingStoreBatchSize        int
-	SkipUTXODelete                          bool
-	UTXOPersisterBufferSize                 string
-	TxStore                                 *url.URL
-	UTXOPersisterDirect                     bool
-	BlockPersisterPersistAge                uint32
-	BlockPersisterPersistSleep              time.Duration
-	BlockPersisterEnableDefensiveReorgCheck bool
-	BlockPersisterProcessUTXOFiles          bool
-	UtxoStore                               *url.URL
-	FileStoreReadConcurrency                int
-	FileStoreWriteConcurrency               int
-	FileStoreUseSystemLimits                bool
+	MinedCacheMaxMB                       int
+	CheckDuplicateTransactionsConcurrency int
+	GetAndValidateSubtreesConcurrency     int
+	KafkaWorkers                          int
+	ValidOrderAndBlessedConcurrency       int
+	MaxSize                               int
+	BlockStore                            *url.URL
+	FailFastValidation                    bool
+	FinalizeBlockValidationConcurrency    int
+	GetMissingTransactions                int
+	QuorumTimeout                         time.Duration
+	ProcessTxMetaUsingStoreBatchSize      int
+	UTXOPersisterBufferSize               string
+	TxStore                               *url.URL
+	UTXOPersisterDirect                   bool
+	UtxoStore                             *url.URL
+	FileStoreReadConcurrency              int
+	FileStoreWriteConcurrency             int
+	FileStoreUseSystemLimits              bool
 }
 
 type BlockChainSettings struct {
@@ -226,6 +218,7 @@ type BlockChainSettings struct {
 	FSMStateChangeDelay   time.Duration // used by tests to delay the state change and have time to capture the state
 	StoreDBTimeoutMillis  int
 	InitializeNodeInState string
+	PostgresPool          *PostgresSettings // Optional: overrides global PostgresSettings for blockchain store (nil = use global)
 }
 
 type BlockAssemblySettings struct {
@@ -386,9 +379,8 @@ type UtxoStoreSettings struct {
 	DBTimeout                         time.Duration
 	UseExternalTxCache                bool
 	ExternalizeAllTransactions        bool
-	ExternalStoreConcurrency          int // Maximum concurrent external storage operations (0 = unlimited)
-	PostgresMaxIdleConns              int
-	PostgresMaxOpenConns              int
+	ExternalStoreConcurrency          int               // Maximum concurrent external storage operations (0 = unlimited)
+	PostgresPool                      *PostgresSettings // Optional: overrides global PostgresSettings for UTXO store (nil = use global)
 	VerboseDebug                      bool
 	UpdateTxMinedStatus               bool
 	MaxMinedRoutines                  int
@@ -497,13 +489,17 @@ type CoinbaseSettings struct {
 }
 
 type PrunerSettings struct {
-	GRPCListenAddress          string
-	GRPCAddress                string
-	UTXODefensiveEnabled       bool          // Enable defensive checks before deleting UTXO transactions (verify children are mined > BlockHeightRetention blocks ago)
-	UTXODefensiveBatchReadSize int           // Batch size for reading child transactions during defensive UTXO pruning (default: 10000)
-	UTXOChunkSize              int           // Number of records to process in each chunk before batch flushing (default: 1000)
-	UTXOChunkGroupLimit        int           // Maximum parallel chunk processing during UTXO pruning (default: 10)
-	UTXOProgressLogInterval    time.Duration // Interval for logging progress during UTXO pruning (default: 30s)
+	GRPCListenAddress               string
+	GRPCAddress                     string
+	BlockAssemblyWaitTimeout        time.Duration // Maximum time to wait for Block Assembly to be in "running" state before skipping pruning (default: 10m)
+	ConnectionPoolWarningThreshold  float64       // Threshold (0.0-1.0) for connection pool utilization warnings and auto-adjustment (default: 0.7)
+	ForceIgnoreBlockPersisterHeight bool          // Force ignore block persister height and use Block notifications (default: false)
+	UTXODefensiveEnabled            bool          // Enable defensive checks before deleting UTXO transactions (verify children are mined > BlockHeightRetention blocks ago)
+	UTXODefensiveBatchReadSize      int           // Batch size for reading child transactions during defensive UTXO pruning (default: 10000)
+	UTXOChunkSize                   int           // Number of records to process in each chunk before batch flushing (default: 1000)
+	UTXOChunkGroupLimit             int           // Maximum parallel chunk processing during UTXO pruning (default: 10)
+	UTXOProgressLogInterval         time.Duration // Interval for logging progress during UTXO pruning (default: 30s)
+	UTXOPartitionQueries            int           // Number of parallel Aerospike partition queries for UTXO pruning (0 = auto-detect based on CPU cores and query-threads-limit)
 }
 
 type SubtreeValidationSettings struct {
@@ -589,4 +585,21 @@ type RPCSettings struct {
 
 type FaucetSettings struct {
 	HTTPListenAddress string
+}
+
+type BlockPersisterSettings struct {
+	Store                    *url.URL
+	HTTPListenAddress        string
+	Concurrency              int
+	BatchMissingTransactions bool
+	SkipUTXODelete           bool
+	PersistSleep             time.Duration
+	ProcessUTXOFiles         bool
+}
+
+type PostgresSettings struct {
+	MaxOpenConns    int           // Maximum number of open connections to the database
+	MaxIdleConns    int           // Maximum number of connections in the idle connection pool
+	ConnMaxLifetime time.Duration // Maximum amount of time a connection may be reused
+	ConnMaxIdleTime time.Duration // Maximum amount of time a connection may be idle before being closed
 }

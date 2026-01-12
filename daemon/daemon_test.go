@@ -293,7 +293,7 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	var persisterHTTPPort int
 	persisterHTTPPort, err = getFreePort()
 	require.NoError(t, err, "Failed to get free port for persister HTTP")
-	appSettings.Block.PersisterHTTPListenAddress = fmt.Sprintf(":%d", persisterHTTPPort)
+	appSettings.BlockPersister.HTTPListenAddress = fmt.Sprintf(":%d", persisterHTTPPort)
 
 	// Use dynamic ports for all service gRPC listeners to avoid conflicts
 	var blockchainGRPCPort int
@@ -358,14 +358,10 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 
 	// Manually set blob stores to memory store
 	appSettings.Block.BlockStore = blobStoreURL
-	appSettings.Block.PersisterStore = blobStoreURL
+	appSettings.BlockPersister.Store = blobStoreURL
 	appSettings.Block.TxStore = blobStoreURL
 	appSettings.SubtreeValidation.SubtreeStore = blobStoreURL
 	appSettings.Legacy.TempStore = blobStoreURL
-
-	// Set state file for block persister (required for non-file store types)
-	tempDir := t.TempDir()
-	appSettings.Block.StateFile = tempDir + "/blockpersister_state.txt"
 
 	// Manually set Kafka topic URL schemes to 'memory' for in-memory provider
 	const newConst = "memory"

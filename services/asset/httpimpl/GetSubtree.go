@@ -145,6 +145,7 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
+		defer subtreeReader.Close()
 
 		var b []byte
 

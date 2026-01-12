@@ -31,7 +31,7 @@ CONTAINER_BINARY="container"
 
 # Display usage
 usage() {
-    echo "Usage: $0 [up|down|restart|status|logs|follow]"
+    echo "Usage: $0 [up|down|restart|status|logs|follow|clean]"
     echo ""
     echo "Commands:"
     echo "  up      - Start all containers"
@@ -40,6 +40,7 @@ usage() {
     echo "  status  - Show container status"
     echo "  logs    - Show logs for all containers"
     echo "  follow  - Follow logs for all containers in real-time"
+    echo "  clean   - Delete all persistent data (requires confirmation)"
     echo ""
     echo "Options:"
     echo "  -h, --help    Show this help message"
@@ -173,12 +174,6 @@ start_postgres() {
     # Remove existing container if it exists but is not running
     $CONTAINER_BINARY rm -f "$POSTGRES_CONTAINER" 2>/dev/null || true
 
-    # Clean up old volume if requested
-    if [ "${CLEAN_POSTGRES:-false}" = "true" ]; then
-        echo "Removing old PostgreSQL volume..."
-        $CONTAINER_BINARY volume rm postgres-data 2>/dev/null || true
-    fi
-
     echo "Starting PostgreSQL..."
     if ! $CONTAINER_BINARY run -d \
         --name "$POSTGRES_CONTAINER" \
@@ -187,7 +182,7 @@ start_postgres() {
         -e POSTGRES_PASSWORD=teranode \
         -e POSTGRES_DB=teranode \
         -e PGDATA=/var/lib/postgresql/data/pgdata \
-        --volume postgres-data:/var/lib/postgresql/data \
+        -v "${DATA_PATH}/postgres:/var/lib/postgresql/data" \
         postgres:17; then
         echo "❌ Failed to start PostgreSQL" >&2
         return 1
@@ -329,10 +324,79 @@ show_logs() {
     fi
 }
 
+# Clean persistent data
+clean_data() {
+    echo "🗑️  Clean Persistent Data"
+    echo ""
+
+    # Check if any containers are running
+    local running_containers=()
+    for container in "$AEROSPIKE_CONTAINER" "$REDPANDA_CONTAINER" "$POSTGRES_CONTAINER"; do
+        if is_container_running "$container"; then
+            running_containers+=("$container")
+        fi
+    done
+
+    if [ ${#running_containers[@]} -gt 0 ]; then
+        echo "❌ Error: Cannot clean data while containers are running" >&2
+        echo "" >&2
+        echo "Running containers:" >&2
+        for container in "${running_containers[@]}"; do
+            echo "  - $container" >&2
+        done
+        echo "" >&2
+        echo "Stop containers first with: $0 down" >&2
+        return 1
+    fi
+
+    # Show what will be deleted
+    echo "⚠️  WARNING: This will permanently delete all data in:"
+    echo "  - ${DATA_PATH}/aerospike"
+    echo "  - ${DATA_PATH}/postgres"
+    echo ""
+    echo "This action cannot be undone!"
+    echo ""
+
+    # Ask for confirmation
+    read -p "Are you sure you want to delete all data? (yes/no): " confirmation
+    if [ "$confirmation" != "yes" ]; then
+        echo "Cancelled."
+        return 0
+    fi
+
+    # Delete the data directories
+    echo ""
+    echo "Deleting data directories..."
+
+    if [ -d "${DATA_PATH}/aerospike" ]; then
+        rm -rf "${DATA_PATH}/aerospike"
+        echo "✅ Deleted ${DATA_PATH}/aerospike"
+    else
+        echo "  ${DATA_PATH}/aerospike does not exist"
+    fi
+
+    if [ -d "${DATA_PATH}/postgres" ]; then
+        rm -rf "${DATA_PATH}/postgres"
+        echo "✅ Deleted ${DATA_PATH}/postgres"
+    else
+        echo "  ${DATA_PATH}/postgres does not exist"
+    fi
+
+    echo ""
+    echo "✅ Data cleanup complete"
+}
+
 # Main execution
 ACTION="${1:-}"
 
 if [ -z "$ACTION" ]; then
+    usage
+fi
+
+# Only allow a single sub-command
+if [ $# -gt 1 ]; then
+    echo "Error: Only one command allowed at a time. Got: $*" >&2
+    echo "" >&2
     usage
 fi
 
@@ -354,6 +418,9 @@ case "$ACTION" in
         ;;
     logs-follow|follow)
         show_logs true
+        ;;
+    clean)
+        clean_data
         ;;
     -h|--help|help)
         usage

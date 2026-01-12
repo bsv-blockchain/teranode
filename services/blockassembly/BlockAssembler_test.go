@@ -173,6 +173,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 		subChan := make(chan *blockchain_api.Notification, 1)
 		// Send initial notification to mimic real blockchain service behavior
 		subChan <- &blockchain_api.Notification{
@@ -218,6 +221,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 			Hash: (&chainhash.Hash{}).CloneBytes(),
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
@@ -276,6 +282,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 		blockchainClient.On("SetState", mock.Anything, "BlockAssembler", mock.Anything).Return(nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
@@ -319,6 +328,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 			Hash: (&chainhash.Hash{}).CloneBytes(),
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
@@ -2004,6 +2016,9 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		subChan := make(chan *blockchain_api.Notification, 1)
 		blockchainClient.On("SubscribeToNewBlock", mock.Anything).Return(subChan, nil)
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(blockchainSubscription, nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		tSettings := createTestSettings(t)
 		newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest)

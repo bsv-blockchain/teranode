@@ -737,7 +737,7 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 		// Get atomic block state to ensure consistency
 		blockState := v.utxoStore.GetBlockState()
 		for _, idx := range idxs {
-			utxoHeights[idx] = blockState.Height
+			utxoHeights[idx] = blockState.Height + 1
 		}
 	} else {
 		for _, idx := range idxs {
