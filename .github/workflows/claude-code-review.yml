@@ -92,6 +92,7 @@ jobs:
           repository: ${{ steps.pr.outputs.repo_full_name }}
           ref: ${{ steps.pr.outputs.head_sha }}
           fetch-depth: 0
+          persist-credentials: false  # Security: Don't store git credentials for fork code
 
       - name: Run Claude Code Review
         if: steps.pr.outputs.is_draft == 'false'

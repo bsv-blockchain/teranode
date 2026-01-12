@@ -1364,6 +1364,17 @@ func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash
 	return nil
 }
 
+func (c *Client) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.ClearBlockMinedSet(ctx, &blockchain_api.ClearBlockMinedSetRequest{
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
 // GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 // This method identifies and returns blocks that have been processed and stored
 // but have not yet completed the mining pipeline and been marked as mined.
@@ -2078,4 +2089,36 @@ func (c *Client) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.H
 	}
 
 	return nil
+}
+
+// SetBlockPersistedAt updates the persisted_at timestamp for a block.
+// This marks the block as having been persisted to blob storage.
+func (c *Client) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.SetBlockPersistedAt(ctx, &blockchain_api.SetBlockPersistedAtRequest{
+		BlockHash: blockHash.CloneBytes(),
+	})
+
+	return err
+}
+
+// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+func (c *Client) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	resp, err := c.client.GetBlocksNotPersisted(ctx, &blockchain_api.GetBlocksNotPersistedRequest{
+		Limit: int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	blocks := make([]*model.Block, len(resp.BlockBytes))
+
+	for i, blockBytes := range resp.BlockBytes {
+		block, err := model.NewBlockFromBytes(blockBytes)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to deserialize block", err)
+		}
+		blocks[i] = block
+	}
+
+	return blocks, nil
 }

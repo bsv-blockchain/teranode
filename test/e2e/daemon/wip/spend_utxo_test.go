@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/require"
@@ -31,12 +32,14 @@ func TestShouldAllowSpendAllUtxos(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.UtxoStore.UtxoBatchSize = 2
-			s.UtxoStore.UtxoStore = parsedURL
-			s.GlobalBlockHeightRetention = 1
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.UtxoStore.UtxoBatchSize = 2
+				s.UtxoStore.UtxoStore = parsedURL
+				s.GlobalBlockHeightRetention = 1
+			},
+		),
 	})
 
 	defer td.Stop(t)

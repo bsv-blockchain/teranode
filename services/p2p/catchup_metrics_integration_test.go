@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -29,13 +30,12 @@ func TestDistributedCatchupMetrics_RecordAttempt(t *testing.T) {
 	testPeerID, err := peer.Decode("12D3KooWBPqTBhshqRZMKZtqb5sfgckM9JYkWDR7eW5kSPEKwKCW")
 	require.NoError(t, err)
 
-	// Add peer to registry
-	p2pRegistry.AddPeer(testPeerID, "")
-	p2pRegistry.UpdateHeight(testPeerID, 1000, "test_hash")
-	p2pRegistry.UpdateDataHubURL(testPeerID, "http://localhost:8090")
+	// Add peer to registry with all data atomically
+	testHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	p2pRegistry.Put(testPeerID, "", 1000, testHash, "http://localhost:8090")
 
 	// Verify initial state
-	info, exists := p2pRegistry.GetPeer(testPeerID)
+	info, exists := p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	require.NotNil(t, info)
 	assert.Equal(t, int64(0), info.InteractionAttempts)
@@ -49,7 +49,7 @@ func TestDistributedCatchupMetrics_RecordAttempt(t *testing.T) {
 	assert.True(t, resp.Ok)
 
 	// Verify attempt was recorded
-	info, exists = p2pRegistry.GetPeer(testPeerID)
+	info, exists = p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.InteractionAttempts)
 	assert.False(t, info.LastInteractionAttempt.IsZero())
@@ -71,9 +71,7 @@ func TestDistributedCatchupMetrics_RecordSuccess(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add peer to registry
-	p2pRegistry.AddPeer(testPeerID, "")
-	p2pRegistry.UpdateHeight(testPeerID, 1000, "test_hash")
-	p2pRegistry.UpdateDataHubURL(testPeerID, "http://localhost:8090")
+	p2pRegistry.Put(testPeerID, "", 1000, nil, "http://localhost:8090")
 
 	// Record first success with 100ms duration
 	req1 := &p2p_api.RecordCatchupSuccessRequest{
@@ -85,7 +83,7 @@ func TestDistributedCatchupMetrics_RecordSuccess(t *testing.T) {
 	assert.True(t, resp1.Ok)
 
 	// Verify success was recorded
-	info, exists := p2pRegistry.GetPeer(testPeerID)
+	info, exists := p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.InteractionSuccesses)
 	assert.Equal(t, 100*time.Millisecond, info.AvgResponseTime)
@@ -101,7 +99,7 @@ func TestDistributedCatchupMetrics_RecordSuccess(t *testing.T) {
 	assert.True(t, resp2.Ok)
 
 	// Verify weighted average: 80% of 100ms + 20% of 200ms = 120ms
-	info, exists = p2pRegistry.GetPeer(testPeerID)
+	info, exists = p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(2), info.InteractionSuccesses)
 	expectedAvg := time.Duration(int64(float64(100*time.Millisecond)*0.8 + float64(200*time.Millisecond)*0.2))
@@ -123,9 +121,7 @@ func TestDistributedCatchupMetrics_RecordFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add peer to registry
-	p2pRegistry.AddPeer(testPeerID, "")
-	p2pRegistry.UpdateHeight(testPeerID, 1000, "test_hash")
-	p2pRegistry.UpdateDataHubURL(testPeerID, "http://localhost:8090")
+	p2pRegistry.Put(testPeerID, "", 1000, nil, "http://localhost:8090")
 
 	// Record failure via gRPC handler
 	req := &p2p_api.RecordCatchupFailureRequest{
@@ -136,7 +132,7 @@ func TestDistributedCatchupMetrics_RecordFailure(t *testing.T) {
 	assert.True(t, resp.Ok)
 
 	// Verify failure was recorded
-	info, exists := p2pRegistry.GetPeer(testPeerID)
+	info, exists := p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.InteractionFailures)
 	assert.False(t, info.LastInteractionFailure.IsZero())
@@ -157,9 +153,7 @@ func TestDistributedCatchupMetrics_RecordMalicious(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add peer to registry
-	p2pRegistry.AddPeer(testPeerID, "")
-	p2pRegistry.UpdateHeight(testPeerID, 1000, "test_hash")
-	p2pRegistry.UpdateDataHubURL(testPeerID, "http://localhost:8090")
+	p2pRegistry.Put(testPeerID, "", 1000, nil, "http://localhost:8090")
 
 	// Record malicious behavior
 	req := &p2p_api.RecordCatchupMaliciousRequest{
@@ -170,7 +164,7 @@ func TestDistributedCatchupMetrics_RecordMalicious(t *testing.T) {
 	assert.True(t, resp.Ok)
 
 	// Verify malicious count was incremented
-	info, exists := p2pRegistry.GetPeer(testPeerID)
+	info, exists := p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.MaliciousCount)
 }
@@ -190,9 +184,7 @@ func TestDistributedCatchupMetrics_UpdateReputation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add peer to registry
-	p2pRegistry.AddPeer(testPeerID, "")
-	p2pRegistry.UpdateHeight(testPeerID, 1000, "test_hash")
-	p2pRegistry.UpdateDataHubURL(testPeerID, "http://localhost:8090")
+	p2pRegistry.Put(testPeerID, "", 1000, nil, "http://localhost:8090")
 
 	// Update reputation score
 	req := &p2p_api.UpdateCatchupReputationRequest{
@@ -204,7 +196,7 @@ func TestDistributedCatchupMetrics_UpdateReputation(t *testing.T) {
 	assert.True(t, resp.Ok)
 
 	// Verify reputation was updated
-	info, exists := p2pRegistry.GetPeer(testPeerID)
+	info, exists := p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, 75.5, info.ReputationScore)
 }
@@ -225,19 +217,13 @@ func TestDistributedCatchupMetrics_GetPeersForCatchup(t *testing.T) {
 	peer3ID, _ := peer.Decode("12D3KooWJpBNhwgvoZ15EB1JwRTRpxgM9NVaqpDtWZXfTf6CpCQd")
 
 	// Add peers with different characteristics
-	p2pRegistry.AddPeer(peer1ID, "")
-	p2pRegistry.UpdateHeight(peer1ID, 1000, "hash1")
-	p2pRegistry.UpdateDataHubURL(peer1ID, "http://peer1:8090")
+	p2pRegistry.Put(peer1ID, "", 1000, nil, "http://peer1:8090")
 	p2pRegistry.UpdateReputation(peer1ID, 95.0) // Best
 
-	p2pRegistry.AddPeer(peer2ID, "")
-	p2pRegistry.UpdateHeight(peer2ID, 1001, "hash2")
-	p2pRegistry.UpdateDataHubURL(peer2ID, "http://peer2:8090")
+	p2pRegistry.Put(peer2ID, "", 1001, nil, "http://peer2:8090")
 	p2pRegistry.UpdateReputation(peer2ID, 85.0) // Second best
 
-	p2pRegistry.AddPeer(peer3ID, "")
-	p2pRegistry.UpdateHeight(peer3ID, 999, "hash3")
-	p2pRegistry.UpdateDataHubURL(peer3ID, "http://peer3:8090")
+	p2pRegistry.Put(peer3ID, "", 999, nil, "http://peer3:8090")
 	p2pRegistry.UpdateReputation(peer3ID, 75.0) // Third
 
 	// Query for peers suitable for catchup
@@ -277,18 +263,16 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add peer to registry
-	p2pRegistry.AddPeer(testPeerID, "")
-	p2pRegistry.UpdateHeight(testPeerID, 1000, "test_hash")
-	p2pRegistry.UpdateDataHubURL(testPeerID, "http://localhost:8090")
+	p2pRegistry.Put(testPeerID, "", 1000, nil, "http://localhost:8090")
 
 	// Initial reputation should be 50.0 (neutral)
-	info, exists := p2pRegistry.GetPeer(testPeerID)
+	info, exists := p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, 50.0, info.ReputationScore)
 
 	// Record first successful catchup - reputation should be automatically calculated
 	p2pRegistry.RecordCatchupSuccess(testPeerID, 100*time.Millisecond)
-	info, _ = p2pRegistry.GetPeer(testPeerID)
+	info, _ = p2pRegistry.Get(testPeerID)
 	assert.Equal(t, int64(1), info.InteractionSuccesses)
 	// With 100% success rate (1/1), reputation should be high
 	// Formula: 100 * 0.6 + 50 * 0.4 + 10 (recency bonus) = 60 + 20 + 10 = 90
@@ -300,14 +284,14 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	}
 
 	// Verify successes were recorded and reputation is still high
-	info, _ = p2pRegistry.GetPeer(testPeerID)
+	info, _ = p2pRegistry.Get(testPeerID)
 	assert.Equal(t, int64(5), info.InteractionSuccesses)
 	// Still 100% success rate, reputation should remain high
 	assert.Greater(t, info.ReputationScore, 85.0, "Perfect success rate should maintain high reputation")
 
 	// Record a failure - reputation should decrease
 	p2pRegistry.RecordCatchupFailure(testPeerID)
-	info, _ = p2pRegistry.GetPeer(testPeerID)
+	info, _ = p2pRegistry.Get(testPeerID)
 	assert.Equal(t, int64(1), info.InteractionFailures)
 	// Success rate is now 5/6 = 83.3%
 	// Formula: 83.3 * 0.6 + 50 * 0.4 = 50 + 20 = 70 (roughly)
@@ -317,7 +301,7 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	// Record malicious behavior - reputation should drop significantly
 	previousScore := info.ReputationScore
 	p2pRegistry.RecordCatchupMalicious(testPeerID)
-	info, _ = p2pRegistry.GetPeer(testPeerID)
+	info, _ = p2pRegistry.Get(testPeerID)
 	assert.Equal(t, int64(1), info.MaliciousCount)
 	// Malicious penalty is -20 per occurrence
 	assert.Less(t, info.ReputationScore, previousScore-15.0, "Malicious behavior should significantly reduce reputation")
@@ -331,7 +315,7 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, resp.Ok)
 
-	info, _ = p2pRegistry.GetPeer(testPeerID)
+	info, _ = p2pRegistry.Get(testPeerID)
 	assert.Equal(t, 95.5, info.ReputationScore)
 
 	// Reputation should never exceed 100 (clamping test)
@@ -343,7 +327,7 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, resp.Ok)
 
-	info, _ = p2pRegistry.GetPeer(testPeerID)
+	info, _ = p2pRegistry.Get(testPeerID)
 	assert.Equal(t, 100.0, info.ReputationScore)
 
 	// Reputation should never go below 0 (clamping test)
@@ -355,7 +339,7 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, resp.Ok)
 
-	info, _ = p2pRegistry.GetPeer(testPeerID)
+	info, _ = p2pRegistry.Get(testPeerID)
 	assert.Equal(t, 0.0, info.ReputationScore)
 }
 
@@ -375,9 +359,7 @@ func TestDistributedCatchupMetrics_ConcurrentUpdates(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add peer to registry
-	p2pRegistry.AddPeer(testPeerID, "")
-	p2pRegistry.UpdateHeight(testPeerID, 1000, "test_hash")
-	p2pRegistry.UpdateDataHubURL(testPeerID, "http://localhost:8090")
+	p2pRegistry.Put(testPeerID, "", 1000, nil, "http://localhost:8090")
 
 	// Simulate concurrent updates from multiple BlockValidation instances
 	const numGoroutines = 10
@@ -412,7 +394,7 @@ func TestDistributedCatchupMetrics_ConcurrentUpdates(t *testing.T) {
 	}
 
 	// Verify final counts
-	info, exists := p2pRegistry.GetPeer(testPeerID)
+	info, exists := p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	expectedSuccesses := int64(numGoroutines * updatesPerGoroutine / 2)
 	expectedFailures := int64(numGoroutines * updatesPerGoroutine / 2)
@@ -473,12 +455,10 @@ func TestReportValidSubtree_IncreasesReputation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add peer to registry with initial state
-	p2pRegistry.AddPeer(testPeerID, "")
-	p2pRegistry.UpdateHeight(testPeerID, 1000, "test_hash")
-	p2pRegistry.UpdateDataHubURL(testPeerID, "http://localhost:8090")
+	p2pRegistry.Put(testPeerID, "", 1000, nil, "http://localhost:8090")
 
 	// Verify initial reputation (should be neutral at 50.0)
-	info, exists := p2pRegistry.GetPeer(testPeerID)
+	info, exists := p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, 50.0, info.ReputationScore, "New peer should start with neutral reputation of 50.0")
 	assert.Equal(t, int64(0), info.SubtreesReceived)
@@ -490,7 +470,7 @@ func TestReportValidSubtree_IncreasesReputation(t *testing.T) {
 	p2pRegistry.RecordSubtreeReceived(testPeerID, duration)
 
 	// Verify subtree was recorded
-	info, exists = p2pRegistry.GetPeer(testPeerID)
+	info, exists = p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.SubtreesReceived)
 	assert.Equal(t, int64(1), info.InteractionSuccesses)
@@ -508,7 +488,7 @@ func TestReportValidSubtree_IncreasesReputation(t *testing.T) {
 	}
 
 	// Verify reputation remains high with perfect success rate
-	info, exists = p2pRegistry.GetPeer(testPeerID)
+	info, exists = p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(5), info.SubtreesReceived)
 	assert.Equal(t, int64(5), info.InteractionSuccesses)
@@ -516,7 +496,7 @@ func TestReportValidSubtree_IncreasesReputation(t *testing.T) {
 
 	// Record a failure to see reputation decrease
 	p2pRegistry.RecordInteractionFailure(testPeerID)
-	info, exists = p2pRegistry.GetPeer(testPeerID)
+	info, exists = p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.InteractionFailures)
 	// Success rate is now 5/6 = 83.3%
@@ -544,7 +524,7 @@ func TestReportValidSubtree_GRPCEndpoint(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add peer to registry
-	p2pRegistry.AddPeer(testPeerID, "")
+	p2pRegistry.Put(testPeerID, "", 0, nil, "")
 
 	// Test valid request returns success
 	req := &p2p_api.ReportValidSubtreeRequest{
@@ -557,7 +537,7 @@ func TestReportValidSubtree_GRPCEndpoint(t *testing.T) {
 	assert.Equal(t, "subtree validation recorded", resp.Message)
 
 	// Verify peer metrics were updated
-	info, exists := p2pRegistry.GetPeer(testPeerID)
+	info, exists := p2pRegistry.Get(testPeerID)
 	require.True(t, exists)
 	assert.Equal(t, int64(1), info.SubtreesReceived)
 	assert.Equal(t, int64(1), info.InteractionSuccesses)

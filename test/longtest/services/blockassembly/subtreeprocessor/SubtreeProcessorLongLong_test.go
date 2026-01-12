@@ -110,6 +110,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 		utxoStore,
 		newSubtreeChan,
 	)
+	stp.Start(context.Background())
 
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -233,6 +234,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 			utxoStore,
 			newSubtreeChan,
 		)
+		stp.Start(context.Background())
 
 		subtreeSize := uint64(1024 * 1024)
 		nrSubtrees := 10

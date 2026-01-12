@@ -34,10 +34,15 @@ import (
 //   - Helps identify blocks that may need additional verification
 //   - Facilitates mining pool integration by ensuring proper attribution of mined blocks
 //
-// The implementation uses a straightforward SQL query to retrieve blocks with mined_set=false,
-// ordered by height to process them in chronological order. It leverages the shared
-// getBlocksWithQuery helper method to handle the common block reconstruction logic used
-// across multiple query methods in the package.
+// The implementation queries blocks with subtrees_set=true AND mined_set=false.
+// The subtrees_set=true filter ensures we only return blocks that have completed
+// subtree validation (whether valid or invalid), preventing infinite waits on blocks
+// that will never be fully processed. This is used by:
+//   - BlockValidation's periodic job to process blocks needing mined status updates
+//   - SubtreeProcessor.WaitForPendingBlocks() to wait only for processable blocks
+//   - BlockValidation.isParentMined() to check if parent blocks are ready
+//
+// The query is ordered by height to process blocks in chronological order.
 //
 // Parameters:
 //   - ctx: Context for the database operation, allowing for cancellation and timeouts
@@ -53,6 +58,15 @@ func (s *SQL) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Only return blocks where subtrees_set = true AND mined_set = false.
+	//
+	// Why we check subtrees_set = true:
+	// - Ensures BlockValidation has finished processing the block's subtrees (either valid or invalid)
+	// - Prevents waiting for blocks that will never be fully processed (e.g., blocks with missing subtrees)
+	// - Includes both valid blocks and invalid blocks (marked invalid after validation) that need mined status set
+	//
+	// This allows BlockValidation's periodic job to process invalidated blocks (set via InvalidateBlock RPC)
+	// which have subtrees_set = true but need their transaction status updated (setTxMined with invalid=true).
 	q := `
 		SELECT
 		 b.ID
@@ -69,7 +83,8 @@ func (s *SQL) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) 
 		,b.subtrees
 		,b.height
 		FROM blocks b
-		WHERE mined_set = false
+		WHERE subtrees_set = true
+		AND mined_set = false
 		ORDER BY height ASC
 	`
 

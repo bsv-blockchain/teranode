@@ -186,7 +186,8 @@ func (n *Node) InvalidateBlock(ctx context.Context, blockHashStr string) error {
 // Returns:
 //   - error: Any error encountered during the ban process, or if the ban failed on all systems
 func (n *Node) BanPeer(ctx context.Context, peer string) error {
-	banned := false
+	var banned bool
+
 	// ban p2p peer for 100 years
 	until := time.Now().Add(24 * 365 * 100 * time.Hour).Unix()
 	err := n.p2pClient.BanPeer(ctx, peer, until)
@@ -225,7 +226,7 @@ func (n *Node) BanPeer(ctx context.Context, peer string) error {
 // Returns:
 //   - error: Any error encountered during the unban process, or if the unban failed on all systems
 func (n *Node) UnbanPeer(ctx context.Context, peer string) error {
-	unbanned := false
+	var unbanned bool
 
 	// unban p2p peer
 	err := n.p2pClient.UnbanPeer(ctx, peer)

@@ -54,6 +54,10 @@ func (m *MockSubtreeProcessor) GetCurrentLength() int {
 	return args.Int(0)
 }
 
+func (m *MockSubtreeProcessor) Start(ctx context.Context) {
+	m.Called(ctx)
+}
+
 func (m *MockSubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, isLegacySync bool, postProcess func() error) ResetResponse {
 	args := m.Called(blockHeader, moveBackBlocks, moveForwardBlocks, isLegacySync, postProcess)
 	return args.Get(0).(ResetResponse)
@@ -158,8 +162,8 @@ func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks
 }
 
 // Remove implements Interface.Remove
-func (m *MockSubtreeProcessor) Remove(hash chainhash.Hash) error {
-	args := m.Called(hash)
+func (m *MockSubtreeProcessor) Remove(ctx context.Context, hash chainhash.Hash) error {
+	args := m.Called(ctx, hash)
 	return args.Error(0)
 }
 
@@ -177,4 +181,9 @@ func (m *MockSubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHe
 func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)
+}
+
+// Stop implements Interface.Stop
+func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
+	m.Called(ctx)
 }

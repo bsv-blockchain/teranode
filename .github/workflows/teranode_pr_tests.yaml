@@ -2,8 +2,6 @@ name: Teranode PR tests
 
 on:
   pull_request:
-    paths-ignore:
-      - 'docs/**'
 
 permissions:
   contents: read

@@ -410,12 +410,16 @@ func New(code ERR, message string, params ...interface{}) *Error {
 The `New` function operates as follows:
 
 1. It takes an error code, a message, and a variadic `params` slice which may include formatting parameters and optionally one error to be wrapped.
+
 2. If the last parameter in `params` is an error of ANY type, it's treated as the error to be wrapped:
 
     - If it's a `*Error` (Teranode error), it's wrapped directly
     - If it's any other `error` type, it's converted to a Teranode error first
+
 3. Any additional parameters are used to format the message string using `fmt.Errorf`, allowing for dynamic message content based on runtime values.
+
 4. Stack trace information (file, line, function) is automatically captured using `runtime.Caller`.
+
 5. The function includes circular reference prevention using the `contains()` method to avoid infinite error chains.
 
 Here's a practical example of using the `New` function to create and wrap errors:
@@ -688,8 +692,11 @@ func UnwrapGRPC(err error) *Error {
 **The `UnwrapGRPC` function**:
 
 1. **Validates the error** is a gRPC status error
+
 2. **Extracts all error details** from the gRPC status
+
 3. **Iterates in reverse order** (bottom-up) to properly reconstruct the error chain
+
 4. **For each detail**:
 
     - Unmarshals the `TError` protobuf message
@@ -697,6 +704,7 @@ func UnwrapGRPC(err error) *Error {
     - Deserializes error data using `GetErrorData()` if present
     - Restores stack trace info (file, line, function)
     - Links to the previous error to rebuild the wrapped error chain
+
 5. **Returns the top-level error** with the complete reconstructed chain
 
 This process allows Teranode to fully reconstruct its internal error types from gRPC errors, preserving:
@@ -714,23 +722,23 @@ Here's an end-to-end example of how gRPC error wrapping and unwrapping works in 
 
 1. In the Blockchain Server, when processing a `GetBlock` request:
 
-```go
-blockHash, err := chainhash.NewHash(request.Hash)
-if err != nil {
-    return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
-}
-```
+    ```go
+    blockHash, err := chainhash.NewHash(request.Hash)
+    if err != nil {
+        return nil, errors.WrapGRPC(errors.New(errors.ERR_BLOCK_NOT_FOUND, "[Blockchain] request's hash is not valid", err))
+    }
+    ```
 
-1. In the Blockchain Client, when handling the response:
+2. In the Blockchain Client, when handling the response:
 
-```go
-resp, err := c.client.GetBlock(ctx, &blockchain_api.GetBlockRequest{
-   Hash: blockHash[:],
-})
-if err != nil {
-   return nil, errors.UnwrapGRPC(err)
-}
-```
+    ```go
+    resp, err := c.client.GetBlock(ctx, &blockchain_api.GetBlockRequest{
+       Hash: blockHash[:],
+    })
+    if err != nil {
+       return nil, errors.UnwrapGRPC(err)
+    }
+    ```
 
 In this example, if an error occurs in the server, it's wrapped as a gRPC error before being sent to the client. The client then unwraps the gRPC error, allowing it to handle the error as a standard Teranode error.
 

@@ -70,6 +70,7 @@ func (h *HTTP) GetSubtreeData() func(c echo.Context) error {
 				return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 			}
 		}
+		defer r.Close()
 
 		prometheusAssetHTTPGetSubtreeData.WithLabelValues("OK", "200").Inc()
 

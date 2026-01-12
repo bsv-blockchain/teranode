@@ -52,12 +52,12 @@
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| RPCListenerURL | Must be valid URL format | Server binding |
-| CacheEnabled | Controls response caching behavior | Performance |
-| RPCTimeout | Must be positive duration | Request handling |
-| ClientCallTimeout | Must be positive duration | Service calls |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| RPCListenerURL | Must be valid URL format | Server binding | During service initialization |
+| CacheEnabled | Controls response caching behavior | Performance | During RPC method execution |
+| RPCTimeout | Must be positive duration | Request handling | During RPC call execution |
+| ClientCallTimeout | Must be positive duration | Service calls | During client service calls |
 
 ## Configuration Examples
 

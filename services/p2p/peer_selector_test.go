@@ -50,22 +50,16 @@ func TestSelector_SkipsPeerMarkedUnhealthyByHealthChecker(t *testing.T) {
 	// Add two peers
 	healthyID := peer.ID("H")
 	unhealthyID := peer.ID("U")
-	registry.AddPeer(healthyID, "")
-	registry.AddPeer(unhealthyID, "")
-	// Set heights so both are ahead
-	registry.UpdateHeight(healthyID, 120, "hashH")
-	registry.UpdateHeight(unhealthyID, 125, "hashU")
-	// Assign DataHub URLs
-	registry.UpdateDataHubURL(healthyID, okSrv.URL)
-	registry.UpdateDataHubURL(unhealthyID, failSrv.URL)
-	// Mark URLs responsive to satisfy selector
-	registry.UpdateURLResponsiveness(healthyID, true)
-	registry.UpdateURLResponsiveness(unhealthyID, true)
 
-	// Run immediate health checks
+	// Set heights so both are ahead
+	registry.Put(healthyID, "", 120, nil, okSrv.URL)
+	registry.UpdateStorage(healthyID, "full")
+
+	registry.Put(unhealthyID, "", 125, nil, failSrv.URL)
 
 	// Fetch peers and select
-	peers := registry.GetAllPeers()
+	peers := registry.GetAll()
+
 	selected := ps.SelectSyncPeer(peers, SelectionCriteria{LocalHeight: 100})
 
 	assert.Equal(t, healthyID, selected, "selector should skip peer marked unhealthy by health checker")
@@ -98,11 +92,6 @@ func TestPeerSelector_SelectSyncPeer_NoPeersAhead(t *testing.T) {
 		CreateTestPeerInfo(peer.ID("B"), 100, true, false, "http://test.com"), // same height
 		CreateTestPeerInfo(peer.ID("C"), 95, true, false, "http://test.com"),  // behind
 	}
-	// Mark URLs as responsive
-	for _, p := range peers {
-		p.URLResponsive = true
-	}
-
 	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
 		LocalHeight: 100,
 	})
@@ -126,10 +115,6 @@ func TestPeerSelector_SelectSyncPeer_BasicSelection(t *testing.T) {
 		CreateTestPeerInfo(peer3, 120, true, false, "http://test.com"), // ahead more
 		CreateTestPeerInfo(peer4, 100, true, false, "http://test.com"), // same height
 	}
-	// Mark URLs as responsive
-	for _, p := range peers {
-		p.URLResponsive = true
-	}
 
 	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
 		LocalHeight: 100,
@@ -151,7 +136,6 @@ func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
 			IsBanned:        false,
 			BanScore:        50,
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 		{
@@ -161,7 +145,6 @@ func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
 			IsBanned:        false,
 			BanScore:        10, // Lower ban score, should be preferred
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 		{
@@ -171,7 +154,6 @@ func TestPeerSelector_SelectSyncPeer_PreferLowerBanScore(t *testing.T) {
 			IsBanned:        false,
 			BanScore:        30,
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 	}
@@ -202,7 +184,6 @@ func TestPeerSelector_SelectSyncPeer_PreferHigherHeight(t *testing.T) {
 			IsBanned:        false,
 			BanScore:        10,
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 		{
@@ -212,7 +193,6 @@ func TestPeerSelector_SelectSyncPeer_PreferHigherHeight(t *testing.T) {
 			IsBanned:        false,
 			BanScore:        10,
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 		{
@@ -222,7 +202,6 @@ func TestPeerSelector_SelectSyncPeer_PreferHigherHeight(t *testing.T) {
 			IsBanned:        false,
 			BanScore:        10,
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 	}
@@ -243,10 +222,6 @@ func TestPeerSelector_SelectSyncPeer_RequireHealthy(t *testing.T) {
 		CreateTestPeerInfo(peer.ID("A"), 110, false, false, "http://test.com"), // unhealthy
 		CreateTestPeerInfo(peer.ID("B"), 120, true, false, "http://test.com"),  // healthy
 		CreateTestPeerInfo(peer.ID("C"), 115, false, false, "http://test.com"), // unhealthy
-	}
-	// Mark URLs as responsive
-	for _, p := range peers {
-		p.URLResponsive = true
 	}
 
 	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
@@ -273,44 +248,6 @@ func TestPeerSelector_SelectSyncPeer_RequireDataHub(t *testing.T) {
 	assert.Equal(t, peer.ID("B"), selected, "Should only select peer with DataHub")
 }
 
-func TestPeerSelector_SelectSyncPeer_RequireResponsiveURL(t *testing.T) {
-	logger := ulogger.New("test")
-	ps := NewPeerSelector(logger, nil)
-
-	peers := []*PeerInfo{
-		{
-			ID:              peer.ID("A"),
-			Height:          110,
-			ReputationScore: 80.0, // Good reputation
-			DataHubURL:      "http://hub1.com",
-			URLResponsive:   false, // not responsive
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("B"),
-			Height:          120,
-			ReputationScore: 80.0, // Good reputation
-			DataHubURL:      "http://hub2.com",
-			URLResponsive:   true, // responsive
-			Storage:         "full",
-		},
-		{
-			ID:              peer.ID("C"),
-			Height:          115,
-			ReputationScore: 80.0, // Good reputation
-			DataHubURL:      "",
-			URLResponsive:   false, // no URL
-			Storage:         "full",
-		},
-	}
-
-	selected := ps.SelectSyncPeer(peers, SelectionCriteria{
-		LocalHeight: 100,
-	})
-
-	assert.Equal(t, peer.ID("B"), selected, "Should only select peer with responsive URL")
-}
-
 func TestPeerSelector_SelectSyncPeer_ForcedPeer(t *testing.T) {
 	logger := ulogger.New("test")
 	ps := NewPeerSelector(logger, nil)
@@ -320,10 +257,6 @@ func TestPeerSelector_SelectSyncPeer_ForcedPeer(t *testing.T) {
 		CreateTestPeerInfo(peer.ID("A"), 110, true, false, "http://test.com"),
 		CreateTestPeerInfo(peer.ID("B"), 120, true, false, "http://test.com"),
 		CreateTestPeerInfo(peer.ID("C"), 115, true, false, "http://test.com"),
-	}
-	// Mark URLs as responsive
-	for _, p := range peers {
-		p.URLResponsive = true
 	}
 
 	// Force selection of peer B
@@ -362,15 +295,13 @@ func TestPeerSelector_SelectSyncPeer_InvalidHeight(t *testing.T) {
 			Height:          0,    // Invalid height
 			ReputationScore: 80.0, // Good reputation
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 		{
 			ID:              peer.ID("B"),
-			Height:          -1,   // Invalid height
+			Height:          0,    // Invalid/unset height
 			ReputationScore: 80.0, // Good reputation
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 		{
@@ -378,7 +309,6 @@ func TestPeerSelector_SelectSyncPeer_InvalidHeight(t *testing.T) {
 			Height:          110,  // Valid height
 			ReputationScore: 80.0, // Good reputation
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 	}
@@ -401,7 +331,6 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 			ReputationScore: 15.0, // Low reputation // fails health check
 			IsBanned:        false,
 			DataHubURL:      "http://hub.com",
-			URLResponsive:   true,
 			BanScore:        0,
 			Storage:         "full",
 		},
@@ -411,7 +340,6 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 			ReputationScore: 80.0, // Good reputation
 			IsBanned:        true, // fails ban check
 			DataHubURL:      "http://hub.com",
-			URLResponsive:   true,
 			BanScore:        100,
 			Storage:         "full",
 		},
@@ -421,7 +349,6 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 			ReputationScore: 80.0, // Good reputation
 			IsBanned:        false,
 			DataHubURL:      "", // fails DataHub requirement
-			URLResponsive:   false,
 			BanScore:        10,
 			Storage:         "full",
 		},
@@ -431,7 +358,6 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 			ReputationScore: 80.0, // Good reputation
 			IsBanned:        false,
 			DataHubURL:      "http://hub.com",
-			URLResponsive:   false, // fails responsive URL check
 			BanScore:        20,
 			Storage:         "full",
 		},
@@ -441,7 +367,6 @@ func TestPeerSelector_SelectSyncPeer_ComplexCriteria(t *testing.T) {
 			ReputationScore: 80.0, // Good reputation
 			IsBanned:        false,
 			DataHubURL:      "http://hub.com",
-			URLResponsive:   true, // passes all checks
 			BanScore:        5,
 			Storage:         "full",
 		},
@@ -472,7 +397,6 @@ func TestPeerSelector_isEligible(t *testing.T) {
 				ReputationScore: 80.0, // Good reputation
 				IsBanned:        false,
 				DataHubURL:      "http://test.com",
-				URLResponsive:   true,
 				Storage:         "full",
 			},
 			criteria: SelectionCriteria{},
@@ -486,7 +410,6 @@ func TestPeerSelector_isEligible(t *testing.T) {
 				ReputationScore: 80.0, // Good reputation
 				IsBanned:        true,
 				DataHubURL:      "http://test.com",
-				URLResponsive:   true,
 				Storage:         "full",
 			},
 			criteria: SelectionCriteria{},
@@ -510,19 +433,6 @@ func TestPeerSelector_isEligible(t *testing.T) {
 				Height:          100,
 				ReputationScore: 80.0, // Good reputation
 				DataHubURL:      "",
-				Storage:         "full",
-			},
-			criteria: SelectionCriteria{},
-			expected: false,
-		},
-		{
-			name: "peer with unresponsive URL fails responsive requirement",
-			peer: &PeerInfo{
-				ID:              peer.ID("E"),
-				Height:          100,
-				ReputationScore: 80.0, // Good reputation
-				DataHubURL:      "http://hub.com",
-				URLResponsive:   false,
 				Storage:         "full",
 			},
 			criteria: SelectionCriteria{},
@@ -561,7 +471,6 @@ func TestPeerSelector_DeterministicSelectionAmongEqualPeers(t *testing.T) {
 			ReputationScore: 80.0, // Good reputation
 			BanScore:        10,
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 		{
@@ -570,7 +479,6 @@ func TestPeerSelector_DeterministicSelectionAmongEqualPeers(t *testing.T) {
 			ReputationScore: 80.0, // Good reputation
 			BanScore:        10,
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 		{
@@ -579,7 +487,6 @@ func TestPeerSelector_DeterministicSelectionAmongEqualPeers(t *testing.T) {
 			ReputationScore: 80.0, // Good reputation
 			BanScore:        10,
 			DataHubURL:      "http://test.com",
-			URLResponsive:   true,
 			Storage:         "full",
 		},
 	}

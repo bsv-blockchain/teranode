@@ -388,27 +388,27 @@ func SetupCreatePostgresSchemaSuccessMocks(mockDB *MockDB) {
 		return strings.Contains(query, "DO $$") && strings.Contains(query, "block_ids") && strings.Contains(query, "ADD COLUMN")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
 
-	// 13. ADD COLUMN unmined_since to transactions (DO $$ block)
+	// 12. ADD COLUMN unmined_since to transactions (DO $$ block)
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "DO $$") && strings.Contains(query, "unmined_since") && strings.Contains(query, "ADD COLUMN")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
 
-	// 14. ADD COLUMN preserve_until to transactions (DO $$ block)
+	// 13. ADD COLUMN preserve_until to transactions (DO $$ block)
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "DO $$") && strings.Contains(query, "preserve_until") && strings.Contains(query, "ADD COLUMN")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
 
-	// 15. DROP CONSTRAINT block_ids_transaction_id_fkey (DO $$ block)
+	// 14. DROP CONSTRAINT block_ids_transaction_id_fkey (DO $$ block)
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "DO $$") && strings.Contains(query, "block_ids_transaction_id_fkey") && strings.Contains(query, "DROP CONSTRAINT")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
 
-	// 16. ADD CONSTRAINT block_ids_transaction_id_fkey (DO $$ block)
+	// 15. ADD CONSTRAINT block_ids_transaction_id_fkey (DO $$ block)
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "DO $$") && strings.Contains(query, "block_ids_transaction_id_fkey") && strings.Contains(query, "ADD CONSTRAINT")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
 
-	// 17. CREATE TABLE conflicting_children
+	// 16. CREATE TABLE IF NOT EXISTS conflicting_children
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "CREATE TABLE IF NOT EXISTS conflicting_children")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)

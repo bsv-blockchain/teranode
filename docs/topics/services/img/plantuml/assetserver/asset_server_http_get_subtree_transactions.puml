@@ -1,0 +1,59 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+
+
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/httpimpl/http.go)" as HTTPServer
+participant "SubtreeStore" as SubtreeStore
+participant "UTXOStore" as UTXOStore
+
+' GET request for subtree transactions with pagination
+Client -> HTTPServer : GET /subtree/:hash/txs/json?offset=0&limit=20
+activate HTTPServer
+
+HTTPServer -> SubtreeStore : GetSubtree(ctx, hash)
+activate SubtreeStore
+SubtreeStore --> HTTPServer : Subtree with nodes
+deactivate SubtreeStore
+
+HTTPServer -> SubtreeStore : GetSubtreeData(ctx, hash)
+activate SubtreeStore
+alt SubtreeData available
+    SubtreeStore --> HTTPServer : Subtree data with transactions
+else SubtreeData not available
+    SubtreeStore --> HTTPServer : Not found
+end
+deactivate SubtreeStore
+
+loop For each transaction in range [offset:offset+limit]
+    HTTPServer -> UTXOStore : GetTransactionMeta(ctx, txHash)
+    activate UTXOStore
+    UTXOStore --> HTTPServer : Transaction metadata
+    deactivate UTXOStore
+end
+
+HTTPServer --> Client : JSON response with pagination
+deactivate HTTPServer
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

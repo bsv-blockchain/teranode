@@ -7,7 +7,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,7 +21,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
-	"github.com/bsv-blockchain/teranode/stores/cleanup"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -45,6 +43,8 @@ type miningCandidateResponse struct {
 	err error
 }
 
+// State represents the current operational state of the BlockAssembler.
+// It tracks the assembler's lifecycle and processing phases.
 type State uint32
 
 const (
@@ -128,10 +128,6 @@ type BlockAssembler struct {
 	stateChangeMu sync.RWMutex
 	stateChangeCh chan BestBlockInfo
 
-	// lastPersistedHeight tracks the last block height processed by block persister
-	// This is updated via BlockPersisted notifications and used to coordinate with cleanup
-	lastPersistedHeight atomic.Uint32
-
 	// currentChainMap maps block hashes to their heights
 	currentChainMap map[chainhash.Hash]uint32
 
@@ -153,20 +149,9 @@ type BlockAssembler struct {
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
 
-	// cleanupService manages background cleanup tasks
-	cleanupService cleanup.Service
-
-	// cleanupServiceLoaded indicates if the cleanup service has been loaded
-	cleanupServiceLoaded atomic.Bool
-
-	// cleanupQueueCh queues cleanup operations (parent preserve + DAH cleanup) to prevent flooding during catchup
-	cleanupQueueCh chan uint32
-
-	// cleanupQueueWorkerStarted tracks if the cleanup queue worker is running
-	cleanupQueueWorkerStarted atomic.Bool
-
 	// unminedCleanupTicker manages periodic cleanup of old unmined transactions
 	unminedCleanupTicker *time.Ticker
+
 	// cachedCandidate stores the cached mining candidate
 	cachedCandidate *CachedMiningCandidate
 
@@ -175,6 +160,9 @@ type BlockAssembler struct {
 
 	// unminedTransactionsLoading indicates if unmined transactions are currently being loaded
 	unminedTransactionsLoading atomic.Bool
+
+	// wg tracks background goroutines for clean shutdown
+	wg sync.WaitGroup
 }
 
 // BestBlockInfo holds both the block header and height atomically
@@ -202,6 +190,10 @@ type CachedMiningCandidate struct {
 	lastUpdate     time.Time
 	generating     bool
 	generationChan chan struct{}
+	// Track state for smart invalidation
+	lastTxCount      uint32
+	lastSizeInBytes  uint64
+	lastSubtreeCount int
 }
 
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
@@ -284,6 +276,14 @@ func (b *BlockAssembler) SubtreeCount() int {
 	return b.subtreeProcessor.SubtreeCount()
 }
 
+// GetChainedSubtrees returns all chained subtrees from the subtree processor.
+//
+// Returns:
+//   - []*subtree.Subtree: Slice of chained subtrees
+func (b *BlockAssembler) GetChainedSubtrees() []*subtree.Subtree {
+	return b.subtreeProcessor.GetChainedSubtrees()
+}
+
 // startChannelListeners initializes and starts all channel listeners for block assembly operations.
 // It handles blockchain notifications, mining candidate requests, and reset operations.
 //
@@ -297,7 +297,9 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 		return errors.NewProcessingError("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 	}
 
+	b.wg.Add(1)
 	go func() {
+		defer b.wg.Done()
 		// variables are defined here to prevent unnecessary allocations
 		b.setCurrentRunningState(StateRunning)
 
@@ -363,28 +365,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 
 				if notification.Type == model.NotificationType_Block {
 					b.processNewBlockAnnouncement(ctx)
-				} else if notification.Type == model.NotificationType_BlockPersisted {
-					// RUNTIME COORDINATION: Update persisted height from block persister
-					//
-					// Block persister sends this notification after successfully persisting a block
-					// and creating its .subtree_data file. We track this height so cleanup can safely
-					// delete transactions from earlier blocks without breaking catchup.
-					//
-					// This notification-based update keeps our persisted height current during normal
-					// operation. Combined with the startup initialization from blockchain state,
-					// we always know how far block persister has progressed.
-					//
-					// Cleanup uses this via GetLastPersistedHeight() to calculate safe deletion height.
-					if notification.Metadata != nil && notification.Metadata.Metadata != nil {
-						if heightStr, ok := notification.Metadata.Metadata["height"]; ok {
-							if height, err := strconv.ParseUint(heightStr, 10, 32); err == nil {
-								b.lastPersistedHeight.Store(uint32(height))
-								b.logger.Debugf("[BlockAssembler] Block persister progress: height %d", height)
-							} else {
-								b.logger.Warnf("[BlockAssembler] Failed to parse persisted height from notification: %v", err)
-							}
-						}
-					}
 				}
 
 				b.setCurrentRunningState(StateRunning)
@@ -726,27 +706,6 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 
 	// Invalidate cache when block height changes
 	b.invalidateMiningCandidateCache()
-
-	// Queue cleanup operations to prevent flooding during catchup
-	// The cleanup queue worker processes operations sequentially (parent preserve → DAH cleanup)
-	// Capture channel reference to avoid TOCTOU race between nil check and send
-	ch := b.cleanupQueueCh
-	if b.utxoStore != nil && b.cleanupServiceLoaded.Load() && b.cleanupService != nil && height > 0 && ch != nil && b.cleanupQueueWorkerStarted.Load() {
-		// Non-blocking send - drop if queue is full (shouldn't happen with 100 buffer, but safety check)
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					b.logger.Debugf("[BlockAssembler] cleanup queue closed; skipping cleanup for height %d", height)
-				}
-			}()
-			select {
-			case ch <- height:
-				// Successfully queued
-			default:
-				b.logger.Warnf("[BlockAssembler] cleanup queue full, dropping cleanup for height %d", height)
-			}
-		}()
-	}
 }
 
 // setCurrentRunningState sets the current operational state.
@@ -764,106 +723,6 @@ func (b *BlockAssembler) setCurrentRunningState(state State) {
 //   - string: Current state description
 func (b *BlockAssembler) GetCurrentRunningState() State {
 	return b.currentRunningState.Load().(State)
-}
-
-// GetLastPersistedHeight returns the last block height processed by block persister.
-// This is used by cleanup service to avoid deleting transactions before they're persisted.
-//
-// Returns:
-//   - uint32: Last persisted block height
-func (b *BlockAssembler) GetLastPersistedHeight() uint32 {
-	return b.lastPersistedHeight.Load()
-}
-
-// startCleanupQueueWorker starts a background worker that processes cleanup operations sequentially.
-// This prevents flooding the system with concurrent cleanup operations during block catchup.
-//
-// The worker processes one block height at a time, running parent preserve followed by DAH cleanup.
-// If multiple heights are queued, only the latest is processed (deduplication).
-//
-// Parameters:
-//   - ctx: Context for cancellation
-func (b *BlockAssembler) startCleanupQueueWorker(ctx context.Context) {
-	// Only start once
-	if !b.cleanupQueueWorkerStarted.CompareAndSwap(false, true) {
-		return
-	}
-
-	// Initialize the cleanup queue channel with a buffer to handle bursts during catchup
-	b.cleanupQueueCh = make(chan uint32, 100)
-
-	go func() {
-		defer func() {
-			// Close the channel - no need to drain because:
-			// 1. Senders use non-blocking send (select with default)
-			// 2. Channel is never set to nil, so no risk of blocking on nil channel
-			close(b.cleanupQueueCh)
-			b.cleanupQueueWorkerStarted.Store(false)
-		}()
-
-		for {
-			select {
-			case <-ctx.Done():
-				b.logger.Infof("[BlockAssembler] cleanup queue worker stopping")
-				return
-
-			case height := <-b.cleanupQueueCh:
-				// Deduplicate: drain any additional heights and only process the latest
-				latestHeight := height
-				drained := false
-				for {
-					select {
-					case nextHeight := <-b.cleanupQueueCh:
-						latestHeight = nextHeight
-						drained = true
-					default:
-						// No more heights in queue
-						if drained {
-							b.logger.Debugf("[BlockAssembler] deduplicating cleanup operations, skipping to height %d", latestHeight)
-						}
-						goto processHeight
-					}
-				}
-
-			processHeight:
-				// Step 1: Preserve parents of old unmined transactions FIRST
-				// This sets preserve_until and clears delete_at_height on parent transactions
-				if b.utxoStore != nil {
-					_, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, b.utxoStore, latestHeight, b.settings, b.logger)
-					if err != nil {
-						b.logger.Errorf("[BlockAssembler] error preserving parents during block height %d update: %v", latestHeight, err)
-						continue
-					}
-				}
-
-				// Step 2: Then trigger DAH cleanup and WAIT for it to complete
-				// This ensures true sequential execution: preserve → cleanup (complete) → next height
-				// Without waiting, the cleanup is queued but runs async, which could cause races
-				if b.cleanupServiceLoaded.Load() && b.cleanupService != nil {
-					// Create a channel to wait for completion
-					doneCh := make(chan string, 1)
-
-					if err := b.cleanupService.UpdateBlockHeight(latestHeight, doneCh); err != nil {
-						b.logger.Errorf("[BlockAssembler] cleanup service error updating block height %d: %v", latestHeight, err)
-						continue
-					}
-
-					// Wait for cleanup to complete or context cancellation
-					select {
-					case status := <-doneCh:
-						if status != "completed" {
-							b.logger.Warnf("[BlockAssembler] cleanup for height %d finished with status: %s", latestHeight, status)
-						}
-					case <-ctx.Done():
-						b.logger.Infof("[BlockAssembler] context cancelled while waiting for cleanup at height %d", latestHeight)
-						return
-					}
-				}
-			}
-		}
-	}()
-
-	b.logger.Infof("[BlockAssembler] cleanup queue worker started")
 }
 
 // Start initializes and begins the block assembler operations.
@@ -892,89 +751,53 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
 
+	// Preserve parents of unmined transactions during catchup.
+	//
+	// During catchup, unmined txs from the mempool will be marked as mined when processing blocks.
+	// Once marked mined (UnminedSince cleared), they're no longer in the unmined tx pool. If their
+	// parent txs are past retention, the pruner could delete them before block validation completes.
+	//
+	// We preserve parents at startup (while unmined pool is intact) rather than per-block to avoid
+	// overhead during catchup. This is a one-time batch operation that protects all parents before
+	// any blocks are validated.
+	//
+	// FSM STATE DETERMINES WHEN TO RUN:
+	// - FSMStateCATCHINGBLOCKS: Run once at startup (efficient batch operation)
+	// - FSMStateRUNNING: Skip (handled per-block in BlockValidation after UpdateTxMinedStatus)
+	//
+	// TIMING: Executes after loadUnminedTransactions() but before Block Validation processes blocks.
+	fsmState, fsmErr := b.blockchainClient.GetFSMCurrentState(ctx)
+	if fsmErr != nil {
+		b.logger.Warnf("[BlockAssembler] Failed to get blockchain FSM state for parent preservation: %v", fsmErr)
+		// Continue - best effort
+	} else if fsmState != nil && *fsmState == blockchain.FSMStateCATCHINGBLOCKS {
+		b.logger.Infof("[BlockAssembler][Catchup] Block Assembly starting during catchup, preserving parents of unmined transactions")
+		_, height := b.CurrentBlock()
+		if count, preserveErr := utxo.PreserveParentsOfOldUnminedTransactions(ctx, b.utxoStore, height, b.settings, b.logger); preserveErr != nil {
+			b.logger.Errorf("[BlockAssembler][Catchup] CRITICAL: Failed to preserve parents during catchup startup: %v", preserveErr)
+			// Continue - best effort, but log as critical since this could cause validation failures
+		} else {
+			b.logger.Infof("[BlockAssembler][Catchup] Preserved parents for %d unmined transactions before catchup validation begins", count)
+		}
+	}
+
+	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
+	b.subtreeProcessor.Start(ctx)
+
 	if err = b.startChannelListeners(ctx); err != nil {
 		return errors.NewProcessingError("[BlockAssembler] failed to start channel listeners: %v", err)
-	}
-
-	// CRITICAL STARTUP COORDINATION: Initialize persisted height from block persister's state
-	//
-	// PROBLEM: Block persister creates .subtree_data files after a delay (BlockPersisterPersistAge blocks),
-	// but cleanup deletes transactions based only on delete_at_height. If cleanup runs before block persister
-	// has created .subtree_data files, those files will reference deleted transactions, causing catchup failures
-	// with "subtree length does not match tx data length" errors (actually missing transactions).
-	//
-	// SOLUTION: Cleanup coordinates with block persister by limiting deletion to:
-	//   max_cleanup_height = min(requested_cleanup_height, persisted_height + retention)
-	//
-	// STARTUP RACE: Block persister notifications arrive asynchronously after BlockAssembler starts.
-	// If cleanup runs before the first notification arrives, it doesn't know the persisted height and
-	// could delete transactions that block persister still needs.
-	//
-	// PREVENTION: Read block persister's last persisted height from blockchain state on startup.
-	// Block persister publishes this state on its own startup, so we have the current value immediately.
-	//
-	// SCENARIOS:
-	//   1. Block persister running: State available, cleanup immediately coordinates correctly
-	//   2. Block persister not deployed: State missing, cleanup proceeds normally (height=0 disables coordination)
-	//   3. Block persister hasn't started yet: State missing, will get notification soon, cleanup waits
-	//   4. Block persister disabled: State missing, cleanup works without coordination
-	//
-	// All scenarios are safe. This prevents premature cleanup during the startup window.
-	if state, err := b.blockchainClient.GetState(ctx, "BlockPersisterHeight"); err == nil && len(state) >= 4 {
-		height := binary.LittleEndian.Uint32(state)
-		if height > 0 {
-			b.lastPersistedHeight.Store(height)
-			b.logger.Infof("[BlockAssembler] Initialized persisted height from block persister state: %d", height)
-		}
-	} else if err != nil {
-		// State doesn't exist - block persister either not deployed, hasn't started, or first run.
-		// All cases are safe (cleanup checks for height=0 and proceeds normally without coordination).
-		b.logger.Debugf("[BlockAssembler] Block persister state not available: %v", err)
-	}
-
-	// Check if the UTXO store supports cleanup operations
-	if !b.settings.UtxoStore.DisableDAHCleaner {
-		if cleanupServiceProvider, ok := b.utxoStore.(cleanup.CleanupServiceProvider); ok {
-			b.logger.Infof("[BlockAssembler] initialising cleanup service")
-
-			b.cleanupService, err = cleanupServiceProvider.GetCleanupService()
-			if err != nil {
-				return err
-			}
-
-			if b.cleanupService != nil {
-				// CLEANUP COORDINATION: Wire up block persister progress tracking
-				//
-				// Cleanup needs to know how far block persister has progressed so it doesn't
-				// delete transactions that block persister still needs to create .subtree_data files.
-				//
-				// The cleanup service will call GetLastPersistedHeight() before each cleanup operation
-				// and limit deletion to: min(requested_height, persisted_height + retention)
-				//
-				// This getter provides the persisted height that was:
-				//   1. Initialized from blockchain state on startup (preventing startup race)
-				//   2. Updated via BlockPersisted notifications during runtime (keeping current)
-				//
-				// See processCleanupJob in cleanup_service.go for the coordination logic.
-				b.cleanupService.SetPersistedHeightGetter(b.GetLastPersistedHeight)
-				b.logger.Infof("[BlockAssembler] Configured cleanup service to coordinate with block persister")
-
-				b.logger.Infof("[BlockAssembler] starting cleanup service")
-				b.cleanupService.Start(ctx)
-			}
-
-			b.cleanupServiceLoaded.Store(true)
-
-			// Start the cleanup queue worker to process parent preserve and DAH cleanup operations
-			// This prevents flooding the system with concurrent operations during block catchup
-			b.startCleanupQueueWorker(ctx)
-		}
 	}
 
 	_, height := b.CurrentBlock()
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(height))
 
 	return nil
+}
+
+// Wait blocks until all background goroutines have finished.
+// This should be called after the context is cancelled to ensure clean shutdown.
+func (b *BlockAssembler) Wait() {
+	b.wg.Wait()
 }
 
 func (b *BlockAssembler) initState(ctx context.Context) error {
@@ -1094,12 +917,13 @@ func (b *BlockAssembler) AddTx(node subtree.Node, txInpoints subtree.TxInpoints)
 // RemoveTx removes a transaction from the block assembler.
 //
 // Parameters:
+//   - ctx: Context for the removal operation
 //   - hash: Hash of the transaction to remove
 //
 // Returns:
 //   - error: Any error encountered during removal
-func (b *BlockAssembler) RemoveTx(hash chainhash.Hash) error {
-	return b.subtreeProcessor.Remove(hash)
+func (b *BlockAssembler) RemoveTx(ctx context.Context, hash chainhash.Hash) error {
+	return b.subtreeProcessor.Remove(ctx, hash)
 }
 
 type resetRequest struct {
@@ -1143,51 +967,104 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	)
 	defer deferFn()
 
-	// Try to get from cache first
-	b.cachedCandidate.mu.RLock()
+	// Declare currentHeight outside loop so it's available for cache update later
+	var currentHeight uint32
 
-	_, currentHeight := b.CurrentBlock()
+	// Use iterative approach instead of recursion to prevent stack overflow under load
+	for {
+		// Try to get from cache first
+		b.cachedCandidate.mu.RLock()
 
-	// Return cached if still valid (same height and within timeout)
-	if !b.settings.ChainCfgParams.ReduceMinDifficulty && b.cachedCandidate.candidate != nil &&
-		b.cachedCandidate.lastHeight == currentHeight &&
-		time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateCacheTimeout {
-		candidate := b.cachedCandidate.candidate
-		subtrees := b.cachedCandidate.subtrees
+		_, currentHeight = b.CurrentBlock()
+
+		// Return cached if still valid (same height and within timeout)
+		if !b.settings.ChainCfgParams.ReduceMinDifficulty && b.cachedCandidate.candidate != nil &&
+			b.cachedCandidate.lastHeight == currentHeight &&
+			time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateCacheTimeout {
+			candidate := b.cachedCandidate.candidate
+			subtrees := b.cachedCandidate.subtrees
+			b.cachedCandidate.mu.RUnlock()
+
+			// Record cache hit metrics
+			prometheusBlockAssemblerCacheHits.Inc()
+
+			b.logger.Debugf("[BlockAssembler] Returning cached mining candidate %s", candidate.Id)
+
+			return candidate, subtrees, nil
+		}
+
+		// Check if already generating
+		if b.cachedCandidate.generating {
+			// Return stale cache if available rather than blocking
+			// Miners can work with slightly stale data during high load
+			if b.cachedCandidate.candidate != nil &&
+				time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge {
+				candidate := b.cachedCandidate.candidate
+				subtrees := b.cachedCandidate.subtrees
+				b.cachedCandidate.mu.RUnlock()
+
+				b.logger.Debugf("[BlockAssembler] Returning stale cache during generation (age: %v)",
+					time.Since(b.cachedCandidate.lastUpdate))
+				prometheusBlockAssemblerCacheHits.Inc()
+
+				return candidate, subtrees, nil
+			}
+
+			// If stale cache too old or doesn't exist, wait for generation
+			ch := b.cachedCandidate.generationChan
+			b.cachedCandidate.mu.RUnlock()
+
+			// Wait for ongoing generation with timeout
+			select {
+			case <-ch:
+				// Generation complete, retry to get fresh cache (loop continues)
+				continue
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			case <-time.After(b.settings.BlockAssembly.GetMiningCandidateResponseTimeout):
+				// Timeout waiting for generation, retry (loop continues)
+				continue
+			}
+		}
+
+		// Mark as generating - upgrade to write lock
 		b.cachedCandidate.mu.RUnlock()
+		b.cachedCandidate.mu.Lock()
 
-		// Record cache hit metrics
-		prometheusBlockAssemblerCacheHits.Inc()
+		// Double check generating flag in case another goroutine set it while we upgraded locks
+		if b.cachedCandidate.generating {
+			// Return stale cache if available (same logic as above)
+			if b.cachedCandidate.candidate != nil &&
+				time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge {
+				candidate := b.cachedCandidate.candidate
+				subtrees := b.cachedCandidate.subtrees
+				b.cachedCandidate.mu.Unlock()
 
-		b.logger.Debugf("[BlockAssembler] Returning cached mining candidate %s", candidate.Id)
+				b.logger.Debugf("[BlockAssembler] Returning stale cache after lock upgrade (age: %v)",
+					time.Since(b.cachedCandidate.lastUpdate))
+				prometheusBlockAssemblerCacheHits.Inc()
 
-		return candidate, subtrees, nil
-	}
+				return candidate, subtrees, nil
+			}
 
-	// Check if already generating
-	if b.cachedCandidate.generating {
-		ch := b.cachedCandidate.generationChan
-		b.cachedCandidate.mu.RUnlock()
+			ch := b.cachedCandidate.generationChan
+			b.cachedCandidate.mu.Unlock()
 
-		// Wait for ongoing generation
-		<-ch
+			// Wait for ongoing generation
+			select {
+			case <-ch:
+				// Generation complete, retry (loop continues)
+				continue
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			case <-time.After(b.settings.BlockAssembly.GetMiningCandidateResponseTimeout):
+				// Timeout waiting for generation, retry (loop continues)
+				continue
+			}
+		}
 
-		return b.GetMiningCandidate(ctx)
-	}
-
-	// Mark as generating - upgrade to write lock
-	b.cachedCandidate.mu.RUnlock()
-	b.cachedCandidate.mu.Lock()
-
-	// Double check generating flag in case another goroutine set it while we upgraded locks
-	if b.cachedCandidate.generating {
-		ch := b.cachedCandidate.generationChan
-		b.cachedCandidate.mu.Unlock()
-
-		// Wait for ongoing generation
-		<-ch
-
-		return b.GetMiningCandidate(ctx)
+		// We have the write lock and no one else is generating - break out to generate
+		break
 	}
 
 	b.cachedCandidate.generating = true
@@ -1213,13 +1090,13 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 		close(responseCh)
 		// context cancelled, do not send
 		return nil, nil, ctx.Err()
-	case <-time.After(1 * time.Second):
+	case <-time.After(b.settings.BlockAssembly.GetMiningCandidateSendTimeout):
 		return nil, nil, errors.NewServiceError("timeout sending mining candidate request")
 	case b.miningCandidateCh <- responseCh:
 		// sent successfully
 	}
 
-	// wait for 10 seconds for the response
+	// wait for response with timeout
 	var candidate *model.MiningCandidate
 
 	var subtrees []*subtree.Subtree
@@ -1231,7 +1108,7 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 		// context cancelled, do not send
 		close(responseCh)
 		err = ctx.Err()
-	case <-time.After(10 * time.Second):
+	case <-time.After(b.settings.BlockAssembly.GetMiningCandidateResponseTimeout):
 		// make sure to close the channel, otherwise the for select will hang, because no one is reading from it
 		close(responseCh)
 
@@ -1244,11 +1121,22 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 
 	// Update cache on success
 	if err == nil {
+		// Calculate metrics for smart invalidation
+		var totalTxCount uint32
+		var totalSize uint64
+		for _, st := range subtrees {
+			totalTxCount += uint32(st.Length())
+			totalSize += st.SizeInBytes
+		}
+
 		b.cachedCandidate.mu.Lock()
 		b.cachedCandidate.candidate = candidate
 		b.cachedCandidate.subtrees = subtrees
 		b.cachedCandidate.lastHeight = currentHeight
 		b.cachedCandidate.lastUpdate = time.Now()
+		b.cachedCandidate.lastTxCount = totalTxCount
+		b.cachedCandidate.lastSizeInBytes = totalSize
+		b.cachedCandidate.lastSubtreeCount = len(subtrees)
 		b.cachedCandidate.mu.Unlock()
 
 		// Record cache miss metrics
@@ -1715,18 +1603,18 @@ func (b *BlockAssembler) getNextNbits(nextBlockTime int64) (*model.NBit, error) 
 	return nbit, nil
 }
 
-// filterTransactionsWithValidParents filters unmined transactions to ensure their parent transactions
-// are either on the best chain or also unmined (to be processed together).
+// validateParentChain validates that unmined transactions have their parent transactions
+// either on the best chain or also unmined (to be processed together).
 //
 // Parameters:
 //   - ctx: Context for cancellation
-//   - unminedTxs: List of unmined transactions to filter
+//   - unminedTxs: List of unmined transactions to validate
 //   - bestBlockHeaderIDsMap: Map of block IDs on the best chain
 //
 // Returns:
-//   - []*utxo.UnminedTransaction: Filtered list of transactions with valid parents
+//   - []*utxo.UnminedTransaction: List of transactions (filtered if OnRestartRemoveInvalidParentChainTxs is enabled)
 //   - error: Context cancellation error if cancelled, nil otherwise
-func (b *BlockAssembler) filterTransactionsWithValidParents(
+func (b *BlockAssembler) validateParentChain(
 	ctx context.Context,
 	unminedTxs []*utxo.UnminedTransaction,
 	bestBlockHeaderIDsMap map[uint32]bool,
@@ -1736,7 +1624,7 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 		return unminedTxs, nil
 	}
 
-	b.logger.Infof("[BlockAssembler][filterTransactionsWithValidParents] Starting parent chain validation for %d unmined transactions", len(unminedTxs))
+	b.logger.Infof("[BlockAssembler][validateParentChain] Starting parent chain validation for %d unmined transactions", len(unminedTxs))
 
 	// OPTIMIZATION: Two-pass approach to minimize memory usage
 	// Pass 1: Collect only the parent hashes that are actually referenced
@@ -1748,7 +1636,7 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 			referencedParents[parentHash] = true
 		}
 	}
-	b.logger.Debugf("[BlockAssembler][filterTransactionsWithValidParents] Found %d unique parent references out of %d transactions",
+	b.logger.Debugf("[BlockAssembler][validateParentChain] Found %d unique parent references out of %d transactions",
 		len(referencedParents), len(unminedTxs))
 
 	// Pass 2: Build index ONLY for transactions that are referenced as parents
@@ -1769,7 +1657,7 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 		// Check for context cancellation at start of each batch
 		select {
 		case <-ctx.Done():
-			b.logger.Infof("[BlockAssembler][filterTransactionsWithValidParents] Parent validation cancelled during batch processing at index %d", i)
+			b.logger.Infof("[BlockAssembler][validateParentChain] Parent validation cancelled during batch processing at index %d", i)
 			return nil, ctx.Err()
 		default:
 		}
@@ -1801,10 +1689,10 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 
 			// Create UnresolvedMetaData slice for batch operation
 			unresolvedParents := make([]*utxo.UnresolvedMetaData, 0, len(parentTxIDs))
-			for i, parentTxID := range parentTxIDs {
+			for parentIdx, parentTxID := range parentTxIDs {
 				unresolvedParents = append(unresolvedParents, &utxo.UnresolvedMetaData{
 					Hash: parentTxID,
-					Idx:  i,
+					Idx:  parentIdx,
 				})
 			}
 
@@ -1814,14 +1702,14 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 				fields.BlockIDs, fields.UnminedSince, fields.Locked)
 			if err != nil {
 				// Log the batch error but continue - individual errors are in UnresolvedMetaData
-				b.logger.Warnf("[BlockAssembler][filterTransactionsWithValidParents] BatchDecorate error (will check individual results): %v", err)
+				b.logger.Warnf("[BlockAssembler][validateParentChain] BatchDecorate error (will check individual results): %v", err)
 			}
 
 			// Process results - check each parent's fetch result
 			for _, unresolved := range unresolvedParents {
 				if unresolved.Err != nil {
 					// Parent doesn't exist or error retrieving it
-					b.logger.Debugf("[BlockAssembler][filterTransactionsWithValidParents] Failed to get parent tx %s metadata: %v",
+					b.logger.Errorf("[BlockAssembler][validateParentChain] Failed to get parent tx %s metadata: %v",
 						unresolved.Hash.String(), unresolved.Err)
 					continue
 				}
@@ -1845,11 +1733,15 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 					}
 				}
 				if onBestChain {
-					// Transaction is already on the best chain - skip it
+					// Transaction is already on the best chain
 					// (though it shouldn't be in unmined list - this is a data inconsistency)
-					b.logger.Warnf("[BlockAssembler][filterTransactionsWithValidParents] Transaction %s is already on best chain but marked as unmined - skipping it", tx.Hash.String())
-					skippedCount++
-					continue
+					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s is already on best chain but marked as unmined", tx.Hash.String())
+					if b.settings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs {
+						// Filtering enabled - skip this transaction
+						skippedCount++
+						continue
+					}
+					// Filtering disabled - keep transaction despite being on best chain
 				}
 				// Transaction has BlockIDs but not on best chain - it's on an orphaned chain
 				// Continue to validate its parents to decide if it can be re-included
@@ -1870,27 +1762,23 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 					// This means BatchDecorate couldn't find it - it doesn't exist
 					allParentsValid = false
 					invalidReason = fmt.Sprintf("parent tx %s not found in UTXO store", parentTxID.String())
+					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
 					break
 				}
 
-				// Parent exists in UTXO store - check if it's on the best chain
-				if len(parentMeta.BlockIDs) > 0 {
-					onBestChain := false
-					for _, blockID := range parentMeta.BlockIDs {
-						if bestBlockHeaderIDsMap[blockID] {
-							onBestChain = true
-							break
-						}
-					}
-					if !onBestChain {
-						allParentsValid = false
-						invalidReason = fmt.Sprintf("parent tx %s is on wrong chain (blocks: %v)",
-							parentTxID.String(), parentMeta.BlockIDs)
-						break
-					}
-				} else {
-					// Parent exists but has no BlockIDs - it's unmined
-					// Check if it's in our unmined list by seeing if it has an index
+				// CRITICAL: Check UnminedSince FIRST (authoritative indicator of mined status)
+				// UnminedSince is the authoritative indicator:
+				//   - UnminedSince == 0: Transaction is mined on the longest chain
+				//   - UnminedSince > 0: Transaction is NOT mined on the longest chain (value is block height when unmarked)
+				// BlockIDs is a historical record of ALL blocks containing this tx (can include forks)
+				//
+				// The key insight: After a reorg, a parent tx may have:
+				//   - BlockIDs = [5640] (block on wrong chain)
+				//   - UnminedSince = 5650 (marked unmined because 5640 is not on longest chain)
+				// We must check UnminedSince FIRST to avoid false "wrong chain" warnings
+				if parentMeta.UnminedSince > 0 {
+					// Parent is unmined (confirmed by UnminedSince field)
+					// Check if it's in our unmined list
 					if _, isInUnminedList := parentIndexMap[parentTxID]; isInUnminedList {
 						// It's in our list - track it for ordering validation
 						unminedParents = append(unminedParents, parentTxID)
@@ -1898,8 +1786,38 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 						// Unmined but not in our list - this is a problem
 						allParentsValid = false
 						invalidReason = fmt.Sprintf("parent tx %s is unmined but not in processing list", parentTxID.String())
+						b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
 						break
 					}
+				} else if len(parentMeta.BlockIDs) > 0 {
+					// Parent should be mined (UnminedSince == 0)
+					// Verify BlockIDs are on best chain for data consistency
+					onBestChain := false
+					for _, blockID := range parentMeta.BlockIDs {
+						if bestBlockHeaderIDsMap[blockID] {
+							onBestChain = true
+							break
+						}
+					}
+
+					if !onBestChain {
+						// Data inconsistency: unmined_since=0 BUT block_ids not on best chain
+						// This indicates transactions weren't properly marked as unmined during a fork
+						// This is a data integrity issue that must be fixed at the source (catchup.go)
+						allParentsValid = false
+						invalidReason = fmt.Sprintf("parent tx %s is on wrong chain (blocks: %v) and not in unmined list - data integrity issue from fork handling",
+							parentTxID.String(), parentMeta.BlockIDs)
+						b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
+						break
+					}
+					// else: parent is mined on best chain - all good, continue
+				} else {
+					// No BlockIDs and UnminedSince=0 - data inconsistency
+					// This should never happen - a tx with unmined_since=0 should have BlockIDs
+					allParentsValid = false
+					invalidReason = fmt.Sprintf("parent tx %s has data inconsistency (unmined_since=0 but no block_ids)", parentTxID.String())
+					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
+					break
 				}
 			}
 
@@ -1916,7 +1834,7 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 					if !parentExists {
 						// Parent not in index map - this means it's not in the unmined list
 						// This shouldn't happen as we just checked it was referenced
-						b.logger.Errorf("[BlockAssembler][filterTransactionsWithValidParents] Parent tx %s not found in index map", parentTxID.String())
+						b.logger.Errorf("[BlockAssembler][validateParentChain] Parent tx %s not found in index map", parentTxID.String())
 						hasInvalidOrdering = true
 						break
 					}
@@ -1927,7 +1845,7 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 						hasInvalidOrdering = true
 						invalidReason = fmt.Sprintf("parent tx %s (index %d) comes after child tx %s (index %d)",
 							parentTxID.String(), parentIdx, tx.Hash.String(), currentIdx)
-						b.logger.Debugf("[BlockAssembler][filterTransactionsWithValidParents] Skipping tx %s: %s", tx.Hash.String(), invalidReason)
+						b.logger.Warnf("[BlockAssembler][validateParentChain] Skipping tx %s: %s", tx.Hash.String(), invalidReason)
 						break
 					}
 				}
@@ -1944,18 +1862,29 @@ func (b *BlockAssembler) filterTransactionsWithValidParents(
 			if allParentsValid {
 				validTxs = append(validTxs, tx)
 			} else {
-				skippedCount++
-				b.logger.Debugf("[BlockAssembler][filterTransactionsWithValidParents] Skipping tx %s: %s", tx.Hash.String(), invalidReason)
+				// Transaction has invalid parent chain - use setting to decide whether to exclude
+				if b.settings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs {
+					// Filtering enabled - skip this transaction
+					skippedCount++
+				} else {
+					// Filtering disabled (default) - keep transaction despite invalid parents
+					validTxs = append(validTxs, tx)
+				}
 			}
 		}
 	}
 
-	if skippedCount > 0 {
-		b.logger.Warnf("[BlockAssembler][filterTransactionsWithValidParents] Skipped %d transactions due to invalid/missing parent chains", skippedCount)
+	filteringStatus := "disabled"
+	if b.settings.BlockAssembly.OnRestartRemoveInvalidParentChainTxs {
+		filteringStatus = "enabled"
 	}
 
-	b.logger.Infof("[BlockAssembler][filterTransactionsWithValidParents] Parent chain validation complete: %d valid, %d skipped",
-		len(validTxs), skippedCount)
+	if skippedCount > 0 {
+		b.logger.Warnf("[BlockAssembler][validateParentChain] Skipped %d transactions due to invalid/missing parent chains (filtering: %s)", skippedCount, filteringStatus)
+	}
+
+	b.logger.Infof("[BlockAssembler][validateParentChain] Parent chain validation complete: %d valid, %d skipped (filtering: %s)",
+		len(validTxs), skippedCount, filteringStatus)
 
 	return validTxs, nil
 }
@@ -2131,9 +2060,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 	})
 
 	// Apply parent chain validation if enabled
-	if b.settings.BlockAssembly.ValidateParentChainOnRestart {
+	if b.settings.BlockAssembly.OnRestartValidateParentChain {
 		var err error
-		unminedTransactions, err = b.filterTransactionsWithValidParents(ctx, unminedTransactions, bestBlockHeaderIDsMap)
+		unminedTransactions, err = b.validateParentChain(ctx, unminedTransactions, bestBlockHeaderIDsMap)
 		if err != nil {
 			// Context was cancelled during parent validation
 			return err
@@ -2172,7 +2101,80 @@ func (b *BlockAssembler) invalidateMiningCandidateCache() {
 	b.cachedCandidate.lastHeight = 0
 	b.cachedCandidate.lastUpdate = time.Time{}
 	b.cachedCandidate.generating = false
+	b.cachedCandidate.lastTxCount = 0
+	b.cachedCandidate.lastSizeInBytes = 0
+	b.cachedCandidate.lastSubtreeCount = 0
 	b.cachedCandidate.mu.Unlock()
+}
+
+// shouldInvalidateCache determines if cache should be invalidated based on significant changes.
+// This prevents unnecessary invalidation during high-load scenarios when changes are minor.
+//
+// Returns true if ANY of these conditions are met:
+// - Cache age exceeds MiningCandidateSmartCacheMaxAge (default 10s) - ensures new txs are eventually included
+// - Transaction count changed by >10%
+// - Block size changed by >1MB
+// - Number of subtrees changed (structural change)
+func (b *BlockAssembler) shouldInvalidateCache(newTxCount uint32, newSizeInBytes uint64, newSubtreeCount int) bool {
+	b.cachedCandidate.mu.RLock()
+	defer b.cachedCandidate.mu.RUnlock()
+
+	// If no cache exists, don't invalidate (nothing to invalidate)
+	if b.cachedCandidate.candidate == nil {
+		return false
+	}
+
+	// Cache age check: invalidate if older than configured max age
+	// This ensures new transactions are included even if they don't trigger
+	// the threshold checks (e.g., steady trickle of small transactions)
+	cacheAge := time.Since(b.cachedCandidate.lastUpdate)
+	if cacheAge > b.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge {
+		return true
+	}
+
+	lastTxCount := b.cachedCandidate.lastTxCount
+	lastSizeInBytes := b.cachedCandidate.lastSizeInBytes
+	lastSubtreeCount := b.cachedCandidate.lastSubtreeCount
+
+	// Subtree count changed - definitely invalidate (structure changed)
+	if newSubtreeCount != lastSubtreeCount {
+		return true
+	}
+
+	// Transaction count changed by >10%
+	if lastTxCount > 0 {
+		var txDelta uint32
+
+		if newTxCount > lastTxCount {
+			txDelta = newTxCount - lastTxCount
+		} else {
+			txDelta = lastTxCount - newTxCount
+		}
+
+		txChangePercent := (float64(txDelta) / float64(lastTxCount)) * 100
+		if txChangePercent > 10.0 {
+			return true
+		}
+	}
+
+	// Block size changed by >1MB (1048576 bytes)
+	const oneMB uint64 = 1048576
+	if lastSizeInBytes > 0 {
+		var sizeDelta uint64
+
+		if newSizeInBytes > lastSizeInBytes {
+			sizeDelta = newSizeInBytes - lastSizeInBytes
+		} else {
+			sizeDelta = lastSizeInBytes - newSizeInBytes
+		}
+
+		if sizeDelta > oneMB {
+			return true
+		}
+	}
+
+	// Changes are minor, keep cache valid
+	return false
 }
 
 // SetSkipWaitForPendingBlocks sets the flag to skip waiting for pending blocks during startup.

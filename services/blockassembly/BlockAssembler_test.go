@@ -173,6 +173,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 		subChan := make(chan *blockchain_api.Notification, 1)
 		// Send initial notification to mimic real blockchain service behavior
 		subChan <- &blockchain_api.Notification{
@@ -218,6 +221,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 			Hash: (&chainhash.Hash{}).CloneBytes(),
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
@@ -276,6 +282,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 		blockchainClient.On("SetState", mock.Anything, "BlockAssembler", mock.Anything).Return(nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
@@ -319,6 +328,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 			Hash: (&chainhash.Hash{}).CloneBytes(),
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
@@ -655,7 +667,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 
 	// overwrite default subtree processor with a new one
 	ba.subtreeProcessor, err = subtreeprocessor.NewSubtreeProcessor(
-		context.Background(),
+		t.Context(),
 		ulogger.TestLogger{},
 		ba.settings,
 		nil,
@@ -665,6 +677,16 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 		subtreeprocessor.WithBatcherSize(1),
 	)
 	require.NoError(t, err)
+
+	// Ensure SubtreeProcessor is properly cleaned up when test ends
+	t.Cleanup(func() {
+		if ba.subtreeProcessor != nil {
+			ba.subtreeProcessor.Stop(context.Background())
+		}
+	})
+
+	// Start the subtree processor
+	ba.subtreeProcessor.Start(t.Context())
 
 	items.blockAssembler = ba
 
@@ -1652,6 +1674,198 @@ func TestBlockAssembler_CacheInvalidation(t *testing.T) {
 	})
 }
 
+func TestBlockAssembler_SmartCacheInvalidation(t *testing.T) {
+	t.Run("Cache invalidates after configured max age", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Override the smart cache max age to 500ms for faster testing
+		ba.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge = 500 * time.Millisecond
+
+		// Setup cache with initial state
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastHeight = 1
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 100
+		ba.cachedCandidate.lastSizeInBytes = 50000
+		ba.cachedCandidate.lastSubtreeCount = 1
+		ba.cachedCandidate.mu.Unlock()
+
+		// Should NOT invalidate immediately (no significant change)
+		shouldInvalidate := ba.shouldInvalidateCache(100, 50000, 1)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate when no significant change")
+
+		// Wait for cache to age past max age
+		time.Sleep(600 * time.Millisecond)
+
+		// Should invalidate due to age
+		shouldInvalidate = ba.shouldInvalidateCache(100, 50000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate after max age")
+	})
+
+	t.Run("Cache invalidates on transaction count change > 10%", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 1000
+		ba.cachedCandidate.lastSizeInBytes = 500000
+		ba.cachedCandidate.lastSubtreeCount = 1
+		ba.cachedCandidate.mu.Unlock()
+
+		// 9% change - should NOT invalidate
+		shouldInvalidate := ba.shouldInvalidateCache(1090, 500000, 1)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate with 9%% tx count change")
+
+		// 11% change - should invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1110, 500000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 11%% tx count change")
+
+		// 11% decrease - should also invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(890, 500000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 11%% tx count decrease")
+	})
+
+	t.Run("Cache invalidates on block size change > 1MB", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 1000
+		ba.cachedCandidate.lastSizeInBytes = 10_000_000 // 10MB
+		ba.cachedCandidate.lastSubtreeCount = 1
+		ba.cachedCandidate.mu.Unlock()
+
+		// 900KB change - should NOT invalidate
+		shouldInvalidate := ba.shouldInvalidateCache(1000, 10_000_000+900_000, 1)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate with 900KB size change")
+
+		// 1.1MB change - should invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 10_000_000+1_100_000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 1.1MB size change")
+
+		// 1.1MB decrease - should also invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 10_000_000-1_100_000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 1.1MB size decrease")
+	})
+
+	t.Run("Cache invalidates on subtree count change", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 1000
+		ba.cachedCandidate.lastSizeInBytes = 500000
+		ba.cachedCandidate.lastSubtreeCount = 5
+		ba.cachedCandidate.mu.Unlock()
+
+		// Same count - should NOT invalidate
+		shouldInvalidate := ba.shouldInvalidateCache(1000, 500000, 5)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate with same subtree count")
+
+		// Different count - should invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 500000, 6)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with different subtree count")
+
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 500000, 4)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with decreased subtree count")
+	})
+
+	t.Run("Cache does not invalidate when no cache exists", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// No cache exists (nil candidate)
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = nil
+		ba.cachedCandidate.mu.Unlock()
+
+		// Should NOT invalidate (nothing to invalidate)
+		shouldInvalidate := ba.shouldInvalidateCache(1000, 500000, 5)
+		assert.False(t, shouldInvalidate, "Should not invalidate when no cache exists")
+	})
+
+	t.Run("Combined scenario - realistic high-load situation", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Set longer max age for this test
+		ba.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge = 10 * time.Second
+
+		// Setup cache with initial state
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 10000
+		ba.cachedCandidate.lastSizeInBytes = 50_000_000 // 50MB
+		ba.cachedCandidate.lastSubtreeCount = 10
+		ba.cachedCandidate.mu.Unlock()
+
+		// Simulate steady trickle of transactions (5% increase, 500KB increase)
+		// Should NOT invalidate (below thresholds)
+		shouldInvalidate := ba.shouldInvalidateCache(10500, 50_500_000, 10)
+		assert.False(t, shouldInvalidate, "Small steady increase should not invalidate cache")
+
+		// Simulate burst of transactions (15% increase, 2MB increase)
+		// Should invalidate due to tx count threshold
+		shouldInvalidate = ba.shouldInvalidateCache(11500, 52_000_000, 10)
+		assert.True(t, shouldInvalidate, "Burst of transactions should invalidate cache")
+
+		// Simulate new subtree completed
+		// Should invalidate due to subtree count change
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.mu.Unlock()
+		shouldInvalidate = ba.shouldInvalidateCache(11500, 52_000_000, 11)
+		assert.True(t, shouldInvalidate, "New subtree should invalidate cache")
+	})
+
+	t.Run("Cache metrics tracking", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache and verify metrics are tracked
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 500
+		ba.cachedCandidate.lastSizeInBytes = 250000
+		ba.cachedCandidate.lastSubtreeCount = 3
+		ba.cachedCandidate.mu.Unlock()
+
+		// Verify tracked values
+		ba.cachedCandidate.mu.RLock()
+		assert.Equal(t, uint32(500), ba.cachedCandidate.lastTxCount, "TX count should be tracked")
+		assert.Equal(t, uint64(250000), ba.cachedCandidate.lastSizeInBytes, "Size should be tracked")
+		assert.Equal(t, 3, ba.cachedCandidate.lastSubtreeCount, "Subtree count should be tracked")
+		ba.cachedCandidate.mu.RUnlock()
+	})
+}
+
 func TestBlockAssembly_GetCurrentRunningState(t *testing.T) {
 	t.Run("GetCurrentRunningState returns correct state", func(t *testing.T) {
 		initPrometheusMetrics()
@@ -1732,7 +1946,7 @@ func TestBlockAssembly_RemoveTx(t *testing.T) {
 		txHash := tx.TxIDChainHash()
 
 		// Since RemoveTx returns an error, we can test it
-		err := testItems.blockAssembler.RemoveTx(*txHash)
+		err := testItems.blockAssembler.RemoveTx(t.Context(), *txHash)
 		// The error might be that the tx doesn't exist, which is fine for this test
 		_ = err
 	})
@@ -1772,7 +1986,7 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		// Set skip wait for pending blocks
 		blockAssembler.SetSkipWaitForPendingBlocks(true)
 
-		err = blockAssembler.Start(context.Background())
+		err = blockAssembler.Start(t.Context())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to initialize state")
 	})
@@ -1802,6 +2016,9 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		subChan := make(chan *blockchain_api.Notification, 1)
 		blockchainClient.On("SubscribeToNewBlock", mock.Anything).Return(subChan, nil)
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(blockchainSubscription, nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		tSettings := createTestSettings(t)
 		newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest)
@@ -1822,7 +2039,7 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		// Set skip wait for pending blocks
 		blockAssembler.SetSkipWaitForPendingBlocks(true)
 
-		err = blockAssembler.Start(context.Background())
+		err = blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		// Verify state was properly initialized
@@ -1856,82 +2073,6 @@ func TestBlockAssembly_processNewBlockAnnouncement_ErrorHandling(t *testing.T) {
 		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
 		assert.Equal(t, initialHeight, currentHeight)
 		assert.Equal(t, initialHeader, currentHeader)
-	})
-}
-
-func TestBlockAssembly_setBestBlockHeader_CleanupServiceFailures(t *testing.T) {
-	t.Run("setBestBlockHeader handles cleanup service failures gracefully", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-
-		// Create a mock cleanup service that fails
-		mockCleanupService := &MockCleanupService{}
-		mockCleanupService.On("UpdateBlockHeight", mock.Anything, mock.Anything).Return(errors.NewProcessingError("cleanup service failed"))
-
-		// Set the cleanup service and mark it as loaded
-		testItems.blockAssembler.cleanupService = mockCleanupService
-		testItems.blockAssembler.cleanupServiceLoaded.Store(true)
-
-		// Start the cleanup queue worker
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		testItems.blockAssembler.startCleanupQueueWorker(ctx)
-
-		// Set state to running so cleanup is triggered
-		testItems.blockAssembler.setCurrentRunningState(StateRunning)
-
-		// Create a new block header
-		newHeader := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  model.GenesisBlockHeader.Hash(),
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      1234567890,
-			Bits:           model.NBit{},
-			Nonce:          1234,
-		}
-		newHeight := uint32(1)
-
-		// Call setBestBlockHeader - should not panic or fail even if cleanup service fails
-		testItems.blockAssembler.setBestBlockHeader(newHeader, newHeight)
-
-		// Verify the block header was still set correctly
-		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
-		assert.Equal(t, newHeader, currentHeader)
-		assert.Equal(t, newHeight, currentHeight)
-
-		// Wait for background goroutine to complete (parent preserve + cleanup trigger)
-		time.Sleep(100 * time.Millisecond)
-
-		// Verify cleanup service was called
-		mockCleanupService.AssertCalled(t, "UpdateBlockHeight", newHeight, mock.Anything)
-	})
-
-	t.Run("setBestBlockHeader skips cleanup when cleanup service not loaded", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-
-		// Ensure cleanup service is not loaded
-		testItems.blockAssembler.cleanupServiceLoaded.Store(false)
-
-		newHeader := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  model.GenesisBlockHeader.Hash(),
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      1234567890,
-			Bits:           model.NBit{},
-			Nonce:          1234,
-		}
-		newHeight := uint32(1)
-
-		// This should work without any cleanup service calls
-		testItems.blockAssembler.setBestBlockHeader(newHeader, newHeight)
-
-		// Verify the block header was set correctly
-		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
-		assert.Equal(t, newHeader, currentHeader)
-		assert.Equal(t, newHeight, currentHeight)
 	})
 }
 
@@ -1992,9 +2133,9 @@ func (m *MockCleanupService) Start(ctx context.Context) {
 	m.Called(ctx)
 }
 
-func (m *MockCleanupService) UpdateBlockHeight(height uint32, doneCh ...chan string) error {
-	args := m.Called(height, doneCh)
-	return args.Error(0)
+func (m *MockCleanupService) Prune(ctx context.Context, height uint32) (int64, error) {
+	args := m.Called(ctx, height)
+	return args.Get(0).(int64), args.Error(1)
 }
 
 func (m *MockCleanupService) SetPersistedHeightGetter(getter func() uint32) {
@@ -2020,7 +2161,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNo
 	require.NotNil(t, items)
 
 	// Disable parent validation for this test as it tests edge cases with UTXO store states
-	items.blockAssembler.settings.BlockAssembly.ValidateParentChainOnRestart = false
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 	// Create a test tx and insert into UTXO store as unmined initially (unmined_since set)
 	tx := newTx(42)
@@ -2066,7 +2207,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStat
 	require.NotNil(t, items)
 
 	// Disable parent validation for this test as it tests edge cases with UTXO store states
-	items.blockAssembler.settings.BlockAssembly.ValidateParentChainOnRestart = false
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 	// Prepare a mined tx on the main chain
 	tx := newTx(43)
@@ -2115,7 +2256,7 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 	require.NotNil(t, items)
 
 	// Disable parent validation for this test as it tests transaction filtering logic independently
-	items.blockAssembler.settings.BlockAssembly.ValidateParentChainOnRestart = false
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 	// Create two test transactions
 	tx1 := newTx(100)
@@ -2499,32 +2640,4 @@ func TestGetMiningCandidate_SendTimeoutResetsGenerationFlag(t *testing.T) {
 	assert.False(t, ba.cachedCandidate.generating, "generating flag should still be reset")
 	assert.Nil(t, ba.cachedCandidate.generationChan, "generation channel should still be nil")
 	ba.cachedCandidate.mu.RUnlock()
-}
-
-// TestGetLastPersistedHeight tests the GetLastPersistedHeight method
-func TestGetLastPersistedHeight(t *testing.T) {
-	initPrometheusMetrics()
-
-	t.Run("GetLastPersistedHeight returns initial zero value", func(t *testing.T) {
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Initially should be 0
-		height := ba.GetLastPersistedHeight()
-		assert.Equal(t, uint32(0), height)
-	})
-
-	t.Run("GetLastPersistedHeight returns updated value", func(t *testing.T) {
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Store a value
-		ba.lastPersistedHeight.Store(uint32(100))
-
-		// Should return the stored value
-		height := ba.GetLastPersistedHeight()
-		assert.Equal(t, uint32(100), height)
-	})
 }

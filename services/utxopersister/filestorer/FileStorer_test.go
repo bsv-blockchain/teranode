@@ -589,3 +589,125 @@ func TestFileStorer_LargeData(t *testing.T) {
 
 	mockStore.AssertExpectations(t)
 }
+
+func TestAbort_DoesNotCallSetDAH(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	tSettings := createTestSettings()
+	mockStore := &MockBlobStore{}
+	key := createTestKey()
+	fileType := fileformat.FileTypeUtxoSet
+
+	// Setup - SetFromReader should receive an error via CloseWithError
+	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
+
+	var readerReceivedError error
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+		// Read from the reader until we get an error
+		buf := make([]byte, 1024)
+		for {
+			_, err := reader.Read(buf)
+			if err != nil {
+				readerReceivedError = err
+				break
+			}
+		}
+		_ = reader.Close()
+		return readerReceivedError
+	}
+	// NOTE: We do NOT expect SetDAH to be called since Abort() should prevent it
+
+	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
+	require.NoError(t, err)
+
+	// Write some data
+	_, err = fs.Write([]byte("test data"))
+	require.NoError(t, err)
+
+	// Abort the storer - this should close the pipe with an error
+	abortErr := errors.NewProcessingError("intentional abort")
+	fs.Abort(abortErr)
+
+	// Verify the reader received an error (not EOF)
+	assert.NotNil(t, readerReceivedError, "Reader should have received an error from CloseWithError")
+	assert.NotEqual(t, io.EOF, readerReceivedError, "Reader should receive abort error, not EOF")
+
+	// SetDAH should NOT have been called (this is verified by mockStore.AssertExpectations
+	// since we didn't set up an expectation for it)
+	mockStore.AssertExpectations(t)
+}
+
+func TestAbort_WithNilError(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	tSettings := createTestSettings()
+	mockStore := &MockBlobStore{}
+	key := createTestKey()
+	fileType := fileformat.FileTypeUtxoSet
+
+	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
+
+	var readerReceivedError error
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+		buf := make([]byte, 1024)
+		for {
+			_, err := reader.Read(buf)
+			if err != nil {
+				readerReceivedError = err
+				break
+			}
+		}
+		_ = reader.Close()
+		return readerReceivedError
+	}
+
+	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
+	require.NoError(t, err)
+
+	_, err = fs.Write([]byte("test data"))
+	require.NoError(t, err)
+
+	// Abort with nil error - should use default error
+	fs.Abort(nil)
+
+	// Verify the reader received an error
+	assert.NotNil(t, readerReceivedError, "Reader should have received an error from CloseWithError")
+	assert.NotEqual(t, io.EOF, readerReceivedError, "Reader should receive abort error, not EOF")
+
+	mockStore.AssertExpectations(t)
+}
+
+func TestAbort_SafeToCallMultipleTimes(t *testing.T) {
+	ctx := createTestContext()
+	logger := ulogger.TestLogger{}
+	tSettings := createTestSettings()
+	mockStore := &MockBlobStore{}
+	key := createTestKey()
+	fileType := fileformat.FileTypeUtxoSet
+
+	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
+	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
+		buf := make([]byte, 1024)
+		for {
+			_, err := reader.Read(buf)
+			if err != nil {
+				break
+			}
+		}
+		_ = reader.Close()
+		return errors.NewProcessingError("aborted")
+	}
+
+	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
+	require.NoError(t, err)
+
+	_, err = fs.Write([]byte("test data"))
+	require.NoError(t, err)
+
+	// Call Abort multiple times - should not panic
+	fs.Abort(errors.NewProcessingError("first abort"))
+	fs.Abort(errors.NewProcessingError("second abort"))
+	fs.Abort(nil)
+
+	mockStore.AssertExpectations(t)
+}

@@ -29,10 +29,10 @@
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| UTXOPersisterBufferSize | Must be valid byte size format | I/O performance |
-| UTXOPersisterDirect | Controls I/O operation mode | Performance behavior |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| UTXOPersisterBufferSize | Must be valid byte size format | I/O performance | During service initialization |
+| UTXOPersisterDirect | Controls I/O operation mode | Performance behavior | During service initialization |
 
 ## Configuration Examples
 

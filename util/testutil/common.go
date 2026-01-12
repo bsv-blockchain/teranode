@@ -25,9 +25,18 @@ type CommonTestSetup struct {
 
 // NewCommonTestSetup creates the basic test infrastructure used by most service tests
 func NewCommonTestSetup(t *testing.T) *CommonTestSetup {
+	logger := ulogger.NewErrorTestLogger(t)
+
+	// Register cleanup to shutdown logger before test completes
+	// This prevents race conditions where background goroutines try to log
+	// after the test's *testing.T context has been marked as done
+	t.Cleanup(func() {
+		logger.Shutdown()
+	})
+
 	return &CommonTestSetup{
 		Ctx:      context.Background(),
-		Logger:   ulogger.NewErrorTestLogger(t),
+		Logger:   logger,
 		Settings: test.CreateBaseTestSettings(t),
 	}
 }

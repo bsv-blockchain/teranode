@@ -3,10 +3,10 @@ package p2p
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
@@ -91,12 +91,18 @@ func (sc *SyncCoordinator) isCaughtUp() bool {
 	localHeight := sc.getLocalHeightSafe()
 
 	// Get all peers
-	peers := sc.registry.GetAllPeers()
+	peers := sc.registry.GetAll()
 
-	// Check if any peer is significantly ahead of us and has a good reputation
+	// Check if any eligible peer is significantly ahead of us.
+	// This must align with sync peer selection criteria; otherwise, a low-quality
+	// peer we would never select could cause us to think we're perpetually behind.
 	for _, p := range peers {
-		if p.Height > localHeight && p.ReputationScore > 20 {
-			return false // At least one peer is ahead
+		// Only consider peers that are viable sync candidates
+		if p.IsBanned || p.DataHubURL == "" || p.Height == 0 || p.ReputationScore < 20 {
+			continue
+		}
+		if p.Height > localHeight+10 { // Allow some tolerance
+			return false // At least one peer is significantly ahead
 		}
 	}
 
@@ -185,7 +191,7 @@ func (sc *SyncCoordinator) TriggerSync() error {
 
 // HandlePeerDisconnected handles peer disconnection
 func (sc *SyncCoordinator) HandlePeerDisconnected(peerID peer.ID) {
-	sc.registry.RemovePeer(peerID)
+	sc.registry.Remove(peerID)
 
 	sc.mu.RLock()
 	isSyncPeer := sc.currentSyncPeer == peerID
@@ -231,9 +237,9 @@ func (sc *SyncCoordinator) HandleCatchupFailure(reason string) {
 // selectNewSyncPeer selects a new sync peer based on current criteria
 func (sc *SyncCoordinator) selectNewSyncPeer() peer.ID {
 	// Get local height
-	localHeight := int32(0)
+	localHeight := uint32(0)
 	if sc.getLocalHeight != nil {
-		localHeight = int32(sc.getLocalHeight())
+		localHeight = sc.getLocalHeight()
 	}
 
 	// Get current sync peer to pass as previous peer
@@ -243,7 +249,7 @@ func (sc *SyncCoordinator) selectNewSyncPeer() peer.ID {
 
 	// Build selection criteria
 	criteria := SelectionCriteria{
-		LocalHeight:         localHeight,
+		LocalHeight:         int32(localHeight),
 		PreviousPeer:        previousPeer,
 		SyncAttemptCooldown: 1 * time.Minute, // Don't retry peers for at least 1 minute
 	}
@@ -262,10 +268,7 @@ func (sc *SyncCoordinator) selectNewSyncPeer() peer.ID {
 	}
 
 	// Get all peers and select
-	peers := sc.registry.GetAllPeers()
-
-	// Check URL responsiveness before selecting
-	sc.checkAndUpdateURLResponsiveness(peers)
+	peers := sc.registry.GetAll()
 
 	return sc.selector.SelectSyncPeer(peers, criteria)
 }
@@ -305,7 +308,7 @@ func (sc *SyncCoordinator) checkFSMState(ctx context.Context) {
 	}
 
 	// Check if we're in backoff mode
-	if sc.isInBackoffPeriod() {
+	if sc.checkAndClearExpiredBackoff() {
 		return
 	}
 
@@ -343,9 +346,17 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 		if currentPeer != "" {
 			// Get local height and peer height to determine if this is a failure
 			localHeight := sc.getLocalHeightSafe()
-			peerInfo, exists := sc.registry.GetPeer(currentPeer)
+			peerInfo, exists := sc.registry.Get(currentPeer)
 
-			if exists && peerInfo.Height > localHeight {
+			if !exists {
+				// Peer no longer exists in registry (likely disconnected)
+				sc.logger.Infof("[SyncCoordinator] Sync peer %s no longer in registry, clearing", currentPeer)
+				sc.ClearSyncPeer()
+				_ = sc.TriggerSync()
+				return true // Transition handled
+			}
+
+			if peerInfo.Height > localHeight {
 				// Only consider it a failure if we're still behind the sync peer
 				sc.logger.Infof("[SyncCoordinator] Sync with peer %s considered failed (local height: %d < peer height: %d)",
 					currentPeer, localHeight, peerInfo.Height)
@@ -387,7 +398,7 @@ func (sc *SyncCoordinator) handleFSMTransition(currentState *blockchain_api.FSMS
 }
 
 // handleRunningState handles the FSM RUNNING state logic
-func (sc *SyncCoordinator) handleRunningState(ctx context.Context) {
+func (sc *SyncCoordinator) handleRunningState(_ context.Context) {
 	localHeight := sc.getLocalHeightSafe()
 
 	sc.mu.RLock()
@@ -398,23 +409,21 @@ func (sc *SyncCoordinator) handleRunningState(ctx context.Context) {
 }
 
 // getLocalHeightSafe safely gets the local blockchain height
-func (sc *SyncCoordinator) getLocalHeightSafe() int32 {
+func (sc *SyncCoordinator) getLocalHeightSafe() uint32 {
 	if sc.getLocalHeight != nil {
-		return int32(sc.getLocalHeight())
+		return sc.getLocalHeight()
 	}
 	return 0
 }
 
 // selectAndActivateNewPeer selects a new sync peer and activates it
-func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight int32, oldPeer peer.ID) {
+func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer peer.ID) {
 	// Clear current sync peer
 	sc.ClearSyncPeer()
 
 	// Get all peers
-	peers := sc.registry.GetAllPeers()
+	peers := sc.registry.GetAll()
 
-	// Check URL responsiveness for all peers first
-	sc.checkAndUpdateURLResponsiveness(peers)
 	// Filter eligible peers
 	eligiblePeers := sc.filterEligiblePeers(peers, oldPeer, localHeight)
 
@@ -426,7 +435,7 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight int32, oldPeer p
 
 	// Select from eligible peers
 	criteria := SelectionCriteria{
-		LocalHeight: localHeight,
+		LocalHeight: int32(localHeight),
 	}
 
 	newSyncPeer := sc.selector.SelectSyncPeer(eligiblePeers, criteria)
@@ -437,11 +446,11 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight int32, oldPeer p
 	}
 
 	// Activate the new sync peer
-	sc.activateSyncPeer(newSyncPeer, oldPeer)
+	sc.activateSyncPeer(newSyncPeer)
 }
 
 // filterEligiblePeers filters peers that are eligible for syncing
-func (sc *SyncCoordinator) filterEligiblePeers(peers []*PeerInfo, oldPeer peer.ID, localHeight int32) []*PeerInfo {
+func (sc *SyncCoordinator) filterEligiblePeers(peers []*PeerInfo, oldPeer peer.ID, localHeight uint32) []*PeerInfo {
 	eligiblePeers := make([]*PeerInfo, 0, len(peers))
 	for _, p := range peers {
 		// Skip the old peer and peers not ahead of us
@@ -459,7 +468,7 @@ func (sc *SyncCoordinator) filterEligiblePeers(peers []*PeerInfo, oldPeer peer.I
 }
 
 // activateSyncPeer sets and activates a new sync peer
-func (sc *SyncCoordinator) activateSyncPeer(newSyncPeer peer.ID, oldPeer peer.ID) {
+func (sc *SyncCoordinator) activateSyncPeer(newSyncPeer peer.ID) {
 	// Set the new sync peer
 	sc.mu.Lock()
 	sc.currentSyncPeer = newSyncPeer
@@ -500,7 +509,13 @@ func (sc *SyncCoordinator) logCandidateList(candidates []*PeerInfo) {
 func (sc *SyncCoordinator) periodicEvaluation(ctx context.Context) {
 	defer sc.wg.Done()
 
-	ticker := time.NewTicker(30 * time.Second)
+	interval := sc.settings.P2P.SyncCoordinatorPeriodicEvaluationInterval
+	if interval <= 0 {
+		sc.logger.Warnf("[SyncCoordinator] Invalid periodic evaluation interval %v, using default 30s", interval)
+		interval = 30 * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -527,7 +542,7 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	}
 
 	// Get peer info
-	peerInfo, exists := sc.registry.GetPeer(currentPeer)
+	peerInfo, exists := sc.registry.Get(currentPeer)
 	if !exists {
 		sc.logger.Warnf("[SyncCoordinator] Sync peer %s no longer exists", currentPeer)
 		sc.ClearSyncPeer()
@@ -559,7 +574,7 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	// Check if we've caught up
 	if sc.getLocalHeight != nil {
 		localHeight := int32(sc.getLocalHeight())
-		if localHeight >= peerInfo.Height && peerInfo.Height > 0 {
+		if uint32(localHeight) >= peerInfo.Height && peerInfo.Height > 0 {
 			sc.logger.Infof("[SyncCoordinator] Caught up to sync peer %s (height %d)",
 				currentPeer, localHeight)
 			// Don't clear peer yet, but look for better peer
@@ -572,11 +587,8 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 }
 
 // UpdatePeerInfo updates peer information
-func (sc *SyncCoordinator) UpdatePeerInfo(peerID peer.ID, height int32, blockHash string, dataHubURL string) {
-	sc.registry.UpdateHeight(peerID, height, blockHash)
-	if dataHubURL != "" {
-		sc.registry.UpdateDataHubURL(peerID, dataHubURL)
-	}
+func (sc *SyncCoordinator) UpdatePeerInfo(peerID peer.ID, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+	sc.registry.Put(peerID, "", height, blockHash, dataHubURL)
 }
 
 // UpdateBanStatus updates ban status from ban manager
@@ -600,58 +612,12 @@ func (sc *SyncCoordinator) UpdateBanStatus(peerID peer.ID) {
 	}
 }
 
-// checkURLResponsiveness checks if a peer's DataHub URL is responsive with a short timeout
-func (sc *SyncCoordinator) checkURLResponsiveness(url string) bool {
-	if url == "" {
-		return false
-	}
-
-	// Create a client with a very short timeout (2 seconds)
-	client := &http.Client{
-		Timeout: 2 * time.Second,
-	}
-
-	// Try to make a HEAD request to check if the server is responsive
-	testURL := fmt.Sprintf("%s/health", url) // Try health endpoint first
-	resp, err := client.Head(testURL)
-	if err == nil {
-		resp.Body.Close()
-		return resp.StatusCode < 500 // Consider it responsive if not a server error
-	}
-
-	// If health endpoint fails, try the base URL
-	resp, err = client.Head(url)
-	if err == nil {
-		resp.Body.Close()
-		return resp.StatusCode < 500
-	}
-
-	return false
-}
-
-// checkAndUpdateURLResponsiveness checks URL responsiveness for all peers and updates registry
-func (sc *SyncCoordinator) checkAndUpdateURLResponsiveness(peers []*PeerInfo) {
-	for _, p := range peers {
-		// Skip if URL was checked recently (within 30 seconds)
-		if time.Since(p.LastURLCheck) < 30*time.Second {
-			continue
-		}
-
-		if p.DataHubURL != "" {
-			responsive := sc.checkURLResponsiveness(p.DataHubURL)
-			sc.registry.UpdateURLResponsiveness(p.ID, responsive)
-
-			if !responsive {
-				sc.logger.Debugf("[SyncCoordinator] Peer %s URL %s is not responsive", p.ID, p.DataHubURL)
-			}
-		}
-	}
-}
-
-// isInBackoffPeriod checks if we're currently in a backoff period
-func (sc *SyncCoordinator) isInBackoffPeriod() bool {
-	sc.mu.RLock()
-	defer sc.mu.RUnlock()
+// checkAndClearExpiredBackoff checks if we're currently in a backoff period.
+// If the backoff has expired, it clears the backoff state and increases the multiplier
+// for the next time we exhaust all peers. Returns true if still in backoff.
+func (sc *SyncCoordinator) checkAndClearExpiredBackoff() bool {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
 
 	if !sc.allPeersAttempted {
 		return false // Not in backoff if we haven't tried all peers
@@ -668,7 +634,8 @@ func (sc *SyncCoordinator) isInBackoffPeriod() bool {
 		return true
 	}
 
-	// Backoff period expired, increase multiplier for next time
+	// Backoff period expired; clear backoff state and increase multiplier for next time.
+	sc.allPeersAttempted = false
 	if sc.backoffMultiplier < sc.maxBackoffMultiplier {
 		sc.backoffMultiplier *= 2
 	}
@@ -689,24 +656,34 @@ func (sc *SyncCoordinator) resetBackoff() {
 	}
 }
 
-// enterBackoffMode marks that all peers have been attempted
+// enterBackoffMode marks that all peers have been attempted.
+// We enter a backoff period to avoid hammering peers when no eligible peer can be selected.
+// We also clear sync attempts so that once backoff expires, peers can be retried immediately.
 func (sc *SyncCoordinator) enterBackoffMode() {
 	sc.mu.Lock()
-	defer sc.mu.Unlock()
-
-	if !sc.allPeersAttempted {
-		sc.allPeersAttempted = true
-		sc.lastAllPeersAttemptTime = time.Now()
-		backoffDuration := time.Duration(sc.backoffMultiplier) * fastMonitorInterval
-		sc.logger.Warnf("[SyncCoordinator] All eligible peers have been attempted, entering backoff for %v",
-			backoffDuration)
+	if sc.allPeersAttempted {
+		sc.mu.Unlock()
+		return
 	}
+
+	sc.allPeersAttempted = true
+	sc.lastAllPeersAttemptTime = time.Now()
+
+	// Capture for logging while holding the lock
+	backoffDuration := time.Duration(sc.backoffMultiplier) * fastMonitorInterval
+	currentMultiplier := sc.backoffMultiplier
+
+	sc.mu.Unlock()
+
+	peersCleared := sc.registry.ClearAllSyncAttempts()
+	sc.logger.Warnf("[SyncCoordinator] All eligible peers attempted, entering backoff for %v (multiplier: %dx). Cleared sync attempts for %d peers.",
+		backoffDuration, currentMultiplier, peersCleared)
 }
 
 // checkAllPeersAttempted checks if all eligible peers have been attempted recently
 func (sc *SyncCoordinator) checkAllPeersAttempted() {
 	// Get all peers and check how many were attempted recently
-	peers := sc.registry.GetAllPeers()
+	peers := sc.registry.GetAll()
 	localHeight := sc.getLocalHeightSafe()
 
 	eligibleCount := 0
@@ -714,9 +691,11 @@ func (sc *SyncCoordinator) checkAllPeersAttempted() {
 	syncAttemptCooldown := 1 * time.Minute // Don't retry a peer for at least 1 minute
 
 	for _, p := range peers {
-		// Count peers that would normally be eligible
-		if p.Height > localHeight && !p.IsBanned &&
-			p.DataHubURL != "" && p.URLResponsive && p.ReputationScore >= 20 {
+		// Count peers that are viable sync candidates (must match isCaughtUp criteria)
+		if p.IsBanned || p.DataHubURL == "" || p.Height == 0 || p.ReputationScore < 20 {
+			continue
+		}
+		if p.Height > localHeight+10 { // Same tolerance as isCaughtUp
 			eligibleCount++
 
 			// Check if attempted recently
@@ -765,7 +744,7 @@ func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer peer.ID, bestHash str
 
 	// Get the peer's DataHub URL if available
 	dataHubURL := ""
-	if peerInfo, exists := sc.registry.GetPeer(syncPeer); exists {
+	if peerInfo, exists := sc.registry.Get(syncPeer); exists {
 		dataHubURL = peerInfo.DataHubURL
 	}
 
@@ -797,9 +776,9 @@ func (sc *SyncCoordinator) sendSyncMessage(peerID peer.ID) error {
 	// Get peer's best known block hash from registry
 	var bestHash string
 	if sc.registry != nil {
-		if peerInfo, exists := sc.registry.GetPeer(peerID); exists {
-			bestHash = peerInfo.BlockHash
-			if bestHash != "" {
+		if peerInfo, exists := sc.registry.Get(peerID); exists {
+			if peerInfo.BlockHash != nil {
+				bestHash = peerInfo.BlockHash.String()
 				sc.logger.Infof("[sendSyncMessage] Found block hash %s for peer %s", bestHash, peerID)
 			} else {
 				sc.logger.Warnf("[sendSyncMessage] No block hash found in registry for peer %s", peerID)
@@ -814,8 +793,7 @@ func (sc *SyncCoordinator) sendSyncMessage(peerID peer.ID) error {
 		sc.logger.Infof("[sendSyncMessage] Sending sync trigger to Kafka for peer %s with hash %s", peerID, bestHash)
 		sc.sendSyncTriggerToKafka(peerID, bestHash)
 		return nil
-	} else {
-		sc.logger.Errorf("[sendSyncMessage] Cannot send sync - no best block hash available for peer %s", peerID)
-		return errors.NewServiceError(fmt.Sprintf("no block hash available for peer %s", peerID))
 	}
+	sc.logger.Errorf("[sendSyncMessage] Cannot send sync - no best block hash available for peer %s", peerID)
+	return errors.NewServiceError(fmt.Sprintf("no block hash available for peer %s", peerID))
 }

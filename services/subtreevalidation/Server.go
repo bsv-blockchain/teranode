@@ -848,7 +848,7 @@ func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, b
 			})
 		}
 
-		maxLevel, txsPerLevel, err := u.prepareTxsPerLevel(ctx, orphanMissingTxs)
+		maxLevel, txsPerLevel, err := u.selectPrepareTxsPerLevel(ctx, orphanMissingTxs)
 		if err != nil {
 			u.logger.Errorf("[CheckSubtreeFromBlock] Failed to prepare transactions per level: %v", err)
 			return
@@ -863,7 +863,7 @@ func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, b
 				tx := mTx.tx
 
 				g.Go(func() error {
-					txMeta, txErr := u.blessMissingTransaction(gCtx, blockHash, tx, blockHeight+1, blockIds, processedValidatorOptions)
+					txMeta, txErr := u.blessMissingTransaction(gCtx, blockHash, chainhash.Hash{}, tx, blockHeight+1, blockIds, processedValidatorOptions)
 					if txErr == nil && txMeta != nil {
 						// transaction was successfully blessed, now remove it from the orphanage
 						u.orphanage.Delete(*tx.TxIDChainHash())

@@ -1,0 +1,132 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam rectangle {
+  BorderColor #666666
+  BackgroundColor #E8F4F8
+  FontStyle bold
+}
+
+title Two-Phase Transaction Commit: All Unlock Paths
+
+actor "Transaction\nSource" as Source
+participant "Validator" as Validator
+database "UTXO Store" as UTXOStore
+participant "Block Assembly" as BlockAssembly
+queue "Kafka" as Kafka
+participant "Block Validation" as BlockValidation
+entity "Blockchain" as Blockchain
+
+== Phase 1: Lock ==
+Source -> Validator: Submit Transaction
+activate Validator
+Validator -> Validator: Validate transaction
+Validator -> UTXOStore: Create UTXOs\n(locked=true)
+note right of UTXOStore
+  **Phase 1 Complete**
+  UTXOs created as locked.
+  Cannot be spent yet.
+end note
+
+== Decision Point: Which Unlock Path? ==
+
+alt **Path 1: Normal Operation** (Primary Path)
+    Validator -> BlockAssembly: Store()
+    Validator -> Kafka: Publish tx metadata
+    Validator -> Validator: twoPhaseCommitTransaction()
+    Validator -> UTXOStore: SetLocked(txHash, false)
+    note right of UTXOStore
+      **Unlock Path 1: Primary**
+      Normal validation flow.
+      Happens immediately after
+      Block Assembly + Kafka.
+    end note
+    deactivate Validator
+
+else **Path 2: Transaction Mined** (Fallback Path)
+    note over Validator, Blockchain
+      If Path 1 unlock fails, Path 2 acts as safety net
+    end note
+    Blockchain -> BlockValidation: Block received\ncontaining transaction
+    activate BlockValidation
+    BlockValidation -> BlockValidation: Validate block
+    BlockValidation -> UTXOStore: SetMinedMulti()
+    note right of UTXOStore
+      **Unlock Path 2: Fallback**
+      Lua script automatically
+      unlocks during SetMinedMulti:
+      if rec[BIN_LOCKED] then
+        rec[BIN_LOCKED] = false
+      end
+    end note
+    deactivate BlockValidation
+
+else **Path 3: Quick Validation** (Checkpointed Blocks)
+    note over Blockchain, BlockValidation
+      Only for blocks below checkpoints
+      during initial sync
+    end note
+    Blockchain -> BlockValidation: Checkpointed block\nreceived
+    activate BlockValidation
+    BlockValidation -> UTXOStore: Create UTXOs (locked=true)
+    BlockValidation -> BlockValidation: Validate in parallel\n(IgnoreLocked=true)
+    BlockValidation -> UTXOStore: SetLocked(txHashes, false)
+    note right of UTXOStore
+      **Unlock Path 3: Quick Validation**
+      Batch unlock for trusted
+      historical blocks.
+      Optimized path.
+    end note
+    deactivate BlockValidation
+
+else **Path 4: Service Recovery** (Block Assembly Restart)
+    note over BlockAssembly
+      Block Assembly service restarts
+      after unclean shutdown
+    end note
+    activate BlockAssembly
+    BlockAssembly -> BlockAssembly: loadUnminedTransactions()
+    BlockAssembly -> UTXOStore: Find locked transactions
+    BlockAssembly -> UTXOStore: SetLocked(lockedTxHashes, false)
+    note right of UTXOStore
+      **Unlock Path 4: Recovery**
+      Unlock transactions that were
+      added to Block Assembly but
+      not yet unlocked due to restart.
+    end note
+    deactivate BlockAssembly
+end
+
+== Final State ==
+note over UTXOStore
+  **Phase 2 Complete**
+  All paths lead to: locked=false
+  Transaction outputs now spendable.
+
+  **Fail-Safe Design:**
+  If Path 1 fails → Path 2 catches it
+  If service crashes → Path 4 catches it
+  Checkpointed blocks → Path 3 optimizes it
+end note
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

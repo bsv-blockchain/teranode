@@ -910,7 +910,7 @@
             <span class="metric-label">Success Rate</span>
             <span class="metric-value">
               {#if selectedPeer.catchup_attempts > 0}
-                {((selectedPeer.catchup_successes / selectedPeer.catchup_attempts) * 100).toFixed(1)}%
+                {((selectedPeer.catchup_successes / (selectedPeer.catchup_successes + selectedPeer.catchup_failures)) * 100).toFixed(1)}%
               {:else}
                 -
               {/if}
@@ -1151,31 +1151,48 @@
     font-weight: 600;
   }
 
-  /* Right-align numeric column headers */
+  /* Right-align numeric column headers and data */
+  /* Height (column 2) */
+  :global(th:nth-child(2)),
+  :global(td:nth-child(2)) {
+    text-align: right !important;
+  }
+
+  :global(th:nth-child(2) .table-cell-row),
+  :global(td:nth-child(2) .table-cell-row) {
+    justify-content: flex-end !important;
+  }
+
+  /* Reputation (column 3) */
   :global(th:nth-child(3)),
-  /* Height */
-  :global(th:nth-child(4)),
-  /* Reputation */
-  :global(th:nth-child(5)),
-  /* Success Rate */
-  :global(th:nth-child(6)),
-  /* Attempts */
-  :global(th:nth-child(7)),
-  /* Avg Response */
-  :global(th:nth-child(9)),
-  /* Last Message */
-  :global(th:nth-child(10))
-    /* Ban Score */ {
+  :global(td:nth-child(3)) {
     text-align: right !important;
   }
 
   :global(th:nth-child(3) .table-cell-row),
+  :global(td:nth-child(3) .table-cell-row) {
+    justify-content: flex-end !important;
+  }
+
+  /* Metrics (column 4) - center align */
+  :global(th:nth-child(4)),
+  :global(td:nth-child(4)) {
+    text-align: center !important;
+  }
+
   :global(th:nth-child(4) .table-cell-row),
+  :global(td:nth-child(4) .table-cell-row) {
+    justify-content: center !important;
+  }
+
+  /* Bytes Received (column 5) */
+  :global(th:nth-child(5)),
+  :global(td:nth-child(5)) {
+    text-align: right !important;
+  }
+
   :global(th:nth-child(5) .table-cell-row),
-  :global(th:nth-child(6) .table-cell-row),
-  :global(th:nth-child(7) .table-cell-row),
-  :global(th:nth-child(9) .table-cell-row),
-  :global(th:nth-child(10) .table-cell-row) {
+  :global(td:nth-child(5) .table-cell-row) {
     justify-content: flex-end !important;
   }
 

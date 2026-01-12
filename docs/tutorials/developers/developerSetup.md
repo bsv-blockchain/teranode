@@ -18,7 +18,7 @@ This guide assists you in setting up the Teranode project on your machine. The b
     - [5.3 Verify](#53-verify)
 6. [Prerequisites for Running the Node](#6-prerequisites-for-running-the-node)
     - [6.1 Install OrbStack](#61-install-orbstack)
-    - [6.2 Start Kafka and PostgreSQL](#62-start-kafka-and-postgresql)
+    - [6.2 Start PostgreSQL](#62-start-postgresql)
 7. [Run the Node](#7-run-the-node)
     - [7.2 Debugging Teranode](#72-debugging-teranode)
 8. [Troubleshooting](#8-troubleshooting)
@@ -183,11 +183,11 @@ source ~/.zprofile
 
 1. **Echo** the environment variable to ensure it's set correctly:
 
-   ```bash
-   echo $SETTINGS_CONTEXT
-   ```
+    ```bash
+    echo $SETTINGS_CONTEXT
+    ```
 
-   Should print `dev`.
+    Should print `dev`.
 
 2. **Run** or **restart** your node. Check logs or console output to confirm it's picking up the lines with `dev`.
 
@@ -217,21 +217,16 @@ Teranode uses Docker containers for running dependencies like Kafka and PostgreS
 docker --version
 ```
 
-### 6.2 Start Kafka and PostgreSQL
+### 6.2 Start PostgreSQL
 
-Once OrbStack is installed and running, start Kafka and PostgreSQL with:
+Once OrbStack is installed and running, start PostgreSQL with:
 
 ```bash
-# Start Kafka in Docker
-./scripts/kafka.sh
-
 # Start PostgreSQL in Docker
 ./scripts/postgres.sh
 ```
 
-These scripts will set up Docker containers with the required services configured correctly for Teranode.
-
-> **Note:** If you configure your settings to use Aerospike for UTXO storage, you'll also need to run the Aerospike script:
+> **Note on Kafka**: Development mode uses in-memory Kafka by default (no setup required). For production-like testing with Docker-based Kafka, see [Kafka Settings Reference](../../references/settings/kafka_settings.md). If you configure your settings to use Aerospike for UTXO storage, you'll also need to run the Aerospike script:
 >
 > ```bash
 > # Start Aerospike in Docker
@@ -330,17 +325,53 @@ Teranode supports debugging using Delve, the Go debugger. You can use any IDE th
 
 #### Local Development Debugging
 
-To debug Teranode during local development:
+To debug Teranode during local development, you have several options:
+
+##### Option 1: Run with Debugger (Recommended)
+
+**This is the most reliable method and works on all platforms including M3/M4 Macs.**
 
 1. **Build with debug symbols**:
 
-   ```bash
-   DEBUG=true make build
-   ```
+    ```bash
+    DEBUG=true make build
+    ```
 
-   This enables debug flags (`-N -l`) that disable optimizations and inlining, making debugging easier.
+    This enables debug flags (`-N -l`) that disable optimizations and inlining, making debugging easier.
 
-2. **Attach your debugger** to the running Teranode process using your preferred IDE or tool.
+2. **Run with your IDE's debugger**:
+    - **GoLand**: Use "Run" → "Debug" or press `Ctrl+D` (Linux/Windows) / `⌃D` (Mac)
+    - **VS Code**: Use "Run and Debug" panel or press `F5` after configuring launch.json
+
+##### Option 2: Attach to Running Process
+
+**Note: This method does not work on Apple M3/M4 Macs due to architecture limitations.**
+
+1. Build and start Teranode as normal
+2. Find the process ID: `ps aux | grep teranode`
+3. Attach your debugger to the PID:
+    - **GoLand**: "Run" → "Attach to Process"
+    - **VS Code**: Use "attach" configuration in launch.json
+
+##### Option 3: Start via Delve and Attach Remotely
+
+This method allows you to start the application with Delve and attach your IDE remotely:
+
+1. **Install Delve** (if not already installed):
+
+    ```bash
+    go install github.com/go-delve/delve/cmd/dlv@latest
+    ```
+
+2. **Start Teranode with Delve**:
+
+    ```bash
+    dlv exec ./teranode.run --headless --listen=:2345 --api-version=2 --accept-multiclient
+    ```
+
+3. **Attach your IDE to Delve**:
+    - **GoLand**: Create a "Go Remote" run configuration pointing to `localhost:2345`
+    - **VS Code**: Use a remote attach configuration in launch.json with port 2345
 
 #### Remote Debugging (Kubernetes Deployments)
 

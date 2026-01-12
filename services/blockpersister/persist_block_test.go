@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
-	"io"
 	"net/url"
 	"testing"
 
@@ -20,191 +19,36 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
-	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-type noOpCloser struct {
-	io.Reader
-}
+// setupMockUTXOStore creates a mock UTXO store configured for the given transactions
+func setupMockUTXOStore(txs []*bt.Tx) *utxo.MockUtxostore {
+	mockStore := &utxo.MockUtxostore{}
 
-func (noOpCloser) Close() error {
-	return nil
-}
-
-func newReadCloserFromBytes(data []byte) io.ReadCloser {
-	return noOpCloser{Reader: bytes.NewReader(data)}
-}
-
-// MockStore implements a mock storage interface for testing
-type MockStore struct {
-	txs      []*bt.Tx
-	subtrees []*subtreepkg.Subtree
-}
-
-// newMockStore creates a new mock store with the given transactions
-func newMockStore(txs []*bt.Tx) (*MockStore, error) {
-	subtree, err := subtreepkg.NewTreeByLeafCount(4)
-	if err != nil {
-		return nil, err
-	}
-
-	for i, tx := range txs {
-		if i == 0 {
-			if err := subtree.AddCoinbaseNode(); err != nil {
-				return nil, err
+	mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			hashes := args.Get(1).([]*utxo.UnresolvedMetaData)
+			for _, missing := range hashes {
+				if missing.Idx >= len(txs) {
+					continue
+				}
+				missing.Data = &meta.Data{
+					Tx: txs[missing.Idx],
+				}
 			}
-		} else {
-			if err := subtree.AddNode(*tx.TxIDChainHash(), 1, uint64(tx.Size())); err != nil {
-				return nil, err
-			}
-		}
-	}
+		}).
+		Return(nil)
 
-	return &MockStore{
-		txs:      txs,
-		subtrees: []*subtreepkg.Subtree{subtree},
-	}, nil
-}
+	mockStore.On("Health", mock.Anything, mock.Anything).Return(0, "", nil)
 
-func (m *MockStore) GetIoReader(ctx context.Context, key []byte, opts ...options.Options) (io.ReadCloser, error) {
-	b, err := m.subtrees[0].Serialize()
-	if err != nil {
-		return nil, err
-	}
-
-	return newReadCloserFromBytes(b), nil
-}
-
-func (m *MockStore) BatchDecorate(ctx context.Context, hashes []*utxo.UnresolvedMetaData, fields ...fields.FieldName) error {
-	for _, missing := range hashes {
-		if missing.Idx >= len(m.txs) {
-			continue
-		}
-
-		missing.Data = &meta.Data{
-			Tx: m.txs[missing.Idx],
-		}
-	}
-
-	return nil
-}
-
-func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	return 0, "", nil
-}
-
-func (m *MockStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
-	return nil, nil
-}
-
-func (m *MockStore) Delete(_ context.Context, hash *chainhash.Hash) error {
-	return nil
-}
-
-func (m *MockStore) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
-	return nil, nil
-}
-
-func (m *MockStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return nil, nil
-}
-
-func (m *MockStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
-	return nil, nil
-}
-
-func (m *MockStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
-	return nil, errors.NewProcessingError("not implemented")
-}
-
-func (m *MockStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
-	return nil, nil
-}
-
-func (m *MockStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	return nil, nil
-}
-
-func (m *MockStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
-	return nil
-}
-
-func (m *MockStore) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
-	return nil
-}
-
-func (m *MockStore) SetBlockHeight(height uint32) error {
-	return nil
-}
-
-func (m *MockStore) GetBlockHeight() uint32 {
-	return 0
-}
-
-func (m *MockStore) SetMedianBlockTime(height uint32) error {
-	return nil
-}
-
-func (m *MockStore) GetMedianBlockTime() uint32 {
-	return 0
-}
-
-func (m *MockStore) GetBlockState() utxo.BlockState {
-	return utxo.BlockState{
-		Height:     m.GetBlockHeight(),
-		MedianTime: m.GetMedianBlockTime(),
-	}
-}
-
-func (m *MockStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
-	return nil
-}
-
-func (m *MockStore) UnFreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
-	return nil
-}
-
-func (m *MockStore) ReAssignUTXO(ctx context.Context, utxo *utxo.Spend, newUtxo *utxo.Spend, tSettings *settings.Settings) error {
-	return nil
-}
-
-func (m *MockStore) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	return nil, nil
-}
-
-func (m *MockStore) GetConflictingChildren(ctx context.Context, txHash chainhash.Hash) ([]chainhash.Hash, error) {
-	return nil, nil
-}
-
-func (m *MockStore) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
-	return nil, nil, nil
-}
-
-func (m *MockStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
-	return nil
-}
-
-func (m *MockStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
-	return nil
-}
-
-func (m *MockStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
-	return nil, nil
-}
-
-func (m *MockStore) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
-	return nil
-}
-
-func (m *MockStore) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
-	return nil
+	return mockStore
 }
 
 // TestBlock validates the block persistence functionality by:
@@ -215,15 +59,15 @@ func TestBlock(t *testing.T) {
 	block, blockBytes, _, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
 
 	// remove the subtree data file if it exists, since we want to test the persistence
-	err := subtreeStore.Del(t.Context(), mockUTXOStore.subtrees[0].RootHash()[:], fileformat.FileTypeSubtreeData)
+	err := subtreeStore.Del(t.Context(), block.Subtrees[0][:], fileformat.FileTypeSubtreeData)
 	require.NoError(t, err)
 
 	persister := New(context.Background(), ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStore, blockchainClient)
 
-	err = persister.persistBlock(context.Background(), mockUTXOStore.subtrees[0].RootHash(), blockBytes)
+	err = persister.persistBlock(context.Background(), block.Header.Hash(), blockBytes)
 	require.NoError(t, err)
 
-	newBlockBytes, err := blockStore.Get(context.Background(), mockUTXOStore.subtrees[0].RootHash()[:], fileformat.FileTypeBlock)
+	newBlockBytes, err := blockStore.Get(context.Background(), block.Header.Hash()[:], fileformat.FileTypeBlock)
 	require.NoError(t, err)
 
 	newBlockModel, err := model.NewBlockFromBytes(newBlockBytes)
@@ -291,22 +135,21 @@ func TestFileStorer(t *testing.T) {
 }
 
 func TestBlockMissingTxMeta(t *testing.T) {
-	_, blockBytes, extendedTxs, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
+	block, blockBytes, extendedTxs, _, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
 
-	// use a mock store that has missing txs
-	mockUTXOStoreWithMissingTxs, err := newMockStore(extendedTxs[1:])
-	require.NoError(t, err)
+	// use a mock store that has missing txs (skip first tx)
+	mockUTXOStoreWithMissingTxs := setupMockUTXOStore(extendedTxs[1:])
 
-	err = subtreeStore.Del(t.Context(), mockUTXOStore.subtrees[0].RootHash()[:], fileformat.FileTypeSubtreeData)
+	err := subtreeStore.Del(t.Context(), block.Subtrees[0][:], fileformat.FileTypeSubtreeData)
 	require.NoError(t, err)
 
 	persister := New(context.Background(), ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStoreWithMissingTxs, blockchainClient)
 
-	err = persister.persistBlock(context.Background(), mockUTXOStore.subtrees[0].RootHash(), blockBytes)
+	err = persister.persistBlock(context.Background(), block.Header.Hash(), blockBytes)
 	require.Error(t, err)
 }
 
-func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Memory, *memory.Memory, *blockchain.LocalClient, *settings.Settings) {
+func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *utxo.MockUtxostore, *memory.Memory, *memory.Memory, *blockchain.LocalClient, *settings.Settings) {
 	initPrometheusMetrics()
 
 	// Take block 100,000 from mainnet
@@ -343,11 +186,23 @@ func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Me
 		assert.Equal(t, extendedTxs[i].TxIDChainHash().String(), txs[i].TxIDChainHash().String())
 	}
 
-	mockUTXOStore, err := newMockStore(extendedTxs)
+	// Create mock UTXO store using the proper mock
+	mockUTXOStore := setupMockUTXOStore(extendedTxs)
+
+	// Create subtree for the transactions
+	subtree, err := subtreepkg.NewTreeByLeafCount(4)
 	require.NoError(t, err)
 
+	for i, tx := range extendedTxs {
+		if i == 0 {
+			err = subtree.AddCoinbaseNode()
+		} else {
+			err = subtree.AddNode(*tx.TxIDChainHash(), 1, uint64(tx.Size()))
+		}
+		require.NoError(t, err)
+	}
+
 	subtreeStore := memory.New()
-	subtree := mockUTXOStore.subtrees[0]
 
 	// Create the .subtree file
 	subtreeBytes, err := subtree.Serialize()
@@ -357,9 +212,8 @@ func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Me
 
 	// Create the .subtreeData file
 	subtreeData := subtreepkg.NewSubtreeData(subtree)
-	// Add the transactions to the subtree data (skipping coinbase as it's handled specially)
-	for i, tx := range extendedTxs[1:] { // Skip coinbase
-		err = subtreeData.AddTx(tx, i+1) // +1 because index 0 is for coinbase
+	for i, tx := range extendedTxs[1:] {
+		err = subtreeData.AddTx(tx, i+1)
 		require.NoError(t, err)
 	}
 
@@ -383,7 +237,7 @@ func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *MockStore, *memory.Me
 	block.CoinbaseTx = extendedTxs[0]
 	block.TransactionCount = uint64(len(extendedTxs))
 
-	block.Subtrees = []*chainhash.Hash{mockUTXOStore.subtrees[0].RootHash()}
+	block.Subtrees = []*chainhash.Hash{subtree.RootHash()}
 
 	b, err := block.Bytes()
 	require.NoError(t, err)

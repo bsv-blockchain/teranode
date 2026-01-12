@@ -109,17 +109,33 @@ func createTestServer(t *testing.T) *Server {
 			BanThreshold: 100,
 			BanDuration:  time.Hour,
 			PeerCacheDir: t.TempDir(),
-			DisableNAT:   true, // Disable NAT in tests to prevent data races in libp2p
+			EnableNAT:    false, // Disable NAT in tests to prevent data races in libp2p
 		},
 	}
 
 	// Create server with minimal setup
 	registry := NewPeerRegistry()
+	mockBanList := &MockBanList{}
+	// Setup default expectations for MockBanList methods
+	mockBanList.On("Add", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	mockBanList.On("Remove", mock.Anything, mock.Anything).Return(nil)
+	mockBanList.On("ListBanned").Return([]string{})
+	mockBanList.On("IsBanned", mock.Anything).Return(false)
+	mockBanList.On("Clear").Return()
+
+	// Create mock P2PClient for tests that need it
+	mockP2PClient := &MockServerP2PClient{}
+	// GetPeers returns empty list by default (method doesn't use mock.Called)
+	// GetID needs to be set up if used
+	mockP2PClient.On("GetID").Return(peer.ID("test-peer-id")).Maybe()
+
 	s := &Server{
 		logger:       logger,
 		settings:     settings,
 		peerRegistry: registry,
 		banManager:   NewPeerBanManager(context.Background(), nil, settings, registry),
+		banList:      mockBanList,
+		P2PClient:    mockP2PClient,
 	}
 
 	return s
@@ -306,9 +322,7 @@ func TestServerStart(t *testing.T) {
 	})
 }
 
-func TestServerIntegration(t *testing.T) {
-	t.Skip("Integration tests require more comprehensive mocking of dependencies")
-}
+// NOTE: TestServerIntegration was removed - it was an empty placeholder test.
 
 func TestHandleBlockTopic(t *testing.T) {
 	// Setup common test variables
@@ -330,12 +344,11 @@ func TestHandleBlockTopic(t *testing.T) {
 
 		// Create peer registry to track updates
 		peerRegistry := NewPeerRegistry()
-		peerRegistry.AddPeer(senderPeerID, "")
-		peerRegistry.AddPeer(originatorPeerID, "")
+		peerRegistry.Put(senderPeerID, "", 0, nil, "")
+		peerRegistry.Put(originatorPeerID, "", 0, nil, "")
 
 		// Get initial times
-		senderInfo1, _ := peerRegistry.GetPeer(senderPeerID)
-		originatorInfo1, _ := peerRegistry.GetPeer(originatorPeerID)
+		senderInfo1, _ := peerRegistry.Get(senderPeerID)
 
 		// Wait to ensure time difference
 		time.Sleep(50 * time.Millisecond)
@@ -350,15 +363,13 @@ func TestHandleBlockTopic(t *testing.T) {
 		}
 
 		// Call handler with message
-		blockMsg := fmt.Sprintf(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"%s"}`, originatorPeerID.String())
+		blockMsg := fmt.Sprintf(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"%s"}`, senderPeerID.String())
 		server.handleBlockTopic(ctx, []byte(blockMsg), senderPeerID.String())
 
 		// Verify last message times were updated
-		senderInfo2, _ := peerRegistry.GetPeer(senderPeerID)
-		originatorInfo2, _ := peerRegistry.GetPeer(originatorPeerID)
+		senderInfo2, _ := peerRegistry.Get(senderPeerID)
 
 		assert.True(t, senderInfo2.LastMessageTime.After(senderInfo1.LastMessageTime), "Sender's LastMessageTime should be updated")
-		assert.True(t, originatorInfo2.LastMessageTime.After(originatorInfo1.LastMessageTime), "Originator's LastMessageTime should be updated")
 
 		// Verify notification was sent
 		select {
@@ -372,7 +383,7 @@ func TestHandleBlockTopic(t *testing.T) {
 	t.Run("ignore message from self", func(t *testing.T) {
 		// Create mock P2PClient
 		mockP2PNode := new(MockServerP2PClient)
-		selfPeerID, _ := peer.Decode("QmBannedPeerID")
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		selfPeerIDStr := selfPeerID.String()
 		mockP2PNode.On("GetID").Return(selfPeerID)
 
@@ -391,7 +402,7 @@ func TestHandleBlockTopic(t *testing.T) {
 		}
 
 		// Call the real handler method with message from self
-		server.handleBlockTopic(ctx, []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"QmBannedPeerID"}`), selfPeerIDStr)
+		server.handleBlockTopic(ctx, []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"}`), selfPeerIDStr)
 
 		// Verify message was added to notification channel
 		select {
@@ -484,7 +495,7 @@ func TestHandleBlockTopic(t *testing.T) {
 	t.Run("error on hash parsing", func(t *testing.T) {
 		// Create mock P2PClient
 		mockP2PNode := new(MockServerP2PClient)
-		selfPeerID, _ := peer.Decode("QmBannedPeerID")
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		mockP2PNode.On("GetID").Return(selfPeerID)
 
 		// Create a mock banManager that returns false for any peer
@@ -507,7 +518,7 @@ func TestHandleBlockTopic(t *testing.T) {
 		}
 
 		// Call the real handler method with invalid hash
-		server.handleBlockTopic(ctx, []byte(`{"Hash":"invalid-hash","Height":1,"DataHubURL":"http://example.com","PeerID":"QmValidPeerID"}`), "other-peer-id")
+		server.handleBlockTopic(ctx, []byte(`{"Hash":"invalid-hash","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"}`), "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 
 		// Verify notification was still sent (happens before hash parsing error)
 		select {
@@ -522,7 +533,7 @@ func TestHandleBlockTopic(t *testing.T) {
 	t.Run("successful kafka publish", func(t *testing.T) {
 		// Create mock P2PClient
 		mockP2PNode := new(MockServerP2PClient)
-		selfPeerID, _ := peer.Decode("QmBannedPeerID")
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 		mockP2PNode.On("GetID").Return(selfPeerID)
 		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
 
@@ -550,7 +561,7 @@ func TestHandleBlockTopic(t *testing.T) {
 		// Call the real handler with valid block hash
 		// Since we can't mock out proto.Marshal, we'll need to allow an error here
 		// or create a proper test implementation that doesn't use proto.Marshal
-		server.handleBlockTopic(ctx, []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"QmValidPeerID"}`), "other-peer-id")
+		server.handleBlockTopic(ctx, []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"}`), "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 
 		// Verify notification was sent
 		select {
@@ -559,6 +570,47 @@ func TestHandleBlockTopic(t *testing.T) {
 			assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", notification.Hash)
 		default:
 			t.Fatal("Expected notification message but none received")
+		}
+	})
+	t.Run("peer IDs don't match", func(t *testing.T) {
+		// Create mock P2PClient
+		mockP2PNode := new(MockServerP2PClient)
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
+		mockP2PNode.On("GetID").Return(selfPeerID)
+		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
+
+		// Create a mock banManager that returns false for any peer
+		mockBanManager := new(MockPeerBanManager)
+		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+
+		// Create mock kafka producer
+		mockKafkaProducer := new(MockKafkaProducer)
+		mockKafkaProducer.On("Publish", mock.Anything).Return()
+
+		// Create peer registry
+		peerRegistry := NewPeerRegistry()
+
+		// Create server with mocks
+		server := &Server{
+			P2PClient:                 mockP2PNode,
+			notificationCh:            make(chan *notificationMsg, 10),
+			blocksKafkaProducerClient: mockKafkaProducer,
+			banManager:                mockBanManager,
+			peerRegistry:              peerRegistry,
+			logger:                    ulogger.New("test-server"),
+		}
+
+		// Call the real handler with valid block hash
+		// Since we can't mock out proto.Marshal, we'll need to allow an error here
+		// or create a proper test implementation that doesn't use proto.Marshal
+		server.handleBlockTopic(ctx, []byte(`{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","Height":1,"DataHubURL":"http://example.com","PeerID":"12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"}`), bannedPeerIDStr)
+
+		// Verify notification was not sent
+		select {
+		case _ = <-server.notificationCh:
+			t.Fatal("Unexpected notification message received")
+		default:
+			t.Logf("Correctly received no notification")
 		}
 	})
 }
@@ -570,7 +622,7 @@ func TestHandleSubtreeTopic(t *testing.T) {
 	t.Run("happy_path_-_successful_handling", func(t *testing.T) {
 		// Create mock P2PClient
 		mockP2PNode := new(MockServerP2PClient)
-		selfPeerID, _ := peer.Decode("QmSelfPeerID")
+		selfPeerID, _ := peer.Decode(peerIDStr)
 		mockP2PNode.On("GetID").Return(selfPeerID)
 
 		// Create a valid peer ID for testing
@@ -611,7 +663,7 @@ func TestHandleSubtreeTopic(t *testing.T) {
 		}
 
 		// Call the method with a valid message from another peer
-		validSubtreeMessage := `{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","DataHubURL":"http://example.com","PeerID":"QmcqHnEQuFdvxoRax8V9qjvHnqF2TpJ8nt8PNGJRRsKKg5"}`
+		validSubtreeMessage := `{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","DataHubURL":"http://example.com","PeerID":"12D3KooWQJ8sLWNhDPsGbMrhA5JhrtpiEVrWvarPGm4GfP6bn6fL"}`
 		server.handleSubtreeTopic(ctx, []byte(validSubtreeMessage), validPeerID)
 
 		// Verify notification was sent to the notification channel
@@ -620,7 +672,7 @@ func TestHandleSubtreeTopic(t *testing.T) {
 			assert.Equal(t, "subtree", notification.Type)
 			assert.Equal(t, "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f", notification.Hash)
 			assert.Equal(t, "http://example.com", notification.BaseURL)
-			assert.Equal(t, "QmcqHnEQuFdvxoRax8V9qjvHnqF2TpJ8nt8PNGJRRsKKg5", notification.PeerID)
+			assert.Equal(t, "12D3KooWQJ8sLWNhDPsGbMrhA5JhrtpiEVrWvarPGm4GfP6bn6fL", notification.PeerID)
 		default:
 			t.Fatal("Expected notification message but none received")
 		}
@@ -630,6 +682,46 @@ func TestHandleSubtreeTopic(t *testing.T) {
 
 		// Verify Kafka publish was called since it's not from self or banned peer
 		mockKafkaProducer.AssertCalled(t, "Publish", mock.Anything)
+	})
+	t.Run("peer IDs don't match", func(t *testing.T) {
+		// Create mock P2PClient
+		mockP2PNode := new(MockServerP2PClient)
+		selfPeerID, _ := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
+		mockP2PNode.On("GetID").Return(selfPeerID)
+		mockP2PNode.On("UpdatePeerHeight", mock.Anything, mock.Anything).Return()
+
+		// Create a mock banManager that returns false for any peer
+		mockBanManager := new(MockPeerBanManager)
+		mockBanManager.On("IsBanned", mock.Anything).Return(false)
+
+		// Create mock kafka producer
+		mockKafkaProducer := new(MockKafkaProducer)
+		mockKafkaProducer.On("Publish", mock.Anything).Return()
+
+		// Create peer registry
+		peerRegistry := NewPeerRegistry()
+
+		// Create server with mocks
+		server := &Server{
+			P2PClient:                 mockP2PNode,
+			notificationCh:            make(chan *notificationMsg, 10),
+			blocksKafkaProducerClient: mockKafkaProducer,
+			banManager:                mockBanManager,
+			peerRegistry:              peerRegistry,
+			logger:                    ulogger.New("test-server"),
+		}
+
+		// Call the method with a valid message but a non matching peer ID
+		validSubtreeMessage := `{"Hash":"000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f","DataHubURL":"http://example.com","PeerID":"12D3KooWQJ8sLWNhDPsGbMrhA5JhrtpiEVrWvarPGm4GfP6bn6fL"}`
+		server.handleSubtreeTopic(ctx, []byte(validSubtreeMessage), bannedPeerIDStr)
+
+		// Verify notification was not sent
+		select {
+		case _ = <-server.notificationCh:
+			t.Fatal("Unexpected notification message received")
+		default:
+			t.Logf("Correctly received no notification")
+		}
 	})
 }
 
@@ -999,9 +1091,9 @@ func TestHandleBanEvent(t *testing.T) {
 		mockP2PNode.On("GetPeers").Return([]p2pMessageBus.PeerInfo{peer1, peer2})
 
 		// Store some test data for peer1
-		// Add peer to registry and set block hash
-		server.peerRegistry.AddPeer(peerID1, "")
-		server.peerRegistry.UpdateBlockHash(peerID1, "test-hash")
+		// Add peer to registry with test hash
+		testHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+		server.peerRegistry.Put(peerID1, "", 0, testHash, "")
 
 		// Create a ban event for PeerID
 		event := BanEvent{
@@ -1017,7 +1109,7 @@ func TestHandleBanEvent(t *testing.T) {
 		mockP2PNode.AssertCalled(t, "GetPeers")
 
 		// Verify peer data was cleaned up (peer removed from registry)
-		_, exists := server.peerRegistry.GetPeer(peerID1)
+		_, exists := server.peerRegistry.Get(peerID1)
 		assert.False(t, exists, "Peer should be removed from registry after ban")
 	})
 }
@@ -1500,7 +1592,7 @@ func TestSelfMessageFiltering(t *testing.T) {
 func createBaseTestSettings() *settings.Settings {
 	s := settings.NewSettings()
 	s.SubtreeValidation.BlacklistedBaseURLs = make(map[string]struct{})
-	s.P2P.DisableNAT = true // Disable NAT in tests to prevent data races in libp2p
+	s.P2P.EnableNAT = false // Disable NAT in tests to prevent data races in libp2p
 
 	return s
 }
@@ -1531,7 +1623,7 @@ func TestNewServer_ConfigValidation(t *testing.T) {
 				RejectedTxTopic: "rejected",
 				ListenMode:      settings.ListenModeFull,
 				PrivateKey:      "privkey",
-				DisableNAT:      true, // Disable NAT in tests to prevent data races in libp2p
+				EnableNAT:       false, // Disable NAT in tests to prevent data races in libp2p
 			},
 			ChainCfgParams: &chaincfg.Params{
 				TopicPrefix: "prefix",
@@ -2674,69 +2766,8 @@ func TestServerStopSuccess(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestDisconnectPeerSuccess(t *testing.T) {
-	t.Skip("disconnect peer is deprecated in new architecture")
-	ctx := context.Background()
-	peerID := "12D3KooWQ89fFeXZtbj4Lmq2Z3zAqz1QzAAzC7D2yxjZK7XWuK6h"
-	logger := ulogger.New("test")
-
-	mockP2P := new(MockServerP2PClient)
-	decodedPeerID, _ := peer.Decode(peerID)
-	mockP2P.On("DisconnectPeer", ctx, decodedPeerID).Return(nil)
-
-	server := &Server{
-		P2PClient:    mockP2P,
-		logger:       logger,
-		peerRegistry: NewPeerRegistry(),
-		// syncManager removed - old architecture
-	}
-
-	req := &p2p_api.DisconnectPeerRequest{PeerId: peerID}
-
-	resp, err := server.DisconnectPeer(ctx, req)
-	assert.NoError(t, err)
-	assert.True(t, resp.Success)
-	assert.Empty(t, resp.Error)
-
-	mockP2P.AssertCalled(t, "DisconnectPeer", ctx, decodedPeerID)
-}
-
-func TestDisconnectPeerInvalidID(t *testing.T) {
-	t.Skip("disconnect peer is deprecated in new architecture")
-	ctx := context.Background()
-	invalidPeerID := "invalid-peer-id"
-	logger := ulogger.New("test")
-
-	server := &Server{
-		P2PClient: new(MockServerP2PClient),
-		logger:    logger,
-	}
-
-	req := &p2p_api.DisconnectPeerRequest{PeerId: invalidPeerID}
-
-	resp, err := server.DisconnectPeer(ctx, req)
-	assert.NoError(t, err)
-	assert.False(t, resp.Success)
-	assert.Contains(t, resp.Error, "invalid peer ID")
-}
-
-func TestDisconnectPeerNoP2PNode(t *testing.T) {
-	t.Skip("disconnect peer is deprecated in new architecture")
-	ctx := context.Background()
-	logger := ulogger.New("test")
-
-	server := &Server{
-		P2PClient: nil,
-		logger:    logger,
-	}
-
-	req := &p2p_api.DisconnectPeerRequest{PeerId: "12D3KooWQ89fFeXZtbj4Lmq2Z3zAqz1QzAAzC7D2yxjZK7XWuK6h"}
-
-	resp, err := server.DisconnectPeer(ctx, req)
-	assert.NoError(t, err)
-	assert.False(t, resp.Success)
-	assert.Equal(t, "P2P node not available", resp.Error)
-}
+// NOTE: TestDisconnectPeerSuccess, TestDisconnectPeerInvalidID, TestDisconnectPeerNoP2PNode
+// were removed because DisconnectPeer is deprecated in the new architecture.
 
 func TestProcessInvalidBlockMessageSuccess(t *testing.T) {
 
@@ -2949,64 +2980,7 @@ func TestBlockchainSubscriptionListener(t *testing.T) {
 	})
 }
 
-func TestConnectPeer(t *testing.T) {
-	t.Skip("connect peer is deprecated in new architecture")
-	t.Run("P2P node is nil", func(t *testing.T) {
-		server := &Server{
-			logger:    ulogger.New("test"),
-			P2PClient: nil,
-		}
-
-		resp, err := server.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
-			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFakePeer",
-		})
-		require.NoError(t, err)
-		assert.False(t, resp.Success)
-		assert.Equal(t, "P2P node not available", resp.Error)
-	})
-
-	t.Run("ConnectToPeer returns error", func(t *testing.T) {
-		mockP2PNode := new(MockServerP2PClient)
-		mockP2PNode.
-			On("ConnectToPeer", mock.Anything, "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFailing").
-			Return(errors.NewProcessingError("connection failed"))
-
-		server := &Server{
-			logger:    ulogger.New("test"),
-			P2PClient: mockP2PNode,
-		}
-
-		resp, err := server.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
-			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooFailing",
-		})
-		require.NoError(t, err)
-		assert.False(t, resp.Success)
-		assert.Contains(t, resp.Error, "connection failed")
-
-		mockP2PNode.AssertExpectations(t)
-	})
-
-	t.Run("ConnectToPeer success", func(t *testing.T) {
-		mockP2PNode := new(MockServerP2PClient)
-		mockP2PNode.
-			On("ConnectToPeer", mock.Anything, "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooSuccess").
-			Return(nil)
-
-		server := &Server{
-			logger:    ulogger.New("test"),
-			P2PClient: mockP2PNode,
-		}
-
-		resp, err := server.ConnectPeer(context.Background(), &p2p_api.ConnectPeerRequest{
-			PeerAddress: "/ip4/127.0.0.1/tcp/4001/p2p/12D3KooSuccess",
-		})
-		require.NoError(t, err)
-		assert.True(t, resp.Success)
-		assert.Empty(t, resp.Error)
-
-		mockP2PNode.AssertExpectations(t)
-	})
-}
+// NOTE: TestConnectPeer was removed because ConnectPeer is deprecated in the new architecture.
 
 func TestServer_GetLocalHeight(t *testing.T) {
 	// Test with nil blockchain client
@@ -3050,23 +3024,25 @@ func TestServer_UpdatePeerHeight(t *testing.T) {
 	peerID := peer.ID("test-peer")
 
 	// Update height for non-existent peer (should add peer)
-	server.updatePeerHeight(peerID, 100)
+	server.addPeer(peerID, "", 100, nil, "")
 
 	// Verify peer was added with correct height
-	peerInfo, exists := registry.GetPeer(peerID)
+	peerInfo, exists := registry.Get(peerID)
 	assert.True(t, exists)
-	assert.Equal(t, int32(100), peerInfo.Height)
+	assert.Equal(t, uint32(100), peerInfo.Height)
 
 	// Update height for existing peer
-	server.updatePeerHeight(peerID, 200)
-	peerInfo, exists = registry.GetPeer(peerID)
+	server.addPeer(peerID, "", 200, nil, "")
+	peerInfo, exists = registry.Get(peerID)
 	assert.True(t, exists)
-	assert.Equal(t, int32(200), peerInfo.Height)
+	assert.Equal(t, uint32(200), peerInfo.Height)
 }
 
 func TestServer_AddPeer(t *testing.T) {
 	logger := ulogger.New("test")
+
 	registry := NewPeerRegistry()
+
 	server := &Server{
 		logger:       logger,
 		peerRegistry: registry,
@@ -3075,15 +3051,15 @@ func TestServer_AddPeer(t *testing.T) {
 	peerID := peer.ID("test-peer")
 
 	// Add peer
-	server.addPeer(peerID, "")
+	server.addPeer(peerID, "", 0, nil, "")
 
 	// Verify peer was added
-	_, exists := registry.GetPeer(peerID)
+	_, exists := registry.Get(peerID)
 	assert.True(t, exists)
 
 	// Add same peer again (should be idempotent)
-	server.addPeer(peerID, "")
-	_, exists = registry.GetPeer(peerID)
+	server.addPeer(peerID, "", 0, nil, "")
+	_, exists = registry.Get(peerID)
 	assert.True(t, exists)
 }
 
@@ -3098,15 +3074,15 @@ func TestServer_RemovePeer(t *testing.T) {
 	peerID := peer.ID("test-peer")
 
 	// Add peer first
-	registry.AddPeer(peerID, "")
-	_, exists := registry.GetPeer(peerID)
+	registry.Put(peerID, "", 0, nil, "")
+	_, exists := registry.Get(peerID)
 	assert.True(t, exists)
 
 	// Remove peer
 	server.removePeer(peerID)
 
 	// Verify peer was removed
-	_, exists = registry.GetPeer(peerID)
+	_, exists = registry.Get(peerID)
 	assert.False(t, exists)
 }
 
@@ -3121,22 +3097,23 @@ func TestServer_UpdateBlockHash(t *testing.T) {
 	peerID := peer.ID("test-peer")
 
 	// Add peer first
-	registry.AddPeer(peerID, "")
+	registry.Put(peerID, "", 0, nil, "")
 
 	// Update block hash
-	blockHash := "00000000000000000123456789abcdef"
-	server.updateBlockHash(peerID, blockHash)
+	blockHashStr := "00000000000000000123456789abcdef00000000000000000123456789abcdef"
+	blockHash, _ := chainhash.NewHashFromStr(blockHashStr)
+	server.peerRegistry.Put(peerID, "", 0, blockHash, "")
 
 	// Verify hash was updated
-	peerInfo, exists := registry.GetPeer(peerID)
+	peerInfo, exists := registry.Get(peerID)
 	assert.True(t, exists)
-	assert.Equal(t, blockHash, peerInfo.BlockHash)
+	assert.Equal(t, blockHashStr, peerInfo.BlockHash.String())
 
-	// Test with empty hash (should not update)
-	server.updateBlockHash(peerID, "")
-	peerInfo, exists = registry.GetPeer(peerID)
+	// Test with nil hash (should not update)
+	server.peerRegistry.Put(peerID, "", 0, nil, "")
+	peerInfo, exists = registry.Get(peerID)
 	assert.True(t, exists)
-	assert.Equal(t, blockHash, peerInfo.BlockHash) // Should still be the old hash
+	assert.Equal(t, blockHashStr, peerInfo.BlockHash.String()) // Should still be the old hash
 }
 
 func TestServer_GetPeer(t *testing.T) {
@@ -3154,43 +3131,36 @@ func TestServer_GetPeer(t *testing.T) {
 	assert.False(t, exists)
 	assert.Nil(t, peerInfo)
 
-	// Add peer
-	registry.AddPeer(peerID, "")
-	registry.UpdateHeight(peerID, 100, "hash")
+	// Add peer with height and hash atomically
+	testHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	registry.Put(peerID, "", 100, testHash, "")
 
 	// Get existing peer
 	peerInfo, exists = server.getPeer(peerID)
 	assert.True(t, exists)
 	assert.NotNil(t, peerInfo)
-	assert.Equal(t, int32(100), peerInfo.Height)
-	assert.Equal(t, "hash", peerInfo.BlockHash)
+	assert.Equal(t, uint32(100), peerInfo.Height)
+	assert.Equal(t, testHash.String(), peerInfo.BlockHash.String())
 }
 
 func TestServer_UpdateDataHubURL(t *testing.T) {
-	logger := ulogger.New("test")
 	registry := NewPeerRegistry()
-	server := &Server{
-		logger:       logger,
-		peerRegistry: registry,
-	}
 
 	peerID := peer.ID("test-peer")
 
-	// Add peer first
-	registry.AddPeer(peerID, "")
-
-	// Update DataHub URL
 	url := "http://example.com:8080"
-	server.updateDataHubURL(peerID, url)
+
+	// Add peer first
+	registry.Put(peerID, "", 0, nil, url)
 
 	// Verify URL was updated
-	peerInfo, exists := registry.GetPeer(peerID)
+	peerInfo, exists := registry.Get(peerID)
 	assert.True(t, exists)
 	assert.Equal(t, url, peerInfo.DataHubURL)
 
 	// Test with empty URL (should not update)
-	server.updateDataHubURL(peerID, "")
-	peerInfo, exists = registry.GetPeer(peerID)
+	registry.Put(peerID, "", 0, nil, "")
+	peerInfo, exists = registry.Get(peerID)
 	assert.True(t, exists)
 	assert.Equal(t, url, peerInfo.DataHubURL) // Should still be the old URL
 }
@@ -3335,7 +3305,7 @@ func TestShouldSkipDuringSync(t *testing.T) {
 	require.NoError(t, err)
 
 	// Add peer to simulate having a sync peer
-	server.addPeer(syncPeerID, "")
+	server.addPeer(syncPeerID, "", 0, nil, "")
 
 	// Test various scenarios - the function should execute without error
 	server.shouldSkipDuringSync("peer2", "originator2", 200, "subtree")
@@ -3418,7 +3388,7 @@ func createEnhancedTestServer(t *testing.T) (*Server, *MockServerP2PClient, *Moc
 			BanThreshold: 100,
 			BanDuration:  time.Hour,
 			PeerCacheDir: t.TempDir(),
-			DisableNAT:   true, // Disable NAT in tests to prevent data races in libp2p
+			EnableNAT:    false, // Disable NAT in tests to prevent data races in libp2p
 		},
 	}
 
@@ -3584,46 +3554,7 @@ func TestP2PNodeConnectedEnhanced(t *testing.T) {
 }
 */
 
-func TestOnPeerBannedEnhanced(t *testing.T) {
-	t.Skip("onPeerBanned is deprecated in new architecture")
-	// Create fresh mocks for this test
-	mockP2PNode := &MockServerP2PClient{}
-	mockBanList := &MockBanList{}
-
-	server := &Server{
-		logger:    ulogger.New("test"),
-		P2PClient: mockP2PNode,
-		banList:   mockBanList,
-	}
-
-	// Create a ban event handler
-	handler := &myBanEventHandler{server: server}
-
-	// Create a test peer ID
-	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
-	require.NoError(t, err)
-	peerID, err := peer.IDFromPublicKey(pub)
-	require.NoError(t, err)
-
-	until := time.Now().Add(time.Hour)
-	reason := "test ban reason"
-
-	// Mock expectations for valid peer ID
-	mockP2PNode.On("GetPeerIPs", peerID).Return([]string{"192.168.1.1", "10.0.0.1"})
-	mockP2PNode.On("DisconnectPeer", mock.Anything, peerID).Return(nil)
-	mockBanList.On("Add", mock.Anything, "192.168.1.1", until).Return(nil)
-	mockBanList.On("Add", mock.Anything, "10.0.0.1", until).Return(nil)
-
-	// Test OnPeerBanned with valid peer ID
-	handler.OnPeerBanned(peerID.String(), until, reason)
-
-	// Test OnPeerBanned with invalid peer ID (error path coverage)
-	handler.OnPeerBanned("invalid-peer-id", until, reason)
-
-	// Verify mocks
-	mockP2PNode.AssertExpectations(t)
-	mockBanList.AssertExpectations(t)
-}
+// NOTE: TestOnPeerBannedEnhanced was removed because onPeerBanned is deprecated in the new architecture.
 
 func TestDisconnectPreExistingBannedPeersEnhanced(t *testing.T) {
 	ctx := context.Background()

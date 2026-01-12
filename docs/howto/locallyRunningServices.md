@@ -6,17 +6,14 @@ This section will walk you through the commands and configurations needed to run
 
 ### Prerequisites
 
-Before running Teranode, ensure the required infrastructure services are started:
+Start PostgreSQL before running Teranode:
 
 ```shell
-# Start Kafka in Docker
-./scripts/kafka.sh
-
 # Start PostgreSQL in Docker
 ./scripts/postgres.sh
 ```
 
-> **Note:** If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:
+> **Note**: Development mode uses in-memory Kafka by default (no Docker setup required). For advanced testing with Docker-based Kafka, run `./scripts/kafka.sh` (requires adding `127.0.0.1 kafka-shared` to `/etc/hosts` first). If you configure your settings to use Aerospike for UTXO storage, you'll also need to run:
 >
 > ```bash
 > # Start Aerospike in Docker
@@ -47,34 +44,34 @@ Teranode supports multiple database backends for UTXO storage, configured via se
 
 1. **PostgreSQL** (Default for development):
 
-   ```shell
-   # Make sure PostgreSQL is running
-   ./scripts/postgres.sh
+    ```shell
+    # Make sure PostgreSQL is running
+    ./scripts/postgres.sh
 
-   # Your settings_local.conf should have a PostgreSQL connection string
-   utxostore.dev.[YOUR_CONTEXT] = postgres://teranode:teranode@localhost:5432/teranode?blockHeightRetention=5
+    # Your settings_local.conf should have a PostgreSQL connection string
+    utxostore.dev.[YOUR_CONTEXT] = postgres://teranode:teranode@localhost:5432/teranode?blockHeightRetention=5
 
-   # Run with the PostgreSQL backend
-   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
-   ```
+    # Run with the PostgreSQL backend
+    SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
+    ```
 
 2. **SQLite** (Lightweight option):
 
-   ```shell
-   # Your settings_local.conf should have an SQLite connection string
-   utxostore.dev.[YOUR_CONTEXT] = sqlite:///utxostore?blockHeightRetention=5
+    ```shell
+    # Your settings_local.conf should have an SQLite connection string
+    utxostore.dev.[YOUR_CONTEXT] = sqlite:///utxostore?blockHeightRetention=5
 
-   # Run with SQLite backend
-   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
-   ```
+    # Run with SQLite backend
+    SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
+    ```
 
 3. **Aerospike** (High-performance option):
 
-   > **Warning: Aerospike Requirements**
-   >
-   > - Requires both the appropriate settings AND the 'aerospike' build tag
-   > - See the Aerospike Integration section below
-   > - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
+    > **Warning: Aerospike Requirements**
+    >
+    > - Requires both the appropriate settings AND the 'aerospike' build tag
+    > - See the Aerospike Integration section below
+    > - **Important**: Unlike PostgreSQL and SQLite, Aerospike requires the build tag because the Aerospike driver code won't be compiled into the binary without it. If you configure Aerospike in settings but don't use the tag, the application will fail at runtime with an 'unknown database driver' error.
 
 > **Note:** The database backend is determined by the connection string prefix in your settings:
 >
@@ -92,15 +89,15 @@ To use Aerospike as the UTXO storage backend:
 
 1. First, start the Aerospike Docker container:
 
-   ```shell
-   ./scripts/aerospike.sh
-   ```
+    ```shell
+    ./scripts/aerospike.sh
+    ```
 
 2. Run Teranode with the aerospike tag:
 
-   ```shell
-   rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
-   ```
+    ```shell
+    rm -rf data && SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
+    ```
 
 ### Transaction Metadata Cache Configurations
 
@@ -176,6 +173,7 @@ Enable or disable components by setting the corresponding option to `1` or `0`. 
 | Legacy             | `-legacy=1`                 | Legacy API support                    |
 | P2P                | `-p2p=1`                    | Peer-to-peer networking service       |
 | Propagation        | `-propagation=1`            | Data propagation service              |
+| Pruner             | `-pruner=1`                 | UTXO data pruning service             |
 | RPC                | `-rpc=1`                    | RPC interface service                 |
 | Subtree Validation | `-subtreevalidation=1`      | Subtree validation service            |
 | UTXO Persister     | `-utxopersister=1`          | UTXO persistence service              |
@@ -247,15 +245,15 @@ You can also run each service on its own:
 
 1. Navigate to a service's directory:
 
-   ```shell
-   cd services/validator
-   ```
+    ```shell
+    cd services/validator
+    ```
 
 2. Run the service:
 
-   ```shell
-   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
-   ```
+    ```shell
+    SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run .
+    ```
 
 ## 📜 Running Specific Commands
 
@@ -272,5 +270,57 @@ make dev-dashboard
 Remember to replace `[YOUR_CONTEXT]` with your actual username throughout all commands.
 
 This guide aims to provide a streamlined process for running services and nodes during development.
+
+## 🌐 Running a Local Testnet Network
+
+For a complete testnet deployment with automated setup wizard and network configuration, see the **[Teranode Teratestnet Repository](https://github.com/bsv-blockchain/teranode-teratestnet)**.
+
+The teratestnet repository provides:
+
+- **`start-teratestnet.sh`** - Interactive wizard for automated setup
+- **Configuration helpers** - Automated domain/URL setup (via ngrok or custom domain)
+- **Docker Compose orchestration** - Pre-configured multi-service deployment
+- **Network setup** - Automatic connectivity configuration
+- **Reset and upgrade utilities** - Simplified data management and version updates
+
+**Key differences from this repository:**
+
+| Feature | Teranode (this repo) | Teranode Teratestnet |
+|---------|----------------------|----------------------|
+| Setup approach | Manual configuration | Wizard-based automation |
+| Target audience | Developers | Miners and operators |
+| Configuration | Requires settings_local.conf | Interactive prompts |
+| Network setup | Manual | Automated (ngrok or custom) |
+| Service management | Individual service control | Docker Compose orchestration |
+
+**When to use each:**
+
+- **Use this repository** for:
+    - Core development and testing
+    - Individual service development
+    - Custom configurations
+    - Contributing to Teranode codebase
+
+- **Use teratestnet repository** for:
+    - Quick testnet deployment
+    - Mining operations
+    - Production-like testnet environment
+    - Users wanting automated setup
+
+**Getting started with teratestnet:**
+
+```bash
+# Clone the teratestnet repository
+git clone https://github.com/bsv-blockchain/teranode-teratestnet.git
+cd teranode-teratestnet
+
+# Run the setup wizard
+./start-teratestnet.sh
+
+# For help and options
+./start-teratestnet.sh --help
+```
+
+## Additional Resources
 
 If you encounter any issues, consult the detailed documentation or reach out to the development team for assistance.

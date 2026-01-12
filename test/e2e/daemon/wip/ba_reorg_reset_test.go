@@ -30,7 +30,6 @@ func TestReorgTransactionPropagation(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "docker.host.teranode1.daemon",
 		EnableP2P:       true,
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.UtxoStore.UtxoStore = parsedURL
