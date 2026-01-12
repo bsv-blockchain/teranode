@@ -468,7 +468,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessTxMetaUsingCacheBatchSize:          getInt("subtreevalidation_processTxMetaUsingCache_BatchSize", 1024, alternativeContext...),
 			ProcessTxMetaUsingCacheConcurrency:        getInt("subtreevalidation_processTxMetaUsingCache_Concurrency", 32, alternativeContext...),
 			ProcessTxMetaUsingCacheMissingTxThreshold: getInt("subtreevalidation_processTxMetaUsingCache_MissingTxThreshold", 1, alternativeContext...),
-			SubtreeBlockHeightRetention:               getUint32("subtreevalidation_subtreeBlockHeightRetention", globalBlockHeightRetention),
 			SubtreeDAHConcurrency:                     getInt("subtreevalidation_subtreeDAHConcurrency", 8, alternativeContext...),
 			TxMetaCacheEnabled:                        getBool("subtreevalidation_txMetaCacheEnabled", true, alternativeContext...),
 			TxMetaCacheMaxMB:                          getInt("txMetaCacheMaxMB", 256, alternativeContext...),

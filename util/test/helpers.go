@@ -32,9 +32,5 @@ func CreateBaseTestSettings(t TestingT) *settings.Settings {
 		RawQuery: "MaxRetries=30&SleepBetweenRetries=50ms&SleepMultiplier=2&TotalTimeout=30s&SocketTimeout=10s",
 	}
 
-	// Initialize adjustment values to 0 for tests (use global value by default)
-	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
-	tSettings.SubtreeValidation.BlockHeightRetentionAdjustment = 0
-
 	return tSettings
 }

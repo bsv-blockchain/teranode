@@ -172,7 +172,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, err
 	}
 
-	externalStore, err := blob.NewStore(logger, externalStoreURL)
+	// Create external store with DAH explicitly disabled
+	// External file lifecycle is managed by the Aerospike pruner service, not by DAH files
+	externalStore, err := blob.NewStore(logger, externalStoreURL, options.WithDisableDAH(true))
 	if err != nil {
 		return nil, err
 	}

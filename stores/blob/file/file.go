@@ -400,6 +400,13 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		options.HashPrefix = -int(val)
 	}
 
+	// Parse disableDAH URL parameter
+	// This can be set via URL (?disableDAH=true/false) or via StoreOption (WithDisableDAH(true/false))
+	// URL parameter takes precedence over StoreOption (bidirectional override)
+	if disableDAH := storeURL.Query().Get("disableDAH"); disableDAH != "" {
+		options.DisableDAH = disableDAH == "true"
+	}
+
 	if len(options.SubDirectory) > 0 {
 		if err := os.MkdirAll(filepath.Join(path, options.SubDirectory), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create sub directory", err)
@@ -1154,6 +1161,12 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 		return "", err
 	}
 
+	// Skip DAH functionality entirely if disabled for this store
+	// Lifecycle is managed externally (e.g., by Aerospike pruner)
+	if merged.DisableDAH {
+		return fileName, nil
+	}
+
 	dah := merged.DAH
 
 	// If the dah is not set and the block height retention is set, set the dah to the current block height plus the block height retention
@@ -1189,6 +1202,9 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 // This implementation stores the DAH value in a separate file with the same name as the blob
 // but with a .dah extension, and also maintains an in-memory map of DAH values for quick access.
 //
+// If the store has DisableDAH=true, this method returns immediately without error, as DAH
+// functionality is disabled for this store (lifecycle managed externally).
+//
 // Parameters:
 //   - ctx: Context for the operation (unused in this implementation)
 //   - key: The key identifying the blob
@@ -1199,6 +1215,12 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 // Returns:
 //   - error: Any error that occurred during the operation, including if the blob doesn't exist
 func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, newDAH uint32, opts ...options.FileOption) error {
+	// If DAH is disabled for this store, return immediately
+	// This store's lifecycle is managed externally (e.g., by Aerospike pruner)
+	if s.options.DisableDAH {
+		return nil
+	}
+
 	if err := acquireWritePermit(ctx); err != nil {
 		return errors.NewStorageError("[File][SetDAH] failed to acquire write permit", err)
 	}
