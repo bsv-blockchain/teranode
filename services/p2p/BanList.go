@@ -524,8 +524,9 @@ func (b *BanList) Unsubscribe(ch chan BanEvent) {
 
 // notifySubscribersAsync notifies all subscribers about a ban event asynchronously.
 // This is safe to call from a goroutine.
-// Each notification is sent in its own goroutine using utils.SafeSend with panic recovery
-// to prevent a closed channel from one subscriber affecting others.
+// utils.SafeSend is called directly (without spawning goroutines) to avoid goroutine proliferation.
+// SafeSend provides both panic recovery and non-blocking sends (select with default),
+// so each subscriber's closed or full channel won't affect others or block execution.
 func (b *BanList) notifySubscribersAsync(event BanEvent) {
 	// Make a copy of subscribers to avoid long lock
 	b.mu.RLock()
@@ -535,11 +536,11 @@ func (b *BanList) notifySubscribersAsync(event BanEvent) {
 	}
 	b.mu.RUnlock()
 
-	// Notify each subscriber in a separate goroutine without holding the lock
-	// This prevents a panic from one subscriber's closed channel affecting others
-	// utils.SafeSend handles the panic recovery for sends to potentially closed channels
+	// Notify each subscriber without holding the lock
+	// utils.SafeSend handles panic recovery and non-blocking sends,
+	// preventing closed/full channels from affecting other subscribers
 	for _, ch := range subscribers {
-		go utils.SafeSend(ch, event)
+		utils.SafeSend(ch, event)
 	}
 }
 

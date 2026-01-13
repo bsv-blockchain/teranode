@@ -412,7 +412,11 @@ func TestIPv6Compatibility(t *testing.T) {
 // TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition is a proof of concept test
 // that verifies the fix for the panic-prone send on possibly closed channel issue.
 // This test aggressively tries to trigger the race condition between unsubscribing/closing
-// channels and notifying subscribers. With the safeSend() fix, no panics should occur.
+// channels and notifying subscribers. With utils.SafeSend, no panics should occur.
+//
+// Note: This test relies on Go's test runner to detect panics in any goroutine.
+// If a panic occurs in the notifySubscribersAsync goroutines (spawned by Add/Remove),
+// the test will fail. No custom panic recovery is needed.
 func TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition(t *testing.T) {
 	banList, _, err := setupBanList(t)
 	require.NoError(t, err)
@@ -422,9 +426,8 @@ func TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition(t *testing.T)
 		numIterations  = 1000
 	)
 
-	var panicCount int64
-	var wg sync.WaitGroup
-	var mu sync.Mutex
+	var operationsWg sync.WaitGroup
+	var cleanupWg sync.WaitGroup
 
 	// Create multiple subscribers
 	subscribers := make([]chan BanEvent, numSubscribers)
@@ -437,9 +440,9 @@ func TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition(t *testing.T)
 	done := make(chan struct{})
 
 	// Goroutine to rapidly unsubscribe and close channels
-	wg.Add(1)
+	cleanupWg.Add(1)
 	go func() {
-		defer wg.Done()
+		defer cleanupWg.Done()
 		for {
 			select {
 			case <-done:
@@ -465,17 +468,11 @@ func TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition(t *testing.T)
 	}()
 
 	// Goroutine to rapidly trigger Add/Remove operations
-	wg.Add(1)
+	// Each Add/Remove spawns a goroutine that calls notifySubscribersAsync,
+	// which is where the send-on-closed-channel would occur without the fix.
+	operationsWg.Add(1)
 	go func() {
-		defer wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				mu.Lock()
-				panicCount++
-				mu.Unlock()
-				t.Errorf("PANIC DETECTED: %v", r)
-			}
-		}()
+		defer operationsWg.Done()
 
 		for i := 0; i < numIterations; i++ {
 			ip := fmt.Sprintf("192.168.1.%d", i%255)
@@ -494,19 +491,18 @@ func TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition(t *testing.T)
 		}
 	}()
 
-	// Wait for operations to complete
-	time.Sleep(2 * time.Second)
+	// Wait for all Add/Remove operations to complete
+	operationsWg.Wait()
+
+	// Signal cleanup goroutine to stop
 	close(done)
-	wg.Wait()
+	cleanupWg.Wait()
 
-	// Verify no panics occurred
-	mu.Lock()
-	finalPanicCount := panicCount
-	mu.Unlock()
+	// Give time for any remaining async notification goroutines to complete
+	// This ensures panics in those goroutines (if any) are caught before test ends
+	time.Sleep(100 * time.Millisecond)
 
-	if finalPanicCount > 0 {
-		t.Fatalf("Test FAILED: Detected %d panic(s).", finalPanicCount)
-	}
-
+	// If we reach here without panics, the test passes
+	// Go's test runner would have failed the test if any goroutine panicked
 	t.Log("Test PASSED: No panics detected during race condition test")
 }
