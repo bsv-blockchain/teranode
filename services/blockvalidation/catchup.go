@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -126,6 +127,40 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	// Step 3: Find common ancestor between chains
 	if err = u.findCommonAncestor(ctx, catchupCtx); err != nil {
 		return err
+	}
+
+	// Step 3.5: If fork detected, reset mined_set on old blocks for transaction state consistency
+	if catchupCtx.forkDepth > 0 {
+		u.logger.Infof("[catchup][%s] Fork detected (depth %d), clearing mined_set on old blocks",
+			catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth)
+
+		currentHeight := catchupCtx.currentHeight
+		headers, _, err := u.blockchainClient.GetBlockHeadersByHeight(ctx,
+			catchupCtx.commonAncestorMeta.Height+1, currentHeight)
+		if err != nil {
+			u.logger.Errorf("[catchup][%s] Failed to get fork block headers: %v",
+				catchupCtx.blockUpTo.Hash().String(), err)
+		} else {
+			for _, header := range headers {
+				if err := u.blockchainClient.ClearBlockMinedSet(ctx, header.Hash()); err != nil {
+					u.logger.Errorf("[catchup][%s] Failed to clear mined_set for block %s: %v",
+						catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+				} else {
+					// Send BlockMinedUnset notification to trigger immediate transaction status update
+					// This ensures BlockValidation processes the block immediately instead of waiting
+					// for the periodic job (which runs every 1 minute). Same pattern as InvalidateBlock RPC.
+					if err := u.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
+						Type: model.NotificationType_BlockMinedUnset,
+						Hash: header.Hash().CloneBytes(),
+					}); err != nil {
+						u.logger.Errorf("[catchup][%s] Failed to send BlockMinedUnset notification for %s: %v",
+							catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+					}
+				}
+			}
+			u.logger.Infof("[catchup][%s] Cleared mined_set on %d fork blocks and sent notifications",
+				catchupCtx.blockUpTo.Hash().String(), len(headers))
+		}
 	}
 
 	// Step 4: Validate fork depth against coinbase maturity

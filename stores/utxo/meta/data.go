@@ -75,6 +75,10 @@ type Data struct {
 	// Locked is a flag indicating if the transaction is locked and not spendable
 	Locked bool `json:"locked"`
 
+	// Creating indicates the transaction is still being created (multi-record 2-phase commit)
+	// When true, the transaction is incomplete and should trigger re-processing for auto-recovery
+	Creating bool `json:"creating"`
+
 	// SpendingDatas is the transaction ID of the transaction that spent the given tx output idx
 	SpendingDatas []*spendpkg.SpendingData `json:"spendingDatas"`
 }

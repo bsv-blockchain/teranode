@@ -20,7 +20,6 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"reflect"
@@ -46,7 +45,6 @@ var (
 	healthRegistered  atomic.Bool
 	metricsRegistered atomic.Bool
 	pprofRegistered   atomic.Bool
-	traceCloser       io.Closer
 )
 
 const (
@@ -57,6 +55,7 @@ const (
 	loggerBlockchain               = "bchn"
 	loggerBlockchainClient         = "bchc"
 	loggerBlockchainSQL            = "bcsql"
+	loggerPruner                   = "pruner"
 	loggerKafkaConsumerBlocks      = "kcb"
 	loggerKafkaConsumerRejectedTx  = "kcrtx"
 	loggerKafkaConsumerSubtree     = "kcs"
@@ -88,6 +87,8 @@ const (
 	serviceBlockPersister          = "blockpersister"
 	serviceBlockPersisterFormal    = "BlockPersister"
 	serviceBlockValidation         = "blockvalidation"
+	servicePruner                  = "pruner"
+	servicePrunerFormal            = "Pruner"
 	serviceBlockValidationFormal   = "BlockValidation"
 	serviceBlockchainFormal        = "Blockchain"
 	serviceHelp                    = "help"
@@ -510,6 +511,9 @@ func printUsage() {
 	fmt.Println("")
 	fmt.Println("    -alert=<1|0>")
 	fmt.Println("          whether to start the alert service")
+	fmt.Println("")
+	fmt.Println("    -pruner=<1|0>")
+	fmt.Println("          whether to start the pruner service")
 	fmt.Println("")
 	fmt.Println("    -all=0")
 	fmt.Println("          disable all services unless explicitly overridden")

@@ -107,6 +107,9 @@ type BlockAssembly struct {
 
 	// skipWaitForPendingBlocks stores the flag value for tests
 	skipWaitForPendingBlocks bool
+
+	// stopOnce ensures Stop() is only executed once
+	stopOnce sync.Once
 }
 
 // subtreeRetrySend encapsulates the data needed for retrying subtree storage operations
@@ -305,8 +308,26 @@ func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeCh
 				ba.logger.Errorf(err.Error())
 			}
 
-			// Invalidate mining candidate cache when new subtree is available
-			ba.blockAssembler.invalidateMiningCandidateCache()
+			// Smart cache invalidation: only invalidate if significant change
+			// Get current state from subtree processor
+			currentTxCount := uint32(ba.blockAssembler.TxCount())
+			currentSubtreeCount := ba.blockAssembler.SubtreeCount()
+
+			// Calculate actual total size by summing all subtree sizes
+			var currentSize uint64
+			subtrees := ba.blockAssembler.GetChainedSubtrees()
+			for _, st := range subtrees {
+				currentSize += st.SizeInBytes
+			}
+
+			if ba.blockAssembler.shouldInvalidateCache(currentTxCount, currentSize, currentSubtreeCount) {
+				ba.logger.Debugf("[Server] Invalidating cache: significant change detected (txs=%d, size=%d, subtrees=%d)",
+					currentTxCount, currentSize, currentSubtreeCount)
+				ba.blockAssembler.invalidateMiningCandidateCache()
+			} else {
+				ba.logger.Debugf("[Server] Keeping cache valid: minor change (txs=%d, size=%d, subtrees=%d)",
+					currentTxCount, currentSize, currentSubtreeCount)
+			}
 
 			if newSubtreeRequest.ErrChan != nil {
 				newSubtreeRequest.ErrChan <- err
@@ -681,14 +702,23 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 }
 
 // Stop gracefully shuts down the BlockAssembly service.
+// This method is idempotent and safe to call multiple times.
 //
 // Parameters:
 //   - ctx: Context for cancellation (currently unused)
 //
 // Returns:
 //   - error: Any error encountered during shutdown
-func (ba *BlockAssembly) Stop(_ context.Context) error {
-	ba.jobStore.Stop()
+func (ba *BlockAssembly) Stop(ctx context.Context) error {
+	ba.stopOnce.Do(func() {
+		ba.jobStore.Stop()
+
+		// Stop the subtree processor to stop the announcement ticker and cleanup resources
+		if ba.blockAssembler != nil && ba.blockAssembler.subtreeProcessor != nil {
+			ba.blockAssembler.subtreeProcessor.Stop(ctx)
+		}
+	})
+
 	return nil
 }
 
@@ -786,7 +816,7 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 	hash := chainhash.Hash(req.Txid)
 
 	if !ba.settings.BlockAssembly.Disabled {
-		if err := ba.blockAssembler.RemoveTx(hash); err != nil {
+		if err := ba.blockAssembler.RemoveTx(ctx, hash); err != nil {
 			return nil, errors.WrapGRPC(err)
 		}
 	}
@@ -1357,7 +1387,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 
 	subtreeCountUint32, err := safeconversion.IntToUint32(ba.blockAssembler.SubtreeCount())
 	if err != nil {
-		return nil, errors.NewProcessingError("error converting subtree count", err)
+		return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting subtree count", err)
 	}
 
 	subtreeHashes := ba.blockAssembler.subtreeProcessor.GetSubtreeHashes()
@@ -1369,15 +1399,25 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 	removeMap := ba.blockAssembler.subtreeProcessor.GetRemoveMap()
 	removeMapLen32, err := safeconversion.IntToUint32(removeMap.Length())
 	if err != nil {
-		return nil, errors.NewProcessingError("error converting remove map length", err)
+		return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting remove map length", err)
 	}
 
 	currentHeader, currentHeight := ba.blockAssembler.CurrentBlock()
+
+	subtreeSize := uint32(0)
+	if currentSubtree := ba.blockAssembler.subtreeProcessor.GetCurrentSubtree(); currentSubtree != nil {
+		// convert to uint32, safe as subtree size cannot exceed uint32
+		subtreeSize, err = safeconversion.IntToUint32(currentSubtree.Size())
+		if err != nil {
+			return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting current subtree size", err)
+		}
+	}
 
 	return &blockassembly_api.StateMessage{
 		BlockAssemblyState:    StateStrings[ba.blockAssembler.GetCurrentRunningState()],
 		SubtreeProcessorState: subtreeprocessor.StateStrings[ba.blockAssembler.subtreeProcessor.GetCurrentRunningState()],
 		SubtreeCount:          subtreeCountUint32,
+		SubtreeSize:           subtreeSize,
 		TxCount:               ba.blockAssembler.TxCount(),
 		QueueCount:            ba.blockAssembler.QueueLength(),
 		CurrentHeight:         currentHeight,

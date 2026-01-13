@@ -210,9 +210,9 @@ If you encounter issues during export or need to retry the process:
 
 1. **Clear the export directory completely:**
 
-   ```bash
-   sudo rm -rf /mnt/teranode/seed/export/*
-   ```
+    ```bash
+    sudo rm -rf /mnt/teranode/seed/export/*
+    ```
 
 2. **Reset the target Teranode instance** (see [reset guide](minersHowToResetTeranode.md))
 

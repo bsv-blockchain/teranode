@@ -411,6 +411,11 @@ func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *
 	return args.Error(0)
 }
 
+func (m *MockBlockchainClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
 // SetBlockProcessedAt implements the blockchain.ClientI interface
 func (m *MockBlockchainClient) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
 	args := m.Called(ctx, blockHash, clear)

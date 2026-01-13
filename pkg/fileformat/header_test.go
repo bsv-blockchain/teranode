@@ -350,7 +350,7 @@ func TestMagicConstants(t *testing.T) {
 	expectedMagics := map[FileType][8]byte{
 		FileTypeUtxoAdditions:  magicUtxoAdditions,
 		FileTypeUtxoDeletions:  magicUtxoDeletions,
-		FileTypeUtxoHeaders:    magicUtxoHeaders,
+		FileTypeUtxoHeaders:    magicUtxoHeadersV2,
 		FileTypeUtxoSet:        magicUtxoSet,
 		FileTypeBlock:          magicBlock,
 		FileTypeSubtree:        magicSubtree,

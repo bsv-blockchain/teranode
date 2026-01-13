@@ -112,9 +112,6 @@ type Validator struct {
 	// This client is used to ensure the validator service remains synchronized with the blockchain.
 	blockchainClient blockchain.ClientI
 
-	// saveInParallel indicates if UTXOs should be saved concurrently
-	saveInParallel bool
-
 	// stats tracks validator performance metrics
 	stats *gocore.Stat
 
@@ -145,7 +142,6 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		txValidator:                   NewTxValidator(logger, tSettings),
 		utxoStore:                     store,
 		blockAssembler:                ba,
-		saveInParallel:                true,
 		stats:                         gocore.NewStat("validator"),
 		txmetaKafkaProducerClient:     txMetaKafkaProducerClient,
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
@@ -737,7 +733,7 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 		// Get atomic block state to ensure consistency
 		blockState := v.utxoStore.GetBlockState()
 		for _, idx := range idxs {
-			utxoHeights[idx] = blockState.Height
+			utxoHeights[idx] = blockState.Height + 1
 		}
 	} else {
 		for _, idx := range idxs {

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,14 +16,14 @@ import (
 // TNJ4-4
 
 func TestBlockSubsidy(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 
 	defer td.Stop(t, true)

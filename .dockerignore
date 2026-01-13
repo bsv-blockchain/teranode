@@ -29,6 +29,7 @@ daemon/test_daemon.go
 daemon/test_daemon_test.go
 ulogger/verboseTest.go
 ulogger/errorTest.go
+ulogger/unified_test_logger.go
 
 # Local data and configuration - excluded as they contain runtime data
 data/

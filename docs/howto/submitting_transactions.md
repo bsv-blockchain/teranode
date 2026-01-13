@@ -113,74 +113,11 @@ func main() {
 
 ## Submission Methods
 
-### HTTP API
-
-Teranode's Propagation Service provides HTTP endpoints for transaction submission.
-
-#### Single Transaction
-
-```bash
-curl -X POST http://localhost:8090/tx \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @transaction.bin
-```
-
-**Response:**
-
-- `200 OK`: Transaction accepted
-- `400 Bad Request`: Malformed transaction
-- `422 Unprocessable Entity`: Transaction validation failed
-
-#### Multiple Transactions (Batch)
-
-```bash
-curl -X POST http://localhost:8090/txs \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @transactions.bin
-```
-
-The batch endpoint expects transactions concatenated together. Each transaction result is returned in order.
-
-**Go Example:**
-
-```go
-package main
-
-import (
-    "bytes"
-    "context"
-    "fmt"
-    "io"
-    "net/http"
-
-    "github.com/libsv/go-bt/v2"
-)
-
-func submitTransaction(tx *bt.Tx, nodeURL string) error {
-    txBytes := tx.Bytes()
-
-    resp, err := http.Post(
-        fmt.Sprintf("%s/tx", nodeURL),
-        "application/octet-stream",
-        bytes.NewReader(txBytes),
-    )
-    if err != nil {
-        return fmt.Errorf("failed to submit transaction: %w", err)
-    }
-    defer resp.Body.Close()
-
-    if resp.StatusCode != http.StatusOK {
-        body, _ := io.ReadAll(resp.Body)
-        return fmt.Errorf("transaction rejected: %s", string(body))
-    }
-
-    return nil
-}
-```
+Teranode provides a gRPC API for transaction submission, offering high performance and low latency.
 
 ### gRPC API
 
-For higher performance and lower latency, use the gRPC API.
+The Propagation service accepts transactions via gRPC. Successful submissions return without error, while rejected transactions return an error with details.
 
 **Go Example:**
 
@@ -200,7 +137,7 @@ import (
 )
 
 func submitTransactionGRPC(tx *bt.Tx, nodeAddr string) error {
-    // Connect to Teranode
+    // Connect to Teranode Propagation service (default port: 8086)
     conn, err := grpc.Dial(nodeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
     if err != nil {
         return fmt.Errorf("failed to connect: %w", err)
@@ -214,17 +151,14 @@ func submitTransactionGRPC(tx *bt.Tx, nodeAddr string) error {
     ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
 
-    response, err := client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+    _, err = client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
         Tx: tx.Bytes(),
     })
     if err != nil {
         return fmt.Errorf("failed to process transaction: %w", err)
     }
 
-    if response.Status != propagation_api.Status_SUCCESS {
-        return fmt.Errorf("transaction rejected: %s", response.RejectReason)
-    }
-
+    // Success - transaction accepted
     return nil
 }
 ```
@@ -284,12 +218,16 @@ In Teranode's architecture, the performance difference between formats is **negl
 
 ### Error Response Example
 
-```json
-{
-  "status": "REJECTED",
-  "reject_reason": "transaction validation failed: parent transaction 5f3a... not found",
-  "tx_id": "abc123...",
-  "error_code": "MISSING_PARENT"
+When a transaction is rejected, the gRPC call returns an error. Extract the error message from the gRPC error:
+
+```go
+_, err = client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+    Tx: tx.Bytes(),
+})
+if err != nil {
+    // Error contains rejection reason
+    fmt.Printf("Transaction rejected: %v\n", err)
+    // Example error: "rpc error: code = InvalidArgument desc = transaction validation failed: parent transaction 5f3a... not found"
 }
 ```
 
@@ -348,34 +286,13 @@ curl http://localhost:8090/tx/abc123.../json
 curl http://localhost:8090/utxo/output_hash/json
 ```
 
-### 5. Batch Submissions for High Volume
-
-For high-throughput applications, use batch submission:
-
-```go
-func submitBatch(txs []*bt.Tx, nodeURL string) error {
-    var buffer bytes.Buffer
-
-    for _, tx := range txs {
-        buffer.Write(tx.Bytes())
-    }
-
-    resp, err := http.Post(
-        fmt.Sprintf("%s/txs", nodeURL),
-        "application/octet-stream",
-        &buffer,
-    )
-    // ... handle response
-}
-```
-
 ## Transaction Lifecycle
 
-1. **Submission**: Transaction sent to Propagation Service (HTTP/gRPC)
+1. **Submission**: Transaction sent to Propagation Service (gRPC)
 2. **Storage**: Transaction stored in blob store
 3. **Format Check**: Validator checks if transaction is extended
-   - If not extended: Automatically extended in-memory using UTXO store
-   - If extended: Proceeds directly to validation
+    - If not extended: Automatically extended in-memory using UTXO store
+    - If extended: Proceeds directly to validation
 4. **Validation**: Full consensus and policy validation
 5. **UTXO Update**: UTXOs marked as spent, new outputs created
 6. **Block Assembly**: Valid transactions forwarded to mining
@@ -389,11 +306,6 @@ func submitBatch(txs []*bt.Tx, nodeURL string) error {
 ```bash
 # Start Teranode in development mode
 SETTINGS_CONTEXT=dev make dev-teranode
-
-# Submit a test transaction
-curl -X POST http://localhost:8090/tx \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @test_tx.bin
 ```
 
 ### Integration Testing
@@ -440,7 +352,7 @@ For more detailed testing patterns, examine the existing tests in `test/e2e/`, `
 - **Teranode accepts both standard and extended transaction formats**
 - **Standard format is recommended for most use cases**
 - **Automatic extension happens transparently during validation**
-- **HTTP and gRPC APIs are available for submission**
+- **gRPC API (Propagation service) is used for transaction submission**
 - **Performance difference between formats is negligible**
 - **Proper error handling and retries are essential**
 

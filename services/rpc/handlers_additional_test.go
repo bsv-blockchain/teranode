@@ -21,17 +21,16 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer_api"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -497,11 +496,10 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		// Create a mock block
 		mockBlock := createMockBlock(t, 100)
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil,
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -531,17 +529,20 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		// Create next block for testing
 		nextBlock := createMockBlock(t, 101)
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil
-			},
-			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
-				if height == 101 {
-					return nextBlock, nil
-				}
-				return nil, errors.ErrBlockNotFound
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil,
+		)
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
+			mockBlock.Header, &model.BlockHeaderMeta{
+				Height:    100,
+				ChainWork: []byte{0x01, 0x02, 0x03},
+			}, nil,
+		)
+		mockBlockchainClient.On("GetBlockByHeight", mock.Anything, uint32(101)).Return(nextBlock, nil)
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]*model.BlockHeader{mockBlock.Header}, []*model.BlockHeaderMeta{{Height: 100}}, nil,
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -555,8 +556,8 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		// Should return a *GetBlockVerboseTxResult
-		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
+		// Should return a GetBlockVerboseResult (both verbosity levels now return the same type)
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseResult)
 		assert.True(t, ok)
 
 		// Verify basic fields
@@ -568,17 +569,23 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		assert.Equal(t, nextBlock.Hash().String(), blockResult.NextHash)
 	})
 
-	t.Run("verbosity 2 returns nil (current implementation)", func(t *testing.T) {
+	t.Run("verbosity 2 returns same as verbosity 1 (updated implementation)", func(t *testing.T) {
 		mockBlock := createMockBlock(t, 200)
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 250}, nil
-			},
-			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
-				return nil, errors.ErrBlockNotFound // No next block
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 250}, nil,
+		)
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
+			mockBlock.Header, &model.BlockHeaderMeta{
+				Height:    200,
+				ChainWork: []byte{0x01, 0x02, 0x03},
+			}, nil,
+		)
+		mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return((*model.Block)(nil), errors.ErrBlockNotFound)
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]*model.BlockHeader{mockBlock.Header}, []*model.BlockHeaderMeta{{Height: 200}}, nil,
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -591,21 +598,29 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		result, err := s.blockToJSON(context.Background(), mockBlock, 2)
 		require.NoError(t, err)
 
-		// Current implementation only handles verbosity 1, returns nil for verbosity 2
-		assert.Nil(t, result)
+		// Updated implementation returns GetBlockVerboseResult for all verbosity levels >= 1
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseResult)
+		assert.True(t, ok)
+		assert.NotNil(t, blockResult)
 	})
 
 	t.Run("block with large size returns size info", func(t *testing.T) {
 		mockBlock := createMockBlock(t, 100)
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil
-			},
-			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
-				return nil, errors.ErrBlockNotFound
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil,
+		)
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
+			mockBlock.Header, &model.BlockHeaderMeta{
+				Height:    100,
+				ChainWork: []byte{0x01, 0x02, 0x03},
+			}, nil,
+		)
+		mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return((*model.Block)(nil), errors.ErrBlockNotFound)
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]*model.BlockHeader{mockBlock.Header}, []*model.BlockHeaderMeta{{Height: 100}}, nil,
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -619,8 +634,8 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		// Should return a *GetBlockVerboseTxResult
-		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
+		// Should return a GetBlockVerboseResult
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseResult)
 		assert.True(t, ok)
 
 		// Verify the size field is populated
@@ -631,11 +646,13 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 	t.Run("blockchain client error on best block", func(t *testing.T) {
 		mockBlock := createMockBlock(t, 100)
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return nil, nil, errors.New(errors.ERR_ERROR, "blockchain service unavailable")
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			nil, nil, errors.New(errors.ERR_ERROR, "blockchain service unavailable"),
+		)
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]*model.BlockHeader{mockBlock.Header}, []*model.BlockHeaderMeta{{Height: 100}}, nil,
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -654,14 +671,22 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 	t.Run("blockchain client error on next block", func(t *testing.T) {
 		mockBlock := createMockBlock(t, 100)
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil
-			},
-			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
-				return nil, errors.New(errors.ERR_ERROR, "database connection error")
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil,
+		)
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
+			mockBlock.Header, &model.BlockHeaderMeta{
+				Height:    100,
+				ChainWork: []byte{0x01, 0x02, 0x03},
+			}, nil,
+		)
+		mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return(
+			nil, errors.New(errors.ERR_ERROR, "database connection error"),
+		)
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]*model.BlockHeader{mockBlock.Header}, []*model.BlockHeaderMeta{{Height: 100}}, nil,
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -691,14 +716,20 @@ func TestBlockToJSONComprehensive(t *testing.T) {
 			Height: 100,
 		}
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return &model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil
-			},
-			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
-				return nil, errors.ErrBlockNotFound
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 150}, nil,
+		)
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
+			mockBlock.Header, &model.BlockHeaderMeta{
+				Height:    100,
+				ChainWork: []byte{0x01, 0x02, 0x03},
+			}, nil,
+		)
+		mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return((*model.Block)(nil), errors.ErrBlockNotFound)
+		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]*model.BlockHeader{mockBlock.Header}, []*model.BlockHeaderMeta{{Height: 100}}, nil,
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1214,11 +1245,10 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 	})
 
 	t.Run("blockchain client returns error", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
-				return nil, errors.New(errors.ERR_ERROR, "blockchain error")
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlock", mock.Anything, mock.Anything).Return(
+			nil, errors.New(errors.ERR_ERROR, "blockchain error"),
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1261,20 +1291,36 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 			Height: 100010,
 		}
 
-		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
-				return orphanBlock, nil
-			},
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return blockHeader, bestBlockMeta, nil
-			},
-			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
-				return nil, errors.ErrBlockNotFound
-			},
-			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
-				return false, nil
-			},
+		// Create headers for median time calculation
+		headers := make([]*model.BlockHeader, 11)
+		dummyHash := chainhash.Hash{}
+		for i := range headers {
+			headers[i] = &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  &dummyHash,
+				HashMerkleRoot: &dummyHash,
+				Timestamp:      uint32(1231006505 + i*600),
+				Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+				Nonce:          12345,
+			}
 		}
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlock", mock.Anything, mock.Anything).Return(orphanBlock, nil)
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, bestBlockMeta, nil)
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
+			blockHeader, &model.BlockHeaderMeta{
+				Height:    100000,
+				ChainWork: []byte{0x01, 0x02, 0x03},
+			}, nil,
+		)
+		mockClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			headers,
+			[]*model.BlockHeaderMeta{{Height: 100000}},
+			nil,
+		)
+		mockClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return((*model.Block)(nil), errors.ErrBlockNotFound)
+		mockClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1295,7 +1341,7 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseResult)
 		assert.True(t, ok)
 		assert.NotNil(t, blockResult)
 		assert.Equal(t, int64(-1), blockResult.Confirmations, "orphan block should have -1 confirmations")
@@ -1323,20 +1369,36 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 			Height: 100010,
 		}
 
-		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.Block, error) {
-				return validBlock, nil
-			},
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return blockHeader, bestBlockMeta, nil
-			},
-			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
-				return nil, errors.ErrBlockNotFound
-			},
-			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
-				return true, nil
-			},
+		// Create headers for median time calculation
+		headers := make([]*model.BlockHeader, 11)
+		dummyHash := chainhash.Hash{}
+		for i := range headers {
+			headers[i] = &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  &dummyHash,
+				HashMerkleRoot: &dummyHash,
+				Timestamp:      uint32(1231006505 + i*600),
+				Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+				Nonce:          12345,
+			}
 		}
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlock", mock.Anything, mock.Anything).Return(validBlock, nil)
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, bestBlockMeta, nil)
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
+			blockHeader, &model.BlockHeaderMeta{
+				Height:    100000,
+				ChainWork: []byte{0x01, 0x02, 0x03},
+			}, nil,
+		)
+		mockClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			headers,
+			[]*model.BlockHeaderMeta{{Height: 100000}},
+			nil,
+		)
+		mockClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return((*model.Block)(nil), errors.ErrBlockNotFound)
+		mockClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1357,7 +1419,7 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		blockResult, ok := result.(*bsvjson.GetBlockVerboseTxResult)
+		blockResult, ok := result.(*bsvjson.GetBlockVerboseResult)
 		assert.True(t, ok)
 		assert.NotNil(t, blockResult)
 		assert.Equal(t, int64(11), blockResult.Confirmations)
@@ -1369,11 +1431,10 @@ func TestHandleGetBlockByHeightComprehensive(t *testing.T) {
 	logger := mocklogger.NewTestLogger()
 
 	t.Run("blockchain client returns error", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
-				return nil, errors.New(errors.ERR_ERROR, "block not found at height")
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return(
+			nil, errors.New(errors.ERR_ERROR, "block not found at height"),
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1416,11 +1477,10 @@ func TestHandleGetBlockHashComprehensive(t *testing.T) {
 	})
 
 	t.Run("blockchain client returns error", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			getBlockByHeightFunc: func(ctx context.Context, height uint32) (*model.Block, error) {
-				return nil, errors.New(errors.ERR_ERROR, "block not found")
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return(
+			nil, errors.New(errors.ERR_ERROR, "block not found"),
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1466,11 +1526,10 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 	})
 
 	t.Run("blockchain client returns error", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return nil, nil, errors.New(errors.ERR_ERROR, "header not found")
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(
+			nil, nil, errors.New(errors.ERR_ERROR, "header not found"),
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1508,11 +1567,8 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 			Height: 100000,
 		}
 
-		mockClient := &mockBlockchainClient{
-			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return blockHeader, blockHeaderMeta, nil
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(blockHeader, blockHeaderMeta, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1556,14 +1612,47 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 		}
 
 		blockHeaderMeta := &model.BlockHeaderMeta{
-			Height: 100000,
+			Height:    100000,
+			ChainWork: []byte{0x01, 0x02, 0x03, 0x04},
 		}
 
-		mockClient := &mockBlockchainClient{
-			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return blockHeader, blockHeaderMeta, nil
-			},
+		// Create headers for median time calculation
+		headers := make([]*model.BlockHeader, 11)
+		dummyHash := chainhash.Hash{}
+		for i := range headers {
+			headers[i] = &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  &dummyHash,
+				HashMerkleRoot: &dummyHash,
+				Timestamp:      uint32(1231006505 + i*600),
+				Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+				Nonce:          12345,
+			}
 		}
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(blockHeader, blockHeaderMeta, nil)
+		mockClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			headers,
+			[]*model.BlockHeaderMeta{{Height: 100000}},
+			nil,
+		)
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, &model.BlockHeaderMeta{Height: 100100}, nil)
+		mockClient.On("GetBlockByHeight", mock.Anything, uint32(100001)).Return(
+			&model.Block{
+				Header:           blockHeader,
+				Height:           100001,
+				TransactionCount: 5,
+			}, nil,
+		)
+		mockClient.On("GetBlockByHeight", mock.Anything, uint32(100000)).Return(
+			&model.Block{
+				Header:           blockHeader,
+				Height:           100000,
+				TransactionCount: 10,
+			}, nil,
+		)
+		mockClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1618,11 +1707,8 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 			Height: 4294967295, // Max uint32 value
 		}
 
-		mockClient := &mockBlockchainClient{
-			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return blockHeader, blockHeaderMeta, nil
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(blockHeader, blockHeaderMeta, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1666,17 +1752,36 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 			Height: 100010, // 10 blocks ahead
 		}
 
-		mockClient := &mockBlockchainClient{
-			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return blockHeader, blockHeaderMeta, nil
-			},
-			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
-				return true, nil
-			},
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return blockHeader, bestBlockMeta, nil
-			},
+		// Create headers for median time calculation
+		headers := make([]*model.BlockHeader, 11)
+		dummyHash := chainhash.Hash{}
+		for i := range headers {
+			headers[i] = &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  &dummyHash,
+				HashMerkleRoot: &dummyHash,
+				Timestamp:      uint32(1231006505 + i*600),
+				Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+				Nonce:          12345,
+			}
 		}
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(blockHeader, blockHeaderMeta, nil)
+		mockClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			headers,
+			[]*model.BlockHeaderMeta{{Height: 100000}},
+			nil,
+		)
+		mockClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, bestBlockMeta, nil)
+		mockClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return(
+			&model.Block{
+				Header:           blockHeader,
+				Height:           100001,
+				TransactionCount: 5,
+			}, nil,
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1721,14 +1826,36 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 			Height: 100000,
 		}
 
-		mockClient := &mockBlockchainClient{
-			getBlockHeaderFunc: func(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return blockHeader, blockHeaderMeta, nil
-			},
-			checkBlockIsInCurrentChainFunc: func(ctx context.Context, blockIDs []uint32) (bool, error) {
-				return false, nil
-			},
+		// Create headers for median time calculation
+		headers := make([]*model.BlockHeader, 11)
+		dummyHash := chainhash.Hash{}
+		for i := range headers {
+			headers[i] = &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  &dummyHash,
+				HashMerkleRoot: &dummyHash,
+				Timestamp:      uint32(1231006505 + i*600),
+				Bits:           model.NBit([4]byte{0xFF, 0xFF, 0x00, 0x1D}),
+				Nonce:          12345,
+			}
 		}
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(blockHeader, blockHeaderMeta, nil)
+		mockClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			headers,
+			[]*model.BlockHeaderMeta{{Height: 100000}},
+			nil,
+		)
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(blockHeader, &model.BlockHeaderMeta{Height: 100100}, nil)
+		mockClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, nil)
+		mockClient.On("GetBlockByHeight", mock.Anything, mock.Anything).Return(
+			&model.Block{
+				Header:           blockHeader,
+				Height:           100001,
+				TransactionCount: 5,
+			}, nil,
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1762,11 +1889,10 @@ func TestHandleGetBestBlockHashComprehensive(t *testing.T) {
 	logger := mocklogger.NewTestLogger()
 
 	t.Run("blockchain client returns error", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return nil, nil, errors.New(errors.ERR_ERROR, "no best block")
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(
+			nil, nil, errors.New(errors.ERR_ERROR, "no best block"),
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -1799,11 +1925,8 @@ func TestHandleGetBestBlockHashComprehensive(t *testing.T) {
 			Nonce:          2083236893,
 		}
 
-		mockClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return mockHeader, &model.BlockHeaderMeta{}, nil
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(mockHeader, &model.BlockHeaderMeta{}, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2414,22 +2537,17 @@ func TestHandleGetblockchaininfoComprehensive(t *testing.T) {
 			ChainWork: make([]byte, 32), // Valid ChainWork bytes
 		}
 
-		mockClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return mockHeader, mockMeta, nil
-			},
-			getBlockHeadersFunc: func(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-				// Return the mock header for median time calculation
-				return []*model.BlockHeader{mockHeader}, []*model.BlockHeaderMeta{mockMeta}, nil
-			},
-			getBlockStatsFunc: func(ctx context.Context) (*model.BlockStats, error) {
-				// Return mock block stats for verification progress calculation
-				return &model.BlockStats{
-					TxCount:       1000,
-					LastBlockTime: 1234567890,
-				}, nil
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(mockHeader, mockMeta, nil)
+		mockClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]*model.BlockHeader{mockHeader}, []*model.BlockHeaderMeta{mockMeta}, nil,
+		)
+		mockClient.On("GetBlockStats", mock.Anything).Return(
+			&model.BlockStats{
+				TxCount:       1000,
+				LastBlockTime: 1234567890,
+			}, nil,
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2450,11 +2568,10 @@ func TestHandleGetblockchaininfoComprehensive(t *testing.T) {
 	})
 
 	t.Run("blockchain client returns error causes panic", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return nil, nil, errors.New(errors.ERR_ERROR, "no blockchain info")
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBestBlockHeader", mock.Anything).Return(
+			nil, nil, errors.New(errors.ERR_ERROR, "no blockchain info"),
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2475,15 +2592,11 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 	logger := mocklogger.NewTestLogger()
 
 	t.Run("successful block invalidation", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
-				// Verify the block hash matches expected value
-				expectedHash, _ := chainhash.NewHashFromStr("00000000000000000007878ec04bb2b2e12317804810f4c26033585b3f81ffaa")
-				assert.Equal(t, expectedHash, blockHash)
-
-				return []chainhash.Hash{}, nil
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("InvalidateBlock", mock.Anything, mock.MatchedBy(func(blockHash *chainhash.Hash) bool {
+			expectedHash, _ := chainhash.NewHashFromStr("00000000000000000007878ec04bb2b2e12317804810f4c26033585b3f81ffaa")
+			return blockHash.IsEqual(expectedHash)
+		})).Return([]chainhash.Hash{}, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2504,7 +2617,7 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 	})
 
 	t.Run("invalid block hash format", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{}
+		mockClient := &blockchain.Mock{}
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2530,13 +2643,8 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 	})
 
 	t.Run("short block hash succeeds with padding", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
-				// Verify the hash is padded correctly - "abcd" becomes padded with zeros
-				// This test shows that short hex strings are valid and get padded
-				return []chainhash.Hash{}, nil
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2558,11 +2666,8 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 	t.Run("blockchain client error", func(t *testing.T) {
 		expectedError := errors.New(errors.ERR_ERROR, "blockchain service unavailable")
-		mockClient := &mockBlockchainClient{
-			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
-				return nil, expectedError
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("InvalidateBlock", mock.Anything, mock.Anything).Return(([]chainhash.Hash)(nil), expectedError)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2603,16 +2708,11 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 	})
 
 	t.Run("context cancellation", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				default:
-					return nil, nil
-				}
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("InvalidateBlock", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			ctx := args.Get(0).(context.Context)
+			<-ctx.Done()
+		}).Return(([]chainhash.Hash)(nil), context.Canceled)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2638,14 +2738,11 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 	})
 
 	t.Run("zero block hash", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			invalidateBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
-				// Verify zero hash is passed correctly
-				zeroHash := &chainhash.Hash{}
-				assert.Equal(t, zeroHash, blockHash)
-				return []chainhash.Hash{}, nil
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("InvalidateBlock", mock.Anything, mock.MatchedBy(func(blockHash *chainhash.Hash) bool {
+			zeroHash := &chainhash.Hash{}
+			return blockHash.IsEqual(zeroHash)
+		})).Return([]chainhash.Hash{}, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2666,7 +2763,7 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 	})
 
 	t.Run("malformed command type", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{}
+		mockClient := &blockchain.Mock{}
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2690,24 +2787,13 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 	t.Run("successful block revalidation", func(t *testing.T) {
 		expectedHash, _ := chainhash.NewHashFromStr("00000000000000000007878ec04bb2b2e12317804810f4c26033585b3f81ffaa")
 
-		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-				// Verify the block hash matches expected value
-				assert.Equal(t, expectedHash, blockHash)
-				// Return a mock block
-				return &model.Block{
-					Header: &model.BlockHeader{
-						HashPrevBlock: &chainhash.Hash{},
-					},
-				}, nil
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
-			validateBlockFunc: func(ctx context.Context, block *model.Block, options *blockvalidation.ValidateBlockOptions) error {
-				// Verify revalidation flag is set
-				assert.NotNil(t, options)
-				assert.True(t, options.IsRevalidation)
+			revalidateBlockFunc: func(ctx context.Context, blockHash chainhash.Hash) error {
+				// Verify the block hash matches expected value
+				assert.Equal(t, expectedHash, &blockHash)
 				return nil
 			},
 		}
@@ -2732,7 +2818,8 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 	})
 
 	t.Run("invalid block hash format", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -2757,17 +2844,22 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
 	})
 
-	t.Run("blockchain client error", func(t *testing.T) {
-		expectedError := errors.New(errors.ERR_ERROR, "blockchain service unavailable")
-		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-				return nil, expectedError
+	t.Run("revalidation error", func(t *testing.T) {
+		expectedError := errors.New(errors.ERR_ERROR, "validation failed")
+
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
+
+		mockBlockValidationClient := &mockBlockValidationClient{
+			revalidateBlockFunc: func(ctx context.Context, blockHash chainhash.Hash) error {
+				return expectedError
 			},
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			blockchainClient: mockClient,
+			logger:                logger,
+			blockchainClient:      mockClient,
+			blockValidationClient: mockBlockValidationClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -2781,17 +2873,21 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, result)
-		// The handler converts GetBlock errors to "Block not found" RPC error
+		// The handler converts revalidation errors to RPC verify error
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
-		assert.Equal(t, bsvjson.ErrRPCBlockNotFound, rpcErr.Code)
-		assert.Equal(t, "Block not found", rpcErr.Message)
+		assert.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Block failed revalidation")
 	})
 
-	t.Run("nil blockchain client", func(t *testing.T) {
+	t.Run("nil validation client", func(t *testing.T) {
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
+
 		s := &RPCServer{
-			logger:           logger,
-			blockchainClient: nil, // No blockchain client
+			logger:                logger,
+			blockchainClient:      mockClient,
+			blockValidationClient: nil, // No validation client
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -2801,27 +2897,36 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 			BlockHash: "00000000000000000007878ec04bb2b2e12317804810f4c26033585b3f81ffaa",
 		}
 
-		// This should panic when trying to call RevalidateBlock on nil client
-		assert.Panics(t, func() {
-			_, _ = handleReconsiderBlock(context.Background(), s, cmd, nil)
-		})
+		result, err := handleReconsiderBlock(context.Background(), s, cmd, nil)
+
+		require.Error(t, err)
+		assert.Nil(t, result)
+		// Should return internal error when validation service is not available
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Block validation service not available")
 	})
 
 	t.Run("context cancellation", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
+
+		mockBlockValidationClient := &mockBlockValidationClient{
+			revalidateBlockFunc: func(ctx context.Context, blockHash chainhash.Hash) error {
 				select {
 				case <-ctx.Done():
-					return nil, ctx.Err()
+					return ctx.Err()
 				default:
-					return nil, errors.New(errors.ERR_ERROR, "should be cancelled")
+					return errors.New(errors.ERR_ERROR, "should be cancelled")
 				}
 			},
 		}
 
 		s := &RPCServer{
-			logger:           logger,
-			blockchainClient: mockClient,
+			logger:                logger,
+			blockchainClient:      mockClient,
+			blockValidationClient: mockBlockValidationClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -2839,29 +2944,24 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, result)
-		// The handler converts the context.Canceled error to "Block not found" RPC error
+		// The handler converts the context.Canceled error to RPC verify error
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
-		assert.Equal(t, bsvjson.ErrRPCBlockNotFound, rpcErr.Code)
-		assert.Equal(t, "Block not found", rpcErr.Message)
+		assert.Equal(t, bsvjson.ErrRPCVerify, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "Block failed revalidation")
 	})
 
 	t.Run("short block hash succeeds with padding", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-				// Verify the hash is padded correctly - "cafe" becomes padded with zeros
-				// When "cafe" is parsed by NewHashFromStr, it is byte-reversed and zero-padded
-				// So the internal representation will be feca000000...
-				// We just verify it matches what NewHashFromStr("cafe") produces
-				expectedHash, _ := chainhash.NewHashFromStr("cafe")
-				assert.Equal(t, expectedHash, blockHash)
-				return &model.Block{
-					Header: &model.BlockHeader{
-						HashPrevBlock: &chainhash.Hash{},
-					},
-				}, nil
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlock", mock.Anything, mock.MatchedBy(func(blockHash *chainhash.Hash) bool {
+			expectedHash, _ := chainhash.NewHashFromStr("cafe")
+			return blockHash.IsEqual(expectedHash)
+		})).Return(&model.Block{
+			Header: &model.BlockHeader{
+				HashPrevBlock: &chainhash.Hash{},
 			},
-		}
+		}, nil)
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
 			validateBlockFunc: func(ctx context.Context, block *model.Block, options *blockvalidation.ValidateBlockOptions) error {
@@ -2890,18 +2990,16 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 	})
 
 	t.Run("zero block hash", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			getBlockFunc: func(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-				// Verify zero hash is passed correctly
-				zeroHash := &chainhash.Hash{}
-				assert.Equal(t, zeroHash, blockHash)
-				return &model.Block{
-					Header: &model.BlockHeader{
-						HashPrevBlock: &chainhash.Hash{},
-					},
-				}, nil
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlock", mock.Anything, mock.MatchedBy(func(blockHash *chainhash.Hash) bool {
+			zeroHash := &chainhash.Hash{}
+			return blockHash.IsEqual(zeroHash)
+		})).Return(&model.Block{
+			Header: &model.BlockHeader{
+				HashPrevBlock: &chainhash.Hash{},
 			},
-		}
+		}, nil)
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
 			validateBlockFunc: func(ctx context.Context, block *model.Block, options *blockvalidation.ValidateBlockOptions) error {
@@ -2930,7 +3028,8 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 	})
 
 	t.Run("malformed command type", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -3034,8 +3133,8 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeer,
+			logger:          logger,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3067,9 +3166,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3101,9 +3200,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3135,9 +3234,9 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3258,8 +3357,8 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeer,
+			logger:          logger,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3291,9 +3390,9 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3329,9 +3428,9 @@ func TestHandleListBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3414,9 +3513,9 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3444,9 +3543,9 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3491,8 +3590,8 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeer,
+			logger:          logger,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3536,9 +3635,9 @@ func TestHandleClearBannedComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3626,9 +3725,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3729,9 +3828,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3847,9 +3946,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3886,9 +3985,9 @@ func TestHandleSetBanComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			p2pClient:  mockP2P,
-			peerClient: mockPeer,
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 			},
@@ -3938,17 +4037,17 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 
 	t.Run("successful get info with all clients", func(t *testing.T) {
 		clearRPCCallCache()
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				// Create a valid NBit value for difficulty calculation
-				nBits, _ := model.NewNBitFromString("180f9ff5")
-				return &model.BlockHeader{
-						Bits: *nBits,
-					}, &model.BlockHeaderMeta{
-						Height: 100000,
-					}, nil
+		nBits, _ := model.NewNBitFromString("180f9ff5")
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{
+				Bits: *nBits,
 			},
-		}
+			&model.BlockHeaderMeta{
+				Height: 100000,
+			},
+			nil,
+		)
 
 		mockBlockAssemblyClient := &mockBlockAssemblyClient{
 			getCurrentDifficultyFunc: func(ctx context.Context) (float64, error) {
@@ -3982,12 +4081,18 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
 			p2pClient:           mockP2PClient,
-			peerClient:          mockLegacyPeerClient,
+			legacyP2PClient:     mockLegacyPeerClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
 					CacheEnabled:      true,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
 				},
 			},
 		}
@@ -4012,16 +4117,14 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 
 	t.Run("successful get info with testnet", func(t *testing.T) {
 		clearRPCCallCache()
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				nBits, _ := model.NewNBitFromString("180f9ff5")
-				return &model.BlockHeader{
-						Bits: *nBits,
-					}, &model.BlockHeaderMeta{
-						Height: 50000,
-					}, nil
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		nBits, _ := model.NewNBitFromString("180f9ff5")
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{
+				Bits: *nBits,
+			}, &model.BlockHeaderMeta{
+				Height: 50000,
+			}, nil)
 
 		mockBlockAssemblyClient := &mockBlockAssemblyClient{
 			getCurrentDifficultyFunc: func(ctx context.Context) (float64, error) {
@@ -4042,6 +4145,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
 					CacheEnabled:      false,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
 				},
 			},
 		}
@@ -4064,11 +4173,10 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 
 	t.Run("blockchain client error handling", func(t *testing.T) {
 		clearRPCCallCache()
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return nil, nil, errors.New(errors.ERR_ERROR, "blockchain service unavailable")
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			nil, nil, errors.New(errors.ERR_ERROR, "blockchain service unavailable"),
+		)
 
 		mockBlockAssemblyClient := &mockBlockAssemblyClient{
 			getCurrentDifficultyFunc: func(ctx context.Context) (float64, error) {
@@ -4086,6 +4194,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 					ClientCallTimeout: 5 * time.Second,
 					CacheEnabled:      false, // Disable cache
 				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
+				},
 			},
 		}
 
@@ -4097,16 +4211,15 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 
 	t.Run("successful without block assembly client", func(t *testing.T) {
 		clearRPCCallCache()
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				nBits, _ := model.NewNBitFromString("180f9ff5")
-				return &model.BlockHeader{
-						Bits: *nBits,
-					}, &model.BlockHeaderMeta{
-						Height: 75000,
-					}, nil
-			},
-		}
+		nBits, _ := model.NewNBitFromString("180f9ff5")
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{
+				Bits: *nBits,
+			}, &model.BlockHeaderMeta{
+				Height: 75000,
+			}, nil,
+		)
 
 		// No block assembly client needed anymore since difficulty comes from block header
 		s := &RPCServer{
@@ -4117,6 +4230,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
 				},
 			},
 		}
@@ -4134,16 +4253,15 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 
 	t.Run("p2p client error handling", func(t *testing.T) {
 		clearRPCCallCache()
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				nBits, _ := model.NewNBitFromString("180f9ff5")
-				return &model.BlockHeader{
-						Bits: *nBits,
-					}, &model.BlockHeaderMeta{
-						Height: 80000,
-					}, nil
-			},
-		}
+		nBits, _ := model.NewNBitFromString("180f9ff5")
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{
+				Bits: *nBits,
+			}, &model.BlockHeaderMeta{
+				Height: 80000,
+			}, nil,
+		)
 
 		mockBlockAssemblyClient := &mockBlockAssemblyClient{
 			getCurrentDifficultyFunc: func(ctx context.Context) (float64, error) {
@@ -4167,6 +4285,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
 				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
+				},
 			},
 		}
 
@@ -4181,16 +4305,15 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 
 	t.Run("legacy peer client error handling", func(t *testing.T) {
 		clearRPCCallCache()
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				nBits, _ := model.NewNBitFromString("180f9ff5")
-				return &model.BlockHeader{
-						Bits: *nBits,
-					}, &model.BlockHeaderMeta{
-						Height: 90000,
-					}, nil
-			},
-		}
+		nBits, _ := model.NewNBitFromString("180f9ff5")
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{
+				Bits: *nBits,
+			}, &model.BlockHeaderMeta{
+				Height: 90000,
+			}, nil,
+		)
 
 		mockBlockAssemblyClient := &mockBlockAssemblyClient{
 			getCurrentDifficultyFunc: func(ctx context.Context) (float64, error) {
@@ -4208,11 +4331,17 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 			logger:              logger,
 			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
-			peerClient:          mockLegacyPeerClient,
+			legacyP2PClient:     mockLegacyPeerClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
 				},
 			},
 		}
@@ -4228,16 +4357,15 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 
 	t.Run("timeout handling for p2p client", func(t *testing.T) {
 		clearRPCCallCache()
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				nBits, _ := model.NewNBitFromString("180f9ff5")
-				return &model.BlockHeader{
-						Bits: *nBits,
-					}, &model.BlockHeaderMeta{
-						Height: 95000,
-					}, nil
-			},
-		}
+		nBits, _ := model.NewNBitFromString("180f9ff5")
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{
+				Bits: *nBits,
+			}, &model.BlockHeaderMeta{
+				Height: 95000,
+			}, nil,
+		)
 
 		mockBlockAssemblyClient := &mockBlockAssemblyClient{
 			getCurrentDifficultyFunc: func(ctx context.Context) (float64, error) {
@@ -4267,6 +4395,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 100 * time.Millisecond, // Very short timeout
 				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
+				},
 			},
 		}
 
@@ -4281,16 +4415,15 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 
 	t.Run("network configuration flags", func(t *testing.T) {
 		clearRPCCallCache()
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				nBits, _ := model.NewNBitFromString("180f9ff5")
-				return &model.BlockHeader{
-						Bits: *nBits,
-					}, &model.BlockHeaderMeta{
-						Height: 25000,
-					}, nil
-			},
-		}
+		nBits, _ := model.NewNBitFromString("180f9ff5")
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{
+				Bits: *nBits,
+			}, &model.BlockHeaderMeta{
+				Height: 25000,
+			}, nil,
+		)
 
 		mockBlockAssemblyClient := &mockBlockAssemblyClient{
 			getCurrentDifficultyFunc: func(ctx context.Context) (float64, error) {
@@ -4310,6 +4443,12 @@ func TestHandleGetInfoComprehensive(t *testing.T) {
 				ChainCfgParams: &stnParams,
 				RPC: settings.RPCSettings{
 					ClientCallTimeout: 5 * time.Second,
+				},
+				Policy: &settings.PolicySettings{
+					ExcessiveBlockSize:           4294967296,
+					BlockMaxSize:                 2000000000,
+					MaxStackMemoryUsagePolicy:    104857600,
+					MaxStackMemoryUsageConsensus: 0,
 				},
 			},
 		}
@@ -4350,11 +4489,10 @@ func TestHandleGetchaintipsComprehensive(t *testing.T) {
 	})
 
 	t.Run("blockchain client returns error", func(t *testing.T) {
-		mockClient := &mockBlockchainClient{
-			getChainTipsFunc: func(ctx context.Context) ([]*model.ChainTip, error) {
-				return nil, errors.New(errors.ERR_ERROR, "no chain tips")
-			},
-		}
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetChainTips", mock.Anything).Return(
+			([]*model.ChainTip)(nil), errors.New(errors.ERR_ERROR, "no chain tips"),
+		)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -4374,215 +4512,13 @@ func TestHandleGetchaintipsComprehensive(t *testing.T) {
 	})
 }
 
-// Mock blockchain client for testing
-type mockBlockchainClient struct {
-	getBlockFunc                    func(context.Context, *chainhash.Hash) (*model.Block, error)
-	getBlockByHeightFunc            func(context.Context, uint32) (*model.Block, error)
-	getBlockHeaderFunc              func(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
-	getBestBlockHeaderFunc          func(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
-	getBestHeightAndTimeFunc        func(context.Context) (uint32, uint32, error)
-	getChainTipsFunc                func(context.Context) ([]*model.ChainTip, error)
-	invalidateBlockFunc             func(context.Context, *chainhash.Hash) ([]chainhash.Hash, error)
-	revalidateBlockFunc             func(context.Context, *chainhash.Hash) error
-	healthFunc                      func(context.Context, bool) (int, string, error)
-	getFSMCurrentStateFunc          func(context.Context) (*blockchain.FSMStateType, error)
-	getBlockHeadersFunc             func(context.Context, *chainhash.Hash, uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
-	getBlockStatsFunc               func(context.Context) (*model.BlockStats, error)
-	findBlocksContainingSubtreeFunc func(context.Context, *chainhash.Hash, uint32) ([]*model.Block, error)
-	checkBlockIsInCurrentChainFunc  func(context.Context, []uint32) (bool, error)
-}
-
-func (m *mockBlockchainClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	if m.healthFunc != nil {
-		return m.healthFunc(ctx, checkLiveness)
-	}
-	return 200, "OK", nil
-}
-
-func (m *mockBlockchainClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-	if m.getBlockFunc != nil {
-		return m.getBlockFunc(ctx, blockHash)
-	}
-	return nil, errors.New(errors.ERR_ERROR, "not implemented")
-}
-
-func (m *mockBlockchainClient) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
-	if m.getBlockByHeightFunc != nil {
-		return m.getBlockByHeightFunc(ctx, height)
-	}
-	return nil, errors.New(errors.ERR_ERROR, "not implemented")
-}
-
-func (m *mockBlockchainClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	if m.getBlockHeaderFunc != nil {
-		return m.getBlockHeaderFunc(ctx, blockHash)
-	}
-	return nil, nil, errors.New(errors.ERR_ERROR, "not implemented")
-}
-
-// Add stub implementations for all other interface methods
-func (m *mockBlockchainClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error {
-	return nil
-}
-func (m *mockBlockchainClient) SendNotification(ctx context.Context, notification *blockchain_api.Notification) error {
-	return nil
-}
-func (m *mockBlockchainClient) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetNextBlockID(ctx context.Context) (uint64, error) {
-	return 1, nil
-}
-func (m *mockBlockchainClient) GetBlockStats(ctx context.Context) (*model.BlockStats, error) {
-	if m.getBlockStatsFunc != nil {
-		return m.getBlockStatsFunc(ctx)
-	}
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*model.BlockDataPoints, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetNextWorkRequired(ctx context.Context, hash *chainhash.Hash, currentBlockTime int64) (*model.NBit, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	return false, nil
-}
-func (m *mockBlockchainClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	if m.getBestBlockHeaderFunc != nil {
-		return m.getBestBlockHeaderFunc(ctx)
-	}
-	return nil, nil, errors.New(errors.ERR_ERROR, "not implemented")
-}
-func (m *mockBlockchainClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	if m.getBlockHeadersFunc != nil {
-		return m.getBlockHeadersFunc(ctx, blockHash, numberOfHeaders)
-	}
-	return nil, nil, nil
-}
-func (m *mockBlockchainClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *mockBlockchainClient) GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *mockBlockchainClient) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, bestBlockHash *chainhash.Hash, blockLocator []chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *mockBlockchainClient) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targetHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *mockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *mockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *mockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	return nil, nil, nil
-}
-func (m *mockBlockchainClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
-	if m.invalidateBlockFunc != nil {
-		return m.invalidateBlockFunc(ctx, blockHash)
-	}
-	return nil, errors.New(errors.ERR_ERROR, "not implemented")
-}
-func (m *mockBlockchainClient) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
-	if m.revalidateBlockFunc != nil {
-		return m.revalidateBlockFunc(ctx, blockHash)
-	}
-	return errors.New(errors.ERR_ERROR, "not implemented")
-}
-func (m *mockBlockchainClient) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]uint32, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetState(ctx context.Context, key string) ([]byte, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) SetState(ctx context.Context, key string, data []byte) error {
-	return nil
-}
-func (m *mockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	return nil
-}
-func (m *mockBlockchainClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	return false, nil
-}
-func (m *mockBlockchainClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	return nil
-}
-func (m *mockBlockchainClient) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
-	return nil
-}
-func (m *mockBlockchainClient) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error) {
-	if m.getBestHeightAndTimeFunc != nil {
-		return m.getBestHeightAndTimeFunc(ctx)
-	}
-	return 0, 0, nil
-}
-func (m *mockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
-	if m.checkBlockIsInCurrentChainFunc != nil {
-		return m.checkBlockIsInCurrentChainFunc(ctx, blockIDs)
-	}
-	return false, nil
-}
-func (m *mockBlockchainClient) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
-	if m.getChainTipsFunc != nil {
-		return m.getChainTipsFunc(ctx)
-	}
-	return nil, nil
-}
-func (m *mockBlockchainClient) GetFSMCurrentState(ctx context.Context) (*blockchain.FSMStateType, error) {
-	if m.getFSMCurrentStateFunc != nil {
-		return m.getFSMCurrentStateFunc(ctx)
-	}
-	// Return a default healthy state
-	state := blockchain_api.FSMStateType_RUNNING
-	return &state, nil
-}
-func (m *mockBlockchainClient) IsFSMCurrentState(ctx context.Context, state blockchain.FSMStateType) (bool, error) {
-	return false, nil
-}
-func (m *mockBlockchainClient) WaitForFSMtoTransitionToGivenState(ctx context.Context, state blockchain.FSMStateType) error {
-	return nil
-}
-func (m *mockBlockchainClient) GetFSMCurrentStateForE2ETestMode() blockchain.FSMStateType {
-	return blockchain.FSMStateType(0)
-}
-func (m *mockBlockchainClient) WaitUntilFSMTransitionFromIdleState(ctx context.Context) error {
-	return nil
-}
-
 // mockBlockValidationClient is a mock implementation of blockvalidation.Interface for testing
 type mockBlockValidationClient struct {
-	validateBlockFunc func(context.Context, *model.Block, *blockvalidation.ValidateBlockOptions) error
-	processBlockFunc  func(context.Context, *model.Block, uint32) error
-	blockFoundFunc    func(context.Context, *chainhash.Hash, string, bool) error
-	healthFunc        func(context.Context, bool) (int, string, error)
+	validateBlockFunc   func(context.Context, *model.Block, *blockvalidation.ValidateBlockOptions) error
+	revalidateBlockFunc func(context.Context, chainhash.Hash) error
+	processBlockFunc    func(context.Context, *model.Block, uint32) error
+	blockFoundFunc      func(context.Context, *chainhash.Hash, string, bool) error
+	healthFunc          func(context.Context, bool) (int, string, error)
 }
 
 func (m *mockBlockValidationClient) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -4614,38 +4550,14 @@ func (m *mockBlockValidationClient) ValidateBlock(ctx context.Context, block *mo
 }
 
 func (m *mockBlockValidationClient) RevalidateBlock(ctx context.Context, blockHash chainhash.Hash) error {
+	if m.revalidateBlockFunc != nil {
+		return m.revalidateBlockFunc(ctx, blockHash)
+	}
 	return nil
 }
 
 func (m *mockBlockValidationClient) GetCatchupStatus(ctx context.Context) (*blockvalidation.CatchupStatus, error) {
 	return &blockvalidation.CatchupStatus{IsCatchingUp: false}, nil
-}
-
-func (m *mockBlockchainClient) IsFullyReady(ctx context.Context) (bool, error) { return false, nil }
-func (m *mockBlockchainClient) Run(ctx context.Context, source string) error   { return nil }
-func (m *mockBlockchainClient) CatchUpBlocks(ctx context.Context) error        { return nil }
-func (m *mockBlockchainClient) LegacySync(ctx context.Context) error           { return nil }
-func (m *mockBlockchainClient) Idle(ctx context.Context) error                 { return nil }
-func (m *mockBlockchainClient) SendFSMEvent(ctx context.Context, event blockchain.FSMEventType) error {
-	return nil
-}
-func (m *mockBlockchainClient) GetBlockLocator(ctx context.Context, blockHeaderHash *chainhash.Hash, blockHeaderHeight uint32) ([]*chainhash.Hash, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error {
-	return nil
-}
-func (m *mockBlockchainClient) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error) {
-	return nil, nil
-}
-func (m *mockBlockchainClient) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash, maxBlocks uint32) ([]*model.Block, error) {
-	if m.findBlocksContainingSubtreeFunc != nil {
-		return m.findBlocksContainingSubtreeFunc(ctx, subtreeHash, maxBlocks)
-	}
-	return nil, errors.New(errors.ERR_ERROR, "not implemented")
 }
 
 // TestHandleFreezeComprehensive tests the handleFreeze handler
@@ -4842,8 +4754,8 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeerClient,
+			logger:          logger,
+			legacyP2PClient: mockPeerClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -4890,7 +4802,7 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 	t.Run("p2p client with stats", func(t *testing.T) {
 		// Create mock p2p client
 		mockP2PClient := &mockP2PClient{
-			getPeersFunc: func(ctx context.Context) ([]*p2p.PeerInfo, error) {
+			getPeerRegistryFunc: func(ctx context.Context) ([]*p2p.PeerInfo, error) {
 				peerID, err := peer.Decode("12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ")
 				require.NoError(t, err, "Failed to decode peer ID")
 				return []*p2p.PeerInfo{
@@ -4973,7 +4885,7 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		mockP2PClient := &mockP2PClient{
-			getPeersFunc: func(ctx context.Context) ([]*p2p.PeerInfo, error) {
+			getPeerRegistryFunc: func(ctx context.Context) ([]*p2p.PeerInfo, error) {
 				peerID, err := peer.Decode("12D3KooWJZZnUE4umdLBuK15eUZL1NF6fdTJ9cucEuwvuX8V8Ktp")
 				require.NoError(t, err, "Failed to decode peer ID")
 				return []*p2p.PeerInfo{
@@ -4989,9 +4901,9 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeerClient,
-			p2pClient:  mockP2PClient,
+			logger:          logger,
+			legacyP2PClient: mockPeerClient,
+			p2pClient:       mockP2PClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -5051,8 +4963,8 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeerClient,
+			logger:          logger,
+			legacyP2PClient: mockPeerClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -5086,9 +4998,9 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeerClient,
-			p2pClient:  mockP2PClient,
+			logger:          logger,
+			legacyP2PClient: mockPeerClient,
+			p2pClient:       mockP2PClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -5128,8 +5040,8 @@ func TestHandleGetpeerinfoComprehensive(t *testing.T) {
 		}
 
 		s := &RPCServer{
-			logger:     logger,
-			peerClient: mockPeerClient,
+			logger:          logger,
+			legacyP2PClient: mockPeerClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				RPC: settings.RPCSettings{
@@ -5331,6 +5243,10 @@ func (m *mockP2PClient) UpdateCatchupReputation(ctx context.Context, peerID stri
 
 func (m *mockP2PClient) UpdateCatchupError(ctx context.Context, peerID string, errorMessage string) error {
 	return nil
+}
+
+func (m *mockP2PClient) ResetReputation(ctx context.Context, peerID string) (int, error) {
+	return 0, nil
 }
 
 func (m *mockP2PClient) ReportValidSubtree(ctx context.Context, peerID string, subtreeHash string) error {
@@ -5738,11 +5654,8 @@ func TestHandleGetMiningInfoComprehensive(t *testing.T) {
 			Timestamp:   uint32(testTime.Unix()),
 		}
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return testHeader, testMeta, nil
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(testHeader, testMeta, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -5770,11 +5683,8 @@ func TestHandleGetMiningInfoComprehensive(t *testing.T) {
 
 	t.Run("blockchain client error", func(t *testing.T) {
 		expectedError := errors.NewServiceError("blockchain service unavailable")
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return nil, nil, expectedError
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return((*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil), expectedError)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -5829,11 +5739,8 @@ func TestHandleGetMiningInfoComprehensive(t *testing.T) {
 			Timestamp:   uint32(testTime.Unix()),
 		}
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return testHeader, testMeta, nil
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(testHeader, testMeta, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -5882,11 +5789,8 @@ func TestHandleGetMiningInfoComprehensive(t *testing.T) {
 			Timestamp:   uint32(testTime.Unix()),
 		}
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return testHeader, testMeta, nil
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(testHeader, testMeta, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -5937,11 +5841,8 @@ func TestHandleGetMiningInfoComprehensive(t *testing.T) {
 			Timestamp:   uint32(testTime.Unix()),
 		}
 
-		mockBlockchainClient := &mockBlockchainClient{
-			getBestBlockHeaderFunc: func(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-				return testHeader, testMeta, nil
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(testHeader, testMeta, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -5980,8 +5881,33 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 			},
 		}
 
+		// Create mock blockchain client to support the new behavior
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil,
+		)
+		// Create blocks for all possible heights (101-105 for the 5 blocks that will be generated)
+		for i := uint32(101); i <= 105; i++ {
+			height := i
+			prevHash := chainhash.Hash{}
+			merkleRoot := chainhash.Hash{}
+			block := &model.Block{
+				Header: &model.BlockHeader{
+					Version:        1,
+					HashPrevBlock:  &prevHash,
+					HashMerkleRoot: &merkleRoot,
+					Timestamp:      1234567890,
+					Bits:           model.NBit([4]byte{0x1d, 0x00, 0xff, 0xff}),
+					Nonce:          0,
+				},
+				Height: height,
+			}
+			mockBlockchainClient.On("GetBlockByHeight", mock.Anything, height).Return(block, nil)
+		}
+
 		s := &RPCServer{
 			logger:              logger,
+			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams, // Use MainNet but set GenerateSupported = true
@@ -5998,7 +5924,11 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 
 		result, err := handleGenerateToAddress(context.Background(), s, cmd, nil)
 		require.NoError(t, err)
-		assert.Nil(t, result) // Function returns nil on success
+
+		// Function now returns block hashes array
+		blockHashes, ok := result.([]string)
+		assert.True(t, ok)
+		assert.Len(t, blockHashes, 5) // Should return 5 block hashes
 
 		// Verify the request was passed correctly to block assembly client
 		require.NotNil(t, capturedRequest)
@@ -6141,8 +6071,15 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 			},
 		}
 
+		// Create mock blockchain client
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100, ChainWork: []byte{0x01, 0x00}}, nil,
+		)
+
 		s := &RPCServer{
 			logger:              logger,
+			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
@@ -6194,8 +6131,33 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 			},
 		}
 
+		// Create mock blockchain client
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100, ChainWork: []byte{0x01, 0x00}}, nil,
+		)
+		// Create blocks for various heights that will be generated in tests
+		for i := uint32(101); i <= 1100; i++ { // Large range to cover all test cases
+			height := i
+			prevHash := chainhash.Hash{}
+			merkleRoot := chainhash.Hash{}
+			block := &model.Block{
+				Header: &model.BlockHeader{
+					Version:        1,
+					HashPrevBlock:  &prevHash,
+					HashMerkleRoot: &merkleRoot,
+					Timestamp:      1234567890,
+					Bits:           model.NBit([4]byte{0x1d, 0x00, 0xff, 0xff}),
+					Nonce:          0,
+				},
+				Height: height,
+			}
+			mockBlockchainClient.On("GetBlockByHeight", mock.Anything, height).Return(block, nil)
+		}
+
 		s := &RPCServer{
 			logger:              logger,
+			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
@@ -6211,7 +6173,7 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 
 		result, err := handleGenerateToAddress(context.Background(), s, cmd, nil)
 		require.NoError(t, err)
-		assert.Nil(t, result)
+		assert.NotNil(t, result)
 
 		// Verify MaxTries is 0 when nil
 		require.NotNil(t, capturedRequest)
@@ -6228,8 +6190,33 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 			},
 		}
 
+		// Create mock blockchain client
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+			&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100, ChainWork: []byte{0x01, 0x00}}, nil,
+		)
+		// Create blocks for various heights that will be generated in tests
+		for i := uint32(101); i <= 1100; i++ { // Large range to cover all test cases
+			height := i
+			prevHash := chainhash.Hash{}
+			merkleRoot := chainhash.Hash{}
+			block := &model.Block{
+				Header: &model.BlockHeader{
+					Version:        1,
+					HashPrevBlock:  &prevHash,
+					HashMerkleRoot: &merkleRoot,
+					Timestamp:      1234567890,
+					Bits:           model.NBit([4]byte{0x1d, 0x00, 0xff, 0xff}),
+					Nonce:          0,
+				},
+				Height: height,
+			}
+			mockBlockchainClient.On("GetBlockByHeight", mock.Anything, height).Return(block, nil)
+		}
+
 		s := &RPCServer{
 			logger:              logger,
+			blockchainClient:    mockBlockchainClient,
 			blockAssemblyClient: mockBlockAssemblyClient,
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
@@ -6246,7 +6233,7 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 
 		result, err := handleGenerateToAddress(context.Background(), s, cmd, nil)
 		require.NoError(t, err)
-		assert.Nil(t, result)
+		assert.NotNil(t, result)
 
 		// Verify large values are handled correctly
 		require.NotNil(t, capturedRequest)

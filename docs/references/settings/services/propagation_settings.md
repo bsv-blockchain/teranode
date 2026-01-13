@@ -16,7 +16,7 @@
 | SendBatchSize | int | 100 | propagation_sendBatchSize | Batch processing configuration |
 | SendBatchTimeout | int | 5 | propagation_sendBatchTimeout | Batch timeout configuration (milliseconds) |
 | GRPCAddresses | []string | [] | propagation_grpcAddresses | gRPC client connections |
-| GRPCListenAddress | string | "" | propagation_grpcListenAddress | **CRITICAL** - gRPC server binding, health checks only run if not empty |
+| GRPCListenAddress | string | "" | propagation_grpcListenAddress | **CRITICAL** - gRPC server binding (service skipped if empty) |
 
 ## Configuration Dependencies
 
@@ -24,9 +24,14 @@
 - When `HTTPListenAddress` is not empty, HTTP server starts
 - `HTTPRateLimit` controls request rate limiting when HTTP server is active
 
+### Service Startup
+
+- Service skipped (not added to ServiceManager) if `GRPCListenAddress` is empty
+- Service requires gRPC server to be configured for operation
+
 ### gRPC Server Management
+
 - When `GRPCListenAddress` is not empty, gRPC server starts with connection age management
-- Health checks only run if address is configured
 - `GRPCMaxConnectionAge` controls connection lifecycle
 
 ### Transport Selection
@@ -48,11 +53,11 @@
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| GRPCListenAddress | Health checks only if not empty | Service monitoring |
-| HTTPListenAddress | Health checks only if not empty | Service monitoring |
-| IPv6Interface | Defaults to "en0" if empty | Network interface selection |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| GRPCListenAddress | Must not be empty | Service skipped if empty | During daemon startup |
+| HTTPListenAddress | Optional for HTTP server | HTTP server not started if empty | During service initialization |
+| IPv6Interface | Defaults to "en0" if empty | Network interface selection | During IPv6 listener setup |
 
 ## Configuration Examples
 

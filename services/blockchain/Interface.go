@@ -583,6 +583,21 @@ type ClientI interface {
 	// - Error if the operation fails, nil on success
 	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
 
+	// ClearBlockMinedSet resets the mined_set flag to false for a block.
+	//
+	// This method resets a block's mined_set flag, triggering background job processing
+	// to re-evaluate and update transaction states. Used during fork handling when blocks
+	// move from the main chain to a side chain, ensuring transactions are correctly marked
+	// as unmined and allowing the background job to re-process them based on current chain state.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - blockHash: Hash of the block to reset
+	//
+	// Returns:
+	// - Error if the operation fails, nil on success
+	ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+
 	// GetBlockIsMined retrieves whether a block has been marked as mined
 	//
 	// This method checks if a specific block has been flagged as successfully mined
@@ -640,6 +655,34 @@ type ClientI interface {
 	// Returns:
 	// - Error if the timestamp update fails, nil on success
 	SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error
+
+	// SetBlockPersistedAt sets the persisted_at timestamp for a block.
+	//
+	// This method updates the timestamp indicating when a block was persisted to blob storage.
+	// This information is used by the block persister to track which blocks have been persisted.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - blockHash: Hash of the block to update the persisted_at timestamp for
+	//
+	// Returns:
+	// - Error if the timestamp update fails, nil on success
+	SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error
+
+	// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+	//
+	// This method fetches blocks where persisted_at IS NULL and invalid = false, ordered by
+	// height ascending. The limit parameter controls the maximum number of blocks returned
+	// per call, which is useful for batching persistence operations.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - limit: Maximum number of blocks to retrieve
+	//
+	// Returns:
+	// - Array of Block structures containing blocks not yet persisted
+	// - Error if the retrieval fails
+	GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error)
 
 	// GetBlocksSubtreesNotSet retrieves blocks with unset subtrees.
 	//

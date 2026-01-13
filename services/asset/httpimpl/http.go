@@ -24,6 +24,10 @@ import (
 var AssetStat = gocore.NewStat("Asset")
 
 // HTTP handles blockchain data API endpoints using the Echo framework.
+// Provides RESTful access to blocks, transactions, subtrees, and UTXO data with
+// support for JSON and binary formats, request signing, CORS, and health checking.
+//
+// Thread-safe: Echo framework and repository handle concurrent requests safely.
 type HTTP struct {
 	logger     ulogger.Logger
 	settings   *settings.Settings
@@ -271,6 +275,17 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
 		apiGroup.Use(authHandler.PostAuthMiddleware)
 
+		// Register dashboard-compatible API routes that need auth protection
+		// The dashboard's SvelteKit +server.ts endpoints don't work in production (adapter-static)
+		// so we need to provide the same endpoints directly in the Go backend
+		apiP2PGroup := e.Group("/api/p2p")
+		apiP2PGroup.Use(authHandler.PostAuthMiddleware) // Protect POST endpoints
+		apiP2PGroup.GET("/peers", h.GetPeers)
+		apiP2PGroup.POST("/reset-reputation", h.ResetReputation)
+
+		apiCatchupGroup := e.Group("/api/catchup")
+		apiCatchupGroup.GET("/status", h.GetCatchupStatus)
+
 		dashboardConfig := middleware.CORSConfig{
 			// Use AllowOriginFunc instead of AllowOrigins to dynamically approve origins
 			AllowOriginFunc: func(origin string) (bool, error) {
@@ -334,17 +349,11 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Register catchup status endpoint
 	apiGroup.GET("/catchup/status", h.GetCatchupStatus)
 
+	// Register service heights endpoint
+	apiGroup.GET("/service/heights", h.GetServiceHeights)
+
 	// Register peers endpoint
 	apiGroup.GET("/peers", h.GetPeers)
-
-	// Register dashboard-compatible API routes
-	// The dashboard's SvelteKit +server.ts endpoints don't work in production (adapter-static)
-	// so we need to provide the same endpoints directly in the Go backend
-	apiP2PGroup := e.Group("/api/p2p")
-	apiP2PGroup.GET("/peers", h.GetPeers)
-
-	apiCatchupGroup := e.Group("/api/catchup")
-	apiCatchupGroup.GET("/status", h.GetCatchupStatus)
 
 	// Add OPTIONS handlers for block operations
 	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {

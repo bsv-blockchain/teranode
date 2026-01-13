@@ -38,7 +38,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockpersister"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -255,21 +254,26 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
-	// Write the last block height and hash to the blockpersister_state.txt file
-	_ = blockpersister.New(ctx, nil, appSettings,
-		nil, nil, nil,
-		nil, blockpersister.WithSetInitialState(height, &hash),
-	)
+	// Note: Block persistence state is now tracked in the database via persisted_at column
+	// No need to write to a state file anymore
 
 	var (
 		headersProcessed uint64
 		txCount          uint64
 	)
 
+	// Determine if this is V1 (without coinbase) or V2 (with coinbase)
+	isV1 := header.IsUtxoHeadersV1()
+	if isV1 {
+		logger.Infof("Reading V1 utxo-headers (without coinbase transactions)")
+	} else {
+		logger.Infof("Reading V2 utxo-headers (with coinbase transactions)")
+	}
+
 	var blockIndex *utxopersister.BlockIndex
 
 	for {
-		blockIndex, err = utxopersister.NewUTXOHeaderFromReader(reader)
+		blockIndex, err = utxopersister.NewUTXOHeaderFromReader(reader, isV1)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -285,6 +289,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 
 		block := &model.Block{
 			Header:           blockIndex.BlockHeader,
+			CoinbaseTx:       blockIndex.CoinbaseTx,
 			TransactionCount: blockIndex.TxCount,
 			Height:           blockIndex.Height,
 		}
@@ -295,6 +300,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 			"headers",
 			blockchainoptions.WithMinedSet(true),
 			blockchainoptions.WithSubtreesSet(true),
+			blockchainoptions.WithPersistedAt(), // Mark as persisted now, since we're seeding and the block persister won't be able to do it later
 		)
 		if err != nil {
 			return errors.NewProcessingError("failed to add block", err)
@@ -308,7 +314,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 		}
 	}
 
-	logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(headersProcessed), formatNumber(txCount))
+	logger.Infof("FINISHED  %16s headers with %16s transactions", formatNumber(headersProcessed), formatNumber(txCount))
 
 	return nil
 }

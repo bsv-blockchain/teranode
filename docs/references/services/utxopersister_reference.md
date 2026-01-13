@@ -158,6 +158,8 @@ type UTXOSet struct {
 
 - `Close() error`: Finalizes the UTXO set by writing footers and closing storers. It writes EOFMarkers and count information to the addition and deletion files.
 
+- `Abort(err error) error`: Aborts the UTXO set without finalizing files. This method should be called when an error occurs during processing to ensure incomplete files are not saved. It calls `Abort()` on both the additions and deletions storers, which removes any temporary files without renaming them to their final names.
+
 - `GetUTXOAdditionsReader(ctx context.Context) (io.ReadCloser, error)`: Returns a reader for accessing UTXO additions. It creates a reader for the additions file of the current block or a specified block.
 
 - `GetUTXODeletionsReader(ctx context.Context) (io.ReadCloser, error)`: Returns a reader for accessing UTXO deletions. It creates a reader for the deletions file of the current block or a specified block.
@@ -370,3 +372,48 @@ Each file type has a specific header format and contains serialized UTXO data.
 - `PadUTXOsWithNil(utxos []*UTXO) []*UTXO`: Pads a slice of UTXOs with nil values to match their indices. It creates a new slice with nil values at positions where no UTXO exists, ensuring that UTXOs are at positions matching their output index.
 - `UnpadSlice[T any](padded []*T) []*T`: Removes nil values from a padded slice. It creates a new slice containing only the non-nil elements from the input slice.
 - `checkMagic(r io.Reader, magic string) error`: Verifies the magic number in a file header. It reads and validates that the magic identifier in the header matches the expected value.
+
+## Error Handling
+
+### UTXOSet Error Recovery
+
+The `UTXOSet` uses `FileStorer` for streaming writes of UTXO additions and deletions. To prevent incomplete files from being saved when errors occur during processing, callers should use the success-flag pattern:
+
+```go
+utxoDiff, err := utxopersister.NewUTXOSet(ctx, logger, settings, store, blockHash, height)
+if err != nil {
+    return err
+}
+
+var writeSucceeded bool
+defer func() {
+    if writeSucceeded {
+        utxoDiff.Close()  // Finalizes files with footers
+    } else {
+        utxoDiff.Abort(err)  // Removes temp files
+    }
+}()
+
+// Process transactions...
+for _, tx := range txs {
+    if err := utxoDiff.ProcessTx(tx); err != nil {
+        return err  // Abort will be called via defer
+    }
+}
+
+writeSucceeded = true
+return nil
+```
+
+### CreateUTXOSet Error Recovery
+
+The `CreateUTXOSet` method, which generates complete UTXO set files, also implements the success-flag pattern internally. If any error occurs while writing the UTXO set, the temporary file is automatically cleaned up and no incomplete file is left in storage.
+
+### FileStorer Abort Mechanism
+
+The underlying `FileStorer` provides an `Abort()` method that:
+
+1. Closes the `io.PipeWriter` with an error via `CloseWithError()`
+2. Signals to the blob store's `SetFromReader` that the write failed
+3. Triggers cleanup of the temporary file
+4. Ensures no incomplete UTXO data is persisted

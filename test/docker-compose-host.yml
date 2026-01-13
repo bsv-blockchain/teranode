@@ -45,14 +45,14 @@ services:
     container_name: postgres
     image: postgres:latest
     network_mode: "host"
+    command: postgres -p 15432 -c max_connections=1000 -c lock_timeout=0
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: really_strong_password_change_me
       POSTGRES_DB: postgres
     volumes:
-      - ./postgres/update-config.sh:/docker-entrypoint-initdb.d/postgres-update-config.sh
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - ../data/postgres:/var/lib/postgresql/data
+      - ../data/postgres:/var/lib/postgresql
     restart: on-failure
 
   kafka-shared:
@@ -126,7 +126,7 @@ services:
       logLevel: "DEBUG"
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/teranode1/txstore:/app/data/teranode1/txstore
       - ../data/teranode1/subtreestore:/app/data/teranode1/subtreestore
       - ../data/teranode1/blockstore:/app/data/teranode1/blockstore
@@ -174,7 +174,7 @@ services:
       JAEGER_AGENT_PORT: 6831
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/teranode2/txstore:/app/data/teranode2/txstore
       - ../data/teranode2/subtreestore:/app/data/teranode2/subtreestore
       - ../data/teranode2/blockstore:/app/data/teranode2/blockstore
@@ -222,7 +222,7 @@ services:
       JAEGER_AGENT_PORT: 6831
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/teranode3/txstore:/app/data/teranode3/txstore
       - ../data/teranode3/subtreestore:/app/data/teranode3/subtreestore
       - ../data/teranode3/blockstore:/app/data/teranode3/blockstore
@@ -239,7 +239,7 @@ services:
     depends_on:
       - teranode-1
     volumes:
-      - ./scripts/generate-blocks.sh:/generate-blocks.sh
+      - ../compose/scripts/generate-blocks.sh:/generate-blocks.sh
     entrypoint:
       [
         "/generate-blocks.sh",
@@ -274,6 +274,7 @@ services:
       ]
     volumes:
       - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/miner1:/app/data
     restart: unless-stopped
 
@@ -298,6 +299,7 @@ services:
       ]
     volumes:
       - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/miner2:/app/data
     restart: unless-stopped
 
@@ -322,6 +324,7 @@ services:
       ]
     volumes:
       - ../settings.conf:/app/settings.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/miner3:/app/data
     restart: unless-stopped
 
@@ -334,7 +337,7 @@ services:
       - teranode-1
     network_mode: "host"
     volumes:
-      - ./scripts/generate-blocks.sh:/generate-blocks.sh
+      - ../compose/scripts/generate-blocks.sh:/generate-blocks.sh
     entrypoint:
       [
         "/generate-blocks.sh",
@@ -364,7 +367,7 @@ services:
       profilerAddr: "localhost:17092"
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/coinbase1:/app/data
 
   tx-blaster-1:
@@ -384,7 +387,7 @@ services:
       ["-workers=1", "-print=0", "-profile=:7092", "-log=0", "-limit=100"]
     volumes:
       - ../settings.conf:/app/settings.conf
-      - ../settings_local.conf:/app/settings_local.conf
+      - ./settings_test.conf:/app/settings_local.conf
       - ../data/txblaster1:/app/data
       # - ../data/txblaster.log:/app/data/txblaster.log
 
@@ -397,7 +400,7 @@ services:
       - "--web.listen-address=:19090"
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
-      - ./prometheus/prometheus-host-1.yml:/etc/prometheus/prometheus.yml
+      - ../compose/prometheus/prometheus-host-1.yml:/etc/prometheus/prometheus.yml
 
   prometheus-2:
     container_name: prometheus-2
@@ -408,7 +411,7 @@ services:
       - "--web.listen-address=:29090"
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
-      - ./prometheus/prometheus-host-2.yml:/etc/prometheus/prometheus.yml
+      - ../compose/prometheus/prometheus-host-2.yml:/etc/prometheus/prometheus.yml
 
   prometheus-3:
     container_name: prometheus-3
@@ -419,17 +422,17 @@ services:
       - "--web.listen-address=:39090"
       - "--config.file=/etc/prometheus/prometheus.yml"
     volumes:
-      - ./prometheus/prometheus-host-3.yml:/etc/prometheus/prometheus.yml
+      - ../compose/prometheus/prometheus-host-3.yml:/etc/prometheus/prometheus.yml
 
   grafana:
     container_name: grafana
     image: grafana/grafana:latest
     network_mode: "host"
     volumes:
-      - ./grafana/datasources/main-host.yaml:/etc/grafana/provisioning/datasources/main.yaml
-      - ./grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
-      - ./grafana/grafana.db:/var/lib/grafana
+      - ../compose/grafana/datasources/main-host.yaml:/etc/grafana/provisioning/datasources/main.yaml
+      - ../compose/grafana/dashboards/main.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ../compose/grafana/dashboards:/var/lib/grafana/dashboards
+      - ../compose/grafana/grafana.db:/var/lib/grafana
     depends_on:
       - prometheus-1
       - prometheus-2

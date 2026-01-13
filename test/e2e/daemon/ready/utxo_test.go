@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/util"
@@ -26,9 +27,9 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 	t.Skip()
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableValidator: true,
-		SettingsContext: "dev.system.test",
+		EnableRPC:            true,
+		EnableValidator:      true,
+		SettingsOverrideFunc: test.SystemTestSettings(),
 		// EnableFullLogging: true,
 	})
 
@@ -182,17 +183,17 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 }
 
 func TestDeleteAtHeightHappyPath(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		// EnableFullLogging: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.GlobalBlockHeightRetention = 1
-		},
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.GlobalBlockHeightRetention = 1
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
@@ -295,10 +296,12 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.GlobalBlockHeightRetention = 10
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.GlobalBlockHeightRetention = 10
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
@@ -417,8 +420,6 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 
 func TestDeleteAtHeightHappyPath2(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
 	// Initialize test daemon with required services
 	// init aerospike
 	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
@@ -432,12 +433,14 @@ func TestDeleteAtHeightHappyPath2(t *testing.T) {
 		EnableRPC:       true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.GlobalBlockHeightRetention = 1
-			settings.UtxoStore.UtxoStore = parsedURL
-			settings.GlobalBlockHeightRetention = 1
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.GlobalBlockHeightRetention = 1
+				settings.UtxoStore.UtxoStore = parsedURL
+				settings.GlobalBlockHeightRetention = 1
+			},
+		),
 	})
 
 	defer td.Stop(t, true)

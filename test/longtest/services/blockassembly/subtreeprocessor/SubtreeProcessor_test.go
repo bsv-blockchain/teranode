@@ -311,8 +311,10 @@ func initSubtreeProcessor(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *me
 
 	newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest, 1)
 
-	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, tSettings, blobStore, blockchainClient, utxoStore, newSubtreeChan)
+	ctx := t.Context()
+	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, blobStore, blockchainClient, utxoStore, newSubtreeChan)
 	require.NoError(t, err)
+	subtreeProcessor.Start(ctx)
 
 	return subtreeProcessor, blobStore, newSubtreeChan
 }

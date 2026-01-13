@@ -231,7 +231,7 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	require.NoError(t, err, "Failed to get free port for Asset")
 
 	// Configure settings - this will now pick up KAFKA_PORT and persister URLs from gocore.Config
-	appSettings := settings.NewSettings("docker.host.teranode3.daemon")
+	appSettings := settings.NewSettings()
 	appSettings.LocalTestStartFromState = "RUNNING"
 	appSettings.P2P.Port = p2pPort
 	appSettings.Asset.HTTPPort = assetPort
@@ -293,7 +293,7 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	var persisterHTTPPort int
 	persisterHTTPPort, err = getFreePort()
 	require.NoError(t, err, "Failed to get free port for persister HTTP")
-	appSettings.Block.PersisterHTTPListenAddress = fmt.Sprintf(":%d", persisterHTTPPort)
+	appSettings.BlockPersister.HTTPListenAddress = fmt.Sprintf(":%d", persisterHTTPPort)
 
 	// Use dynamic ports for all service gRPC listeners to avoid conflicts
 	var blockchainGRPCPort int
@@ -358,7 +358,7 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 
 	// Manually set blob stores to memory store
 	appSettings.Block.BlockStore = blobStoreURL
-	appSettings.Block.PersisterStore = blobStoreURL
+	appSettings.BlockPersister.Store = blobStoreURL
 	appSettings.Block.TxStore = blobStoreURL
 	appSettings.SubtreeValidation.SubtreeStore = blobStoreURL
 	appSettings.Legacy.TempStore = blobStoreURL

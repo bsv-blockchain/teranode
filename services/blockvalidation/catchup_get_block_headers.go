@@ -425,15 +425,12 @@ func (u *Server) getPeerChainTip(ctx context.Context, peerID string) (*chainhash
 	}
 
 	// Check if peer has a block hash
-	if peerInfo.BlockHash == "" {
+	if peerInfo.BlockHash == nil {
 		return nil, errors.NewNotFoundError("peer %s has no block hash in registry", peerID)
 	}
 
-	// Parse the block hash
-	chainTipHash, err := chainhash.NewHashFromStr(peerInfo.BlockHash)
-	if err != nil {
-		return nil, errors.NewInvalidArgumentError("invalid block hash for peer %s: %w", peerID, err)
-	}
+	// Use the block hash directly (no need to parse)
+	chainTipHash := peerInfo.BlockHash
 
 	return chainTipHash, nil
 }

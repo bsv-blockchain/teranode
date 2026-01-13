@@ -8,6 +8,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -66,13 +67,15 @@ func testUnminedTransactionInBlockAssemblyAfterReorg(t *testing.T, utxoStore str
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			// Parse and set the UTXO store URL
-			parsedURL, err := url.Parse(utxoStore)
-			require.NoError(t, err, "Failed to parse UTXO store URL")
-			s.UtxoStore.UtxoStore = parsedURL
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				// Parse and set the UTXO store URL
+				parsedURL, err := url.Parse(utxoStore)
+				require.NoError(t, err, "Failed to parse UTXO store URL")
+				s.UtxoStore.UtxoStore = parsedURL
+			},
+		),
 	})
 	defer td.Stop(t)
 

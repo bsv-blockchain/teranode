@@ -1,0 +1,46 @@
+@startuml pruner_fallback_trigger
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+participant "Block Validation" as BlockValidation
+participant "Blockchain Service" as Blockchain
+participant "Pruner Service" as Pruner
+
+note over BlockValidation, Pruner: **Fallback Trigger (No Block Persister)**
+
+BlockValidation -> BlockValidation: Block Fully Validated
+
+BlockValidation -> Blockchain: SetMined(blockHash, true)
+
+Blockchain -> Blockchain: Update Block:\nmined_set = true
+
+Blockchain -> Blockchain: Send Block Notification\n(mined_set = true)
+
+Blockchain -> Pruner: Block Notification
+
+Pruner -> Pruner: Check lastPersistedHeight
+
+alt lastPersistedHeight == 0
+    note right of Pruner: Block Persister not running
+
+    Pruner -> Blockchain: Get BlockHeader
+    Blockchain --> Pruner: Block Header (with height)
+
+    Pruner -> Pruner: Verify mined_set == true
+
+    Pruner -> Pruner: Trigger Pruning\nfor block height
+
+    note right of Pruner: No coordination needed\nNo .subtree_data files\nto protect
+else lastPersistedHeight > 0
+    note right of Pruner: Block Persister is active\nIgnore Block notification\nUse BlockPersisted instead
+    Pruner -> Pruner: Skip (already handled\nby BlockPersisted)
+end
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+@enduml

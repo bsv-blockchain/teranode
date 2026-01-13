@@ -19,10 +19,9 @@ func TestInvalidBlockBanScore(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		SettingsContext: "docker.host.teranode2.daemon",
-		FSMState:        blockchain.FSMStateRUNNING,
+		EnableRPC: true,
+		EnableP2P: true,
+		FSMState:  blockchain.FSMStateRUNNING,
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.ChainCfgParams.CoinbaseMaturity = 1
 		},
@@ -30,10 +29,9 @@ func TestInvalidBlockBanScore(t *testing.T) {
 	defer node1.Stop(t)
 
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		SettingsContext: "docker.host.teranode1.daemon",
-		FSMState:        blockchain.FSMStateRUNNING,
+		EnableRPC: true,
+		EnableP2P: true,
+		FSMState:  blockchain.FSMStateRUNNING,
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.ChainCfgParams.CoinbaseMaturity = 1
 		},
