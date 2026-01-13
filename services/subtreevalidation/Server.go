@@ -832,7 +832,11 @@ func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, b
 		u.logger.Infof("[CheckSubtreeFromBlock] Processing orphaned transactions after subtree validation, count: %d", u.orphanage.Len())
 
 		processedOrphans := atomic.Uint32{}
-		processedValidatorOptions := validator.ProcessOptions()
+		processedValidatorOptions := validator.ProcessOptions(
+			validator.WithSkipPolicyChecks(true),
+			validator.WithCreateConflicting(true),
+			validator.WithIgnoreLocked(true), // Orphans should ignore locks to handle multi-node race conditions
+		)
 		orphanTxs := u.orphanage.Items()
 
 		// first we need to process all the orphans into levels, making sure we process them
