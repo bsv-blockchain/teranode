@@ -631,6 +631,225 @@ func TestGetLegacyBlockWireFormat(t *testing.T) {
 	}
 }
 
+// TestLegacyBlockMerkleRootValidation validates that the merkle root calculated from
+// all transactions in a legacy block matches the merkle root in the block header.
+// This comprehensive test ensures merkle roots are correctly calculated for various block types.
+func TestLegacyBlockMerkleRootValidation(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	ctx := setup(t)
+
+	testCases := []struct {
+		name        string
+		txs         []*bt.Tx
+		description string
+	}{
+		{
+			name:        "coinbase_only",
+			txs:         []*bt.Tx{coinbase},
+			description: "Coinbase-only block: merkle root equals coinbase hash",
+		},
+		{
+			name:        "two_transactions",
+			txs:         []*bt.Tx{coinbase, tx1},
+			description: "Two transactions: merkle root from coinbase and tx1",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("Test case: %s", tc.description)
+
+			// Create block parameters
+			blockParams := blockInfo{
+				version:           1,
+				bits:              "2000ffff",
+				previousBlockHash: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+				height:            100,
+				nonce:             2083236893,
+				timestamp:         uint32(time.Now().Unix()),
+				txs:               tc.txs,
+			}
+
+			// Create block with correct merkle root
+			block, subtree := createBlockWithCorrectMerkleRoot(ctx, t, blockParams)
+
+			// Mock blockchain client
+			blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
+			blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
+
+			// Setup subtree data if block has subtrees
+			if len(block.Subtrees) > 0 {
+				// Create subtree data (contains only non-coinbase transactions)
+				subtreeData := subtreepkg.NewSubtreeData(subtree)
+				for i := 1; i < len(tc.txs); i++ {
+					require.NoError(t, subtreeData.AddTx(tc.txs[i], i))
+				}
+
+				subtreeDataBytes, err := subtreeData.Serialize()
+				require.NoError(t, err)
+
+				err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes)
+				require.NoError(t, err)
+			}
+
+			// Get legacy block reader
+			r, err := ctx.repo.GetLegacyBlockReader(context.Background(), &chainhash.Hash{}, true)
+			require.NoError(t, err)
+
+			// Read all block data
+			blockData, err := io.ReadAll(r)
+			if err != nil && err != io.ErrClosedPipe {
+				require.NoError(t, err)
+			}
+
+			// Parse the block
+			reader := bytes.NewReader(blockData)
+
+			// Read and parse header
+			headerBytes := make([]byte, 80)
+			_, err = io.ReadFull(reader, headerBytes)
+			require.NoError(t, err)
+
+			// Extract merkle root from header (bytes 36-68)
+			merkleRootBytes := headerBytes[36:68]
+			headerMerkleRoot, err := chainhash.NewHash(merkleRootBytes)
+			require.NoError(t, err)
+			t.Logf("Header merkle root: %s", headerMerkleRoot.String())
+
+			// Read transaction count
+			varIntBytes := make([]byte, 9)
+			n, err := reader.Read(varIntBytes)
+			require.NoError(t, err)
+			txCount, bytesRead := bt.NewVarIntFromBytes(varIntBytes[:n])
+			reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+
+			// Read all transactions
+			txHashes := make([]*chainhash.Hash, 0, txCount)
+			for i := uint64(0); i < uint64(txCount); i++ {
+				tx := &bt.Tx{}
+				_, err = tx.ReadFrom(reader)
+				require.NoError(t, err)
+				txHashes = append(txHashes, tx.TxIDChainHash())
+				t.Logf("  Tx[%d]: %s", i, tx.TxIDChainHash().String())
+			}
+
+			// Calculate merkle root from transactions
+			calculatedRoot := calculateMerkleRoot(txHashes)
+			t.Logf("Calculated merkle root: %s", calculatedRoot.String())
+
+			// Validate they match
+			assert.Equal(t, headerMerkleRoot.String(), calculatedRoot.String(),
+				"Merkle root mismatch for %s", tc.description)
+
+			// Additional validation: transaction count
+			assert.Equal(t, len(tc.txs), len(txHashes),
+				"Transaction count mismatch: expected %d, got %d", len(tc.txs), len(txHashes))
+
+			t.Logf("✓ Merkle root validation passed for block with %d transactions", len(txHashes))
+		})
+	}
+}
+
+// createBlockWithCorrectMerkleRoot creates a block with the properly calculated merkle root
+func createBlockWithCorrectMerkleRoot(_ *testContext, t *testing.T, b blockInfo) (*model.Block, *subtreepkg.Subtree) {
+	if len(b.txs) == 0 {
+		panic("no transactions provided")
+	}
+
+	// Create subtree with power-of-two size
+	subtreeSize := 1
+	for subtreeSize < len(b.txs) {
+		subtreeSize *= 2
+	}
+	subtree, err := subtreepkg.NewTreeByLeafCount(subtreeSize)
+	require.NoError(t, err)
+
+	// Add all transactions to subtree
+	txHashes := make([]*chainhash.Hash, len(b.txs))
+	for i, tx := range b.txs {
+		txHashes[i] = tx.TxIDChainHash()
+		if i == 0 {
+			require.NoError(t, subtree.AddCoinbaseNode())
+		} else {
+			require.NoError(t, subtree.AddNode(*txHashes[i], 100, 0))
+		}
+	}
+
+	// Calculate the correct merkle root
+	merkleRoot := calculateMerkleRoot(txHashes)
+
+	nBits, _ := model.NewNBitFromString(b.bits)
+	hashPrevBlock, _ := chainhash.NewHashFromStr(b.previousBlockHash)
+
+	// Only add subtrees if we have more than just coinbase
+	subtreeHashes := make([]*chainhash.Hash, 0)
+	if len(b.txs) > 1 {
+		subtreeHashes = append(subtreeHashes, subtree.RootHash())
+	}
+
+	blockHeader := &model.BlockHeader{
+		Version:        b.version,
+		HashPrevBlock:  hashPrevBlock,
+		HashMerkleRoot: merkleRoot,
+		Timestamp:      b.timestamp,
+		Bits:           *nBits,
+		Nonce:          b.nonce,
+	}
+
+	// Calculate block size
+	var sizeInBytes uint64
+	for _, tx := range b.txs {
+		sizeInBytes += uint64(tx.Size())
+	}
+
+	block := &model.Block{
+		Header:           blockHeader,
+		CoinbaseTx:       b.txs[0],
+		TransactionCount: uint64(len(b.txs)),
+		Subtrees:         subtreeHashes,
+		Height:           b.height,
+		SizeInBytes:      sizeInBytes,
+	}
+
+	return block, subtree
+}
+
+// calculateMerkleRoot calculates the merkle root from transaction hashes
+// following the Bitcoin protocol specification
+func calculateMerkleRoot(txHashes []*chainhash.Hash) *chainhash.Hash {
+	if len(txHashes) == 0 {
+		return &chainhash.Hash{}
+	}
+	if len(txHashes) == 1 {
+		return txHashes[0]
+	}
+
+	// Build merkle tree level by level
+	currentLevel := make([]*chainhash.Hash, len(txHashes))
+	copy(currentLevel, txHashes)
+
+	for len(currentLevel) > 1 {
+		// If odd number of elements, duplicate the last one
+		if len(currentLevel)%2 != 0 {
+			currentLevel = append(currentLevel, currentLevel[len(currentLevel)-1])
+		}
+
+		// Calculate next level
+		nextLevel := make([]*chainhash.Hash, 0, len(currentLevel)/2)
+		for i := 0; i < len(currentLevel); i += 2 {
+			// Concatenate and double-hash the pair
+			combined := append(currentLevel[i][:], currentLevel[i+1][:]...)
+			hash := chainhash.DoubleHashH(combined)
+			nextLevel = append(nextLevel, &hash)
+		}
+
+		currentLevel = nextLevel
+	}
+
+	return currentLevel[0]
+}
+
 // TestGetLegacyBlockMerkleRootValidation validates that the merkle root calculated from
 // transactions in a legacy block matches the merkle root in the block header.
 // This ensures the coinbase duplication bug is fixed and merkle roots are correct.
