@@ -170,7 +170,7 @@ func readFile(ctx context.Context, filename string, ext fileformat.FileType, log
 		return handleUtxoAdditions(ctx, br)
 
 	case fileformat.FileTypeUtxoHeaders:
-		return handleUtxoHeaders(br)
+		return handleUtxoHeaders(header, br)
 
 	case fileformat.FileTypeUtxoDeletions:
 		return handleUtxoDeletions(br)
@@ -443,11 +443,19 @@ func handleUtxoAdditions(ctx context.Context, br *bufio.Reader) error {
 }
 
 // handleUtxoHeaders processes FileTypeUtxoHeaders files.
-func handleUtxoHeaders(br *bufio.Reader) error {
+func handleUtxoHeaders(header fileformat.Header, br *bufio.Reader) error {
 	var (
 		count      int
 		lastHeight uint32
 	)
+
+	// Determine if this is V1 (without coinbase) or V2 (with coinbase)
+	isV1 := header.IsUtxoHeadersV1()
+	if isV1 {
+		fmt.Printf("Reading V1 utxo-headers (without coinbase transactions)\n")
+	} else {
+		fmt.Printf("Reading V2 utxo-headers (with coinbase transactions)\n")
+	}
 
 	// Read the last block hash and height that's written after the file header
 	var (
@@ -467,7 +475,7 @@ func handleUtxoHeaders(br *bufio.Reader) error {
 		fmt.Printf("Last block hash: %s, height: %d\n", hash.String(), height)
 
 		for {
-			uh, err := utxopersister.NewUTXOHeaderFromReader(br)
+			uh, err := utxopersister.NewUTXOHeaderFromReader(br, isV1)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break

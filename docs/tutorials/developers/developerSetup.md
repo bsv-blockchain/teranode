@@ -325,7 +325,11 @@ Teranode supports debugging using Delve, the Go debugger. You can use any IDE th
 
 #### Local Development Debugging
 
-To debug Teranode during local development:
+To debug Teranode during local development, you have several options:
+
+##### Option 1: Run with Debugger (Recommended)
+
+**This is the most reliable method and works on all platforms including M3/M4 Macs.**
 
 1. **Build with debug symbols**:
 
@@ -335,7 +339,39 @@ To debug Teranode during local development:
 
     This enables debug flags (`-N -l`) that disable optimizations and inlining, making debugging easier.
 
-2. **Attach your debugger** to the running Teranode process using your preferred IDE or tool.
+2. **Run with your IDE's debugger**:
+    - **GoLand**: Use "Run" → "Debug" or press `Ctrl+D` (Linux/Windows) / `⌃D` (Mac)
+    - **VS Code**: Use "Run and Debug" panel or press `F5` after configuring launch.json
+
+##### Option 2: Attach to Running Process
+
+**Note: This method does not work on Apple M3/M4 Macs due to architecture limitations.**
+
+1. Build and start Teranode as normal
+2. Find the process ID: `ps aux | grep teranode`
+3. Attach your debugger to the PID:
+    - **GoLand**: "Run" → "Attach to Process"
+    - **VS Code**: Use "attach" configuration in launch.json
+
+##### Option 3: Start via Delve and Attach Remotely
+
+This method allows you to start the application with Delve and attach your IDE remotely:
+
+1. **Install Delve** (if not already installed):
+
+    ```bash
+    go install github.com/go-delve/delve/cmd/dlv@latest
+    ```
+
+2. **Start Teranode with Delve**:
+
+    ```bash
+    dlv exec ./teranode.run --headless --listen=:2345 --api-version=2 --accept-multiclient
+    ```
+
+3. **Attach your IDE to Delve**:
+    - **GoLand**: Create a "Go Remote" run configuration pointing to `localhost:2345`
+    - **VS Code**: Use a remote attach configuration in launch.json with port 2345
 
 #### Remote Debugging (Kubernetes Deployments)
 

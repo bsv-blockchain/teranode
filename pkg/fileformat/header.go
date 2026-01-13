@@ -43,7 +43,8 @@ func (f FileType) ToMagicBytes() [8]byte {
 var (
 	magicUtxoAdditions  = [8]byte{'U', '-', 'A', '-', '1', '.', '0', ' '} // U-A-1.0
 	magicUtxoDeletions  = [8]byte{'U', '-', 'D', '-', '1', '.', '0', ' '} // U-D-1.0
-	magicUtxoHeaders    = [8]byte{'U', '-', 'H', '-', '1', '.', '0', ' '} // U-H-1.0
+	magicUtxoHeaders    = [8]byte{'U', '-', 'H', '-', '1', '.', '0', ' '} // U-H-1.0 (legacy, without coinbase)
+	magicUtxoHeadersV2  = [8]byte{'U', '-', 'H', '-', '2', '.', '0', ' '} // U-H-2.0 (with coinbase tx)
 	magicUtxoSet        = [8]byte{'U', '-', 'S', '-', '1', '.', '0', ' '} // U-S-1.0
 	magicBlock          = [8]byte{'B', '-', '1', '.', '0', ' ', ' ', ' '} // B-1.0
 	magicSubtree        = [8]byte{'S', '-', '1', '.', '0', ' ', ' ', ' '} // S-1.0
@@ -64,7 +65,7 @@ var (
 var fileTypeToMagic = map[FileType][8]byte{
 	FileTypeUtxoAdditions:  magicUtxoAdditions,
 	FileTypeUtxoDeletions:  magicUtxoDeletions,
-	FileTypeUtxoHeaders:    magicUtxoHeaders,
+	FileTypeUtxoHeaders:    magicUtxoHeadersV2, // Default to V2 (with coinbase)
 	FileTypeUtxoSet:        magicUtxoSet,
 	FileTypeBlock:          magicBlock,
 	FileTypeSubtree:        magicSubtree,
@@ -86,6 +87,7 @@ var magicToFileType = map[[8]byte]FileType{
 	magicUtxoAdditions:  FileTypeUtxoAdditions,
 	magicUtxoDeletions:  FileTypeUtxoDeletions,
 	magicUtxoHeaders:    FileTypeUtxoHeaders,
+	magicUtxoHeadersV2:  FileTypeUtxoHeaders, // V2 also maps to same FileType
 	magicUtxoSet:        FileTypeUtxoSet,
 	magicBlock:          FileTypeBlock,
 	magicSubtree:        FileTypeSubtree,
@@ -124,6 +126,21 @@ func NewHeader(fileType FileType) Header {
 
 func (h Header) Size() int {
 	return 8
+}
+
+// IsUtxoHeadersV1 returns true if this is a version 1.0 utxo-headers file (without coinbase transactions).
+func (h Header) IsUtxoHeadersV1() bool {
+	return h.magic == magicUtxoHeaders
+}
+
+// IsUtxoHeadersV2 returns true if this is a version 2.0 utxo-headers file (with coinbase transactions).
+func (h Header) IsUtxoHeadersV2() bool {
+	return h.magic == magicUtxoHeadersV2
+}
+
+// Magic returns the magic bytes of this header for version checking.
+func (h Header) Magic() [8]byte {
+	return h.magic
 }
 
 func (h Header) Bytes() []byte {

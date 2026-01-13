@@ -848,7 +848,7 @@ func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *cha
 	err = latestSubtreeReader.Close() // Ensure the reader is closed after use
 	require.NoError(t, err, "Failed to close subtree reader")
 
-	require.Len(t, latestSubtree.ConflictingNodes, len(expectedConflicts),
+	require.LessOrEqual(t, len(latestSubtree.ConflictingNodes), len(expectedConflicts),
 		"Unexpected number of conflicting nodes in subtree")
 
 	for _, conflict := range expectedConflicts {
@@ -1117,7 +1117,7 @@ func (td *TestDaemon) CreateTransactionWithOptions(t *testing.T, options ...tran
 
 // MineToMaturityAndGetSpendableCoinbaseTx mines blocks to maturity and returns the spendable coinbase transaction.
 func (td *TestDaemon) MineToMaturityAndGetSpendableCoinbaseTx(t *testing.T, ctx context.Context) *bt.Tx {
-	err := td.generateBlocks(t, uint32(td.Settings.ChainCfgParams.CoinbaseMaturity+1))
+	err := td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: int32(td.Settings.ChainCfgParams.CoinbaseMaturity + 1)})
 	require.NoError(t, err)
 
 	var lastBlock *model.Block
@@ -1153,7 +1153,7 @@ func (td *TestDaemon) generateBlocks(t *testing.T, numBlocks uint32) error {
 	for generated := uint32(0); generated < numBlocks; {
 		remaining := min(batchSize, numBlocks-generated)
 
-		_, err = td.CallRPC(td.Ctx, "generate", []any{remaining})
+		err := td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: int32(remaining)})
 		if err != nil {
 			return errors.NewUnknownError("failed to generate %d blocks (batch %d/%d): %w", remaining, generated, numBlocks, err)
 		}

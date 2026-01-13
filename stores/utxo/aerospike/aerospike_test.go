@@ -396,9 +396,9 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	_, err = store.Spend(context.Background(), spendTx, 1)
 	require.NoError(t, err)
 
-	// check that the tx is stored externally
+	// Verify DAH file does not exist (external store has DisableDAH=true)
 	_, err = os.Stat("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah")
-	require.Error(t, err) // DAH should not exist
+	require.Error(t, err) // DAH should not exist before SetMined
 
 	err = store.SetBlockHeight(100_000)
 	require.NoError(t, err)
@@ -415,10 +415,10 @@ func TestLargeTxStoresExternally(t *testing.T) {
 	require.Len(t, blockIDsMap[*tx.TxIDChainHash()], 1)
 	require.Equal(t, []uint32{1}, blockIDsMap[*tx.TxIDChainHash()])
 
-	dah, err := os.ReadFile("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah")
-	require.NoError(t, err)
-
-	require.Equal(t, "100011", string(dah))
+	// Verify DAH file still does not exist after SetMined
+	// External store has DisableDAH=true - lifecycle managed by pruner service
+	_, err = os.Stat("./data/external/01/01d29b3fd5f2629c3b6586790312ee4a16039d8033e35a6ad0dcfa0235a39400.tx.dah")
+	require.Error(t, err) // DAH should NOT be created for external stores
 }
 
 // TestStore_SimpleGetters tests simple getter methods that don't require Aerospike connection
