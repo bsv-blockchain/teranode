@@ -26,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/ordishs/go-utils"
 )
 
 var (
@@ -523,6 +524,8 @@ func (b *BanList) Unsubscribe(ch chan BanEvent) {
 
 // notifySubscribersAsync notifies all subscribers about a ban event asynchronously.
 // This is safe to call from a goroutine.
+// Each notification is sent in its own goroutine using utils.SafeSend with panic recovery
+// to prevent a closed channel from one subscriber affecting others.
 func (b *BanList) notifySubscribersAsync(event BanEvent) {
 	// Make a copy of subscribers to avoid long lock
 	b.mu.RLock()
@@ -532,15 +535,11 @@ func (b *BanList) notifySubscribersAsync(event BanEvent) {
 	}
 	b.mu.RUnlock()
 
-	// Notify each subscriber without holding the lock
+	// Notify each subscriber in a separate goroutine without holding the lock
+	// This prevents a panic from one subscriber's closed channel affecting others
+	// utils.SafeSend handles the panic recovery for sends to potentially closed channels
 	for _, ch := range subscribers {
-		select {
-		case ch <- event:
-			b.logger.Debugf("Successfully notified subscriber about %s\n", event.IP)
-		default:
-			// Channel is full or closed, skip this notification
-			b.logger.Warnf("Skipped notification for %s (channel full or unavailable)", event.IP)
-		}
+		go utils.SafeSend(ch, event)
 	}
 }
 

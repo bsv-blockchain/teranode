@@ -408,3 +408,105 @@ func TestIPv6Compatibility(t *testing.T) {
 		})
 	}
 }
+
+// TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition is a proof of concept test
+// that verifies the fix for the panic-prone send on possibly closed channel issue.
+// This test aggressively tries to trigger the race condition between unsubscribing/closing
+// channels and notifying subscribers. With the safeSend() fix, no panics should occur.
+func TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition(t *testing.T) {
+	banList, _, err := setupBanList(t)
+	require.NoError(t, err)
+
+	const (
+		numSubscribers = 10
+		numIterations  = 1000
+	)
+
+	var panicCount int64
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	// Create multiple subscribers
+	subscribers := make([]chan BanEvent, numSubscribers)
+	for i := 0; i < numSubscribers; i++ {
+		ch := banList.Subscribe()
+		subscribers[i] = ch
+	}
+
+	// Channel to coordinate test completion
+	done := make(chan struct{})
+
+	// Goroutine to rapidly unsubscribe and close channels
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				// Rapidly unsubscribe and close channels to trigger race condition
+				for i := 0; i < numSubscribers; i++ {
+					if subscribers[i] != nil {
+						banList.Unsubscribe(subscribers[i])
+						close(subscribers[i])
+						subscribers[i] = nil
+					}
+				}
+				// Re-subscribe to keep the race condition possible
+				for i := 0; i < numSubscribers; i++ {
+					if subscribers[i] == nil {
+						subscribers[i] = banList.Subscribe()
+					}
+				}
+				time.Sleep(time.Microsecond) // Small delay to allow race condition
+			}
+		}
+	}()
+
+	// Goroutine to rapidly trigger Add/Remove operations
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				mu.Lock()
+				panicCount++
+				mu.Unlock()
+				t.Errorf("PANIC DETECTED: %v", r)
+			}
+		}()
+
+		for i := 0; i < numIterations; i++ {
+			ip := fmt.Sprintf("192.168.1.%d", i%255)
+			ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+
+			// Trigger Add which spawns notifySubscribersAsync goroutine
+			_ = banList.Add(ctx, ip, time.Now().Add(time.Hour))
+
+			// Small delay to allow race condition window
+			time.Sleep(time.Nanosecond)
+
+			// Trigger Remove which spawns another notifySubscribersAsync goroutine
+			_ = banList.Remove(ctx, ip)
+
+			cancel()
+		}
+	}()
+
+	// Wait for operations to complete
+	time.Sleep(2 * time.Second)
+	close(done)
+	wg.Wait()
+
+	// Verify no panics occurred
+	mu.Lock()
+	finalPanicCount := panicCount
+	mu.Unlock()
+
+	if finalPanicCount > 0 {
+		t.Fatalf("Test FAILED: Detected %d panic(s).", finalPanicCount)
+	}
+
+	t.Log("Test PASSED: No panics detected during race condition test")
+}
