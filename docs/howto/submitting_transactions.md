@@ -117,6 +117,8 @@ Teranode provides a gRPC API for transaction submission, offering high performan
 
 ### gRPC API
 
+The Propagation service accepts transactions via gRPC. Successful submissions return without error, while rejected transactions return an error with details.
+
 **Go Example:**
 
 ```go
@@ -135,7 +137,7 @@ import (
 )
 
 func submitTransactionGRPC(tx *bt.Tx, nodeAddr string) error {
-    // Connect to Teranode
+    // Connect to Teranode Propagation service (default port: 8086)
     conn, err := grpc.Dial(nodeAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
     if err != nil {
         return fmt.Errorf("failed to connect: %w", err)
@@ -149,17 +151,14 @@ func submitTransactionGRPC(tx *bt.Tx, nodeAddr string) error {
     ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
 
-    response, err := client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+    _, err = client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
         Tx: tx.Bytes(),
     })
     if err != nil {
         return fmt.Errorf("failed to process transaction: %w", err)
     }
 
-    if response.Status != propagation_api.Status_SUCCESS {
-        return fmt.Errorf("transaction rejected: %s", response.RejectReason)
-    }
-
+    // Success - transaction accepted
     return nil
 }
 ```
@@ -219,12 +218,16 @@ In Teranode's architecture, the performance difference between formats is **negl
 
 ### Error Response Example
 
-```json
-{
-  "status": "REJECTED",
-  "reject_reason": "transaction validation failed: parent transaction 5f3a... not found",
-  "tx_id": "abc123...",
-  "error_code": "MISSING_PARENT"
+When a transaction is rejected, the gRPC call returns an error. Extract the error message from the gRPC error:
+
+```go
+_, err = client.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+    Tx: tx.Bytes(),
+})
+if err != nil {
+    // Error contains rejection reason
+    fmt.Printf("Transaction rejected: %v\n", err)
+    // Example error: "rpc error: code = InvalidArgument desc = transaction validation failed: parent transaction 5f3a... not found"
 }
 ```
 
@@ -349,7 +352,7 @@ For more detailed testing patterns, examine the existing tests in `test/e2e/`, `
 - **Teranode accepts both standard and extended transaction formats**
 - **Standard format is recommended for most use cases**
 - **Automatic extension happens transparently during validation**
-- **HTTP and gRPC APIs are available for submission**
+- **gRPC API (Propagation service) is used for transaction submission**
 - **Performance difference between formats is negligible**
 - **Proper error handling and retries are essential**
 

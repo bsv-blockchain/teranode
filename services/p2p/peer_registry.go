@@ -1,11 +1,18 @@
 package p2p
 
 import (
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/libp2p/go-libp2p/core/peer"
+)
+
+const (
+	// maxPeerNameLength limits peer names to prevent resource exhaustion
+	maxPeerNameLength = 128
 )
 
 // PeerRegistry maintains peer information
@@ -22,6 +29,40 @@ func NewPeerRegistry() *PeerRegistry {
 	}
 }
 
+// sanitizePeerName validates and sanitizes peer client names to prevent injection attacks.
+// It limits length, removes control characters, and filters potentially dangerous characters.
+func sanitizePeerName(name string) string {
+	if name == "" {
+		return ""
+	}
+
+	// Limit length to prevent resource exhaustion
+	if len(name) > maxPeerNameLength {
+		name = name[:maxPeerNameLength]
+	}
+
+	// Remove control characters, null bytes, and other problematic characters
+	// Allow only printable ASCII, spaces, and basic punctuation
+	var cleaned strings.Builder
+	cleaned.Grow(len(name))
+
+	for _, r := range name {
+		// Allow ASCII letters, numbers, spaces, and safe punctuation
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == ' ' || r == '-' || r == '_' || r == '.' || r == '/' {
+			cleaned.WriteRune(r)
+		} else if unicode.IsPrint(r) && r < 128 {
+			// Allow other printable ASCII but exclude potential XSS chars like <, >, &, ', "
+			if r != '<' && r != '>' && r != '&' && r != '\'' && r != '"' && r != '\\' {
+				cleaned.WriteRune(r)
+			}
+		}
+		// All other characters (control chars, high Unicode, etc.) are dropped
+	}
+
+	return strings.TrimSpace(cleaned.String())
+}
+
 // Put adds or updates a peer atomically
 func (pr *PeerRegistry) Put(id peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
 	pr.mu.Lock()
@@ -29,10 +70,13 @@ func (pr *PeerRegistry) Put(id peer.ID, clientName string, height uint32, blockH
 
 	now := time.Now()
 
+	// Sanitize client name to prevent injection attacks and limit length
+	sanitizedClientName := sanitizePeerName(clientName)
+
 	if _, exists := pr.peers[id]; !exists {
 		pr.peers[id] = &PeerInfo{
 			ID:              id,
-			ClientName:      clientName,
+			ClientName:      sanitizedClientName,
 			Height:          height,
 			BlockHash:       blockHash,
 			DataHubURL:      dataHubURL,
@@ -44,7 +88,7 @@ func (pr *PeerRegistry) Put(id peer.ID, clientName string, height uint32, blockH
 		info := pr.peers[id]
 
 		if clientName != "" {
-			info.ClientName = clientName
+			info.ClientName = sanitizedClientName
 		}
 
 		if height > 0 {

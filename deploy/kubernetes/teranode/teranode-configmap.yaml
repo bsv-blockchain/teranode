@@ -13,7 +13,7 @@ data:
   KAFKA_PARTITIONS_HIGH: "1"
   aerospike_host: "aerospike"
   blockchain_store: "postgres://teranode:teranode@postgres:5432/teranode"
-  utxostore: "aerospike://aerospike:3000/utxo-store?WarmUp=0&ConnectionQueueSize=16&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=file://./data/teranode-operator/external%3FhashPrefix=2"
+  utxostore: "aerospike://aerospike:3000/utxo-store?WarmUp=0&ConnectionQueueSize=16&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&set=utxo&externalStore=file:///data/teranode-operator/external%3FhashPrefix=2"
   # recommended settings to tweak based on your deployment
   # KAFKA_PARTITIONS_HIGH: "512"
   # txMetaCacheMaxMB: "32768"

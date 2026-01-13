@@ -614,6 +614,67 @@ The service employs an optimized algorithm for tracking and selecting the longes
 - Implements transaction-based operations with the store to maintain consistency.
 - Reports persistent storage errors through health endpoints.
 
+### 9.3 Known Performance Limitations
+
+#### Catchup Performance During Block Sync
+
+**Issue:** Block synchronization (catchup) can become progressively slower as the blockchain grows, particularly on deployments with large block counts.
+
+**Root Cause:**
+
+The blockchain store uses a recursive CTE (Common Table Expression) query to traverse the chain when storing blocks:
+
+```sql
+WITH RECURSIVE ChainBlocks AS (
+    SELECT id, parent_id
+    FROM blocks
+    WHERE hash = $1
+    UNION ALL
+    SELECT bb.id, bb.parent_id
+    FROM blocks bb
+    JOIN ChainBlocks cb ON bb.id = cb.parent_id
+    WHERE bb.id != cb.id
+)
+SELECT id FROM ChainBlocks
+LIMIT $2
+```
+
+This query can become expensive as the blockchain grows. The issue is compounded by the current caching strategy:
+
+1. Query results are cached in `responseCache` for performance
+2. Every time `StoreBlock()` is called, it calls `ResetResponseCache()` which invalidates the entire cache
+3. The next block storage operation must re-run the expensive recursive query from scratch
+4. During catchup, this results in the query being executed for every single block
+
+**Impact:**
+
+On large blockchains (>1.7M blocks), index scan counts can reach hundreds of billions, causing catchup speeds to drop from initial rates to as low as 6-7 blocks per minute.
+
+**Tracking:**
+
+This is a known issue being tracked in internal issue #4374.
+
+**Potential Optimization:**
+
+Instead of invalidating the entire cache on each block store, the cache could be incrementally updated:
+
+- Reuse existing cached chain traversal results
+- Append the new block to the cached chain
+- Only invalidate cache entries that are directly affected by the new block
+- This would reduce the recursive query to a one-time cost at startup
+
+**Current Workaround:**
+
+For faster initial synchronization:
+
+- Use the seeder with exported UTXO data instead of full catchup
+- See [How to Sync the Node](../../howto/miners/kubernetes/minersHowToSyncTheNode.md) for seeding procedures
+- Seeding bypasses the incremental block-by-block catchup process
+
+**Status:**
+
+Performance optimization work is ongoing and may be addressed in future releases.
+
 ## 10. Other Resources
 
 - [Blockchain Reference](../../references/services/blockchain_reference.md)

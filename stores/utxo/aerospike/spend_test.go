@@ -166,10 +166,11 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.Equal(t, 4, resp.Bins[fields.TotalExtraRecs.String()])
 		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
-		// check the external file DAH has been set
+		// Verify external file DAH is NOT set (external store has DisableDAH=true)
+		// External file lifecycle is managed by the Aerospike pruner service
 		dah, err = store.GetExternalStore().GetDAH(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
-		assert.Greater(t, dah, uint32(0))
+		assert.Equal(t, uint32(0), dah) // External DAH disabled
 	})
 }
 

@@ -18,8 +18,11 @@ package utxopersister
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"io"
+	"sort"
 	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -31,6 +34,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/bytesize"
@@ -757,4 +761,126 @@ func UnpadSlice[T any](padded []*T) []*T {
 	}
 
 	return utxos
+}
+
+// WriteHeadersToStore writes block headers from the blockchain store to a utxo-headers file.
+// This function exports block headers for all blocks from genesis up to the specified tip block.
+// It traces back from the tip to genesis to ensure only the active chain blocks are included.
+// The headers are written to blob storage with the same format as used by bitcointoutxoset tool.
+//
+// Parameters:
+// - ctx: Context for controlling the operation
+// - logger: Logger interface for recording operational events
+// - settings: Configuration settings
+// - blobStore: Blob store for writing the headers file
+// - blockchainStore: Blockchain store for reading block headers
+// - tipHash: Hash of the tip block (usually matches the UTXO set block hash)
+// - tipHeight: Height of the tip block
+//
+// Returns:
+// - error: Any error encountered during the operation
+//
+// The file format matches the seeder expectations:
+// 1. File header with magic number for FileTypeUtxoHeaders
+// 2. Tip block hash (32 bytes)
+// 3. Tip block height (4 bytes)
+// 4. Serialized BlockIndex entries for each block from genesis to tip
+// 5. SHA256 hash file for verification
+func WriteHeadersToStore(ctx context.Context, logger ulogger.Logger, settings *settings.Settings, blobStore blob.Store, blockchainStore blockchain_store.Store, tipHash *chainhash.Hash, tipHeight uint32) error {
+	logger.Infof("[WriteHeadersToStore] Writing headers for block %s height %d", tipHash.String(), tipHeight)
+
+	allBlocks := make(map[chainhash.Hash]*BlockIndex, tipHeight+1)
+
+	currentHash := tipHash
+	var bestBlock *BlockIndex
+
+	for currentHash != nil {
+		header, meta, err := blockchainStore.GetBlockHeader(ctx, currentHash)
+		if err != nil {
+			return errors.NewStorageError("failed to get block header for hash %s", currentHash.String(), err)
+		}
+
+		// Try to get the full block to extract the coinbase transaction
+		var coinbaseTx *bt.Tx
+		block, _, err := blockchainStore.GetBlock(ctx, currentHash)
+		if err != nil {
+			logger.Warnf("[WriteHeadersToStore] Could not get block %s to extract coinbase tx: %v", currentHash.String(), err)
+		} else if block != nil {
+			coinbaseTx = block.CoinbaseTx
+		}
+
+		blockIndex := &BlockIndex{
+			Hash:        currentHash,
+			Height:      meta.Height,
+			TxCount:     meta.TxCount,
+			BlockHeader: header,
+			CoinbaseTx:  coinbaseTx,
+		}
+
+		allBlocks[*currentHash] = blockIndex
+
+		if bestBlock == nil {
+			bestBlock = blockIndex
+		}
+
+		if meta.Height == 0 {
+			break
+		}
+
+		currentHash = header.HashPrevBlock
+	}
+
+	blocks := make([]*BlockIndex, 0, len(allBlocks))
+	for _, block := range allBlocks {
+		blocks = append(blocks, block)
+	}
+
+	sort.SliceStable(blocks, func(i, j int) bool {
+		return blocks[i].Height < blocks[j].Height
+	})
+
+	// Use FileStorer which will automatically use the V2 magic header
+	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blobStore, tipHash[:], fileformat.FileTypeUtxoHeaders)
+	if err != nil {
+		return errors.NewStorageError("error creating utxo-headers file", err)
+	}
+
+	hasher := sha256.New()
+	multiWriter := io.MultiWriter(storer, hasher)
+
+	if err = binary.Write(multiWriter, binary.LittleEndian, bestBlock.Hash); err != nil {
+		return errors.NewProcessingError("couldn't write block hash to file", err)
+	}
+
+	if err = binary.Write(multiWriter, binary.LittleEndian, bestBlock.Height); err != nil {
+		return errors.NewProcessingError("error writing block height", err)
+	}
+
+	var (
+		recordCount uint64
+		txCount     uint64
+	)
+
+	for _, block := range blocks {
+		if err = block.Serialise(multiWriter); err != nil {
+			return errors.NewProcessingError("couldn't write header to file", err)
+		}
+
+		recordCount++
+		txCount += block.TxCount
+	}
+
+	if err = storer.Close(ctx); err != nil {
+		return errors.NewStorageError("error closing utxo-headers file", err)
+	}
+
+	logger.Infof("Wrote %d block headers with %d total transactions", recordCount, txCount)
+
+	hashData := fmt.Sprintf("%x  %s\n", hasher.Sum(nil), tipHash.String()+".utxo-headers")
+
+	if err = blobStore.Set(ctx, tipHash[:], fileformat.FileTypeUtxoHeaders+".sha256", []byte(hashData), options.WithAllowOverwrite(true)); err != nil {
+		return errors.NewStorageError("error writing hash file", err)
+	}
+
+	return nil
 }

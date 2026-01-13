@@ -262,10 +262,18 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 		txCount          uint64
 	)
 
+	// Determine if this is V1 (without coinbase) or V2 (with coinbase)
+	isV1 := header.IsUtxoHeadersV1()
+	if isV1 {
+		logger.Infof("Reading V1 utxo-headers (without coinbase transactions)")
+	} else {
+		logger.Infof("Reading V2 utxo-headers (with coinbase transactions)")
+	}
+
 	var blockIndex *utxopersister.BlockIndex
 
 	for {
-		blockIndex, err = utxopersister.NewUTXOHeaderFromReader(reader)
+		blockIndex, err = utxopersister.NewUTXOHeaderFromReader(reader, isV1)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -281,6 +289,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 
 		block := &model.Block{
 			Header:           blockIndex.BlockHeader,
+			CoinbaseTx:       blockIndex.CoinbaseTx,
 			TransactionCount: blockIndex.TxCount,
 			Height:           blockIndex.Height,
 		}
@@ -305,7 +314,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 		}
 	}
 
-	logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(headersProcessed), formatNumber(txCount))
+	logger.Infof("FINISHED  %16s headers with %16s transactions", formatNumber(headersProcessed), formatNumber(txCount))
 
 	return nil
 }
