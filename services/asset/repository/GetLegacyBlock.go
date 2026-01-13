@@ -80,9 +80,10 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		var (
 			subtreeDataExists bool
 			subtreeDataReader io.ReadCloser
+			coinbaseWritten   bool
 		)
 
-		for _, subtreeHash := range block.Subtrees {
+		for subtreeIdx, subtreeHash := range block.Subtrees {
 			subtreeDataExists, err = repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 			if err == nil && subtreeDataExists {
 				subtreeDataReader, err = repo.SubtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
@@ -93,14 +94,22 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 					return errors.NewProcessingError("[GetLegacyBlockReader] error getting subtree %s from store", subtreeHash.String(), err)
 				}
 
-				// Note: The subtree data already contains the coinbase transaction,
-				// so we don't need to write it separately here
+				// Write the coinbase transaction first (it's not in the subtree data)
+				// Only write it once, for the first subtree
+				if subtreeIdx == 0 && !coinbaseWritten && block.CoinbaseTx != nil {
+					if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
+						_ = w.CloseWithError(io.ErrClosedPipe)
+						_ = r.CloseWithError(err)
+						return errors.NewProcessingError("[GetLegacyBlockReader] error writing coinbase tx", err)
+					}
+					coinbaseWritten = true
+				}
 
 				// create a buffered reader to read the subtree data
 				// Using 32KB buffer for optimal sequential I/O with minimal memory overhead
 				bufferedReader := bufio.NewReaderSize(subtreeDataReader, 32*1024)
 
-				// process the subtree data streaming to the writer
+				// process the subtree data streaming to the writer (non-coinbase transactions)
 				for {
 					tx := &bt.Tx{}
 
@@ -127,6 +136,16 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 
 				// move to the next subtree
 				continue
+			}
+
+			// Write coinbase first if not yet written (for fallback path)
+			if subtreeIdx == 0 && !coinbaseWritten && block.CoinbaseTx != nil {
+				if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
+					_ = w.CloseWithError(io.ErrClosedPipe)
+					_ = r.CloseWithError(err)
+					return errors.NewProcessingError("[GetLegacyBlockReader] error writing coinbase tx", err)
+				}
+				coinbaseWritten = true
 			}
 
 			if err = repo.writeTransactionsViaSubtreeStore(gCtx, w, block, subtreeHash); err != nil {
@@ -262,17 +281,11 @@ func (repo *Repository) writeTransactionsViaSubtreeStore(ctx context.Context, w 
 
 	for i := 0; i < len(txMetaSlice); i++ {
 		if subtreepkg.CoinbasePlaceholderHash.Equal(txHashes[i]) {
-			if block != nil {
-				// The coinbase tx is not in the txmeta store, so we add in a special coinbase placeholder tx
-				if i != 0 {
-					return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] coinbase tx is not first in subtree (%d)", i)
-				}
-
-				// Write coinbase tx
-				if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
-					return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] error writing coinbase tx", err)
-				}
+			// Skip the coinbase placeholder - it's handled separately in GetLegacyBlockReader
+			if i != 0 {
+				return errors.NewProcessingError("[writeTransactionsViaSubtreeStore] coinbase placeholder is not first in subtree (%d)", i)
 			}
+			continue
 		} else {
 			// always write the non-extended normal bytes to the subtree data file !
 			// our peer node should extend the transactions if needed
