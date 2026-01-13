@@ -10,7 +10,6 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 )
 
@@ -134,7 +133,7 @@ func (m *HTTPMockSetup) Activate() {
 		return
 	}
 
-	httpmock.ActivateNonDefault(util.HTTPClient())
+	httpmock.Activate()
 	m.activated = true
 
 	// Register all configured responses

@@ -7,9 +7,6 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: read  # Required for checkout
-
 env:
   REPO: teranode
   SETTINGS_CONTEXT_DEFAULT: test

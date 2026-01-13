@@ -4,21 +4,59 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
+	"github.com/bsv-blockchain/teranode/test/utils/postgres"
+	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/require"
 )
 
-func TestLongestChainPostgres(t *testing.T) {
+func TestLongestChainSQLite(t *testing.T) {
+	utxoStore := "sqlite:///test"
+
 	t.Run("simple", func(t *testing.T) {
-		testLongestChainSimple(t, "postgres")
+		testLongestChainSimple(t, utxoStore)
 	})
 
 	t.Run("invalid block", func(t *testing.T) {
-		testLongestChainInvalidateBlock(t, "postgres")
+		testLongestChainInvalidateBlock(t, utxoStore)
 	})
 
 	t.Run("invalid block with old tx", func(t *testing.T) {
-		t.Skip()
-		testLongestChainInvalidateBlockWithOldTx(t, "postgres")
+		testLongestChainInvalidateBlockWithOldTx(t, utxoStore)
+	})
+
+	t.Run("fork with different tx inclusion", func(t *testing.T) {
+		testLongestChainForkDifferentTxInclusion(t, utxoStore)
+	})
+
+	t.Run("transaction chain dependency", func(t *testing.T) {
+		testLongestChainTransactionChainDependency(t, utxoStore)
+	})
+
+	t.Run("partial output consumption", func(t *testing.T) {
+		testLongestChainWithDoubleSpendTransaction(t, utxoStore)
+	})
+}
+
+func TestLongestChainPostgres(t *testing.T) {
+	// start a postgres container
+	utxoStore, teardown, err := postgres.SetupTestPostgresContainer()
+	require.NoError(t, err)
+
+	defer func() {
+		_ = teardown()
+	}()
+
+	t.Run("simple", func(t *testing.T) {
+		testLongestChainSimple(t, utxoStore)
+	})
+
+	t.Run("invalid block", func(t *testing.T) {
+		testLongestChainInvalidateBlock(t, utxoStore)
+	})
+
+	t.Run("invalid block with old tx", func(t *testing.T) {
+		testLongestChainInvalidateBlockWithOldTx(t, utxoStore)
 	})
 
 	t.Run("fork with different tx inclusion", func(t *testing.T) {
@@ -35,16 +73,24 @@ func TestLongestChainPostgres(t *testing.T) {
 }
 
 func TestLongestChainAerospike(t *testing.T) {
+	// start an aerospike container
+	utxoStore, teardown, err := aerospike.InitAerospikeContainer()
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = teardown()
+	})
+
 	t.Run("simple", func(t *testing.T) {
-		testLongestChainSimple(t, "aerospike")
+		testLongestChainSimple(t, utxoStore)
 	})
 
 	t.Run("invalid block", func(t *testing.T) {
-		testLongestChainInvalidateBlock(t, "aerospike")
+		testLongestChainInvalidateBlock(t, utxoStore)
 	})
 
 	t.Run("invalid block with old tx", func(t *testing.T) {
-		testLongestChainInvalidateBlockWithOldTx(t, "aerospike")
+		testLongestChainInvalidateBlockWithOldTx(t, utxoStore)
 	})
 
 	t.Run("fork with different tx inclusion", func(t *testing.T) {

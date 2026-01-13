@@ -11,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/test"
 	postgres "github.com/bsv-blockchain/teranode/test/longtest/util/postgres"
 	"github.com/bsv-blockchain/teranode/test/utils/tconfig"
 	"github.com/bsv-blockchain/teranode/util/retry"
@@ -197,17 +196,15 @@ func SetupPostgresTestDaemon(t *testing.T, ctx context.Context, containerName st
 	pgStore := fmt.Sprintf("postgres://teranode:teranode@localhost:%s/teranode?expiration=5m", pg.Port)
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC: true,
-		SettingsOverrideFunc: test.ComposeSettings(
-			test.SystemTestSettings(),
-			func(tSettings *settings.Settings) {
-				url, err := url.Parse(pgStore)
-				require.NoError(t, err)
-				tSettings.BlockChain.StoreURL = url
-				tSettings.Coinbase.Store = url
-				tSettings.UtxoStore.UtxoStore = url
-			},
-		),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
+		SettingsOverrideFunc: func(tSettings *settings.Settings) {
+			url, err := url.Parse(pgStore)
+			require.NoError(t, err)
+			tSettings.BlockChain.StoreURL = url
+			tSettings.Coinbase.Store = url
+			tSettings.UtxoStore.UtxoStore = url
+		},
 	})
 
 	t.Cleanup(func() {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/p2p/p2p_api"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -450,32 +449,6 @@ func (c *Client) UpdateCatchupReputation(ctx context.Context, peerID string, sco
 	return nil
 }
 
-// ResetReputation resets reputation metrics for a peer or all peers.
-// If peerID is empty, resets all peers. Returns the number of peers reset.
-// Parameters:
-//   - ctx: Context for the operation
-//   - peerID: The peer ID to reset (empty string for all peers)
-//
-// Returns:
-//   - int: Number of peers that had their reputation reset
-//   - error: Any error encountered during the operation
-func (c *Client) ResetReputation(ctx context.Context, peerID string) (int, error) {
-	req := &p2p_api.ResetReputationRequest{
-		PeerId: peerID,
-	}
-
-	resp, err := c.client.ResetReputation(ctx, req)
-	if err != nil {
-		return 0, err
-	}
-
-	if resp != nil && !resp.Ok {
-		return 0, errors.NewServiceError("failed to reset reputation")
-	}
-
-	return int(resp.PeersReset), nil
-}
-
 // GetPeersForCatchup returns peers suitable for catchup operations.
 // Parameters:
 //   - ctx: Context for the operation
@@ -666,36 +639,23 @@ func convertFromAPIPeerInfo(apiPeer interface{}) *PeerInfo {
 	switch p := apiPeer.(type) {
 	case *p2p_api.PeerInfoForCatchup:
 		peerID, _ := peer.Decode(p.Id)
-
-		var blockHash *chainhash.Hash
-		if p.BlockHash != "" {
-			blockHash, _ = chainhash.NewHashFromStr(p.BlockHash)
-		}
-
 		return &PeerInfo{
 			ID:                   peerID,
 			Height:               p.Height,
-			BlockHash:            blockHash,
+			BlockHash:            p.BlockHash,
 			DataHubURL:           p.DataHubUrl,
 			ReputationScore:      p.CatchupReputationScore,
 			InteractionAttempts:  p.CatchupAttempts,
 			InteractionSuccesses: p.CatchupSuccesses,
 			InteractionFailures:  p.CatchupFailures,
 		}
-
 	case *p2p_api.PeerRegistryInfo:
 		peerID, _ := peer.Decode(p.Id)
-
-		var blockHash *chainhash.Hash
-		if p.BlockHash != "" {
-			blockHash, _ = chainhash.NewHashFromStr(p.BlockHash)
-		}
-
 		return &PeerInfo{
 			ID:                     peerID,
 			ClientName:             p.ClientName,
 			Height:                 p.Height,
-			BlockHash:              blockHash,
+			BlockHash:              p.BlockHash,
 			DataHubURL:             p.DataHubUrl,
 			BanScore:               int(p.BanScore),
 			IsBanned:               p.IsBanned,
@@ -704,6 +664,8 @@ func convertFromAPIPeerInfo(apiPeer interface{}) *PeerInfo {
 			BytesReceived:          p.BytesReceived,
 			LastBlockTime:          time.Unix(p.LastBlockTime, 0),
 			LastMessageTime:        time.Unix(p.LastMessageTime, 0),
+			URLResponsive:          p.UrlResponsive,
+			LastURLCheck:           time.Unix(p.LastUrlCheck, 0),
 			Storage:                p.Storage,
 			InteractionAttempts:    p.InteractionAttempts,
 			InteractionSuccesses:   p.InteractionSuccesses,
@@ -717,7 +679,6 @@ func convertFromAPIPeerInfo(apiPeer interface{}) *PeerInfo {
 			LastCatchupError:       p.LastCatchupError,
 			LastCatchupErrorTime:   time.Unix(p.LastCatchupErrorTime, 0),
 		}
-
 	default:
 		// Return empty PeerInfo for unknown types
 		return &PeerInfo{}

@@ -140,9 +140,6 @@
 - [QA Guide & Instructions for Functional Requirement Tests](./topics/functionalRequirementTests.md)
 - [Double Spends](./topics/architecture/understandingDoubleSpends.md)
 - [Two Phase Commit](./topics/features/two_phase_commit.md)
-- [Peer Registry and Reputation System](./topics/features/peer_registry_reputation.md)
-- [UTXO Lock Records](./topics/features/utxo_lock_records.md)
-- [Dashboard](./topics/dashboard.md)
 
 -----
 
@@ -161,6 +158,7 @@
 - [P2P Server](./references/services/p2p_reference.md)
 - [Propagation Server](./references/services/propagation_reference.md)
 - [RPC Service](./references/services/rpc_reference.md)
+- [RPC API Docs](https://bsv-blockchain.github.io/teranode/references/open-rpc/)
 - [Subtree Validation](./references/services/subtreevalidation_reference.md)
 - [UTXO Persister](./references/services/utxopersister_reference.md)
 - [TX Validator](./references/services/validator_reference.md)

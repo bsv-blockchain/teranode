@@ -10,15 +10,14 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/daemon"
-	"github.com/bsv-blockchain/teranode/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestShouldHandleFreeze(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:            true,
-		SettingsOverrideFunc: test.SystemTestSettings(),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 
 	defer td.Stop(t)

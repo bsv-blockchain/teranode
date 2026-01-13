@@ -14,9 +14,6 @@ import (
 	"github.com/bsv-blockchain/teranode/cmd/checkblocktemplate"
 	"github.com/bsv-blockchain/teranode/cmd/filereader"
 	"github.com/bsv-blockchain/teranode/cmd/getfsmstate"
-	"github.com/bsv-blockchain/teranode/cmd/logs"
-	"github.com/bsv-blockchain/teranode/cmd/monitor"
-	"github.com/bsv-blockchain/teranode/cmd/reconsiderblock"
 	"github.com/bsv-blockchain/teranode/cmd/resetblockassembly"
 	"github.com/bsv-blockchain/teranode/cmd/seeder"
 	"github.com/bsv-blockchain/teranode/cmd/setfsmstate"
@@ -45,12 +42,9 @@ var commandHelp = map[string]string{
 	"import-blocks":           "Import blockchain from CSV",
 	"checkblocktemplate":      "Check block template",
 	"checkblock":              "Check block - fetches a block and validates it using the block validation service",
-	"reconsiderblock":         "Reconsider a block that was previously marked as invalid",
 	"resetblockassembly":      "Reset block assembly state",
 	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
 	"validate-utxo-set":       "Validate UTXO set file",
-	"monitor":                 "Live TUI dashboard for monitoring node status",
-	"logs":                    "Interactive log viewer with filtering and search",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -248,17 +242,6 @@ func Start(args []string, version, commit string) {
 			getfsmstate.FetchFSMState(logger, tSettings)
 			return nil
 		}
-	case "monitor":
-		cmd.Execute = func(args []string) error {
-			return monitor.Run(logger, tSettings)
-		}
-	case "logs":
-		logFile := cmd.FlagSet.String("file", "./logs/teranode.log", "Path to log file")
-		bufferSize := cmd.FlagSet.Int("buffer", 10000, "Number of log entries to keep in memory")
-
-		cmd.Execute = func(args []string) error {
-			return logs.Run(*logFile, *bufferSize)
-		}
 	case "setfsmstate":
 		targetFsmState := cmd.FlagSet.String("fsmstate", "", "target fsm state (accepted values: running, idle, catchingblocks, legacysyncing)")
 
@@ -347,14 +330,6 @@ func Start(args []string, version, commit string) {
 			fmt.Printf("Checked block successfully: %s\n", blockTemplate.String())
 
 			return nil
-		}
-	case "reconsiderblock":
-		cmd.Execute = func(args []string) error {
-			if len(args) != 1 {
-				return errors.NewProcessingError("Usage: reconsiderblock <blockhash>")
-			}
-
-			return reconsiderblock.ReconsiderBlock(logger, tSettings, args[0])
 		}
 	case "resetblockassembly":
 		fullReset := cmd.FlagSet.Bool("full-reset", false, "Perform a full reset, including clearing mempool and unmined transactions")

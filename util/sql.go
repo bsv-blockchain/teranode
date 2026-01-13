@@ -26,15 +26,10 @@ const (
 // InitSQLDB initializes a SQL database connection based on the provided URL scheme.
 // Supports PostgreSQL, SQLite, and in-memory SQLite databases.
 // Returns a configured database connection with appropriate settings applied.
-// If servicePoolSettings is provided, it will override the global PostgreSQL pool settings.
-func InitSQLDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings, servicePoolSettings ...*settings.PostgresSettings) (*usql.DB, error) {
+func InitSQLDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*usql.DB, error) {
 	switch storeURL.Scheme {
 	case "postgres":
-		var poolSettings *settings.PostgresSettings
-		if len(servicePoolSettings) > 0 && servicePoolSettings[0] != nil {
-			poolSettings = servicePoolSettings[0]
-		}
-		return InitPostgresDB(logger, storeURL, tSettings, poolSettings)
+		return InitPostgresDB(logger, storeURL, tSettings)
 	case "sqlite", "sqlitememory":
 		return InitSQLiteDB(logger, storeURL, tSettings)
 	}
@@ -45,9 +40,7 @@ func InitSQLDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Set
 // InitPostgresDB initializes a PostgreSQL database connection with connection pooling.
 // Extracts connection parameters from the URL and applies SSL mode configuration.
 // Sets up connection limits based on the provided settings.
-// If servicePoolSettings is provided, it overrides the global PostgreSQL pool settings.
-// Otherwise, uses the global PostgresSettings from tSettings.
-func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings, servicePoolSettings *settings.PostgresSettings) (*usql.DB, error) {
+func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings) (*usql.DB, error) {
 	dbHost := storeURL.Hostname()
 	port := storeURL.Port()
 	dbPort, _ := strconv.Atoi(port)
@@ -78,45 +71,8 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 
 	logger.Infof("Using postgres DB: %s@%s:%d/%s", dbUser, dbHost, dbPort, dbName)
 
-	// Determine which pool settings to use: service-specific override or global defaults
-	poolSettings := &tSettings.Postgres
-	if servicePoolSettings != nil {
-		// Merge service-specific settings with global defaults (zero values use global)
-		poolSettings = &settings.PostgresSettings{
-			MaxOpenConns:    servicePoolSettings.MaxOpenConns,
-			MaxIdleConns:    servicePoolSettings.MaxIdleConns,
-			ConnMaxLifetime: servicePoolSettings.ConnMaxLifetime,
-			ConnMaxIdleTime: servicePoolSettings.ConnMaxIdleTime,
-		}
-		// Use global defaults for zero values
-		if poolSettings.MaxOpenConns == 0 {
-			poolSettings.MaxOpenConns = tSettings.Postgres.MaxOpenConns
-		}
-		if poolSettings.MaxIdleConns == 0 {
-			poolSettings.MaxIdleConns = tSettings.Postgres.MaxIdleConns
-		}
-		if poolSettings.ConnMaxLifetime == 0 {
-			poolSettings.ConnMaxLifetime = tSettings.Postgres.ConnMaxLifetime
-		}
-		if poolSettings.ConnMaxIdleTime == 0 {
-			poolSettings.ConnMaxIdleTime = tSettings.Postgres.ConnMaxIdleTime
-		}
-	}
-
-	// Configure connection pool settings
-	db.SetMaxOpenConns(poolSettings.MaxOpenConns)
-	db.SetMaxIdleConns(poolSettings.MaxIdleConns)
-	db.SetConnMaxLifetime(poolSettings.ConnMaxLifetime)
-	db.SetConnMaxIdleTime(poolSettings.ConnMaxIdleTime)
-
-	logger.Infof("PostgreSQL connection pool configured: MaxOpenConns=%d, MaxIdleConns=%d, ConnMaxLifetime=%v, ConnMaxIdleTime=%v",
-		poolSettings.MaxOpenConns,
-		poolSettings.MaxIdleConns,
-		poolSettings.ConnMaxLifetime,
-		poolSettings.ConnMaxIdleTime)
-
-	// Log initial pool metrics
-	logPostgresPoolMetrics(logger, db)
+	db.SetMaxIdleConns(tSettings.UtxoStore.PostgresMaxIdleConns)
+	db.SetMaxOpenConns(tSettings.UtxoStore.PostgresMaxOpenConns)
 
 	return db, nil
 }
@@ -133,6 +89,10 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 		filename = fmt.Sprintf("file:%s?mode=memory&cache=shared", random.String(16))
 	} else {
 		folder := tSettings.DataFolder
+		if err = os.MkdirAll(folder, 0755); err != nil {
+			return nil, errors.NewServiceError("failed to create data folder %s", folder, err)
+		}
+
 		dbName := storeURL.Path[1:]
 
 		filename, err = filepath.Abs(path.Join(folder, fmt.Sprintf("%s.db", dbName)))
@@ -140,11 +100,7 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 			return nil, errors.NewServiceError("failed to get absolute path for sqlite DB", err)
 		}
 
-		// Create the directory containing the database file (handles nested paths like teranode1/blockchain1.db)
-		dbDir := filepath.Dir(filename)
-		if err = os.MkdirAll(dbDir, 0755); err != nil {
-			return nil, errors.NewServiceError("failed to create data folder %s", dbDir, err)
-		}
+		// filename = fmt.Sprintf("file:%s?cache=shared&mode=rwc", filename)
 
 		/* Don't be tempted by a large busy_timeout. Just masks a bigger problem.
 		Fail fast. This is 'dev mode' sqlite after all */
@@ -174,19 +130,4 @@ func InitSQLiteDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.
 	This is sqlite, our local db, this isn't about performance. Use a small number. See the problem. Fail fast. */
 	// db.SetMaxOpenConns(5)
 	return db, nil
-}
-
-// logPostgresPoolMetrics logs PostgreSQL connection pool statistics including
-// open connections, idle connections, wait count, and wait duration.
-func logPostgresPoolMetrics(logger ulogger.Logger, db *usql.DB) {
-	stats := db.Stats()
-	logger.Infof("PostgreSQL connection pool metrics: OpenConnections=%d, InUse=%d, Idle=%d, WaitCount=%d, WaitDuration=%v, MaxIdleClosed=%d, MaxIdleTimeClosed=%d, MaxLifetimeClosed=%d",
-		stats.OpenConnections,
-		stats.InUse,
-		stats.Idle,
-		stats.WaitCount,
-		stats.WaitDuration,
-		stats.MaxIdleClosed,
-		stats.MaxIdleTimeClosed,
-		stats.MaxLifetimeClosed)
 }

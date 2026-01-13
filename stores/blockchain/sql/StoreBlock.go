@@ -12,7 +12,6 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -20,7 +19,6 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/lib/pq"
 	"modernc.org/sqlite"
@@ -262,8 +260,7 @@ INSERT INTO blocks (
 	,invalid
 	,mined_set
 	,subtrees_set
-	,persisted_at
-) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21)
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20)
 RETURNING id
 			`
 		} else {
@@ -289,8 +286,7 @@ INSERT INTO blocks (
 	,invalid
 	,mined_set
 	,subtrees_set
-	,persisted_at
-) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20)
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
 RETURNING id
 			`
 		}
@@ -319,8 +315,7 @@ INSERT INTO blocks (
 	,invalid
 	,mined_set
 	,subtrees_set
-	,persisted_at
-) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20, $21)
+) VALUES ($1, $2, $3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20)
 RETURNING id
 			`
 		} else {
@@ -346,8 +341,7 @@ INSERT INTO blocks (
 	,invalid
 	,mined_set
 	,subtrees_set
-	,persisted_at
-) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19, $20)
+) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7 ,$8 ,$9 ,$10 ,$11 ,$12 ,$13 ,$14, $15, $16, $17, $18, $19)
 RETURNING id
 			`
 		}
@@ -369,19 +363,6 @@ RETURNING id
 	}
 
 	var rows *sql.Rows
-
-	// persisted_at is either NULL or set to the current timestamp
-	var persistedAt interface{}
-
-	if storeBlockOptions.PersistedAt {
-		now := time.Now()
-		if s.engine == util.Postgres {
-			persistedAt = now
-		} else {
-			// SQLite stores timestamps as TEXT - format as "YYYY-MM-DD HH:MM:SS"
-			persistedAt = now.UTC().Format("2006-01-02 15:04:05")
-		}
-	}
 
 	if useCustomID {
 		// When using custom ID, the ID is the first parameter
@@ -406,7 +387,6 @@ RETURNING id
 			storeAsInvalid,
 			storeBlockOptions.MinedSet,
 			storeBlockOptions.SubtreesSet,
-			persistedAt,
 		)
 	} else {
 		// When using auto-increment, no ID parameter is needed
@@ -430,7 +410,6 @@ RETURNING id
 			storeAsInvalid,
 			storeBlockOptions.MinedSet,
 			storeBlockOptions.SubtreesSet,
-			persistedAt,
 		)
 	}
 

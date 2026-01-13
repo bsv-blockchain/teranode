@@ -86,7 +86,7 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 		bufferSize = 1024 * 128 // default to 128KB
 	}
 
-	logger.Debugf("Using %s buffer for file storer", bufferSize)
+	logger.Infof("Using %s buffer for file storer", bufferSize)
 
 	// Create pipe for streaming data to blob storage
 	reader, writer := io.Pipe()
@@ -185,25 +185,6 @@ func (f *FileStorer) Close(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// Abort signals that the write operation should be abandoned and the temp file should not be finalized.
-// It closes the pipe writer with an error, causing SetFromReader to receive an error during io.Copy,
-// which triggers temp file cleanup in the blob store.
-// This should be called instead of Close() when an error occurs during writing.
-// It is safe to call Abort() multiple times or after Close().
-func (f *FileStorer) Abort(err error) {
-	if err == nil {
-		err = errors.NewProcessingError("write operation aborted")
-	}
-
-	// Close the pipe with an error to signal the background goroutine to abort
-	// This will cause io.Copy in SetFromReader to return this error,
-	// which triggers temp file cleanup
-	_ = f.writer.CloseWithError(err)
-
-	// Wait for the background goroutine to complete
-	f.wg.Wait()
 }
 
 // waitUntilFileIsAvailable waits for the file to become available in storage.

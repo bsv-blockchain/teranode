@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/test"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/stretchr/testify/require"
 )
@@ -20,11 +19,14 @@ var blockWait = 30 * time.Second
 
 func TestMoveUp(t *testing.T) {
 	t.Skip("Skipping until p2p client is refactored")
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC: true,
 		EnableP2P: true,
 		// EnableFullLogging: true,
-		FSMState: blockchain.FSMStateRUNNING,
+		SettingsContext: "docker.host.teranode2.daemon",
+		FSMState:        blockchain.FSMStateRUNNING,
 	})
 	defer node2.Stop(t, true)
 
@@ -35,7 +37,8 @@ func TestMoveUp(t *testing.T) {
 		EnableRPC: true,
 		EnableP2P: true,
 		// EnableFullLogging: true,
-		FSMState: blockchain.FSMStateRUNNING,
+		SettingsContext: "docker.host.teranode1.daemon",
+		FSMState:        blockchain.FSMStateRUNNING,
 	})
 	defer node1.Stop(t, true)
 
@@ -61,11 +64,14 @@ func TestMoveUp(t *testing.T) {
 
 func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 	t.Skip("Skipping until p2p client is refactored")
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 			// Create a copy to avoid race conditions
@@ -93,6 +99,7 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:       true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 			// Create a copy to avoid race conditions
@@ -136,10 +143,13 @@ func TestMoveDownMoveUpWhenNewBlockIsGenerated(t *testing.T) {
 func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 	t.Skip("Skipping until p2p client is refactored")
 
+	SharedTestLock.Lock()
+	defer SharedTestLock.Unlock()
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableP2P:       true,
 		EnableValidator: true,
+		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 			// Create a copy to avoid race conditions
@@ -163,6 +173,7 @@ func TestMoveDownMoveUpWhenNoNewBlockIsGenerated(t *testing.T) {
 		EnableP2P:       true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			s.BlockValidation.SecretMiningThreshold = 9999
 			// Create a copy to avoid race conditions
@@ -197,10 +208,7 @@ func TestTDRestart(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       false,
 		EnableValidator: true,
-		UTXOStoreType:   "aerospike",
-		SettingsOverrideFunc: test.ComposeSettings(
-			test.SystemTestSettings(),
-		),
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	// err := td.BlockchainClient.Run(td.Ctx, "test")
@@ -221,10 +229,7 @@ func TestTDRestart(t *testing.T) {
 		EnableP2P:         false,
 		EnableValidator:   true,
 		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
-		UTXOStoreType:     "aerospike",
-		SettingsOverrideFunc: test.ComposeSettings(
-			test.SystemTestSettings(),
-		),
+		SettingsContext:   "docker.host.teranode1.daemon",
 	})
 
 	td.WaitForBlockHeight(t, block1, blockWait, true)
@@ -282,6 +287,7 @@ func TestDynamicSubtreeSize(t *testing.T) {
 		EnableRPC:       true,
 		EnableP2P:       false,
 		EnableValidator: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	defer td.Stop(t)
@@ -347,11 +353,8 @@ func TestDynamicSubtreeSize(t *testing.T) {
 
 func TestInvalidateBlock(t *testing.T) {
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:     true,
-		UTXOStoreType: "aerospike",
-		SettingsOverrideFunc: test.ComposeSettings(
-			test.SystemTestSettings(),
-		),
+		EnableRPC:       true,
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 	defer node1.Stop(t, true)
 

@@ -61,13 +61,13 @@ kubectl get pods -n teranode-operator
 
 ```bash
 # Get Aerospike pod name
-AEROSPIKE_POD=$(kubectl get pods -n teranode-operator -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep aero)
+AEROSPIKE_POD=$(kubectl get pods -n teranode-operator -l app=aerospike -o jsonpath='{.items[0].metadata.name}')
 
 # Access Aerospike pod
 kubectl exec -it $AEROSPIKE_POD -n teranode-operator -- bash
 
 # Truncate the UTXO set
-asadm --enable -e "manage truncate ns utxo-store"
+asadm --enable -e "manage truncate ns utxo-store set utxo"
 
 # Verify the total records count (should slowly decrease to 0)
 asadm -e "info"
@@ -126,7 +126,7 @@ kubectl delete pvc shared-pvc -n teranode-operator
 # Or manually create it if needed
 
 # Alternatively, access a pod with the PVC mounted and clean specific directories
-kubectl exec -it <pod-with-pvc> -n teranode-operator -- rm -rf /data/teranode-operator/*
+kubectl exec -it <pod-with-pvc> -n teranode-operator -- rm -rf /app/data/*
 ```
 
 ## Restart Services

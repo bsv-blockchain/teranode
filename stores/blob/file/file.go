@@ -102,26 +102,6 @@ type longtermStore interface {
 	Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error)
 }
 
-// semaphoreReadCloser wraps an io.ReadCloser and releases the read semaphore when closed.
-// This ensures the read permit is held for the entire duration of the read operation,
-// not just during file open, making read behavior consistent with write behavior where
-// the write permit is held for the entire streaming write operation.
-type semaphoreReadCloser struct {
-	io.ReadCloser
-}
-
-func (r *semaphoreReadCloser) Close() error {
-	err := r.ReadCloser.Close()
-	// Only release the semaphore permit if the underlying close was successful.
-	// This provides natural idempotency: subsequent calls will fail at the OS level
-	// (file already closed) and won't release the permit again, avoiding the
-	// possible overhead of using a sync.Once to ensure the permit is released exactly once.
-	if err == nil {
-		releaseReadPermit()
-	}
-	return err
-}
-
 // Semaphore configuration constants
 const (
 	defaultReadLimit  = 768 // 75% of original 1024 total
@@ -285,8 +265,8 @@ func InitSemaphores(readLimit, writeLimit int) error {
 // acquireReadPermit acquires a single read permit with a timeout.
 // This prevents goroutines from blocking indefinitely if the semaphore is full.
 func acquireReadPermit(ctx context.Context) error {
-	// Create a context with 25 second timeout
-	acquireCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	// Create a context with 30 second timeout
+	acquireCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	if err := readSemaphore.Acquire(acquireCtx, 1); err != nil {
@@ -311,8 +291,8 @@ func releaseReadPermit() {
 // acquireWritePermit acquires a single write permit with a timeout.
 // This prevents goroutines from blocking indefinitely if the semaphore is full.
 func acquireWritePermit(ctx context.Context) error {
-	// Create a context with 25 second timeout
-	acquireCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	// Create a context with 30 second timeout
+	acquireCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	if err := writeSemaphore.Acquire(acquireCtx, 1); err != nil {
@@ -320,7 +300,7 @@ func acquireWritePermit(ctx context.Context) error {
 			return errors.NewServiceUnavailableError("[File] write operation timed out waiting for semaphore permit")
 		}
 
-		return errors.NewStorageError("[File] failed to acquire write permit: %w", err)
+		return errors.NewProcessingError("[File] failed to acquire write permit: %w", err)
 	}
 
 	return nil
@@ -383,7 +363,7 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	options := options.NewStoreOptions(opts...)
 
 	if hashPrefix := storeURL.Query().Get("hashPrefix"); len(hashPrefix) > 0 {
-		val, err := strconv.ParseInt(hashPrefix, 10, 32)
+		val, err := strconv.ParseInt(hashPrefix, 10, 64)
 		if err != nil {
 			return nil, errors.NewStorageError("[File] failed to parse hashPrefix", err)
 		}
@@ -392,19 +372,12 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	}
 
 	if hashSuffix := storeURL.Query().Get("hashSuffix"); len(hashSuffix) > 0 {
-		val, err := strconv.ParseInt(hashSuffix, 10, 32)
+		val, err := strconv.ParseInt(hashSuffix, 10, 64)
 		if err != nil {
 			return nil, errors.NewStorageError("[File] failed to parse hashSuffix", err)
 		}
 
 		options.HashPrefix = -int(val)
-	}
-
-	// Parse disableDAH URL parameter
-	// This can be set via URL (?disableDAH=true/false) or via StoreOption (WithDisableDAH(true/false))
-	// URL parameter takes precedence over StoreOption (bidirectional override)
-	if disableDAH := storeURL.Query().Get("disableDAH"); disableDAH != "" {
-		options.DisableDAH = disableDAH == "true"
 	}
 
 	if len(options.SubDirectory) > 0 {
@@ -427,11 +400,6 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 
 	// Check if longterm storage options are provided
 	if options.PersistSubDir != "" {
-		// Validate PersistSubDir doesn't contain path traversal sequences
-		if strings.Contains(options.PersistSubDir, "..") {
-			return nil, errors.NewInvalidArgumentError("[File] PersistSubDir contains path traversal sequence")
-		}
-
 		// Create persistent subdirectory
 		if err := os.MkdirAll(filepath.Join(path, options.PersistSubDir), 0755); err != nil {
 			return nil, errors.NewStorageError("[File] failed to create persist sub directory", err)
@@ -538,56 +506,6 @@ func (s *File) loadDAHs() error {
 
 		if cleaned > 0 {
 			s.logger.Infof("[File] Cleaned up %d leftover .dah.tmp files (older than %v)", cleaned, cleanupThreshold)
-		}
-	}
-
-	// Clean up any leftover general .tmp files from incomplete SetFromReader writes
-	// Only remove files older than 10 minutes to avoid interfering with active writes
-	generalTmpFiles, err := findFilesByExtension(s.path, ".tmp")
-	if err == nil && len(generalTmpFiles) > 0 {
-		now := time.Now()
-		cleanupThreshold := 10 * time.Minute
-		var cleaned int
-
-		for _, tmpFile := range generalTmpFiles {
-			// Skip .dah.tmp files (already handled above) and .sha256.tmp files (hash temp files)
-			if strings.HasSuffix(tmpFile, ".dah.tmp") || strings.HasSuffix(tmpFile, ".sha256.tmp") {
-				continue
-			}
-
-			func() {
-				ctx := context.Background()
-				if err := acquireReadPermit(ctx); err != nil {
-					s.logger.Warnf("[File] failed to acquire read permit for stat: %v", err)
-					return
-				}
-				defer releaseReadPermit()
-
-				info, err := os.Stat(tmpFile)
-				if err != nil {
-					return
-				}
-
-				// Check if file is older than the threshold
-				if now.Sub(info.ModTime()) > cleanupThreshold {
-					if err := acquireWritePermit(ctx); err != nil {
-						s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-						return
-					}
-					defer releaseWritePermit()
-
-					err := os.Remove(tmpFile)
-					if err != nil && !os.IsNotExist(err) {
-						s.logger.Warnf("[File] failed to remove leftover tmp file: %s", tmpFile)
-					} else {
-						cleaned++
-					}
-				}
-			}()
-		}
-
-		if cleaned > 0 {
-			s.logger.Infof("[File] Cleaned up %d leftover .tmp files (older than %v)", cleaned, cleanupThreshold)
 		}
 	}
 
@@ -1032,19 +950,7 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	if err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to create file", filename, err)
 	}
-
-	// Track whether we should clean up the temp file on exit.
-	// Default to true (cleanup); only set to false on success path after rename.
-	cleanupTmpFile := true
-	defer func() {
-		file.Close()
-		if cleanupTmpFile {
-			// Remove temp file on any error path to prevent incomplete files
-			if removeErr := os.Remove(tmpFilename); removeErr != nil && !os.IsNotExist(removeErr) {
-				s.logger.Warnf("[File][SetFromReader] failed to remove temp file %s: %v", tmpFilename, removeErr)
-			}
-		}
-	}()
+	defer file.Close()
 
 	// Set up the hasher; keep destination as the raw *os.File so io.Copy can use the ReadFrom fast path
 	hasher := sha256.New()
@@ -1058,29 +964,16 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 	}
 
 	// Stream the body using io.Copy with io.TeeReader so the file can use ReadFrom fast path while also hashing.
-	bytesWritten, err := io.Copy(file, io.TeeReader(reader, hasher))
-	if err != nil {
+	if _, err = io.Copy(file, io.TeeReader(reader, hasher)); err != nil {
 		return errors.NewStorageError("[File][SetFromReader] [%s] failed to write data to file", filename, err)
 	}
-
-	// Validate that actual data was written from the reader
-	if bytesWritten == 0 {
-		return errors.NewStorageError("[File][SetFromReader] [%s] reader provided zero bytes of data", filename)
-	}
-
-	// Success path - don't cleanup temp file, we're about to rename it
-	cleanupTmpFile = false
 
 	// rename the file to remove the .tmp extension
 	if err = os.Rename(tmpFilename, filename); err != nil {
 		// check is some other process has created this file before us
 		if _, statErr := os.Stat(filename); statErr != nil {
-			// Rename failed and file doesn't exist - clean up temp file
-			_ = os.Remove(tmpFilename)
 			return errors.NewStorageError("[File][SetFromReader] [%s] failed to rename file from tmp", filename, err)
 		} else {
-			// Another process created the file - clean up our temp file
-			_ = os.Remove(tmpFilename)
 			s.logger.Warnf("[File][SetFromReader] [%s] already exists so another process created it first", filename)
 		}
 	}
@@ -1161,12 +1054,6 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 		return "", err
 	}
 
-	// Skip DAH functionality entirely if disabled for this store
-	// Lifecycle is managed externally (e.g., by Aerospike pruner)
-	if merged.DisableDAH {
-		return fileName, nil
-	}
-
 	dah := merged.DAH
 
 	// If the dah is not set and the block height retention is set, set the dah to the current block height plus the block height retention
@@ -1202,9 +1089,6 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 // This implementation stores the DAH value in a separate file with the same name as the blob
 // but with a .dah extension, and also maintains an in-memory map of DAH values for quick access.
 //
-// If the store has DisableDAH=true, this method returns immediately without error, as DAH
-// functionality is disabled for this store (lifecycle managed externally).
-//
 // Parameters:
 //   - ctx: Context for the operation (unused in this implementation)
 //   - key: The key identifying the blob
@@ -1215,12 +1099,6 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 // Returns:
 //   - error: Any error that occurred during the operation, including if the blob doesn't exist
 func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, newDAH uint32, opts ...options.FileOption) error {
-	// If DAH is disabled for this store, return immediately
-	// This store's lifecycle is managed externally (e.g., by Aerospike pruner)
-	if s.options.DisableDAH {
-		return nil
-	}
-
 	if err := acquireWritePermit(ctx); err != nil {
 		return errors.NewStorageError("[File][SetDAH] failed to acquire write permit", err)
 	}
@@ -1347,9 +1225,7 @@ func (s *File) GetIoReader(ctx context.Context, key []byte, fileType fileformat.
 	}
 
 	if err := s.validateFileHeader(f, fileName, fileType); err != nil {
-		if closeErr := f.Close(); closeErr != nil {
-			s.logger.Warnf("[File][GetIoReader] failed to close file after header validation error: %v", closeErr)
-		}
+		f.Close()
 		return nil, err
 	}
 
@@ -1379,14 +1255,14 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 	if err := acquireReadPermit(ctx); err != nil {
 		return nil, errors.NewStorageError("[File][openFileWithFallback] failed to acquire read permit", err)
 	}
+	defer releaseReadPermit()
 
 	f, err := os.Open(fileName)
 	if err == nil {
-		return &semaphoreReadCloser{ReadCloser: f}, nil
+		return f, nil
 	}
 
 	if !errors.Is(err, os.ErrNotExist) {
-		releaseReadPermit()
 		return nil, errors.NewStorageError("[File][openFileWithFallback] [%s] failed to open file", fileName, err)
 	}
 
@@ -1394,25 +1270,21 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 	if s.persistSubDir != "" {
 		persistedFilename, err := merged.ConstructFilename(filepath.Join(s.path, s.persistSubDir), key, fileType)
 		if err != nil {
-			releaseReadPermit()
 			return nil, err
 		}
 
 		persistFile, err := os.Open(persistedFilename)
 		if err == nil {
-			return &semaphoreReadCloser{ReadCloser: persistFile}, nil
+			return persistFile, nil
 		}
 
 		if !errors.Is(err, os.ErrNotExist) {
-			releaseReadPermit()
 			return nil, errors.NewStorageError("[File][openFileWithFallback] [%s] failed to open file in persist directory", persistedFilename, err)
 		}
 	}
 
 	// Try longterm storage if available
 	if s.longtermClient != nil {
-		releaseReadPermit()
-
 		fileReader, err := s.longtermClient.GetIoReader(ctx, key, fileType, opts...)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -1425,7 +1297,6 @@ func (s *File) openFileWithFallback(ctx context.Context, merged *options.Options
 		return fileReader, nil
 	}
 
-	releaseReadPermit()
 	return nil, errors.ErrNotFound
 }
 
@@ -1567,16 +1438,12 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 func findFilesByExtension(root, ext string) ([]string, error) {
 	var a []string
 
-	// Normalize extension: remove leading dot if present for 'find' command
-	// filepath.Ext returns extension with leading dot, but find pattern needs "*.<ext>"
-	extForFind := strings.TrimPrefix(ext, ".")
-
 	useFind := runtime.GOOS == "linux" || runtime.GOOS == "darwin"
 
 	// Check if 'find' is available
 	if useFind {
 		if _, err := exec.LookPath("find"); err == nil {
-			pattern := "*." + extForFind
+			pattern := "*." + ext
 			cmd := exec.Command("find", root, "-type", "f", "-name", pattern)
 
 			var out bytes.Buffer
@@ -1596,20 +1463,12 @@ func findFilesByExtension(root, ext string) ([]string, error) {
 		}
 	}
 
-	// Normalize extension: ensure it has a leading dot for filepath.Ext comparison
-	extForWalk := ext
-	if !strings.HasPrefix(extForWalk, ".") {
-		extForWalk = "." + extForWalk
-	}
-
 	err := filepath.Walk(root, func(s string, d os.FileInfo, e error) error {
 		if e != nil {
 			return e
 		}
 
-		// Use HasSuffix instead of filepath.Ext to support multi-dot extensions
-		// filepath.Ext("file.dah.tmp") returns ".tmp", not ".dah.tmp"
-		if strings.HasSuffix(d.Name(), extForWalk) {
+		if filepath.Ext(d.Name()) == ext {
 			a = append(a, s)
 		}
 

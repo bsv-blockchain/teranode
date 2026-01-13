@@ -55,12 +55,7 @@ func (e *Error) Error() string {
 		return "<nil>"
 	}
 
-	// Use strings.Builder for efficient string concatenation
-	var b strings.Builder
-	// Pre-allocate reasonable capacity to reduce allocations
-	b.Grow(256)
-
-	// Get data message if it exists
+	// Set the data message if it exists
 	dataMsg := ""
 	if e.Data() != nil {
 		dataMsg = e.data.Error()
@@ -69,82 +64,19 @@ func (e *Error) Error() string {
 	// If the wrapped error is nil, return the error message without the wrapped error
 	if e.WrappedErr() == nil {
 		if dataMsg == "" {
-			b.WriteString(e.code.String())
-			b.WriteString(" (")
-			b.WriteString(fmt.Sprint(int32(e.code)))
-			b.WriteString("): ")
-			b.WriteString(e.message)
-		} else {
-			// Special format when data but no wrapped error: just number
-			b.WriteString(fmt.Sprint(int32(e.code)))
-			b.WriteString(": ")
-			b.WriteString(e.message)
-			b.WriteString(" \"")
-			b.WriteString(dataMsg)
-			b.WriteString("\"")
-		}
-		return b.String()
-	}
-
-	// Has wrapped error - use full format with name
-	b.WriteString(e.code.String())
-	b.WriteString(" (")
-	b.WriteString(fmt.Sprint(int32(e.code)))
-	b.WriteString("): ")
-	b.WriteString(e.message)
-
-	// Add data message if present
-	if dataMsg != "" {
-		b.WriteString(" \"")
-		b.WriteString(dataMsg)
-		b.WriteString("\"")
-	}
-
-	// Add wrapped error chain - use iterative approach to avoid recursive Error() calls
-	if e.wrappedErr != nil {
-		b.WriteString(" -> ")
-		// Limit chain depth to prevent excessive formatting
-		depth := 0
-		maxDepth := 20
-		current := e.wrappedErr
-
-		for current != nil && depth < maxDepth {
-			if errPtr, ok := current.(*Error); ok {
-				b.WriteString(errPtr.code.String())
-				b.WriteString(" (")
-				b.WriteString(fmt.Sprint(int32(errPtr.code)))
-				b.WriteString("): ")
-				b.WriteString(errPtr.message)
-
-				if errPtr.Data() != nil {
-					dataMsg := errPtr.data.Error()
-					if dataMsg != "" {
-						b.WriteString(" \"")
-						b.WriteString(dataMsg)
-						b.WriteString("\"")
-					}
-				}
-
-				current = errPtr.wrappedErr
-				if current != nil {
-					b.WriteString(" -> ")
-				}
-			} else {
-				// Non-Error type, use Error() method
-				b.WriteString(current.Error())
-				break
-			}
-			depth++
+			return fmt.Sprintf("%s (%d): %v", e.code.Enum(), e.code, e.message)
 		}
 
-		if depth >= maxDepth {
-			b.WriteString("... (chain truncated at ")
-			b.WriteString(fmt.Sprint(maxDepth))
-			b.WriteString(" errors)")
-		}
+		return fmt.Sprintf("%d: %v %q", e.code, e.message, dataMsg)
 	}
 
-	return b.String()
+	// No data message, return the error message with the wrapped error
+	if dataMsg == "" {
+		return fmt.Sprintf("%s (%d): %v -> %v", e.code.Enum(), e.code, e.message, e.wrappedErr)
+	}
+
+	// Return the error message with the wrapped error and data message
+	return fmt.Sprintf("%s (%d): %v -> %v %q", e.code.Enum(), e.code, e.message, e.wrappedErr, dataMsg)
 }
 
 // Is reports whether error codes match.
@@ -387,17 +319,17 @@ func (e *Error) contains(target *Error) bool {
 		return false
 	}
 
-	// Build a set of all errors in e's chain using struct{} for zero memory overhead
-	// Pre-allocate with capacity to reduce allocations for typical chain depths
-	eChain := make(map[*Error]struct{}, 8)
+	// Build a set of all errors in e's chain
+	eChain := make(map[*Error]bool)
+	visited := make(map[*Error]bool)
 
 	current := e
 	for current != nil {
-		// Check for cycles while building the chain
-		if _, exists := eChain[current]; exists {
+		if visited[current] {
 			break // Cycle detected, stop traversal
 		}
-		eChain[current] = struct{}{}
+		visited[current] = true
+		eChain[current] = true
 
 		// Move to the next wrapped error
 		if wrappedErr, ok := current.wrappedErr.(*Error); ok {
@@ -408,17 +340,16 @@ func (e *Error) contains(target *Error) bool {
 	}
 
 	// Check if any error in target's chain exists in e's chain
-	// Track visited errors in target's chain to detect cycles
-	visited := make(map[*Error]struct{}, 4)
+	visited = make(map[*Error]bool)
 	current = target
 	for current != nil {
-		if _, exists := visited[current]; exists {
+		if visited[current] {
 			return false // Cycle detected in target chain
 		}
-		visited[current] = struct{}{}
+		visited[current] = true
 
 		// Check if this target error exists in e's chain
-		if _, exists := eChain[current]; exists {
+		if eChain[current] {
 			return true
 		}
 

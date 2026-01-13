@@ -11,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/daemon"
-	"github.com/bsv-blockchain/teranode/test"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/require"
@@ -24,8 +23,8 @@ func TestVerifyMerkleRootCalculation(t *testing.T) {
 	ctx := context.Background()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:            true,
-		SettingsOverrideFunc: test.SystemTestSettings(),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 
 	defer td.Stop(t)
@@ -60,6 +59,7 @@ func TestCheckPrevBlockHash(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	defer td.Stop(t)
@@ -121,13 +121,15 @@ func TestPrevBlockHashAfterReorg(t *testing.T) {
 	ctx := context.Background()
 
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC: true,
+		EnableRPC:       true,
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	defer node1.Stop(t)
 
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC: true,
+		EnableRPC:       true,
+		SettingsContext: "docker.host.teranode2.daemon",
 	})
 
 	defer node2.Stop(t)
@@ -192,8 +194,8 @@ func TestCheckHashPrevBlockCandidate(t *testing.T) {
 	ctx := context.Background()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:            true,
-		SettingsOverrideFunc: test.SystemTestSettings(),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 
 	defer td.Stop(t)
@@ -237,8 +239,8 @@ func TestCoinbaseTXAmount(t *testing.T) {
 	ctx := context.Background()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:            true,
-		SettingsOverrideFunc: test.SystemTestSettings(),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 
 	defer td.Stop(t)
@@ -277,8 +279,8 @@ func TestCoinbaseTXAmount2(t *testing.T) {
 	ctx := context.Background()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:            true,
-		SettingsOverrideFunc: test.SystemTestSettings(),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 
 	defer td.Stop(t)
@@ -323,8 +325,8 @@ func TestUniqueCandidateIdentifiers(t *testing.T) {
 	ctx := context.Background()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:            true,
-		SettingsOverrideFunc: test.SystemTestSettings(),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 
 	defer td.Stop(t)
@@ -378,8 +380,8 @@ func TestConcurrentCandidateIdentifiers(t *testing.T) {
 	var wg sync.WaitGroup
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:            true,
-		SettingsOverrideFunc: test.SystemTestSettings(),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 
 	defer td.Stop(t)

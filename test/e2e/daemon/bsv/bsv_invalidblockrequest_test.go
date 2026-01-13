@@ -37,6 +37,7 @@ func TestBSVInvalidBlockRequest(t *testing.T) {
 		EnableRPC:       true,
 		EnableValidator: true,
 		EnableP2P:       true,
+		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 18090
 			settings.Validator.UseLocalValidator = true
@@ -48,6 +49,7 @@ func TestBSVInvalidBlockRequest(t *testing.T) {
 		EnableRPC:       true,
 		EnableValidator: true,
 		EnableP2P:       true,
+		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 28090
 			settings.Validator.UseLocalValidator = true
@@ -59,6 +61,7 @@ func TestBSVInvalidBlockRequest(t *testing.T) {
 		EnableRPC:       true,
 		EnableValidator: true,
 		EnableP2P:       true,
+		SettingsContext: "docker.host.teranode3.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 38090
 			settings.Validator.UseLocalValidator = true

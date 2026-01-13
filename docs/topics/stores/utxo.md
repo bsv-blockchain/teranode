@@ -1,4 +1,4 @@
-# UTXO Store
+# 🗃️ UTXO Store
 
 ## Index
 
@@ -21,7 +21,7 @@
 5. [Technology](#5-technology)
     - [5.1. Language and Libraries](#51-language-and-libraries)
     - [5.2. Data Stores](#52-data-stores)
-    - [5.3. Data Pruning](#53-data-pruning)
+    - [5.3. Data Purging](#53-data-purging)
 6. [Performance Optimizations](#6-performance-optimizations)
     - [6.1. Shared Buffer Optimization](#61-shared-buffer-optimization)
 7. [Directory Structure and Main Files](#7-directory-structure-and-main-files)
@@ -63,7 +63,7 @@ The UTXO Store includes functionality to **freeze** and **unfreeze** UTXOs, as w
 
 ## 2. Architecture
 
-The UTXO Store is a shared library component that is used by multiple Teranode services to retrieve, store, and modify UTXOs.
+The UTXO Store is a micro-service that is used by other micro-services to retrieve or store / modify UTXOs.
 
 ![UTXO_Store_Container_Context_Diagram.png](../services/img/UTXO_Store_Container_Context_Diagram.png)
 
@@ -77,7 +77,7 @@ The following diagram illustrates the complete flow of UTXO operations across al
 
 ![utxo_operations_flow.svg](../services/img/plantuml/utxo/utxo_operations_flow.svg)
 
-The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (`utxostore`), as it can be seen in the following code example:
+The UTXO store implementation is consistent within a Teranode node (every service connects to the same specific implementation), and it is defined via settings (`utxostore`), as it can be seen in the following code fragment (`main.go`):
 
 ```go
 
@@ -104,7 +104,7 @@ func getUtxoStore(ctx context.Context, logger ulogger.Logger) utxostore.Interfac
 
 The following diagram provides a deeper level of detail into the UTXO Store's internal components and their interactions:
 
-> **Note**: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Pruner Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.
+> **Note**: This diagram represents a simplified component view showing the main architectural elements. The Store Interface defines the contract, Factory creates implementation instances, and each implementation (Aerospike, SQL, Memory, Null) provides the actual storage backend. Batchers enhance performance for specific operations, and the Cleanup Service manages delete-after-height operations. Alert system operations (Freeze, Reassign) are methods on the Store implementations rather than separate components.
 
 ![utxo_store_detailed_component.svg](../services/img/plantuml/utxo/utxo_store_detailed_component.svg)
 
@@ -130,7 +130,7 @@ The Teranode UTXO is no different from Bitcoin UTXO. The following is a descript
 
 - **Transaction Outputs**: When a transaction occurs on the blockchain, it creates "transaction outputs," which are essentially chunks of cryptocurrency value. Each output specifies an amount and a condition under which it can be spent (a cryptographic script key that the receiver owns).
 
-Under the external library `github.com/bsv-blockchain/go-bt/v2`, we can see the structure of a transaction output.
+Under the external library `github.com/ordishs/go-bt/output.go`, we can see the structure of a transaction output.
 
 ```go
 type Output struct {
@@ -152,7 +152,7 @@ Components of the `Output` struct:
     - The `LockingScript`, often referred to as the "scriptPubKey" in Bitcoin's technical documentation, is a script written in Bitcoin's scripting language.
     - This script contains cryptographic conditions to unlock the funds.
 
-Equally, we can see how a list of outputs is part of a transaction (`github.com/bsv-blockchain/go-bt/v2`):
+Equally, we can see how a list of outputs is part of a transaction (`github.com/ordishs/go-bt/tx.go`):
 
 ```go
 type Tx struct {
@@ -207,23 +207,31 @@ Once the UTXO is spent, the spending tx_id will be saved.
 
 - To compute the hash of the key, the caller must know the complete data and calculate the hash before calling the API.
 
-- The hashing logic can be found in `util/utxo_hash.go`:
+- The hashing logic can be found in `UTXOHash.go`:
 
 ```go
-func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript *bscript.Script, satoshis uint64) (*chainhash.Hash, error) {
- if lockingScript == nil {
-  return nil, errors.NewProcessingError("locking script is nil")
+func UTXOHash(previousTxid *chainhash.Hash, index uint32, lockingScript []byte, satoshis uint64) (*chainhash.Hash, error) {
+ if len(lockingScript) == 0 {
+  return nil, fmt.Errorf("locking script is nil")
+ }
+
+ if satoshis == 0 {
+  return nil, fmt.Errorf("satoshis is 0")
  }
 
  utxoHash := make([]byte, 0, 256)
  utxoHash = append(utxoHash, previousTxid.CloneBytes()...)
  utxoHash = append(utxoHash, bt.VarInt(index).Bytes()...)
- utxoHash = append(utxoHash, *lockingScript...)
+ utxoHash = append(utxoHash, lockingScript...)
  utxoHash = append(utxoHash, bt.VarInt(satoshis).Bytes()...)
 
- chHash := chainhash.HashH(utxoHash)
+ hash := crypto.Sha256(utxoHash)
+ chHash, err := chainhash.NewHash(hash)
+ if err != nil {
+  return nil, err
+ }
 
- return &chHash, nil
+ return chHash, nil
 }
 ```
 
@@ -284,7 +292,7 @@ Coinbase Transaction creation (UTXO step):
 
 Coinbase Transaction deletion (UTXO step):
 
-1. The **Block Assembly** service (see `SubtreeProcessor.go`, `removeCoinbaseUtxos` method)  deletes the Coinbase transaction. This is done when blocks are reorganised and previously tracked coinbase transactions lose validity.
+1. The **Block Assembly** service (see `SubtreeProcessor.go`, `` method)  deletes the Coinbase transaction. This is done when blocks are reorganised and previously tracked coinbase transactions lose validity.
 2. The **Block Assembly** service sends a request to the **UTXO Store** to delete the Coinbase UTXO.
 3. The **UTXO Store** interacts with the underlying **Datastore** implementation to delete the Coinbase UTXO.
 
@@ -347,33 +355,6 @@ To optimize performance when reading externally stored transactions, the UTXO st
 
 The cache handles concurrent reads efficiently, preventing multiple simultaneous fetches of the same external transaction data.
 
-#### Lock Record Pattern for Multi-Record Transactions
-
-When a transaction has more than 20,000 outputs (configurable via `utxo_store_batch_size`), it must be split across multiple Aerospike records. The lock record pattern ensures these multi-record operations complete atomically, preventing data corruption from partial writes or concurrent access.
-
-**Key Components:**
-
-1. **Lock Records**: Temporary Aerospike records that prevent concurrent creation attempts for the same transaction. They use a special index (`0xFFFFFFFF`) that cannot conflict with actual sub-records.
-
-2. **Creating Flag**: A per-record boolean flag that prevents UTXO spending until all records are fully committed. When `creating=true`, the UTXO's outputs cannot be spent.
-
-**Two-Phase Commit Protocol:**
-
-- **Phase 1**: Acquire lock, store external data, create all Aerospike records with `creating=true`
-- **Phase 2**: Clear `creating` flag from children first, then master (master's flag absence indicates completion)
-
-**Error Handling and Recovery:**
-
-The system automatically recovers from partial failures through multiple paths:
-
-- Retry attempts complete Phase 2 via existing record detection
-- Re-encounter during block/subtree processing triggers completion
-- Mining operations clear flags as part of `SetMined`
-
-Lock records have dynamic TTL (30-300 seconds based on record count) to prevent permanent locks on process crashes.
-
-For detailed documentation, see [UTXO Lock Record Pattern for Multi-Record Transactions](../features/utxo_lock_records.md).
-
 ### 4.8. Alert System and UTXO Management
 
 The UTXO Store supports advanced UTXO management features, which can be utilized by an alert system.
@@ -432,7 +413,7 @@ The UTXO Store tracks unmined transactions to support transaction recovery and c
 A statically typed, compiled language known for its simplicity and efficiency, especially in concurrent operations and networked services.
 The primary language used for implementing the service's logic.
 
-2. **Bitcoin Transaction (BT) GoLang library**: `github.com/bsv-blockchain/go-bt/v2` - a full featured Bitcoin transactions and transaction manipulation/functionality Go Library.
+2. **Bitcoin Transaction (BT) GoLang library**: `github.com/ordishs/go-bt/` - a full featured Bitcoin transactions and transaction manipulation/functionality Go Library.
 
 ### 5.2. Data Stores
 
@@ -444,7 +425,7 @@ The following datastores are supported (either in development / experimental or 
     - Suitable for environments requiring high throughput and low latency.
     - Handles large volumes of UTXO data with fast read/write capabilities.
     - Aerospike is the reference datastore. Teranode has been guaranteed to process 1 million tps with Aerospike.
-    - Aerospike records can contain up to 1MB.
+    - Aerospike records can contain up to 1024 bytes.
    ![AerospikeRecord.png](../services/img/AerospikeRecord.png)
     - For more information, please refer to the official Aerospike documentation: <https://aerospike.com>.
 
@@ -472,27 +453,9 @@ The following datastores are supported (either in development / experimental or 
 - Databases like Aerospike provide a balance of speed and persistence, suitable for larger, more complex systems.
 - Nullstore is more appropriate for testing, development, or lightweight applications.
 
-### 5.3. Data Pruning
+### 5.3. Data Purging
 
-Stored data is automatically pruned to prevent the datastore from growing indefinitely. The UTXO Store works in conjunction with the **Pruner Service**, a standalone microservice responsible for managing UTXO data pruning operations.
-
-**Pruning Mechanisms:**
-
-1. **Delete-At-Height (DAH)**: UTXO records are marked with a `DeleteAtHeight` field when they are spent or when coinbase maturity expires. The Pruner Service queries and deletes records where `deleteAtHeight <= currentBlockHeight`.
-
-2. **Parent Preservation**: The Pruner Service implements a critical two-phase safety mechanism to protect parent transactions of old unmined transactions from premature deletion, ensuring resubmitted transactions can validate successfully.
-
-3. **External Transaction Cleanup**: For large transactions stored in blob storage (Aerospike), the Pruner Service also deletes external `.tx` files to reclaim storage space.
-
-**Event-Driven Architecture:**
-
-The Pruner Service operates event-driven, responding to `BlockPersisted` notifications from the Block Persister service. This ensures pruning is coordinated with block persistence, preventing deletion of transaction data before it's safely stored in `.subtree_data` files for catchup nodes.
-
-**For detailed information about pruning operations, configuration, and the two-phase safety mechanism, see:**
-
-- [Pruner Service Documentation](../services/pruner.md)
-- [Pruner Settings Reference](../../references/settings/services/pruner_settings.md)
-- [UTXO Data Model](../datamodel/utxo_data_model.md) (DeleteAtHeight field documentation)
+Stored data is automatically purged a certain TTL (Time To Live) period after it is spent. This is done to prevent the datastore from growing indefinitely and to ensure that only relevant data (i.e. data that is spendable or recently spent) is kept in the store.
 
 ## 6. Performance Optimizations
 
@@ -596,20 +559,15 @@ UTXO Store Package Structure (stores/utxo)
 
 ## 8. Running the Store Locally
 
-- **Validator**: For validating transactions and managing UTXO state
-- **Block Assembly**: For creating new blocks and managing coinbase UTXOs
-- **Block Validation**: For validating blocks and storing coinbase transactions
-- **Subtree Validation**: For retrieving UTXO metadata during subtree validation
-- **Asset Server**: For serving UTXO data to external clients
-- **Block Persister**: For retrieving UTXO metadata when persisting blocks
+### How to run
 
-The UTXO Store is a data store component that is used by various services. It is not run independently. To use the UTXO Store locally, run services that depend on it, such as the Validator or UTXO Persister:
+To run the UTXO Store locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -validator=1 
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -UtxoStore=1
 ```
 
-Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running services locally.
+Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Bootstrap Service locally.
 
 ## 9. Configuration and Settings
 

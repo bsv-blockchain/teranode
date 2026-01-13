@@ -37,7 +37,12 @@
     pageSize = data.value.pageSize
   }
 
-  $: totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
+  let totalPages = 0
+
+  const onTotal = (e) => {
+    totalPages = e.detail.total
+  }
+
   $: showPagerNav = totalPages > 1
   $: showPagerSize = showPagerNav || (totalPages === 1 && data.length > 5)
   $: showTableFooter = showPagerSize
@@ -126,6 +131,7 @@
       }}
       hasBoundaryRight={true}
       on:change={onPage}
+      on:total={onTotal}
     />
     <TableToggle value={variant} on:change={onToggle} />
   </svelte:fragment>

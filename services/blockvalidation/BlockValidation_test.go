@@ -52,7 +52,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/greatroar/blobloom"
@@ -188,7 +187,7 @@ func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, bl
 // proper test isolation.
 func setup(t *testing.T) (utxostore.Store, subtreevalidation.Interface, blockchain.ClientI, blob.Store, blob.Store, func()) {
 	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
-	httpmock.ActivateNonDefault(util.HTTPClient())
+	httpmock.Activate()
 	httpmock.RegisterResponder(
 		"GET",
 		`=~^/tx/[a-z0-9]+\z`,
@@ -3331,7 +3330,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 		subtreeHashes,
 		uint64(subtree.Length()), //nolint:gosec
 		uint64(totalSize),        //nolint:gosec
-		1, 1,
+		100, 0,
 	)
 	require.NoError(t, err)
 
@@ -3355,7 +3354,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	require.NotEmpty(t, metaChildTx.BlockHeights)
 
 	require.Equal(t, metaChildTx.BlockIDs[0], uint32(0x1))
-	require.Equal(t, metaChildTx.BlockHeights[0], uint32(0x1))
+	require.Equal(t, metaChildTx.BlockHeights[0], uint32(0x64))
 	require.Equal(t, metaChildTx.SubtreeIdxs[0], 0)
 }
 

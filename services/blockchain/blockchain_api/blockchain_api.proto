@@ -126,9 +126,6 @@ service BlockchainAPI {
   // SetBlockMinedSet marks a block as mined.
   rpc SetBlockMinedSet(SetBlockMinedSetRequest) returns (google.protobuf.Empty) {}
 
-  // ClearBlockMinedSet resets the mined_set flag to false for a block.
-  rpc ClearBlockMinedSet(ClearBlockMinedSetRequest) returns (google.protobuf.Empty) {}
-
   // GetBlocksMinedNotSet retrieves blocks not marked as mined.
   rpc GetBlocksMinedNotSet(google.protobuf.Empty) returns (GetBlocksMinedNotSetResponse) {}
 
@@ -140,12 +137,6 @@ service BlockchainAPI {
 
   // SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
   rpc SetBlockProcessedAt (SetBlockProcessedAtRequest) returns (google.protobuf.Empty) {}
-
-  // SetBlockPersistedAt updates the persisted_at timestamp for a block.
-  rpc SetBlockPersistedAt(SetBlockPersistedAtRequest) returns (google.protobuf.Empty) {}
-
-  // GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
-  rpc GetBlocksNotPersisted(GetBlocksNotPersistedRequest) returns (GetBlocksNotPersistedResponse) {}
 
   // FSM-related methods
 
@@ -532,10 +523,6 @@ message SetBlockMinedSetRequest {
   bytes blockHash = 1;  // Hash of the mined block
 }
 
-message ClearBlockMinedSetRequest {
-  bytes blockHash = 1;  // Hash of the block to reset
-}
-
 // GetBlocksMinedNotSetResponse contains blocks not marked as mined.
 message GetBlocksMinedNotSetResponse {
   repeated bytes blockBytes = 1;  // List of serialized blocks
@@ -632,19 +619,4 @@ message ReportPeerFailureRequest {
   string peer_id = 2;        // Identifier of the failing peer
   string failure_type = 3;   // Type of failure (e.g., "catchup", "subtree", "block")
   string reason = 4;         // Description of the failure
-}
-
-// SetBlockPersistedAtRequest marks a block as persisted.
-message SetBlockPersistedAtRequest {
-  bytes block_hash = 1;  // Hash of the persisted block
-}
-
-// GetBlocksNotPersistedRequest requests blocks not yet persisted to blob storage.
-message GetBlocksNotPersistedRequest {
-  int32 limit = 1;  // Maximum number of blocks to return
-}
-
-// GetBlocksNotPersistedResponse contains blocks not yet persisted.
-message GetBlocksNotPersistedResponse {
-  repeated bytes block_bytes = 1;  // List of serialized blocks
 }

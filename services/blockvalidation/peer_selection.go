@@ -2,9 +2,6 @@ package blockvalidation
 
 import (
 	"context"
-
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/teranode/model"
 )
 
 // PeerForCatchup represents a peer suitable for catchup operations with its metadata
@@ -12,8 +9,8 @@ type PeerForCatchup struct {
 	ID                     string
 	Storage                string
 	DataHubURL             string
-	Height                 uint32
-	BlockHash              *chainhash.Hash
+	Height                 int32
+	BlockHash              string
 	CatchupReputationScore float64
 	CatchupAttempts        int64
 	CatchupSuccesses       int64
@@ -30,7 +27,7 @@ type PeerForCatchup struct {
 // Returns:
 //   - []PeerForCatchup: List of peers sorted by reputation (best first)
 //   - error: If the query fails
-func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uint32) ([]PeerForCatchup, error) {
+func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight int32) ([]PeerForCatchup, error) {
 	// If P2P client is not available, return empty list
 	if u.p2pClient == nil {
 		u.logger.Debugf("[peer_selection] P2P client not available, using fallback peer selection")
@@ -92,45 +89,26 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 	return peers, nil
 }
 
-// tryAlternativePeersForCatchup attempts catchup with alternative peers from the P2P service.
-// It skips the excludePeerID and any peers marked as malicious.
-// Returns true if catchup succeeded with any peer.
-func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model.Block, excludePeerID string) bool {
-	blockHash := block.Hash()
-	bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, block.Height)
-	if peerErr != nil {
-		u.logger.Warnf("[catchup] Failed to get best peers from P2P service: %v", peerErr)
+// selectBestPeerForBlock selects the best peer to fetch a specific block from.
+// This is a convenience wrapper around selectBestPeersForCatchup that returns
+// the single best peer.
+//
+// Parameters:
+//   - ctx: Context for the gRPC call
+//   - targetHeight: The height of the block we're trying to fetch
+//
+// Returns:
+//   - *PeerForCatchup: The best peer, or nil if none available
+//   - error: If the query fails
+func (u *Server) selectBestPeerForBlock(ctx context.Context, targetHeight int32) (*PeerForCatchup, error) {
+	peers, err := u.selectBestPeersForCatchup(ctx, targetHeight)
+	if err != nil {
+		return nil, err
 	}
 
-	if len(bestPeers) == 0 {
-		return false
+	if len(peers) == 0 {
+		return nil, nil
 	}
 
-	u.logger.Infof("[catchup] Trying %d alternative peers for block %s", len(bestPeers), blockHash.String())
-
-	for _, bestPeer := range bestPeers {
-		if bestPeer.ID == excludePeerID {
-			continue
-		}
-
-		if u.isPeerMalicious(ctx, bestPeer.ID) {
-			u.logger.Debugf("[catchup] Skipping peer %s - marked as malicious", bestPeer.ID)
-			continue
-		}
-
-		u.logger.Infof("[catchup] Trying peer %s (score: %.2f) for block %s", bestPeer.ID, bestPeer.CatchupReputationScore, blockHash.String())
-
-		altErr := u.catchup(ctx, block, bestPeer.ID, bestPeer.DataHubURL)
-		if altErr == nil {
-			u.logger.Infof("[catchup] Successfully processed block %s from peer %s", blockHash.String(), bestPeer.ID)
-			u.processBlockNotify.Delete(*blockHash)
-			u.catchupAlternatives.Delete(*blockHash)
-			return true
-		}
-
-		u.logger.Warnf("[catchup] Peer %s failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
-		u.reportCatchupFailure(ctx, bestPeer.ID)
-	}
-
-	return false
+	return &peers[0], nil
 }

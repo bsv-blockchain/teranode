@@ -22,7 +22,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
@@ -42,7 +41,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		headers := []*model.BlockHeader{blocks[1].Header}
 
 		// Set up HTTP mock for block fetch
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -103,7 +102,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		}
 
 		// Set up HTTP mocks for batch fetching (current implementation uses large batches)
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock batch request for all 5 blocks in one request
@@ -179,7 +178,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		}
 
 		// Set up HTTP mock to return error for batch request
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET", fmt.Sprintf("http://test-peer/blocks/%s?n=%d", blocks[1].Header.Hash().String(), numBlocks),
@@ -222,7 +221,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		headers := []*model.BlockHeader{blocks[1].Header}
 
 		// Set up HTTP mock with delay
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -283,7 +282,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		}
 
 		// Set up HTTP mock to return empty response for batch request
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET", fmt.Sprintf("http://test-peer/blocks/%s?n=%d", blocks[numBlocks].Header.Hash().String(), numBlocks),
@@ -334,7 +333,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		var requestTimes []time.Time
 		var timeMutex sync.Mutex
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock batch request for all blocks - blocks returned in reverse order
@@ -481,7 +480,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -509,7 +508,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -545,7 +544,7 @@ func TestFetchBlocksConcurrently_PerformanceCharacteristics(t *testing.T) {
 		}
 
 		// Mock batch request for large batch processing
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock single large batch request - blocks returned in reverse order
@@ -639,7 +638,7 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -667,7 +666,7 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -698,7 +697,7 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -726,7 +725,7 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock to return multiple blocks
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -768,7 +767,7 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		)
 
 		// Set up HTTP mock to return error
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Call fetchBlocksBatch - should return error
@@ -790,7 +789,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -817,7 +816,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock to return error
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -841,7 +840,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock to return invalid data
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -874,7 +873,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		}
 
 		// Mock HTTP responses - simulate batch fetching
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// The optimized function uses batch size of 5, so it will make 1 request for all 5 blocks
@@ -943,7 +942,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockHeaders = append(blockHeaders, blocks[i].Header)
 		}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock batch responses using regex pattern to match any batch request
@@ -1024,7 +1023,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		}
 
 		// Mock HTTP responses for large batch requests
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock single large batch request (100 blocks) - blocks returned in reverse order
@@ -1092,7 +1091,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockHeaders = append(blockHeaders, blocks[i].Header)
 		}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock 3 large batch requests (100, 100, 50)
@@ -1172,7 +1171,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockHeaders = append(blockHeaders, blocks[i].Header)
 		}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock batch request with artificial delay to test parallel processing
@@ -1254,7 +1253,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockHeaders = append(blockHeaders, blocks[i].Header)
 		}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock HTTP error response
@@ -1306,7 +1305,7 @@ func TestFetchBlocksConcurrently_WorkerPoolArchitecture(t *testing.T) {
 		}
 
 		// Mock HTTP responses for large batch requests
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock single large batch request (100 blocks) - blocks returned in reverse order
@@ -1392,7 +1391,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 		expectedData := []byte("mock subtree data")
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
@@ -1410,7 +1409,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
@@ -1429,7 +1428,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
@@ -1449,7 +1448,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 		expectedData := []byte("mock subtree data content")
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
@@ -1473,7 +1472,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
@@ -1492,7 +1491,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
@@ -1517,7 +1516,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		suite.Server.subtreeStore = memory.New()
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Create node hashes for the subtree endpoint (raw hashes, not serialized subtree)
@@ -1576,7 +1575,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock subtree endpoint to fail
@@ -1607,7 +1606,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Create node hashes for the subtree endpoint (raw hashes, not serialized subtree)
@@ -1664,7 +1663,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Subtrees: []*chainhash.Hash{subtreeHash},
 		}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock subtree endpoint to fail
@@ -1690,7 +1689,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Subtrees: []*chainhash.Hash{subtreeHash},
 		}
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Create minimal valid node hashes for the subtree endpoint
@@ -1725,7 +1724,7 @@ func TestFetchBlocksConcurrentlyOptimized(t *testing.T) {
 		headers := []*model.BlockHeader{blocks[1].Header, blocks[2].Header}
 
 		// Set up HTTP mock for block fetching
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock batch request - return blocks in reverse order (newest first)
@@ -1780,7 +1779,7 @@ func TestFetchBlocksConcurrentlyOptimized(t *testing.T) {
 
 // TestFetchSubtreeDataForBlock tests the fetchSubtreeDataForBlock function comprehensively
 func TestFetchSubtreeDataForBlock(t *testing.T) {
-	httpmock.ActivateNonDefault(util.HTTPClient())
+	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
 	logger := ulogger.TestLogger{}
@@ -1991,7 +1990,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 			subtreeStore: mockSubtreeStore,
 			settings:     settings,
 		}
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer func() {
 			httpmock.DeactivateAndReset()
 		}()
@@ -2032,7 +2031,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 			subtreeStore: mockSubtreeStore,
 			settings:     settings,
 		}
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer func() {
 			httpmock.DeactivateAndReset()
 		}()
@@ -2066,7 +2065,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 			subtreeStore: mockSubtreeStore,
 			settings:     settings,
 		}
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer func() {
 			httpmock.DeactivateAndReset()
 		}()
@@ -2108,7 +2107,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 			subtreeStore: blobStore,
 			settings:     settings,
 		}
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer func() {
 			httpmock.DeactivateAndReset()
 		}()
@@ -2161,7 +2160,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 			subtreeStore: mockSubtreeStore,
 			settings:     settings,
 		}
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer func() {
 			httpmock.DeactivateAndReset()
 		}()
@@ -2211,7 +2210,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 
 // TestFetchSubtreeFromPeer tests the fetchSubtreeFromPeer function comprehensively
 func TestFetchSubtreeFromPeer(t *testing.T) {
-	httpmock.ActivateNonDefault(util.HTTPClient())
+	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
 	logger := ulogger.TestLogger{}
@@ -2295,7 +2294,7 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 
 // TestFetchSubtreeDataFromPeer tests the fetchSubtreeDataFromPeer function comprehensively
 func TestFetchSubtreeDataFromPeer(t *testing.T) {
-	httpmock.ActivateNonDefault(util.HTTPClient())
+	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
 	logger := ulogger.TestLogger{}
@@ -2393,7 +2392,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 
 // TestBlockWorker tests the blockWorker function more comprehensively
 func TestBlockWorker(t *testing.T) {
-	httpmock.ActivateNonDefault(util.HTTPClient())
+	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
 	logger := ulogger.TestLogger{}
@@ -2585,7 +2584,7 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		}
 
 		// Set up HTTP mock with delay to allow cancellation
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -2641,7 +2640,7 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		headers := []*model.BlockHeader{blocks[1].Header, blocks[2].Header}
 
 		// Set up HTTP mock that returns wrong block for second request
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -2687,7 +2686,7 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		blocks := testhelpers.CreateTestBlockChain(t, 2)
 
 		// Set up HTTP mock that returns partial block data
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -2723,7 +2722,7 @@ func TestOrderedDelivery_StrictOrdering(t *testing.T) {
 	}
 
 	// Set up HTTP mock
-	httpmock.ActivateNonDefault(util.HTTPClient())
+	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
 	httpmock.RegisterResponder(
@@ -2788,7 +2787,7 @@ func TestFetchSingleBlock_ImprovedErrorHandling(t *testing.T) {
 	}
 
 	t.Run("Block Creation Failure with Better Context", func(t *testing.T) {
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		hash := createTestHash("test")
@@ -2864,7 +2863,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		defer suite.Cleanup()
 
 		// Set up HTTP mock
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		subtreeHash := createTestHash("subtree1")
@@ -2906,7 +2905,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		subtreeHash := createTestHash("subtree-coinbase")
@@ -2943,7 +2942,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		subtreeHash := createTestHash("subtree-fail")
@@ -2969,7 +2968,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		subtreeHash := createTestHash("empty-subtree")

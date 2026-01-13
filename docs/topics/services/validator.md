@@ -7,13 +7,13 @@
     - [2.1. Starting the Validator as a service](#21-starting-the-validator-as-a-service)
     - [2.2. Receiving Transaction Validation Requests](#22-receiving-transaction-validation-requests)
     - [2.3. Validating the Transaction](#23-validating-the-transaction)
-        - [2.3.1. Consensus Rules vs Policy Checks](#231-consensus-rules-vs-policy-checks)
-        - [2.3.2. Transaction Format Extension](#232-transaction-format-extension)
+    - [2.3.1. Consensus Rules vs Policy Checks](#231-consensus-rules-vs-policy-checks)
+    - [2.3.2. Transaction Format Extension](#232-transaction-format-extension)
     - [2.4. Script Verification](#24-script-verification)
     - [2.5. Error Handling and Transaction Rejection](#25-error-handling-and-transaction-rejection)
     - [2.6. Concurrent Processing](#26-concurrent-processing)
     - [2.7. Post-validation: Updating stores and propagating the transaction](#27-post-validation-updating-stores-and-propagating-the-transaction)
-        - [2.7.1. Two-Phase Transaction Commit Process](#271-two-phase-transaction-commit-process)
+    - [2.7.1. Two-Phase Transaction Commit Process](#271-two-phase-transaction-commit-process)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -26,7 +26,7 @@
 
 The `Validator` (also called `Transaction Validator` or `Tx Validator`) is a go component responsible for:
 
-1. Receiving new transactions from the `Propagation` service,
+1. Receiving new transactions from the `Propagation`service,
 2. Validating them,
 3. Persisting the data into the utxo store,
 4. Propagating the transactions to other services based on validation results:
@@ -201,12 +201,12 @@ The validation process includes several stages:
     - Ensure inputs are unspent (prevent double-spending)
     - Validate input script format
 
-Transactions are validated by the `ValidateTransaction()` function using Teranode's internal validation logic and libraries from the BSV Blockchain organization (`github.com/bsv-blockchain/go-bt`). The implementation uses pluggable script interpreters (GoBT, GoSDK, or GoBDK) for script verification.
+New Txs are validated by the `ValidateTransaction()` function. To ensure the validity of the extended Tx, this is delegated to a BSV library: `github.com/TAAL-GmbH/arc/validator/default` (the default validator).
 
 We can see the exact steps being executed as part of the validation process below:
 
 ```go
-func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
+func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
  //
  // Each node will verify every transaction against a long checklist of criteria:
  //
@@ -232,7 +232,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 
  // 4) Each output value, as well as the total, must be within the allowed range of values (less than 21m coins,
  //    more than the dust threshold if 1 unless it's OP_RETURN, which is allowed to be 0)
- if err := tv.checkOutputs(tx, blockHeight, validationOptions); err != nil {
+ if err := tv.checkOutputs(tx, blockHeight); err != nil {
   return err
  }
 
@@ -251,7 +251,7 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
  // 10) Reject if the sum of input values is less than sum of output values
  // 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
  if !validationOptions.SkipPolicyChecks {
-  if err := tv.checkFees(tx, blockHeight, utxoHeights); err != nil {
+  if err := tv.checkFees(tx, feesToBtFeeQuote(tv.settings.Policy.GetMinMiningTxFee())); err != nil {
    return err
   }
  }
@@ -501,18 +501,23 @@ The Validator implements a structured error handling system to categorize and re
 
 The Validator leverages concurrency to optimize transaction processing performance:
 
-1. **Batching**:
+1. **Parallel UTXO Saving**:
+
+    - The `saveInParallel` flag enables concurrent UTXO updates
+    - Improves throughput by processing multiple transactions simultaneously
+
+2. **Batching**:
 
     - Transactions can be validated in batches for higher throughput
     - Batch processing is configurable and used by both Propagation and Subtree Validation services
     - The `TriggerBatcher()` method initiates batch processing when sufficient transactions accumulate
 
-2. **Error Group Pattern**:
+3. **Error Group Pattern**:
 
     - Uses Go's `errgroup` package for coordinated concurrent execution
     - Maintains proper error propagation in concurrent processing flows
 
-3. **Two-Phase Commit Process**:
+4. **Two-Phase Commit Process**:
 
     - The `twoPhaseCommitTransaction` method ensures atomic transaction processing
     - Prevents partial updates in case of failures during concurrent processing
@@ -551,12 +556,11 @@ The Validator notifies the Block Assembly service of new transactions through gR
 
 The Validator service behavior is controlled by several key configuration parameters:
 
-- **`validator_kafkaWorkers`** (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.
-- **`validator_httpRateLimit`** (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.
-- **`validator_verbose_debug`** (default: false): Enables detailed validation logging for troubleshooting.
-- **`validator_useLocalValidator`** (default: false): Determines whether to use a local validator instance or connect to a remote validator service via gRPC.
-
-**Note:** While these settings are available in the codebase, they are advanced options and may not be listed in the default `settings.conf` file. For a complete list of all available settings, see the [Validator Settings Reference](../../references/settings/services/validator_settings.md).
+- **`KafkaMaxMessageBytes`** (default: 1MB): Controls size-based routing - large transactions that exceed this threshold are routed via HTTP instead of Kafka to avoid message size limitations.
+- **`UseLocalValidator`** (default: false): Determines whether to use a local validator instance or connect to a remote validator service via gRPC.
+- **`KafkaWorkers`** (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.
+- **`HTTPRateLimit`** (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.
+- **`VerboseDebug`** (default: false): Enables detailed validation logging for troubleshooting.
 
 ### Rejected Transaction Handling
 
@@ -639,7 +643,7 @@ The Validation Service processes transactions in multiple formats:
 
 ## 5. Technology
 
-The code snippets you have been provided utilize a variety of technologies and libraries, each serving a specific purpose within the context of a Bitcoin SV (BSV) blockchain-related application. Here's a breakdown of these technologies:
+The code snippet you've provided utilizes a variety of technologies and libraries, each serving a specific purpose within the context of a Bitcoin SV (BSV) blockchain-related application. Here's a breakdown of these technologies:
 
 1. **Go (Golang)**: The programming language used for the entire codebase.
 
@@ -688,7 +692,7 @@ The code snippets you have been provided utilize a variety of technologies and l
 To run the Validator locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -validator=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -Validator=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Validator locally.

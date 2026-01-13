@@ -20,11 +20,8 @@ import (
 // TestP2PWebSocketIntegration tests the full p2p WebSocket integration to ensure:
 // 1. The first message received is a node_status message
 // 2. The first node_status message is from the current node (our own node)
-// NOTE: This test is skipped because it requires starting a full HTTP server with WebSocket
-// support and connecting to it, which is complex and potentially flaky in CI environments.
-// The core functionality is tested by TestP2PWebSocketCurrentNodeFirst and TestP2PWebSocketMessageStructure.
 func TestP2PWebSocketIntegration(t *testing.T) {
-	t.Skip("Full WebSocket integration test - functionality covered by TestP2PWebSocketCurrentNodeFirst and TestP2PWebSocketMessageStructure")
+	t.SkipNow()
 
 	// Create a mock P2PClient for testing
 	mockP2PNode := new(MockServerP2PClient)
@@ -47,7 +44,8 @@ func TestP2PWebSocketIntegration(t *testing.T) {
 	notificationCh := make(chan *notificationMsg, 10)
 
 	// Create handler
-	handler := server.HandleWebSocket(notificationCh)
+	baseURL := "http://test.com"
+	handler := server.HandleWebSocket(notificationCh, baseURL)
 
 	// Create test server
 	e := echo.New()

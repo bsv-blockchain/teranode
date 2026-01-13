@@ -206,20 +206,17 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 		ChildCount     int
 		DeleteAtHeight uint32
 	}, 0)
+	externalDAH := make([]struct {
+		TxID *chainhash.Hash
+		DAH  uint32
+	}, 0)
 	// DAH timing assumption:
 	// - thisBatch operates under a fixed block-processing context.
 	// - thisBlockHeight and retention are immutable for the duration of SetMinedMulti() execution.
 	// Therefore, computing DeleteAtHeight (DAH) once is safe and consistent across all signals in this batch.
 	// If this assumption ever changes (e.g., SetBlockHeight or retention can mutate concurrently),
 	// DAH must be computed per-record at signal time to avoid stale values.
-	//
-	// Only calculate DAH if BlockHeightRetention is configured (> 0)
-	// When retention is 0, it means "don't use automatic retention"
-	retention := s.settings.GetUtxoStoreBlockHeightRetention()
-	var dahHeight uint32
-	if retention > 0 {
-		dahHeight = thisBlockHeight + retention
-	}
+	dahHeight := thisBlockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 
 	for idx, batchRecord := range batchRecords {
 		result, res, err := s.processSingleBatchRecord(ctx, batchRecord, hashes[idx], thisBlockHeight, minedBlockInfo)
@@ -257,22 +254,25 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			case LuaSignalAllSpent:
 				extraRecords = append(extraRecords, hashes[idx])
 			case LuaSignalDAHSet:
-				// Only set DAH if retention is configured
-				if retention > 0 {
-					dahSetItems = append(dahSetItems, struct {
-						TxID           *chainhash.Hash
-						ChildCount     int
-						DeleteAtHeight uint32
-					}{TxID: hashes[idx], ChildCount: res.ChildCount, DeleteAtHeight: dahHeight})
-					// External store DAH is disabled - lifecycle managed by pruner service
-				}
+				dahSetItems = append(dahSetItems, struct {
+					TxID           *chainhash.Hash
+					ChildCount     int
+					DeleteAtHeight uint32
+				}{TxID: hashes[idx], ChildCount: res.ChildCount, DeleteAtHeight: dahHeight})
+				externalDAH = append(externalDAH, struct {
+					TxID *chainhash.Hash
+					DAH  uint32
+				}{TxID: hashes[idx], DAH: dahHeight})
 			case LuaSignalDAHUnset:
 				dahUnsetItems = append(dahUnsetItems, struct {
 					TxID           *chainhash.Hash
 					ChildCount     int
 					DeleteAtHeight uint32
 				}{TxID: hashes[idx], ChildCount: res.ChildCount, DeleteAtHeight: 0})
-				// External store DAH is disabled - lifecycle managed by pruner service
+				externalDAH = append(externalDAH, struct {
+					TxID *chainhash.Hash
+					DAH  uint32
+				}{TxID: hashes[idx], DAH: 0})
 			}
 		}
 	}
@@ -305,8 +305,11 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 		}
 	}
 
-	// External store DAH is disabled - lifecycle managed by pruner service
-	// setDAHExternalTransactionMulti removed as it would no-op
+	if len(externalDAH) > 0 {
+		if err := s.setDAHExternalTransactionMulti(ctx, externalDAH); err != nil {
+			postErr = errors.Join(postErr, err)
+		}
+	}
 
 	if postErr != nil {
 		return blockIDs, errors.NewError("aerospike setMined follow-up batch errors", postErr)
@@ -362,6 +365,7 @@ func (s *Store) handleBatchRecordError(err error, hash *chainhash.Hash) error {
 // handleSetMinedSignal handles signals from the setMined operation
 func (s *Store) handleSetMinedSignal(ctx context.Context, signal LuaSignal, hash *chainhash.Hash, childCount int, thisBlockHeight uint32) error {
 	var errs error
+	dahHeight := thisBlockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 
 	switch signal {
 	case LuaSignalAllSpent:
@@ -370,22 +374,20 @@ func (s *Store) handleSetMinedSignal(ctx context.Context, signal LuaSignal, hash
 		}
 
 	case LuaSignalDAHSet:
-		// Only set DAH if BlockHeightRetention is configured (> 0)
-		// When retention is 0, it means "don't use automatic retention"
-		if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
-			dahHeight := thisBlockHeight + retention
-
-			if err := s.SetDAHForChildRecords(hash, childCount, dahHeight); err != nil {
-				errs = errors.Join(errs, err)
-			}
-			// External store DAH is disabled - lifecycle managed by pruner service
+		if err := s.SetDAHForChildRecords(hash, childCount, dahHeight); err != nil {
+			errs = errors.Join(errs, err)
+		}
+		if err := s.setDAHExternalTransaction(ctx, hash, dahHeight); err != nil {
+			errs = errors.Join(errs, err)
 		}
 
 	case LuaSignalDAHUnset:
 		if err := s.SetDAHForChildRecords(hash, childCount, 0); err != nil {
 			errs = errors.Join(errs, err)
 		}
-		// External store DAH is disabled - lifecycle managed by pruner service
+		if err := s.setDAHExternalTransaction(ctx, hash, 0); err != nil {
+			errs = errors.Join(errs, err)
+		}
 	}
 
 	return errs

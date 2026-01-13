@@ -55,9 +55,9 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		return errors.NewProcessingError("error creating block from bytes", err)
 	}
 
-	u.logger.Infof("[persistBlock][%s] Processing block (%d subtrees)...", block.String(), len(block.Subtrees))
+	u.logger.Infof("[BlockPersister] Processing block %s (%d subtrees)...", block.Header.Hash().String(), len(block.Subtrees))
 
-	concurrency := u.settings.BlockPersister.Concurrency
+	concurrency := u.settings.Block.BlockPersisterConcurrency
 
 	// In all-in-one mode, reduce concurrency to avoid resource starvation across multiple services
 	if u.settings.IsAllInOneMode {
@@ -65,101 +65,68 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		if concurrency < 1 {
 			concurrency = 1 // Ensure at least 1
 		}
-		u.logger.Infof("[persistBlock][%s] All-in-one mode detected: reducing concurrency to %d", block.String(), concurrency)
+		u.logger.Infof("[BlockPersister] All-in-one mode detected: reducing concurrency to %d", concurrency)
 	}
 
-	u.logger.Infof("[persistBlock][%s] Processing subtrees with concurrency %d", block.String(), concurrency)
+	u.logger.Infof("[BlockPersister] Processing subtrees with concurrency %d", concurrency)
 
-	// Only process UTXO files if enabled
-	var utxoDiff *utxopersister.UTXOSet
-	if u.settings.BlockPersister.ProcessUTXOFiles {
-		// Create a new UTXO diff
-		var err error
-		utxoDiff, err = utxopersister.NewUTXOSet(ctx, u.logger, u.settings, u.blockStore, block.Header.Hash(), block.Height)
-		if err != nil {
-			return errors.NewProcessingError("error creating utxo diff", err)
+	// Create a new UTXO diff
+	utxoDiff, err := utxopersister.NewUTXOSet(ctx, u.logger, u.settings, u.blockStore, block.Header.Hash(), block.Height)
+	if err != nil {
+		return errors.NewProcessingError("error creating utxo diff", err)
+	}
+
+	defer func() {
+		if closeErr := utxoDiff.Close(); closeErr != nil {
+			u.logger.Warnf("[persistBlock] error closing utxoDiff during error cleanup: %v", closeErr)
 		}
-
-		defer func() {
-			if closeErr := utxoDiff.Close(); closeErr != nil {
-				u.logger.Warnf("[persistBlock][%s] error closing utxoDiff during error cleanup: %v", block.String(), closeErr)
-			}
-		}()
-	} else {
-		u.logger.Infof("[persistBlock][%s] UTXO file processing disabled - skipping utxo-additions and utxo-deletions files", block.String())
-	}
+	}()
 
 	if len(block.Subtrees) == 0 {
 		// No subtrees to process, just write the coinbase UTXO to the diff and continue
-		if utxoDiff != nil {
-			if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
-				return errors.NewProcessingError("[persistBlock][%s] error processing coinbase tx", block.String(), err)
-			}
+		if err := utxoDiff.ProcessTx(block.CoinbaseTx); err != nil {
+			return errors.NewProcessingError("error processing coinbase tx", err)
 		}
 	} else {
-		// Phase 1: Create all subtreeData files in parallel
-		u.logger.Infof("[persistBlock][%s] Phase 1: Creating %d subtreeData files", block.String(), len(block.Subtrees))
-
-		g1, gCtx1 := errgroup.WithContext(ctx)
-		util.SafeSetLimit(g1, concurrency)
+		g, gCtx := errgroup.WithContext(ctx)
+		util.SafeSetLimit(g, concurrency)
 
 		for i, subtreeHash := range block.Subtrees {
 			subtreeHash := subtreeHash
 			i := i
 
-			g1.Go(func() error {
-				return u.CreateSubtreeDataFileStreaming(gCtx1, *subtreeHash, block, i+1)
+			g.Go(func() error {
+				u.logger.Infof("[BlockPersister] processing subtree %d / %d [%s]", i+1, len(block.Subtrees), subtreeHash.String())
+
+				return u.ProcessSubtree(gCtx, *subtreeHash, block.CoinbaseTx, utxoDiff)
 			})
 		}
 
-		if err = g1.Wait(); err != nil {
+		u.logger.Infof("[BlockPersister] writing UTXODiff for block %s", block.Header.Hash().String())
+
+		if err = g.Wait(); err != nil {
+			// Don't wrap the error again, ProcessSubtree should return the error in correct format
 			return err
-		}
-
-		u.logger.Infof("[persistBlock][%s] Phase 1 complete: All subtreeData files created", block.String())
-
-		// Phase 2: Process UTXO diff sequentially through files
-		if utxoDiff != nil {
-			u.logger.Infof("[persistBlock][%s] Phase 2: Processing UTXO diff for %d subtrees", block.String(), len(block.Subtrees))
-
-			for i, subtreeHash := range block.Subtrees {
-				u.logger.Debugf("[persistBlock][%s] processing UTXO for subtree %d / %d [%s]", i+1, block.String(), len(block.Subtrees), subtreeHash.String())
-
-				if err := u.ProcessSubtreeUTXOStreaming(ctx, *subtreeHash, utxoDiff); err != nil {
-					return err
-				}
-			}
-
-			u.logger.Infof("[persistBlock][%s] Phase 2 complete: UTXO diff processed", block.String())
 		}
 	}
 
 	// Now, write the block file
-	u.logger.Infof("[persistBlock][%s] Writing block to disk", block.String())
+	u.logger.Infof("[BlockPersister] Writing block %s to disk", block.Header.Hash().String())
 
 	storer, err := filestorer.NewFileStorer(ctx, u.logger, u.settings, u.blockStore, hash[:], fileformat.FileTypeBlock)
 	if err != nil {
-		return errors.NewStorageError("[persistBlock][%s] error creating block file", block.String(), err)
+		return errors.NewStorageError("error creating block file", err)
 	}
 
-	// Track whether write succeeded to determine whether to close or abort
-	var writeSucceeded bool
 	defer func() {
-		if writeSucceeded {
-			if closeErr := storer.Close(ctx); closeErr != nil {
-				u.logger.Warnf("[persistBlock][%s] error closing storer: %v", block.String(), closeErr)
-			}
-		} else {
-			// Abort to prevent incomplete file from being finalized
-			storer.Abort(errors.NewProcessingError("[persistBlock][%s] block write failed", block.String()))
+		if closeErr := storer.Close(ctx); closeErr != nil {
+			u.logger.Warnf("[persistBlock] error closing storer: %v", closeErr)
 		}
 	}()
 
 	if _, err = storer.Write(blockBytes); err != nil {
-		return errors.NewStorageError("[persistBlock][%s] error writing block to disk", block.String(), err)
+		return errors.NewStorageError("error writing block to disk", err)
 	}
-
-	writeSucceeded = true
 
 	return nil
 }

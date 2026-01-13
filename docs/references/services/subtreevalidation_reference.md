@@ -73,8 +73,11 @@ type Server struct {
     // invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages
     invalidSubtreeDeDuplicateMap *expiringmap.ExpiringMap[string, struct{}]
 
-    // orphanage manages orphaned transactions that are missing their parent transactions
-    orphanage *Orphanage
+    // orphanage is used to store transactions that are missing parents that can be validated later
+    orphanage *expiringmap.ExpiringMap[chainhash.Hash, *bt.Tx]
+
+    // orphanageLock is used to make sure we only process the orphanage once at a time
+    orphanageLock sync.Mutex
 
     // pauseSubtreeProcessing is used to pause subtree processing while a block is being processed
     pauseSubtreeProcessing atomic.Bool
@@ -87,10 +90,6 @@ type Server struct {
 
     // currentBlockIDsMap is used to store the current block IDs for the current best block height
     currentBlockIDsMap atomic.Pointer[map[uint32]bool]
-
-    // p2pClient interfaces with the P2P service
-    // Used to report successful subtree fetches to improve peer reputation
-    p2pClient P2PClientI
 }
 ```
 
@@ -146,7 +145,6 @@ func New(
     blockchainClient blockchain.ClientI,
     subtreeConsumerClient kafka.KafkaConsumerGroupI,
     txmetaConsumerClient kafka.KafkaConsumerGroupI,
-    p2pClient P2PClientI,
 ) (*Server, error)
 ```
 

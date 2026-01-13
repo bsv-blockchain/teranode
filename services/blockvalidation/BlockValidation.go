@@ -325,49 +325,10 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 								continue
 							}
 
-							// IMPORTANT: We listen for BlockSubtreesSet, NOT NotificationType_Block.
-							//
-							// HOW THIS NOTIFICATION IS TRIGGERED:
-							// Both validation paths call updateSubtreesDAH() after validation completes:
-							//
-							// Normal Validation (ValidateBlock):
-							//   ValidateBlock() → updateSubtreesDAH() → SetBlockSubtreesSet() → notification
-							//
-							// Quick Validation (Catchup):
-							//   quickValidateBlock() → goroutines complete via errgroup.Wait()
-							//   → updateSubtreesDAH() → SetBlockSubtreesSet() → notification
-							//
-							// TIMING GUARANTEES:
-							// BlockSubtreesSet is sent AFTER:
-							// 1. Block validation completes (all consensus rules checked)
-							// 2. All goroutines that write to block.SubtreeSlices have finished (errgroup.Wait)
-							// 3. updateSubtreesDAH() has updated the DAH values for all subtrees
-							// 4. blockchainClient.SetBlockSubtreesSet() is called and sends this notification
-							//
-							// WHY THIS PREVENTS DATA RACES:
-							// Using NotificationType_Block (sent when block is added to chain) would trigger
-							// setTxMined too early, before validation goroutines complete. This caused:
-							// - Thread A (validation): Spawns goroutines writing to block.SubtreeSlices
-							// - Thread A: Caches the block with SubtreeSlices populated
-							// - Thread B (setTxMined): Retrieves the SAME block instance from cache
-							// - Thread B: Reads/modifies block.SubtreeSlices while Thread A's goroutines are still writing
-							// - Result: Data race on block.SubtreeSlices access (detected by race detector)
-							//
-							// By using BlockSubtreesSet (sent after goroutines complete), we ensure sequential
-							// access to block.SubtreeSlices without needing expensive locks everywhere.
-							if notification.Type == model.NotificationType_BlockSubtreesSet {
+							if notification.Type == model.NotificationType_Block {
 								cHash := chainhash.Hash(notification.Hash)
 								bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification: %s", cHash.String())
 								// push block hash to the setMinedChan
-								bv.setMinedChan <- &cHash
-							}
-
-							// Listen for BlockMinedUnset notifications (sent by InvalidateBlock RPC)
-							// This triggers immediate processing instead of waiting for periodic job
-							if notification.Type == model.NotificationType_BlockMinedUnset {
-								cHash := chainhash.Hash(notification.Hash)
-								bv.logger.Infof("[BlockValidation:setMined] received BlockMinedUnset notification: %s", cHash.String())
-								// push block hash to the setMinedChan for immediate processing
 								bv.setMinedChan <- &cHash
 							}
 						}
@@ -425,15 +386,11 @@ func (u *BlockValidation) start(ctx context.Context) error {
 		}
 	}
 
-	// start a ticker that checks periodically whether there are subtrees/mined that need to be set
+	// start a ticker that checks every minute whether there are subtrees/mined that need to be set
 	// this is a light routine for periodic cleanup and handling of invalidated blocks
 	go func() {
-		interval := u.settings.BlockValidation.PeriodicProcessingInterval
-		if interval == 0 {
-			interval = 1 * time.Minute // default to 1 minute if not set
-		}
-		u.logger.Infof("[BlockValidation:start] starting periodic block processing goroutine (interval: %v)", interval)
-		ticker := time.NewTicker(interval)
+		u.logger.Infof("[BlockValidation:start] starting periodic block processing goroutine")
+		ticker := time.NewTicker(1 * time.Minute)
 
 		for {
 			select {
@@ -834,14 +791,14 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	if blockWasAlreadyCached && cachedBlock != nil {
 		// Verify the cached block has subtrees loaded
 		if u.hasValidSubtrees(cachedBlock) {
-			u.logger.Debugf("[setTxMined][%s] using cached block with subtrees", blockHash.String())
+			u.logger.Debugf("[setTxMined][%s] using cached block with %d subtrees", blockHash.String(), len(cachedBlock.SubtreeSlices))
 			block = cachedBlock
-
-			// Remove from cache immediately - we're about to use it and don't need it cached anymore
-			// This frees memory sooner than waiting for cache expiry or the delete at line 894
-			u.lastValidatedBlocks.Delete(*blockHash)
 		} else {
-			u.logger.Warnf("[setTxMined][%s] cached block has invalid subtrees, fetching from blockchain", blockHash.String())
+			if len(cachedBlock.SubtreeSlices) != len(cachedBlock.Subtrees) || len(cachedBlock.SubtreeSlices) == 0 {
+				u.logger.Warnf("[setTxMined][%s] cached block missing subtrees, fetching from blockchain", blockHash.String())
+			} else {
+				u.logger.Warnf("[setTxMined][%s] cached block has invalid subtrees, fetching from blockchain", blockHash.String())
+			}
 			blockWasAlreadyCached = false
 		}
 	}
@@ -927,40 +884,10 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		return errors.NewProcessingError("[setTxMined][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 
-	// Preserve parents of old unmined transactions to protect them from pruning.
-	//
-	// When a transaction sits unmined beyond UnminedTxRetention, its parents may be fully spent
-	// and eligible for DAH pruning. We preserve those parents by setting PreserveUntil so they
-	// remain available if the child is later mined or resubmitted.
-	//
-	// FSM STATE DETERMINES WHEN TO RUN:
-	// - FSMStateRUNNING: Run on every block (normal operation, unmined pool is stable)
-	// - FSMStateCATCHINGBLOCKS: Skip (Block Assembly handles at startup as one-time batch operation)
-	//
-	// WHY DIFFERENT BEHAVIOR FOR CATCHINGBLOCKS:
-	// During catchup, child txs transition from unmined→mined rapidly. By the time we execute this
-	// code, the child's UnminedSince is already cleared (no longer in unmined query results).
-	// Block Assembly startup runs before any txs are mined, catching all unmined txs while they're
-	// still in the pool. This eliminates the timing window and is more efficient (one batch vs per-block).
-	if len(unsetMined) == 0 || !unsetMined[0] {
-		// Only preserve when setting mined (not when unsetting during invalidation)
-		fsmState, fsmErr := u.blockchainClient.GetFSMCurrentState(ctx)
-		if fsmErr != nil {
-			u.logger.Warnf("[setTxMined][%s] Failed to get blockchain FSM state for parent preservation: %v", block.Hash().String(), fsmErr)
-			// Continue - best effort
-		} else if fsmState != nil && *fsmState == blockchain.FSMStateRUNNING {
-			// Only preserve during normal operation (catchup is handled at Block Assembly startup)
-			if _, preserveErr := utxo.PreserveParentsOfOldUnminedTransactions(ctx, u.utxoStore, block.Height, u.settings, u.logger); preserveErr != nil {
-				u.logger.Errorf("[setTxMined][%s] Failed to preserve parents at height %d: %v", block.Hash().String(), block.Height, preserveErr)
-				// Continue - best effort, pruner will still run
-			}
-		}
+	// delete the block from the cache, if it was there
+	if blockWasAlreadyCached {
+		u.lastValidatedBlocks.Delete(*blockHash)
 	}
-
-	// Clear subtrees to free memory - they're no longer needed after UpdateTxMinedStatus
-	// This prevents memory retention in the blockchain store cache if block came from there and was mutated
-	// Note: lastValidatedBlocks cache was already cleared at line 799 when we retrieved the block
-	block.SubtreeSlices = nil
 
 	// update block mined_set to true
 	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
@@ -1381,18 +1308,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					return
 				}
 
+				// Block validation succeeded - now cache it with subtrees loaded
+				u.logger.Debugf("[ValidateBlock][%s] background validation complete, caching block with subtrees", block.Hash().String())
+				u.lastValidatedBlocks.Set(*block.Hash(), block)
+
 				// Update subtrees DAH now that we know the block is valid
 				if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
-					// Trigger revalidation to ensure block is retried
-					// This is consistent with other error handling in this goroutine
-					u.ReValidateBlock(block, baseURL)
-					return
 				}
-
-				// Block validation succeeded - now cache it with subtrees loaded
-				u.logger.Debugf("[ValidateBlock][%s] background validation complete, caching block", block.Hash().String())
-				u.lastValidatedBlocks.Set(*block.Hash(), block)
 			}()
 		} else {
 			// get all 100 previous block headers on the main chain
@@ -1428,11 +1351,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					reason = err.Error()
 				}
 
-				// Check if we had a storage error; if so do not mark the block as invalid
-				if errors.Is(err, errors.ErrStorageError) {
-					return err
-				}
-
 				u.storeInvalidBlock(ctx, block, baseURL, reason)
 
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err)
@@ -1448,6 +1366,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 
 			u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
+
+			// Cache the block only if subtrees are loaded (they should be from Valid() call)
+			if u.hasValidSubtrees(block) {
+				u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), len(block.SubtreeSlices))
+				u.lastValidatedBlocks.Set(*block.Hash(), block)
+			} else {
+				if len(block.SubtreeSlices) != len(block.Subtrees) || len(block.SubtreeSlices) == 0 {
+					u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), len(block.SubtreeSlices), len(block.Subtrees))
+				} else {
+					u.logger.Warnf("[ValidateBlock][%s] not caching block - some subtrees are nil", block.Hash().String())
+				}
+			}
 
 			// if valid, store the block (or update it if revalidating)
 			u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
@@ -1504,25 +1434,13 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		if !useOptimisticMining {
 			// it's critical that we call updateSubtreesDAH() only when we know the block is valid
 			if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
-				return errors.NewProcessingError("[ValidateBlock][%s] failed to update subtrees DAH", block.Hash().String(), err)
+				u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
 			}
 		}
 
 		// create bloom filter for the block and wait for it
 		if err = u.createAppendBloomFilter(decoupledCtx, block); err != nil {
 			u.logger.Errorf("[ValidateBlock][%s] failed to create bloom filter: %s", block.Hash().String(), err)
-		}
-
-		// Cache the block only if subtrees are loaded (they should be from Valid() call)
-		if u.hasValidSubtrees(block) {
-			u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), len(block.SubtreeSlices))
-			u.lastValidatedBlocks.Set(*block.Hash(), block)
-		} else {
-			if len(block.SubtreeSlices) != len(block.Subtrees) || len(block.SubtreeSlices) == 0 {
-				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), len(block.SubtreeSlices), len(block.Subtrees))
-			} else {
-				u.logger.Warnf("[ValidateBlock][%s] not caching block - some subtrees are nil", block.Hash().String())
-			}
 		}
 
 		return nil

@@ -84,7 +84,7 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.False(t, ok)
 
 		// mine the tx
-		blockIDsMap, err := store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101, OnLongestChain: true})
+		blockIDsMap, err := store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: 101, BlockHeight: 101, SubtreeIdx: 101})
 		require.NoError(t, err)
 		assert.Len(t, blockIDsMap, 1)
 		assert.Equal(t, uint32(101), blockIDsMap[*tx.TxIDChainHash()][0])
@@ -166,11 +166,10 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.Equal(t, 4, resp.Bins[fields.TotalExtraRecs.String()])
 		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
-		// Verify external file DAH is NOT set (external store has DisableDAH=true)
-		// External file lifecycle is managed by the Aerospike pruner service
+		// check the external file DAH has been set
 		dah, err = store.GetExternalStore().GetDAH(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
 		require.NoError(t, err)
-		assert.Equal(t, uint32(0), dah) // External DAH disabled
+		assert.Greater(t, dah, uint32(0))
 	})
 }
 
@@ -249,7 +248,6 @@ func TestStore_IncrementSpentRecords(t *testing.T) {
 			fields.SpentUtxos.String():     2,
 			fields.BlockIDs.String():       []int{101},
 			fields.TotalExtraRecs.String(): 2,
-			fields.UnminedSince.String():   nil, // Clear unminedSince to simulate transaction on longest chain
 		})
 		require.NoError(t, err)
 

@@ -19,7 +19,6 @@ import (
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -163,7 +162,7 @@ func TestKafkaConsumerMessageHandling(t *testing.T) {
 	err = server.Init(ctx)
 	require.NoError(t, err)
 
-	httpmock.ActivateNonDefault(util.HTTPClient())
+	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
 	t.Run("Valid_Message_Processing", func(t *testing.T) {
@@ -316,7 +315,7 @@ func TestMaliciousPeerFailover(t *testing.T) {
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 	}
 
-	httpmock.ActivateNonDefault(util.HTTPClient())
+	httpmock.Activate()
 	defer httpmock.DeactivateAndReset()
 
 	// Good peer responds correctly

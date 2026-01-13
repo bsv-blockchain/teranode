@@ -1,18 +1,10 @@
 package p2p
 
 import (
-	"strings"
 	"sync"
 	"time"
-	"unicode"
 
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/libp2p/go-libp2p/core/peer"
-)
-
-const (
-	// maxPeerNameLength limits peer names to prevent resource exhaustion
-	maxPeerNameLength = 128
 )
 
 // PeerRegistry maintains peer information
@@ -29,94 +21,36 @@ func NewPeerRegistry() *PeerRegistry {
 	}
 }
 
-// sanitizePeerName validates and sanitizes peer client names to prevent injection attacks.
-// It limits length, removes control characters, and filters potentially dangerous characters.
-func sanitizePeerName(name string) string {
-	if name == "" {
-		return ""
-	}
-
-	// Limit length to prevent resource exhaustion
-	if len(name) > maxPeerNameLength {
-		name = name[:maxPeerNameLength]
-	}
-
-	// Remove control characters, null bytes, and other problematic characters
-	// Allow only printable ASCII, spaces, and basic punctuation
-	var cleaned strings.Builder
-	cleaned.Grow(len(name))
-
-	for _, r := range name {
-		// Allow ASCII letters, numbers, spaces, and safe punctuation
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
-			r == ' ' || r == '-' || r == '_' || r == '.' || r == '/' {
-			cleaned.WriteRune(r)
-		} else if unicode.IsPrint(r) && r < 128 {
-			// Allow other printable ASCII but exclude potential XSS chars like <, >, &, ', "
-			if r != '<' && r != '>' && r != '&' && r != '\'' && r != '"' && r != '\\' {
-				cleaned.WriteRune(r)
-			}
-		}
-		// All other characters (control chars, high Unicode, etc.) are dropped
-	}
-
-	return strings.TrimSpace(cleaned.String())
-}
-
-// Put adds or updates a peer atomically
-func (pr *PeerRegistry) Put(id peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
+// AddPeer adds or updates a peer
+func (pr *PeerRegistry) AddPeer(id peer.ID, clientName string) {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 
-	now := time.Now()
-
-	// Sanitize client name to prevent injection attacks and limit length
-	sanitizedClientName := sanitizePeerName(clientName)
-
 	if _, exists := pr.peers[id]; !exists {
+		now := time.Now()
 		pr.peers[id] = &PeerInfo{
 			ID:              id,
-			ClientName:      sanitizedClientName,
-			Height:          height,
-			BlockHash:       blockHash,
-			DataHubURL:      dataHubURL,
+			ClientName:      clientName,
 			ConnectedAt:     now,
 			LastMessageTime: now,  // Initialize to connection time
 			ReputationScore: 50.0, // Start with neutral reputation
 		}
-	} else {
-		info := pr.peers[id]
-
-		if clientName != "" {
-			info.ClientName = sanitizedClientName
-		}
-
-		if height > 0 {
-			info.Height = height
-		}
-
-		if blockHash != nil {
-			info.BlockHash = blockHash
-		}
-
-		if dataHubURL != "" {
-			info.DataHubURL = dataHubURL
-		}
-
-		info.LastMessageTime = now
+	} else if clientName != "" {
+		// Update client name if provided for existing peer
+		pr.peers[id].ClientName = clientName
 	}
 }
 
-// Remove removes a peer
-func (pr *PeerRegistry) Remove(id peer.ID) {
+// RemovePeer removes a peer
+func (pr *PeerRegistry) RemovePeer(id peer.ID) {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 
 	delete(pr.peers, id)
 }
 
-// Get returns peer info
-func (pr *PeerRegistry) Get(id peer.ID) (*PeerInfo, bool) {
+// GetPeer returns peer info
+func (pr *PeerRegistry) GetPeer(id peer.ID) (*PeerInfo, bool) {
 	pr.mu.RLock()
 	defer pr.mu.RUnlock()
 
@@ -130,19 +64,48 @@ func (pr *PeerRegistry) Get(id peer.ID) (*PeerInfo, bool) {
 	return &copy, true
 }
 
-// GetAll returns all peer information
-func (pr *PeerRegistry) GetAll() []*PeerInfo {
+// GetAllPeers returns all peer information
+func (pr *PeerRegistry) GetAllPeers() []*PeerInfo {
 	pr.mu.RLock()
 	defer pr.mu.RUnlock()
 
 	result := make([]*PeerInfo, 0, len(pr.peers))
-
 	for _, info := range pr.peers {
 		copy := *info
 		result = append(result, &copy)
 	}
-
 	return result
+}
+
+// UpdateHeight updates a peer's height
+func (pr *PeerRegistry) UpdateHeight(id peer.ID, height int32, blockHash string) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		info.Height = height
+		info.BlockHash = blockHash
+	}
+}
+
+// UpdateBlockHash updates only the peer's block hash
+func (pr *PeerRegistry) UpdateBlockHash(id peer.ID, blockHash string) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		info.BlockHash = blockHash
+	}
+}
+
+// UpdateDataHubURL updates a peer's DataHub URL
+func (pr *PeerRegistry) UpdateDataHubURL(id peer.ID, url string) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		info.DataHubURL = url
+	}
 }
 
 // UpdateBanStatus updates a peer's ban status
@@ -164,6 +127,17 @@ func (pr *PeerRegistry) UpdateNetworkStats(id peer.ID, bytesReceived uint64) {
 	if info, exists := pr.peers[id]; exists {
 		info.BytesReceived = bytesReceived
 		info.LastBlockTime = time.Now()
+	}
+}
+
+// UpdateURLResponsiveness updates whether a peer's DataHub URL is responsive
+func (pr *PeerRegistry) UpdateURLResponsiveness(id peer.ID, responsive bool) {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	if info, exists := pr.peers[id]; exists {
+		info.URLResponsive = responsive
+		info.LastURLCheck = time.Now()
 	}
 }
 
@@ -379,12 +353,12 @@ func (pr *PeerRegistry) UpdateCatchupReputation(id peer.ID, score float64) {
 // - Final score is clamped to 0-100 range
 func (pr *PeerRegistry) calculateAndUpdateReputation(info *PeerInfo) {
 	const (
-		baseScore     = 50.0
-		successWeight = 0.6
-		// maliciousPenalty = 20.0
-		// maliciousCap     = 50.0
-		recencyBonus  = 10.0
-		recencyWindow = 1 * time.Hour
+		baseScore        = 50.0
+		successWeight    = 0.6
+		maliciousPenalty = 20.0
+		maliciousCap     = 50.0
+		recencyBonus     = 10.0
+		recencyWindow    = 1 * time.Hour
 	)
 
 	// If peer has been marked malicious, keep reputation very low
@@ -396,9 +370,7 @@ func (pr *PeerRegistry) calculateAndUpdateReputation(info *PeerInfo) {
 
 	// Calculate success rate (0-100)
 	totalAttempts := info.InteractionSuccesses + info.InteractionFailures
-
-	var successRate float64
-
+	successRate := 0.0
 	if totalAttempts > 0 {
 		successRate = (float64(info.InteractionSuccesses) / float64(totalAttempts)) * 100.0
 	} else {
@@ -544,23 +516,6 @@ func (pr *PeerRegistry) RecordSyncAttempt(id peer.ID) {
 	}
 }
 
-// ClearAllSyncAttempts clears the LastSyncAttempt time for all peers,
-// allowing them to be retried immediately. This is used when all peers
-// have been attempted and we want to refresh and try again.
-func (pr *PeerRegistry) ClearAllSyncAttempts() int {
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-
-	peersCleared := 0
-	for _, info := range pr.peers {
-		if !info.LastSyncAttempt.IsZero() {
-			info.LastSyncAttempt = time.Time{}
-			peersCleared++
-		}
-	}
-	return peersCleared
-}
-
 // ReconsiderBadPeers resets reputation for peers that have been bad for a while
 // Returns the number of peers that had their reputation recovered
 func (pr *PeerRegistry) ReconsiderBadPeers(cooldownPeriod time.Duration) int {
@@ -609,67 +564,6 @@ func (pr *PeerRegistry) ReconsiderBadPeers(cooldownPeriod time.Duration) int {
 	}
 
 	return peersRecovered
-}
-
-// ResetReputation resets reputation metrics for a specific peer or all peers.
-// If peerID is empty, resets all peers. Otherwise, resets only the specified peer.
-// Returns the number of peers that had their reputation reset.
-func (pr *PeerRegistry) ResetReputation(peerIDStr string) int {
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
-
-	peersReset := 0
-
-	// Helper function to reset a single peer's reputation
-	resetPeer := func(info *PeerInfo) {
-		// Reset interaction metrics
-		info.InteractionAttempts = 0
-		info.InteractionSuccesses = 0
-		info.InteractionFailures = 0
-		info.LastInteractionAttempt = time.Time{}
-		info.LastInteractionSuccess = time.Time{}
-		info.LastInteractionFailure = time.Time{}
-
-		// Reset reputation score to neutral
-		info.ReputationScore = 50.0
-		info.MaliciousCount = 0
-		info.AvgResponseTime = 0
-
-		// Clear catchup error tracking
-		info.LastCatchupError = ""
-		info.LastCatchupErrorTime = time.Time{}
-
-		// Clear reputation reset tracking to allow fresh start
-		info.LastReputationReset = time.Time{}
-		info.ReputationResetCount = 0
-
-		// Clear sync attempt tracking
-		info.LastSyncAttempt = time.Time{}
-		info.SyncAttemptCount = 0
-	}
-
-	if peerIDStr == "" {
-		// Reset all peers
-		for _, info := range pr.peers {
-			resetPeer(info)
-			peersReset++
-		}
-	} else {
-		// Reset specific peer - decode the peer ID string first
-		peerID, err := peer.Decode(peerIDStr)
-		if err != nil {
-			// Invalid peer ID, return 0
-			return 0
-		}
-
-		info, exists := pr.peers[peerID]
-		if exists {
-			resetPeer(info)
-			peersReset = 1
-		}
-	}
-
-	return peersReset
 }
 
 // GetPeersForCatchup returns peers suitable for catchup operations

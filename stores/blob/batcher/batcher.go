@@ -19,7 +19,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"io"
-	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -48,12 +47,10 @@ type Batcher struct {
 	writeKeys bool
 	// queue is a lock-free queue for storing batch items to be processed asynchronously
 	queue *lockfreequeue.LockFreeQ[BatchItem]
-	// done is the channel for signaling the background batch processing goroutine to stop
-	done chan struct{}
-	// notifyCh is used to notify the worker goroutine when new items are enqueued
-	notifyCh chan struct{}
-	// wg is used to wait for the background worker goroutine to complete during shutdown
-	wg sync.WaitGroup
+	// queueCtx is the context for controlling the background batch processing goroutine
+	queueCtx context.Context
+	// queueCancel is the function to cancel the queue context and stop background processing
+	queueCancel context.CancelFunc
 	// currentBatch holds the accumulated blob data for the current batch
 	currentBatch []byte
 	// currentBatchKeys holds the accumulated key data for the current batch (if writeKeys is true)
@@ -97,41 +94,28 @@ type blobStoreSetter interface {
 // Returns:
 //   - *Batcher: A configured batcher instance ready to accept blob operations
 func New(logger ulogger.Logger, blobStore blobStoreSetter, sizeInBytes int, writeKeys bool) *Batcher {
+	ctx, cancel := context.WithCancel(context.Background())
 	b := &Batcher{
 		logger:           logger,
 		blobStore:        blobStore,
 		sizeInBytes:      sizeInBytes,
 		writeKeys:        writeKeys,
 		queue:            lockfreequeue.NewLockFreeQ[BatchItem](),
-		done:             make(chan struct{}),
-		notifyCh:         make(chan struct{}, 1),
+		queueCtx:         ctx,
+		queueCancel:      cancel,
 		currentBatch:     make([]byte, 0, sizeInBytes),
 		currentBatchKeys: make([]byte, 0, sizeInBytes),
 	}
 
-	b.wg.Add(1)
 	go func() {
-		defer b.wg.Done()
-
 		var (
 			batchItem *BatchItem
 			err       error
 		)
 
 		for {
-			// Try immediate dequeue (optimistic fast path)
-			batchItem = b.queue.Dequeue()
-			if batchItem != nil {
-				err = b.processBatchItem(batchItem)
-				if err != nil {
-					b.logger.Errorf("error processing batch item: %v", err)
-				}
-				continue
-			}
-
-			// Queue is empty - wait for notification or shutdown
 			select {
-			case <-b.done:
+			case <-b.queueCtx.Done():
 				// Process remaining items before exiting
 				for {
 					batchItem = b.queue.Dequeue()
@@ -149,11 +133,19 @@ func New(logger ulogger.Logger, blobStore blobStoreSetter, sizeInBytes int, writ
 						b.logger.Errorf("error writing final batch during shutdown: %v", err)
 					}
 				}
-				return
 
-			case <-b.notifyCh:
-				// Item available, loop back to dequeue
-				continue
+				return
+			default:
+				batchItem = b.queue.Dequeue()
+				if batchItem == nil {
+					time.Sleep(10 * time.Millisecond)
+					continue
+				}
+
+				err = b.processBatchItem(batchItem)
+				if err != nil {
+					b.logger.Errorf("error processing batch item: %v", err)
+				}
 			}
 		}
 	}()
@@ -243,9 +235,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	binary.BigEndian.PutUint32(batchKey, timeUint32)
 	// add a random string as the next bytes, to prevent conflicting filenames from other pods
 	randBytes := make([]byte, 4)
-	if _, err := rand.Read(randBytes); err != nil {
-		return errors.NewStorageError("failed to generate random bytes for batch key", err)
-	}
+	_, _ = rand.Read(randBytes)
 	batchKey = append(batchKey, randBytes...)
 
 	g, gCtx := errgroup.WithContext(context.Background())
@@ -308,16 +298,10 @@ func (b *Batcher) Health(ctx context.Context, checkLiveness bool) (int, string, 
 //   - error: Any error that occurred during shutdown
 func (b *Batcher) Close(_ context.Context) error {
 	// Signal the background goroutine to stop
-	close(b.done)
+	b.queueCancel()
 
-	// Wake up the worker if it's blocked on notifyCh
-	select {
-	case b.notifyCh <- struct{}{}:
-	default:
-	}
-
-	// Wait for the background goroutine to finish processing all remaining items
-	b.wg.Wait()
+	// Wait a bit to ensure the goroutine has time to process remaining items
+	time.Sleep(100 * time.Millisecond)
 
 	return nil
 }
@@ -366,12 +350,6 @@ func (b *Batcher) Set(_ context.Context, hash []byte, fileType fileformat.FileTy
 		fileType: fileType,
 		value:    value,
 	})
-
-	// Notify worker that new item is available (non-blocking)
-	select {
-	case b.notifyCh <- struct{}{}:
-	default: // Already notified, don't block
-	}
 
 	return nil
 }

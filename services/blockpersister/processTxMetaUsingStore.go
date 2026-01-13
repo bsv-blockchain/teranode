@@ -61,7 +61,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepk
 		subtreeLen = subtree.Length()
 	)
 
-	if u.settings.BlockPersister.BatchMissingTransactions {
+	if u.settings.Block.BatchMissingTransactions {
 		for i := 0; i < subtreeLen; i += batchSize {
 			i := i // capture range variable for goroutine
 

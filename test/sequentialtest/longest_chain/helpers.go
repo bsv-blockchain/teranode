@@ -1,6 +1,7 @@
 package longest_chain
 
 import (
+	"net/url"
 	"testing"
 	"time"
 
@@ -8,7 +9,6 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/test"
 	"github.com/stretchr/testify/require"
 )
 
@@ -16,20 +16,16 @@ var (
 	blockWait = 30 * time.Second
 )
 
-func setupLongestChainTest(t *testing.T, utxoStoreType string) (td *daemon.TestDaemon, block3 *model.Block) {
-	// Default to aerospike if not specified
-	if utxoStoreType == "" {
-		utxoStoreType = "aerospike"
-	}
-
+func setupLongestChainTest(t *testing.T, utxoStoreOverride string) (td *daemon.TestDaemon, block3 *model.Block) {
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
-		UTXOStoreType: utxoStoreType,
-		SettingsOverrideFunc: test.ComposeSettings(
-			test.SystemTestSettings(),
-			func(tSettings *settings.Settings) {
-				tSettings.ChainCfgParams.CoinbaseMaturity = 2
-			},
-		),
+		// EnableFullLogging: true,
+		SettingsContext: "dev.system.test",
+		SettingsOverrideFunc: func(tSettings *settings.Settings) {
+			url, err := url.Parse(utxoStoreOverride)
+			require.NoError(t, err)
+			tSettings.UtxoStore.UtxoStore = url
+			tSettings.ChainCfgParams.CoinbaseMaturity = 2
+		},
 	})
 
 	// Set the FSM state to RUNNING...

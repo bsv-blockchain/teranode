@@ -188,7 +188,10 @@ func (s *Store) unspendLua(spend *utxo.Spend) error {
 			if err := s.SetDAHForChildRecords(spend.TxID, res.ChildCount, 0); err != nil {
 				return err
 			}
-			// External store DAH is disabled - lifecycle managed by pruner service
+
+			if err := s.setDAHExternalTransaction(s.ctx, spend.TxID, 0); err != nil {
+				return err
+			}
 		}
 	} else if res.Status == LuaStatusError {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()

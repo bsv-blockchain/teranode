@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -48,10 +47,6 @@ type Options struct {
 	LongtermStoreURL *url.URL
 	// BlockHeightCh is a channel for tracking block heights
 	BlockHeightCh chan uint32
-	// DisableDAH disables all Delete-At-Height functionality for this store (StoreOption)
-	// When true, the store will never create .dah files or participate in DAH-based cleanup
-	// This is useful for external stores where lifecycle management is handled by other systems
-	DisableDAH bool
 }
 
 // StoreOption is a function type for configuring store-level options.
@@ -124,16 +119,6 @@ func WithDefaultSubDirectory(subDirectory string) StoreOption {
 func WithHashPrefix(length int) StoreOption {
 	return func(s *Options) {
 		s.HashPrefix = length
-	}
-}
-
-// WithDisableDAH disables all Delete-At-Height functionality for the store.
-// When enabled, the store will never create .dah files or participate in DAH-based cleanup.
-// This is useful for external stores where lifecycle management is handled by other systems
-// (e.g., Aerospike pruner service managing external file cleanup).
-func WithDisableDAH(disable bool) StoreOption {
-	return func(s *Options) {
-		s.DisableDAH = disable
 	}
 }
 
@@ -220,7 +205,6 @@ func MergeOptions(storeOpts *Options, fileOpts []FileOption) *Options {
 		options.SkipHeader = storeOpts.SkipHeader
 		options.PersistSubDir = storeOpts.PersistSubDir
 		options.LongtermStoreURL = storeOpts.LongtermStoreURL
-		options.DisableDAH = storeOpts.DisableDAH
 	}
 
 	for _, opt := range fileOpts {
@@ -293,47 +277,11 @@ func QueryToFileOptions(query url.Values) []FileOption {
 	return opts
 }
 
-// validatePathWithinBase ensures the resolved path stays within basePath to prevent
-// path traversal attacks. It resolves both paths to absolute form and checks that
-// the target path is a subdirectory of the base path.
-func validatePathWithinBase(basePath, targetPath string) error {
-	absBase, err := filepath.Abs(basePath)
-	if err != nil {
-		return err
-	}
-	absTarget, err := filepath.Abs(targetPath)
-	if err != nil {
-		return err
-	}
-
-	// Clean paths to remove any . or .. components
-	absBase = filepath.Clean(absBase)
-	absTarget = filepath.Clean(absTarget)
-
-	// Ensure target is within base (with proper separator handling)
-	// The target must either equal the base or start with base + separator
-	if absTarget != absBase && !strings.HasPrefix(absTarget, absBase+string(os.PathSeparator)) {
-		return errors.NewInvalidArgumentError("path escapes base directory")
-	}
-
-	return nil
-}
-
 func (o *Options) ConstructFilename(basePath string, key []byte, fileType fileformat.FileType) (string, error) {
 	var (
 		filename string
 		prefix   string
 	)
-
-	// Validate SubDirectory doesn't contain path traversal sequences
-	if strings.Contains(o.SubDirectory, "..") {
-		return "", errors.NewInvalidArgumentError("subdirectory contains path traversal sequence")
-	}
-
-	// Validate Filename doesn't contain path traversal or separator characters
-	if strings.Contains(o.Filename, "..") || strings.ContainsAny(o.Filename, `/\`) {
-		return "", errors.NewInvalidArgumentError("filename contains invalid path characters")
-	}
 
 	if len(o.Filename) > 0 {
 		filename = o.Filename
@@ -348,11 +296,6 @@ func (o *Options) ConstructFilename(basePath string, key []byte, fileType filefo
 	// Build the folder to use based on the StoreOption SubDirectory and the calculated prefix
 	folder := filepath.Join(basePath, o.SubDirectory, prefix)
 
-	// Validate the folder path stays within basePath
-	if err := validatePathWithinBase(basePath, folder); err != nil {
-		return "", err
-	}
-
 	// Create the folder if it doesn't exist but only if we have a prefix as the subdirectory
 	// would already have been created by StoreOptions
 	if prefix != "" {
@@ -361,14 +304,9 @@ func (o *Options) ConstructFilename(basePath string, key []byte, fileType filefo
 		}
 	}
 
-	finalPath := filepath.Join(folder, filename) + "." + fileType.String()
+	filename = filepath.Join(folder, filename) + "." + fileType.String()
 
-	// Final validation that the complete path stays within basePath
-	if err := validatePathWithinBase(basePath, finalPath); err != nil {
-		return "", err
-	}
-
-	return finalPath, nil
+	return filename, nil
 }
 
 func (o *Options) CalculatePrefix(filename string) string {

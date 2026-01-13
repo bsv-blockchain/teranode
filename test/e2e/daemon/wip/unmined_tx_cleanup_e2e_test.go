@@ -14,7 +14,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
-	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/assert"
@@ -42,16 +41,14 @@ func TestUnminedTransactionCleanup(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
+		SettingsContext: "dev.system.test",
 		// EnableFullLogging: true,
-		SettingsOverrideFunc: test.ComposeSettings(
-			test.SystemTestSettings(),
-			func(s *settings.Settings) {
-				s.UtxoStore.UnminedTxRetention = unminedTxRetention
-				s.UtxoStore.ParentPreservationBlocks = parentPreservationBlocks
-				s.GlobalBlockHeightRetention = utxoRetentionHeight
-				s.UtxoStore.BlockHeightRetention = utxoRetentionHeight
-			},
-		),
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			s.UtxoStore.UnminedTxRetention = unminedTxRetention
+			s.UtxoStore.ParentPreservationBlocks = parentPreservationBlocks
+			s.GlobalBlockHeightRetention = utxoRetentionHeight
+			s.UtxoStore.BlockHeightRetention = utxoRetentionHeight
+		},
 	})
 	defer td.Stop(t)
 
@@ -306,18 +303,16 @@ func TestUnminedTransactionCleanupAerospike(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
+		SettingsContext: "dev.system.test",
 		// EnableFullLogging: true,
-		SettingsOverrideFunc: test.ComposeSettings(
-			test.SystemTestSettings(),
-			func(s *settings.Settings) {
-				parsedURL, _ := url.Parse(utxoStoreURL)
-				s.UtxoStore.UtxoStore = parsedURL
-				s.UtxoStore.UnminedTxRetention = unminedTxRetention
-				s.UtxoStore.ParentPreservationBlocks = parentPreservationBlocks
-				s.GlobalBlockHeightRetention = utxoRetentionHeight
-				s.UtxoStore.BlockHeightRetention = utxoRetentionHeight
-			},
-		),
+		SettingsOverrideFunc: func(s *settings.Settings) {
+			parsedURL, _ := url.Parse(utxoStoreURL)
+			s.UtxoStore.UtxoStore = parsedURL
+			s.UtxoStore.UnminedTxRetention = unminedTxRetention
+			s.UtxoStore.ParentPreservationBlocks = parentPreservationBlocks
+			s.GlobalBlockHeightRetention = utxoRetentionHeight
+			s.UtxoStore.BlockHeightRetention = utxoRetentionHeight
+		},
 	})
 	defer td.Stop(t)
 

@@ -1,5 +1,7 @@
 # How to Interact with the RPC Server
 
+Last Modified: 28-May-2025
+
 There are 2 primary ways to interact with the node, using the RPC Server, and using the Asset Server. This document will focus on the RPC Server. The RPC server provides a JSON-RPC interface for interacting with the node. Below is a list of implemented RPC methods with their parameters and return values.
 
 ## Teranode RPC HTTP API
@@ -38,10 +40,9 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
         - Optional object containing:
 
-            - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response
-            - `verbosity` (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes
+            - `coinbaseValue` (numeric, optional): Custom coinbase value in satoshis
 
-    - Returns: Object containing candidate ID, previous block hash, coinbase value, and merkle proof
+    - Returns: Object containing candidate ID, previous block hash, coinbase transaction, and merkle branches
     - Example Request:
 
         ```json
@@ -53,14 +54,14 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         }
         ```
 
-    - Example Request with coinbase transaction and subtree hashes:
+    - Example Request with custom coinbase value:
 
         ```json
         {
             "jsonrpc": "1.0",
             "id": "mining",
             "method": "getminingcandidate",
-            "params": [{"provideCoinbaseTx": true, "verbosity": 1}]
+            "params": [{"coinbaseValue": 5000000000}]
         }
         ```
 
@@ -71,14 +72,18 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
             "result": {
                 "id": "00000000000000000000000000000000...",
                 "prevhash": "000000000000000004a1b6d6fdfa0d0a...",
+                "coinbase": "01000000010000000000000000000000000000...",
                 "coinbaseValue": 5000000000,
                 "version": 536870912,
-                "nBits": "180d60e3",
+                "merkleproof": [...],
                 "time": 1621500000,
+                "bits": "180d60e3",
                 "height": 700001,
+                "nBits": 402947203,
                 "num_tx": 5620,
                 "sizeWithoutCoinbase": 2300000,
-                "merkleProof": [...]
+                "minTime": 1621498888,
+                "fullCurrentTime": 1621500000
             },
             "error": null,
             "id": "mining"

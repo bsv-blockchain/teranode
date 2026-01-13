@@ -57,6 +57,7 @@ package aerospike
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -64,6 +65,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
@@ -207,6 +209,45 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 	return aggErr
 }
 
+// setDAHExternalTransactionMulti updates DAH in the external store for many txids using a limited worker pool.
+func (s *Store) setDAHExternalTransactionMulti(ctx context.Context, updates []struct {
+	TxID *chainhash.Hash
+	DAH  uint32
+}) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	// Limit concurrency to avoid IO overload; 16 is a reasonable default.
+	const maxWorkers = 16
+	sem := make(chan struct{}, maxWorkers)
+	g, ctx2 := errgroup.WithContext(ctx)
+
+	for i := range updates {
+		upd := updates[i]
+		g.Go(func() error {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			// Try tx file first, then outputs
+			if err := s.externalStore.SetDAH(ctx2, upd.TxID[:], fileformat.FileTypeTx, upd.DAH); err != nil {
+				if errors.Is(err, errors.ErrNotFound) {
+					if err2 := s.externalStore.SetDAH(ctx2, upd.TxID[:], fileformat.FileTypeOutputs, upd.DAH); err2 != nil {
+						return errors.NewStorageError("[setDAHExternalTransactionMulti][%s] failed to %s DAH for external transaction outputs: %v", upd.TxID, dahOperation(upd.DAH), err2)
+					}
+				} else {
+					return errors.NewStorageError("[setDAHExternalTransactionMulti][%s] failed to %s DAH for external transaction: %v", upd.TxID, dahOperation(upd.DAH), err)
+				}
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	return nil
+}
+
 // batchIncrement handles record count updates for paginated transactions
 type batchIncrement struct {
 	txID      *chainhash.Hash               // Transaction hash
@@ -278,6 +319,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		g  = errgroup.Group{}
 
 		spentSpends     = make([]*utxo.Spend, 0, len(spends))
+		errSpent        *errors.UtxoSpentErrData
 		txAlreadyExists bool
 	)
 
@@ -290,13 +332,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		spend := spend
 
 		g.Go(func() error {
-			// Fast-fail check: if circuit breaker is already open, reject immediately
-			if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
-				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND] circuit breaker open, rejecting request")
-				return nil
-			}
-
-			errCh := make(chan error, 1)
+			errCh := make(chan error)
 			s.spendBatcher.Put(&batchSpend{
 				spend:             spend,
 				blockHeight:       blockHeight,
@@ -305,29 +341,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				ignoreLocked:      useIgnoreLocked,
 			})
 
-			// Wait for batch response with timeout to prevent indefinite blocking
-			var batchErr error
-			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
-			if spendTimeout <= 0 {
-				spendTimeout = 30 * time.Second
-			}
-
-			timer := time.NewTimer(spendTimeout)
-			defer timer.Stop()
-
-			select {
-			case batchErr = <-errCh:
-				// Batch completed successfully or with error
-			case <-ctx.Done():
-				spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
-				return nil
-			case <-timer.C:
-				if prometheusUtxoMapErrors != nil {
-					prometheusUtxoMapErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
-				}
-				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
-				return nil
-			}
+			// this waits for the batch to be sent and the response to be received from the batch operation
+			batchErr := <-errCh
 
 			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) {
 				mu.Lock()
@@ -355,7 +370,6 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 				s.logger.Debugf("[SPEND][%s:%d] error in aerospike spend: %+v", spend.TxID.String(), spend.Vout, spend.Err)
 
-				var errSpent *errors.UtxoSpentErrData
 				if errors.AsData(batchErr, &errSpent) {
 					spends[idx].ConflictingTxID = errSpent.SpendingData.TxID
 				}
@@ -621,10 +635,6 @@ func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batch
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err)
 	}
-	// Record batch-level failure for circuit breaker
-	if s.spendCircuitBreaker != nil {
-		s.spendCircuitBreaker.RecordFailure()
-	}
 }
 
 // handleMissingResponse handles missing response from batch operation
@@ -645,6 +655,8 @@ func (s *Store) handleParseError(batchByKey []aerospike.MapValue, batch []*batch
 
 // handleSpendSignal handles signals from spend operations
 func (s *Store) handleSpendSignal(ctx context.Context, signal LuaSignal, txID *chainhash.Hash, childCount int, thisBlockHeight uint32) {
+	dahHeight := thisBlockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
+
 	switch signal {
 	case LuaSignalAllSpent:
 		if err := s.handleExtraRecords(ctx, txID, 1); err != nil {
@@ -652,22 +664,20 @@ func (s *Store) handleSpendSignal(ctx context.Context, signal LuaSignal, txID *c
 		}
 
 	case LuaSignalDAHSet:
-		// Only set DAH if BlockHeightRetention is configured (> 0)
-		// When retention is 0, it means "don't use automatic retention"
-		if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
-			dahHeight := thisBlockHeight + retention
-
-			if err := s.SetDAHForChildRecords(txID, childCount, dahHeight); err != nil {
-				s.logger.Errorf("Failed to set DAH for child records: %v", err)
-			}
-			// External store DAH is disabled - lifecycle managed by pruner service
+		if err := s.SetDAHForChildRecords(txID, childCount, dahHeight); err != nil {
+			s.logger.Errorf("Failed to set DAH for child records: %v", err)
+		}
+		if err := s.setDAHExternalTransaction(ctx, txID, dahHeight); err != nil {
+			s.logger.Errorf("Failed to set DAH for external transaction: %v", err)
 		}
 
 	case LuaSignalDAHUnset:
 		if err := s.SetDAHForChildRecords(txID, childCount, aerospike.TTLDontExpire); err != nil {
 			s.logger.Errorf("Failed to unset DAH for child records: %v", err)
 		}
-		// External store DAH is disabled - lifecycle managed by pruner service
+		if err := s.setDAHExternalTransaction(ctx, txID, 0); err != nil {
+			s.logger.Errorf("Failed to unset DAH for external transaction: %v", err)
+		}
 	}
 }
 
@@ -676,10 +686,6 @@ func (s *Store) handleSuccessfulSpends(batchByKey []aerospike.MapValue, batch []
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].errCh <- nil
-	}
-	// Record successful batch operation for circuit breaker
-	if s.spendCircuitBreaker != nil {
-		s.spendCircuitBreaker.RecordSuccess()
 	}
 }
 
@@ -841,23 +847,25 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 		if ret.Signal != "" {
 			switch ret.Signal {
 			case LuaSignalDAHSet:
-				// Only set DAH if BlockHeightRetention is configured (> 0)
-				// When retention is 0, it means "don't use automatic retention"
-				if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
-					thisBlockHeight := s.blockHeight.Load()
-					dah := thisBlockHeight + retention
+				thisBlockHeight := s.blockHeight.Load()
+				dah := thisBlockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 
-					if err := s.SetDAHForChildRecords(txID, ret.ChildCount, dah); err != nil {
-						return err
-					}
-					// External store DAH is disabled - lifecycle managed by pruner service
+				if err := s.SetDAHForChildRecords(txID, ret.ChildCount, dah); err != nil {
+					return err
+				}
+
+				if err := s.setDAHExternalTransaction(ctx, txID, dah); err != nil {
+					return err
 				}
 
 			case LuaSignalDAHUnset:
 				if err := s.SetDAHForChildRecords(txID, ret.ChildCount, 0); err != nil {
 					return err
 				}
-				// External store DAH is disabled - lifecycle managed by pruner service
+
+				if err := s.setDAHExternalTransaction(ctx, txID, 0); err != nil {
+					return err
+				}
 			}
 		}
 	} else if ret.Status == LuaStatusError {
@@ -865,6 +873,63 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 	}
 
 	return nil
+}
+
+// setDAHExternalTransaction sets the Delete-At-Height (DAH) for a transaction stored in external storage.
+// This is used to schedule cleanup of large transactions that are stored in blob storage
+// rather than directly in Aerospike records.
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - txid: Transaction ID to set DAH for
+//   - newDAH: Block height at which the transaction should be deleted
+//
+// Returns:
+//   - error: Any error encountered, or nil if successful or transaction not found
+func (s *Store) setDAHExternalTransaction(ctx context.Context, txid *chainhash.Hash, newDAH uint32) error {
+	if err := s.externalStore.SetDAH(ctx,
+		txid[:],
+		fileformat.FileTypeTx,
+		newDAH,
+	); err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			// did not find the tx, try the outputs
+			if err := s.externalStore.SetDAH(ctx,
+				txid[:],
+				fileformat.FileTypeOutputs,
+				newDAH,
+			); err != nil {
+				return errors.NewStorageError("[ttlExternalTransaction][%s] failed to %s DAH for external transaction outputs",
+					txid,
+					dahOperation(newDAH),
+					err)
+			}
+		} else {
+			return errors.NewStorageError("[ttlExternalTransaction][%s] failed to %s DAH for external transaction",
+				txid,
+				dahOperation(newDAH),
+				err)
+		}
+	}
+
+	return nil
+}
+
+// dahOperation returns a human-readable string describing the DAH operation.
+// This is used for logging and error messages to indicate whether DAH is being
+// set to a specific block height or unset (cleared).
+//
+// Parameters:
+//   - dah: Delete-At-Height value (0 means unset, >0 means set to that height)
+//
+// Returns:
+//   - string: "set at <height>" if dah > 0, "unset" if dah == 0
+func dahOperation(dah uint32) string {
+	if dah > 0 {
+		return fmt.Sprintf("set at %d", dah)
+	}
+
+	return "unset"
 }
 
 type incrementSpentRecordsRes struct {

@@ -336,11 +336,12 @@ func (s *HTTPStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.
 	}
 
 	// Parse the DAH from the response body, the dah will be a string representation of an int
-	dahInt, err := strconv.ParseUint(string(dah), 10, 32)
+	dahInt, err := strconv.Atoi(string(dah))
 	if err != nil {
-		return 0, errors.NewStorageError("[HTTPStore] GetDAH failed to parse response body", err)
+		return 0, errors.NewStorageError("[HTTPStore] GetDAH failed to parse response body int", err)
 	}
 
+	// nolint: gosec
 	return uint32(dahInt), nil
 }
 

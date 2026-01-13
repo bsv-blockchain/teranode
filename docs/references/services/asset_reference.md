@@ -6,19 +6,17 @@
 
 ```go
 type Server struct {
-    logger                ulogger.Logger
-    settings              *settings.Settings
-    utxoStore             utxo.Store
-    txStore               blob.Store
-    subtreeStore          blob.Store
-    blockPersisterStore   blob.Store
-    httpAddr              string
-    httpServer            *httpimpl.HTTP
-    centrifugeAddr        string
-    centrifugeServer      *centrifuge_impl.Centrifuge
-    blockchainClient      blockchain.ClientI
-    blockvalidationClient blockvalidation.Interface
-    p2pClient             p2p.ClientI
+    logger              ulogger.Logger
+    settings            *settings.Settings
+    utxoStore           utxo.Store
+    txStore             blob.Store
+    subtreeStore        blob.Store
+    blockPersisterStore blob.Store
+    httpAddr            string
+    httpServer          *httpimpl.HTTP
+    centrifugeAddr      string
+    centrifugeServer    *centrifuge_impl.Centrifuge
+    blockchainClient    blockchain.ClientI
 }
 ```
 
@@ -28,15 +26,13 @@ The `Server` type is the main structure for the Asset Service. It coordinates be
 
 ```go
 type Repository struct {
-    logger                ulogger.Logger
-    settings              *settings.Settings
-    UtxoStore             utxo.Store
-    TxStore               blob.Store
-    SubtreeStore          blob.Store
-    BlockPersisterStore   blob.Store
-    BlockchainClient      blockchain.ClientI
-    BlockvalidationClient blockvalidation.Interface
-    P2PClient             p2p.ClientI
+    logger              ulogger.Logger
+    settings            *settings.Settings
+    UtxoStore           utxo.Store
+    TxStore             blob.Store
+    SubtreeStore        blob.Store
+    BlockPersisterStore blob.Store
+    BlockchainClient    blockchain.ClientI
 }
 ```
 
@@ -64,7 +60,7 @@ The `HTTP` type represents the HTTP server for the Asset Service.
 #### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI) *Server
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI) *Server
 ```
 
 Creates a new instance of the `Server` with the provided dependencies. It initializes the server with necessary stores and clients for handling blockchain data.
@@ -106,7 +102,7 @@ Gracefully shuts down the server and its components, including HTTP and Centrifu
 #### NewRepository
 
 ```go
-func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store, blockPersisterStore blob.Store, p2pClient p2p.ClientI) (*Repository, error)
+func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store, blockchainClient blockchain.ClientI, subtreeStore blob.Store, blockPersisterStore blob.Store) (*Repository, error)
 ```
 
 Creates a new instance of the `Repository` with the provided dependencies. It initializes connections to various data stores for blockchain data access.
@@ -698,18 +694,6 @@ Error responses include a JSON object with an error message:
         - `offset` (integer, optional, default: 0) - Number of subtrees to skip
         - `limit` (integer, optional, default: 20, max: 100) - Maximum subtrees to return
     - Returns: Subtree data array (JSON) with pagination metadata
-
-### P2P and Network Endpoints
-
-- **GET `/api/p2p/peers`**
-    - Purpose: Get peer registry information from P2P service
-    - Returns: Peer list (JSON) with reputation metrics, connection status, and catchup statistics
-    - Response includes: peer ID, client name, blockchain height, reputation score, catchup metrics, ban status
-
-- **GET `/api/catchup/status`**
-    - Purpose: Get current blockchain synchronization status
-    - Returns: Catchup status (JSON) with progress metrics and peer information
-    - Response includes: current/target heights, blocks fetched/validated, peer details, fork depth, previous attempt data
 
 ### Search Endpoints
 

@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,9 +27,10 @@ func TestPeerRegistryCache_SaveAndLoad(t *testing.T) {
 	// Log the peer IDs to see their format
 	t.Logf("PeerID1: %s", peerID1)
 
-	// Add peer 1 with catchup metrics atomically
-	testHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	pr.Put(peerID1, "", 123456, testHash, "http://peer1.example.com:8090")
+	// Add peer 1 with catchup metrics
+	pr.AddPeer(peerID1, "")
+	pr.UpdateDataHubURL(peerID1, "http://peer1.example.com:8090")
+	pr.UpdateHeight(peerID1, 123456, "hash-123456")
 	pr.RecordCatchupAttempt(peerID1)
 	pr.RecordCatchupSuccess(peerID1, 100*time.Millisecond)
 	pr.RecordCatchupSuccess(peerID1, 200*time.Millisecond)
@@ -38,12 +38,13 @@ func TestPeerRegistryCache_SaveAndLoad(t *testing.T) {
 	// Note: Don't set reputation directly since it's auto-calculated
 
 	// Add peer 2 with some metrics
-	pr.Put(peerID2, "", 0, nil, "http://peer2.example.com:8090")
+	pr.AddPeer(peerID2, "")
+	pr.UpdateDataHubURL(peerID2, "http://peer2.example.com:8090")
 	pr.RecordCatchupAttempt(peerID2)
 	pr.RecordCatchupMalicious(peerID2)
 
 	// Add peer 3 with no meaningful metrics (should not be cached)
-	pr.Put(peerID3, "", 0, nil, "")
+	pr.AddPeer(peerID3, "")
 
 	// Save the cache
 	err := pr.SavePeerRegistryCache(tempDir)
@@ -64,12 +65,11 @@ func TestPeerRegistryCache_SaveAndLoad(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify peer 1 data was restored
-	info1, exists := pr2.Get(peerID1)
+	info1, exists := pr2.GetPeer(peerID1)
 	require.True(t, exists, "Peer 1 should exist after loading cache")
 	assert.Equal(t, "http://peer1.example.com:8090", info1.DataHubURL)
-	assert.Equal(t, uint32(123456), info1.Height)
-	assert.NotNil(t, info1.BlockHash, "BlockHash should be restored from cache")
-	assert.Equal(t, testHash.String(), info1.BlockHash.String())
+	assert.Equal(t, int32(123456), info1.Height)
+	assert.Equal(t, "hash-123456", info1.BlockHash)
 	assert.Equal(t, int64(1), info1.InteractionAttempts)
 	assert.Equal(t, int64(2), info1.InteractionSuccesses)
 	assert.Equal(t, int64(1), info1.InteractionFailures)
@@ -82,7 +82,7 @@ func TestPeerRegistryCache_SaveAndLoad(t *testing.T) {
 	assert.True(t, info1.AvgResponseTime.Milliseconds() > 0)
 
 	// Verify peer 2 data was restored
-	info2, exists := pr2.Get(peerID2)
+	info2, exists := pr2.GetPeer(peerID2)
 	assert.True(t, exists)
 	assert.Equal(t, "http://peer2.example.com:8090", info2.DataHubURL)
 	assert.Equal(t, int64(1), info2.InteractionAttempts)
@@ -96,7 +96,7 @@ func TestPeerRegistryCache_SaveAndLoad(t *testing.T) {
 	// Verify peer 3 was not cached (no meaningful metrics)
 	// Since peer3 has no metrics, it should not have been saved to the cache
 	// and therefore won't exist in the new registry
-	info3, exists := pr2.Get(peerID3)
+	info3, exists := pr2.GetPeer(peerID3)
 	assert.False(t, exists, "Peer 3 should not exist (no metrics to cache)")
 	assert.Nil(t, info3)
 }
@@ -159,7 +159,8 @@ func TestPeerRegistryCache_MergeWithExisting(t *testing.T) {
 	// Create initial registry and save cache
 	pr1 := NewPeerRegistry()
 	peerID1, _ := peer.Decode(testPeer1)
-	pr1.Put(peerID1, "", 0, nil, "http://peer1.example.com:8090")
+	pr1.AddPeer(peerID1, "")
+	pr1.UpdateDataHubURL(peerID1, "http://peer1.example.com:8090")
 	pr1.RecordCatchupAttempt(peerID1)
 	pr1.RecordCatchupSuccess(peerID1, 100*time.Millisecond)
 	err := pr1.SavePeerRegistryCache(tempDir)
@@ -168,17 +169,18 @@ func TestPeerRegistryCache_MergeWithExisting(t *testing.T) {
 	// Create a new registry, add a peer, then load cache
 	pr2 := NewPeerRegistry()
 	// Add the same peer with different data
-	pr2.Put(peerID1, "", 0, nil, "http://different.example.com:8090")
+	pr2.AddPeer(peerID1, "")
+	pr2.UpdateDataHubURL(peerID1, "http://different.example.com:8090")
 	// Add a new peer
 	peerID2, _ := peer.Decode(testPeer2)
-	pr2.Put(peerID2, "", 0, nil, "http://peer2.example.com:8090")
+	pr2.AddPeer(peerID2, "")
 
 	// Load cache - should restore metrics but keep existing peers
 	err = pr2.LoadPeerRegistryCache(tempDir)
 	require.NoError(t, err)
 
 	// Verify peer 1 has restored metrics
-	info1, exists := pr2.Get(peerID1)
+	info1, exists := pr2.GetPeer(peerID1)
 	assert.True(t, exists)
 	// DataHubURL should NOT be overwritten since it was already set
 	assert.Equal(t, "http://different.example.com:8090", info1.DataHubURL)
@@ -188,7 +190,7 @@ func TestPeerRegistryCache_MergeWithExisting(t *testing.T) {
 	assert.True(t, info1.ReputationScore > 0) // Should have auto-calculated reputation
 
 	// Verify peer 2 still exists (was not in cache)
-	_, exists = pr2.Get(peerID2)
+	_, exists = pr2.GetPeer(peerID2)
 	assert.True(t, exists)
 }
 
@@ -218,7 +220,8 @@ func TestPeerRegistryCache_AtomicWrite(t *testing.T) {
 	// Create a registry with test data
 	pr := NewPeerRegistry()
 	peerID, _ := peer.Decode(testPeer1)
-	pr.Put(peerID, "", 0, nil, "http://peer1.example.com:8090")
+	pr.AddPeer(peerID, "")
+	pr.UpdateDataHubURL(peerID, "http://peer1.example.com:8090")
 
 	// First save to create the file
 	err := pr.SavePeerRegistryCache(tempDir)
@@ -243,7 +246,7 @@ func TestPeerRegistryCache_AtomicWrite(t *testing.T) {
 	pr2 := NewPeerRegistry()
 	err = pr2.LoadPeerRegistryCache(tempDir)
 	require.NoError(t, err)
-	info, exists := pr2.Get(peerID)
+	info, exists := pr2.GetPeer(peerID)
 	assert.True(t, exists)
 	assert.Equal(t, "http://peer1.example.com:8090", info.DataHubURL)
 }
@@ -294,7 +297,9 @@ func TestPeerRegistryCache_ReputationMetricsPersistence(t *testing.T) {
 	peerID3, _ := peer.Decode(testPeer3)
 
 	// Peer 1: High reputation with many successes
-	pr.Put(peerID1, "Teranode v1.0", 100000, nil, "http://peer1.com:8090")
+	pr.AddPeer(peerID1, "Teranode v1.0")
+	pr.UpdateDataHubURL(peerID1, "http://peer1.com:8090")
+	pr.UpdateHeight(peerID1, 100000, "hash-100000")
 	for i := 0; i < 15; i++ {
 		pr.RecordInteractionAttempt(peerID1)
 		pr.RecordInteractionSuccess(peerID1, time.Duration(100+i)*time.Millisecond)
@@ -303,7 +308,9 @@ func TestPeerRegistryCache_ReputationMetricsPersistence(t *testing.T) {
 	pr.RecordSubtreeReceived(peerID1, 110*time.Millisecond)
 
 	// Peer 2: Low reputation with many failures
-	pr.Put(peerID2, "Teranode v0.9", 99000, nil, "http://peer2.com:8090")
+	pr.AddPeer(peerID2, "Teranode v0.9")
+	pr.UpdateDataHubURL(peerID2, "http://peer2.com:8090")
+	pr.UpdateHeight(peerID2, 99000, "hash-99000")
 	for i := 0; i < 3; i++ {
 		pr.RecordInteractionAttempt(peerID2)
 		pr.RecordInteractionSuccess(peerID2, 200*time.Millisecond)
@@ -314,7 +321,9 @@ func TestPeerRegistryCache_ReputationMetricsPersistence(t *testing.T) {
 	}
 
 	// Peer 3: Malicious with very low reputation
-	pr.Put(peerID3, "Teranode v1.1", 98000, nil, "http://peer3.com:8090")
+	pr.AddPeer(peerID3, "Teranode v1.1")
+	pr.UpdateDataHubURL(peerID3, "http://peer3.com:8090")
+	pr.UpdateHeight(peerID3, 98000, "hash-98000")
 	// Record attempts before marking as malicious (normal flow)
 	pr.RecordInteractionAttempt(peerID3)
 	pr.RecordMaliciousInteraction(peerID3)
@@ -331,7 +340,7 @@ func TestPeerRegistryCache_ReputationMetricsPersistence(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify Peer 1 reputation metrics restored
-	info1, exists := pr2.Get(peerID1)
+	info1, exists := pr2.GetPeer(peerID1)
 	require.True(t, exists, "Peer 1 should exist")
 	// 15 explicit RecordInteractionAttempt calls, but RecordBlockReceived and RecordSubtreeReceived don't increment attempts
 	assert.Equal(t, int64(15), info1.InteractionAttempts)
@@ -345,7 +354,7 @@ func TestPeerRegistryCache_ReputationMetricsPersistence(t *testing.T) {
 	assert.False(t, info1.LastInteractionSuccess.IsZero())
 
 	// Verify Peer 2 reputation metrics restored
-	info2, exists := pr2.Get(peerID2)
+	info2, exists := pr2.GetPeer(peerID2)
 	require.True(t, exists, "Peer 2 should exist")
 	assert.Equal(t, int64(15), info2.InteractionAttempts)
 	assert.Equal(t, int64(3), info2.InteractionSuccesses)
@@ -354,7 +363,7 @@ func TestPeerRegistryCache_ReputationMetricsPersistence(t *testing.T) {
 	assert.False(t, info2.LastInteractionFailure.IsZero())
 
 	// Verify Peer 3 malicious metrics restored
-	info3, exists := pr2.Get(peerID3)
+	info3, exists := pr2.GetPeer(peerID3)
 	require.True(t, exists, "Peer 3 should exist")
 	assert.Equal(t, int64(2), info3.InteractionAttempts)
 	assert.Equal(t, int64(2), info3.MaliciousCount)
@@ -397,7 +406,7 @@ func TestPeerRegistryCache_BackwardCompatibility_LegacyFields(t *testing.T) {
 
 	// Verify legacy fields mapped to new fields
 	peerID, _ := peer.Decode(testPeer1)
-	info, exists := pr.Get(peerID)
+	info, exists := pr.GetPeer(peerID)
 	require.True(t, exists, "Legacy peer should be loaded")
 	assert.Equal(t, int64(10), info.InteractionAttempts, "Legacy attempts should map to InteractionAttempts")
 	assert.Equal(t, int64(8), info.InteractionSuccesses, "Legacy successes should map to InteractionSuccesses")
@@ -406,7 +415,7 @@ func TestPeerRegistryCache_BackwardCompatibility_LegacyFields(t *testing.T) {
 	assert.Equal(t, 150*time.Millisecond, info.AvgResponseTime, "Legacy response time should be converted")
 	assert.Equal(t, int64(8), info.CatchupBlocks, "CatchupBlocks should be set for backward compatibility")
 	assert.Equal(t, "http://legacy-peer.com:8090", info.DataHubURL)
-	assert.Equal(t, uint32(95000), info.Height)
+	assert.Equal(t, int32(95000), info.Height)
 }
 
 func TestPeerRegistryCache_InteractionTypeBreakdown(t *testing.T) {
@@ -419,23 +428,21 @@ func TestPeerRegistryCache_InteractionTypeBreakdown(t *testing.T) {
 	peerID2, _ := peer.Decode(testPeer2)
 
 	// Peer 1: Many blocks, some subtrees, lots of transactions
-	pr.Put(peerID1, "", 0, nil, "http://peer1.com")
-
+	pr.AddPeer(peerID1, "")
+	pr.UpdateDataHubURL(peerID1, "http://peer1.com")
 	for i := 0; i < 100; i++ {
 		pr.RecordBlockReceived(peerID1, 100*time.Millisecond)
 	}
-
 	for i := 0; i < 50; i++ {
 		pr.RecordSubtreeReceived(peerID1, 80*time.Millisecond)
 	}
-
 	for i := 0; i < 200; i++ {
 		pr.RecordTransactionReceived(peerID1)
 	}
 
 	// Peer 2: Only subtrees, no blocks or transactions
-	pr.Put(peerID2, "", 0, nil, "http://peer2.com")
-
+	pr.AddPeer(peerID2, "")
+	pr.UpdateDataHubURL(peerID2, "http://peer2.com")
 	for i := 0; i < 100; i++ {
 		pr.RecordSubtreeReceived(peerID2, 90*time.Millisecond)
 	}
@@ -449,14 +456,14 @@ func TestPeerRegistryCache_InteractionTypeBreakdown(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify Peer 1 interaction breakdown
-	info1, exists := pr2.Get(peerID1)
+	info1, exists := pr2.GetPeer(peerID1)
 	require.True(t, exists)
 	assert.Equal(t, int64(100), info1.BlocksReceived)
 	assert.Equal(t, int64(50), info1.SubtreesReceived)
 	assert.Equal(t, int64(200), info1.TransactionsReceived)
 
 	// Verify Peer 2 interaction breakdown
-	info2, exists := pr2.Get(peerID2)
+	info2, exists := pr2.GetPeer(peerID2)
 	require.True(t, exists)
 	assert.Equal(t, int64(0), info2.BlocksReceived)
 	assert.Equal(t, int64(100), info2.SubtreesReceived)
@@ -489,7 +496,7 @@ func TestPeerRegistryCache_EmptyReputationDefaults(t *testing.T) {
 
 	// Verify peer has default neutral reputation
 	peerID, _ := peer.Decode(testPeer1)
-	info, exists := pr.Get(peerID)
+	info, exists := pr.GetPeer(peerID)
 	require.True(t, exists)
 	assert.Equal(t, 50.0, info.ReputationScore, "Peer with no metrics should have neutral reputation")
 	assert.Equal(t, int64(0), info.InteractionAttempts)

@@ -25,7 +25,6 @@ type Stores struct {
 	mainBlockPersisterStore     blob.Store
 	mainBlockStore              blob.Store
 	mainBlockValidationClient   blockvalidation.Interface
-	mainBlockAssemblyClient     blockassembly.ClientI
 	mainP2PClient               p2p.ClientI
 	mainSubtreeStore            blob.Store
 	mainSubtreeValidationClient subtreevalidation.Interface
@@ -123,22 +122,10 @@ func (d *Stores) GetBlockchainClient(ctx context.Context, logger ulogger.Logger,
 }
 
 // GetBlockAssemblyClient creates and returns a new block assembly client instance.
-func (d *Stores) GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logger,
+func GetBlockAssemblyClient(ctx context.Context, logger ulogger.Logger,
 	appSettings *settings.Settings) (blockassembly.ClientI, error) {
-	if d.mainBlockAssemblyClient != nil {
-		return d.mainBlockAssemblyClient, nil
-	}
-
-	var err error
-
-	client, err := blockassembly.NewClient(ctx, logger, appSettings)
-	if err != nil {
-		return nil, err
-	}
-
-	d.mainBlockAssemblyClient = client
-
-	return client, nil
+	// don't use a global client, otherwise we don't know the source
+	return blockassembly.NewClient(ctx, logger, appSettings)
 }
 
 // GetValidatorClient returns the main validator client instance. If the client hasn't been
@@ -180,7 +167,7 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 
 		var blockAssemblyClient blockassembly.ClientI
 
-		blockAssemblyClient, err = d.GetBlockAssemblyClient(ctx, logger, appSettings)
+		blockAssemblyClient, err = GetBlockAssemblyClient(ctx, logger, appSettings)
 		if err != nil {
 			return nil, errors.NewServiceError("could not create block assembly client for local validator", err)
 		}
@@ -372,7 +359,7 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 		return d.mainBlockPersisterStore, nil
 	}
 
-	blockStoreURL := appSettings.BlockPersister.Store
+	blockStoreURL := appSettings.Block.PersisterStore
 
 	if blockStoreURL == nil {
 		return nil, errors.NewConfigurationError("blockPersisterStore config not found")
@@ -422,5 +409,5 @@ func (d *Stores) Cleanup() {
 
 	// Reset the Aerospike cleanup service singleton if it exists
 	// This prevents state leakage between test runs
-	aerospike.ResetPrunerServiceForTests()
+	aerospike.ResetCleanupServiceForTests()
 }

@@ -41,9 +41,6 @@ type BlockAssembly struct {
 
     // skipWaitForPendingBlocks stores the flag value for tests
     skipWaitForPendingBlocks bool
-
-    // stopOnce ensures Stop() is only executed once
-    stopOnce sync.Once
 }
 ```
 
@@ -77,17 +74,11 @@ type BlockAssembler struct {
     // miningCandidateCh coordinates requests for mining candidates
     miningCandidateCh chan chan *miningCandidateResponse
 
-    // bestBlock atomically stores the current best block header and height together
-    bestBlock atomic.Pointer[BestBlockInfo]
+    // bestBlockHeader atomically stores the current best block header
+    bestBlockHeader atomic.Pointer[model.BlockHeader]
 
-    // stateChangeCh notifies listeners of state changes
-    // Protected by stateChangeMu to prevent race conditions
-    stateChangeMu sync.RWMutex
-    stateChangeCh chan BestBlockInfo
-
-    // lastPersistedHeight tracks the last block height processed by block persister
-    // This is updated via BlockPersisted notifications
-    lastPersistedHeight atomic.Uint32
+    // bestBlockHeight atomically stores the current best block height
+    bestBlockHeight atomic.Uint32
 
     // currentChainMap maps block hashes to their heights
     currentChainMap map[chainhash.Hash]uint32
@@ -101,18 +92,32 @@ type BlockAssembler struct {
     // blockchainSubscriptionCh receives blockchain notifications
     blockchainSubscriptionCh chan *blockchain.Notification
 
+    // currentDifficulty stores the current mining difficulty target
+    currentDifficulty atomic.Pointer[model.NBit]
+
     // defaultMiningNBits stores the default mining difficulty
     defaultMiningNBits *model.NBit
 
     // resetCh handles reset requests for the assembler
-    resetCh chan resetRequest
+    resetCh chan struct{}
+
+    // resetWaitCount tracks the number of blocks to wait after reset
+    resetWaitCount atomic.Int32
+
+    // resetWaitDuration tracks the time to wait after reset
+    resetWaitDuration atomic.Int32
 
     // currentRunningState tracks the current operational state
     currentRunningState atomic.Value
 
-    // Note: Cleanup-related fields (cleanupService, cleanupQueueCh, unminedCleanupTicker)
-    // were removed in PR #114 when UTXO pruning was extracted to the standalone Pruner service.
-    // See: docs/topics/services/pruner.md
+    // cleanupService manages background cleanup tasks
+    cleanupService cleanup.Service
+
+    // cleanupServiceLoaded indicates if the cleanup service has been loaded
+    cleanupServiceLoaded atomic.Bool
+
+    // unminedCleanupTicker manages periodic cleanup of old unmined transactions
+    unminedCleanupTicker *time.Ticker
 
     // cachedCandidate stores the cached mining candidate
     cachedCandidate *CachedMiningCandidate

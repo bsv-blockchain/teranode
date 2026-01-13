@@ -1918,16 +1918,6 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 		b.logger.Errorf("[Blockchain] Error sending notification for best block %s: %v", blockHash, err)
 	}
 
-	// send BlockMinedUnset notification to trigger immediate processing by BlockValidation
-	// This ensures transaction status is updated immediately for invalidated blocks
-	// instead of waiting for the periodic job (which runs every 1 minute in production)
-	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
-		Type: model.NotificationType_BlockMinedUnset,
-		Hash: blockHash.CloneBytes(),
-	}); err != nil {
-		b.logger.Errorf("[Blockchain] Error sending BlockMinedUnset notification for %s: %v", blockHash, err)
-	}
-
 	return &blockchain_api.InvalidateBlockResponse{
 		InvalidatedBlocks: invalidatedHashBytes,
 	}, nil
@@ -2105,18 +2095,6 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 	return &emptypb.Empty{}, nil
 }
 
-// ClearBlockMinedSet resets the mined_set flag to false for a block.
-func (b *Blockchain) ClearBlockMinedSet(ctx context.Context, req *blockchain_api.ClearBlockMinedSetRequest) (*emptypb.Empty, error) {
-	blockHash := chainhash.Hash(req.BlockHash)
-
-	err := b.store.ClearBlockMinedSet(ctx, &blockHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	return &emptypb.Empty{}, nil
-}
-
 // GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksMinedNotSetResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocksMinedNotSet",
@@ -2140,52 +2118,6 @@ func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty)
 	}
 
 	return &blockchain_api.GetBlocksMinedNotSetResponse{
-		BlockBytes: blockBytes,
-	}, nil
-}
-
-// SetBlockPersistedAt marks a block as persisted in blob storage.
-func (b *Blockchain) SetBlockPersistedAt(ctx context.Context, req *blockchain_api.SetBlockPersistedAtRequest) (*emptypb.Empty, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "SetBlockPersistedAt",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainSetBlockPersistedAt),
-		tracing.WithDebugLogMessage(b.logger, "[SetBlockPersistedAt] called with hash %x", req.BlockHash),
-	)
-	defer deferFn()
-
-	blockHash := chainhash.Hash(req.BlockHash)
-
-	err := b.store.SetBlockPersistedAt(ctx, &blockHash)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	return &emptypb.Empty{}, nil
-}
-
-// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
-func (b *Blockchain) GetBlocksNotPersisted(ctx context.Context, req *blockchain_api.GetBlocksNotPersistedRequest) (*blockchain_api.GetBlocksNotPersistedResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocksNotPersisted",
-		tracing.WithParentStat(b.stats),
-		tracing.WithHistogram(prometheusBlockchainGetBlocksNotPersisted),
-		tracing.WithDebugLogMessage(b.logger, "[GetBlocksNotPersisted] called with limit %d", req.Limit),
-	)
-	defer deferFn()
-
-	blocks, err := b.store.GetBlocksNotPersisted(ctx, int(req.Limit))
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	blockBytes := make([][]byte, len(blocks))
-	for i, block := range blocks {
-		blockBytes[i], err = block.Bytes()
-		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlocksNotPersisted] failed to serialize block", err))
-		}
-	}
-
-	return &blockchain_api.GetBlocksNotPersistedResponse{
 		BlockBytes: blockBytes,
 	}, nil
 }

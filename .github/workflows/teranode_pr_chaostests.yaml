@@ -1,0 +1,179 @@
+name: Teranode PR chaos tests
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
+env:
+  REPO: teranode
+  SETTINGS_CONTEXT_DEFAULT: test
+  GO_VERSION: "1.25.2"
+
+jobs:
+  chaostest:
+    name: chaostest
+    runs-on: teranode-runner-4-core
+    steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+          comment_on_pr: "false"
+
+      # Only login to Docker Hub for internal PRs to avoid rate limits.
+      # Fork PRs won't have access to secrets and will skip this step.
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Start required services for chaos testing
+        run: |
+          cd compose
+          docker compose -f docker-compose-ss.yml up -d postgres toxiproxy-postgres kafka-shared toxiproxy-kafka
+          # Wait for PostgreSQL to be healthy
+          timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps postgres | grep -q "healthy"; do sleep 2; done'
+          # Wait for toxiproxy services to be up and API responding (no healthcheck in minimal image)
+          timeout 60 bash -c 'until curl -sf http://localhost:8474/version >/dev/null; do sleep 2; done'
+          timeout 60 bash -c 'until curl -sf http://localhost:8475/version >/dev/null; do sleep 2; done'
+          # Wait for Kafka to be ready (no healthcheck, just wait for it to be up)
+          timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps kafka-shared | grep -q "Up"; do sleep 2; done'
+          sleep 10  # Extra wait for Kafka to be fully ready
+        continue-on-error: false
+
+      - name: Run Chaos Test Scenario 01 (Database Latency)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario01_DatabaseLatency 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-01-results.txt
+        continue-on-error: false
+        timeout-minutes: 5
+
+      - name: Run Chaos Test Scenario 02 (Kafka Broker Failure)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario02_KafkaBrokerFailure 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-02-results.txt
+        continue-on-error: false
+        timeout-minutes: 5
+
+      - name: Run Chaos Test Scenario 03 (Network Partition)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario03_NetworkPartition 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-03-results.txt
+        continue-on-error: false
+        timeout-minutes: 5
+
+      - name: Upload chaostest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chaostest-results
+          path: /tmp/teranode-test-results/chaostest-scenario-*.txt
+          retention-days: 2
+          if-no-files-found: warn
+
+      - name: Cleanup chaos test services
+        if: always()
+        run: |
+          cd compose
+          docker compose -f docker-compose-ss.yml down -v
+
+  chaostest2:
+    name: chaostest2
+    runs-on: teranode-runner-4-core
+    steps:
+      - name: Workflow Telemetry
+        uses: catchpoint/workflow-telemetry-action@f974e0c5942f8f37973c4cc395704165fbe629ba # v2
+        with:
+          theme: "dark"
+          comment_on_pr: "false"
+
+      # Only login to Docker Hub for internal PRs to avoid rate limits.
+      # Fork PRs won't have access to secrets and will skip this step.
+      - name: Login to Docker Hub
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Start required services for chaos testing
+        run: |
+          cd compose
+          docker compose -f docker-compose-ss.yml up -d postgres toxiproxy-postgres kafka-shared toxiproxy-kafka
+          # Wait for PostgreSQL to be healthy
+          timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps postgres | grep -q "healthy"; do sleep 2; done'
+          # Wait for toxiproxy services to be up and API responding (no healthcheck in minimal image)
+          timeout 60 bash -c 'until curl -sf http://localhost:8474/version >/dev/null; do sleep 2; done'
+          timeout 60 bash -c 'until curl -sf http://localhost:8475/version >/dev/null; do sleep 2; done'
+          # Wait for Kafka to be ready (no healthcheck, just wait for it to be up)
+          timeout 60 bash -c 'until docker compose -f docker-compose-ss.yml ps kafka-shared | grep -q "Up"; do sleep 2; done'
+          sleep 10  # Extra wait for Kafka to be fully ready
+        continue-on-error: false
+
+      - name: Run Chaos Test Scenario 04A (Intermittent Connection Drops)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario04_IntermittentDrops 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-04a-results.txt
+        continue-on-error: false
+        timeout-minutes: 10
+
+      - name: Run Chaos Test Scenario 04B (Cascading Effects)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario04_CascadingEffects 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-04b-results.txt
+        continue-on-error: false
+        timeout-minutes: 2
+
+      - name: Run Chaos Test Scenario 04C (Load Under Failures)
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/teranode-test-results
+          go test -v ./test/chaos -run TestScenario04_LoadUnderFailures 2>&1 | tee /tmp/teranode-test-results/chaostest-scenario-04c-results.txt
+        continue-on-error: false
+        timeout-minutes: 2
+
+      - name: Upload chaostest results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chaostest2-results
+          path: /tmp/teranode-test-results/chaostest-scenario-04*.txt
+          retention-days: 2
+          if-no-files-found: warn
+
+      - name: Cleanup chaos test services
+        if: always()
+        run: |
+          cd compose
+          docker compose -f docker-compose-ss.yml down -v

@@ -4,7 +4,6 @@ kind: Cluster
 metadata:
   name: teranode-cluster
 spec:
-  image: ghcr.io/bsv-blockchain/teranode:v0.12.4
   # enabled can be used to completely disable all Teranode services, defaults to true
   # enabled: false
   alertSystem:
@@ -91,6 +90,7 @@ spec:
             cpu: 1
             memory: 1Gi
   configMapName: teranode-operator-config
+  image: ghcr.io/bsv-blockchain/teranode:v0.11.13
   legacy:
     enabled: true
     spec:

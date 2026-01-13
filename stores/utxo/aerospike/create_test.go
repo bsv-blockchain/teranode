@@ -13,11 +13,9 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
-	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranodeaerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
-	testutil "github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -364,15 +362,8 @@ func TestStore_TwoPhaseCommit(t *testing.T) {
 			}()
 
 			td = daemon.NewTestDaemon(t, daemon.TestOptions{
-				EnableRPC: true,
-				SettingsOverrideFunc: testutil.ComposeSettings(
-					testutil.SystemTestSettings(),
-					func(s *settings.Settings) {
-						s.Validator.UseLocalValidator = true
-						s.TracingEnabled = true
-						s.TracingSampleRate = 1.0
-					},
-				),
+				EnableRPC:       true,
+				SettingsContext: "dev.system.test",
 			})
 		}()
 

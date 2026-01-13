@@ -14,7 +14,6 @@ import (
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
-	testSettings "github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/testcontainers"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -30,6 +29,7 @@ func TestOrphanTx(t *testing.T) {
 		EnableRPC: true,
 		EnableP2P: true,
 		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			// settings.Asset.HTTPPort = 18090
 			settings.Validator.UseLocalValidator = true
@@ -41,6 +41,7 @@ func TestOrphanTx(t *testing.T) {
 	node2 := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableP2P: true,
 		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			// settings.Asset.HTTPPort = 28090
 			settings.Validator.UseLocalValidator = true
@@ -144,6 +145,7 @@ func TestOrphanTx(t *testing.T) {
 		EnableRPC:         true,
 		EnableP2P:         true,
 		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
+		SettingsContext:   "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			settings.Asset.HTTPPort = 18090
 			settings.Validator.UseLocalValidator = true
@@ -366,11 +368,8 @@ func TestInvalidBlockWithContainer(t *testing.T) {
 
 func TestOrphanTxWithSingleNode(t *testing.T) {
 	node1 := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:     true,
-		UTXOStoreType: "aerospike",
-		SettingsOverrideFunc: testSettings.ComposeSettings(
-			testSettings.SystemTestSettings(),
-		),
+		EnableRPC:       true,
+		SettingsContext: "dev.system.test",
 	})
 	// is stopped manually
 
@@ -415,9 +414,7 @@ func TestOrphanTxWithSingleNode(t *testing.T) {
 	node1 = daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:         true,
 		SkipRemoveDataDir: true, // we are re-starting so don't delete data dir
-		SettingsOverrideFunc: testSettings.ComposeSettings(
-			testSettings.SystemTestSettings(),
-		),
+		SettingsContext:   "dev.system.test",
 	})
 
 	defer node1.Stop(t)
@@ -459,6 +456,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 		EnableRPC: true,
 		EnableP2P: true,
 		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			// settings.Asset.HTTPPort = 18090
 			settings.Validator.UseLocalValidator = true
@@ -473,6 +471,7 @@ func TestUnminedConflictResolution(t *testing.T) {
 		EnableRPC: true,
 		EnableP2P: true,
 		// EnableFullLogging: true,
+		SettingsContext: "docker.host.teranode2.daemon",
 		SettingsOverrideFunc: func(settings *settings.Settings) {
 			// settings.Asset.HTTPPort = 28090
 			settings.Validator.UseLocalValidator = true

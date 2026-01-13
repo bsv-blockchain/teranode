@@ -60,7 +60,7 @@ func (pcb *PeerCircuitBreakers) GetPeerState(peerID string) CircuitBreakerState 
 	defer pcb.mu.RUnlock()
 
 	if breaker, exists := pcb.breakers[peerID]; exists {
-		return breaker.GetState()
+		return breaker.state
 	}
 
 	// Return StateClosed if breaker doesn't exist yet

@@ -5,11 +5,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"net/http"
-	"runtime"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -28,13 +25,9 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"golang.org/x/sync/semaphore"
 )
 
 // Interface defines blockchain data repository operations.
-// It abstracts access to blocks, transactions, subtrees, and UTXO data across
-// multiple storage backends (UTXO store, transaction store, subtree store, and
-// block persister store).
 type Interface interface {
 	Health(ctx context.Context, checkLiveness bool) (int, string, error)
 	GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
@@ -73,10 +66,6 @@ type Interface interface {
 }
 
 // Repository implements blockchain data access across multiple storage backends.
-// It coordinates between UTXO, transaction, subtree, and block stores to provide
-// a unified data access layer.
-//
-// Thread-safe: delegates to thread-safe store implementations.
 type Repository struct {
 	logger                ulogger.Logger
 	settings              *settings.Settings
@@ -87,17 +76,6 @@ type Repository struct {
 	BlockchainClient      blockchain.ClientI
 	BlockvalidationClient blockvalidation.Interface
 	P2PClient             p2p.ClientI
-
-	// Per-method concurrency semaphores (nil = unlimited)
-	semGetTransaction         *semaphore.Weighted
-	semGetTransactionMeta     *semaphore.Weighted
-	semGetSubtreeData         *semaphore.Weighted
-	semGetSubtreeDataReader   *semaphore.Weighted
-	semGetSubtreeTransactions *semaphore.Weighted
-	semGetSubtreeExists       *semaphore.Weighted
-	semGetSubtreeHead         *semaphore.Weighted
-	semGetUtxo                *semaphore.Weighted
-	semGetLegacyBlockReader   *semaphore.Weighted
 }
 
 // NewRepository creates a new Repository instance with the provided dependencies.
@@ -119,7 +97,7 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 	blockchainClient blockchain.ClientI, blockvalidationClient blockvalidation.Interface, subtreeStore blob.Store,
 	blockPersisterStore blob.Store, p2pClient p2p.ClientI) (*Repository, error) {
 
-	repo := &Repository{
+	return &Repository{
 		logger:                logger,
 		settings:              tSettings,
 		BlockchainClient:      blockchainClient,
@@ -129,73 +107,7 @@ func NewRepository(logger ulogger.Logger, tSettings *settings.Settings, utxoStor
 		SubtreeStore:          subtreeStore,
 		BlockPersisterStore:   blockPersisterStore,
 		P2PClient:             p2pClient,
-	}
-
-	// Initialize per-method semaphores
-	// 0 = unlimited, -1 = runtime.NumCPU(), >0 = exact limit
-	initSemaphore := func(c int, name string) *semaphore.Weighted {
-		if c == 0 {
-			return nil // Unlimited
-		}
-		if c == -1 {
-			c = runtime.NumCPU()
-		}
-		if c > 0 {
-			logger.Infof("[Repository] %s semaphore: %d", name, c)
-			return semaphore.NewWeighted(int64(c))
-		}
-		return nil
-	}
-
-	repo.semGetTransaction = initSemaphore(tSettings.Asset.ConcurrencyGetTransaction, "GetTransaction")
-	repo.semGetTransactionMeta = initSemaphore(tSettings.Asset.ConcurrencyGetTransactionMeta, "GetTransactionMeta")
-	repo.semGetSubtreeData = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeData, "GetSubtreeData")
-	repo.semGetSubtreeDataReader = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeDataReader, "GetSubtreeDataReader")
-	repo.semGetSubtreeTransactions = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeTransactions, "GetSubtreeTransactions")
-	repo.semGetSubtreeExists = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeExists, "GetSubtreeExists")
-	repo.semGetSubtreeHead = initSemaphore(tSettings.Asset.ConcurrencyGetSubtreeHead, "GetSubtreeHead")
-	repo.semGetUtxo = initSemaphore(tSettings.Asset.ConcurrencyGetUtxo, "GetUtxo")
-	repo.semGetLegacyBlockReader = initSemaphore(tSettings.Asset.ConcurrencyGetLegacyBlockReader, "GetLegacyBlockReader")
-
-	return repo, nil
-}
-
-// acquireSemaphorePermit attempts to acquire a permit from the given semaphore.
-// If sem is nil (unlimited concurrency), returns immediately without error.
-// Respects the parent context's deadline; adds a 30-second fallback timeout only if no deadline is set.
-func acquireSemaphorePermit(ctx context.Context, sem *semaphore.Weighted, methodName string) error {
-	if sem == nil {
-		return nil // Unlimited concurrency
-	}
-
-	// Only add a fallback timeout if the parent context has no deadline
-	acquireCtx := ctx
-	var cancel context.CancelFunc
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
-		acquireCtx, cancel = context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-	}
-
-	if err := sem.Acquire(acquireCtx, 1); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return errors.NewContextCanceledError(
-				fmt.Sprintf("[Repository:%s] operation canceled while waiting for semaphore permit", methodName), err)
-		} else if errors.Is(err, context.DeadlineExceeded) {
-			return errors.NewServiceUnavailableError(
-				fmt.Sprintf("[Repository:%s] operation timed out waiting for semaphore permit", methodName))
-		}
-		return errors.NewProcessingError(
-			fmt.Sprintf("[Repository:%s] failed to acquire semaphore permit", methodName), err)
-	}
-	return nil
-}
-
-// releaseSemaphorePermit releases a permit back to the semaphore.
-// If sem is nil (unlimited concurrency), does nothing.
-func releaseSemaphorePermit(sem *semaphore.Weighted) {
-	if sem != nil {
-		sem.Release(1)
-	}
+	}, nil
 }
 
 // Health performs health checks on the repository and its dependencies.
@@ -285,11 +197,6 @@ func (repo *Repository) GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*m
 //   - []byte: Transaction data
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash) ([]byte, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetTransaction, "GetTransaction"); err != nil {
-		return nil, err
-	}
-	defer releaseSemaphorePermit(repo.semGetTransaction)
-
 	repo.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 
 	txMeta, err := repo.UtxoStore.Get(ctx, hash)
@@ -344,11 +251,6 @@ func (repo *Repository) GetBlockGraphData(ctx context.Context, periodMillis uint
 //   - *meta.Data: Transaction metadata
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetTransactionMeta, "GetTransactionMeta"); err != nil {
-		return nil, err
-	}
-	defer releaseSemaphorePermit(repo.semGetTransactionMeta)
-
 	repo.logger.Debugf("[Repository] GetTransaction: %s", hash.String())
 
 	txMeta, err := repo.UtxoStore.Get(ctx, hash)
@@ -712,17 +614,6 @@ func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*
 //   - *util.SubtreeData: Deserialized subtree data structure
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeData, "GetSubtreeData"); err != nil {
-		return nil, err
-	}
-	defer releaseSemaphorePermit(repo.semGetSubtreeData)
-
-	return repo.getSubtreeDataInternal(ctx, hash)
-}
-
-// getSubtreeDataInternal contains the core logic for GetSubtreeData without semaphore protection.
-// This is used internally to avoid nested semaphore acquisition.
-func (repo *Repository) getSubtreeDataInternal(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error) {
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeData",
 		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeData: %s", hash.String()),
 	)
@@ -753,17 +644,11 @@ func (repo *Repository) getSubtreeDataInternal(ctx context.Context, hash *chainh
 }
 
 func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeTransactions, "GetSubtreeTransactions"); err != nil {
-		return nil, err
-	}
-	defer releaseSemaphorePermit(repo.semGetSubtreeTransactions)
-
 	ctx, _, _ = tracing.Tracer("repository").Start(ctx, "GetSubtreeTransactions",
 		tracing.WithLogMessage(repo.logger, "[Repository] GetSubtreeTransactions: %s", hash.String()),
 	)
 
-	// Call internal method to avoid nested semaphore acquisition
-	subtreeData, err := repo.getSubtreeDataInternal(ctx, hash)
+	subtreeData, err := repo.GetSubtreeData(ctx, hash)
 	if err != nil {
 		// always return an empty map if no transactions are found
 		return make(map[chainhash.Hash]*bt.Tx), err
@@ -799,11 +684,6 @@ func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainh
 //   - bool: True if the subtree exists in the store, false otherwise
 //   - error: Any error encountered during the existence check
 func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeExists, "GetSubtreeExists"); err != nil {
-		return false, err
-	}
-	defer releaseSemaphorePermit(repo.semGetSubtreeExists)
-
 	if exists, err := repo.SubtreeStore.Exists(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree); err == nil {
 		return exists, nil
 	}
@@ -822,11 +702,6 @@ func (repo *Repository) GetSubtreeExists(ctx context.Context, hash *chainhash.Ha
 //   - int: Number of nodes in the subtree
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, int, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetSubtreeHead, "GetSubtreeHead"); err != nil {
-		return nil, 0, err
-	}
-	defer releaseSemaphorePermit(repo.semGetSubtreeHead)
-
 	repo.logger.Debugf("[Repository] GetSubtree: %s", hash.String())
 
 	subtreeReader, err := repo.SubtreeStore.GetIoReader(ctx, hash.CloneBytes(), fileformat.FileTypeSubtree)
@@ -888,11 +763,6 @@ func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash
 //   - *utxo.SpendResponse: Detailed spend information
 //   - error: Any error encountered during retrieval
 func (repo *Repository) GetUtxo(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
-	if err := acquireSemaphorePermit(ctx, repo.semGetUtxo, "GetUtxo"); err != nil {
-		return nil, err
-	}
-	defer releaseSemaphorePermit(repo.semGetUtxo)
-
 	repo.logger.Debugf("[Repository] GetUtxo: %s", spend.UTXOHash.String())
 
 	resp, err := repo.UtxoStore.GetSpend(ctx, spend)

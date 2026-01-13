@@ -157,14 +157,6 @@ type RPCServer struct {
     // utxoStore provides access to the UTXO (Unspent Transaction Output) database
     // Used for transaction validation and UTXO queries
     utxoStore utxo.Store
-
-    // txStore provides access to the transaction blob store for persisting transactions
-    // Used for storing raw transaction data before validation
-    txStore blob.Store
-
-    // validatorClient provides access to the transaction validator service
-    // Used for synchronous transaction validation in sendrawtransaction RPC
-    validatorClient validator.Interface
 }
 ```
 
@@ -179,10 +171,10 @@ The RPCServer is designed for concurrent operation, employing synchronization me
 ### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI, txStore blob.Store, validatorClient validator.Interface) (*RPCServer, error)
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI) (*RPCServer, error)
 ```
 
-Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, block validation client, UTXO store, transaction store, validator client, and service clients.
+Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, block validation client, UTXO store, and service clients.
 
 This factory function creates a fully configured RPCServer instance, setting up:
 
@@ -729,18 +721,13 @@ Returns information about a block header.
         "hash": "000000000000000004a1b6d6fdfa0d0a0e52a7a2c8a35ee5b5a7518a846387bc",
         "version": 1,
         "versionHex": "00000001",
-        "previousblockhash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+        "previoushash": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
         "merkleroot": "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b",
         "time": 1231006505,
-        "mediantime": 1231006505,
         "nonce": 2083236893,
         "bits": "1d00ffff",
         "difficulty": 1,
-        "chainwork": "0000000000000000000000000000000000000000000000000000000100010001",
-        "height": 1000,
-        "size": 285,
-        "num_tx": 1,
-        "status": "active"
+        "height": 1000
     },
     "error": null,
     "id": "curltest"
@@ -869,30 +856,25 @@ Returns information for creating a new block.
 
 1. `parameters` (object, optional):
 
-   - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response
-   - `verbosity` (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes
+   - `coinbaseValue` (numeric, optional): Custom coinbase value in satoshis
 
 **Returns:**
 
 ```json
 {
-    "id": "string",                // Mining candidate ID
-    "prevhash": "string",          // Previous block hash
-    "coinbaseValue": number,       // Coinbase value in satoshis
-    "version": number,             // Block version
-    "nBits": "string",             // Compressed difficulty target
-    "time": number,                // Current timestamp
-    "height": number,              // Block height
-    "num_tx": number,              // Number of transactions
-    "sizeWithoutCoinbase": number, // Block size excluding coinbase
-    "merkleProof": ["string"],     // Merkle proof
-    "coinbase": "string"           // Coinbase transaction (only if provideCoinbaseTx=true)
+    "id": "string",         // Mining candidate ID
+    "prevhash": "string",   // Previous block hash
+    "coinbase": "string",   // Coinbase transaction
+    "coinbaseValue": number,  // Coinbase value in satoshis
+    "version": number,           // Block version
+    "nBits": "string",          // Compressed difficulty target
+    "time": number,             // Current timestamp
+    "height": number,           // Block height
+    "num_tx": number,           // Number of transactions
+    "merkleProof": ["string"],  // Merkle proof
+    "merkleRoot": "string"      // Merkle root
 }
 ```
-
-When `verbosity=1`, the response also includes:
-
-- `subtreeHashes` (array of strings): Hashes of subtrees in the block assembly
 
 **Example Request (standard):**
 
@@ -905,14 +887,14 @@ When `verbosity=1`, the response also includes:
 }
 ```
 
-**Example Request (with coinbase transaction and subtree hashes):**
+**Example Request (with custom coinbase value):**
 
 ```json
 {
     "jsonrpc": "1.0",
     "id": "curltest",
     "method": "getminingcandidate",
-    "params": [{"provideCoinbaseTx": true, "verbosity": 1}]
+    "params": [{"coinbaseValue": 5000000000}]
 }
 ```
 
@@ -1738,6 +1720,40 @@ Returns raw transaction data for a specific transaction.
 }
 ```
 
+### getrawmempool
+
+Returns all transaction IDs currently available for block assembly. Note that Teranode uses a subtree-based architecture instead of a traditional mempool, but this command provides compatibility with standard Bitcoin RPC interfaces by returning transaction IDs from the block assembly service.
+
+**Parameters:** none
+
+**Returns:**
+
+- `array` - Array of transaction IDs (strings) currently available for block assembly
+
+**Example Request:**
+
+```json
+{
+    "jsonrpc": "1.0",
+    "id": "curltest",
+    "method": "getrawmempool",
+    "params": []
+}
+```
+
+**Example Response:**
+
+```json
+{
+    "result": [
+        "a08e6907dbbd3d809776dbfc5d82e371b764ed838b5655e72f463568df1aadf0",
+        "b19f7908eced4e820887efdc6e93f482c865fe949c5666e83f574679ef2bbef1"
+    ],
+    "error": null,
+    "id": "curltest"
+}
+```
+
 ### getchaintips
 
 Returns information about all known chain tips in the block tree, including the main chain as well as orphaned branches.
@@ -1789,7 +1805,114 @@ Returns information about all known chain tips in the block tree, including the 
 
 ## Unimplemented RPC Commands
 
-Teranode implements a subset of Bitcoin Core's RPC methods. Commands that are recognized but not implemented will return an `ErrRPCUnimplemented` error. Wallet-related commands are not supported as Teranode does not include wallet functionality.
+The following commands are recognized by the RPC server but are not currently implemented (they would return an ErrRPCUnimplemented error):
+
+- `addnode` - Adds a node to the peer list
+- `debuglevel` - Changes the debug level on the fly
+- `decoderawtransaction` - Decodes a raw transaction hexadecimal string
+- `decodescript` - Decodes a hex-encoded script
+- `estimatefee` - Estimates the fee per kilobyte
+- `getaddednodeinfo` - Returns information about added nodes
+- `getbestblock` - Returns information about best block
+- `getblockcount` - Returns the current block count
+- `getblocktemplate` - Returns template for block generation
+- `getcfilter` - Returns the committed filter for a block
+- `getcfilterheader` - Returns the filter header for a filter
+- `getconnectioncount` - Returns connection count
+- `getcurrentnet` - Returns the current network ID
+- `getgenerate` - Returns if the server is generating coins
+- `gethashespersec` - Returns hashes per second
+- `getheaders` - Returns header information
+- `getnettotals` - Returns network statistics
+- `getnetworkhashps` - Returns estimated network hashes per second
+- `gettxout` - Returns unspent transaction output
+- `gettxoutproof` - Returns proof that transaction was included in a block
+- `node` - Attempts to add or remove a node
+- `ping` - Pings the server
+- `searchrawtransactions` - Searches for raw transactions
+- `setgenerate` - Sets generation on or off
+- `submitblock` - Submits a block to the network
+- `uptime` - Returns the server uptime
+- `validateaddress` - Validates a Bitcoin address
+- `verifychain` - Verifies the blockchain
+- `verifymessage` - Verifies a signed message
+- `verifytxoutproof` - Verifies a transaction output proof
+
+- `addmultisigaddress` - Add a multisignature address to the wallet
+- `backupwallet` - Safely copies wallet.dat to the specified file
+- `createencryptedwallet` - Creates a new encrypted wallet
+- `createmultisig` - Creates a multi-signature address
+- `dumpprivkey` - Reveals the private key for an address
+- `dumpwallet` - Dumps wallet keys to a file
+- `encryptwallet` - Encrypts the wallet
+- `getaccount` - Returns the account associated with an address
+- `getaccountaddress` - Returns the address for an account
+- `getaddressesbyaccount` - Returns addresses for an account
+- `getbalance` - Returns the wallet balance
+- `getnewaddress` - Returns a new Bitcoin address for receiving payments
+- `getrawchangeaddress` - Returns a new Bitcoin address for receiving change
+- `getreceivedbyaccount` - Returns amount received by account
+- `getreceivedbyaddress` - Returns amount received by address
+- `gettransaction` - Returns wallet transaction details
+- `getunconfirmedbalance` - Returns unconfirmed balance
+- `getwalletinfo` - Returns wallet state information
+- `importaddress` - Adds an address to the wallet
+- `importprivkey` - Adds a private key to the wallet
+- `importwallet` - Imports keys from a wallet dump file
+- `keypoolrefill` - Refills the key pool
+- `listaccounts` - Lists account balances
+- `listaddressgroupings` - Lists address groupings
+- `listlockunspent` - Lists temporarily unspendable outputs
+- `listreceivedbyaccount` - Lists balances by account
+- `listreceivedbyaddress` - Lists balances by address
+- `listsinceblock` - Lists transactions since a block
+- `listtransactions` - Lists wallet transactions
+- `listunspent` - Lists unspent transaction outputs
+- `lockunspent` - Locks/unlocks unspent outputs
+- `move` - Moves funds between accounts
+- `sendfrom` - Sends from an account
+- `sendmany` - Sends to multiple recipients
+- `sendtoaddress` - Sends to an address
+- `setaccount` - Sets the account for an address
+- `settxfee` - Sets the transaction fee
+- `signmessage` - Signs a message with address key
+- `signrawtransaction` - Signs a raw transaction
+- `walletlock` - Locks the wallet
+- `walletpassphrase` - Unlocks wallet for sending
+- `walletpassphrasechange` - Changes wallet passphrase
+
+Additionally, the following node-related commands are recognized but return ErrRPCUnimplemented:
+
+- `addnode` - Add/remove a node from the address manager
+- `debuglevel` - Changes debug logging level
+- `decoderawtransaction` - Decodes a raw transaction
+- `decodescript` - Decodes a script
+- `estimatefee` - Estimates transaction fee
+- `getaddednodeinfo` - Returns information about added nodes
+- `getbestblock` - Returns best block hash and height
+- `getblockcount` - Returns the blockchain height
+- `getblocktemplate` - Returns data for block template creation
+- `getcfilter` - Returns a compact filter for a block
+- `getcfilterheader` - Returns a filter header for a block
+- `getconnectioncount` - Returns connection count
+- `getcurrentnet` - Returns the network (mainnet/testnet)
+- `getgenerate` - Returns if the node is generating blocks
+- `gethashespersec` - Returns mining hashrate
+- `getheaders` - Returns block headers
+- `getnettotals` - Returns network traffic statistics
+- `getnetworkhashps` - Returns estimated network hashrate
+- `gettxout` - Returns transaction output information
+- `gettxoutproof` - Returns proof that transaction was included in a block
+- `node` - Attempts to add or remove a peer node
+- `ping` - Requests the node ping
+- `searchrawtransactions` - Searches for raw transactions
+- `setgenerate` - Sets if the node generates blocks
+- `submitblock` - Submits a block to the network
+- `uptime` - Returns node uptime
+- `validateaddress` - Validates a Bitcoin address
+- `verifychain` - Verifies blockchain database
+- `verifymessage` - Verifies a signed message
+- `verifytxoutproof` - Verifies proof that transaction was included in a block
 
 ## Error Handling
 
@@ -1912,3 +2035,5 @@ The RPC Service implements several security features:
 - TLS support for encrypted communications (when configured)
 
 ## Related Documents
+
+- [RPC API Docs](https://bsv-blockchain.github.io/teranode/references/open-rpc/)

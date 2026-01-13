@@ -53,6 +53,8 @@
       boundaryCount,
       siblingCount,
     )
+
+    dispatch('total', { total: totalPages })
   }
 
   function isSelected(btn) {

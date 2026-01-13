@@ -20,6 +20,7 @@ func TestUTXOValidation(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	defer td.Stop(t)
@@ -97,6 +98,7 @@ func TestScriptValidation(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
+		SettingsContext: "docker.host.teranode1.daemon",
 	})
 
 	defer td.Stop(t)

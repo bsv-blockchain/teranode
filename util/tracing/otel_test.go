@@ -487,8 +487,8 @@ func TestInitTracer_ExporterCreationError(t *testing.T) {
 			url:  "http://localhost:99999/api/traces",
 		},
 		{
-			name: "special_chars_path",
-			url:  "http://localhost:4318/path%00with%00nulls",
+			name: "malformed_path",
+			url:  "http://localhost:4318/\x00invalid",
 		},
 	}
 
@@ -606,12 +606,10 @@ func TestShutdownTracer_ConnectionRefusedPath(t *testing.T) {
 
 	for i, ctx := range contexts {
 		t.Run(fmt.Sprintf("attempt_%d", i), func(t *testing.T) {
-			// Reinitialize tracer for each attempt since ShutdownTracer sets tp = nil
-			if tp == nil {
-				resetGlobalState()
-				err = InitTracer(testSettings)
-				require.NoError(t, err)
-				require.NotNil(t, tp)
+			// Make a copy of the current state
+			currentTp := tp
+			if currentTp == nil {
+				t.Skip("No tracer provider available")
 			}
 
 			err := ShutdownTracer(ctx)
@@ -629,6 +627,12 @@ func TestShutdownTracer_ConnectionRefusedPath(t *testing.T) {
 				assert.Contains(t, err.Error(), "failed to flush spans")
 			}
 		})
+
+		// Reset for next attempt if needed
+		if tp == nil {
+			err = InitTracer(testSettings)
+			require.NoError(t, err)
+		}
 	}
 }
 

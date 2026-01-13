@@ -23,116 +23,87 @@
 
 ## 1. Description
 
-The Blob Store is a generic datastore that can be used for any specific data model. In the current Teranode implementation, it is used to store transactions (extended tx) and subtrees.
+The Blob Server is a generic datastore that can be used for any specific data model. In the current Teranode implementation, it is used to store transactions (extended tx) and subtrees.
 
-The Blob Store provides a set of methods to interact with the TX and Subtree storage implementations:
+The Blob Server provides a set of methods to interact with the TX and Subtree storage implementations.
 
-### Store Interface Methods
+1. **Health**: `Health(ctx)`
+    - **Purpose**: Checks the health status of the Blob Server.
 
-- **Health**: `Health(ctx, checkLiveness bool) (int, string, error)` - Checks the health status of the blob store, returning HTTP status code, description, and any error.
+2. **Exists**: `Exists(ctx, key)`
+    - **Purpose**: Determines if a given key exists in the store.
 
-- **Exists**: `Exists(ctx, key, fileType, opts...) (bool, error)` - Determines if a given key exists in the store.
+3. **Get**: `Get(ctx, key)`
+    - **Purpose**: Retrieves the value associated with a given key.
 
-- **Get**: `Get(ctx, key, fileType, opts...) ([]byte, error)` - Retrieves the blob data associated with a given key.
+4. **GetIoReader**: `GetIoReader(ctx, key)`
+    - **Purpose**: Retrieves an `io.ReadCloser` for the value associated with a given key, useful for streaming large data.
 
-- **GetIoReader**: `GetIoReader(ctx, key, fileType, opts...) (io.ReadCloser, error)` - Retrieves an `io.ReadCloser` for the blob associated with a given key, useful for streaming large data.
+5. **Set**: `Set(ctx, key, value, opts...)`
+    - **Purpose**: Sets a key-value pair in the store.
 
-- **Set**: `Set(ctx, key, fileType, value, opts...) error` - Stores a key-value pair in the store.
+6. **SetFromReader**: `SetFromReader(ctx, key, value, opts...)`
+    - **Purpose**: Sets a key-value pair in the store from an `io.ReadCloser`, useful for streaming large data.
 
-- **SetFromReader**: `SetFromReader(ctx, key, fileType, reader, opts...) error` - Stores a key-value pair in the store from an `io.ReadCloser`, useful for streaming large data.
+7. **SetTTL**: `SetTTL(ctx, key, ttl)`
+    - **Purpose**: Sets a Time-To-Live for a given key.
 
-- **SetDAH**: `SetDAH(ctx, key, fileType, dah, opts...) error` - Sets a Delete-At-Height value for a given key for automatic blockchain-based expiration.
+8. **Del**: `Del(ctx, key)`
+    - **Purpose**: Deletes a key and its associated value from the store.
 
-- **GetDAH**: `GetDAH(ctx, key, fileType, opts...) (uint32, error)` - Retrieves the Delete-At-Height value for a given key.
-
-- **Del**: `Del(ctx, key, fileType, opts...) error` - Deletes a key and its associated value from the store.
-
-- **Close**: `Close(ctx) error` - Closes the Blob Store connection and releases any associated resources.
-
-- **SetCurrentBlockHeight**: `SetCurrentBlockHeight(height uint32)` - Sets the current block height for the store, used for DAH functionality.
-
-11. **SetCurrentBlockHeight**: `SetCurrentBlockHeight(height)`
-    - **Purpose**: Sets the current block height for the store, used by the DAH (Delete-At-Height) mechanism.
+9. **Close**: `Close(ctx)`
+    - **Purpose**: Closes the Blob Server connection or any associated resources.
 
 ## 2. Architecture
 
-The Blob Store is a store interface, with implementations for Tx Store and Subtree Store.
+The Blob Server is a store interface, with implementations for Tx Store and Subtree Store.
 
 ![Blob_Store_Component_Context_Diagram.png](..%2Fservices%2Fimg%2FBlob_Store_Component_Context_Diagram.png)
 
-The Blob Store implementations for Tx Store and Subtree Store are injected into the various services that require them. They are initialized in `daemon/daemon_stores.go` and passed into the services as dependencies. See example below:
+The Blob Server implementations for Tx Store and Subtree Store are injected into the various services that require them. They are initialised in the `daemon/daemon_stores.go` file and passed into the services as a dependency. See below:
 
 ```go
-// GetTxStore returns the main transaction store instance. If the store hasn't been initialized yet,
-// it creates a new one using the configured URL from settings.
-func (d *Stores) GetTxStore(logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
-    if d.mainTxStore != nil {
-        return d.mainTxStore, nil
-    }
 
-    txStoreURL := appSettings.Block.TxStore
-    if txStoreURL == nil {
-        return nil, errors.NewConfigurationError("txstore config not found")
-    }
+func getTxStore(logger ulogger.Logger) blob.Store {
+ if txStore != nil {
+  return txStore
+ }
 
-    var err error
-    hashPrefix := 2
-    if txStoreURL.Query().Get("hashPrefix") != "" {
-        hashPrefix, err = strconv.Atoi(txStoreURL.Query().Get("hashPrefix"))
-        if err != nil {
-            return nil, errors.NewConfigurationError("txstore hashPrefix config error", err)
-        }
-    }
+ txStoreUrl, err, found := gocore.Config().GetURL("txstore")
+ if err != nil {
+  panic(err)
+ }
+ if !found {
+  panic("txstore config not found")
+ }
+ txStore, err = blob.NewStore(logger, txStoreUrl, options.WithHashPrefix(10))
+ if err != nil {
+  panic(err)
+ }
 
-    d.mainTxStore, err = blob.NewStore(logger, txStoreURL, options.WithHashPrefix(hashPrefix))
-    if err != nil {
-        return nil, errors.NewServiceError("could not create tx store", err)
-    }
-
-    return d.mainTxStore, nil
+ return txStore
 }
 
-// GetSubtreeStore returns the main subtree store instance. If the store hasn't been initialized yet,
-// it creates a new one using the URL from settings.
-func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
-    if d.mainSubtreeStore != nil {
-        return d.mainSubtreeStore, nil
-    }
+func getSubtreeStore(logger ulogger.Logger) blob.Store {
+ if subtreeStore != nil {
+  return subtreeStore
+ }
 
-    var err error
-    subtreeStoreURL := appSettings.SubtreeValidation.SubtreeStore
+ subtreeStoreUrl, err, found := gocore.Config().GetURL("subtreestore")
+ if err != nil {
+  panic(err)
+ }
+ if !found {
+  panic("subtreestore config not found")
+ }
+ subtreeStore, err = blob.NewStore(logger, subtreeStoreUrl, options.WithHashPrefix(10))
+ if err != nil {
+  panic(err)
+ }
 
-    if subtreeStoreURL == nil {
-        return nil, errors.NewConfigurationError("subtreestore config not found")
-    }
-
-    hashPrefix := 2
-    if subtreeStoreURL.Query().Get("hashPrefix") != "" {
-        hashPrefix, err = strconv.Atoi(subtreeStoreURL.Query().Get("hashPrefix"))
-        if err != nil {
-            return nil, errors.NewConfigurationError("subtreestore hashPrefix config error", err)
-        }
-    }
-
-    blockchainClient, err := d.GetBlockchainClient(ctx, logger, appSettings, "subtree")
-    if err != nil {
-        return nil, errors.NewServiceError("could not create blockchain client for subtree store", err)
-    }
-
-    ch, err := getBlockHeightTrackerCh(ctx, logger, blockchainClient)
-    if err != nil {
-        return nil, errors.NewServiceError("could not create block height tracker channel", err)
-    }
-
-    d.mainSubtreeStore, err = blob.NewStore(logger, subtreeStoreURL,
-        options.WithHashPrefix(hashPrefix),
-        options.WithBlockHeightCh(ch))
-    if err != nil {
-        return nil, errors.NewServiceError("could not create subtree store", err)
-    }
-
-    return d.mainSubtreeStore, nil
+ return subtreeStore
 }
+
 ```
 
 The following diagram provides a deeper level of detail into the Blob Store's internal components and their interactions:
@@ -160,7 +131,7 @@ The Blob Server supports various backends, each suited to different storage requ
 
 - **HTTP**: Implements an HTTP client for interacting with a remote blob storage server.
 
-- **Local DAH**: Provides local Delete-At-Height (DAH) functionality for managing blockchain-based data expiration.
+- **Local TTL**: Provides local Time-to-Live (TTL) functionality for managing data expiration.
 
 - **Memory**: In-memory storage for temporary and fast data access.
 
@@ -202,16 +173,17 @@ The `ConcurrentBlob` wrapper is particularly useful for services that need to fe
 
 ### 3.4 HTTP REST API Server
 
-The Blob Store includes a comprehensive HTTP REST API server implementation (`HTTPBlobServer`) that provides full HTTP access to blob storage operations. This server implements the standard `http.Handler` interface and can be easily integrated into existing HTTP server infrastructure.
+The Blob Server includes a comprehensive HTTP REST API server implementation (`HTTPBlobServer`) that provides full HTTP access to blob storage operations. This server implements the standard `http.Handler` interface and can be easily integrated into existing HTTP server infrastructure.
 
 #### Supported HTTP Endpoints
 
 - **GET /health**: Health check endpoint returning server status
-- **HEAD /blob/{key}.{fileType}**: Check if a blob exists without retrieving content
-- **GET /blob/{key}.{fileType}**: Retrieve blob by key with optional Range header support for partial content
-- **POST /blob/{key}.{fileType}**: Store new blob data with streaming support
-- **PATCH /blob/{key}.{fileType}**: Update blob's Delete-At-Height value via `dah` query parameter
-- **DELETE /blob/{key}.{fileType}**: Delete blob by key
+- **GET /{key}**: Retrieve blob by key with optional range support
+- **POST /{key}**: Store new blob data
+- **PUT /{key}**: Update existing blob data
+- **DELETE /{key}**: Delete blob by key
+- **GET /{key}/dah**: Get Delete-At-Height information for a blob
+- **POST /{key}/dah**: Set Delete-At-Height for a blob
 
 #### Usage Example
 
@@ -270,24 +242,19 @@ gRPC endpoints:
 
 ```text
 ./stores/blob/
-├── Interface.go                # Interface definitions for the blob store.
+├── Interface.go                # Interface definitions for the project.
 ├── batcher                     # Batching functionality for efficient processing.
 │   └── batcher.go              # Main batcher functionality.
-├── concurrent_blob.go          # Concurrent blob access implementation.
-├── concurrent_blob_test.go     # Test cases for concurrent blob access.
-├── factory.go                  # Factory methods for creating store instances.
+├── factory.go                  # Factory methods for creating instances.
 ├── file                        # File system based implementations.
 │   ├── file.go                 # File system handling.
 │   └── file_test.go            # Test cases for file system functions.
 ├── http                        # HTTP client implementation for remote blob storage.
 │   └── http.go                 # HTTP specific functionality.
-├── localdah                    # Local Delete-At-Height functionality.
-│   ├── localDAH.go             # Local DAH implementation.
-│   └── localDAH_test.go        # Test cases for local DAH.
-├── logger                      # Logging wrapper for blob store operations.
+├── localttl                    # Local Time-to-Live functionality.
+│   └── localttl.go             # Local TTL handling.
 ├── memory                      # In-memory implementation.
 │   └── memory.go               # In-memory data handling.
-├── mock.go                     # Mock implementation for testing.
 ├── null                        # Null implementation (no-op).
 │   └── null.go                 # Null pattern implementation.
 ├── options                     # Options and configurations.
@@ -301,12 +268,11 @@ gRPC endpoints:
 
 ## 7. Locally Running the store
 
-The Blob Store cannot be run independently. It is instantiated as part of the main.go initialization and directly used by the services that require it.
+The Blob Server cannot be run independently. It is instantiated as part of the main.go initialization and directly used by the services that require it.
 
 ## 8. Configuration Options
 
 For comprehensive configuration documentation including all settings, defaults, and interactions, see the [ublob Store Settings Reference](../../references/settings/stores/blob_settings.md).
-
 ## 9. Other Resources
 
 [Blob Server Reference](../../references/stores/blob_reference.md)

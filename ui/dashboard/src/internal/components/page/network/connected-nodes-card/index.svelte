@@ -48,7 +48,12 @@
 
   $: hasSorting = sortColumn && sortOrder
 
-  $: totalPages = Math.max(1, Math.ceil((allData?.length || 0) / pageSize))
+  let totalPages = 0
+
+  const onTotal = (e) => {
+    totalPages = e.detail.total
+  }
+
   $: showPagerNav = totalPages > 1
   $: showPagerSize = showPagerNav || (totalPages === 1 && allData.length > 5)
   $: showTableFooter = showPagerSize
@@ -78,6 +83,7 @@
       }}
       hasBoundaryRight={true}
       on:change={onPage}
+      on:total={onTotal}
     />
     <TableToggle value={variant} on:change={onToggle} />
     {#if hasSorting}

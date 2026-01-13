@@ -16,7 +16,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -87,7 +86,7 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 			Return(true, nil).Maybe()
 
 		// Setup HTTP mock
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		requestCount := 0
@@ -201,7 +200,7 @@ func TestCatchup_MemoryExhaustionAttack(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
 			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Create a large but valid chain of headers
@@ -301,7 +300,7 @@ func TestCatchup_CPUExhaustion(t *testing.T) {
 			Return(false, nil).Maybe()
 
 		// Setup HTTP mock
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Track active requests
@@ -434,7 +433,7 @@ func TestCatchup_SlowLorisAttack(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Mock GetBlockHeader for common ancestor finding
@@ -549,7 +548,7 @@ func TestCatchup_SlowLorisAttack(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).
 			Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Simulate normally slow but legitimate peer
@@ -684,7 +683,7 @@ func TestCatchup_MemoryMonitoring(t *testing.T) {
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, bestBlockHeader.Hash()).
 			Return(true, nil).Maybe()
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		// Track peak memory during request using atomic operations
@@ -844,7 +843,7 @@ func TestCatchup_ResourceCleanup(t *testing.T) {
 		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
 			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
 
-		httpmock.ActivateNonDefault(util.HTTPClient())
+		httpmock.Activate()
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(

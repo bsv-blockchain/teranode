@@ -19,8 +19,6 @@ type StoreBlockOptions struct {
 	MinedSet bool
 	// SubtreesSet indicates whether the subtrees data is explicitly set for the block
 	SubtreesSet bool
-	// PersistedAt indicates whether to set the persisted_at timestamp for the block
-	PersistedAt bool
 	// Invalid indicates whether the block is marked as invalid
 	Invalid bool
 	// ID is an optional identifier for the block, instead of incrementing the last known block ID
@@ -40,9 +38,7 @@ func ProcessStoreBlockOptions(opts ...StoreBlockOption) *StoreBlockOptions {
 	}
 
 	for _, o := range opts {
-		if o != nil {
-			o(options)
-		}
+		o(options)
 	}
 
 	return options
@@ -73,20 +69,6 @@ func WithMinedSet(b bool) StoreBlockOption {
 func WithSubtreesSet(b bool) StoreBlockOption {
 	return func(opts *StoreBlockOptions) {
 		opts.SubtreesSet = b
-	}
-}
-
-// WithPersistedAt creates an option that sets the PersistedAt timestamp.
-// This option specifies when the block was persisted.
-//
-// Parameters:
-//   - d: Time value to set for PersistedAt field
-//
-// Returns:
-//   - StoreBlockOption: Function that applies the configuration
-func WithPersistedAt() StoreBlockOption {
-	return func(opts *StoreBlockOptions) {
-		opts.PersistedAt = true
 	}
 }
 

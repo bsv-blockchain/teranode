@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"os"
@@ -30,6 +31,7 @@ import (
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -931,17 +933,6 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 		tracing.WithHistogram(peerServerMetrics["OnGetHeaders"]),
 	)
 
-	// Don't serve headers to other peers while we're actively syncing in headers-first mode.
-	// Serving headers during checkpoint sync causes significant delays (18s+ per batch) due to:
-	// - Database query contention (querying 2000 headers per peer)
-	// - Multiple peers requesting headers simultaneously
-	// - Competition with our own header processing
-	// This prevents the sync from timing out (3-minute lastBlockTime limit).
-	if sp.server.syncManager.IsHeadersFirstMode() {
-		sp.server.logger.Debugf("Ignoring getheaders request from %s: node is syncing in headers-first mode", sp)
-		return
-	}
-
 	// Find the most recent known block in the best chain based on the block
 	// locator and fetch all the headers after it until either
 	// wire.MaxBlockHeadersPerMsg have been fetched or the provided stop
@@ -1365,13 +1356,12 @@ func (s *server) getTxFromStore(hash *chainhash.Hash) (*bsvutil.Tx, int64, error
 // connected peer.  An error is returned if the block hash is not known.
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
-	// Stream directly from Asset Server without disk caching.
-	// For large blocks (4GB+), the disk I/O overhead of ConcurrentBlob causes timeouts.
-	// The Asset Server handles caching internally, so we stream directly to avoid:
-	// 1. Writing the entire block to disk (slow, causes context deadline exceeded)
-	// 2. Reading it back from disk (additional I/O overhead)
-	url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
-	reader, err := util.DoHTTPRequestBodyReader(s.ctx, url)
+	// use a concurrent store to make sure we do not request the legacy block multiple times
+	// for different peers. This makes sure we serve the block from a local cache store and not from the utxo store.
+	reader, err := s.concurrentStore.Get(s.ctx, *hash, fileformat.FileTypeMsgBlock, func() (io.ReadCloser, error) {
+		url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
+		return util.DoHTTPRequestBodyReader(s.ctx, url)
+	})
 	if err != nil {
 		sp.server.logger.Errorf("Unable to fetch requested block %v: %v", hash, err)
 
@@ -1386,12 +1376,9 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 		_ = reader.Close()
 	}()
 
-	// Use RawBlockMessage to avoid deserialize/serialize overhead for large blocks.
-	// This reads raw bytes directly and writes them to the wire, bypassing the
-	// expensive process of creating Go structs for millions of transactions.
-	rawBlockMsg, err := NewRawBlockMessage(reader)
-	if err != nil {
-		sp.server.logger.Errorf("Unable to read requested block hash %v: %v", hash, err)
+	var msgBlock wire.MsgBlock
+	if err = msgBlock.Deserialize(reader); err != nil {
+		sp.server.logger.Errorf("Unable to deserialize requested block hash %v: %v", hash, err)
 
 		if doneChan != nil {
 			doneChan <- struct{}{}
@@ -1416,7 +1403,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 		dc = doneChan
 	}
 
-	sp.QueueMessageWithEncoding(rawBlockMsg, dc, encoding)
+	sp.QueueMessageWithEncoding(&msgBlock, dc, encoding)
 
 	// When the peer requests the final block that was advertised in
 	// response to a getblocks message which requested more blocks than

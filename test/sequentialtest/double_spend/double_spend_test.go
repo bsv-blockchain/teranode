@@ -11,6 +11,8 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/test/txregistry"
+	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
+	"github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,92 +30,150 @@ var (
 // NOTE: these tests cannot be run in parallel as they rely on the same blockchain instance. They have to be run sequentially.
 // All Double spend testcases are covering TNA-5: Teranode must only accept the block if all transactions in it are valid and not already spent
 
-func TestDoubleSpendPostgres(t *testing.T) {
-	// t.Skip()
+func TestDoubleSpendSQLite(t *testing.T) {
+	utxoStore := "sqlite:///test"
 
 	t.Run("single_tx_with_one_conflicting_transaction", func(t *testing.T) {
-		testSingleDoubleSpend(t, "postgres")
+		testSingleDoubleSpend(t, utxoStore)
 	})
 	// t.Run("multiple conflicting txs in same block", func(t *testing.T) {
-	// 	testMarkAsConflictingMultipleSameBlock(t, "postgres")
+	// 	testMarkAsConflictingMultipleSameBlock(t, utxoStore)
 	// })
 	t.Run("multiple_conflicting_txs_in_different_blocks", func(t *testing.T) {
-		testMarkAsConflictingMultiple(t, "postgres")
+		testMarkAsConflictingMultiple(t, utxoStore)
 	})
 	t.Run("conflicting_transaction_chains", func(t *testing.T) {
-		testMarkAsConflictingChains(t, "postgres")
+		testMarkAsConflictingChains(t, utxoStore)
 	})
 	t.Run("double_spend_fork", func(t *testing.T) {
-		testDoubleSpendFork(t, "postgres")
+		testDoubleSpendFork(t, utxoStore)
 	})
-	// t.Run("double spend in subsequent block", func(t *testing.T) {
-	// 	testDoubleSpendInSubsequentBlock(t, "postgres")
-	// })
+	t.Run("double spend in subsequent block", func(t *testing.T) {
+		testDoubleSpendInSubsequentBlock(t, utxoStore)
+	})
 	t.Run("triple_forked_chain", func(t *testing.T) {
-		testTripleForkedChain(t, "postgres")
+		testTripleForkedChain(t, utxoStore)
 	})
 	t.Run("test_non_conflicting_tx_after_reorg", func(t *testing.T) {
-		t.Skip()
-		testNonConflictingTxReorg(t, "postgres")
+		testNonConflictingTxReorg(t, utxoStore)
 	})
 	t.Run("test_conflicting_tx_processed_after_reorg", func(t *testing.T) {
-		testConflictingTxReorg(t, "postgres")
+		testConflictingTxReorg(t, utxoStore)
 	})
 	t.Run("test_non_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
-		testNonConflictingTxBlockAssemblyReset(t, "postgres")
+		testNonConflictingTxBlockAssemblyReset(t, utxoStore)
 	})
 	t.Run("test_double_spend_fork_with_nested_txs", func(t *testing.T) {
-		testDoubleSpendForkWithNestedTXs(t, "postgres")
+		testDoubleSpendForkWithNestedTXs(t, utxoStore)
 	})
 	t.Run("test_double_spend_with_frozen_tx", func(t *testing.T) {
-		testSingleDoubleSpendFrozenTx(t, "postgres")
+		testSingleDoubleSpendFrozenTx(t, utxoStore)
 	})
 	// this test is not working yet, waiting for #2853
 	// t.Run("test_double_spend_not_mined_for_long", func(t *testing.T) {
-	// 	testSingleDoubleSpendNotMinedForLong(t, "postgres")
+	// 	testSingleDoubleSpendNotMinedForLong(t, utxoStore)
+	// })
+}
+
+func TestDoubleSpendPostgres(t *testing.T) {
+	// t.Skip()
+	// start a postgres container
+	utxoStore, teardown, err := postgres.SetupTestPostgresContainer()
+	require.NoError(t, err)
+
+	defer func() {
+		_ = teardown()
+	}()
+
+	t.Run("single_tx_with_one_conflicting_transaction", func(t *testing.T) {
+		testSingleDoubleSpend(t, utxoStore)
+	})
+	// t.Run("multiple conflicting txs in same block", func(t *testing.T) {
+	// 	testMarkAsConflictingMultipleSameBlock(t, utxoStore)
+	// })
+	t.Run("multiple_conflicting_txs_in_different_blocks", func(t *testing.T) {
+		testMarkAsConflictingMultiple(t, utxoStore)
+	})
+	t.Run("conflicting_transaction_chains", func(t *testing.T) {
+		testMarkAsConflictingChains(t, utxoStore)
+	})
+	t.Run("double_spend_fork", func(t *testing.T) {
+		testDoubleSpendFork(t, utxoStore)
+	})
+	// t.Run("double spend in subsequent block", func(t *testing.T) {
+	// 	testDoubleSpendInSubsequentBlock(t, utxoStore)
+	// })
+	t.Run("triple_forked_chain", func(t *testing.T) {
+		testTripleForkedChain(t, utxoStore)
+	})
+	t.Run("test_non_conflicting_tx_after_reorg", func(t *testing.T) {
+		testNonConflictingTxReorg(t, utxoStore)
+	})
+	t.Run("test_conflicting_tx_processed_after_reorg", func(t *testing.T) {
+		testConflictingTxReorg(t, utxoStore)
+	})
+	t.Run("test_non_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
+		testNonConflictingTxBlockAssemblyReset(t, utxoStore)
+	})
+	t.Run("test_double_spend_fork_with_nested_txs", func(t *testing.T) {
+		testDoubleSpendForkWithNestedTXs(t, utxoStore)
+	})
+	t.Run("test_double_spend_with_frozen_tx", func(t *testing.T) {
+		testSingleDoubleSpendFrozenTx(t, utxoStore)
+	})
+	// this test is not working yet, waiting for #2853
+	// t.Run("test_double_spend_not_mined_for_long", func(t *testing.T) {
+	// 	testSingleDoubleSpendNotMinedForLong(t, utxoStore)
 	// })
 }
 
 func TestDoubleSpendAerospike(t *testing.T) {
+	utxoStore, teardown, err := aerospike.InitAerospikeContainer()
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = teardown()
+	})
+
 	t.Run("single_tx_with_one_conflicting_transaction", func(t *testing.T) {
-		testSingleDoubleSpend(t, "aerospike")
+		testSingleDoubleSpend(t, utxoStore)
 	})
 	// t.Run("multiple conflicting txs in same block", func(t *testing.T) {
-	// 	testMarkAsConflictingMultipleSameBlock(t, "aerospike")
+	// 	testMarkAsConflictingMultipleSameBlock(t, utxoStore)
 	// })
 	t.Run("multiple_conflicting_txs_in_different_blocks", func(t *testing.T) {
-		testMarkAsConflictingMultiple(t, "aerospike")
+		testMarkAsConflictingMultiple(t, utxoStore)
 	})
 	t.Run("conflicting_transaction_chains", func(t *testing.T) {
-		testMarkAsConflictingChains(t, "aerospike")
+		testMarkAsConflictingChains(t, utxoStore)
 	})
 	t.Run("double_spend_fork", func(t *testing.T) {
-		testDoubleSpendFork(t, "aerospike")
+		testDoubleSpendFork(t, utxoStore)
 	})
 	t.Run("double_spend_in_subsequent_block", func(t *testing.T) {
-		testDoubleSpendInSubsequentBlock(t, "aerospike")
+		testDoubleSpendInSubsequentBlock(t, utxoStore)
 	})
 	t.Run("triple_forked_chain", func(t *testing.T) {
-		testTripleForkedChain(t, "aerospike")
+		testTripleForkedChain(t, utxoStore)
 	})
 	t.Run("test_non_conflicting_tx_after_reorg", func(t *testing.T) {
-		testNonConflictingTxReorg(t, "aerospike")
+		testNonConflictingTxReorg(t, utxoStore)
 	})
 	t.Run("test_conflicting_tx_processed_after_reorg", func(t *testing.T) {
-		testConflictingTxReorg(t, "aerospike")
+		testConflictingTxReorg(t, utxoStore)
 	})
 	t.Run("test_non_conflicting_tx_after_block_assembly_reset", func(t *testing.T) {
-		testNonConflictingTxBlockAssemblyReset(t, "aerospike")
+		testNonConflictingTxBlockAssemblyReset(t, utxoStore)
 	})
 	t.Run("test_double_spend_fork_with_nested_txs", func(t *testing.T) {
-		testDoubleSpendForkWithNestedTXs(t, "aerospike")
+		testDoubleSpendForkWithNestedTXs(t, utxoStore)
 	})
 	t.Run("test_double_spend_with_frozen_tx", func(t *testing.T) {
-		testSingleDoubleSpendFrozenTx(t, "aerospike")
+		testSingleDoubleSpendFrozenTx(t, utxoStore)
 	})
 	// this test is not working yet, waiting for #2853
 	// t.Run("test_double_spend_not_mined_for_long", func(t *testing.T) {
-	// 	testSingleDoubleSpendNotMinedForLong(t, "aerospike")
+	// 	testSingleDoubleSpendNotMinedForLong(t, utxoStore)
 	// })
 }
 
@@ -467,6 +527,29 @@ func createConflictingBlock(t *testing.T, td *daemon.TestDaemon, originalBlock *
 	// Verify conflicting
 	td.VerifyConflictingInSubtrees(t, newBlockSubtree.RootHash(), blockTxs...)
 	td.VerifyConflictingInUtxoStore(t, true, blockTxs...)
+
+	return newBlock
+}
+
+func createFork(t *testing.T, td *daemon.TestDaemon, originalBlock *model.Block, blockTxs []*bt.Tx, nonce uint32) *model.Block {
+	// Get previous block so we can create an alternate bock for this block with no conflicting transactions.
+	previousBlock, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, originalBlock.Height-1)
+	require.NoError(t, err)
+
+	// Step 1: Create and validate block with double spend transaction
+	_, newBlock := td.CreateTestBlock(t, previousBlock, nonce, blockTxs...)
+
+	require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy"),
+		"Failed to process block with double spend transaction")
+
+	td.VerifyBlockByHash(t, newBlock, newBlock.Header.Hash())
+
+	// Verify block 102 is still the original block at height 102
+	td.WaitForBlockHeight(t, originalBlock, blockWait)
+
+	// Verify conflicting is set to false
+	td.VerifyConflictingInSubtrees(t, originalBlock.Subtrees[0], nil)
+	td.VerifyConflictingInUtxoStore(t, false, blockTxs...)
 
 	return newBlock
 }

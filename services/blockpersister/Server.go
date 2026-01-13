@@ -23,10 +23,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/blockpersister/state"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -68,13 +70,35 @@ type Server struct {
 	// blockchainClient interfaces with the blockchain service to retrieve block data
 	// and coordinate persistence operations with blockchain state
 	blockchainClient blockchain.ClientI
+
+	// state manages the persister's internal state, tracking which blocks have been
+	// successfully persisted and allowing for recovery after interruptions
+	state *state.State
+}
+
+// WithSetInitialState is an optional configuration function that sets the initial state
+// of the block persister server. This can be used during initialization to establish
+// a known starting point for block persistence operations.
+//
+// Parameters:
+//   - height: The blockchain height to set as the initial state
+//   - hash: The block hash corresponding to the specified height
+//
+// Returns a function that, when called with a Server instance, will set the initial state
+// of that server. If the state cannot be set, an error is logged but not returned.
+func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server) {
+	return func(s *Server) {
+		if err := s.state.AddBlock(height, hash.String()); err != nil {
+			s.logger.Errorf("Failed to set initial state: %v", err)
+		}
+	}
 }
 
 // New creates a new block persister server instance with the provided dependencies.
 //
 // This constructor initializes all components required for block persistence operations,
-// including stores and client connections. It accepts optional configuration functions
-// to customize the server instance after construction.
+// including stores, state management, and client connections. It accepts optional
+// configuration functions to customize the server instance after construction.
 //
 // Parameters:
 //   - ctx: Context for controlling the server lifecycle
@@ -97,6 +121,9 @@ func New(
 	blockchainClient blockchain.ClientI,
 	opts ...func(*Server),
 ) *Server {
+	// Get blocks file path from config, or use default
+	state := state.New(logger, tSettings.Block.StateFile)
+
 	u := &Server{
 		ctx:              ctx,
 		logger:           logger,
@@ -106,6 +133,7 @@ func New(
 		utxoStore:        utxoStore,
 		stats:            gocore.NewStat("blockpersister"),
 		blockchainClient: blockchainClient,
+		state:            state,
 	}
 
 	// Apply optional configuration functions
@@ -183,11 +211,13 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	return nil
 }
 
-// getNextBlockToProcess retrieves the next block that needs to be persisted to blob storage.
+// getNextBlockToProcess retrieves the next block that needs to be processed
+// based on the current state and configuration.
 //
-// This method queries the database for blocks that haven't been persisted yet (persisted_at IS NULL)
-// and aren't marked as invalid. The database stores block metadata and tracks persistence status,
-// eliminating the need for external state files.
+// This method determines the next block to persist by comparing the last persisted block height
+// with the current blockchain tip. It ensures blocks are persisted in sequence without gaps
+// and respects the configured persistence age policy to control how far behind persistence
+// can lag.
 //
 // Parameters:
 //   - ctx: Context for coordinating the block retrieval operation
@@ -195,17 +225,33 @@ func (u *Server) Init(ctx context.Context) (err error) {
 // Returns:
 //   - *model.Block: The next block to process, or nil if no block needs processing yet
 //   - error: Any error encountered during the operation
+//
+// The method follows these steps:
+//  1. Get the last persisted block height from the state
+//  2. Get the current best block from the blockchain
+//  3. If the difference between them exceeds BlockPersisterPersistAge, return the next block
+//  4. Otherwise, return nil to indicate no blocks need processing yet
 func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error) {
-	blocks, err := u.blockchainClient.GetBlocksNotPersisted(ctx, 1)
+	lastPersistedHeight, err := u.state.GetLastPersistedBlockHeight()
 	if err != nil {
-		return nil, errors.NewProcessingError("failed to get blocks not persisted", err)
+		return nil, errors.NewProcessingError("failed to get last persisted block height", err)
 	}
 
-	if len(blocks) == 0 {
-		return nil, nil
+	_, blockMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to get best block header", err)
 	}
 
-	return blocks[0], nil
+	if blockMeta.Height > lastPersistedHeight+u.settings.Block.BlockPersisterPersistAge {
+		block, err := u.blockchainClient.GetBlockByHeight(ctx, lastPersistedHeight+1)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to get block headers by height", err)
+		}
+
+		return block, nil
+	}
+
+	return nil, nil
 }
 
 // Start initializes and begins the block persister service operations.
@@ -237,7 +283,7 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return err
 	}
 
-	blockPersisterHTTPListenAddress := u.settings.BlockPersister.HTTPListenAddress
+	blockPersisterHTTPListenAddress := u.settings.Block.PersisterHTTPListenAddress
 
 	if blockPersisterHTTPListenAddress != "" {
 		blockStoreURL := u.settings.Block.BlockStore
@@ -303,17 +349,14 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	//
 	// By publishing state on startup, BlockAssembler can initialize immediately from this state.
 	// During runtime, BlockPersisted notifications keep the height current.
-	blocks, err := u.blockchainClient.GetBlocksNotPersisted(ctx, 1)
-	if err != nil {
-		u.logger.Warnf("[BlockPersister] Failed to query initial state: %v", err)
-	} else if len(blocks) > 0 && blocks[0].Height > 0 {
-		// GetBlocksNotPersisted returns blocks in ascending height order, so blocks[0] is the lowest unpersisted block
-		lastHeight := blocks[0].Height - 1
-		heightBytes := binary.LittleEndian.AppendUint32(nil, lastHeight)
-		if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
-			u.logger.Warnf("[BlockPersister] Failed to publish initial state: %v", err)
-		} else {
-			u.logger.Infof("[BlockPersister] Published initial state: height %d", lastHeight)
+	if lastHeight, err := u.state.GetLastPersistedBlockHeight(); err == nil && lastHeight > 0 {
+		if u.blockchainClient != nil {
+			heightBytes := binary.LittleEndian.AppendUint32(nil, lastHeight)
+			if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
+				u.logger.Warnf("[BlockPersister] Failed to publish initial state: %v", err)
+			} else {
+				u.logger.Infof("[BlockPersister] Published initial state: height %d", lastHeight)
+			}
 		}
 	}
 
@@ -322,51 +365,53 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		for {
 			select {
 			case <-ctx.Done():
-				u.logger.Infof("[BlockPersister] Shutting down block processing loop")
+				u.logger.Infof("Shutting down block processing loop")
 				return
 			default:
 				block, err := u.getNextBlockToProcess(ctx)
 				if err != nil {
-					u.logger.Errorf("[BlockPersister] Error getting next block to process: %v", err)
-					time.Sleep(u.settings.BlockPersister.PersistSleep) // Sleep after error
+					u.logger.Errorf("Error getting next block to process: %v", err)
+					time.Sleep(time.Minute) // Sleep after error
 
 					continue
 				}
 
 				if block == nil {
-					time.Sleep(u.settings.BlockPersister.PersistSleep) // Sleep when no blocks available
+					if u.settings.Block.BlockPersisterPersistSleep >= time.Minute {
+						u.logger.Infof("No new blocks to process, waiting...")
+					}
+
+					time.Sleep(u.settings.Block.BlockPersisterPersistSleep) // Sleep when no blocks available
 
 					continue
 				}
 
-				startTime := time.Now()
-
-				u.logger.Infof("[BlockPersister] Processing block %s", block.String())
-
 				// Get block bytes
 				blockBytes, err := block.Bytes()
 				if err != nil {
-					u.logger.Errorf("[BlockPersister] Failed to get block bytes: %v", err)
-					time.Sleep(u.settings.BlockPersister.PersistSleep)
+					u.logger.Errorf("Failed to get block bytes: %v", err)
+					time.Sleep(time.Minute)
 
 					continue
 				}
 
 				// Process the block
-				if err = u.persistBlock(ctx, block.Hash(), blockBytes); err != nil {
+				if err := u.persistBlock(ctx, block.Hash(), blockBytes); err != nil {
 					if errors.Is(err, errors.NewBlobAlreadyExistsError("")) {
 						// We log the error but continue processing
-						u.logger.Infof("[BlockPersister] Block %s already exists, skipping...", block.String())
+						u.logger.Infof("Block %s already exists, skipping...", block.Hash())
 					} else {
-						u.logger.Errorf("[BlockPersister] Failed to persist block %s: %v", block.String(), err)
+						u.logger.Errorf("Failed to persist block %s: %v", block.Hash(), err)
+						time.Sleep(time.Minute)
 
 						continue
 					}
 				}
 
-				// Mark block as persisted in database
-				if err = u.blockchainClient.SetBlockPersistedAt(ctx, block.Hash()); err != nil {
-					u.logger.Errorf("[BlockPersister] Failed to mark block %s as persisted: %v", block.String(), err)
+				// Add this after successful persistence
+				if err := u.state.AddBlock(block.Height, block.Hash().String()); err != nil {
+					u.logger.Errorf("Failed to record block %s: %v", block.Hash(), err)
+					time.Sleep(time.Minute)
 
 					continue
 				}
@@ -382,28 +427,30 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 				// to calculate safe deletion bounds: min(requested_height, persisted_height + retention)
 				//
 				// See BlockAssembler.startChannelListeners for the notification handler.
-				notification := &blockchain_api.Notification{
-					Type: model.NotificationType_BlockPersisted,
-					Hash: block.Hash().CloneBytes(),
-					Metadata: &blockchain_api.NotificationMetadata{
-						Metadata: map[string]string{
-							"height": fmt.Sprintf("%d", block.Height),
+				if u.blockchainClient != nil {
+					notification := &blockchain_api.Notification{
+						Type: model.NotificationType_BlockPersisted,
+						Hash: block.Hash().CloneBytes(),
+						Metadata: &blockchain_api.NotificationMetadata{
+							Metadata: map[string]string{
+								"height": fmt.Sprintf("%d", block.Height),
+							},
 						},
-					},
-				}
-				if err = u.blockchainClient.SendNotification(ctx, notification); err != nil {
-					u.logger.Warnf("[BlockPersister] Failed to send persisted notification for block %s: %v",
-						block.String(), err)
+					}
+					if err := u.blockchainClient.SendNotification(ctx, notification); err != nil {
+						u.logger.Warnf("[BlockPersister] Failed to send persisted notification for block %s at height %d: %v",
+							block.Hash().String(), block.Height, err)
+					}
+
+					// Update BlockPersisterHeight state for P2P storage mode determination
+					heightBytes := binary.LittleEndian.AppendUint32(nil, block.Height)
+					if err := u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
+						u.logger.Warnf("[BlockPersister] Failed to update BlockPersisterHeight state for block %s at height %d: %v",
+							block.Hash().String(), block.Height, err)
+					}
 				}
 
-				// Update BlockPersisterHeight state for P2P storage mode determination
-				heightBytes := binary.LittleEndian.AppendUint32(nil, block.Height)
-				if err = u.blockchainClient.SetState(ctx, "BlockPersisterHeight", heightBytes); err != nil {
-					u.logger.Warnf("[BlockPersister] Failed to update BlockPersisterHeight state for block %s: %v",
-						block.String(), err)
-				}
-
-				u.logger.Infof("[BlockPersister] Successfully processed block %s in %s", block.String(), time.Since(startTime))
+				u.logger.Infof("Successfully processed block %s", block.Hash())
 			}
 		}
 	}()

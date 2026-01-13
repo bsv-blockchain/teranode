@@ -378,14 +378,6 @@ func rpcDecodeHexError(gotHex string) *bsvjson.RPCError {
 // handleUnimplemented is the handler for commands that should ultimately be
 // supported but are not yet implemented.
 func handleUnimplemented(ctx context.Context, s *RPCServer, cmd interface{}, closeChan <-chan struct{}) (interface{}, error) {
-	select {
-	case <-closeChan:
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCMisc,
-			Message: "Connection closed by client",
-		}
-	default:
-	}
 	s.logger.Debugf("handling unimplemented command")
 	return nil, ErrRPCUnimplemented
 }
@@ -677,9 +669,9 @@ type RPCServer struct {
 	// Used for mining-related RPC commands like getminingcandidate and generate
 	blockAssemblyClient blockassembly.ClientI
 
-	// legacyP2PClient provides access to legacy peer network services
+	// peerClient provides access to legacy peer network services
 	// Used for peer management and information retrieval
-	legacyP2PClient peer.ClientI
+	peerClient peer.ClientI
 
 	// p2pClient provides access to the P2P network services
 	// Used for modern peer management and network operations
@@ -1392,7 +1384,7 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // Returns:
 //   - *RPCServer: Configured server instance ready for initialization
 //   - error: Any error encountered during configuration
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, legacyPeerClient peer.ClientI, p2pClient p2p.ClientI, txStore blob.Store, validatorClient validator.Interface) (*RPCServer, error) {
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI, txStore blob.Store, validatorClient validator.Interface) (*RPCServer, error) {
 	initPrometheusMetrics()
 
 	assetHTTPAddress := tSettings.Asset.HTTPAddress
@@ -1417,7 +1409,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		helpCacher:             newHelpCacher(),
 		utxoStore:              utxoStore,
 		blockAssemblyClient:    blockAssemblyClient,
-		legacyP2PClient:        legacyPeerClient,
+		peerClient:             peerClient,
 		p2pClient:              p2pClient,
 		txStore:                txStore,
 		validatorClient:        validatorClient,

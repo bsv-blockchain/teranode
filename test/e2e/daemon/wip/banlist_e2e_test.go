@@ -15,8 +15,9 @@ import (
 func TestBanListGRPCE2E(t *testing.T) {
 	RunSequentialTest(t, func(t *testing.T) {
 		daemonNode := daemon.NewTestDaemon(t, daemon.TestOptions{
-			EnableRPC: true,
-			EnableP2P: true,
+			EnableRPC:       true,
+			EnableP2P:       true,
+			SettingsContext: "docker.host.teranode1.daemon",
 			SettingsOverrideFunc: func(settings *settings.Settings) {
 				settings.P2P.PrivateKey = "c8a1b91ae120878d91a04c904e0d565aa44b2575c1bb30a729bd3e36e2a1d5e6067216fa92b1a1a7e30d0aaabe288e25f1efc0830f309152638b61d84be6b71d"
 			},
@@ -60,6 +61,7 @@ func TestBanListGRPCE2E(t *testing.T) {
 		daemonNode = daemon.NewTestDaemon(t, daemon.TestOptions{
 			EnableRPC:         true,
 			EnableP2P:         true,
+			SettingsContext:   "docker.host.teranode1.daemon",
 			SkipRemoveDataDir: true, // keep data dir for persistence
 		})
 		defer daemonNode.Stop(t)

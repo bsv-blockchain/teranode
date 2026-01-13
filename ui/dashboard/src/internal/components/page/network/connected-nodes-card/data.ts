@@ -228,7 +228,7 @@ export const renderCells = {
     const state = item[colId] || '-'
     let emoji = ''
     let tooltip = state
-
+    
     // Add colorful emojis based on actual FSM states
     if (state === 'RUNNING') {
       emoji = '✅'
@@ -236,14 +236,14 @@ export const renderCells = {
     } else if (state === 'CATCHINGBLOCKS') {
       emoji = '🟠'
       tooltip = 'CATCHINGBLOCKS'
-    } else if (state === 'LEGACYSYNCING') {
+    } else if (state === 'LEGACYSYNC') {
       emoji = '🟡'
-      tooltip = 'LEGACYSYNCING'
+      tooltip = 'LEGACYSYNC'
     } else if (state === 'IDLE') {
       emoji = '⏸️'
       tooltip = 'IDLE'
     }
-
+    
     return {
       component: RenderSpanWithTooltip,
       props: {
