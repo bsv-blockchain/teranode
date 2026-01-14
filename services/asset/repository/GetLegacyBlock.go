@@ -110,6 +110,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 				bufferedReader := bufio.NewReaderSize(subtreeDataReader, 32*1024)
 
 				// process the subtree data streaming to the writer (non-coinbase transactions)
+				coinbaseTxID := block.CoinbaseTx.TxIDChainHash()
 				for {
 					tx := &bt.Tx{}
 
@@ -120,6 +121,13 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 						}
 
 						return errors.NewProcessingError("error reading transaction: %s", err)
+					}
+
+					// Skip if this is the coinbase transaction (handle malformed subtree data)
+					// Subtree data should never contain the coinbase, but if it does due to
+					// older buggy code, we need to skip it to avoid duplication
+					if tx.TxIDChainHash().String() == coinbaseTxID.String() {
+						continue
 					}
 
 					// Write the normal transaction bytes to the writer

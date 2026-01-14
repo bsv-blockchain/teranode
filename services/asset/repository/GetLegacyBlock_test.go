@@ -853,6 +853,97 @@ func calculateMerkleRoot(txHashes []*chainhash.Hash) *chainhash.Hash {
 	return currentLevel[0]
 }
 
+// TestMalformedSubtreeDataWithCoinbase verifies that GetLegacyBlockReader correctly handles
+// subtree data that incorrectly contains the coinbase transaction (from older buggy code).
+// It should not duplicate the coinbase even when subtree data is malformed.
+func TestMalformedSubtreeDataWithCoinbase(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	ctx := setup(t)
+
+	// Create block with multiple transactions
+	blockParams := blockInfo{
+		version:           1,
+		bits:              "2000ffff",
+		previousBlockHash: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+		height:            100,
+		nonce:             2083236893,
+		timestamp:         uint32(time.Now().Unix()),
+		txs:               []*bt.Tx{coinbase, tx1},
+	}
+
+	block, subtree := createBlockWithCorrectMerkleRoot(ctx, t, blockParams)
+
+	// Mock blockchain client
+	blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
+	blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
+
+	// Create MALFORMED subtree data that includes the coinbase (simulating older buggy code)
+	subtreeData := subtreepkg.NewSubtreeData(subtree)
+	// Add coinbase as first transaction (this is the bug we're handling)
+	require.NoError(t, subtreeData.AddTx(coinbase, 0))
+	// Add regular transaction
+	require.NoError(t, subtreeData.AddTx(tx1, 1))
+
+	subtreeDataBytes, err := subtreeData.Serialize()
+	require.NoError(t, err)
+
+	// Store the malformed subtree data
+	err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes)
+	require.NoError(t, err)
+
+	// Get legacy block reader
+	r, err := ctx.repo.GetLegacyBlockReader(context.Background(), &chainhash.Hash{}, true)
+	require.NoError(t, err)
+
+	// Read all block data
+	blockData, err := io.ReadAll(r)
+	if err != nil && err != io.ErrClosedPipe {
+		require.NoError(t, err)
+	}
+
+	// Parse the block to count transactions
+	reader := bytes.NewReader(blockData)
+
+	// Skip header (80 bytes)
+	headerBytes := make([]byte, 80)
+	_, err = io.ReadFull(reader, headerBytes)
+	require.NoError(t, err)
+
+	// Read transaction count
+	varIntBytes := make([]byte, 9)
+	n, err := reader.Read(varIntBytes)
+	require.NoError(t, err)
+	txCount, bytesRead := bt.NewVarIntFromBytes(varIntBytes[:n])
+	reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+
+	// Read and verify all transactions
+	txHashes := make([]string, 0, txCount)
+	for i := uint64(0); i < uint64(txCount); i++ {
+		tx := &bt.Tx{}
+		_, err = tx.ReadFrom(reader)
+		require.NoError(t, err)
+		txHashes = append(txHashes, tx.TxIDChainHash().String())
+		t.Logf("Tx[%d]: %s", i, tx.TxIDChainHash().String())
+	}
+
+	// Verify we have exactly 2 transactions (no duplication)
+	assert.Equal(t, 2, len(txHashes), "Should have exactly 2 transactions")
+
+	// Verify coinbase is first and only appears once
+	coinbaseHash := coinbase.TxIDChainHash().String()
+	assert.Equal(t, coinbaseHash, txHashes[0], "First transaction should be coinbase")
+
+	// Verify tx1 is second
+	tx1Hash := tx1.TxIDChainHash().String()
+	assert.Equal(t, tx1Hash, txHashes[1], "Second transaction should be tx1")
+
+	// Verify no duplicates
+	assert.NotEqual(t, txHashes[0], txHashes[1], "Transactions should not be duplicated")
+
+	t.Logf("✓ Malformed subtree data handled correctly - no coinbase duplication")
+}
+
 // TestBlockVsLegacyEndpointConsistency validates that the merkle root calculated from
 // transactions is identical whether using the /block endpoint (structured data) or
 // the /block_legacy endpoint (wire format streaming). This test reproduces and validates
