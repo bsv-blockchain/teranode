@@ -80,8 +80,14 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 		var (
 			subtreeDataExists bool
 			subtreeDataReader io.ReadCloser
-			coinbaseWritten   bool
 		)
+
+		// Write the coinbase first before processing subtrees
+		if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
+			_ = w.CloseWithError(io.ErrClosedPipe)
+			_ = r.CloseWithError(err)
+			return errors.NewProcessingError("[GetLegacyBlockReader] error writing coinbase tx", err)
+		}
 
 		for subtreeIdx, subtreeHash := range block.Subtrees {
 			subtreeDataExists, err = repo.SubtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
@@ -92,17 +98,6 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 					_ = r.CloseWithError(err)
 
 					return errors.NewProcessingError("[GetLegacyBlockReader] error getting subtree %s from store", subtreeHash.String(), err)
-				}
-
-				// Write the coinbase transaction first (it's not in the subtree data)
-				// Only write it once, for the first subtree
-				if subtreeIdx == 0 && !coinbaseWritten && block.CoinbaseTx != nil {
-					if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
-						_ = w.CloseWithError(io.ErrClosedPipe)
-						_ = r.CloseWithError(err)
-						return errors.NewProcessingError("[GetLegacyBlockReader] error writing coinbase tx", err)
-					}
-					coinbaseWritten = true
 				}
 
 				// create a buffered reader to read the subtree data
@@ -126,7 +121,8 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 					// Skip if this is the coinbase transaction (handle malformed subtree data)
 					// Subtree data should never contain the coinbase, but if it does due to
 					// older buggy code, we need to skip it to avoid duplication
-					if tx.TxIDChainHash().String() == coinbaseTxID.String() {
+					// Include the subtreeIdx check to avoid needing to do string comparison every iteration
+					if subtreeIdx == 0 && tx.TxIDChainHash().String() == coinbaseTxID.String() {
 						continue
 					}
 
@@ -144,16 +140,6 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 
 				// move to the next subtree
 				continue
-			}
-
-			// Write coinbase first if not yet written (for fallback path)
-			if subtreeIdx == 0 && !coinbaseWritten && block.CoinbaseTx != nil {
-				if _, err = w.Write(block.CoinbaseTx.Bytes()); err != nil {
-					_ = w.CloseWithError(io.ErrClosedPipe)
-					_ = r.CloseWithError(err)
-					return errors.NewProcessingError("[GetLegacyBlockReader] error writing coinbase tx", err)
-				}
-				coinbaseWritten = true
 			}
 
 			if err = repo.writeTransactionsViaSubtreeStore(gCtx, w, block, subtreeHash); err != nil {

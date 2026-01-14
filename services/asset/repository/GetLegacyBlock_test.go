@@ -915,7 +915,8 @@ func TestMalformedSubtreeDataWithCoinbase(t *testing.T) {
 	n, err := reader.Read(varIntBytes)
 	require.NoError(t, err)
 	txCount, bytesRead := bt.NewVarIntFromBytes(varIntBytes[:n])
-	reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+	_, err = reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+	require.NoError(t, err)
 
 	// Read and verify all transactions
 	txHashes := make([]string, 0, txCount)
