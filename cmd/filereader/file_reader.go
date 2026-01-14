@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -37,6 +38,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
@@ -662,7 +664,18 @@ func getBlockStore(logger ulogger.Logger, settings *settings.Settings) blob.Stor
 		panic("blockstore config not found")
 	}
 
-	blockStore, err := blob.NewStore(logger, blockStoreURL)
+	var err error
+
+	hashPrefix := -2
+
+	if blockStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		panic(err)
 	}

@@ -40,14 +40,14 @@ func TestUnminedTxIterator_Integration(t *testing.T) {
 		var count int
 
 		for {
-			unminedTransaction, err := it.Next(ctx)
+			batch, err := it.Next(ctx)
 			require.NoError(t, err)
 
-			if unminedTransaction == nil {
+			if batch == nil {
 				break
 			}
 
-			count++
+			count += len(batch)
 		}
 
 		assert.Equal(t, 0, count, "should not find any unmined transactions")
@@ -75,21 +75,23 @@ func TestUnminedTxIterator_Integration(t *testing.T) {
 		var count int
 
 		for {
-			unminedTransaction, err := it.Next(ctx)
+			batch, err := it.Next(ctx)
 			require.NoError(t, err)
 
-			if unminedTransaction == nil {
+			if batch == nil {
 				break
 			}
 
-			assert.Equal(t, tx1.TxIDChainHash(), unminedTransaction.Hash)
-			assert.Equal(t, tx1Meta.Fee, unminedTransaction.Fee)
-			assert.Equal(t, tx1Meta.SizeInBytes, unminedTransaction.Size)
-			assert.Len(t, unminedTransaction.TxInpoints.ParentTxHashes, 1)
-			assert.Greater(t, unminedTransaction.CreatedAt, 0)
-			assert.NotNil(t, unminedTransaction.BlockIDs)
+			for _, unminedTx := range batch {
+				assert.Equal(t, *tx1.TxIDChainHash(), unminedTx.Node.Hash)
+				assert.Equal(t, tx1Meta.Fee, unminedTx.Node.Fee)
+				assert.Equal(t, tx1Meta.SizeInBytes, unminedTx.Node.SizeInBytes)
+				assert.Len(t, unminedTx.TxInpoints.ParentTxHashes, 1)
+				assert.Greater(t, unminedTx.CreatedAt, 0)
+				assert.NotNil(t, unminedTx.BlockIDs)
 
-			count++
+				count++
+			}
 		}
 
 		assert.Equal(t, 1, count, "should find one unmined transaction")
@@ -123,14 +125,14 @@ func TestUnminedTxIterator_Integration(t *testing.T) {
 		var count int
 
 		for {
-			unminedTransaction, err := it.Next(ctx)
+			batch, err := it.Next(ctx)
 			require.NoError(t, err)
 
-			if unminedTransaction == nil {
+			if batch == nil {
 				break
 			}
 
-			count++
+			count += len(batch)
 		}
 
 		assert.Equal(t, 0, count, "should not find any unmined transactions")

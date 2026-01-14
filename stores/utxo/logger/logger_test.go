@@ -62,9 +62,12 @@ func (m *MockStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, o
 	return args.Get(0).(*meta.Data), args.Error(1)
 }
 
-func (m *MockStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	args := m.Called(ctx, hash)
-	return args.Get(0).(*meta.Data), args.Error(1)
+func (m *MockStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	args := m.Called(ctx, hash, data)
+	if result := args.Get(0); result != nil {
+		*data = *result.(*meta.Data)
+	}
+	return args.Error(1)
 }
 
 func (m *MockStore) Get(ctx context.Context, hash *chainhash.Hash, fieldsArg ...fields.FieldName) (*meta.Data, error) {
@@ -172,12 +175,12 @@ type MockIterator struct {
 	mock.Mock
 }
 
-func (m *MockIterator) Next(ctx context.Context) (*utxo.UnminedTransaction, error) {
+func (m *MockIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*utxo.UnminedTransaction), args.Error(1)
+	return args.Get(0).([]*utxo.UnminedTransaction), args.Error(1)
 }
 
 func (m *MockIterator) Err() error {
@@ -415,9 +418,10 @@ func TestGetMeta(t *testing.T) {
 	expectedData := createTestMetaData()
 	expectedErr := errors.NewError("get meta error")
 
-	mockStore.On("GetMeta", ctx, hash).Return(expectedData, expectedErr)
+	mockStore.On("GetMeta", ctx, hash, mock.Anything).Return(expectedData, expectedErr)
 
-	data, err := store.GetMeta(ctx, hash)
+	data := &meta.Data{}
+	err := store.GetMeta(ctx, hash, data)
 
 	assert.Equal(t, expectedData, data)
 	assert.Equal(t, expectedErr, err)
@@ -800,7 +804,7 @@ func TestLoggerIntegration(t *testing.T) {
 	mockStore.On("SetBlockHeight", blockHeight).Return(nil)
 	mockStore.On("GetBlockHeight").Return(blockHeight)
 	mockStore.On("Create", ctx, tx, blockHeight, mock.Anything).Return(metaData, nil)
-	mockStore.On("GetMeta", ctx, hash).Return(metaData, nil)
+	mockStore.On("GetMeta", ctx, hash, mock.Anything).Return(metaData, nil)
 
 	// Execute operations
 	err := store.SetBlockHeight(blockHeight)
@@ -813,7 +817,8 @@ func TestLoggerIntegration(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, metaData, createdData)
 
-	retrievedData, err := store.GetMeta(ctx, hash)
+	retrievedData := &meta.Data{}
+	err = store.GetMeta(ctx, hash, retrievedData)
 	require.NoError(t, err)
 	assert.Equal(t, metaData, retrievedData)
 
@@ -925,7 +930,7 @@ func TestConcurrentAccess(t *testing.T) {
 	metaData := createTestMetaData()
 
 	// Setup expectations for concurrent calls
-	mockStore.On("GetMeta", ctx, hash).Return(metaData, nil).Times(10)
+	mockStore.On("GetMeta", ctx, hash, mock.Anything).Return(metaData, nil).Times(10)
 
 	// Test concurrent access to ensure thread safety of logging
 	done := make(chan bool, 10)
@@ -933,7 +938,8 @@ func TestConcurrentAccess(t *testing.T) {
 		go func() {
 			defer func() { done <- true }()
 
-			data, err := store.GetMeta(ctx, hash)
+			data := &meta.Data{}
+			err := store.GetMeta(ctx, hash, data)
 			assert.NoError(t, err)
 			assert.Equal(t, metaData, data)
 		}()

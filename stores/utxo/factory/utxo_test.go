@@ -73,8 +73,8 @@ func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.
 	return nil, nil
 }
 
-func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return nil, nil
+func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	return nil
 }
 
 func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {

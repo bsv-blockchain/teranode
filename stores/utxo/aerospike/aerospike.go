@@ -135,6 +135,7 @@ type Store struct {
 	externalStoreSem    chan struct{} // Semaphore to limit concurrent external storage operations
 	indexMutex          sync.Mutex    // Mutex for index creation operations
 	indexOnce           sync.Once     // Ensures index creation/wait is only done once per process
+	spendLuaPackages    []string      // Pre-initialized array of Lua package names for spend operations
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -214,6 +215,14 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		externalStoreSem: externalStoreSem,
 	}
 
+	// Initialize spendLuaPackages array with configurable count
+	if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {
+		s.spendLuaPackages = make([]string, s.settings.Aerospike.SeparateSpendUDFModuleCount)
+		for i := 0; i < s.settings.Aerospike.SeparateSpendUDFModuleCount; i++ {
+			s.spendLuaPackages[i] = LuaPackage + "_" + fmt.Sprintf("%d", i)
+		}
+	}
+
 	// Ensure index creation/wait is only done once per process
 	if pruner.IndexName != "" {
 		s.indexOnce.Do(func() {
@@ -269,6 +278,21 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// update the version of the lua script when a new version is launched, do not re-use the old one
 	if err = registerLuaIfNecessary(logger, client, LuaPackage, teranodeLUA); err != nil {
 		return nil, errors.NewStorageError("Failed to register udfLUA", err)
+	}
+
+	// register separate lua scripts for spending utxos in batches
+	if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {
+		for _, packageName := range s.spendLuaPackages {
+			if err = registerLuaIfNecessary(logger, client, packageName, teranodeLUA); err != nil {
+				return nil, errors.NewStorageError("Failed to register udfLUA for spend batcher", err)
+			}
+		}
+	}
+
+	// Make sure the udf lua scripts are installed in the cluster
+	// update the version of the lua script when a new version is launched, do not re-use the old one
+	if err = registerLuaIfNecessary(logger, client, LuaPackageMined, teranodeLUA); err != nil {
+		return nil, errors.NewStorageError("Failed to register udfLUA mined", err)
 	}
 
 	spendBatchSize := s.settings.UtxoStore.SpendBatcherSize
@@ -683,8 +707,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	for i, record := range batchRecords {
 		batchRecord := record.BatchRec()
 		if batchRecord.Err != nil {
-			s.logger.Warnf("[PreserveTransactions] Failed to preserve tx %s: %v",
-				txIDs[i].String(), batchRecord.Err)
+			s.logger.Warnf("[PreserveTransactions] Failed to preserve tx %s: %v", txIDs[i].String(), batchRecord.Err)
 			continue
 		}
 
@@ -702,11 +725,9 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 				preservedCount++
 			case LuaStatusError:
 				if res.ErrorCode == LuaErrorCodeTxNotFound {
-					s.logger.Warnf("[PreserveTransactions] Transaction not found for tx %s",
-						txIDs[i].String())
+					s.logger.Debugf("[PreserveTransactions] Transaction not found for tx %s", txIDs[i].String())
 				} else {
-					s.logger.Errorf("[PreserveTransactions] Error preserving tx %s: %s",
-						txIDs[i].String(), res.Message)
+					s.logger.Errorf("[PreserveTransactions] Error preserving tx %s: %s", txIDs[i].String(), res.Message)
 				}
 			}
 		} else {

@@ -167,11 +167,11 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	return data, err
 }
 
-func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	data, err := s.store.GetMeta(ctx, hash)
+func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	err := s.store.GetMeta(ctx, hash, data)
 	s.logger.Debugf("[UTXOStore][logger][GetMeta] hash %s data %v err %v : %s", hash.String(), data, err, caller())
 
-	return data, err
+	return err
 }
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {

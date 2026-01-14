@@ -24,6 +24,7 @@ package validator
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -53,7 +54,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
-	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	aeroTest "github.com/bsv-blockchain/testcontainers-aerospike-go"
@@ -61,7 +61,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
 
 func BenchmarkValidator(b *testing.B) {
@@ -235,12 +234,18 @@ func TestValidate_BlockAssemblyAndTxMetaChannels(t *testing.T) {
 	msg := <-txmetaKafkaProducerClient.PublishChannel()
 	assert.NotNil(t, msg)
 
-	// unmarshal the kafka message
-	var kafkaMsg kafkamessage.KafkaTxMetaTopicMessage
-	err = proto.Unmarshal(msg.Value, &kafkaMsg)
-	require.NoError(t, err)
+	// parse the binary batch format kafka message
+	// Format: [4 bytes entry count] [32 bytes hash] [1 byte action] [4 bytes content len] [content]
+	data := msg.Value
+	require.GreaterOrEqual(t, len(data), 4, "message too short")
 
-	assert.Equal(t, tx.TxID(), kafkaMsg.TxHash)
+	entryCount := binary.LittleEndian.Uint32(data[0:4])
+	require.Equal(t, uint32(1), entryCount, "expected 1 entry in batch")
+
+	// Read hash (offset 4, 32 bytes)
+	var hash chainhash.Hash
+	copy(hash[:], data[4:36])
+	assert.Equal(t, tx.TxID(), hash.String())
 
 	// check the block assembly store
 	assert.Len(t, blockAssembler.storedTxs, 1)
@@ -984,9 +989,10 @@ func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
 	_, err = utxoStore.Create(ctx, tx, 100, utxostore.WithLocked(true))
 	require.NoError(t, err)
 
-	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	metaData := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	require.True(t, meta.Locked)
+	require.True(t, metaData.Locked)
 
 	v := &Validator{
 		logger:      ulogger.TestLogger{},
@@ -1002,9 +1008,10 @@ func TestValidator_TwoPhaseCommitTransaction(t *testing.T) {
 	err = v.twoPhaseCommitTransaction(ctx, tx, tx.TxID())
 	require.NoError(t, err)
 
-	meta, err = utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	metaData = &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.False(t, meta.Locked)
+	assert.False(t, metaData.Locked)
 }
 
 func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
@@ -1029,9 +1036,10 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 	_, err = utxoStore.Create(ctx, tx, 100, utxostore.WithLocked(false))
 	require.NoError(t, err)
 
-	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	metaData := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.False(t, meta.Locked, "TX should be spendable before 2-phase commit")
+	assert.False(t, metaData.Locked, "TX should be spendable before 2-phase commit")
 
 	v := &Validator{
 		logger:      ulogger.TestLogger{},
@@ -1047,9 +1055,10 @@ func TestValidator_TwoPhaseCommitTransaction_AlreadySpendable(t *testing.T) {
 	err = v.twoPhaseCommitTransaction(ctx, tx, tx.TxID())
 	assert.NoError(t, err)
 
-	meta, err = utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	metaData = &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.False(t, meta.Locked, "TX should remain spendable after 2-phase commit")
+	assert.False(t, metaData.Locked, "TX should remain spendable after 2-phase commit")
 }
 
 // FailingUtxoStore provides a test double that simulates UTXO store failures.
@@ -1107,9 +1116,10 @@ func TestValidator_TwoPhaseCommitTransaction_SetLockedFails(t *testing.T) {
 	err = v.twoPhaseCommitTransaction(ctx, tx, tx.TxID())
 	assert.Error(t, err)
 
-	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	metaData := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	require.True(t, meta.Locked)
+	require.True(t, metaData.Locked)
 }
 
 func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
@@ -1161,9 +1171,10 @@ func TestValidator_LockedFlagChangedIfBlockAssemblyStoreSucceeds(t *testing.T) {
 	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
 	require.NoError(t, err)
 
-	meta, err := utxoStore.GetMeta(ctx, txs[1].TxIDChainHash())
+	metaData := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.False(t, meta.Locked, "Flag should be unset after successful block assembly")
+	assert.False(t, metaData.Locked, "Flag should be unset after successful block assembly")
 }
 
 func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T) {
@@ -1219,7 +1230,186 @@ func TestValidator_LockedFlagNotChangedIfBlockAssemblyDidNotStoreTx(t *testing.T
 	_, err = v.ValidateWithOptions(ctx, txs[1], 2, opts)
 	require.NoError(t, err)
 
-	meta, err := utxoStore.GetMeta(ctx, txs[1].TxIDChainHash())
+	metaData := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, txs[1].TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.True(t, meta.Locked, "Flag should be set if block assembly did not store tx")
+	assert.True(t, metaData.Locked, "Flag should be set if block assembly did not store tx")
+}
+
+func Test_serializeTxMetaBatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		batch    []*txmetaBatchItem
+		expected func(*testing.T, []byte)
+	}{
+		{
+			name:  "empty batch",
+			batch: []*txmetaBatchItem{},
+			expected: func(t *testing.T, data []byte) {
+				require.Equal(t, 4, len(data), "empty batch should have 4 bytes for entry count")
+				count := binary.LittleEndian.Uint32(data[0:4])
+				assert.Equal(t, uint32(0), count, "entry count should be 0")
+			},
+		},
+		{
+			name: "single ADD entry",
+			batch: []*txmetaBatchItem{
+				{
+					hash:      &chainhash.Hash{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
+					metaBytes: []byte("test content"),
+					isDelete:  false,
+				},
+			},
+			expected: func(t *testing.T, data []byte) {
+				// 4 (count) + 32 (hash) + 1 (action) + 4 (len) + 12 (content) = 53
+				require.Equal(t, 53, len(data))
+
+				count := binary.LittleEndian.Uint32(data[0:4])
+				assert.Equal(t, uint32(1), count)
+
+				var hash chainhash.Hash
+				copy(hash[:], data[4:36])
+				assert.Equal(t, byte(1), hash[0])
+				assert.Equal(t, byte(32), hash[31])
+
+				action := data[36]
+				assert.Equal(t, txmetaActionADD, action)
+
+				contentLen := binary.LittleEndian.Uint32(data[37:41])
+				assert.Equal(t, uint32(12), contentLen)
+
+				content := string(data[41:53])
+				assert.Equal(t, "test content", content)
+			},
+		},
+		{
+			name: "single DELETE entry",
+			batch: []*txmetaBatchItem{
+				{
+					hash:     &chainhash.Hash{0xAB, 0xCD},
+					isDelete: true,
+				},
+			},
+			expected: func(t *testing.T, data []byte) {
+				// 4 (count) + 32 (hash) + 1 (action) + 4 (len) = 41
+				require.Equal(t, 41, len(data))
+
+				count := binary.LittleEndian.Uint32(data[0:4])
+				assert.Equal(t, uint32(1), count)
+
+				action := data[36]
+				assert.Equal(t, txmetaActionDELETE, action)
+
+				contentLen := binary.LittleEndian.Uint32(data[37:41])
+				assert.Equal(t, uint32(0), contentLen)
+			},
+		},
+		{
+			name: "multiple entries",
+			batch: []*txmetaBatchItem{
+				{
+					hash:      &chainhash.Hash{1},
+					metaBytes: []byte("one"),
+					isDelete:  false,
+				},
+				{
+					hash:     &chainhash.Hash{2},
+					isDelete: true,
+				},
+				{
+					hash:      &chainhash.Hash{3},
+					metaBytes: []byte("three"),
+					isDelete:  false,
+				},
+			},
+			expected: func(t *testing.T, data []byte) {
+				count := binary.LittleEndian.Uint32(data[0:4])
+				assert.Equal(t, uint32(3), count)
+
+				// First entry: ADD with "one" (3 bytes)
+				// offset 4: hash (32), then action (1), then length (4), then content (3)
+				offset := 4
+				assert.Equal(t, byte(1), data[offset], "first entry hash[0]")
+				assert.Equal(t, txmetaActionADD, data[offset+32], "first entry action")
+				len1 := binary.LittleEndian.Uint32(data[offset+33 : offset+37])
+				assert.Equal(t, uint32(3), len1, "first entry content length")
+				assert.Equal(t, "one", string(data[offset+37:offset+40]), "first entry content")
+
+				// Second entry: DELETE (starts at offset 4 + 32 + 1 + 4 + 3 = 44)
+				offset = 44
+				assert.Equal(t, byte(2), data[offset], "second entry hash[0]")
+				assert.Equal(t, txmetaActionDELETE, data[offset+32], "second entry action")
+				len2 := binary.LittleEndian.Uint32(data[offset+33 : offset+37])
+				assert.Equal(t, uint32(0), len2, "second entry content length")
+
+				// Third entry: ADD with "three" (starts at offset 44 + 32 + 1 + 4 + 0 = 81)
+				offset = 81
+				assert.Equal(t, byte(3), data[offset], "third entry hash[0]")
+				assert.Equal(t, txmetaActionADD, data[offset+32], "third entry action")
+				len3 := binary.LittleEndian.Uint32(data[offset+33 : offset+37])
+				assert.Equal(t, uint32(5), len3, "third entry content length")
+				assert.Equal(t, "three", string(data[offset+37:offset+42]), "third entry content")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := serializeTxMetaBatch(tt.batch)
+			tt.expected(t, result)
+		})
+	}
+}
+
+func Test_serializeTxMetaBatch_RoundTrip(t *testing.T) {
+	// Create a batch with multiple entries
+	hash1 := chainhash.Hash{}
+	copy(hash1[:], bytes.Repeat([]byte{0xAA}, 32))
+	hash2 := chainhash.Hash{}
+	copy(hash2[:], bytes.Repeat([]byte{0xBB}, 32))
+	hash3 := chainhash.Hash{}
+	copy(hash3[:], bytes.Repeat([]byte{0xCC}, 32))
+
+	batch := []*txmetaBatchItem{
+		{hash: &hash1, metaBytes: []byte("metadata for tx1"), isDelete: false},
+		{hash: &hash2, isDelete: true},
+		{hash: &hash3, metaBytes: []byte("metadata for tx3 which is longer"), isDelete: false},
+	}
+
+	// Serialize
+	data := serializeTxMetaBatch(batch)
+
+	// Manually parse and verify round-trip
+	offset := 0
+	count := binary.LittleEndian.Uint32(data[offset:])
+	offset += 4
+	require.Equal(t, uint32(3), count)
+
+	for i := uint32(0); i < count; i++ {
+		var parsedHash chainhash.Hash
+		copy(parsedHash[:], data[offset:offset+32])
+		offset += 32
+
+		action := data[offset]
+		offset++
+
+		contentLen := binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
+
+		var content []byte
+		if contentLen > 0 {
+			content = data[offset : offset+int(contentLen)]
+			offset += int(contentLen)
+		}
+
+		// Verify against original batch
+		assert.Equal(t, batch[i].hash[:], parsedHash[:], "hash mismatch at entry %d", i)
+		if batch[i].isDelete {
+			assert.Equal(t, txmetaActionDELETE, action, "action mismatch at entry %d", i)
+			assert.Equal(t, uint32(0), contentLen, "delete should have 0 content length")
+		} else {
+			assert.Equal(t, txmetaActionADD, action, "action mismatch at entry %d", i)
+			assert.Equal(t, batch[i].metaBytes, content, "content mismatch at entry %d", i)
+		}
+	}
 }

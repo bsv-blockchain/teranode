@@ -3,11 +3,9 @@ package model
 import (
 	"context"
 	"crypto/rand"
-	"encoding/binary"
 	"fmt"
 	"net/url"
 	"os"
-	"runtime"
 	"runtime/pprof"
 	"testing"
 	"time"
@@ -20,7 +18,6 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
-	"github.com/bsv-blockchain/teranode/model"
 	teranode_model "github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -33,7 +30,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,7 +59,7 @@ func TestBlock_ValidBlockWithMultipleTransactions(t *testing.T) {
 	// check if the block is valid, we expect an error because of the duplicate transaction
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats(), tSettings)
+	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, txMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings)
 	require.NoError(t, err)
 	require.True(t, v)
 
@@ -402,7 +398,7 @@ func TestBlock_WithDuplicateTransaction(t *testing.T) {
 	// check if the block is valid, we expect an error because of the duplicate transaction
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats(), tSettings)
+	v, err := b.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings)
 	require.Error(t, err)
 	require.False(t, v)
 
@@ -422,7 +418,8 @@ func TestBigBlock_Valid(t *testing.T) {
 	reqTxId, err := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 	require.NoError(t, err)
 
-	data, err := teranode_model.TestCachedTxMetaStore.GetMeta(context.Background(), reqTxId)
+	data := &meta.Data{}
+	err = teranode_model.TestCachedTxMetaStore.GetMeta(context.Background(), reqTxId, data)
 	require.NoError(t, err)
 	require.Equal(t, &meta.Data{
 		Fee:         1,
@@ -458,7 +455,7 @@ func TestBigBlock_Valid(t *testing.T) {
 	start := time.Now()
 	oldBlockIDs := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, nil, currentChain, currentChainIDs, teranode_model.NewBloomStats(), tSettings)
+	v, err := block.Valid(context.Background(), ulogger.TestLogger{}, subtreeStore, teranode_model.TestCachedTxMetaStore, oldBlockIDs, currentChain, currentChainIDs, tSettings)
 	require.NoError(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 
@@ -466,130 +463,6 @@ func TestBigBlock_Valid(t *testing.T) {
 	defer f.Close()
 	_ = pprof.WriteHeapProfile(f)
 	require.True(t, v)
-}
-
-func Test_NewOptimizedBloomFilter(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings(t)
-	subtreeStore, block, err := generateBigBlockTestData(t)
-	require.NoError(t, err)
-
-	// load the subtrees before starting profiling
-	_ = block.GetAndValidateSubtrees(context.Background(), ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
-
-	runtime.SetCPUProfileRate(500)
-
-	f, _ := os.Create("cpu.prof")
-
-	defer f.Close()
-
-	_ = pprof.StartCPUProfile(f)
-
-	defer pprof.StopCPUProfile()
-
-	bbf := &model.BlockBloomFilter{
-		CreationTime: time.Now(),
-		BlockHash:    block.Hash(),
-	}
-
-	timeStart := time.Now()
-	bloomFilter, err := block.NewOptimizedBloomFilter(context.Background(), ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
-	require.NoError(t, err)
-	t.Logf("Time taken: %s\n", time.Since(timeStart))
-
-	bbf.Filter = bloomFilter
-
-	f, _ = os.Create("mem.prof")
-
-	defer f.Close()
-
-	_ = pprof.WriteHeapProfile(f)
-
-	require.NotNil(t, bbf.Filter)
-
-	assert.Equal(t, true, bbf.Filter.Has(0))
-	assert.Equal(t, false, bbf.Filter.Has(1))
-
-	// check all txids are in bloom filter
-	for idx, subtree := range block.SubtreeSlices {
-		for nodeIdx, node := range subtree.Nodes {
-			if idx == 0 && nodeIdx == 0 {
-				continue
-			}
-
-			n64 := binary.BigEndian.Uint64(node.Hash[:])
-			assert.Equal(t, true, bbf.Filter.Has(n64))
-		}
-	}
-
-	// random negative check
-	assert.Equal(t, false, bbf.Filter.Has(1231422))
-	assert.Equal(t, false, bbf.Filter.Has(5453456356))
-	assert.Equal(t, false, bbf.Filter.Has(4556873583))
-
-	// store the bloom filter to the subtreestore
-
-	// Serialize the bloom filter
-	bloomFilterBytes, err := bbf.Serialize()
-	require.NoError(t, err)
-	require.NotNil(t, bloomFilterBytes)
-
-	// record the bloom filter in the subtreestore
-	err = subtreeStore.Set(context.Background(), block.Hash()[:], fileformat.FileTypeBloomFilter, bloomFilterBytes)
-	require.NoError(t, err)
-
-	// get the bloom filter from the subtreestore
-	retrievedBloomFilterBytes, err := subtreeStore.Get(context.Background(), block.Hash()[:], fileformat.FileTypeBloomFilter)
-	require.NoError(t, err)
-
-	fmt.Println("retrievedBloomFilterBytes Length: ", len(retrievedBloomFilterBytes))
-
-	createdBbf := &model.BlockBloomFilter{
-		CreationTime: time.Now(),
-		BlockHash:    block.Hash(),
-	}
-
-	err = createdBbf.Deserialize(bloomFilterBytes)
-	require.NoError(t, err)
-
-	assert.Equal(t, true, createdBbf.Filter.Has(0))
-	assert.Equal(t, false, createdBbf.Filter.Has(1))
-
-	// check all txids are in bloom filter
-	for idx, subtree := range block.SubtreeSlices {
-		for nodeIdx, node := range subtree.Nodes {
-			if idx == 0 && nodeIdx == 0 {
-				continue
-			}
-
-			n64 := binary.BigEndian.Uint64(node.Hash[:])
-			assert.Equal(t, true, createdBbf.Filter.Has(n64))
-		}
-	}
-
-	// random negative check
-	assert.Equal(t, false, createdBbf.Filter.Has(1231422))
-	assert.Equal(t, false, createdBbf.Filter.Has(5453456356))
-	assert.Equal(t, false, createdBbf.Filter.Has(4556873583))
-}
-
-func Test_NewOptimizedBloomFilter_EmptyBlock(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings(t)
-	subtreeStore := teranode_model.NewLocalSubtreeStore()
-
-	timeStart := time.Now()
-	t.Logf("Time taken: %s\n", time.Since(timeStart))
-
-	emptyBlock := &teranode_model.Block{} // Assuming Block is your block struct
-	emptyBloomFilter, err := emptyBlock.NewOptimizedBloomFilter(context.Background(), ulogger.TestLogger{}, subtreeStore, tSettings.Block.GetAndValidateSubtreesConcurrency)
-	require.NoError(t, err)
-	require.NotNil(t, emptyBloomFilter)
-	assert.Equal(t, false, emptyBloomFilter.Has(0))
-
-	// Case 3: Edge cases
-	assert.Equal(t, false, emptyBloomFilter.Has(0xFFFFFFFFFFFFFFFF))
-	assert.Equal(t, false, emptyBloomFilter.Has(0))
-	assert.Equal(t, false, emptyBloomFilter.Has(1))
-
 }
 
 func Test_LoadTxMetaIntoMemory(t *testing.T) {

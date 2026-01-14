@@ -490,8 +490,17 @@ func (s *Store) updateParentConflictingChildren(ctx context.Context, transaction
 	return nil
 }
 
-func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return s.get(ctx, hash, utxo.MetaFields)
+func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	result, err := s.get(ctx, hash, utxo.MetaFields)
+	if err != nil {
+		return err
+	}
+
+	if result != nil {
+		*data = *result
+	}
+
+	return nil
 }
 
 // Get retrieves transaction metadata and optionally the full transaction data.

@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -41,6 +42,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -84,7 +86,7 @@ func usage(msg string) {
 //
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
 func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir string, hash string,
-	skipHeaders bool, skipUTXOs bool) {
+	skipHeaders bool, skipUTXOs bool, skipCheck bool) {
 	profilerAddr := appSettings.ProfilerAddr
 	if profilerAddr != "" {
 		go func() {
@@ -158,6 +160,7 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			defer wg.Done()
 
 			logger.Infof("Processing headers...")
+			logger.Infof("Blockchain store: %s", appSettings.BlockChain.StoreURL)
 
 			// Process the headers
 			if err := processHeaders(ctx, logger, appSettings, headerFile); err != nil {
@@ -176,9 +179,10 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			defer wg.Done()
 
 			logger.Infof("Processing UTXOs...")
+			logger.Infof("UTXO store: %s", appSettings.UtxoStore.UtxoStore.String())
 
 			// Process the UTXOs
-			if err := processUTXOs(ctx, logger, appSettings, utxoFile); err != nil {
+			if err := processUTXOs(ctx, logger, appSettings, utxoFile, skipCheck); err != nil {
 				logger.Errorf("Failed to process UTXOs: %v", err)
 				return
 			}
@@ -322,29 +326,42 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 // processUTXOs reads the UTXO set from a file and stores it in the UTXO store.
 //
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
-func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, utxoFile string) error {
+func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, utxoFile string, skipCheck bool) error {
 	blockStoreURL := appSettings.Block.BlockStore
 	if blockStoreURL == nil {
 		return errors.NewConfigurationError("blockstore URL not found in config")
 	}
 
-	logger.Infof("Using blockStore at %s", blockStoreURL)
+	var err error
 
-	blockStore, err := blob.NewStore(logger, blockStoreURL)
+	hashPrefix := -2
+
+	if blockStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	logger.Infof("Using blockStore at %s with hashPrefix %d", blockStoreURL, hashPrefix)
+
+	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return errors.NewStorageError("failed to create blockStore", err)
 	}
 
-	var exists bool
+	if !skipCheck {
+		var exists bool
 
-	exists, err = blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"))
-	if err != nil {
-		return errors.NewStorageError("failed to check if lastProcessed.dat exists", err)
-	}
+		exists, err = blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
+		if err != nil {
+			return errors.NewStorageError("failed to check if lastProcessed.dat exists", err)
+		}
 
-	if exists {
-		logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
-		return nil
+		if exists {
+			logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
+			return nil
+		}
 	}
 
 	logger.Infof("Using utxostore at %s", appSettings.UtxoStore.UtxoStore)
@@ -476,7 +493,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	heightStr := fmt.Sprintf("%d\n", height)
 
-	if err = blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(heightStr), bloboptions.WithFilename("lastProcessed")); err != nil {
+	if err = blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(heightStr), bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix()); err != nil {
 		return errors.NewStorageError("failed to write height of %d to lastProcessed.dat", height, err)
 	}
 

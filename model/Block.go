@@ -32,7 +32,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/greatroar/blobloom"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -41,7 +40,7 @@ import (
 // while dramatically reducing memory pressure and GC overhead (16x reduction from previous 512KB).
 var bufioReaderPool = sync.Pool{
 	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 32*1024) // 32KB buffer - optimized for sequential I/O
+		return bufio.NewReaderSize(nil, 1024*1024) // Temp changed to 1MB buffer for scaling env - 32KB buffer - optimized for sequential I/O
 	},
 }
 
@@ -361,7 +360,7 @@ type SubtreeStore interface {
 }
 
 func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
-	recentBlocksBloomFilters []*BlockBloomFilter, currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, bloomStats *BloomStats, settings *settings.Settings) (bool, error) {
+	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings) (bool, error) {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
 		tracing.WithHistogram(prometheusBlockValid),
 		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
@@ -497,7 +496,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	// we only check when we have a subtree store passed in, otherwise this check cannot / should not be done
 	if subtreeStore != nil {
 		// this creates the txMap for the block that is also used in the validOrderAndBlessed check
-		err = b.checkDuplicateTransactions(ctx, settings.Block.CheckDuplicateTransactionsConcurrency)
+		err = b.checkDuplicateTransactions(ctx, logger, settings.Block.CheckDuplicateTransactionsConcurrency)
 		if err != nil {
 			return false, err
 		}
@@ -507,13 +506,11 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	//     Can only be done with a valid texMetaStore passed in
 	if txMetaStore != nil {
 		deps := &validationDependencies{
-			txMetaStore:              txMetaStore,
-			subtreeStore:             subtreeStore,
-			recentBlocksBloomFilters: recentBlocksBloomFilters,
-			currentChain:             currentChain,
-			currentBlockHeaderIDs:    currentBlockHeaderIDs,
-			bloomStats:               bloomStats,
-			oldBlockIDsMap:           oldBlockIDsMap,
+			txMetaStore:           txMetaStore,
+			subtreeStore:          subtreeStore,
+			currentChain:          currentChain,
+			currentBlockHeaderIDs: currentBlockHeaderIDs,
+			oldBlockIDsMap:        oldBlockIDsMap,
 		}
 		err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency)
 		if err != nil {
@@ -554,7 +551,7 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params) error {
 	coinbaseReward := util.GetBlockSubsidyForHeight(b.Height, params)
 
 	if coinbaseOutputSatoshis > subtreeFees+coinbaseReward {
-		return errors.NewBlockInvalidError("[BLOCK][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
+		return errors.NewBlockInvalidError("[checkBlockRewardAndFees][%s] coinbase output (%d) is greater than the fees + block subsidy (%d)", b.String(), coinbaseOutputSatoshis, subtreeFees+coinbaseReward)
 	}
 
 	return nil
@@ -569,8 +566,10 @@ func (b *Block) checkBlockRewardAndFees(params *chaincfg.Params) error {
 //
 // Returns:
 // - error: if a duplicate transaction is found or if there is an error adding the transaction to the txMap
-func (b *Block) checkDuplicateTransactions(ctx context.Context, checkDuplicateTransactionsConcurrency int) error {
-	_, _, deferFn := tracing.Tracer("block").Start(ctx, "checkDuplicateTransactions")
+func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.Logger, checkDuplicateTransactionsConcurrency int) error {
+	_, _, deferFn := tracing.Tracer("block").Start(ctx, "checkDuplicateTransactions",
+		tracing.WithLogMessage(logger, "[checkDuplicateTransactions][%s] called", b.String()),
+	)
 	defer deferFn()
 
 	concurrency := checkDuplicateTransactionsConcurrency
@@ -659,17 +658,17 @@ func (b *Block) checkDuplicateTransactionsInSubtree(subtree *subtreepkg.Subtree,
 }
 
 type validationDependencies struct {
-	txMetaStore              utxo.Store
-	subtreeStore             SubtreeStore
-	recentBlocksBloomFilters []*BlockBloomFilter
-	currentChain             []*BlockHeader
-	currentBlockHeaderIDs    []uint32
-	bloomStats               *BloomStats
-	oldBlockIDsMap           *txmap.SyncedMap[chainhash.Hash, []uint32]
+	txMetaStore           utxo.Store
+	subtreeStore          SubtreeStore
+	currentChain          []*BlockHeader
+	currentBlockHeaderIDs []uint32
+	oldBlockIDsMap        *txmap.SyncedMap[chainhash.Hash, []uint32]
 }
 
 func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, deps *validationDependencies, validOrderAndBlessedConcurrency int) error {
-	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validOrderAndBlessed")
+	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validOrderAndBlessed",
+		tracing.WithLogMessage(logger, "[validOrderAndBlessed][%s] called", b.String()),
+	)
 	defer deferFn()
 
 	if b.txMap == nil {
@@ -679,7 +678,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: b.buildBlockHeaderHashesMap(deps.currentChain),
 		currentBlockHeaderIDsMap:    b.buildBlockHeaderIDsMap(deps.currentBlockHeaderIDs),
-		parentSpendsMap:             txmap.NewSyncedMap[subtreepkg.Inpoint, struct{}](),
+		parentSpendsMap:             NewSplitSyncedParentMap(4096),
 	}
 
 	concurrency := b.getValidationConcurrency(validOrderAndBlessedConcurrency)
@@ -701,7 +700,9 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 
 func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
 	validationCtx *validationContext, subtree *subtreepkg.Subtree, sIdx int) error {
-	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validateSubtree")
+	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "validateSubtree",
+		tracing.WithLogMessage(logger, "[validateSubtree][%s][%s:%d] called", b.String(), subtree.RootHash().String(), sIdx),
+	)
 	defer deferFn()
 
 	var (
@@ -718,12 +719,6 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	// a subtreeMetaSlice is required for further block validation, so if we cannot get it, we return an error
 	if err != nil {
 		return errors.NewProcessingError("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice: %v", b.String(), subtreeHash.String(), sIdx, err)
-	}
-
-	if deps.bloomStats != nil {
-		deps.bloomStats.mu.Lock()
-		deps.bloomStats.QueryCounter += uint64(len(subtree.Nodes))
-		deps.bloomStats.mu.Unlock()
 	}
 
 	for snIdx := 0; snIdx < len(subtree.Nodes); snIdx++ {
@@ -749,40 +744,47 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	}
 
 	if len(checkParentTxHashes) > 0 {
-		// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
-		parentG := new(errgroup.Group)
-		util.SafeSetLimit(parentG, 1024*32)
-
-		for _, parentTxStruct := range checkParentTxHashes {
-			parentTxStruct := parentTxStruct
-
-			parentG.Go(func() error {
-				oldParentBlockIDs, err := b.checkParentExistsOnChain(ctx, logger, deps.txMetaStore, parentTxStruct, validationCtx.currentBlockHeaderIDsMap)
-
-				// there are old blocks we need to return to the validator
-				if err == nil && len(oldParentBlockIDs) > 0 {
-					// insert tx id and old parent block ids (i.e. tx's parent block ids) into the map.
-					// Each tx id and its block ids will be checked by the validator separately.
-					deps.oldBlockIDsMap.Set(parentTxStruct.txHash, oldParentBlockIDs)
-				}
-
-				return err
-			})
-		}
-
-		if err = parentG.Wait(); err != nil {
-			// just return the error from above
-			return err
-		}
+		return b.checkParentsExistOnChain(ctx, logger, deps, validationCtx, checkParentTxHashes)
 	}
 
 	return nil
 }
 
+func (b *Block) checkParentsExistOnChain(ctx context.Context, logger ulogger.Logger, deps *validationDependencies,
+	validationCtx *validationContext, checkParentTxHashes []missingParentTx) error {
+	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "checkParentsExistOnChain",
+		tracing.WithLogMessage(logger, "[validateSubtree][%s] called to check %d parent tx hashes", b.String(), len(checkParentTxHashes)),
+	)
+	defer deferFn()
+
+	// check all the parent transactions in parallel, this allows us to batch read from the txMetaStore
+	parentG := new(errgroup.Group)
+	util.SafeSetLimit(parentG, 1024*32)
+
+	for _, parentTxStruct := range checkParentTxHashes {
+		parentTxStruct := parentTxStruct
+
+		parentG.Go(func() error {
+			oldParentBlockIDs, err := b.checkParentExistsOnChain(ctx, logger, deps.txMetaStore, parentTxStruct, validationCtx.currentBlockHeaderIDsMap)
+
+			// there are old blocks we need to return to the validator
+			if err == nil && len(oldParentBlockIDs) > 0 {
+				// insert tx id and old parent block ids (i.e. tx's parent block ids) into the map.
+				// Each tx id and its block ids will be checked by the validator separately.
+				deps.oldBlockIDsMap.Set(parentTxStruct.txHash, oldParentBlockIDs)
+			}
+
+			return err
+		})
+	}
+
+	return parentG.Wait()
+}
+
 type validationContext struct {
 	currentBlockHeaderHashesMap map[chainhash.Hash]struct{}
 	currentBlockHeaderIDsMap    map[uint32]struct{}
-	parentSpendsMap             *txmap.SyncedMap[subtreepkg.Inpoint, struct{}]
+	parentSpendsMap             *SplitSyncedParentMap
 }
 
 func (b *Block) buildBlockHeaderHashesMap(currentChain []*BlockHeader) map[chainhash.Hash]struct{} {
@@ -810,58 +812,6 @@ func (b *Block) getValidationConcurrency(validOrderAndBlessedConcurrency int) in
 	}
 
 	return concurrency
-}
-
-func (b *Block) checkTxInRecentBlocks(ctx context.Context, deps *validationDependencies, validationCtx *validationContext,
-	subtreeNode subtreepkg.Node, subtreeHash *chainhash.Hash, sIdx, snIdx int) error {
-	// get first 8 bytes of the subtreeNode hash
-	n64 := binary.BigEndian.Uint64(subtreeNode.Hash[:])
-
-	for _, filter := range deps.recentBlocksBloomFilters {
-		// check whether this bloom filter is on our chain
-		if _, found := validationCtx.currentBlockHeaderHashesMap[*filter.BlockHash]; !found {
-			continue
-		}
-
-		if !filter.Filter.Has(n64) {
-			continue
-		}
-
-		// we have a match, check the txMetaStore
-		if deps.bloomStats != nil {
-			deps.bloomStats.mu.Lock()
-			deps.bloomStats.PositiveCounter++
-			deps.bloomStats.mu.Unlock()
-		}
-
-		// there is a chance that the bloom filter has a false positive, but the txMetaStore has pruned
-		// the transaction. This will cause the block to be incorrectly invalidated, but this is the safe
-		// option for now.
-		txMeta, err := deps.txMetaStore.GetMeta(ctx, &subtreeNode.Hash)
-		if err != nil {
-			if errors.Is(err, errors.ErrTxNotFound) {
-				continue
-			}
-
-			return errors.NewStorageError("[validOrderAndBlessed][%s][%s:%d]:%d error getting transaction %s from txMetaStore",
-				b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), err)
-		}
-
-		for _, blockID := range txMeta.BlockIDs {
-			if _, found := validationCtx.currentBlockHeaderIDsMap[blockID]; found {
-				return errors.NewBlockInvalidError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s has already been mined in block %d",
-					b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String(), blockID)
-			}
-		}
-
-		if deps.bloomStats != nil {
-			deps.bloomStats.mu.Lock()
-			deps.bloomStats.FalsePositiveCounter++
-			deps.bloomStats.mu.Unlock()
-		}
-	}
-
-	return nil
 }
 
 func (b *Block) checkParentExistsOnChain(gCtx context.Context, logger ulogger.Logger, txMetaStore utxo.Store, parentTxStruct missingParentTx, currentBlockHeaderIDsMap map[uint32]struct{}) ([]uint32, error) {
@@ -919,8 +869,8 @@ func ErrCheckParentExistsOnChain(gCtx context.Context, currentBlockHeaderIDsMap 
 	headerErr := errors.NewBlockError("currentBlockHeaderIDs: %v", currentBlockHeaderIDsMap)
 	headerErr = errors.NewBlockError("parent TxMeta: %v", parentTxMeta, headerErr)
 
-	txMeta, err := txMetaStore.GetMeta(gCtx, &parentTxStruct.txHash)
-	if err != nil {
+	txMeta := &meta.Data{}
+	if err := txMetaStore.GetMeta(gCtx, &parentTxStruct.txHash, txMeta); err != nil {
 		headerErr = errors.NewProcessingError("txMetaStore error getting transaction %s: %v", parentTxStruct.txHash.String(), err, headerErr)
 	} else {
 		headerErr = errors.NewProcessingError("tx TxMeta: %v", txMeta, headerErr)
@@ -962,10 +912,15 @@ func (b *Block) validateTransaction(ctx context.Context, deps *validationDepende
 	}
 
 	// Check if transaction has been mined in recent blocks
-	err = b.checkTxInRecentBlocks(ctx, deps, validationCtx, params.subtreeNode, params.subtreeHash, params.sIdx, params.snIdx)
-	if err != nil {
-		return nil, err
-	}
+	//
+	// We do not have to do this anymore, since we are checking for this in setTXMined, which gets the blockIDs for all transactions
+	// returned and checks them against the recent block IDs.
+	// model/update-tx-mined.go:278
+	//
+	// err = b.checkTxInRecentBlocks(ctx, deps, validationCtx, params.subtreeNode, params.subtreeHash, params.sIdx, params.snIdx)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	// Check parent transactions
 	return b.checkParentTransactions(parentTxHashes, txIdx, params.subtreeNode, params.subtreeHash, params.sIdx, params.snIdx)
@@ -980,7 +935,7 @@ func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validati
 	}
 
 	for _, txInpoint := range txInpoints {
-		if _, valueSet := validationCtx.parentSpendsMap.SetIfNotExists(txInpoint, struct{}{}); !valueSet {
+		if valueSet := validationCtx.parentSpendsMap.SetIfNotExists(txInpoint); !valueSet {
 			return errors.NewBlockInvalidError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s has duplicate inputs",
 				b.String(), subtreeHash.String(), sIdx, snIdx, subtreeNode.Hash.String())
 		}
@@ -991,7 +946,7 @@ func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validati
 
 func (b *Block) checkParentTransactions(parentTxHashes []chainhash.Hash, txIdx uint64,
 	subtreeNode subtreepkg.Node, subtreeHash *chainhash.Hash, sIdx, snIdx int) ([]missingParentTx, error) {
-	checkParentTxHashes := make([]missingParentTx, 0, len(parentTxHashes))
+	checkParentTxHashes := make([]missingParentTx, 0, len(parentTxHashes)/16) // assume 1 in 16 parents will be missing
 
 	for _, parentTxHash := range parentTxHashes {
 		parentTxIdx, foundInSameBlock := b.txMap.Get(parentTxHash)
@@ -1064,6 +1019,7 @@ func (b *Block) GetSubtrees(ctx context.Context, logger ulogger.Logger, subtreeS
 func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, getAndValidateSubtreesConcurrency int) error {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "GetAndValidateSubtrees",
 		tracing.WithHistogram(prometheusBlockGetAndValidateSubtrees),
+		tracing.WithLogMessage(logger, "[GetAndValidateSubtrees][%s] fetching and validating subtrees", b.String()),
 	)
 	defer deferFn()
 
@@ -1425,40 +1381,6 @@ func (b *Block) Bytes() ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
-}
-
-func (b *Block) NewOptimizedBloomFilter(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, getAndValidateSubtreesConcurrency int) (*blobloom.Filter, error) {
-	err := b.GetAndValidateSubtrees(ctx, logger, subtreeStore, getAndValidateSubtreesConcurrency)
-	if err != nil {
-		// just return the error from the call above
-		return nil, err
-	}
-
-	filter := blobloom.NewOptimized(blobloom.Config{
-		Capacity: b.TransactionCount, // Expected number of keys.
-		FPRate:   1e-6,               // Accept one false positive per 100,000 lookups.
-	})
-
-	var n64 uint64
-	// insert all transaction ids first 8 bytes to the filter
-	for sIdx := 0; sIdx < len(b.SubtreeSlices); sIdx++ {
-		subtree := b.SubtreeSlices[sIdx]
-		if subtree == nil {
-			return nil, errors.NewProcessingError("[BLOCK][%s] missing subtree %d", b.String(), sIdx)
-		}
-
-		for nodeIdx := 0; nodeIdx < len(subtree.Nodes); nodeIdx++ {
-			if sIdx == 0 && nodeIdx == 0 && subtree.Nodes[nodeIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-				// skip coinbase
-				continue
-			}
-
-			n64 = binary.BigEndian.Uint64(subtree.Nodes[nodeIdx].Hash[:])
-			filter.Add(n64)
-		}
-	}
-
-	return filter, nil
 }
 
 func CalculateMedianTimestamp(timestamps []time.Time) (*time.Time, error) {

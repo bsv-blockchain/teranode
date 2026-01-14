@@ -253,23 +253,23 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		stp.InitCurrentBlockHeader(moveBackBlock2.Header)
 
 		// Add transactions that would be in the blocks being moved back
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *conflictTx1Hash,
 			Fee:         300,
 			SizeInBytes: 400,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *conflictTx2Hash,
 			Fee:         400,
 			SizeInBytes: 500,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *uniqueTxHash,
 			Fee:         500,
 			SizeInBytes: 600,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
 		// Wait for transactions to be processed
 		time.Sleep(100 * time.Millisecond)
@@ -539,17 +539,17 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		stp.InitCurrentBlockHeader(moveBackBlock.Header)
 
 		// Add initial transactions to simulate existing state
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *duplicateTxHash,
 			Fee:         600,
 			SizeInBytes: 700,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *moveBackOnlyTxHash,
 			Fee:         700,
 			SizeInBytes: 800,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
 		// Wait for processing
 		time.Sleep(100 * time.Millisecond)
@@ -1002,29 +1002,29 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		// Add transactions to simulate they were processed up to block3
 		// tx1 and tx2 would have been processed in block2
 		// tx3 and tx4 would have been processed in block3
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *tx1Hash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *tx2Hash,
 			Fee:         200,
 			SizeInBytes: 300,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *tx3Hash,
 			Fee:         300,
 			SizeInBytes: 400,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *tx4Hash,
 			Fee:         400,
 			SizeInBytes: 500,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
 		// Wait for transactions to be processed
 		time.Sleep(100 * time.Millisecond)
@@ -1195,17 +1195,17 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		stp.InitCurrentBlockHeader(oldBlockHeader)
 
 		// Add transactions that would be in the old block
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *uniqueTxHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
-		stp.Add(subtree.Node{
+		stp.AddBatch([]subtree.Node{{
 			Hash:        *duplicateTxHash,
 			Fee:         200,
 			SizeInBytes: 300,
-		}, subtree.TxInpoints{})
+		}}, []*subtree.TxInpoints{{}})
 
 		// Wait for processing
 		time.Sleep(50 * time.Millisecond)
@@ -1232,11 +1232,11 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
 			// This simulates the duplicate transaction being processed in the new block
-			stp.Add(subtree.Node{
+			stp.AddBatch([]subtree.Node{{
 				Hash:        *duplicateTxHash, // Same transaction as before
 				Fee:         200,
 				SizeInBytes: 300,
-			}, subtree.TxInpoints{})
+			}}, []*subtree.TxInpoints{{}})
 		}()
 
 		// Perform reorg: move back old block, move forward new block

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/internal/profiling"
 	"github.com/bsv-blockchain/teranode/services/alert"
 	"github.com/bsv-blockchain/teranode/services/asset"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
@@ -181,8 +182,11 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 			mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 			// fgprof support
-
 			mux.Handle("/debug/fgprof", fgprof.Handler())
+
+			// memory analyzer support (includes mmap, non-heap memory)
+			logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
+			mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
 
 			if appSettings.StatsPrefix != "" {
 				gocore.RegisterStatsHandlers(mux)

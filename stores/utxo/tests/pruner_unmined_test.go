@@ -362,14 +362,16 @@ func getUnminedTransactions(t *testing.T, ctx context.Context, store utxo.Store)
 	var hashes []chainhash.Hash
 
 	for {
-		unminedTx, err := iterator.Next(ctx)
+		batch, err := iterator.Next(ctx)
 		require.NoError(t, err, "Iterator.Next should not return error")
 
-		if unminedTx == nil {
+		if batch == nil {
 			break
 		}
 
-		hashes = append(hashes, *unminedTx.Hash)
+		for _, unminedTx := range batch {
+			hashes = append(hashes, unminedTx.Node.Hash)
+		}
 	}
 
 	// Sort hashes for consistent comparison

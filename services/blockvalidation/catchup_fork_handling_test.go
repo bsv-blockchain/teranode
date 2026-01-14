@@ -65,26 +65,6 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 		// Add bestBlock to the blockExists cache for chain continuity
 		_ = server.blockValidation.SetBlockExists(bestBlock.Header.Hash())
 
-		// Pre-create bloom filter for genesis block to avoid collision
-		// This simulates that the genesis block was already validated
-		genesisBloomFilter := &model.BlockBloomFilter{
-			CreationTime: time.Now(),
-			BlockHash:    bestBlock.Header.Hash(),
-			BlockHeight:  1000,
-		}
-		server.blockValidation.recentBlocksBloomFilters.Set(*bestBlock.Header.Hash(), genesisBloomFilter)
-
-		// Also pre-create bloom filters for the common blocks before the fork
-		// (blocks at indices 0-399 in initialChain are common to both chains)
-		for i := 0; i < 400; i++ {
-			blockBloomFilter := &model.BlockBloomFilter{
-				CreationTime: time.Now(),
-				BlockHash:    initialChain[i].Header.Hash(),
-				BlockHeight:  uint32(1001 + i),
-			}
-			server.blockValidation.recentBlocksBloomFilters.Set(*initialChain[i].Header.Hash(), blockBloomFilter)
-		}
-
 		// Log the genesis block hash for debugging
 		t.Logf("Genesis block hash: %s", bestBlock.Header.Hash().String())
 		t.Logf("First block in chain hash: %s", initialChain[0].Header.Hash().String())
@@ -687,14 +667,6 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 		_ = server.blockValidation.SetBlockExists(genesisHeader.Hash())
 		// Add genesis parent (empty hash) to blockExists cache
 		_ = server.blockValidation.SetBlockExists(&chainhash.Hash{})
-
-		// Pre-create bloom filter for genesis block to simulate it was already validated
-		genesisBloomFilter := &model.BlockBloomFilter{
-			CreationTime: time.Now(),
-			BlockHash:    genesisHeader.Hash(),
-			BlockHeight:  0,
-		}
-		server.blockValidation.recentBlocksBloomFilters.Set(*genesisHeader.Hash(), genesisBloomFilter)
 
 		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
 			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 0}, nil)

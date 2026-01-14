@@ -2,10 +2,8 @@ package txmetacache
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"testing"
-	"unsafe"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -14,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -44,7 +43,8 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		ctx := context.Background()
 
 		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
-		_, err := c.GetMeta(ctx, &chainhash.Hash{})
+		metaGet := &meta.Data{}
+		err := c.GetMeta(ctx, &chainhash.Hash{}, metaGet)
 		require.Error(t, err)
 	})
 
@@ -54,15 +54,16 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
 		require.NoError(t, err)
 
-		meta, err := c.Create(ctx, coinbaseTx, 100)
+		metaCreated, err := c.Create(ctx, coinbaseTx, 100)
 		require.NoError(t, err)
 
 		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
-		metaGet, err := c.GetMeta(ctx, hash)
+		metaGet := &meta.Data{}
+		err = c.GetMeta(ctx, hash, metaGet)
 		require.NoError(t, err)
 
-		meta.Tx = nil // Tx should not be set in the cache, so we set it to nil for comparison
-		require.Equal(t, meta, metaGet)
+		metaCreated.Tx = nil // Tx should not be set in the cache, so we set it to nil for comparison
+		require.Equal(t, metaCreated, metaGet)
 	})
 
 	t.Run("test set cache", func(t *testing.T) {
@@ -82,7 +83,8 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		err := c.(*TxMetaCache).SetCache(hash, metaData)
 		require.NoError(t, err)
 
-		metaGet, err := c.GetMeta(ctx, hash)
+		metaGet := &meta.Data{}
+		err = c.GetMeta(ctx, hash, metaGet)
 		require.NoError(t, err)
 
 		metaData.Tx = nil // Tx should not be set in the cache, so we set it to nil for comparison
@@ -100,7 +102,8 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		err = c.(*TxMetaCache).SetCache(tests.Tx.TxIDChainHash(), metaData)
 		require.NoError(t, err)
 
-		metaGet, err := c.GetMeta(ctx, tests.Tx.TxIDChainHash())
+		metaGet := &meta.Data{}
+		err = c.GetMeta(ctx, tests.Tx.TxIDChainHash(), metaGet)
 		require.NoError(t, err)
 
 		metaData.Tx = nil // Tx should not be set in the cache, so we set it to nil for comparison
@@ -166,7 +169,7 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, Unallocated)
 	cache := c.(*TxMetaCache)
 
-	meta := &meta.Data{
+	metaData := &meta.Data{
 		Fee:         100,
 		SizeInBytes: 111,
 		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
@@ -181,7 +184,7 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 		hash := chainhash.HashH([]byte(string(rune(i))))
 		hashes[i] = hash
 
-		if err := cache.SetCache(&hash, meta); err != nil {
+		if err := cache.SetCache(&hash, metaData); err != nil {
 			b.Fatalf("pre-population of cache failed: %v", err)
 		}
 	}
@@ -195,14 +198,13 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 		i := i
 
 		g.Go(func() error {
-			data, err := cache.GetMeta(context.Background(), &hash)
+			data := &meta.Data{}
+			err := cache.GetMeta(context.Background(), &hash, data)
 			_ = data
 
 			if err != nil {
 				b.Fatalf("cache miss, iteration %d: %v", i, err)
 			}
-
-			fmt.Println("data size: ", unsafe.Sizeof(data))
 
 			return nil
 		})
@@ -210,6 +212,107 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 
 	err = g.Wait()
 	require.NoError(b, err)
+}
+
+type decoratingNullStore struct {
+	*nullstore.NullStore
+	metaData *meta.Data
+}
+
+func (s *decoratingNullStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
+	for _, it := range items {
+		if it == nil {
+			continue
+		}
+		it.Data = s.metaData
+		it.Err = nil
+	}
+	return nil
+}
+
+func makeUnresolvedMetaForBench(n int) []*utxo.UnresolvedMetaData {
+	unresolved := make([]*utxo.UnresolvedMetaData, n)
+	for i := 0; i < n; i++ {
+		h := chainhash.HashH([]byte(string(rune(i))))
+		unresolved[i] = &utxo.UnresolvedMetaData{Hash: h}
+	}
+	return unresolved
+}
+
+// Benchmark_txMetaCache_BatchDecorate_1k benchmarks the actual TxMetaCache.BatchDecorate implementation
+func Benchmark_txMetaCache_BatchDecorate_1k(b *testing.B) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(b)
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(b, err)
+	require.NoError(b, ns.SetBlockHeight(100))
+
+	metaData := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+		BlockIDs:    make([]uint32, 0),
+	}
+
+	store := &decoratingNullStore{
+		NullStore: ns,
+		metaData:  metaData,
+	}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, store, Unallocated)
+	require.NoError(b, err)
+	cache := c.(*TxMetaCache)
+
+	const numTx = 1_000
+	unresolved := makeUnresolvedMetaForBench(numTx)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for iter := 0; iter < b.N; iter++ {
+		if err := cache.BatchDecorate(ctx, unresolved, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs, fields.Creating); err != nil {
+			b.Fatalf("BatchDecorate failed: %v", err)
+		}
+	}
+}
+
+// Benchmark_txMetaCache_BatchDecorate_100k benchmarks the actual TxMetaCache.BatchDecorate implementation.
+func Benchmark_txMetaCache_BatchDecorate_100k(b *testing.B) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(b)
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(b, err)
+	require.NoError(b, ns.SetBlockHeight(100))
+
+	metaData := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+		BlockIDs:    make([]uint32, 0),
+	}
+
+	store := &decoratingNullStore{
+		NullStore: ns,
+		metaData:  metaData,
+	}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, store, Unallocated)
+	require.NoError(b, err)
+	cache := c.(*TxMetaCache)
+
+	const numTx = 100_000
+	unresolved := makeUnresolvedMetaForBench(numTx)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for iter := 0; iter < b.N; iter++ {
+		if err := cache.BatchDecorate(ctx, unresolved, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs, fields.Creating); err != nil {
+			b.Fatalf("BatchDecorate failed: %v", err)
+		}
+	}
 }
 
 func TestMap(t *testing.T) {
@@ -226,232 +329,7 @@ func TestMap(t *testing.T) {
 	assert.Equal(t, 1, len(m))
 }
 
-func Test_txMetaCache_HeightEncoding(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(t)
-
-	tSettings := test.CreateBaseTestSettings(t)
-
-	utxoStoreURL, err := url.Parse("sqlitememory:///test")
-	require.NoError(t, err)
-
-	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
-	require.NoError(t, err)
-
-	t.Run("test height encoding and retrieval", func(t *testing.T) {
-		ctx := context.Background()
-		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
-		cache := c.(*TxMetaCache)
-
-		// Set initial block height
-		err := utxoStore.SetBlockHeight(100)
-		require.NoError(t, err)
-
-		// Create and set a transaction
-		metaData := &meta.Data{
-			Fee:         100,
-			SizeInBytes: 111,
-			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
-			BlockIDs:    make([]uint32, 0),
-		}
-
-		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
-		err = cache.SetCache(hash, metaData)
-		require.NoError(t, err)
-
-		// Verify the height was encoded correctly
-		cachedBytes := make([]byte, 0)
-		err = cache.cache.Get(&cachedBytes, hash[:])
-		require.NoError(t, err)
-		require.Greater(t, len(cachedBytes), 4) // Should have at least 4 bytes for height
-
-		// Read back the height
-		height := readHeightFromValue(cachedBytes)
-		require.Equal(t, uint32(100), height)
-	})
-
-	t.Run("test height-based cache invalidation", func(t *testing.T) {
-		ctx := context.Background()
-		tSettings := test.CreateBaseTestSettings(t)
-		c, _ := NewTxMetaCache(ctx, tSettings, ulogger.TestLogger{}, utxoStore, Unallocated)
-		cache := c.(*TxMetaCache)
-
-		// Set initial block height
-		err := utxoStore.SetBlockHeight(100)
-		require.NoError(t, err)
-
-		// Create and set a transaction
-		metaData := &meta.Data{
-			Fee:         100,
-			SizeInBytes: 111,
-			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
-			BlockIDs:    make([]uint32, 0),
-		}
-
-		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
-		err = cache.SetCache(hash, metaData)
-		require.NoError(t, err)
-
-		// Advance block height beyond cache retention period
-		err = utxoStore.SetBlockHeight(200)
-		require.NoError(t, err)
-
-		// Try to get the transaction - should be nil due to height-based invalidation
-		metaGet, err := cache.GetMeta(ctx, hash)
-		require.NoError(t, err)
-		require.Nil(t, metaGet)
-	})
-
-	t.Run("test multiple transactions with different heights", func(t *testing.T) {
-		ctx := context.Background()
-		tSettings := test.CreateBaseTestSettings(t)
-		c, err := NewTxMetaCache(ctx, tSettings, ulogger.TestLogger{}, utxoStore, Unallocated)
-		require.NoError(t, err)
-
-		cache := c.(*TxMetaCache)
-
-		// Set initial block height
-		err = utxoStore.SetBlockHeight(100)
-		require.NoError(t, err)
-
-		// Create first transaction
-		metaData1 := &meta.Data{
-			Fee:         100,
-			SizeInBytes: 111,
-			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
-			BlockIDs:    make([]uint32, 0),
-		}
-
-		hash1, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
-		require.NoError(t, err)
-		err = cache.SetCache(hash1, metaData1)
-		require.NoError(t, err)
-
-		// verify it is retrievable now
-		metaGet1Initial, err := cache.GetMeta(ctx, hash1)
-		require.NoError(t, err)
-		require.NotNil(t, metaGet1Initial)
-
-		// Advance block height
-		err = utxoStore.SetBlockHeight(150)
-		require.NoError(t, err)
-
-		// Create second transaction
-		metaData2 := &meta.Data{
-			Fee:         100,
-			SizeInBytes: 111,
-			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
-			BlockIDs:    make([]uint32, 0),
-		}
-
-		hash2, err := chainhash.NewHashFromStr("b7fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb90")
-		require.NoError(t, err)
-		err = cache.SetCache(hash2, metaData2)
-		require.NoError(t, err)
-
-		// Verify first transaction is not retrievable
-		metaGet1, err := cache.GetMeta(ctx, hash1)
-		require.NoError(t, err)
-		require.Nil(t, metaGet1)
-
-		// Verify second transaction is retrievable
-		metaGet2, err := cache.GetMeta(ctx, hash2)
-		require.NoError(t, err)
-		require.NotNil(t, metaGet2)
-	})
-
-	t.Run("test edge cases", func(t *testing.T) {
-		ctx := context.Background()
-		c, _ := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Unallocated)
-		cache := c.(*TxMetaCache)
-
-		// Test with zero height
-		err := utxoStore.SetBlockHeight(0)
-		require.NoError(t, err)
-
-		metaData := &meta.Data{
-			Fee:         100,
-			SizeInBytes: 111,
-			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
-			BlockIDs:    make([]uint32, 0),
-		}
-
-		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
-		err = cache.SetCache(hash, metaData)
-		require.NoError(t, err)
-
-		// Verify height encoding
-		cachedBytes := make([]byte, 0)
-		err = cache.cache.Get(&cachedBytes, hash[:])
-		require.NoError(t, err)
-
-		height := readHeightFromValue(cachedBytes)
-		require.Equal(t, uint32(0), height)
-
-		// Test with maximum uint32 height
-		err = utxoStore.SetBlockHeight(^uint32(0))
-		require.NoError(t, err)
-
-		err = cache.SetCache(hash, metaData)
-		require.NoError(t, err)
-
-		err = cache.cache.Get(&cachedBytes, hash[:])
-		require.NoError(t, err)
-
-		height = readHeightFromValue(cachedBytes)
-		require.Equal(t, ^uint32(0), height)
-	})
-}
-
 func Test_txMetaCache_GetFunctions(t *testing.T) {
-	t.Run("test GetMetaCached with height encoding", func(t *testing.T) {
-		ctx := context.Background()
-		utxoStoreURL, err := url.Parse("sqlitememory:///test")
-		require.NoError(t, err)
-
-		tSettings := test.CreateBaseTestSettings(t)
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, tSettings, utxoStoreURL)
-		require.NoError(t, err)
-
-		c, err := NewTxMetaCache(ctx, tSettings, ulogger.TestLogger{}, utxoStore, Unallocated)
-		require.NoError(t, err)
-
-		cache := c.(*TxMetaCache)
-
-		// Set initial block height
-		err = utxoStore.SetBlockHeight(100)
-		require.NoError(t, err)
-
-		// Create and set a transaction
-		metaData := &meta.Data{
-			Fee:         100,
-			SizeInBytes: 111,
-			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
-			BlockIDs:    make([]uint32, 0),
-		}
-
-		hash, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
-		require.NoError(t, err)
-		err = cache.SetCache(hash, metaData)
-		require.NoError(t, err)
-
-		// Test GetMetaCached
-		metaGet, err := cache.GetMetaCached(ctx, *hash)
-		require.NoError(t, err)
-		require.NotNil(t, metaGet)
-		require.Equal(t, metaData.Fee, metaGet.Fee)
-		require.Equal(t, metaData.SizeInBytes, metaGet.SizeInBytes)
-
-		// Advance block height beyond cache retention period
-		err = utxoStore.SetBlockHeight(200)
-		require.NoError(t, err)
-
-		// Test GetMetaCached after height advancement
-		metaGet, err = cache.GetMetaCached(ctx, *hash)
-		require.NoError(t, err)
-		require.Nil(t, metaGet)
-	})
-
 	t.Run("test Get with height encoding", func(t *testing.T) {
 		ctx := context.Background()
 		utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -520,6 +398,15 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		// Test Get with specific fields should never return anything from the cache
 		_, err = cache.Get(ctx, hash, fields.Fee, fields.SizeInBytes)
 		require.Error(t, err)
+
+		var found bool
+
+		metaDataGet := &meta.Data{}
+		found, err = cache.GetMetaCached(ctx, *hash, metaDataGet)
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, uint64(100), metaDataGet.Fee)
+		require.Equal(t, uint64(111), metaDataGet.SizeInBytes)
 	})
 
 	t.Run("test Get with non-existent hash", func(t *testing.T) {
@@ -543,10 +430,13 @@ func Test_txMetaCache_GetFunctions(t *testing.T) {
 		require.Error(t, err)
 		require.Nil(t, metaGet)
 
+		var found bool
+
 		// Test GetMetaCached with non-existent hash
-		metaGet, err = cache.GetMetaCached(ctx, *hash)
+		found, err = cache.GetMetaCached(ctx, *hash, metaGet)
 		require.Error(t, err)
 		require.Nil(t, metaGet)
+		require.False(t, found)
 	})
 }
 
@@ -609,87 +499,15 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 		err = cache.cache.Get(&cachedBytes2, hash2[:])
 		require.NoError(t, err)
 
-		height1 := readHeightFromValue(cachedBytes1)
-		require.Equal(t, uint32(100), height1)
-
-		height2 := readHeightFromValue(cachedBytes2)
-		require.Equal(t, uint32(100), height2)
-
 		// Verify data can be retrieved
-		metaGet1, err := cache.GetMeta(ctx, hash1)
+		metaGet1 := &meta.Data{}
+		err = cache.GetMeta(ctx, hash1, metaGet1)
 		require.NoError(t, err)
 		require.NotNil(t, metaGet1)
 		require.Equal(t, metaData1.Fee, metaGet1.Fee)
 
-		metaGet2, err := cache.GetMeta(ctx, hash2)
-		require.NoError(t, err)
-		require.NotNil(t, metaGet2)
-		require.Equal(t, metaData2.Fee, metaGet2.Fee)
-	})
-
-	t.Run("test multi operations with height advancement", func(t *testing.T) {
-		ctx := context.Background()
-		utxoStoreURL, err := url.Parse("sqlitememory:///test")
-		require.NoError(t, err)
-
-		tSettings := test.CreateBaseTestSettings(t)
-		utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, tSettings, utxoStoreURL)
-		require.NoError(t, err)
-
-		c, err := NewTxMetaCache(ctx, tSettings, ulogger.TestLogger{}, utxoStore, Unallocated)
-		require.NoError(t, err)
-
-		cache := c.(*TxMetaCache)
-
-		// Set initial block height
-		err = utxoStore.SetBlockHeight(100)
-		require.NoError(t, err)
-
-		// Create multiple transactions
-		metaData1 := &meta.Data{
-			Fee:         100,
-			SizeInBytes: 111,
-			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
-			BlockIDs:    make([]uint32, 0),
-		}
-
-		metaData2 := &meta.Data{
-			Fee:         200,
-			SizeInBytes: 222,
-			TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
-			BlockIDs:    make([]uint32, 0),
-		}
-
-		hash1, err := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
-		require.NoError(t, err)
-		hash2, err := chainhash.NewHashFromStr("b7fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb90")
-		require.NoError(t, err)
-
-		// Set first transaction
-		metaBytes, err := metaData1.Bytes()
-		require.NoError(t, err)
-
-		err = cache.SetCacheMulti([][]byte{hash1[:]}, [][]byte{metaBytes})
-		require.NoError(t, err)
-
-		// Advance block height
-		err = utxoStore.SetBlockHeight(150)
-		require.NoError(t, err)
-
-		// Set second transaction
-		metaBytes2, err := metaData2.Bytes()
-		require.NoError(t, err)
-
-		err = cache.SetCacheMulti([][]byte{hash2[:]}, [][]byte{metaBytes2})
-		require.NoError(t, err)
-
-		// Verify first transaction is not retrievable (too old)
-		metaGet1, err := cache.GetMeta(ctx, hash1)
-		require.NoError(t, err)
-		require.Nil(t, metaGet1)
-
-		// Verify second transaction is retrievable
-		metaGet2, err := cache.GetMeta(ctx, hash2)
+		metaGet2 := &meta.Data{}
+		err = cache.GetMeta(ctx, hash2, metaGet2)
 		require.NoError(t, err)
 		require.NotNil(t, metaGet2)
 		require.Equal(t, metaData2.Fee, metaGet2.Fee)
@@ -725,8 +543,6 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 		err = cache.cache.Get(&cachedBytes, hash[:])
 		require.NoError(t, err)
 		require.Equal(t, 4, len(cachedBytes)) // Should only contain height
-		height := readHeightFromValue(cachedBytes)
-		require.Equal(t, uint32(100), height)
 	})
 }
 

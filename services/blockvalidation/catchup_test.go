@@ -1039,11 +1039,8 @@ func TestCatchup(t *testing.T) {
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
-		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     mockUTXOStore,
-		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),
 		subtreeStore:                  blobmemory.New(),
-		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 	}
 
@@ -1210,7 +1207,6 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 			blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
-			bloomFilterStats:              model.NewBloomStats(),
 			utxoStore:                     mockUTXOStore,
 		}
 
@@ -3074,11 +3070,8 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
-		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     mockUTXOStore,
-		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),
 		subtreeStore:                  blobmemory.New(),
-		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 	}
 
@@ -3168,11 +3161,8 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
-		bloomFilterStats:              model.NewBloomStats(),
 		utxoStore:                     mockUTXOStore,
-		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),
 		subtreeStore:                  blobmemory.New(),
-		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 	}
 

@@ -454,18 +454,13 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 					logger.Errorf("[%s] utxo %s does not exist in utxo store", loggerContext, utxoHash)
 				} else {
 					if utxo.SpendingData != nil {
-						meta, err := utxoStore.GetMeta(ctx, utxo.SpendingData.TxID)
-						if err != nil {
+						metaData := &meta.Data{}
+						if err := utxoStore.GetMeta(ctx, utxo.SpendingData.TxID, metaData); err != nil {
 							logger.Errorf("[%s] failed to get utxo %s from utxo store: %s", loggerContext, utxoHash, err)
 							continue
 						}
 
-						if meta == nil {
-							logger.Errorf("[%s] utxo %s does not exist in utxo store", loggerContext, utxoHash)
-							continue
-						}
-
-						if len(meta.BlockIDs) == 0 {
+						if len(metaData.BlockIDs) == 0 {
 							// non-mined spending tx obviously won't appear on the other nodes
 							// so for the sake of the integtrity check we pretend it is unspent
 							// and assume this is what it will be on the other nodes
@@ -622,18 +617,13 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 										logger.Errorf("[%s] parent utxo %s (%s:%d) is not marked as spent by transaction %s instead it is spent by %s", loggerContext, utxoHash, input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, btTx.TxIDChainHash(), utxo.SpendingData.TxID)
 									} else {
 										if utxo.SpendingData != nil {
-											meta, err := utxoStore.GetMeta(ctx, utxo.SpendingData.TxID)
-											if err != nil {
+											metaData := &meta.Data{}
+											if err := utxoStore.GetMeta(ctx, utxo.SpendingData.TxID, metaData); err != nil {
 												logger.Errorf("[%s] failed to get utxo %s from utxo store: %s", loggerContext, utxoHash, err)
 												continue
 											}
 
-											if meta == nil {
-												logger.Errorf("[%s] utxo %s does not exist in utxo store", loggerContext, utxoHash)
-												continue
-											}
-
-											if len(meta.BlockIDs) == 0 {
+											if len(metaData.BlockIDs) == 0 {
 												// non-mined spending tx obviously won't appear on the other nodes
 												// so for the sake of the integtrity check we pretend it is unspent
 												// and assume this is what it will be on the other nodes

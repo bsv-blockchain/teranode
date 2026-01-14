@@ -407,20 +407,27 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 type keyIgnoreLocked struct {
 	key               *aerospike.Key
+	hash              *chainhash.Hash
 	blockHeight       uint32
 	ignoreConflicting bool
 	ignoreLocked      bool
 }
 
-// sendSpendBatchLua processes a batch of spend requests via Lua scripts.
+// sendSpendBatchLua processes a batch of spend requests via Lua scripts or expressions.
 // The function:
 //  1. Groups spends by transaction
-//  2. Creates batch UDF operations
-//  3. Executes Lua scripts
+//  2. Creates batch UDF operations or expression-based operations
+//  3. Executes Lua scripts or expressions
 //  4. Handles responses and errors
 //  5. Manages DAH settings
 //  6. Updates external storage
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
+	// Use expression-based implementation if enabled
+	if s.settings.Aerospike.EnableSpendFilterExpressions {
+		s.SpendMultiWithExpressions(s.ctx, batch)
+		return
+	}
+
 	start := time.Now()
 	stat := gocore.NewStat("sendSpendBatchLua")
 
@@ -481,6 +488,7 @@ func (s *Store) prepareSpendBatches(batch []*batchSpend, batchID uint64) (map[ke
 		mapValue := s.createSpendMapValue(idx, bItem)
 		useKey := keyIgnoreLocked{
 			key:               key,
+			hash:              bItem.spend.TxID,
 			blockHeight:       bItem.blockHeight,
 			ignoreConflicting: bItem.ignoreConflicting,
 			ignoreLocked:      bItem.ignoreLocked,
@@ -536,7 +544,13 @@ func (s *Store) createBatchRecords(batchesByKey map[keyIgnoreLocked][]aerospike.
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
 
 	for batchKey, batchItems := range batchesByKey {
-		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, LuaPackage, "spendMulti",
+		useLuaPackage := LuaPackage
+		if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {
+			// determine which lua package to use for spends, based on the first byte of the tx id, there will be N packages (0 to N-1)
+			useLuaPackage = s.spendLuaPackages[batchKey.hash[0]%uint8(s.settings.Aerospike.SeparateSpendUDFModuleCount)]
+		}
+
+		batchRecords = append(batchRecords, aerospike.NewBatchUDF(batchUDFPolicy, batchKey.key, useLuaPackage, "spendMulti",
 			aerospike.NewValue(batchItems),
 			aerospike.NewValue(batchKey.ignoreConflicting),
 			aerospike.NewValue(batchKey.ignoreLocked),

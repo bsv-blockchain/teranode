@@ -33,7 +33,7 @@ import (
 //
 // The function will return a ThresholdExceededError if failFast is true and
 // the number of missing transactions exceeds the configured threshold.
-func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data, failFast bool) (int, error) {
+func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem, failFast bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, errors.NewProcessingError("txHashes and txMetaSlice must be the same length")
 	}
@@ -90,19 +90,21 @@ type TxMetaProcessor struct {
 	missingTxThreshold                 uint32
 	cache                              *txmetacache.TxMetaCache
 	txHashes                           []chainhash.Hash
-	txMetaSlice                        []*meta.Data
+	txMetaSlice                        []metaSliceItem
 	failFast                           bool
 	missed                             atomic.Uint32
 }
 
 func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
 	var (
-		txMeta *meta.Data
-		err    error
+		err   error
+		found bool
 	)
 
+	txMeta := meta.Data{}
+
 	for j := 0; j < subtree.Min(p.batchSize, len(p.txHashes)-i); j++ {
-		if p.txMetaSlice[i+j] != nil {
+		if p.txMetaSlice[i+j].isSet {
 			continue
 		}
 
@@ -118,19 +120,27 @@ func (p *TxMetaProcessor) processTxMetaUsingCache(i int) error {
 			continue
 		}
 
-		txMeta, err = p.cache.GetMetaCached(p.ctx, txHash)
+		found, err = p.cache.GetMetaCached(p.ctx, txHash, &txMeta)
 		if err != nil && !errors.Is(err, errors.ErrNotFound) {
 			p.logger.Warnf("[processTxMetaUsingCache] error retrieving txMeta for %s: %v", txHash.String(), err)
-
-			txMeta = nil
 		}
 
-		if txMeta != nil {
-			p.txMetaSlice[i+j] = txMeta
+		if found {
+			p.txMetaSlice[i+j] = metaSliceItem{
+				fee:         txMeta.Fee,
+				sizeInBytes: txMeta.SizeInBytes,
+				coinbase:    txMeta.IsCoinbase,
+				conflicting: txMeta.Conflicting,
+				creating:    txMeta.Creating,
+				isSet:       true,
+				txInpoints:  txMeta.TxInpoints,
+			}
+
 			continue
 		}
 
 		newMissed := p.missed.Add(1)
+
 		if p.failFast && p.missingTxThreshold > 0 && newMissed > p.missingTxThreshold {
 			return errors.NewThresholdExceededError("threshold exceeded for missing txs: %d > %d", newMissed, p.missingTxThreshold)
 		}

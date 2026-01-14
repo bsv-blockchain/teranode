@@ -89,8 +89,19 @@ local FIELD_SPENDING_DATA = "spendingData"
 -- local FIELD_DEBUG = "debug"
 
 -- Helper functions
+local bytes_size = bytes.size
+local bytes_get_bytes = bytes.get_bytes
+local string_format = string.format
+local table_concat = table.concat
+local list_append = list.append
+local list_iterator = list.iterator
 
-
+-- Pre-computed hex lookup table for fast byte-to-hex conversion
+-- Eliminates repeated string_format() calls in hot paths
+local HEX_LOOKUP = {}
+for i = 0, 255 do
+    HEX_LOOKUP[i] = string_format("%02x", i)
+end
 
 -- Function to get error with stack trace
 local function errorWithTrace(msg)
@@ -99,11 +110,12 @@ end
 
 -- Function to compare two byte arrays for equality
 local function bytes_equal(a, b)
-    if bytes.size(a) ~= bytes.size(b) then
+    local size_a = bytes_size(a)
+    if size_a ~= bytes_size(b) then
         return false
     end
 
-    for i = 1, bytes.size(a) do
+    for i = 1, size_a do
         if a[i] ~= b[i] then
             return false
         end
@@ -114,32 +126,35 @@ end
 
 -- Function to convert a byte array to a hexadecimal string
 local function spendingDataBytesToHex(b)
-    local hex = ""
+    -- Build hex string using table for efficient concatenation (36 bytes: 32 txid + 4 vin)
+    local t = {}
 
-    -- The first 32 bytes are the txID
-    -- And we want to reverse it
+    -- The first 32 bytes are the txID (reversed)
     for i = 32, 1, -1 do
-        hex = hex .. string.format("%02x", b[i])
+        t[#t+1] = HEX_LOOKUP[b[i]]
     end
 
     -- The next 4 bytes are the vin in little-endian
-    for i = 33, 36, 1 do
-        hex = hex .. string.format("%02x", b[i])
+    for i = 33, 36 do
+        t[#t+1] = HEX_LOOKUP[b[i]]
     end
-    return hex
+
+    -- Single concatenation at the end (O(n) instead of O(n^2))
+    return table_concat(t)
 end
 
 -- Function to convert a spending byte array to a reverse tx hexadecimal string
 local function spendingDataBytesToTxHex(b)
-    local hex = ""
+    -- Build hex string using table for efficient concatenation (32 bytes)
+    local t = {}
 
-    -- The first 32 bytes are the txID
-    -- And we want to reverse it
+    -- The first 32 bytes are the txID (reversed)
     for i = 32, 1, -1 do
-        hex = hex .. string.format("%02x", b[i])
+        t[#t+1] = HEX_LOOKUP[b[i]]
     end
 
-    return hex
+    -- Single concatenation at the end (O(n) instead of O(n^2))
+    return table_concat(t)
 end
 
 -- Creates a new UTXO with spending data
@@ -177,10 +192,10 @@ end
 -- @return string|nil spendingData The spending data if present
 -- @return table|nil errorInfo A map containing errorCode and message if an error occurs
 local function getUTXOAndSpendingData(utxos, offset, expectedHash)
-    assert(utxos ~= nil, "utxos must be non-nil")
-    assert(type(offset) == "number" and offset >= 0, "offset must be a non-negative number")
-    assert(expectedHash, "expectedHash is required")
-    assert(bytes.size(expectedHash) == UTXO_HASH_SIZE, "expectedHash must be " .. UTXO_HASH_SIZE .. " bytes long")
+    -- assert(utxos ~= nil, "utxos must be non-nil") -- Removed for performance, caller ensures
+    -- assert(type(offset) == "number" and offset >= 0, "offset must be a non-negative number")
+    -- assert(expectedHash, "expectedHash is required")
+    -- assert(bytes_size(expectedHash) == UTXO_HASH_SIZE, "expectedHash must be " .. UTXO_HASH_SIZE .. " bytes long")
 
     local utxo = utxos[offset + 1] -- Lua arrays are 1-based
     if utxo == nil then
@@ -193,22 +208,23 @@ local function getUTXOAndSpendingData(utxos, offset, expectedHash)
         return nil, nil, response
     end
 
-    local existingHash = bytes.get_bytes(utxo, 1, UTXO_HASH_SIZE)
+    -- Inline hash comparison to avoid allocation of existingHash
+    for i = 1, UTXO_HASH_SIZE do
+        if utxo[i] ~= expectedHash[i] then
+            local response = map()
 
-    if not bytes_equal(existingHash, expectedHash) then
-        local response = map()
+            response[FIELD_STATUS] = STATUS_ERROR
+            response[FIELD_ERROR_CODE] = ERROR_CODE_UTXO_HASH_MISMATCH
+            response[FIELD_MESSAGE] = ERR_UTXO_HASH_MISMATCH
 
-        response[FIELD_STATUS] = STATUS_ERROR
-        response[FIELD_ERROR_CODE] = ERROR_CODE_UTXO_HASH_MISMATCH
-        response[FIELD_MESSAGE] = ERR_UTXO_HASH_MISMATCH
-
-        return nil, nil, response
+            return nil, nil, response
+        end
     end
 
     local spendingData = nil
 
-    if bytes.size(utxo) == FULL_UTXO_SIZE then
-        spendingData = bytes.get_bytes(utxo, UTXO_HASH_SIZE + 1, SPENDING_DATA_SIZE)
+    if bytes_size(utxo) == FULL_UTXO_SIZE then
+        spendingData = bytes_get_bytes(utxo, UTXO_HASH_SIZE + 1, SPENDING_DATA_SIZE)
     end
 
     return utxo, spendingData, nil
@@ -258,13 +274,6 @@ function spend(rec, offset, utxoHash, spendingData, ignoreConflicting, ignoreLoc
     return spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHeight, blockHeightRetention)
 end
 
-local function bytesToHex(b)
-    local hex = ""
-    for i = 1, bytes.size(b) do
-        hex = hex .. string.format("%02x", b[i])
-    end
-    return hex
-end
 --                           _ __  __       _ _   _
 --  ___ _ __   ___ _ __   __| |  \/  |_   _| | |_(_)
 -- / __| '_ \ / _ \ '_ \ / _` | |\/| | | | | | __| |
@@ -332,12 +341,15 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     end
 
     local blockIDs = rec[BIN_BLOCK_IDS]
-
     local errors = map()
     local deletedChildren = rec[BIN_DELETED_CHILDREN]
+    local spendableIn = rec[BIN_UTXO_SPENDABLE_IN]
+    local spendCount = #spends
+    local spentUtxos = rec[BIN_SPENT_UTXOS] or 0
 
-    -- loop through the spends
-    for spend in list.iterator(spends) do
+    -- Use direct array indexing instead of iterator for better performance
+    for i = 1, spendCount do
+        local spend = spends[i]
         local offset = spend['offset']
         local utxoHash = spend['utxoHash']
         local spendingData = spend['spendingData']
@@ -356,12 +368,13 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
             goto continue
         end
 
-        if rec[BIN_UTXO_SPENDABLE_IN] then
-            if rec[BIN_UTXO_SPENDABLE_IN][offset] and rec[BIN_UTXO_SPENDABLE_IN][offset] >= currentBlockHeight then
+        if spendableIn then
+            local spendableHeight = spendableIn[offset]
+            if spendableHeight and spendableHeight >= currentBlockHeight then
                 local error = map()
 
                 error[FIELD_ERROR_CODE] = ERROR_CODE_FROZEN_UNTIL
-                error[FIELD_MESSAGE] = MSG_FROZEN_UNTIL .. rec[BIN_UTXO_SPENDABLE_IN][offset]
+                error[FIELD_MESSAGE] = MSG_FROZEN_UNTIL .. spendableHeight
 
                 errors[idx] = error
 
@@ -373,9 +386,6 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         if existingSpendingData then
 
             if bytes_equal(existingSpendingData, spendingData) then
-                -- local res = response[FIELD_DEBUG] or ""
-                -- response[FIELD_DEBUG] = res .. "\nEQUAL: existing: " .. bytesToHex(existingSpendingData) .. ", spending: " .. bytesToHex(spendingData)
-
                 -- Already spent with same data
 
                 if deletedChildren ~= nil then
@@ -403,9 +413,6 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
                 goto continue
             else
-                -- local res = response[FIELD_DEBUG] or ""
-                -- response[FIELD_DEBUG] = res .. "\nDEFAULT: existing: " .. bytesToHex(existingSpendingData) .. ", spending: " .. bytesToHex(spendingData)
-
                 local error = map()
 
                 error[FIELD_ERROR_CODE] = ERROR_CODE_SPENT
@@ -423,13 +430,14 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
         -- Update the record
         utxos[offset + 1] = newUtxo -- NB - lua arrays are 1-based!!!!
-        rec[BIN_SPENT_UTXOS] = rec[BIN_SPENT_UTXOS] + 1
+        spentUtxos = spentUtxos + 1
 
         ::continue::
     end
 
-    -- Update the record with the new utxos
+    -- Update the record with the new values
     rec[BIN_UTXOS] = utxos
+    rec[BIN_SPENT_UTXOS] = spentUtxos
 
     local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
@@ -560,39 +568,34 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
 
     if unsetMined then
         -- Remove the block id and height/subtreeIdx at the same index from the bin if it exists, the block was invalidated
+        -- Cache block count to avoid recalculation
+        local blockCount = #blocks
         local foundIdx = nil
-        for i = 1, #blocks do
+
+        for i = 1, blockCount do
             if blocks[i] == blockID then
                 foundIdx = i
                 break
             end
         end
 
-        -- Only rebuild lists if we found the blockID to remove
+        -- Use list.remove() instead of rebuilding arrays for better performance
         if foundIdx then
-            local newBlocks = list()
-            local newBlockHeights = list()
-            local newSubtreeIdxs = list()
+            list.remove(blocks, foundIdx)
+            list.remove(heights, foundIdx)
+            list.remove(subtreeIdxs, foundIdx)
 
-            for i = 1, #blocks do
-                if i ~= foundIdx then
-                    newBlocks[#newBlocks + 1] = blocks[i]
-                    newBlockHeights[#newBlockHeights + 1] = heights[i]
-                    newSubtreeIdxs[#newSubtreeIdxs + 1] = subtreeIdxs[i]
-                end
-            end
-
-            rec[BIN_BLOCK_IDS] = newBlocks
-            rec[BIN_BLOCK_HEIGHTS] = newBlockHeights
-            rec[BIN_SUBTREE_IDXS] = newSubtreeIdxs
-
-            blocks = newBlocks  -- Update local reference for response
+            rec[BIN_BLOCK_IDS] = blocks
+            rec[BIN_BLOCK_HEIGHTS] = heights
+            rec[BIN_SUBTREE_IDXS] = subtreeIdxs
         end
     else
         -- Append the value to the list in the specified bin if it doesn't already exist
+        -- Cache block count to avoid recalculation
+        local blockCount = #blocks
         local blockExists = false
 
-        for i = 1, #blocks do
+        for i = 1, blockCount do
             if blocks[i] == blockID then
                 blockExists = true
                 break
@@ -600,7 +603,7 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
         end
 
         if not blockExists then
-            blocks[#blocks + 1] = blockID
+            blocks[blockCount + 1] = blockID
             rec[BIN_BLOCK_IDS] = blocks
 
             heights[#heights + 1] = blockHeight
@@ -615,6 +618,7 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     response[FIELD_BLOCK_IDS] = blocks
 
     -- if we have a block in the record on the longest chain, then it is no longer unmined
+    -- Cache block count to avoid recalculation
     local hasBlocks = #blocks > 0
     if hasBlocks then
         if onLongestChain then
@@ -874,23 +878,27 @@ function reassign(rec, offset, utxoHash, newUtxoHash, blockHeight, spendableAfte
     rec[BIN_UTXOS] = utxos
 
     -- Initialize reassignment tracking if needed
-    if rec[BIN_REASSIGNMENTS] == nil then
-        rec[BIN_REASSIGNMENTS] = list()
+    local reassignments = rec[BIN_REASSIGNMENTS]
+    if reassignments == nil then
+        reassignments = list()
+        rec[BIN_REASSIGNMENTS] = reassignments
     end
 
-    if rec[BIN_UTXO_SPENDABLE_IN] == nil then
-        rec[BIN_UTXO_SPENDABLE_IN] = map()
+    local spendableInMap = rec[BIN_UTXO_SPENDABLE_IN]
+    if spendableInMap == nil then
+        spendableInMap = map()
+        rec[BIN_UTXO_SPENDABLE_IN] = spendableInMap
     end
 
     -- Record reassignment details
-    rec[BIN_REASSIGNMENTS][#rec[BIN_REASSIGNMENTS] + 1] = map {
+    reassignments[#reassignments + 1] = map {
         offset = offset,
         utxoHash = utxoHash,
         newUtxoHash = newUtxoHash,
         blockHeight = blockHeight
     }
 
-    rec[BIN_UTXO_SPENDABLE_IN][offset] = blockHeight + spendableAfter
+    spendableInMap[offset] = blockHeight + spendableAfter
 
     -- Ensure record is not DAH'd when all UTXOs are spent
     rec[BIN_RECORD_UTXOS] = rec[BIN_RECORD_UTXOS] + 1
@@ -973,10 +981,12 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
         spentExtraRecs = 0
     end
 
+    -- Cache blockIDs size check to avoid recalculation
+    local hasBlockIDs = blockIDs and #blockIDs > 0
+    local isOnLongestChain = (rec[BIN_UNMINED_SINCE] == nil)
+
     -- This is a master record: only set deleteAtHeight if all UTXOs are spent and transaction is in at least one block
     local allSpent = (totalExtraRecs == spentExtraRecs) and (rec[BIN_SPENT_UTXOS] == rec[BIN_RECORD_UTXOS])
-    local hasBlockIDs = blockIDs and list.size(blockIDs) > 0
-    local isOnLongestChain = (rec[BIN_UNMINED_SINCE] == nil)
 
     -- Set or update deleteAtHeight if all UTXOs are spent, transaction is in at least one block, AND on longest chain
     if allSpent and hasBlockIDs and isOnLongestChain then
@@ -1107,21 +1117,13 @@ function setLocked(rec, setValue)
         return response
     end
 
-    local oldLocked = rec[BIN_LOCKED]
-    local existingDeleteAtHeight = rec[BIN_DELETE_AT_HEIGHT]
-    local totalExtraRecs = rec[BIN_TOTAL_EXTRA_RECS]
-
-    if totalExtraRecs == nil then
-        totalExtraRecs = 0
-    end
+    local totalExtraRecs = rec[BIN_TOTAL_EXTRA_RECS] or 0
 
     rec[BIN_LOCKED] = setValue
 
-    if rec[BIN_LOCKED] then
-        -- Remove any existing deleteAtHeight
-        if existingDeleteAtHeight then
-            rec[BIN_DELETE_AT_HEIGHT] = nil
-        end
+    -- Remove any existing deleteAtHeight when locking
+    if setValue and rec[BIN_DELETE_AT_HEIGHT] then
+        rec[BIN_DELETE_AT_HEIGHT] = nil
     end
 
     aerospike:update(rec)

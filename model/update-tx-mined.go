@@ -40,10 +40,15 @@ var (
 	workerSettings   *settings.Settings
 	workerSettingsMu sync.RWMutex
 
+	// inFlightBlocks tracks blocks currently being processed to prevent duplicate processing
+	inFlightBlocks   = make(map[uint32]bool)
+	inFlightBlocksMu sync.Mutex
+
 	// prometheus metrics
-	prometheusUpdateTxMinedCh       prometheus.Counter
-	prometheusUpdateTxMinedQueue    prometheus.Gauge
-	prometheusUpdateTxMinedDuration prometheus.Histogram
+	prometheusUpdateTxMinedCh         prometheus.Counter
+	prometheusUpdateTxMinedQueue      prometheus.Gauge
+	prometheusUpdateTxMinedDuration   prometheus.Histogram
+	prometheusUpdateTxMinedDuplicates prometheus.Counter
 )
 
 func setWorkerSettings(tSettings *settings.Settings) {
@@ -81,6 +86,12 @@ func initWorker(tSettings *settings.Settings) {
 		Name:      "update_tx_mined_duration",
 		Help:      "Duration of updating tx mined status",
 		Buckets:   util.MetricsBucketsSeconds,
+	})
+	prometheusUpdateTxMinedDuplicates = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "model",
+		Name:      "update_tx_mined_duplicates",
+		Help:      "Number of duplicate tx mined update attempts blocked",
 	})
 
 	go func() {
@@ -125,6 +136,25 @@ func UpdateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	block *Block, blockID uint32, chainBlockIDs []uint32, onLongestChain bool, unsetMined ...bool) error {
 	// start the worker, if not already started
 	txMinedOnce.Do(func() { initWorker(tSettings) })
+
+	// Check if this block is already being processed and mark it as in-flight atomically
+	inFlightBlocksMu.Lock()
+	if inFlightBlocks[blockID] {
+		inFlightBlocksMu.Unlock()
+		logger.Infof("[UpdateTxMinedStatus][%s] blockID %d is already being processed, ignoring duplicate call", block.Hash().String(), blockID)
+		prometheusUpdateTxMinedDuplicates.Inc()
+		return errors.NewBlockParentNotMinedError("[UpdateTxMinedStatus][%s] blockID %d is already being processed", block.Hash().String(), blockID)
+	}
+	// Mark block as in-flight immediately to prevent duplicate processing
+	inFlightBlocks[blockID] = true
+	inFlightBlocksMu.Unlock()
+
+	// Ensure block is removed from in-flight tracking when done
+	defer func() {
+		inFlightBlocksMu.Lock()
+		delete(inFlightBlocks, blockID)
+		inFlightBlocksMu.Unlock()
+	}()
 
 	startTime := time.Now()
 	defer func() {
@@ -202,6 +232,11 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 		}
 
 		g.Go(func() error {
+			gCtx, _, endSpan := tracing.Tracer("model").Start(gCtx, "updateTxMinedStatus",
+				tracing.WithDebugLogMessage(logger, "[UpdateTxMinedStatus][%s][%s] starting processing", block.String(), block.Subtrees[subtreeIdx].String()),
+			)
+			defer endSpan()
+
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 
 			for idx := 0; idx < len(subtree.Nodes); idx++ {
@@ -251,7 +286,7 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 						}
 					}
 
-					hashes = make([]*chainhash.Hash, 0, maxMinedBatchSize)
+					hashes = hashes[:0] // reuse the slice, just reset length
 				}
 			}
 

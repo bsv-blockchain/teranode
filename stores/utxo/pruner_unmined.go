@@ -73,27 +73,30 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 	processedCount := 0
 
 	for {
-		unminedTx, err := iterator.Next(ctx)
+		unminedBatch, err := iterator.Next(ctx)
 		if err != nil {
 			return 0, errors.NewStorageError("failed to iterate unmined transactions", err)
 		}
-		if unminedTx == nil {
+		if unminedBatch == nil {
 			break
 		}
 
-		// Skip special markers
-		if unminedTx.Skip {
-			continue
-		}
+		// Process each transaction in the batch
+		for _, unminedTx := range unminedBatch {
+			// Skip special markers
+			if unminedTx.Skip {
+				continue
+			}
 
-		// Filter for old unmined transactions (UnminedSince <= cutoffBlockHeight)
-		if unminedTx.UnminedSince > 0 && unminedTx.UnminedSince <= int(cutoffBlockHeight) {
-			// TxInpoints already available - no Get() call needed!
-			if len(unminedTx.TxInpoints.ParentTxHashes) > 0 {
-				for _, parentHash := range unminedTx.TxInpoints.ParentTxHashes {
-					allParents[parentHash] = struct{}{}
+			// Filter for old unmined transactions (UnminedSince <= cutoffBlockHeight)
+			if unminedTx.UnminedSince > 0 && unminedTx.UnminedSince <= int(cutoffBlockHeight) {
+				// TxInpoints already available - no Get() call needed!
+				if len(unminedTx.TxInpoints.ParentTxHashes) > 0 {
+					for _, parentHash := range unminedTx.TxInpoints.ParentTxHashes {
+						allParents[parentHash] = struct{}{}
+					}
+					processedCount++
 				}
-				processedCount++
 			}
 		}
 	}
