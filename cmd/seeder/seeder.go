@@ -318,7 +318,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 		}
 	}
 
-	logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(headersProcessed), formatNumber(txCount))
+	logger.Infof("FINISHED  %16s headers with %16s transactions", formatNumber(headersProcessed), formatNumber(txCount))
 
 	return nil
 }

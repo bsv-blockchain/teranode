@@ -1863,8 +1863,8 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 			// s.UtxoStore.UtxoStore = parsedURL
 			s.ChainCfgParams.CoinbaseMaturity = 2
 		},
-		FSMState:          blockchain.FSMStateRUNNING,
-		EnableFullLogging: true,
+		FSMState:           blockchain.FSMStateRUNNING,
+		EnableDebugLogging: true,
 	})
 	defer nodeA.Stop(t)
 

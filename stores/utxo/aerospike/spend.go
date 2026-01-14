@@ -278,7 +278,6 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		g  = errgroup.Group{}
 
 		spentSpends     = make([]*utxo.Spend, 0, len(spends))
-		errSpent        *errors.UtxoSpentErrData
 		txAlreadyExists bool
 	)
 
@@ -356,6 +355,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 				s.logger.Debugf("[SPEND][%s:%d] error in aerospike spend: %+v", spend.TxID.String(), spend.Vout, spend.Err)
 
+				var errSpent *errors.UtxoSpentErrData
 				if errors.AsData(batchErr, &errSpent) {
 					spends[idx].ConflictingTxID = errSpent.SpendingData.TxID
 				}

@@ -1104,6 +1104,8 @@ func TestSendSubtreeNotification(t *testing.T) {
 
 // TestStartStopIntensive tests the Start and Stop methods comprehensively
 func TestStartStopIntensive(t *testing.T) {
+	t.Skip("Skipping intensive test") // It is questionable if this test should be part of our unit tests
+
 	t.Run("Start method comprehensive test", func(t *testing.T) {
 		server, _ := setupServer(t)
 

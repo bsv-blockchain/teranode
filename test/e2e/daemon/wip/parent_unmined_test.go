@@ -181,8 +181,8 @@ func TestParentSpentNotMinedonSameChain(t *testing.T) {
 			settings.UtxoStore.UtxoStore = parsedURL
 			settings.BlockValidation.OptimisticMining = true
 		},
-		FSMState:          blockchain.FSMStateRUNNING,
-		EnableFullLogging: true,
+		FSMState:           blockchain.FSMStateRUNNING,
+		EnableDebugLogging: true,
 	})
 	defer nodeA.Stop(t)
 

@@ -17,7 +17,7 @@
     - [4.2. Block Validation Service Role](#42-block-validation-service-role)
     - [4.3. Block Assembly Service Role](#43-block-assembly-service-role)
 5. [Data Model Impact](#5-data-model-impact)
-6. [Configuration Options](#6-configuration-options)
+6. [Internal Implementation Options](#6-internal-implementation-options)
 7. [Flow Diagrams](#7-flow-diagrams)
 8. [Related Documentation](#8-related-documentation)
 
@@ -239,23 +239,36 @@ For complete details on the UTXO data model, including all fields and their desc
 
 This field is part of the UTXO record and is set to `true` when a transaction is initially created, then set to `false` after successful addition to Block Assembly or when the transaction is mined in a block.
 
-## 6. Configuration Options
+## 6. Internal Implementation Options
 
-The behavior of the Two-Phase Transaction Commit process can be configured through the following options:
+The Two-Phase Transaction Commit process uses several internal options to handle different validation scenarios:
 
-**Validator Service:**
+**IgnoreLocked Option:**
 
-```text
-WithIgnoreLocked(bool) - When set to true, the validator will ignore the locked flag when processing transactions that are part of a block
-```
-
-In the Validator Options struct:
+The `WithIgnoreLocked` option controls whether the validator will ignore the locked flag when spending UTXOs:
 
 ```go
 type Options struct {
     IgnoreLocked bool
 }
+
+func WithIgnoreLocked(ignoreLocked bool) Option {
+    return func(o *Options) {
+        o.IgnoreLocked = ignoreLocked
+    }
+}
 ```
+
+**Usage:**
+
+This option is **always set to `true`** when validating blocks (see `services/subtreevalidation/`). This is necessary because:
+
+1. Transactions in a received block have already been validated and locked during initial propagation
+2. When validating the entire block, these transactions need to be re-validated for block consensus
+3. The locked flag must be ignored to allow this re-validation without conflicts
+4. This is an internal implementation detail, not a user-configurable setting
+
+**Note:** This is not exposed as a configuration setting in `settings.conf` because it must always be `true` for block validation to work correctly. The option exists in the code for API flexibility and testing purposes, but in production it is always used with the value `true`.
 
 ## 7. Flow Diagrams
 

@@ -179,7 +179,7 @@ sudo chown $USER:$(id -gn $USER) /mnt/teranode/seed/export
 ```bash
 # Export UTXO set from Bitcoin SV node
 # Replace /mnt/bitcoin-sv-data with your actual SV node data directory
-# Instead of latest, you could use a specific version of teranode. 
+# Instead of latest, you could use a specific version of teranode.
 # Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 docker run -it \
     -v /mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro \
@@ -294,18 +294,45 @@ ls -la /mnt/teranode/seed/export/
 #### Step 3: Run Seeder
 
 ```bash
-# Create a temporary seeder pod
-# Instead of latest, you could use a specific version of teranode. 
+# Create a temporary seeder pod with proper configmap and volume mounts
+# Instead of latest, you could use a specific version of teranode.
 # Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 kubectl run teranode-seeder \
     --image=ghcr.io/bsv-blockchain/teranode:latest \
     --restart=Never \
     --rm -i --tty \
     -n teranode-operator \
-    -- /app/teranode-cli seeder \
-        -inputDir /mnt/teranode/seed/export \
-        -hash 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
+    --overrides='
+{
+  "spec": {
+    "containers": [
+      {
+        "name": "teranode-seeder",
+        "image": "ghcr.io/bsv-blockchain/teranode:latest",
+        "command": ["/app/teranode-cli"],
+        "args": ["seeder", "-inputDir", "/mnt/teranode/seed/export", "-hash", "0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af"],
+        "envFrom": [{
+          "configMapRef": {
+            "name": "teranode-operator-config"
+          }
+        }],
+        "volumeMounts": [{
+          "name": "shared-storage",
+          "mountPath": "/mnt/teranode"
+        }]
+      }
+    ],
+    "volumes": [{
+      "name": "shared-storage",
+      "persistentVolumeClaim": {
+        "claimName": "shared-pvc"
+      }
+    }]
+  }
+}'
 ```
+
+> **Important:** The seeder pod must have the same configmap (teranode-operator-config) and volume mounts as the regular Teranode pods to access the correct database and storage configuration.
 
 #### Step 4: Monitor Seeding Progress
 
@@ -393,16 +420,41 @@ Use the same seeder process as described in Method 2:
 # Scale down services
 kubectl patch cluster teranode-cluster -n teranode-operator --type=merge -p '{"spec":{"enabled":false}}'
 
-# Run seeder
-# Instead of latest, you could use a specific version of teranode. 
+# Run seeder with proper configmap and volume mounts
+# Instead of latest, you could use a specific version of teranode.
 # Check for tagged versions here ghcr.io/bsv-blockchain/teranode
 kubectl run teranode-seeder \
     --image=ghcr.io/bsv-blockchain/teranode:latest \
     --restart=Never --rm -i --tty \
     -n teranode-operator \
-    -- /app/teranode-cli seeder \
-        -inputDir /mnt/teranode/seed/export \
-        -hash <blockhash-from-filename>
+    --overrides='
+{
+  "spec": {
+    "containers": [
+      {
+        "name": "teranode-seeder",
+        "image": "ghcr.io/bsv-blockchain/teranode:latest",
+        "command": ["/app/teranode-cli"],
+        "args": ["seeder", "-inputDir", "/mnt/teranode/seed/export", "-hash", "<blockhash-from-filename>"],
+        "envFrom": [{
+          "configMapRef": {
+            "name": "teranode-operator-config"
+          }
+        }],
+        "volumeMounts": [{
+          "name": "shared-storage",
+          "mountPath": "/mnt/teranode"
+        }]
+      }
+    ],
+    "volumes": [{
+      "name": "shared-storage",
+      "persistentVolumeClaim": {
+        "claimName": "shared-pvc"
+      }
+    }]
+  }
+}'
 ```
 
 ### Expected Timeline

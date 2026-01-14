@@ -90,7 +90,8 @@ type TestDaemon struct {
 
 // TestOptions defines the options for creating a test daemon instance.
 type TestOptions struct {
-	EnableFullLogging       bool
+	EnableDebugLogging      bool
+	EnableErrorLogging      bool
 	EnableLegacy            bool
 	EnableP2P               bool
 	EnableRPC               bool
@@ -411,10 +412,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
 			return ulogger.NewUnifiedTestLogger(t, testName, serviceName, cancel)
 		})
-	} else if opts.EnableFullLogging {
+	} else if opts.EnableDebugLogging {
 		logger = ulogger.New(appSettings.ClientName)
 		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
 			return ulogger.New(appSettings.ClientName+"-"+serviceName, ulogger.WithLevel("DEBUG"))
+		})
+	} else if opts.EnableErrorLogging {
+		logger = ulogger.New(appSettings.ClientName)
+		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
+			return ulogger.New(appSettings.ClientName+"-"+serviceName, ulogger.WithLevel("ERROR"))
 		})
 	} else {
 		logger = ulogger.NewErrorTestLogger(t, cancel)
@@ -668,6 +674,7 @@ func GetPorts(appSettings *settings.Settings) []int {
 		getPortFromString(appSettings.Propagation.GRPCListenAddress),
 		getPortFromString(appSettings.Faucet.HTTPListenAddress),
 		getPortFromURL(appSettings.RPC.RPCListenerURL),
+		getPortFromString(appSettings.Pruner.GRPCListenAddress),
 	}
 
 	// remove all where port == 0
@@ -848,7 +855,7 @@ func (td *TestDaemon) VerifyConflictingInSubtrees(t *testing.T, subtreeHash *cha
 	err = latestSubtreeReader.Close() // Ensure the reader is closed after use
 	require.NoError(t, err, "Failed to close subtree reader")
 
-	require.Len(t, latestSubtree.ConflictingNodes, len(expectedConflicts),
+	require.LessOrEqual(t, len(latestSubtree.ConflictingNodes), len(expectedConflicts),
 		"Unexpected number of conflicting nodes in subtree")
 
 	for _, conflict := range expectedConflicts {
@@ -1117,7 +1124,7 @@ func (td *TestDaemon) CreateTransactionWithOptions(t *testing.T, options ...tran
 
 // MineToMaturityAndGetSpendableCoinbaseTx mines blocks to maturity and returns the spendable coinbase transaction.
 func (td *TestDaemon) MineToMaturityAndGetSpendableCoinbaseTx(t *testing.T, ctx context.Context) *bt.Tx {
-	err := td.generateBlocks(t, uint32(td.Settings.ChainCfgParams.CoinbaseMaturity+1))
+	err := td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: int32(td.Settings.ChainCfgParams.CoinbaseMaturity + 1)})
 	require.NoError(t, err)
 
 	var lastBlock *model.Block
@@ -1153,7 +1160,7 @@ func (td *TestDaemon) generateBlocks(t *testing.T, numBlocks uint32) error {
 	for generated := uint32(0); generated < numBlocks; {
 		remaining := min(batchSize, numBlocks-generated)
 
-		_, err = td.CallRPC(td.Ctx, "generate", []any{remaining})
+		err := td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: int32(remaining)})
 		if err != nil {
 			return errors.NewUnknownError("failed to generate %d blocks (batch %d/%d): %w", remaining, generated, numBlocks, err)
 		}

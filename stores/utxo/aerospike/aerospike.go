@@ -72,7 +72,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -723,14 +722,6 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 			switch res.Status {
 			case LuaStatusOK:
-				if res.Signal == LuaSignalPreserve {
-					// Handle external transaction preservation
-					// if err = s.preserveUntilExternalTransaction(ctx, &txIDs[i], preserveUntilHeight); err != nil {
-					// 	s.logger.Errorf("[PreserveTransactions] Failed to preserve external files for tx %s: %v", txIDs[i].String(), err)
-					// 	continue
-					// }
-				}
-
 				preservedCount++
 			case LuaStatusError:
 				if res.ErrorCode == LuaErrorCodeTxNotFound {
@@ -745,69 +736,6 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	}
 
 	s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions", preservedCount, len(txIDs))
-
-	return nil
-}
-
-// preserveUntilExternalTransaction removes any existing Delete-At-Height (DAH) files
-// and creates .preservedUntil files for a transaction stored in external storage.
-// This is used to protect large transactions from automatic cleanup until a specific block height.
-//
-// Parameters:
-//   - ctx: Context for cancellation
-//   - txid: Transaction ID to preserve
-//   - preserveUntilHeight: Block height until which the transaction should be preserved
-//
-// Returns:
-//   - error: Any error encountered, or nil if successful or transaction not found
-func (s *Store) preserveUntilExternalTransaction(ctx context.Context, txid *chainhash.Hash, preserveUntilHeight uint32) error {
-	// First, try to clear any existing DAH for the transaction and create .preserveUntil file
-	if err := s.setPreserveUntilForExternalFile(ctx, txid[:], fileformat.FileTypeTx, preserveUntilHeight); err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
-			// Try the outputs if transaction not found
-			if err := s.setPreserveUntilForExternalFile(ctx, txid[:], fileformat.FileTypeOutputs, preserveUntilHeight); err != nil && !errors.Is(err, errors.ErrNotFound) {
-				return errors.NewStorageError("[preserveUntilExternalTransaction][%s] failed to preserve external transaction outputs",
-					txid,
-					err)
-			}
-		} else {
-			return errors.NewStorageError("[preserveUntilExternalTransaction][%s] failed to preserve external transaction",
-				txid,
-				err)
-		}
-	}
-
-	return nil
-}
-
-// setPreserveUntilForExternalFile removes any existing DAH file and creates .preserveUntil file
-func (s *Store) setPreserveUntilForExternalFile(ctx context.Context, key []byte, fileType fileformat.FileType, preserveUntilHeight uint32) error {
-	// First, clear any existing DAH file
-	if err := s.externalStore.SetDAH(ctx, key, fileType, 0); err != nil && !errors.Is(err, errors.ErrNotFound) {
-		return errors.NewStorageError("failed to clear DAH file", err)
-	}
-
-	// Check if the original file exists first
-	exists, err := s.externalStore.Exists(ctx, key, fileType)
-	if err != nil {
-		return errors.NewStorageError("failed to check if file exists", err)
-	}
-
-	if !exists {
-		return errors.ErrNotFound
-	}
-
-	// Create .preserveUntil file with the preserveUntilHeight value
-	preserveUntilData := []byte(fmt.Sprintf("%d", preserveUntilHeight))
-
-	if err := s.externalStore.Set(ctx, key, fileformat.FileTypePreserveUntil, preserveUntilData,
-		options.WithSkipHeader(true),
-		options.WithAllowOverwrite(true)); err != nil {
-		return errors.NewStorageError("failed to create .preserveUntil file", err)
-	}
-
-	s.logger.Infof("Preserved external transaction %x until block %d (DAH cleared, .preserveUntil file created)",
-		key[:8], preserveUntilHeight) // Only log first 8 bytes of key for brevity
 
 	return nil
 }

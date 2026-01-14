@@ -156,3 +156,42 @@ The Seeder uses various configuration options, which can be set through a config
 - `channelSize`: Size of the channel for UTXO processing (default: 1000).
 - `workerCount`: Number of worker goroutines for UTXO processing (default: 500).
 - `skipStore`: Boolean flag to skip storing UTXOs (for testing purposes).
+
+## 8. Known Limitations
+
+### Missing Miner Information in V1 Format
+
+**Current Behavior (V1 format - U-H-1.0):**
+
+Blocks seeded using the V1 UTXO headers format will not have miner information populated in the blockchain store. This is because:
+
+1. The V1 headers file format only contains:
+   - Block hash (32 bytes)
+   - Block height (4 bytes)
+   - Transaction count (8 bytes)
+   - Block header (80 bytes)
+
+2. Miner information is extracted from the coinbase transaction using `util.ExtractCoinbaseMiner()`
+
+3. V1 format does not include coinbase transactions in the headers file
+
+**Result:** Seeded blocks will show empty miner information when queried through the Asset Server or blockchain APIs.
+
+**Resolution:**
+
+The V2 format (U-H-2.0) includes coinbase transactions in the headers file and will properly populate miner information during seeding. This update is available in commit `bb10c7d12` and will be merged to main in a future release.
+
+The V2 format:
+
+- Maintains backwards compatibility with V1 headers files
+- Includes the full coinbase transaction for each block
+- Allows the seeder to extract and store miner information correctly
+- Supports both legacy V1 imports and new V2 exports
+
+**Workaround:**
+
+For existing deployments using V1 format seeds:
+
+- Blocks mined after the seeding point will have proper miner information
+- Historical seeded blocks will continue to show empty miner data until re-seeded with V2 format
+- This does not affect blockchain validation or UTXO correctness

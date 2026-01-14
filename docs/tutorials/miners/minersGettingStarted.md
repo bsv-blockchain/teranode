@@ -116,6 +116,17 @@ Force the node to transition to Run mode:
 # Navigate to FSM State section and select RUNNING or LEGACYSYNCING
 ```
 
+> **Note:** The embedded dashboard is only available when Teranode is built with dashboard support (default in Docker images). The dashboard provides:
+>
+> - `/admin` - FSM management, block invalidation/revalidation (requires authentication)
+> - `/viewer` - Blockchain viewer (blocks, transactions, UTXOs, subtrees)
+> - `/home` - Node overview and statistics
+> - `/peers` - Peer management and reputation
+> - `/network` - Network status and connected nodes
+> - `/p2p` - P2P message monitor
+>
+> For comprehensive dashboard documentation, see [Dashboard Documentation](../../topics/dashboard.md).
+
 #### Option 2: Using teranode-cli
 
 ```bash
@@ -156,7 +167,16 @@ docker compose logs legacy
 curl http://localhost:8090/health
 ```
 
-- Access monitoring dashboard:
+- Access the built-in Teranode dashboard:
+
+    - **Service Viewer**: <http://localhost:8090/viewer> - View blocks, transactions, UTXOs, and subtrees
+    - **Admin Interface**: <http://localhost:8090/admin> (credentials: bitcoin/bitcoin) - FSM state management and block operations
+    - **Home Overview**: <http://localhost:8090/home> - Node statistics and block graphs
+    - **Peer Management**: <http://localhost:8090/peers> - Connected peers and reputation scores
+    - **Network Status**: <http://localhost:8090/network> - Connected nodes and chain status
+    - For complete dashboard features, see [Dashboard Documentation](../../topics/dashboard.md)
+
+- Access Grafana monitoring (metrics and time-series data):
 
     - Open Grafana: <http://localhost:3005>
     - Login with the default credentials: admin/admin

@@ -562,7 +562,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					originalCurrentTxMap := stp.currentTxMap
 					currentBlockHeader := stp.currentBlockHeader
 
-					if _, err = stp.moveForwardBlock(processorCtx, moveForwardReq.block, false, processedConflictingHashesMap, true, true); err != nil {
+					if _, err = stp.moveForwardBlock(processorCtx, moveForwardReq.block, false, processedConflictingHashesMap, false, true); err != nil {
 						// rollback to previous state
 						stp.chainedSubtrees = originalChainedSubtrees
 						stp.currentSubtree.Store(originalCurrentSubtree)
@@ -2275,7 +2275,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		lastMoveForwardBlock := blockIdx == len(moveForwardBlocks)-1
 		// we skip the notifications for now and do them all at the end
 		// transactionMap is returned so we can check which transactions need to be marked as on the longest chain
-		if transactionMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, true, lastMoveForwardBlock); err != nil {
+		if transactionMap, err = stp.moveForwardBlock(ctx, block, true, processedConflictingHashesMap, !lastMoveForwardBlock, lastMoveForwardBlock); err != nil {
 			return err
 		}
 
@@ -2757,17 +2757,25 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 				return nil
 			}
 
-			subtreeMetaReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
-			if err != nil {
-				return errors.NewServiceError("[moveBackBlock:GetSubtrees][%s] error getting subtree meta %s", block.String(), subtreeHash.String(), err)
-			}
+			if stp.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
+				subtreeMetaReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
+				if err != nil {
+					return errors.NewServiceError("[moveBackBlock:GetSubtrees][%s] error getting subtree meta %s", block.String(), subtreeHash.String(), err)
+				}
 
-			subtreeMeta, err := subtreepkg.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
-			if err != nil {
-				return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error deserializing subtree meta", block.String(), err)
-			}
+				subtreeMeta, err := subtreepkg.NewSubtreeMetaFromReader(subtree, subtreeMetaReader)
+				if err != nil {
+					return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error deserializing subtree meta", block.String(), err)
+				}
 
-			subtreeMetaTxInpoints[idx] = subtreeMeta.TxInpoints
+				subtreeMetaTxInpoints[idx] = subtreeMeta.TxInpoints
+			} else {
+				subtreeMetaTxInpoints[idx] = make([]subtreepkg.TxInpoints, len(subtree.Nodes))
+
+				for i := range subtreeMetaTxInpoints[idx] {
+					subtreeMetaTxInpoints[idx][i] = subtreepkg.TxInpoints{}
+				}
+			}
 
 			// process conflicting hashes
 			if len(subtree.ConflictingNodes) > 0 {
