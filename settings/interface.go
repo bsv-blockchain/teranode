@@ -31,6 +31,7 @@ type Settings struct {
 	LogLevel                     string
 	PrettyLogs                   bool
 	JSONLogging                  bool
+	Debug                        DebugSettings
 	ProfilerAddr                 string
 	StatsPrefix                  string
 	PrometheusEndpoint           string
@@ -71,6 +72,14 @@ type Settings struct {
 	Dashboard                    DashboardSettings
 	Pruner                       PrunerSettings
 	GlobalBlockHeightRetention   uint32
+}
+
+// DebugSettings configures subsystem-specific debug toggles.
+type DebugSettings struct {
+	All       bool
+	File      bool
+	Blobstore bool
+	UTXOStore bool
 }
 
 // GetUtxoStoreBlockHeightRetention calculates the effective block height retention for UTXO store
