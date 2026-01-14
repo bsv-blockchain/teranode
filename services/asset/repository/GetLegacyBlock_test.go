@@ -345,25 +345,25 @@ func TestGetLegacyBlockNoDuplication(t *testing.T) {
 
 	// Test all possible scenarios where duplication could occur
 	testCases := []struct {
-		name              string
-		setupSubtreeData  bool
-		setupUTXOStore    bool
-		multipleSubtrees  bool
-		description       string
+		name             string
+		setupSubtreeData bool
+		setupUTXOStore   bool
+		multipleSubtrees bool
+		description      string
 	}{
 		{
-			name:              "subtree_data_exists",
-			setupSubtreeData:  true,
-			setupUTXOStore:    false,
-			multipleSubtrees:  false,
-			description:       "Subtree data exists - should write coinbase once then data from subtree",
+			name:             "subtree_data_exists",
+			setupSubtreeData: true,
+			setupUTXOStore:   false,
+			multipleSubtrees: false,
+			description:      "Subtree data exists - should write coinbase once then data from subtree",
 		},
 		{
-			name:              "fallback_to_utxo_store",
-			setupSubtreeData:  false,
-			setupUTXOStore:    true,
-			multipleSubtrees:  false,
-			description:       "No subtree data - should write coinbase once then fetch from UTXO store",
+			name:             "fallback_to_utxo_store",
+			setupSubtreeData: false,
+			setupUTXOStore:   true,
+			multipleSubtrees: false,
+			description:      "No subtree data - should write coinbase once then fetch from UTXO store",
 		},
 	}
 
@@ -437,7 +437,8 @@ func TestGetLegacyBlockNoDuplication(t *testing.T) {
 			n, err := reader.Read(varIntBytes)
 			require.NoError(t, err)
 			txCount, bytesRead := bt.NewVarIntFromBytes(varIntBytes[:n])
-			reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+			_, err = reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+			require.NoError(t, err)
 
 			// Read all transactions and count coinbase occurrences
 			coinbaseHash := coinbase.TxIDChainHash().String()
@@ -480,22 +481,22 @@ func TestGetLegacyBlockWireFormat(t *testing.T) {
 	ctx := setup(t)
 
 	testCases := []struct {
-		name             string
-		txs              []*bt.Tx
-		expectSubtrees   bool
-		description      string
+		name           string
+		txs            []*bt.Tx
+		expectSubtrees bool
+		description    string
 	}{
 		{
-			name:             "coinbase_only_block",
-			txs:              []*bt.Tx{coinbase},
-			expectSubtrees:   false,
-			description:      "Block with only coinbase transaction",
+			name:           "coinbase_only_block",
+			txs:            []*bt.Tx{coinbase},
+			expectSubtrees: false,
+			description:    "Block with only coinbase transaction",
 		},
 		{
-			name:             "block_with_two_transactions",
-			txs:              []*bt.Tx{coinbase, tx1},
-			expectSubtrees:   true,
-			description:      "Block with coinbase and one regular transaction",
+			name:           "block_with_two_transactions",
+			txs:            []*bt.Tx{coinbase, tx1},
+			expectSubtrees: true,
+			description:    "Block with coinbase and one regular transaction",
 		},
 	}
 
@@ -592,7 +593,8 @@ func TestGetLegacyBlockWireFormat(t *testing.T) {
 			n, err := reader.Read(varIntBytes)
 			require.NoError(t, err)
 			txCount, bytesRead := bt.NewVarIntFromBytes(varIntBytes[:n])
-			reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+			_, err = reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+			require.NoError(t, err)
 
 			t.Logf("Block header reports %d transactions", txCount)
 			require.Equal(t, uint64(len(tc.txs)), uint64(txCount), "Transaction count mismatch")
@@ -722,7 +724,8 @@ func TestLegacyBlockMerkleRootValidation(t *testing.T) {
 			n, err := reader.Read(varIntBytes)
 			require.NoError(t, err)
 			txCount, bytesRead := bt.NewVarIntFromBytes(varIntBytes[:n])
-			reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+			_, err = reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+			require.NoError(t, err)
 
 			// Read all transactions
 			txHashes := make([]*chainhash.Hash, 0, txCount)
@@ -989,7 +992,8 @@ func TestBlockVsLegacyEndpointConsistency(t *testing.T) {
 			n, err := reader.Read(varIntBytes)
 			require.NoError(t, err)
 			txCount, bytesRead := bt.NewVarIntFromBytes(varIntBytes[:n])
-			reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+			_, err = reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+			require.NoError(t, err)
 
 			t.Logf("  /block_legacy reports %d transactions in header", txCount)
 
@@ -1180,7 +1184,8 @@ func TestGetLegacyBlockMerkleRootValidation(t *testing.T) {
 			require.NoError(t, err)
 			txCount, bytesRead := bt.NewVarIntFromBytes(varIntBytes[:n])
 			// Seek back to correct position after reading varint
-			reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+			_, err = reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+			require.NoError(t, err)
 			t.Logf("Block has %d transactions", txCount)
 
 			// Verify transaction count matches expected

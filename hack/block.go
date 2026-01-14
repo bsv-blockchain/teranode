@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/go-wire"
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 // BlockHeader represents the JSON structure returned by the asset server
@@ -33,9 +34,9 @@ type BlockHeader struct {
 func main() {
 	// Parse command-line arguments
 	var (
-		baseURL    string
-		blockHash  string
-		validateBoth bool
+		baseURL        string
+		blockHash      string
+		validateBoth   bool
 		validateLegacy bool
 	)
 	flag.StringVar(&baseURL, "url", "https://us-east-1.teranode.space", "Base URL of the teranode instance")
@@ -97,7 +98,7 @@ func validateBlockEndpoint(baseURL, blockHash string) (*chainhash.Hash, error) {
 	// Fetch block header
 	blockHeader, err := fetchBlockHeader(baseURL, blockHash)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch block header: %w", err)
+		return nil, errors.NewError("failed to fetch block header: %v", err)
 	}
 
 	log.Printf("Block header merkle root: %s\n", blockHeader.HashMerkleRoot)
@@ -206,7 +207,7 @@ func validateBlockEndpoint(baseURL, blockHash string) (*chainhash.Hash, error) {
 		return calculatedRoot, nil
 	}
 
-	return nil, fmt.Errorf("merkle root validation failed - expected: %s, calculated: %s",
+	return nil, errors.NewError("merkle root validation failed - expected: %s, calculated: %s",
 		expectedRoot.String(), calculatedRoot.String())
 }
 
@@ -224,9 +225,9 @@ func fetch(url string) ([]byte, error) {
 	if res.StatusCode != http.StatusOK {
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			return nil, fmt.Errorf("HTTP %d: failed to read response body", res.StatusCode)
+			return nil, errors.NewError("HTTP %d: failed to read response body", res.StatusCode)
 		}
-		return nil, fmt.Errorf("HTTP %d: %s", res.StatusCode, string(body))
+		return nil, errors.NewError("HTTP %d: %s", res.StatusCode, string(body))
 	}
 
 	return io.ReadAll(res.Body)
@@ -238,12 +239,12 @@ func fetchBlockHeader(baseURL, blockHash string) (*BlockHeader, error) {
 
 	body, err := fetch(url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch block header: %w", err)
+		return nil, errors.NewError("failed to fetch block header: %v", err)
 	}
 
 	var header BlockHeader
 	if err := json.Unmarshal(body, &header); err != nil {
-		return nil, fmt.Errorf("failed to parse block header JSON: %w", err)
+		return nil, errors.NewError("failed to parse block header JSON: %v", err)
 	}
 
 	return &header, nil
@@ -255,12 +256,12 @@ func fetchBlockData(baseURL, blockHash string) (map[string]interface{}, error) {
 
 	body, err := fetch(blockURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch block data: %w", err)
+		return nil, errors.NewError("failed to fetch block data: %v", err)
 	}
 
 	var blockData map[string]interface{}
 	if err := json.Unmarshal(body, &blockData); err != nil {
-		return nil, fmt.Errorf("failed to parse block JSON: %w", err)
+		return nil, errors.NewError("failed to parse block JSON: %v", err)
 	}
 
 	return blockData, nil
@@ -308,7 +309,7 @@ func fetchCoinbaseTxID(baseURL, blockHash string) (string, error) {
 	// If not found in block data, try to fetch directly (assuming first tx is coinbase)
 	// This is a fallback approach
 	log.Printf("Warning: Coinbase not found in block data, using fallback method\n")
-	return "", fmt.Errorf("coinbase transaction not found in block data")
+	return "", errors.NewError("coinbase transaction not found in block data")
 }
 
 func validateSingleSubtree(baseURL, blockHash, subtreeHash string) *chainhash.Hash {
@@ -404,7 +405,7 @@ func validateLegacyBlock(baseURL, blockHash string) (*chainhash.Hash, error) {
 
 	blockData, err := fetch(legacyURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch legacy block: %w", err)
+		return nil, errors.NewError("failed to fetch legacy block: %v", err)
 	}
 
 	log.Printf("Fetched %d bytes of legacy block data\n", len(blockData))
@@ -415,7 +416,7 @@ func validateLegacyBlock(baseURL, blockHash string) (*chainhash.Hash, error) {
 	// Parse block using wire.MsgBlock
 	msgBlock := &wire.MsgBlock{}
 	if err := msgBlock.Deserialize(reader); err != nil {
-		return nil, fmt.Errorf("failed to deserialize block: %w", err)
+		return nil, errors.NewError("failed to deserialize block: %v", err)
 	}
 
 	log.Printf("Parsed block with %d transactions\n", len(msgBlock.Transactions))
@@ -442,7 +443,7 @@ func validateLegacyBlock(baseURL, blockHash string) (*chainhash.Hash, error) {
 	var calculatedRoot *chainhash.Hash
 
 	if len(msgBlock.Transactions) == 0 {
-		return nil, fmt.Errorf("block has no transactions")
+		return nil, errors.NewError("block has no transactions")
 	} else if len(msgBlock.Transactions) == 1 {
 		// Single transaction - merkle root is the transaction hash
 		txHash := msgBlock.Transactions[0].TxHash()
@@ -502,7 +503,7 @@ func validateLegacyBlock(baseURL, blockHash string) (*chainhash.Hash, error) {
 		return calculatedRoot, nil
 	}
 
-	return nil, fmt.Errorf("legacy merkle root validation failed - expected: %s, calculated: %s",
+	return nil, errors.NewError("legacy merkle root validation failed - expected: %s, calculated: %s",
 		expectedRoot.String(), calculatedRoot.String())
 }
 
