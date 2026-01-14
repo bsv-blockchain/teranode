@@ -448,11 +448,12 @@ func TestBanList_NotifySubscribersAsync_ClosedChannelRaceCondition(t *testing.T)
 			case <-done:
 				return
 			default:
-				// Rapidly unsubscribe and close channels to trigger race condition
+				// Rapidly unsubscribe channels to trigger race condition
+				// Don't close the channels here to avoid race with notifySubscribersAsync
+				// The channels will be garbage collected after unsubscribe
 				for i := 0; i < numSubscribers; i++ {
 					if subscribers[i] != nil {
 						banList.Unsubscribe(subscribers[i])
-						close(subscribers[i])
 						subscribers[i] = nil
 					}
 				}
