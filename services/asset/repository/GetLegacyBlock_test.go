@@ -850,6 +850,201 @@ func calculateMerkleRoot(txHashes []*chainhash.Hash) *chainhash.Hash {
 	return currentLevel[0]
 }
 
+// TestBlockVsLegacyEndpointConsistency validates that the merkle root calculated from
+// transactions is identical whether using the /block endpoint (structured data) or
+// the /block_legacy endpoint (wire format streaming). This test reproduces and validates
+// the fix for the original issue where these endpoints produced different merkle roots.
+func TestBlockVsLegacyEndpointConsistency(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	ctx := setup(t)
+
+	testCases := []struct {
+		name        string
+		txs         []*bt.Tx
+		description string
+	}{
+		{
+			name:        "single_transaction_block",
+			txs:         []*bt.Tx{coinbase},
+			description: "Coinbase-only block",
+		},
+		{
+			name:        "multi_transaction_block",
+			txs:         []*bt.Tx{coinbase, tx1},
+			description: "Block with multiple transactions (reproduces original bug)",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Logf("Testing consistency for: %s", tc.description)
+
+			// Create block
+			blockParams := blockInfo{
+				version:           1,
+				bits:              "2000ffff",
+				previousBlockHash: "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206",
+				height:            100,
+				nonce:             2083236893,
+				timestamp:         uint32(time.Now().Unix()),
+				txs:               tc.txs,
+			}
+
+			block, subtree := createBlockWithCorrectMerkleRoot(ctx, t, blockParams)
+			t.Logf("  Created block with merkle root in header: %s", block.Header.HashMerkleRoot.String())
+			t.Logf("  Block.TransactionCount: %d", block.TransactionCount)
+
+			// Mock blockchain client
+			blockchainClientMock := ctx.repo.BlockchainClient.(*blockchain.Mock)
+			// Only the /block_legacy endpoint calls GetBlock via GetLegacyBlockReader
+			blockchainClientMock.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil).Once()
+
+			// Setup subtree data if needed
+			if len(block.Subtrees) > 0 {
+				subtreeData := subtreepkg.NewSubtreeData(subtree)
+				for i := 1; i < len(tc.txs); i++ {
+					require.NoError(t, subtreeData.AddTx(tc.txs[i], i))
+				}
+				subtreeDataBytes, err := subtreeData.Serialize()
+				require.NoError(t, err)
+				err = ctx.repo.SubtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes)
+				require.NoError(t, err)
+			}
+
+			// =================================================================
+			// SIMULATE /block ENDPOINT (structured JSON response)
+			// =================================================================
+			t.Logf("\n=== Simulating /block endpoint (structured data) ===")
+
+			// The /block endpoint would return structured data with:
+			// - header with merkle root
+			// - coinbase transaction
+			// - subtree information
+			blockEndpointTxs := make([]*chainhash.Hash, 0)
+
+			// In the /block response, we get:
+			// 1. The coinbase from block.CoinbaseTx
+			blockEndpointTxs = append(blockEndpointTxs, block.CoinbaseTx.TxIDChainHash())
+			t.Logf("  /block coinbase: %s", block.CoinbaseTx.TxIDChainHash().String())
+
+			// 2. For each subtree, we would fetch and parse transactions
+			if len(block.Subtrees) > 0 {
+				// Simulate fetching subtree data
+				for _, subtreeHash := range block.Subtrees {
+					subtreeDataReader, err := ctx.repo.SubtreeStore.GetIoReader(context.Background(),
+						subtreeHash[:], fileformat.FileTypeSubtreeData)
+					require.NoError(t, err)
+					defer subtreeDataReader.Close()
+
+					// Read transactions from subtree data
+					bufferedReader := bufio.NewReaderSize(subtreeDataReader, 32*1024)
+					for {
+						tx := &bt.Tx{}
+						if _, err = tx.ReadFrom(bufferedReader); err != nil {
+							if err == io.EOF {
+								break
+							}
+							require.NoError(t, err)
+						}
+						blockEndpointTxs = append(blockEndpointTxs, tx.TxIDChainHash())
+						t.Logf("  /block subtree tx: %s", tx.TxIDChainHash().String())
+					}
+				}
+			}
+
+			blockEndpointMerkleRoot := calculateMerkleRoot(blockEndpointTxs)
+			t.Logf("  /block calculated merkle root: %s", blockEndpointMerkleRoot.String())
+
+			// =================================================================
+			// SIMULATE /block_legacy ENDPOINT (wire format streaming)
+			// =================================================================
+			t.Logf("\n=== Simulating /block_legacy endpoint (wire format) ===")
+
+			// Get legacy block reader (this is what /block_legacy uses)
+			r, err := ctx.repo.GetLegacyBlockReader(context.Background(), &chainhash.Hash{}, true)
+			require.NoError(t, err)
+
+			// Read the wire format data
+			blockData, err := io.ReadAll(r)
+			if err != nil && err != io.ErrClosedPipe {
+				require.NoError(t, err)
+			}
+
+			// Parse block from wire format
+			reader := bytes.NewReader(blockData)
+
+			// Skip header (80 bytes)
+			headerBytes := make([]byte, 80)
+			_, err = io.ReadFull(reader, headerBytes)
+			require.NoError(t, err)
+
+			// Extract merkle root from header
+			merkleRootBytes := headerBytes[36:68]
+			headerMerkleRoot, err := chainhash.NewHash(merkleRootBytes)
+			require.NoError(t, err)
+
+			// Read transaction count
+			varIntBytes := make([]byte, 9)
+			n, err := reader.Read(varIntBytes)
+			require.NoError(t, err)
+			txCount, bytesRead := bt.NewVarIntFromBytes(varIntBytes[:n])
+			reader.Seek(int64(-n+bytesRead), io.SeekCurrent)
+
+			t.Logf("  /block_legacy reports %d transactions in header", txCount)
+
+			// Read all transactions from wire format
+			legacyEndpointTxs := make([]*chainhash.Hash, 0, txCount)
+			for i := uint64(0); i < uint64(txCount); i++ {
+				tx := &bt.Tx{}
+				_, err = tx.ReadFrom(reader)
+				if err != nil {
+					t.Logf("  /block_legacy: Failed to read tx[%d]: %v", i, err)
+					break
+				}
+				legacyEndpointTxs = append(legacyEndpointTxs, tx.TxIDChainHash())
+				t.Logf("  /block_legacy tx[%d]: %s", i, tx.TxIDChainHash().String())
+			}
+
+			t.Logf("  /block_legacy collected %d transaction hashes", len(legacyEndpointTxs))
+			legacyEndpointMerkleRoot := calculateMerkleRoot(legacyEndpointTxs)
+			t.Logf("  /block_legacy calculated merkle root: %s", legacyEndpointMerkleRoot.String())
+
+			// =================================================================
+			// VERIFY CONSISTENCY
+			// =================================================================
+			t.Logf("\n=== Verification ===")
+			t.Logf("  Header merkle root:        %s", headerMerkleRoot.String())
+			t.Logf("  /block calculated root:    %s", blockEndpointMerkleRoot.String())
+			t.Logf("  /block_legacy calculated:  %s", legacyEndpointMerkleRoot.String())
+
+			// All three should match
+			assert.Equal(t, headerMerkleRoot.String(), blockEndpointMerkleRoot.String(),
+				"/block endpoint merkle root should match header")
+			assert.Equal(t, headerMerkleRoot.String(), legacyEndpointMerkleRoot.String(),
+				"/block_legacy endpoint merkle root should match header")
+			assert.Equal(t, blockEndpointMerkleRoot.String(), legacyEndpointMerkleRoot.String(),
+				"Both endpoints should produce identical merkle roots")
+
+			// Verify transaction counts match
+			assert.Equal(t, len(tc.txs), len(blockEndpointTxs),
+				"/block endpoint should return correct transaction count")
+			assert.Equal(t, len(tc.txs), len(legacyEndpointTxs),
+				"/block_legacy endpoint should return correct transaction count")
+
+			// Verify transaction order matches
+			for i := 0; i < len(tc.txs); i++ {
+				if i < len(blockEndpointTxs) && i < len(legacyEndpointTxs) {
+					assert.Equal(t, blockEndpointTxs[i].String(), legacyEndpointTxs[i].String(),
+						"Transaction %d should match between endpoints", i)
+				}
+			}
+
+			t.Logf("✓ Both endpoints produce identical merkle roots and transaction sets")
+		})
+	}
+}
+
 // TestGetLegacyBlockMerkleRootValidation validates that the merkle root calculated from
 // transactions in a legacy block matches the merkle root in the block header.
 // This ensures the coinbase duplication bug is fixed and merkle roots are correct.

@@ -33,29 +33,71 @@ type BlockHeader struct {
 func main() {
 	// Parse command-line arguments
 	var (
-		baseURL        string
-		blockHash      string
+		baseURL    string
+		blockHash  string
+		validateBoth bool
 		validateLegacy bool
 	)
 	flag.StringVar(&baseURL, "url", "https://us-east-1.teranode.space", "Base URL of the teranode instance")
 	flag.StringVar(&blockHash, "hash", "00000000151e54c0ef1c023bca89d3fe904b353dc9316979000eedfa5de08d31", "Block hash to validate")
-	flag.BoolVar(&validateLegacy, "validate-legacy", false, "Use legacy block endpoint for validation")
+	flag.BoolVar(&validateBoth, "validate-both", false, "Validate both /block and /block_legacy endpoints")
+	flag.BoolVar(&validateLegacy, "validate-legacy", false, "Use only legacy block endpoint for validation")
 	flag.Parse()
 
-	log.Printf("Validating block %s from %s (legacy mode: %v)\n", blockHash, baseURL, validateLegacy)
+	log.Printf("Validating block %s from %s\n", blockHash, baseURL)
+
+	if validateBoth {
+		// Validate both endpoints and compare
+		log.Printf("=== Validating both /block and /block_legacy endpoints ===\n")
+
+		// First validate /block endpoint
+		log.Printf("\n--- Validating /block endpoint ---\n")
+		blockRoot, err := validateBlockEndpoint(baseURL, blockHash)
+		if err != nil {
+			log.Fatalf("/block validation failed: %v", err)
+		}
+
+		// Then validate /block_legacy endpoint
+		log.Printf("\n--- Validating /block_legacy endpoint ---\n")
+		legacyRoot, err := validateLegacyBlock(baseURL, blockHash)
+		if err != nil {
+			log.Fatalf("/block_legacy validation failed: %v", err)
+		}
+
+		// Compare the results
+		log.Printf("\n=== Comparing results ===\n")
+		log.Printf("/block endpoint merkle root:    %s\n", blockRoot.String())
+		log.Printf("/block_legacy endpoint merkle root: %s\n", legacyRoot.String())
+
+		if blockRoot.String() == legacyRoot.String() {
+			log.Printf("✓ Both endpoints produce identical merkle roots!\n")
+		} else {
+			log.Printf("✗ MISMATCH: Endpoints produce different merkle roots!\n")
+			os.Exit(1)
+		}
+		return
+	}
 
 	if validateLegacy {
-		// Use legacy block endpoint
-		if err := validateLegacyBlock(baseURL, blockHash); err != nil {
+		// Use legacy block endpoint only
+		if _, err := validateLegacyBlock(baseURL, blockHash); err != nil {
 			log.Fatalf("Legacy validation failed: %v", err)
 		}
 		return
 	}
 
+	// Default to /block endpoint validation
+	if _, err := validateBlockEndpoint(baseURL, blockHash); err != nil {
+		log.Fatalf("Block validation failed: %v", err)
+	}
+}
+
+// validateBlockEndpoint validates merkle root using the /block endpoint
+func validateBlockEndpoint(baseURL, blockHash string) (*chainhash.Hash, error) {
 	// Fetch block header
 	blockHeader, err := fetchBlockHeader(baseURL, blockHash)
 	if err != nil {
-		log.Fatalf("Failed to fetch block header: %v", err)
+		return nil, fmt.Errorf("failed to fetch block header: %w", err)
 	}
 
 	log.Printf("Block header merkle root: %s\n", blockHeader.HashMerkleRoot)
@@ -161,12 +203,11 @@ func main() {
 		log.Printf("✓ Merkle root validation PASSED\n")
 		log.Printf("  Expected: %s\n", expectedRoot.String())
 		log.Printf("  Calculated: %s\n", calculatedRoot.String())
-		os.Exit(0)
+		return calculatedRoot, nil
 	}
-	log.Printf("✗ Merkle root validation FAILED\n")
-	log.Printf("  Expected: %s\n", expectedRoot.String())
-	log.Printf("  Calculated: %s\n", calculatedRoot.String())
-	os.Exit(1)
+
+	return nil, fmt.Errorf("merkle root validation failed - expected: %s, calculated: %s",
+		expectedRoot.String(), calculatedRoot.String())
 }
 
 func fetch(url string) ([]byte, error) {
@@ -354,7 +395,7 @@ func validateSingleSubtree(baseURL, blockHash, subtreeHash string) *chainhash.Ha
 	return newtree.RootHash()
 }
 
-func validateLegacyBlock(baseURL, blockHash string) error {
+func validateLegacyBlock(baseURL, blockHash string) (*chainhash.Hash, error) {
 	log.Printf("Using legacy block endpoint for validation\n")
 
 	// Fetch the legacy block data with wire=1 parameter
@@ -363,7 +404,7 @@ func validateLegacyBlock(baseURL, blockHash string) error {
 
 	blockData, err := fetch(legacyURL)
 	if err != nil {
-		return fmt.Errorf("failed to fetch legacy block: %w", err)
+		return nil, fmt.Errorf("failed to fetch legacy block: %w", err)
 	}
 
 	log.Printf("Fetched %d bytes of legacy block data\n", len(blockData))
@@ -374,7 +415,7 @@ func validateLegacyBlock(baseURL, blockHash string) error {
 	// Parse block using wire.MsgBlock
 	msgBlock := &wire.MsgBlock{}
 	if err := msgBlock.Deserialize(reader); err != nil {
-		return fmt.Errorf("failed to deserialize block: %w", err)
+		return nil, fmt.Errorf("failed to deserialize block: %w", err)
 	}
 
 	log.Printf("Parsed block with %d transactions\n", len(msgBlock.Transactions))
@@ -401,7 +442,7 @@ func validateLegacyBlock(baseURL, blockHash string) error {
 	var calculatedRoot *chainhash.Hash
 
 	if len(msgBlock.Transactions) == 0 {
-		return fmt.Errorf("block has no transactions")
+		return nil, fmt.Errorf("block has no transactions")
 	} else if len(msgBlock.Transactions) == 1 {
 		// Single transaction - merkle root is the transaction hash
 		txHash := msgBlock.Transactions[0].TxHash()
@@ -411,7 +452,7 @@ func validateLegacyBlock(baseURL, blockHash string) error {
 		// Multiple transactions - build merkle tree
 		txHashes := make([]*chainhash.Hash, 0, len(msgBlock.Transactions))
 
-		for i, tx := range msgBlock.Transactions {
+		for _, tx := range msgBlock.Transactions {
 			txHash := tx.TxHash()
 			txHashes = append(txHashes, &txHash)
 		}
@@ -458,13 +499,11 @@ func validateLegacyBlock(baseURL, blockHash string) error {
 		log.Printf("✓ Legacy merkle root validation PASSED\n")
 		log.Printf("  Expected: %s\n", expectedRoot.String())
 		log.Printf("  Calculated: %s\n", calculatedRoot.String())
-		os.Exit(0)
+		return calculatedRoot, nil
 	}
-	log.Printf("✗ Legacy merkle root validation FAILED\n")
-	log.Printf("  Expected: %s\n", expectedRoot.String())
-	log.Printf("  Calculated: %s\n", calculatedRoot.String())
-	os.Exit(1)
-	return nil
+
+	return nil, fmt.Errorf("legacy merkle root validation failed - expected: %s, calculated: %s",
+		expectedRoot.String(), calculatedRoot.String())
 }
 
 // buildMerkleRoot calculates the merkle root from a list of transaction hashes
