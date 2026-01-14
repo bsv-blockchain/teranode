@@ -30,6 +30,8 @@ var (
 	prometheusSubtreeProcessorReset                        prometheus.Histogram
 	prometheusSubtreeProcessorDynamicSubtreeSize           prometheus.Gauge
 	prometheusSubtreeProcessorCurrentState                 prometheus.Gauge
+	prometheusBlockAssemblySubtreeCompleteHist             prometheus.Histogram
+	prometheusSubtreeProcessorDequeuedTxs                  prometheus.Counter
 )
 
 var (
@@ -188,6 +190,25 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreeprocessor",
 			Name:      "current_state",
 			Help:      "Current state of the block assembly process",
+		},
+	)
+
+	prometheusBlockAssemblySubtreeCompleteHist = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "subtree_complete",
+			Help:      "Histogram of subtree completion duration in block assembly",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusSubtreeProcessorDequeuedTxs = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "dequeued_txs",
+			Help:      "Number of transactions dequeued from subtree processor",
 		},
 	)
 }

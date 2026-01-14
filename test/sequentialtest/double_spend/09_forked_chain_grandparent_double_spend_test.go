@@ -60,6 +60,7 @@ func testComplexForkGrandparentConflict(t *testing.T, utxoStore string) {
 	// Setup test environment with external transactions
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		UTXOStoreType:        utxoStore,
+		EnableErrorLogging:   true,
 		SettingsOverrideFunc: externalTxSettingsFunc(),
 	})
 	defer func() {

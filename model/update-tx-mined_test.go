@@ -409,6 +409,114 @@ func TestUpdateTxMinedStatus_ContextCancellation(t *testing.T) {
 
 }
 
+// TestUpdateTxMinedStatus_DuplicateDetection tests the duplicate block processing detection
+func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		UpdateTxMinedStatus: true,
+		MaxMinedBatchSize:   10,
+		MaxMinedRoutines:    1,
+	}
+
+	testTx := newTx(100)
+	block := &Block{}
+	block.Height = 100
+	block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+	block.SubtreeSlices = []*subtree.Subtree{
+		{
+			Nodes: []subtree.Node{
+				{Hash: *testTx.TxIDChainHash()},
+			},
+		},
+	}
+
+	t.Run("should ignore duplicate calls for same block", func(t *testing.T) {
+		// Reset worker settings and in-flight tracking for this test
+		setWorkerSettings(tSettings)
+		inFlightBlocksMu.Lock()
+		inFlightBlocks = make(map[uint32]bool)
+		inFlightBlocksMu.Unlock()
+
+		mockStore := &utxo.MockUtxostore{}
+		expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
+
+		// Setup a controlled delay for SetMinedMulti to ensure we can test concurrent calls
+		processingStarted := make(chan struct{})
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) {
+				close(processingStarted)
+				time.Sleep(50 * time.Millisecond) // Delay to ensure the second call happens during processing
+			}).
+			Return(expectedBlockIDsMap, nil).Once()
+
+		// Start the first call in a goroutine
+		done1 := make(chan error)
+		go func() {
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+			done1 <- err
+		}()
+
+		// Wait for the first call to actually start processing
+		<-processingStarted
+
+		// Second call should be ignored immediately (duplicate detection)
+		err2 := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		require.Error(t, err2) // Should return parent not mined error
+		assert.Contains(t, err2.Error(), "already being processed")
+
+		// Wait for first call to complete
+		err1 := <-done1
+		require.NoError(t, err1)
+
+		// SetMinedMulti should only be called once (not twice)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should allow processing of different blocks concurrently", func(t *testing.T) {
+		// Reset worker settings and in-flight tracking for this test
+		setWorkerSettings(tSettings)
+		inFlightBlocksMu.Lock()
+		inFlightBlocks = make(map[uint32]bool)
+		inFlightBlocksMu.Unlock()
+
+		mockStore1 := &utxo.MockUtxostore{}
+		mockStore2 := &utxo.MockUtxostore{}
+		expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
+
+		mockStore1.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(expectedBlockIDsMap, nil).Once()
+		mockStore2.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(expectedBlockIDsMap, nil).Once()
+
+		// Call with different block IDs
+		done1 := make(chan error)
+		done2 := make(chan error)
+
+		go func() {
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore1, block, 15, []uint32{}, true)
+			done1 <- err
+		}()
+
+		go func() {
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore2, block, 16, []uint32{}, true)
+			done2 <- err
+		}()
+
+		// Both should complete successfully
+		err1 := <-done1
+		err2 := <-done2
+		require.NoError(t, err1)
+		require.NoError(t, err2)
+
+		// Both should have called SetMinedMulti
+		mockStore1.AssertExpectations(t)
+		mockStore2.AssertExpectations(t)
+	})
+}
+
 // TestUpdateTxMinedStatus_ConfigurationDisabled tests disabled configuration scenario
 func TestUpdateTxMinedStatus_ConfigurationDisabled(t *testing.T) {
 	ctx := context.Background()

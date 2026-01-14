@@ -52,7 +52,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepk
 	defer deferFn()
 
 	batchSize := u.settings.Block.ProcessTxMetaUsingStoreBatchSize
-	validateSubtreeInternalConcurrency := subtreepkg.Max(4, runtime.NumCPU()/2)
+	validateSubtreeInternalConcurrency := subtreepkg.Max(4, runtime.NumCPU()*2)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, validateSubtreeInternalConcurrency)

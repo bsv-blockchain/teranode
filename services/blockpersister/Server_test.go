@@ -922,8 +922,8 @@ func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error 
 func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return nil, nil
+func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash, txMeta *meta.Data) error {
+	return nil
 }
 func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil

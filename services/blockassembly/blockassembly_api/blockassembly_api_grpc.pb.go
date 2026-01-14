@@ -24,6 +24,7 @@ const (
 	BlockAssemblyAPI_AddTx_FullMethodName                          = "/blockassembly_api.BlockAssemblyAPI/AddTx"
 	BlockAssemblyAPI_RemoveTx_FullMethodName                       = "/blockassembly_api.BlockAssemblyAPI/RemoveTx"
 	BlockAssemblyAPI_AddTxBatch_FullMethodName                     = "/blockassembly_api.BlockAssemblyAPI/AddTxBatch"
+	BlockAssemblyAPI_AddTxBatchColumnar_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/AddTxBatchColumnar"
 	BlockAssemblyAPI_GetMiningCandidate_FullMethodName             = "/blockassembly_api.BlockAssemblyAPI/GetMiningCandidate"
 	BlockAssemblyAPI_GetCurrentDifficulty_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/GetCurrentDifficulty"
 	BlockAssemblyAPI_SubmitMiningSolution_FullMethodName           = "/blockassembly_api.BlockAssemblyAPI/SubmitMiningSolution"
@@ -57,6 +58,10 @@ type BlockAssemblyAPIClient interface {
 	// AddTxBatch efficiently adds multiple transactions in a single request.
 	// Provides better performance than multiple individual AddTx calls.
 	AddTxBatch(ctx context.Context, in *AddTxBatchRequest, opts ...grpc.CallOption) (*AddTxBatchResponse, error)
+	// AddTxBatchColumnar efficiently adds multiple transactions using columnar data format.
+	// This format reduces CPU usage by 15-20% and GC pressure by 50% compared to AddTxBatch.
+	// Uses column-oriented storage for better cache locality and fewer allocations.
+	AddTxBatchColumnar(ctx context.Context, in *AddTxBatchColumnarRequest, opts ...grpc.CallOption) (*AddTxBatchResponse, error)
 	// GetMiningCandidate retrieves a block template ready for mining.
 	// Includes all necessary components for miners to begin work.
 	GetMiningCandidate(ctx context.Context, in *GetMiningCandidateRequest, opts ...grpc.CallOption) (*model.MiningCandidate, error)
@@ -133,6 +138,16 @@ func (c *blockAssemblyAPIClient) AddTxBatch(ctx context.Context, in *AddTxBatchR
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AddTxBatchResponse)
 	err := c.cc.Invoke(ctx, BlockAssemblyAPI_AddTxBatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockAssemblyAPIClient) AddTxBatchColumnar(ctx context.Context, in *AddTxBatchColumnarRequest, opts ...grpc.CallOption) (*AddTxBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AddTxBatchResponse)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_AddTxBatchColumnar_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +275,10 @@ type BlockAssemblyAPIServer interface {
 	// AddTxBatch efficiently adds multiple transactions in a single request.
 	// Provides better performance than multiple individual AddTx calls.
 	AddTxBatch(context.Context, *AddTxBatchRequest) (*AddTxBatchResponse, error)
+	// AddTxBatchColumnar efficiently adds multiple transactions using columnar data format.
+	// This format reduces CPU usage by 15-20% and GC pressure by 50% compared to AddTxBatch.
+	// Uses column-oriented storage for better cache locality and fewer allocations.
+	AddTxBatchColumnar(context.Context, *AddTxBatchColumnarRequest) (*AddTxBatchResponse, error)
 	// GetMiningCandidate retrieves a block template ready for mining.
 	// Includes all necessary components for miners to begin work.
 	GetMiningCandidate(context.Context, *GetMiningCandidateRequest) (*model.MiningCandidate, error)
@@ -313,6 +332,9 @@ func (UnimplementedBlockAssemblyAPIServer) RemoveTx(context.Context, *RemoveTxRe
 }
 func (UnimplementedBlockAssemblyAPIServer) AddTxBatch(context.Context, *AddTxBatchRequest) (*AddTxBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AddTxBatch not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) AddTxBatchColumnar(context.Context, *AddTxBatchColumnarRequest) (*AddTxBatchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddTxBatchColumnar not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) GetMiningCandidate(context.Context, *GetMiningCandidateRequest) (*model.MiningCandidate, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetMiningCandidate not implemented")
@@ -433,6 +455,24 @@ func _BlockAssemblyAPI_AddTxBatch_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockAssemblyAPIServer).AddTxBatch(ctx, req.(*AddTxBatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockAssemblyAPI_AddTxBatchColumnar_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddTxBatchColumnarRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).AddTxBatchColumnar(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_AddTxBatchColumnar_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).AddTxBatchColumnar(ctx, req.(*AddTxBatchColumnarRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -639,6 +679,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AddTxBatch",
 			Handler:    _BlockAssemblyAPI_AddTxBatch_Handler,
+		},
+		{
+			MethodName: "AddTxBatchColumnar",
+			Handler:    _BlockAssemblyAPI_AddTxBatchColumnar_Handler,
 		},
 		{
 			MethodName: "GetMiningCandidate",

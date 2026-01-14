@@ -45,10 +45,12 @@ func createTestTx(txID string, parentIDs ...string) *utxo.UnminedTransaction {
 	hash, _ := chainhash.NewHashFromStr(txID)
 
 	return &utxo.UnminedTransaction{
-		Hash:       hash,
-		TxInpoints: txInpoints,
-		Fee:        1000,
-		Size:       250,
+		Node: &subtree.Node{
+			Hash:        *hash,
+			Fee:         1000,
+			SizeInBytes: 250,
+		},
+		TxInpoints: &txInpoints,
 	}
 }
 
@@ -247,11 +249,10 @@ func TestParentChildOrderingLogic(t *testing.T) {
 			// Create maps for validation logic (simulating the actual implementation)
 			unminedTxMap := make(map[chainhash.Hash]bool, len(unminedTxs))
 			unminedTxIndexMap := make(map[chainhash.Hash]int, len(unminedTxs))
+
 			for idx, tx := range unminedTxs {
-				if tx.Hash != nil {
-					unminedTxMap[*tx.Hash] = true
-					unminedTxIndexMap[*tx.Hash] = idx
-				}
+				unminedTxMap[tx.Hash] = true
+				unminedTxIndexMap[tx.Hash] = idx
 			}
 
 			// Perform validation logic - matching production code behavior
@@ -276,7 +277,7 @@ func TestParentChildOrderingLogic(t *testing.T) {
 					// STEP 2: Parent exists - check if it's unmined and in our list
 					if unminedTxMap[parentTxID] {
 						// Parent is unmined and in our list - check ordering
-						currentIdx := unminedTxIndexMap[*tx.Hash]
+						currentIdx := unminedTxIndexMap[tx.Hash]
 						parentIdx, exists := unminedTxIndexMap[parentTxID]
 						if !exists || parentIdx >= currentIdx {
 							// Parent comes after or at same position as child - invalid ordering

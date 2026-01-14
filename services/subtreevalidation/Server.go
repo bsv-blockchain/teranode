@@ -119,9 +119,6 @@ type Server struct {
 	// orphanage manages orphaned transactions that are missing their parent transactions
 	orphanage *Orphanage
 
-	// pauseSubtreeProcessing is used to pause subtree processing while a block is being processed
-	pauseSubtreeProcessing atomic.Bool
-
 	// bestBlockHeader is used to store the current best block header
 	bestBlockHeader atomic.Pointer[model.BlockHeader]
 
@@ -538,9 +535,8 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // allowing in-progress operations to complete when possible and releasing
 // all resources properly. It follows a consistent shutdown sequence that:
 // 1. Stops accepting new requests
-// 2. Pauses Kafka consumers to prevent new messages from being processed
-// 3. Waits for in-progress operations to complete (with reasonable timeouts)
-// 4. Closes connections and releases resources
+// 2. Waits for in-progress operations to complete (with reasonable timeouts)
+// 3. Closes connections and releases resources
 //
 // The method is designed to be called when the service needs to be terminated,
 // either for normal shutdown or in response to system signals.

@@ -90,7 +90,8 @@ type TestDaemon struct {
 
 // TestOptions defines the options for creating a test daemon instance.
 type TestOptions struct {
-	EnableFullLogging       bool
+	EnableDebugLogging      bool
+	EnableErrorLogging      bool
 	EnableLegacy            bool
 	EnableP2P               bool
 	EnableRPC               bool
@@ -411,10 +412,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
 			return ulogger.NewUnifiedTestLogger(t, testName, serviceName, cancel)
 		})
-	} else if opts.EnableFullLogging {
+	} else if opts.EnableDebugLogging {
 		logger = ulogger.New(appSettings.ClientName)
 		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
 			return ulogger.New(appSettings.ClientName+"-"+serviceName, ulogger.WithLevel("DEBUG"))
+		})
+	} else if opts.EnableErrorLogging {
+		logger = ulogger.New(appSettings.ClientName)
+		loggerFactory = WithLoggerFactory(func(serviceName string) ulogger.Logger {
+			return ulogger.New(appSettings.ClientName+"-"+serviceName, ulogger.WithLevel("ERROR"))
 		})
 	} else {
 		logger = ulogger.NewErrorTestLogger(t, cancel)
@@ -668,6 +674,7 @@ func GetPorts(appSettings *settings.Settings) []int {
 		getPortFromString(appSettings.Propagation.GRPCListenAddress),
 		getPortFromString(appSettings.Faucet.HTTPListenAddress),
 		getPortFromURL(appSettings.RPC.RPCListenerURL),
+		getPortFromString(appSettings.Pruner.GRPCListenAddress),
 	}
 
 	// remove all where port == 0

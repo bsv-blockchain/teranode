@@ -174,6 +174,12 @@ func WithSkipHeader(skipHeader bool) FileOption {
 	}
 }
 
+func WithNoHashPrefix() FileOption {
+	return func(s *Options) {
+		s.HashPrefix = 0
+	}
+}
+
 // WithLongtermStorage configures longterm storage options for the store.
 // This enables the three-layer storage functionality (primary local, persistent local, and longterm store, like S3).
 // Parameters:

@@ -1395,11 +1395,11 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 		return s.handleBlockNotification(ctx, hash) // These handlers return wrapped errors
 
 	case model.NotificationType_Subtree:
-		s.logger.Debugf("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		s.logger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
 		return s.handleSubtreeNotification(ctx, hash)
 
 	case model.NotificationType_PeerFailure:
-		s.logger.Debugf("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		s.logger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
 		return s.handlePeerFailureNotification(ctx, notification)
 
 	default:

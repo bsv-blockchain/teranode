@@ -17,6 +17,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/model"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -37,14 +38,14 @@ import (
 // into efficient subtree structures and maintaining consistency during blockchain
 // state changes.
 type Interface interface {
-	// Add adds a transaction node to the subtree processor for processing.
-	// The transaction will be organized into appropriate subtrees based on
-	// its dependencies and relationships with other transactions.
+	// AddBatch adds a batch of transaction nodes to the subtree processor for processing.
+	// The transactions will be organized into appropriate subtrees based on
+	// their dependencies and relationships with other transactions.
 	//
 	// Parameters:
-	//   - node: The transaction node to add to processing
-	//   - txInpoints: Transaction input points for dependency tracking
-	Add(node subtree.Node, txInpoints subtree.TxInpoints)
+	//   - nodes: The transaction nodes to add to processing
+	//   - txInpoints: Transaction input points for each node for dependency tracking
+	AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints)
 
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.
@@ -67,7 +68,19 @@ type Interface interface {
 	//   - error: Any error encountered during the addition
 	//
 	// Note: This method bypasses the normal queue processing and should be used
-	AddDirectly(node subtree.Node, txInpoints subtree.TxInpoints, skipNotification bool) error
+	AddDirectly(node *subtreepkg.Node, txInpoints *subtreepkg.TxInpoints, skipNotification bool) error
+
+	// AddNodesDirectly adds a batch of unmined transactions directly to the processor without going through the queue.
+	// It performs parallel filtering/insertion into currentTxMap and sequential insertion into subtrees.
+	// This bypasses the queue and is useful for bulk loading transactions at startup.
+	//
+	// Parameters:
+	//   - txs: Unmined transactions to add
+	//   - skipNotification: Whether to skip notification of new subtrees
+	//
+	// Returns:
+	//   - error: Any error encountered during addition
+	AddNodesDirectly(txs []*utxostore.UnminedTransaction, skipNotification bool) error
 
 	// GetCurrentRunningState returns the current operational state of the processor.
 	// This provides visibility into whether the processor is running, stopped,
@@ -173,20 +186,33 @@ type Interface interface {
 	//   - *util.Subtree: Currently active subtree, nil if none
 	GetCurrentSubtree() *subtree.Subtree
 
+	// GetCurrentSubtreeSize returns the size of the current subtree being processed.
+	// This metric helps monitor subtree growth and processing state.
+	//
+	// Returns:
+	//   - int: Size of the current subtree
+	GetCurrentSubtreeSize() int
+
 	// GetCurrentTxMap returns the current transaction map with input points.
 	// This provides access to the processor's transaction tracking state.
 	//
 	// Returns:
-	//   - *util.SyncedMap[chainhash.Hash, meta.TxInpoints]: Current transaction map
-	GetCurrentTxMap() *txmap.SyncedMap[chainhash.Hash, subtree.TxInpoints]
+	//   - TxInpointsMap: Current transaction map
+	GetCurrentTxMap() TxInpointsMap
 
 	// GetRemoveMap returns the map of transactions scheduled for removal.
 	// This map contains transactions that have been marked for removal
 	// but not yet processed.
 	//
 	// Returns:
-	//   - *txmap.SwissMap: Map of transactions to be removed
-	GetRemoveMap() *txmap.SwissMap
+	//   - txmap.TxMap: Map of transactions to be removed
+	GetRemoveMap() txmap.TxMap
+
+	// GetRemoveMapLength returns the number of transactions scheduled for removal.
+	//
+	// Returns:
+	//   - int: Number of transactions in the removal map
+	GetRemoveMapLength() int
 
 	// GetChainedSubtrees returns subtrees that are chained together.
 	// These represent transaction dependencies and processing order.
@@ -260,4 +286,33 @@ type Interface interface {
 	// Parameters:
 	//   - ctx: Context for the stop operation
 	Stop(ctx context.Context)
+}
+
+// TxInpointsMap defines the interface for transaction inpoints storage with hash keys.
+// Implementations provide concurrent-safe operations for storing and retrieving transaction inpoints.
+type TxInpointsMap interface {
+	// Delete removes a transaction hash and its inpoints from the map.
+	// Returns true if the hash was found and deleted, false otherwise.
+	Delete(hash chainhash.Hash) bool
+
+	// Exists checks if a transaction hash exists in the map.
+	// Returns true if the hash exists, false otherwise.
+	Exists(hash chainhash.Hash) bool
+
+	// Get retrieves the inpoints for a given transaction hash.
+	// Returns the inpoints and true if found, empty inpoints and false otherwise.
+	Get(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool)
+
+	// Length returns the total number of entries in the map.
+	Length() int
+
+	// Set stores or updates the inpoints for a given transaction hash.
+	Set(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints)
+
+	// SetIfNotExists stores the inpoints only if the hash doesn't already exist.
+	// Returns the inpoints (existing or newly inserted) and true if inserted, false if already existed.
+	SetIfNotExists(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints) (*subtreepkg.TxInpoints, bool)
+
+	// Clear removes all entries from the map.
+	Clear()
 }

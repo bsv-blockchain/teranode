@@ -80,8 +80,17 @@ func (m *NullStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.Spen
 	return nil, nil
 }
 
-func (m *NullStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return m.Get(ctx, hash)
+func (m *NullStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	result, err := m.Get(ctx, hash)
+	if err != nil {
+		return err
+	}
+
+	if result != nil {
+		*data = *result
+	}
+
+	return nil
 }
 
 func (m *NullStore) MetaBatchDecorate(_ context.Context, _ []*utxo.UnresolvedMetaData, _ ...string) error {

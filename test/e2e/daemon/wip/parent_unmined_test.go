@@ -131,7 +131,7 @@ func TestParentNotFullySpentNotMinedonSameChain(t *testing.T) {
 	bestBlock, err := nodeA.BlockchainClient.GetBlock(nodeA.Ctx, bestBlockHeader.Hash())
 	require.NoError(t, err)
 	_, block := nodeA.CreateTestBlock(t, bestBlock, 0, childTx)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block, "legacy")
 	require.Error(t, err)
 	require.ErrorContains(t, err, fmt.Sprintf("parent transaction %s of tx %s has no block IDs", parentTx.TxIDChainHash().String(), childTx.TxIDChainHash().String()))
 
@@ -181,8 +181,8 @@ func TestParentSpentNotMinedonSameChain(t *testing.T) {
 			settings.UtxoStore.UtxoStore = parsedURL
 			settings.BlockValidation.OptimisticMining = true
 		},
-		FSMState:          blockchain.FSMStateRUNNING,
-		EnableFullLogging: true,
+		FSMState:           blockchain.FSMStateRUNNING,
+		EnableDebugLogging: true,
 	})
 	defer nodeA.Stop(t)
 
@@ -266,10 +266,10 @@ func TestParentSpentNotMinedonSameChain(t *testing.T) {
 	block2, err := nodeA.BlockchainClient.GetBlock(nodeA.Ctx, bestBlockHeader.Hash())
 	require.NoError(t, err)
 	_, block3 := nodeA.CreateTestBlock(t, block2, 0, childTx)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3, "legacy")
 	require.NoError(t, err)
 	_, block4 := nodeA.CreateTestBlock(t, block3, 0)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4, "legacy")
 	require.NoError(t, err)
 	nodeA.WaitForBlock(t, block4, 10*time.Second, true)
 

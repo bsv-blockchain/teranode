@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"container/list"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math/rand/v2"
 	"net"
@@ -2460,35 +2461,81 @@ func (sm *SyncManager) kafkaBlocksFinalListener(ctx context.Context, kafkaURL *u
 	}, &sm.settings.Kafka)
 }
 
+// kafkaTXmetaListener processes TxMeta Kafka messages in binary batch format.
+// Messages use a binary batch format:
+// [4 bytes]  - entry count (uint32, little-endian)
+// For each entry:
+//
+//	[32 bytes] - tx hash (raw bytes)
+//	[1 byte]   - action (0=ADD, 1=DELETE)
+//	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
+//	[N bytes]  - content (metaBytes) - only for ADD
 func (sm *SyncManager) kafkaTXmetaListener(ctx context.Context, kafkaURL *url.URL, groupID string) {
+	const (
+		txmetaActionADD    = byte(0)
+		txmetaActionDELETE = byte(1)
+	)
+
 	kafka.StartKafkaListener(ctx, sm.logger, kafkaURL, groupID, true, func(msg *kafka.KafkaMessage) error {
-		var kafkaMsg kafkamessage.KafkaTxMetaTopicMessage
-		if err := proto.Unmarshal(msg.Value, &kafkaMsg); err != nil {
-			sm.logger.Errorf("Failed to unmarshal kafka message: %v", err)
-			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to unmarshal kafka message", err)
+		data := msg.Value
+		if len(data) < 4 {
+			return nil
 		}
 
-		hash, err := chainhash.NewHashFromStr(kafkaMsg.TxHash)
-		if err != nil {
-			sm.logger.Errorf("Failed to parse tx hash from message: %v", err)
-			return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to parse tx hash from message", err)
-		}
+		offset := 0
 
-		if kafkaMsg.Action == kafkamessage.KafkaTxMetaActionType_ADD {
-			sm.logger.Debugf("Received tx message from Kafka: %v", hash)
+		// Read entry count
+		entryCount := binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
 
-			var txMeta meta.Data
-
-			if err = meta.NewMetaDataFromBytes(kafkaMsg.Content, &txMeta); err != nil {
-				sm.logger.Errorf("Failed to create tx meta data from bytes: %v", err)
-				return errors.New(errors.ERR_INVALID_ARGUMENT, "Failed to create tx meta data from bytes", err)
+		// Process each entry
+		for i := uint32(0); i < entryCount; i++ {
+			// Check minimum bytes for hash + action + length
+			if offset+32+1+4 > len(data) {
+				sm.logger.Errorf("[kafkaTXmetaListener] truncated message at entry %d", i)
+				return nil
 			}
 
-			sm.txAnnounceBatcher.Put(&TxHashAndFee{
-				TxHash: *hash,
-				Fee:    txMeta.Fee,
-				Size:   txMeta.SizeInBytes,
-			})
+			// Read hash (32 bytes)
+			var hash chainhash.Hash
+			copy(hash[:], data[offset:offset+32])
+			offset += 32
+
+			// Read action (1 byte)
+			action := data[offset]
+			offset++
+
+			// Read content length (4 bytes)
+			contentLen := binary.LittleEndian.Uint32(data[offset:])
+			offset += 4
+
+			if action == txmetaActionADD {
+				// Handle ADD
+				if offset+int(contentLen) > len(data) {
+					sm.logger.Errorf("[kafkaTXmetaListener] truncated content at entry %d", i)
+					return nil
+				}
+
+				content := data[offset : offset+int(contentLen)]
+				offset += int(contentLen)
+
+				sm.logger.Debugf("Received tx message from Kafka: %v", hash)
+
+				var txMeta meta.Data
+				if err := meta.NewMetaDataFromBytes(content, &txMeta); err != nil {
+					sm.logger.Errorf("Failed to create tx meta data from bytes: %v", err)
+					continue
+				}
+
+				sm.txAnnounceBatcher.Put(&TxHashAndFee{
+					TxHash: hash,
+					Fee:    txMeta.Fee,
+					Size:   txMeta.SizeInBytes,
+				})
+			} else {
+				// Skip DELETE entries (no action needed for peer announcements)
+				continue
+			}
 		}
 
 		return nil

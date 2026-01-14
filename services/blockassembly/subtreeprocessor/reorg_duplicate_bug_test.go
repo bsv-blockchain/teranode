@@ -8,7 +8,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/model"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -134,7 +133,7 @@ func TestReorgDuplicateTransactionBug(t *testing.T) {
 
 		// Create currentTxMap that contains all the transactions
 		// This simulates the state where these transactions were in the mempool
-		currentTxMap := txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
+		currentTxMap := NewSplitTxInpointsMap(256)
 
 		// Pre-populate currentTxMap with all transactions (simulating they were in mempool)
 		// Use a common parent hash instead of self-reference
@@ -142,7 +141,7 @@ func TestReorgDuplicateTransactionBug(t *testing.T) {
 		for _, subtree := range chainedSubtrees {
 			for _, node := range subtree.Nodes {
 				if !node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
-					currentTxMap.Set(node.Hash, subtreepkg.TxInpoints{
+					currentTxMap.Set(node.Hash, &subtreepkg.TxInpoints{
 						ParentTxHashes: []chainhash.Hash{parentHash}, // Use common parent instead of self-reference
 					})
 				}

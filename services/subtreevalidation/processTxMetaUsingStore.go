@@ -5,6 +5,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -18,6 +19,38 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
 )
+
+var TxMetaFieldsForDecorate = []fields.FieldName{fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs, fields.Creating}
+
+// unresolvedMetaDataSlicePool reduces allocation pressure by reusing
+// []*utxo.UnresolvedMetaData slices during batch tx metadata processing.
+var unresolvedMetaDataSlicePool = sync.Pool{}
+
+// getUnresolvedMetaDataSlice returns a slice from the pool or allocates a new one.
+func getUnresolvedMetaDataSlice(capacity int) *[]*utxo.UnresolvedMetaData {
+	if v := unresolvedMetaDataSlicePool.Get(); v != nil {
+		s := v.(*[]*utxo.UnresolvedMetaData)
+		if cap(*s) >= capacity {
+			*s = (*s)[:0]
+			return s
+		}
+	}
+	s := make([]*utxo.UnresolvedMetaData, 0, capacity)
+	return &s
+}
+
+// putUnresolvedMetaDataSlice returns a slice to the pool after clearing references.
+func putUnresolvedMetaDataSlice(s *[]*utxo.UnresolvedMetaData) {
+	if s == nil {
+		return
+	}
+	// Clear references to allow GC of pointed-to objects
+	for i := range *s {
+		(*s)[i] = nil
+	}
+	*s = (*s)[:0]
+	unresolvedMetaDataSlicePool.Put(s)
+}
 
 // processTxMetaUsingStore attempts to retrieve transaction metadata from the underlying store
 // for a batch of transactions. It supports both batched and individual transaction retrieval.
@@ -36,7 +69,7 @@ import (
 // The function uses BatchDecorate when batched is true, otherwise falls back to
 // individual GetMeta calls. It will return a ThresholdExceededError if failFast
 // is true and the number of missing transactions exceeds the configured threshold.
-func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []*meta.Data,
+func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem,
 	blockIds map[uint32]bool, batched bool, failFast bool) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, errors.NewInvalidArgumentError("txHashes and txMetaSlice must be the same length")
@@ -61,7 +94,12 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 			g.Go(func() error {
 				end := subtree.Min(i+batchSize, len(txHashes))
 
-				missingTxHashesCompacted := make([]*utxo.UnresolvedMetaData, 0, end-i)
+				missingTxHashesCompactedPtr := getUnresolvedMetaDataSlice(end - i)
+				missingTxHashesCompacted := *missingTxHashesCompactedPtr
+				defer func() {
+					*missingTxHashesCompactedPtr = missingTxHashesCompacted
+					putUnresolvedMetaDataSlice(missingTxHashesCompactedPtr)
+				}()
 
 				for j := 0; j < subtree.Min(batchSize, len(txHashes)-i); j++ {
 					select {
@@ -75,7 +113,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 							continue
 						}
 
-						if txMetaSlice[i+j] == nil {
+						if !txMetaSlice[i+j].isSet {
 							missingTxHashesCompacted = append(missingTxHashesCompacted, &utxo.UnresolvedMetaData{
 								Hash: txHashes[i+j],
 								Idx:  i + j,
@@ -84,7 +122,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 					}
 				}
 
-				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs, fields.Creating); err != nil {
+				if err := u.utxoStore.BatchDecorate(gCtx, missingTxHashesCompacted, TxMetaFieldsForDecorate...); err != nil {
 					return errors.NewStorageError("error running batch decorate on utxo store for missing transactions", err)
 				}
 
@@ -121,22 +159,20 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 							continue
 						}
 
-						txMetaSlice[data.Idx] = data.Data
-
-						// if the tx is conflicting, we need to check if it is conflicting on the current chain
-						if txMetaSlice[data.Idx].Conflicting {
-							if err = u.checkCounterConflictingOnCurrentChain(ctx, data.Hash, blockIds); err != nil {
-								return errors.NewProcessingError("[processTxMetaUsingStore][%s] failed to check counter conflicting tx on current chain", data.Hash.String(), err)
-							}
+						txMetaSlice[data.Idx] = metaSliceItem{
+							fee:         data.Data.Fee,
+							sizeInBytes: data.Data.SizeInBytes,
+							coinbase:    data.Data.IsCoinbase,
+							conflicting: data.Data.Conflicting,
+							creating:    data.Data.Creating,
+							isSet:       true,
+							txInpoints:  data.Data.TxInpoints,
 						}
 
-						// check whether this transaction has already been mined into a block on our chain
-						if len(txMetaSlice[data.Idx].BlockIDs) > 0 && blockIds != nil {
-							for _, blockID := range txMetaSlice[data.Idx].BlockIDs {
-								if _, exists := blockIds[blockID]; exists {
-									// this transaction has already been mined into a block on our chain
-									return errors.NewProcessingError("transaction %s has already been mined into block ID %d on our chain", data.Hash.String(), blockID)
-								}
+						// if the tx is conflicting, we need to check if it is conflicting on the current chain
+						if txMetaSlice[data.Idx].conflicting {
+							if err = u.checkCounterConflictingOnCurrentChain(ctx, data.Hash, blockIds); err != nil {
+								return errors.NewProcessingError("[processTxMetaUsingStore][%s] failed to check counter conflicting tx on current chain", data.Hash.String(), err)
 							}
 						}
 					}
@@ -176,16 +212,25 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 							continue
 						}
 
-						if txMetaSlice[i+j] == nil {
-							txMeta, err := u.utxoStore.GetMeta(gCtx, &txHash)
-							if err != nil {
+						if !txMetaSlice[i+j].isSet {
+							txMeta := &meta.Data{}
+							if err := u.utxoStore.GetMeta(gCtx, &txHash, txMeta); err != nil {
 								return errors.NewStorageError("error getting tx meta from utxo store", err)
 							}
 
 							// Auto-recovery: only use txMeta if it's not in the "creating" state
 							// If Creating is true, treat as missing to trigger re-processing
-							if txMeta != nil && !txMeta.Creating {
-								txMetaSlice[i+j] = txMeta
+							if !txMeta.Creating {
+								txMetaSlice[i+j] = metaSliceItem{
+									fee:         txMeta.Fee,
+									sizeInBytes: txMeta.SizeInBytes,
+									coinbase:    txMeta.IsCoinbase,
+									conflicting: txMeta.Conflicting,
+									creating:    txMeta.Creating,
+									isSet:       true,
+									txInpoints:  txMeta.TxInpoints,
+								}
+
 								continue
 							}
 						}

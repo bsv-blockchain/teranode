@@ -304,6 +304,135 @@ func (x *AddTxBatchRequest) GetTxRequests() []*AddTxRequest {
 	return nil
 }
 
+// Request for adding a batch of transactions using columnar format.
+// This format stores transaction data in column-oriented arrays for better performance.
+//
+// Column-oriented storage benefits:
+// - Single allocation per array instead of N allocations per transaction
+// - Better cache locality from sequential memory access
+// - Fewer pointer dereferences during processing
+// - Reduced GC pressure from fewer heap objects
+//
+// OPTIMIZATION: TxInpoints are pre-deserialized by the Client (which runs on multiple machines)
+// and sent in columnar format. This shifts deserialization work away from the single-machine Server.
+// The Server reconstructs TxInpoints directly from columnar data WITHOUT deserialization overhead.
+type AddTxBatchColumnarRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// All transaction IDs concatenated (each exactly 32 bytes).
+	// Total length must be divisible by 32.
+	// Transaction count = len(txids_packed) / 32
+	TxidsPacked []byte `protobuf:"bytes,1,opt,name=txids_packed,json=txidsPacked,proto3" json:"txids_packed,omitempty"`
+	// Transaction fees in satoshis (one per transaction).
+	// Length must equal transaction count.
+	Fees []uint64 `protobuf:"varint,2,rep,packed,name=fees,proto3" json:"fees,omitempty"`
+	// Transaction sizes in bytes (one per transaction).
+	// Length must equal transaction count.
+	Sizes []uint64 `protobuf:"varint,3,rep,packed,name=sizes,proto3" json:"sizes,omitempty"`
+	// All parent transaction hashes concatenated (each exactly 32 bytes).
+	// Deserialized from TxInpoints on the Client side.
+	// Use parent_tx_offsets to identify boundaries for each transaction.
+	ParentTxHashesPacked []byte `protobuf:"bytes,6,opt,name=parent_tx_hashes_packed,json=parentTxHashesPacked,proto3" json:"parent_tx_hashes_packed,omitempty"`
+	// Offsets into parent_tx_hashes_packed for each transaction.
+	// Length must be exactly transaction_count + 1.
+	// Each offset is in units of hashes (multiply by 32 for byte offset).
+	// Example: [0, 3, 7, 10] represents 3 transactions:
+	//   - Transaction 0: 3 parent hashes (hashes 0-2)
+	//   - Transaction 1: 4 parent hashes (hashes 3-6)
+	//   - Transaction 2: 3 parent hashes (hashes 7-9)
+	ParentTxOffsets []uint32 `protobuf:"varint,7,rep,packed,name=parent_tx_offsets,json=parentTxOffsets,proto3" json:"parent_tx_offsets,omitempty"`
+	// All parent vout indices for all transactions, flattened and concatenated.
+	// These are the Idxs from TxInpoints (the uint32 indices for each parent hash).
+	// Use vout_idx_offsets to identify boundaries.
+	ParentVoutIndices []uint32 `protobuf:"varint,8,rep,packed,name=parent_vout_indices,json=parentVoutIndices,proto3" json:"parent_vout_indices,omitempty"`
+	// Offsets into parent_vout_indices for each parent hash.
+	// Length must be exactly (total number of parent hashes) + 1.
+	// This creates a 2-level offset structure:
+	//  1. parent_tx_offsets identifies which parent hashes belong to each transaction
+	//  2. vout_idx_offsets identifies which vout indices belong to each parent hash
+	VoutIdxOffsets []uint32 `protobuf:"varint,9,rep,packed,name=vout_idx_offsets,json=voutIdxOffsets,proto3" json:"vout_idx_offsets,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *AddTxBatchColumnarRequest) Reset() {
+	*x = AddTxBatchColumnarRequest{}
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AddTxBatchColumnarRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AddTxBatchColumnarRequest) ProtoMessage() {}
+
+func (x *AddTxBatchColumnarRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AddTxBatchColumnarRequest.ProtoReflect.Descriptor instead.
+func (*AddTxBatchColumnarRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *AddTxBatchColumnarRequest) GetTxidsPacked() []byte {
+	if x != nil {
+		return x.TxidsPacked
+	}
+	return nil
+}
+
+func (x *AddTxBatchColumnarRequest) GetFees() []uint64 {
+	if x != nil {
+		return x.Fees
+	}
+	return nil
+}
+
+func (x *AddTxBatchColumnarRequest) GetSizes() []uint64 {
+	if x != nil {
+		return x.Sizes
+	}
+	return nil
+}
+
+func (x *AddTxBatchColumnarRequest) GetParentTxHashesPacked() []byte {
+	if x != nil {
+		return x.ParentTxHashesPacked
+	}
+	return nil
+}
+
+func (x *AddTxBatchColumnarRequest) GetParentTxOffsets() []uint32 {
+	if x != nil {
+		return x.ParentTxOffsets
+	}
+	return nil
+}
+
+func (x *AddTxBatchColumnarRequest) GetParentVoutIndices() []uint32 {
+	if x != nil {
+		return x.ParentVoutIndices
+	}
+	return nil
+}
+
+func (x *AddTxBatchColumnarRequest) GetVoutIdxOffsets() []uint32 {
+	if x != nil {
+		return x.VoutIdxOffsets
+	}
+	return nil
+}
+
 // Request for retrieving a mining candidate block template.
 type GetMiningCandidateRequest struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
@@ -314,7 +443,7 @@ type GetMiningCandidateRequest struct {
 
 func (x *GetMiningCandidateRequest) Reset() {
 	*x = GetMiningCandidateRequest{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[5]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -326,7 +455,7 @@ func (x *GetMiningCandidateRequest) String() string {
 func (*GetMiningCandidateRequest) ProtoMessage() {}
 
 func (x *GetMiningCandidateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[5]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -339,7 +468,7 @@ func (x *GetMiningCandidateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetMiningCandidateRequest.ProtoReflect.Descriptor instead.
 func (*GetMiningCandidateRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{5}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetMiningCandidateRequest) GetIncludeSubtrees() bool {
@@ -359,7 +488,7 @@ type RemoveTxRequest struct {
 
 func (x *RemoveTxRequest) Reset() {
 	*x = RemoveTxRequest{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[6]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -371,7 +500,7 @@ func (x *RemoveTxRequest) String() string {
 func (*RemoveTxRequest) ProtoMessage() {}
 
 func (x *RemoveTxRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[6]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -384,7 +513,7 @@ func (x *RemoveTxRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveTxRequest.ProtoReflect.Descriptor instead.
 func (*RemoveTxRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{6}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RemoveTxRequest) GetTxid() []byte {
@@ -404,7 +533,7 @@ type AddTxResponse struct {
 
 func (x *AddTxResponse) Reset() {
 	*x = AddTxResponse{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[7]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -416,7 +545,7 @@ func (x *AddTxResponse) String() string {
 func (*AddTxResponse) ProtoMessage() {}
 
 func (x *AddTxResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[7]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -429,7 +558,7 @@ func (x *AddTxResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddTxResponse.ProtoReflect.Descriptor instead.
 func (*AddTxResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{7}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AddTxResponse) GetOk() bool {
@@ -449,7 +578,7 @@ type AddTxBatchResponse struct {
 
 func (x *AddTxBatchResponse) Reset() {
 	*x = AddTxBatchResponse{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[8]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -461,7 +590,7 @@ func (x *AddTxBatchResponse) String() string {
 func (*AddTxBatchResponse) ProtoMessage() {}
 
 func (x *AddTxBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[8]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -474,7 +603,7 @@ func (x *AddTxBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddTxBatchResponse.ProtoReflect.Descriptor instead.
 func (*AddTxBatchResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{8}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AddTxBatchResponse) GetOk() bool {
@@ -498,7 +627,7 @@ type SubmitMiningSolutionRequest struct {
 
 func (x *SubmitMiningSolutionRequest) Reset() {
 	*x = SubmitMiningSolutionRequest{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[9]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -510,7 +639,7 @@ func (x *SubmitMiningSolutionRequest) String() string {
 func (*SubmitMiningSolutionRequest) ProtoMessage() {}
 
 func (x *SubmitMiningSolutionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[9]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -523,7 +652,7 @@ func (x *SubmitMiningSolutionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubmitMiningSolutionRequest.ProtoReflect.Descriptor instead.
 func (*SubmitMiningSolutionRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{9}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SubmitMiningSolutionRequest) GetId() []byte {
@@ -571,7 +700,7 @@ type OKResponse struct {
 
 func (x *OKResponse) Reset() {
 	*x = OKResponse{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[10]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -583,7 +712,7 @@ func (x *OKResponse) String() string {
 func (*OKResponse) ProtoMessage() {}
 
 func (x *OKResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[10]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -596,7 +725,7 @@ func (x *OKResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OKResponse.ProtoReflect.Descriptor instead.
 func (*OKResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{10}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *OKResponse) GetOk() bool {
@@ -625,7 +754,7 @@ type StateMessage struct {
 
 func (x *StateMessage) Reset() {
 	*x = StateMessage{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[11]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -637,7 +766,7 @@ func (x *StateMessage) String() string {
 func (*StateMessage) ProtoMessage() {}
 
 func (x *StateMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[11]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -650,7 +779,7 @@ func (x *StateMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StateMessage.ProtoReflect.Descriptor instead.
 func (*StateMessage) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{11}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *StateMessage) GetBlockAssemblyState() string {
@@ -733,7 +862,7 @@ type GetCurrentDifficultyResponse struct {
 
 func (x *GetCurrentDifficultyResponse) Reset() {
 	*x = GetCurrentDifficultyResponse{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[12]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -745,7 +874,7 @@ func (x *GetCurrentDifficultyResponse) String() string {
 func (*GetCurrentDifficultyResponse) ProtoMessage() {}
 
 func (x *GetCurrentDifficultyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[12]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -758,7 +887,7 @@ func (x *GetCurrentDifficultyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCurrentDifficultyResponse.ProtoReflect.Descriptor instead.
 func (*GetCurrentDifficultyResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{12}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetCurrentDifficultyResponse) GetDifficulty() float64 {
@@ -780,7 +909,7 @@ type GenerateBlocksRequest struct {
 
 func (x *GenerateBlocksRequest) Reset() {
 	*x = GenerateBlocksRequest{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[13]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -792,7 +921,7 @@ func (x *GenerateBlocksRequest) String() string {
 func (*GenerateBlocksRequest) ProtoMessage() {}
 
 func (x *GenerateBlocksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[13]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -805,7 +934,7 @@ func (x *GenerateBlocksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GenerateBlocksRequest.ProtoReflect.Descriptor instead.
 func (*GenerateBlocksRequest) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{13}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GenerateBlocksRequest) GetCount() int32 {
@@ -839,7 +968,7 @@ type GetBlockAssemblyBlockCandidateResponse struct {
 
 func (x *GetBlockAssemblyBlockCandidateResponse) Reset() {
 	*x = GetBlockAssemblyBlockCandidateResponse{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[14]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -851,7 +980,7 @@ func (x *GetBlockAssemblyBlockCandidateResponse) String() string {
 func (*GetBlockAssemblyBlockCandidateResponse) ProtoMessage() {}
 
 func (x *GetBlockAssemblyBlockCandidateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[14]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -864,7 +993,7 @@ func (x *GetBlockAssemblyBlockCandidateResponse) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use GetBlockAssemblyBlockCandidateResponse.ProtoReflect.Descriptor instead.
 func (*GetBlockAssemblyBlockCandidateResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{14}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetBlockAssemblyBlockCandidateResponse) GetBlock() []byte {
@@ -885,7 +1014,7 @@ type GetBlockAssemblyTxsResponse struct {
 
 func (x *GetBlockAssemblyTxsResponse) Reset() {
 	*x = GetBlockAssemblyTxsResponse{}
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[15]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -897,7 +1026,7 @@ func (x *GetBlockAssemblyTxsResponse) String() string {
 func (*GetBlockAssemblyTxsResponse) ProtoMessage() {}
 
 func (x *GetBlockAssemblyTxsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[15]
+	mi := &file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -910,7 +1039,7 @@ func (x *GetBlockAssemblyTxsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBlockAssemblyTxsResponse.ProtoReflect.Descriptor instead.
 func (*GetBlockAssemblyTxsResponse) Descriptor() ([]byte, []int) {
-	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{15}
+	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetBlockAssemblyTxsResponse) GetTxCount() uint64 {
@@ -952,7 +1081,15 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x11AddTxBatchRequest\x12?\n" +
 	"\n" +
 	"txRequests\x18\x01 \x03(\v2\x1f.blockassembly_api.AddTxRequestR\n" +
-	"txRequests\"E\n" +
+	"txRequests\"\xa5\x02\n" +
+	"\x19AddTxBatchColumnarRequest\x12!\n" +
+	"\ftxids_packed\x18\x01 \x01(\fR\vtxidsPacked\x12\x12\n" +
+	"\x04fees\x18\x02 \x03(\x04R\x04fees\x12\x14\n" +
+	"\x05sizes\x18\x03 \x03(\x04R\x05sizes\x125\n" +
+	"\x17parent_tx_hashes_packed\x18\x06 \x01(\fR\x14parentTxHashesPacked\x12*\n" +
+	"\x11parent_tx_offsets\x18\a \x03(\rR\x0fparentTxOffsets\x12.\n" +
+	"\x13parent_vout_indices\x18\b \x03(\rR\x11parentVoutIndices\x12(\n" +
+	"\x10vout_idx_offsets\x18\t \x03(\rR\x0evoutIdxOffsets\"E\n" +
 	"\x19GetMiningCandidateRequest\x12(\n" +
 	"\x0fincludeSubtrees\x18\x01 \x01(\bR\x0fincludeSubtrees\"%\n" +
 	"\x0fRemoveTxRequest\x12\x12\n" +
@@ -1003,15 +1140,15 @@ const file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawD
 	"\x05block\x18\x01 \x01(\fR\x05block\"I\n" +
 	"\x1bGetBlockAssemblyTxsResponse\x12\x18\n" +
 	"\atxCount\x18\x01 \x01(\x04R\atxCount\x12\x10\n" +
-	"\x03txs\x18\x02 \x03(\tR\x03txs2\xce\n" +
-	"\n" +
+	"\x03txs\x18\x02 \x03(\tR\x03txs2\xbb\v\n" +
 	"\x10BlockAssemblyAPI\x12R\n" +
 	"\n" +
 	"HealthGRPC\x12\x1f.blockassembly_api.EmptyMessage\x1a!.blockassembly_api.HealthResponse\"\x00\x12L\n" +
 	"\x05AddTx\x12\x1f.blockassembly_api.AddTxRequest\x1a .blockassembly_api.AddTxResponse\"\x00\x12Q\n" +
 	"\bRemoveTx\x12\".blockassembly_api.RemoveTxRequest\x1a\x1f.blockassembly_api.EmptyMessage\"\x00\x12[\n" +
 	"\n" +
-	"AddTxBatch\x12$.blockassembly_api.AddTxBatchRequest\x1a%.blockassembly_api.AddTxBatchResponse\"\x00\x12\\\n" +
+	"AddTxBatch\x12$.blockassembly_api.AddTxBatchRequest\x1a%.blockassembly_api.AddTxBatchResponse\"\x00\x12k\n" +
+	"\x12AddTxBatchColumnar\x12,.blockassembly_api.AddTxBatchColumnarRequest\x1a%.blockassembly_api.AddTxBatchResponse\"\x00\x12\\\n" +
 	"\x12GetMiningCandidate\x12,.blockassembly_api.GetMiningCandidateRequest\x1a\x16.model.MiningCandidate\"\x00\x12j\n" +
 	"\x14GetCurrentDifficulty\x12\x1f.blockassembly_api.EmptyMessage\x1a/.blockassembly_api.GetCurrentDifficultyResponse\"\x00\x12g\n" +
 	"\x14SubmitMiningSolution\x12..blockassembly_api.SubmitMiningSolutionRequest\x1a\x1d.blockassembly_api.OKResponse\"\x00\x12X\n" +
@@ -1035,60 +1172,63 @@ func file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDe
 	return file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDescData
 }
 
-var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_goTypes = []any{
 	(*EmptyMessage)(nil),                           // 0: blockassembly_api.EmptyMessage
 	(*HealthResponse)(nil),                         // 1: blockassembly_api.HealthResponse
 	(*NewChaintipAndHeightRequest)(nil),            // 2: blockassembly_api.NewChaintipAndHeightRequest
 	(*AddTxRequest)(nil),                           // 3: blockassembly_api.AddTxRequest
 	(*AddTxBatchRequest)(nil),                      // 4: blockassembly_api.AddTxBatchRequest
-	(*GetMiningCandidateRequest)(nil),              // 5: blockassembly_api.GetMiningCandidateRequest
-	(*RemoveTxRequest)(nil),                        // 6: blockassembly_api.RemoveTxRequest
-	(*AddTxResponse)(nil),                          // 7: blockassembly_api.AddTxResponse
-	(*AddTxBatchResponse)(nil),                     // 8: blockassembly_api.AddTxBatchResponse
-	(*SubmitMiningSolutionRequest)(nil),            // 9: blockassembly_api.SubmitMiningSolutionRequest
-	(*OKResponse)(nil),                             // 10: blockassembly_api.OKResponse
-	(*StateMessage)(nil),                           // 11: blockassembly_api.StateMessage
-	(*GetCurrentDifficultyResponse)(nil),           // 12: blockassembly_api.GetCurrentDifficultyResponse
-	(*GenerateBlocksRequest)(nil),                  // 13: blockassembly_api.GenerateBlocksRequest
-	(*GetBlockAssemblyBlockCandidateResponse)(nil), // 14: blockassembly_api.GetBlockAssemblyBlockCandidateResponse
-	(*GetBlockAssemblyTxsResponse)(nil),            // 15: blockassembly_api.GetBlockAssemblyTxsResponse
-	(*timestamppb.Timestamp)(nil),                  // 16: google.protobuf.Timestamp
-	(*model.MiningCandidate)(nil),                  // 17: model.MiningCandidate
+	(*AddTxBatchColumnarRequest)(nil),              // 5: blockassembly_api.AddTxBatchColumnarRequest
+	(*GetMiningCandidateRequest)(nil),              // 6: blockassembly_api.GetMiningCandidateRequest
+	(*RemoveTxRequest)(nil),                        // 7: blockassembly_api.RemoveTxRequest
+	(*AddTxResponse)(nil),                          // 8: blockassembly_api.AddTxResponse
+	(*AddTxBatchResponse)(nil),                     // 9: blockassembly_api.AddTxBatchResponse
+	(*SubmitMiningSolutionRequest)(nil),            // 10: blockassembly_api.SubmitMiningSolutionRequest
+	(*OKResponse)(nil),                             // 11: blockassembly_api.OKResponse
+	(*StateMessage)(nil),                           // 12: blockassembly_api.StateMessage
+	(*GetCurrentDifficultyResponse)(nil),           // 13: blockassembly_api.GetCurrentDifficultyResponse
+	(*GenerateBlocksRequest)(nil),                  // 14: blockassembly_api.GenerateBlocksRequest
+	(*GetBlockAssemblyBlockCandidateResponse)(nil), // 15: blockassembly_api.GetBlockAssemblyBlockCandidateResponse
+	(*GetBlockAssemblyTxsResponse)(nil),            // 16: blockassembly_api.GetBlockAssemblyTxsResponse
+	(*timestamppb.Timestamp)(nil),                  // 17: google.protobuf.Timestamp
+	(*model.MiningCandidate)(nil),                  // 18: model.MiningCandidate
 }
 var file_services_blockassembly_blockassembly_api_blockassembly_api_proto_depIdxs = []int32{
-	16, // 0: blockassembly_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	17, // 0: blockassembly_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
 	3,  // 1: blockassembly_api.AddTxBatchRequest.txRequests:type_name -> blockassembly_api.AddTxRequest
 	0,  // 2: blockassembly_api.BlockAssemblyAPI.HealthGRPC:input_type -> blockassembly_api.EmptyMessage
 	3,  // 3: blockassembly_api.BlockAssemblyAPI.AddTx:input_type -> blockassembly_api.AddTxRequest
-	6,  // 4: blockassembly_api.BlockAssemblyAPI.RemoveTx:input_type -> blockassembly_api.RemoveTxRequest
+	7,  // 4: blockassembly_api.BlockAssemblyAPI.RemoveTx:input_type -> blockassembly_api.RemoveTxRequest
 	4,  // 5: blockassembly_api.BlockAssemblyAPI.AddTxBatch:input_type -> blockassembly_api.AddTxBatchRequest
-	5,  // 6: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:input_type -> blockassembly_api.GetMiningCandidateRequest
-	0,  // 7: blockassembly_api.BlockAssemblyAPI.GetCurrentDifficulty:input_type -> blockassembly_api.EmptyMessage
-	9,  // 8: blockassembly_api.BlockAssemblyAPI.SubmitMiningSolution:input_type -> blockassembly_api.SubmitMiningSolutionRequest
-	0,  // 9: blockassembly_api.BlockAssemblyAPI.ResetBlockAssembly:input_type -> blockassembly_api.EmptyMessage
-	0,  // 10: blockassembly_api.BlockAssemblyAPI.ResetBlockAssemblyFully:input_type -> blockassembly_api.EmptyMessage
-	0,  // 11: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyState:input_type -> blockassembly_api.EmptyMessage
-	13, // 12: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:input_type -> blockassembly_api.GenerateBlocksRequest
-	0,  // 13: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:input_type -> blockassembly_api.EmptyMessage
-	0,  // 14: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:input_type -> blockassembly_api.EmptyMessage
-	0,  // 15: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyTxs:input_type -> blockassembly_api.EmptyMessage
-	1,  // 16: blockassembly_api.BlockAssemblyAPI.HealthGRPC:output_type -> blockassembly_api.HealthResponse
-	7,  // 17: blockassembly_api.BlockAssemblyAPI.AddTx:output_type -> blockassembly_api.AddTxResponse
-	0,  // 18: blockassembly_api.BlockAssemblyAPI.RemoveTx:output_type -> blockassembly_api.EmptyMessage
-	8,  // 19: blockassembly_api.BlockAssemblyAPI.AddTxBatch:output_type -> blockassembly_api.AddTxBatchResponse
-	17, // 20: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:output_type -> model.MiningCandidate
-	12, // 21: blockassembly_api.BlockAssemblyAPI.GetCurrentDifficulty:output_type -> blockassembly_api.GetCurrentDifficultyResponse
-	10, // 22: blockassembly_api.BlockAssemblyAPI.SubmitMiningSolution:output_type -> blockassembly_api.OKResponse
-	0,  // 23: blockassembly_api.BlockAssemblyAPI.ResetBlockAssembly:output_type -> blockassembly_api.EmptyMessage
-	0,  // 24: blockassembly_api.BlockAssemblyAPI.ResetBlockAssemblyFully:output_type -> blockassembly_api.EmptyMessage
-	11, // 25: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyState:output_type -> blockassembly_api.StateMessage
-	0,  // 26: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:output_type -> blockassembly_api.EmptyMessage
-	10, // 27: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:output_type -> blockassembly_api.OKResponse
-	14, // 28: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:output_type -> blockassembly_api.GetBlockAssemblyBlockCandidateResponse
-	15, // 29: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyTxs:output_type -> blockassembly_api.GetBlockAssemblyTxsResponse
-	16, // [16:30] is the sub-list for method output_type
-	2,  // [2:16] is the sub-list for method input_type
+	5,  // 6: blockassembly_api.BlockAssemblyAPI.AddTxBatchColumnar:input_type -> blockassembly_api.AddTxBatchColumnarRequest
+	6,  // 7: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:input_type -> blockassembly_api.GetMiningCandidateRequest
+	0,  // 8: blockassembly_api.BlockAssemblyAPI.GetCurrentDifficulty:input_type -> blockassembly_api.EmptyMessage
+	10, // 9: blockassembly_api.BlockAssemblyAPI.SubmitMiningSolution:input_type -> blockassembly_api.SubmitMiningSolutionRequest
+	0,  // 10: blockassembly_api.BlockAssemblyAPI.ResetBlockAssembly:input_type -> blockassembly_api.EmptyMessage
+	0,  // 11: blockassembly_api.BlockAssemblyAPI.ResetBlockAssemblyFully:input_type -> blockassembly_api.EmptyMessage
+	0,  // 12: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyState:input_type -> blockassembly_api.EmptyMessage
+	14, // 13: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:input_type -> blockassembly_api.GenerateBlocksRequest
+	0,  // 14: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:input_type -> blockassembly_api.EmptyMessage
+	0,  // 15: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:input_type -> blockassembly_api.EmptyMessage
+	0,  // 16: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyTxs:input_type -> blockassembly_api.EmptyMessage
+	1,  // 17: blockassembly_api.BlockAssemblyAPI.HealthGRPC:output_type -> blockassembly_api.HealthResponse
+	8,  // 18: blockassembly_api.BlockAssemblyAPI.AddTx:output_type -> blockassembly_api.AddTxResponse
+	0,  // 19: blockassembly_api.BlockAssemblyAPI.RemoveTx:output_type -> blockassembly_api.EmptyMessage
+	9,  // 20: blockassembly_api.BlockAssemblyAPI.AddTxBatch:output_type -> blockassembly_api.AddTxBatchResponse
+	9,  // 21: blockassembly_api.BlockAssemblyAPI.AddTxBatchColumnar:output_type -> blockassembly_api.AddTxBatchResponse
+	18, // 22: blockassembly_api.BlockAssemblyAPI.GetMiningCandidate:output_type -> model.MiningCandidate
+	13, // 23: blockassembly_api.BlockAssemblyAPI.GetCurrentDifficulty:output_type -> blockassembly_api.GetCurrentDifficultyResponse
+	11, // 24: blockassembly_api.BlockAssemblyAPI.SubmitMiningSolution:output_type -> blockassembly_api.OKResponse
+	0,  // 25: blockassembly_api.BlockAssemblyAPI.ResetBlockAssembly:output_type -> blockassembly_api.EmptyMessage
+	0,  // 26: blockassembly_api.BlockAssemblyAPI.ResetBlockAssemblyFully:output_type -> blockassembly_api.EmptyMessage
+	12, // 27: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyState:output_type -> blockassembly_api.StateMessage
+	0,  // 28: blockassembly_api.BlockAssemblyAPI.GenerateBlocks:output_type -> blockassembly_api.EmptyMessage
+	11, // 29: blockassembly_api.BlockAssemblyAPI.CheckBlockAssembly:output_type -> blockassembly_api.OKResponse
+	15, // 30: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyBlockCandidate:output_type -> blockassembly_api.GetBlockAssemblyBlockCandidateResponse
+	16, // 31: blockassembly_api.BlockAssemblyAPI.GetBlockAssemblyTxs:output_type -> blockassembly_api.GetBlockAssemblyTxsResponse
+	17, // [17:32] is the sub-list for method output_type
+	2,  // [2:17] is the sub-list for method input_type
 	2,  // [2:2] is the sub-list for extension type_name
 	2,  // [2:2] is the sub-list for extension extendee
 	0,  // [0:2] is the sub-list for field type_name
@@ -1099,15 +1239,15 @@ func file_services_blockassembly_blockassembly_api_blockassembly_api_proto_init(
 	if File_services_blockassembly_blockassembly_api_blockassembly_api_proto != nil {
 		return
 	}
-	file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[9].OneofWrappers = []any{}
-	file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[13].OneofWrappers = []any{}
+	file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[10].OneofWrappers = []any{}
+	file_services_blockassembly_blockassembly_api_blockassembly_api_proto_msgTypes[14].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDesc), len(file_services_blockassembly_blockassembly_api_blockassembly_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

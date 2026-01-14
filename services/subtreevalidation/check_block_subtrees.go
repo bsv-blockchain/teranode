@@ -28,7 +28,7 @@ import (
 // while dramatically reducing memory pressure and GC overhead (16x reduction from previous 512KB).
 var bufioReaderPool = sync.Pool{
 	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 32*1024) // 32KB buffer - optimized for sequential I/O
+		return bufio.NewReaderSize(nil, 1024*1024) // Temp changed to 1MB buffer for scaling env - 32KB buffer - optimized for sequential I/O
 	},
 }
 
@@ -50,7 +50,6 @@ func (c *countingReadCloser) Close() error {
 
 // CheckBlockSubtrees validates that all subtrees referenced in a block exist in storage.
 //
-// Pauses subtree processing during validation to avoid conflicts and returns missing
 // subtree information for blocks that reference unavailable subtrees.
 func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest) (*subtreevalidation_api.CheckBlockSubtreesResponse, error) {
 	block, err := model.NewBlockFromBytes(request.Block)
@@ -98,82 +97,6 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	}
 
 	u.logger.Infof("[CheckBlockSubtrees] Found %d missing subtrees for block %s, proceeding with validation", len(missingSubtrees), block.Hash().String())
-
-	// Check if the block is on our chain or will become part of our chain
-	// Only pause subtree processing if this block is on our chain or extending our chain
-	shouldPauseProcessing := false
-
-	bestBlockHeader, _, err := u.blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil {
-		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get best block header", err)
-	}
-
-	if bestBlockHeader.Hash().IsEqual(block.Header.HashPrevBlock) {
-		// If the block's parent is the best block, we can safely assume this block
-		// is extending our chain and should pause subtree processing
-		u.logger.Infof("[CheckBlockSubtrees] Block %s is extending our chain - pausing subtree processing", block.Hash().String())
-		shouldPauseProcessing = true
-	} else {
-		// First check if the block's parent exists
-		parentExists, err := u.blockchainClient.GetBlockExists(ctx, block.Header.HashPrevBlock)
-		if err != nil {
-			u.logger.Warnf("[CheckBlockSubtrees] Failed to check if parent block exists: %v", err)
-			// On error, default to pausing for safety
-			shouldPauseProcessing = true
-		} else if parentExists {
-			// If the parent exists, check if it's on our current chain
-			_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
-			if err != nil {
-				u.logger.Warnf("[CheckBlockSubtrees] Failed to get parent block header: %v", err)
-				// On error, default to pausing for safety
-				shouldPauseProcessing = true
-			} else if parentMeta != nil && parentMeta.ID > 0 {
-				// Check if the parent is on the current chain
-				isOnChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{parentMeta.ID})
-				if err != nil {
-					u.logger.Warnf("[CheckBlockSubtrees] Failed to check if parent is on current chain: %v", err)
-					// On error, default to pausing for safety
-					shouldPauseProcessing = true
-				} else {
-					shouldPauseProcessing = isOnChain
-				}
-			}
-		} else {
-			// Parent doesn't exist - this could be a block from a different fork
-			// Don't pause processing for blocks from different forks
-			u.logger.Infof("[CheckBlockSubtrees] Block %s parent %s not found - likely from different fork, not pausing subtree processing", block.Hash().String(), block.Header.HashPrevBlock.String())
-			shouldPauseProcessing = false
-		}
-	}
-
-	// Skip pause lock if we're catching up
-	if shouldPauseProcessing {
-		currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
-		if err != nil {
-			u.logger.Warnf("[CheckBlockSubtrees] Failed to get FSM state: %v - will pause for safety", err)
-		} else if currentState != nil &&
-			(*currentState == blockchain.FSMStateCATCHINGBLOCKS || *currentState == blockchain.FSMStateLEGACYSYNCING) {
-			u.logger.Infof("[CheckBlockSubtrees] Skipping pause lock - FSM state is %s (catching up)", currentState.String())
-			shouldPauseProcessing = false
-		}
-	}
-
-	// Acquire and manage pause lock with immediate defer for guaranteed cleanup
-	if shouldPauseProcessing {
-		u.logger.Infof("[CheckBlockSubtrees] Block %s is on our chain or extending it - acquiring pause lock across all pods", block.Hash().String())
-
-		releasePause, err := u.setPauseProcessing(ctx)
-		// Always defer - safe to call even on error (returns noopFunc which does nothing)
-		defer releasePause()
-
-		if err != nil {
-			u.logger.Warnf("[CheckBlockSubtrees] Failed to acquire distributed pause lock: %v - continuing without pause", err)
-		} else {
-			u.logger.Infof("[CheckBlockSubtrees] Pause lock acquired successfully for block %s", block.Hash().String())
-		}
-	} else {
-		u.logger.Infof("[CheckBlockSubtrees] Block %s is on a different fork - not pausing subtree processing", block.Hash().String())
-	}
 
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
@@ -668,13 +591,50 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		return nil
 	}
 
-	u.logger.Infof("[processTransactionsInLevels] Organizing %d transactions into dependency levels", len(allTransactions))
+	txHashes := make([]chainhash.Hash, len(allTransactions))
 
-	// Convert transactions to missingTx format for prepareTxsPerLevel
-	missingTxs := make([]missingTx, len(allTransactions))
 	for i, tx := range allTransactions {
 		if tx == nil {
 			return errors.NewProcessingError("[processTransactionsInLevels] transaction is nil at index %d", i)
+		}
+
+		txHashes[i] = *tx.TxIDChainHash()
+	}
+
+	// Pre-check: identify transactions that are already validated in cache or UTXO store
+	txMetaSlice := make([]metaSliceItem, len(txHashes))
+
+	missed, err := u.processTxMetaUsingCache(ctx, txHashes, txMetaSlice, false)
+	if err != nil {
+		return errors.NewProcessingError("[processTransactionsInLevels] Failed to check txMeta cache", err)
+	}
+
+	if missed > 0 {
+		u.logger.Infof("[processTransactionsInLevels] Pre-check: %d/%d transactions missed in cache, checking UTXO store", missed, len(txHashes))
+
+		batched := u.settings.SubtreeValidation.BatchMissingTransactions
+		missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, false)
+		if err != nil {
+			return errors.NewProcessingError("[processTransactionsInLevels] Failed to check txMeta store", err)
+		}
+	}
+
+	alreadyValidated := len(txHashes) - missed
+
+	if missed == 0 {
+		u.logger.Infof("[processTransactionsInLevels] All transactions already validated, skipping processing")
+		return nil
+	} else if alreadyValidated > 0 {
+		u.logger.Infof("[processTransactionsInLevels] Pre-check: %d/%d transactions already validated, %d need validation", alreadyValidated, len(txHashes), missed)
+	}
+
+	// Convert transactions to missingTx format for prepareTxsPerLevel
+	missingTxs := make([]missingTx, len(allTransactions))
+
+	for i, tx := range allTransactions {
+		if txMetaSlice[i].isSet {
+			// Transaction already validated, skip
+			continue
 		}
 
 		missingTxs[i] = missingTx{
@@ -682,6 +642,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			idx: i,
 		}
 	}
+
+	u.logger.Infof("[processTransactionsInLevels] Organizing %d transactions into dependency levels", len(allTransactions))
 
 	// Use the existing prepareTxsPerLevel logic to organize transactions by dependency levels
 	maxLevel, txsPerLevel, err := u.selectPrepareTxsPerLevel(ctx, missingTxs)
@@ -768,6 +730,12 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 				return errors.NewProcessingError("[processTransactionsInLevels] transaction is nil at level %d", level)
 			}
 
+			// Skip transactions that were already validated (found in cache or UTXO store)
+			if txMetaSlice[mTx.idx].isSet {
+				u.logger.Debugf("[processTransactionsInLevels] Transaction %s already validated (pre-check), skipping", tx.TxIDChainHash().String())
+				return nil
+			}
+
 			g.Go(func() error {
 				// Use existing blessMissingTransaction logic for validation
 				txMeta, err := u.blessMissingTransaction(gCtx, blockHash, subtreeHash, tx, blockHeight, blockIds, processedValidatorOptions)
@@ -842,6 +810,9 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	}
 
 	u.logger.Infof("[processTransactionsInLevels] Successfully processed all %d transactions", totalTxCount)
+
+	txMetaSlice = nil //nolint:ineffassign // Intentional early GC hint
+
 	return nil
 }
 

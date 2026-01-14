@@ -138,18 +138,22 @@ type KafkaSettings struct {
 }
 
 type AerospikeSettings struct {
-	Debug                  bool
-	Host                   string
-	BatchPolicyURL         *url.URL
-	ReadPolicyURL          *url.URL
-	WritePolicyURL         *url.URL
-	QueryPolicyURL         *url.URL
-	Port                   int
-	UseDefaultBasePolicies bool
-	UseDefaultPolicies     bool
-	WarmUp                 bool
-	StoreBatcherDuration   time.Duration
-	StatsRefreshDuration   time.Duration
+	Debug                           bool
+	Host                            string
+	BatchPolicyURL                  *url.URL
+	ReadPolicyURL                   *url.URL
+	WritePolicyURL                  *url.URL
+	QueryPolicyURL                  *url.URL
+	Port                            int
+	UseDefaultBasePolicies          bool
+	UseDefaultPolicies              bool
+	WarmUp                          bool
+	StoreBatcherDuration            time.Duration
+	StatsRefreshDuration            time.Duration
+	EnableSetMinedFilterExpressions bool
+	EnableSpendFilterExpressions    bool
+	UseSeparateUDFMinedModule       bool
+	SeparateSpendUDFModuleCount     int
 }
 
 type AlertSettings struct {
@@ -183,6 +187,10 @@ type AssetSettings struct {
 	ConcurrencyGetSubtreeHead         int
 	ConcurrencyGetUtxo                int
 	ConcurrencyGetLegacyBlockReader   int
+
+	// Streaming configuration
+	SubtreeDataStreamingChunkSize   int // Number of transactions to process per chunk when streaming subtree data (default: 10000)
+	SubtreeDataStreamingConcurrency int // Number of concurrent chunks to fetch in parallel when streaming subtree data (default: 4)
 }
 
 type BlockSettings struct {
@@ -238,6 +246,7 @@ type BlockAssemblySettings struct {
 	SubtreeProcessorConcurrentReads      int
 	NewSubtreeChanBuffer                 int
 	SubtreeRetryChanBuffer               int
+	SubtreeStorageWorkers                int
 	SubmitMiningSolutionWaitForResponse  bool
 	InitialMerkleItemsPerSubtree         int
 	MinimumMerkleItemsPerSubtree         int
@@ -253,10 +262,24 @@ type BlockAssemblySettings struct {
 	OnRestartValidateParentChain         bool
 	ParentValidationBatchSize            int
 	OnRestartRemoveInvalidParentChainTxs bool
+	UseColumnarBatch                     bool
+	// UnminedTxDiskSortPath is the base path for temporary storage during disk-based sorting
+	// of unmined transactions. If empty, os.TempDir() is used.
+	UnminedTxDiskSortPath string
+	// UnminedTxDiskSortEnabled enables disk-based sorting to reduce RAM usage when loading
+	// unmined transactions. When disabled or when OnRestartValidateParentChain is enabled,
+	// the original in-memory approach is used.
+	UnminedTxDiskSortEnabled bool
+	UnminedLoadingBatchSize  int
 	// GetMiningCandidate timeouts
 	GetMiningCandidateSendTimeout     time.Duration // Timeout when sending request on internal channel (default: 1s)
 	GetMiningCandidateResponseTimeout time.Duration // Timeout waiting for mining candidate response (default: 10s)
 	SubtreeAnnouncementInterval       time.Duration
+	// ParallelSetIfNotExistsThreshold is the minimum number of nodes required to trigger
+	// parallel processing of Get and SetIfNotExists operations in processOwnBlockSubtreeNodes
+	// and processRemainderTxHashes. Below this threshold, sequential processing is used.
+	ParallelSetIfNotExistsThreshold int
+	StoreTxInpointsForSubtreeMeta   bool
 }
 
 type BlockValidationSettings struct {
@@ -338,6 +361,8 @@ type ValidatorSettings struct {
 	HTTPRateLimit             int
 	KafkaMaxMessageBytes      int // Maximum Kafka message size in bytes for transaction validation
 	UseLocalValidator         bool
+	TxMetaKafkaBatchSize      int // Batch size for TxMeta Kafka messages (0 = disabled)
+	TxMetaKafkaBatchTimeoutMs int // Batch timeout in milliseconds for TxMeta Kafka messages
 }
 
 type RegionSettings struct {

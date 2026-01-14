@@ -43,6 +43,8 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+const confirmations = 100
+
 // Server manages the UTXO persistence operations.
 // It coordinates the processing of blocks, extraction of UTXOs, and their persistent storage.
 // The server maintains the state of the UTXO set by handling additions and deletions as new blocks are processed.
@@ -248,20 +250,22 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		ch  chan *blockchain.Notification
 	)
 
-	// Blocks until the FSM transitions from the IDLE state
-	err = s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
-	if err != nil {
-		s.logger.Errorf("[UTXOPersister Service] Failed to wait for FSM transition from IDLE state: %s", err)
-
-		return err
-	}
-
-	if s.blockchainClient == nil {
-		ch = make(chan *blockchain.Notification) // Create a dummy channel
-	} else {
-		ch, err = s.blockchainClient.Subscribe(ctx, "utxo-persister")
+	if s.blockchainClient != nil {
+		// Blocks until the FSM transitions from the IDLE state
+		err = s.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
 		if err != nil {
+			s.logger.Errorf("[UTXOPersister Service] Failed to wait for FSM transition from IDLE state: %s", err)
+
 			return err
+		}
+
+		if s.blockchainClient == nil {
+			ch = make(chan *blockchain.Notification) // Create a dummy channel
+		} else {
+			ch, err = s.blockchainClient.Subscribe(ctx, "utxo-persister")
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -428,15 +432,15 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	// Calculate the maximum height that can be processed.  This is the best block height minus 100 confirmations
 	// Handle underflow when chain height < 100 (early chain bootstrapping, test networks)
 	var maxHeight uint32
-	if bestBlockMeta.Height < 100 {
+	if bestBlockMeta.Height < confirmations {
 		// For early chains, allow processing up to current height (no safety window yet)
 		maxHeight = bestBlockMeta.Height
 	} else {
-		maxHeight = bestBlockMeta.Height - 100
+		maxHeight = bestBlockMeta.Height - confirmations
 	}
 
 	if s.lastHeight >= maxHeight {
-		s.logger.Infof("Waiting for 100 confirmations (height to process: %d, best block height: %d)", s.lastHeight, bestBlockMeta.Height)
+		s.logger.Infof("Waiting for %d confirmations (height to process: %d, best block height: %d)", confirmations, s.lastHeight, bestBlockMeta.Height)
 		return 1 * time.Minute, nil
 	}
 
@@ -468,7 +472,9 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	s.logger.Infof("Rolling up data from block height %d to %d", s.lastHeight+1, maxHeight)
 
 	if err := c.ConsolidateBlockRange(ctx, s.lastHeight+1, maxHeight); err != nil {
-		return 0, err
+		if !errors.Is(err, errors.ErrNotFound) {
+			return 0, nil
+		}
 	}
 
 	// At the end of this, we have a rollup of deletions and additions.  Add these to the last UTXOSet
@@ -496,7 +502,16 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 
 	s.lastHeight = c.lastBlockHeight
 
-	// Remove the previous block's UTXOSet
+	// Write the headers file for the UTXO set
+	if s.blockchainStore != nil {
+		if err := WriteHeadersToStore(ctx, s.logger, s.settings, s.blockStore, s.blockchainStore, c.lastBlockHash, c.lastBlockHeight); err != nil {
+			s.logger.Warnf("[UTXOPersister] Error writing headers file: %v", err)
+		}
+	} else if s.blockchainClient != nil {
+		s.logger.Warnf("[UTXOPersister] Cannot write headers file: blockchain client interface doesn't support GetBlockHeader")
+	}
+
+	// Remove the previous block's UTXOSet and headers
 	if lastWrittenUTXOSetHash.String() != s.settings.ChainCfgParams.GenesisHash.String() && !s.settings.BlockPersister.SkipUTXODelete {
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
@@ -504,6 +519,14 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 
 		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoSet+".sha256"); err != nil {
 			return 0, errors.NewProcessingError("[UTXOPersister] Error deleting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
+		}
+
+		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoHeaders); err != nil {
+			s.logger.Warnf("[UTXOPersister] Error deleting UTXOHeaders for block %s height %d: %v", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
+		}
+
+		if err := s.blockStore.Del(ctx, lastWrittenUTXOSetHash[:], fileformat.FileTypeUtxoHeaders+".sha256"); err != nil {
+			s.logger.Warnf("[UTXOPersister] Error deleting UTXOHeaders sha256 for block %s height %d: %v", lastWrittenUTXOSetHash, c.firstBlockHeight, err)
 		}
 	}
 
@@ -529,7 +552,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 // Other errors during reading or parsing are returned to the caller.
 func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 	// Read the file content as a byte slice
-	b, err := s.blockStore.Get(ctx, nil, fileformat.FileTypeDat, options.WithFilename("lastProcessed"))
+	b, err := s.blockStore.Get(ctx, nil, fileformat.FileTypeDat, options.WithFilename("lastProcessed"), options.WithNoHashPrefix())
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			s.logger.Warnf("lastProcessed.dat does not exist, starting from height 0")
@@ -584,6 +607,7 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 		fileformat.FileTypeDat,
 		[]byte(heightStr),
 		options.WithFilename("lastProcessed"),
+		options.WithNoHashPrefix(),
 		options.WithAllowOverwrite(true),
 	)
 }

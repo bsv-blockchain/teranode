@@ -59,6 +59,7 @@ package aerospike
 
 import (
 	"context"
+	"sync"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/aerospike/aerospike-client-go/v8/types"
@@ -69,6 +70,37 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
+
+// batchRecordsPool pools slices of aerospike.BatchRecordIfc to reduce allocations
+// during SetMinedMulti batch processing.
+var batchRecordsPool = sync.Pool{}
+
+// getBatchRecordsSlice returns a slice from the pool or allocates a new one with the given capacity.
+func getBatchRecordsSlice(capacity int) *[]aerospike.BatchRecordIfc {
+	if v := batchRecordsPool.Get(); v != nil {
+		s := v.(*[]aerospike.BatchRecordIfc)
+		if cap(*s) >= capacity {
+			*s = (*s)[:capacity] // set length to capacity, we'll overwrite all elements
+			return s
+		}
+		// Capacity too small, discard and allocate new
+	}
+	s := make([]aerospike.BatchRecordIfc, capacity)
+	return &s
+}
+
+// putBatchRecordsSlice returns a slice to the pool for reuse.
+func putBatchRecordsSlice(s *[]aerospike.BatchRecordIfc) {
+	if s == nil {
+		return
+	}
+	// Clear the slice to allow GC of the BatchRecordIfc objects
+	for i := range *s {
+		(*s)[i] = nil
+	}
+	*s = (*s)[:0]
+	batchRecordsPool.Put(s)
+}
 
 // SetMinedMulti updates the block references for multiple transactions in batch.
 // This operation marks transactions as mined in a specific block using Lua scripts
@@ -129,14 +161,22 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	thisBlockHeight := s.blockHeight.Load() + 1
 
+	if !minedBlockInfo.UnsetMined && s.settings.Aerospike.EnableSetMinedFilterExpressions {
+		return s.SetMinedMultiWithExpressions(ctx, hashes, minedBlockInfo)
+	}
+
+	// Get batch records slice from pool
+	batchRecordsPtr := getBatchRecordsSlice(len(hashes))
+	defer putBatchRecordsSlice(batchRecordsPtr)
+	batchRecords := *batchRecordsPtr
+
 	// Prepare batch records
-	batchRecords, err := s.prepareBatchRecordsForSetMined(hashes, minedBlockInfo, thisBlockHeight)
-	if err != nil {
+	if err := s.prepareBatchRecordsForSetMined(batchRecords, hashes, minedBlockInfo, thisBlockHeight); err != nil {
 		return nil, err
 	}
 
 	// Execute batch operation
-	if err = s.executeBatchOperation(batchRecords); err != nil {
+	if err := s.executeBatchOperation(batchRecords); err != nil {
 		return nil, err
 	}
 
@@ -144,21 +184,27 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	return s.processBatchResultsForSetMined(ctx, batchRecords, hashes, thisBlockHeight, minedBlockInfo)
 }
 
-// prepareBatchRecordsForSetMined creates batch records for the setMined operation
-func (s *Store) prepareBatchRecordsForSetMined(hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo, thisBlockHeight uint32) ([]aerospike.BatchRecordIfc, error) {
-	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
+// prepareBatchRecordsForSetMined populates batch records for the setMined operation.
+// The batchRecords slice must be pre-allocated with len(hashes) capacity.
+func (s *Store) prepareBatchRecordsForSetMined(batchRecords []aerospike.BatchRecordIfc, hashes []*chainhash.Hash,
+	minedBlockInfo utxo.MinedBlockInfo, thisBlockHeight uint32) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
+
+	usePackage := LuaPackage
+	if s.settings.Aerospike.UseSeparateUDFMinedModule {
+		usePackage = LuaPackageMined
+	}
 
 	for idx, hash := range hashes {
 		key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 		if err != nil {
-			return nil, errors.NewProcessingError("aerospike NewKey error", err)
+			return errors.NewProcessingError("aerospike NewKey error", err)
 		}
 
 		batchRecords[idx] = aerospike.NewBatchUDF(
 			batchUDFPolicy,
 			key,
-			LuaPackage,
+			usePackage,
 			"setMined",
 			aerospike.NewValue(minedBlockInfo.BlockID),
 			aerospike.NewValue(minedBlockInfo.BlockHeight),
@@ -170,7 +216,7 @@ func (s *Store) prepareBatchRecordsForSetMined(hashes []*chainhash.Hash, minedBl
 		)
 	}
 
-	return batchRecords, nil
+	return nil
 }
 
 // executeBatchOperation performs the batch operation and increments metrics

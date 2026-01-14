@@ -1545,10 +1545,6 @@ func TestCheckBlockSubtrees_DifferentFork(t *testing.T) {
 			assert.NoError(t, err)
 			assert.True(t, response.Blessed)
 
-			// Verify pause flag was never set (early return path)
-			isPaused := server.pauseSubtreeProcessing.Load()
-			assert.False(t, isPaused, "subtree processing should not have been paused for empty blocks")
-
 			// No blockchain client calls should have been made (early return)
 			mockBlockchainClient.AssertExpectations(t)
 		})
@@ -1606,10 +1602,6 @@ func TestCheckBlockSubtrees_ParentBlockErrors(t *testing.T) {
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.NoError(t, err)
 		assert.True(t, response.Blessed)
-
-		// Verify that pauseSubtreeProcessing was set to true due to error
-		// (it will be false after defer cleanup)
-		assert.False(t, server.pauseSubtreeProcessing.Load())
 	})
 
 	t.Run("GetBlockHeader_Error", func(t *testing.T) {

@@ -1863,8 +1863,8 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 			// s.UtxoStore.UtxoStore = parsedURL
 			s.ChainCfgParams.CoinbaseMaturity = 2
 		},
-		FSMState:          blockchain.FSMStateRUNNING,
-		EnableFullLogging: true,
+		FSMState:           blockchain.FSMStateRUNNING,
+		EnableDebugLogging: true,
 	})
 	defer nodeA.Stop(t)
 
@@ -2004,20 +2004,20 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 	require.NoError(t, err, "Failed to get block 2 from NodeA")
 	_, block3BNodeA := nodeA.CreateTestBlock(t, block2, 3, parentTx, nodeBChildTx)
 	require.NoError(t, err, "Failed to create block 3 on NodeA")
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3BNodeA, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3BNodeA, "legacy")
 	require.NoError(t, err, "Failed to validate block 3 on NodeA")
 	// nodeA.WaitForBlock(t, block3BNodeA, 10*time.Second, true)
 
 	// make this chain longer on NodeA by adding another test block
 	_, block4BNodeA := nodeA.CreateTestBlock(t, block3BNodeA, 4, nodeBGrandchildTx)
 	require.NoError(t, err, "Failed to create block 4 on NodeA")
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4BNodeA, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4BNodeA, "legacy")
 	require.NoError(t, err, "Failed to validate block 4 on NodeA")
 
 	// create one more block on NodeA
 	_, block5BNodeA := nodeA.CreateTestBlock(t, block4BNodeA, 5)
 	require.NoError(t, err, "Failed to create block 5 on NodeA")
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block5BNodeA, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block5BNodeA, "legacy")
 	require.NoError(t, err, "Failed to validate block 5 on NodeA")
 
 	nodeA.WaitForBlock(t, block5BNodeA, 10*time.Second, true) // this fork on NodeA should be winning
@@ -2206,28 +2206,28 @@ func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 	require.NoError(t, err)
 
 	_, block3 := nodeA.CreateTestBlock(t, block2, 1000)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3, "legacy")
 	require.NoError(t, err)
 	nodeA.WaitForBlock(t, block3, 10*time.Second, true)
 
 	// mine upto GlobalBlockHeightRetention
 	_, block4 := nodeA.CreateTestBlock(t, block3, 1001)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4, "legacy")
 	require.NoError(t, err)
 	nodeA.WaitForBlock(t, block4, 10*time.Second, true)
 
 	_, block5 := nodeA.CreateTestBlock(t, block4, 1002)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block5, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block5, "legacy")
 	require.NoError(t, err)
 	nodeA.WaitForBlock(t, block5, 10*time.Second, true)
 
 	_, invalidblock6 := nodeA.CreateTestBlock(t, block5, 1003, childTx)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, invalidblock6, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, invalidblock6, "legacy")
 	require.Error(t, err)
 
 	// create a block with both transactions
 	_, block6 := nodeA.CreateTestBlock(t, block5, 1004, parentTx, childTx)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block6, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block6, "legacy")
 	require.NoError(t, err)
 	nodeA.WaitForBlockHeight(t, block6, 10*time.Second, true)
 	nodeA.WaitForBlock(t, block6, 10*time.Second, true)

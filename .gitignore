@@ -1,3 +1,6 @@
+# Local profiling artifacts
+/stores/txmetacache/testdata/pprof/
+
 
 .history/**
 *.tar.gz

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -19,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 )
@@ -194,7 +196,18 @@ func getBlobStoreReader(hash []byte, logger ulogger.Logger, settings *settings.S
 		return nil, errors.NewProcessingError("blockstore config not found")
 	}
 
-	blockStore, err := blob.NewStore(logger, blockStoreURL)
+	var err error
+
+	hashPrefix := -2
+
+	if blockStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			return nil, errors.NewProcessingError("error parsing hashPrefix", err)
+		}
+	}
+
+	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return nil, errors.NewProcessingError("error creating blob store", err)
 	}

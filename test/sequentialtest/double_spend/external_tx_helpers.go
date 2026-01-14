@@ -209,7 +209,7 @@ func createConflictingBlockUseExternalRecords(t *testing.T, td *daemon.TestDaemo
 	// require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, newBlock, newBlock.Height, "", "legacy"),
 	// 	"Failed to process block with double spend transaction")
 
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, newBlock, "legacy", nil),
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, newBlock, "legacy"),
 		"Failed to process block with double spend transaction")
 
 	td.VerifyBlockByHash(t, newBlock, newBlock.Header.Hash())

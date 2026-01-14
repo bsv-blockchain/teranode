@@ -17,157 +17,149 @@ import (
 func Test_queue(t *testing.T) {
 	q := NewLockFreeQueue()
 
-	enqueueItems(t, q, 1, 10)
+	enqueueBatches(t, q, 1, 10)
 
-	items := 0
+	batches := 0
+	totalTxs := 0
 
 	for {
-		node, txInpoints, time64, found := q.dequeue(0)
+		batch, found := q.dequeueBatch(0)
 		if !found {
 			break
 		}
 
-		assert.Equal(t, uint64(items), node.Fee) // nolint:gosec
-		assert.Equal(t, subtree.TxInpoints{}, txInpoints)
-		assert.Greater(t, time64, int64(0))
-
-		items++
+		assert.Greater(t, batch.time, int64(0))
+		totalTxs += len(batch.nodes)
+		batches++
 	}
 
 	assert.True(t, q.IsEmpty())
+	assert.Equal(t, 10, batches)
+	assert.Equal(t, 10, totalTxs) // each batch has 1 tx
 
-	assert.Equal(t, 10, items)
+	enqueueBatches(t, q, 1, 10)
 
-	enqueueItems(t, q, 1, 10)
-
-	items = 0
+	batches = 0
+	totalTxs = 0
 
 	for {
-		node, txInpoints, time64, found := q.dequeue(0)
+		batch, found := q.dequeueBatch(0)
 		if !found {
 			break
 		}
 
-		assert.Equal(t, uint64(items), node.Fee) // nolint:gosec
-		assert.Equal(t, subtree.TxInpoints{}, txInpoints)
-		assert.Greater(t, time64, int64(0))
-
-		items++
+		assert.Greater(t, batch.time, int64(0))
+		totalTxs += len(batch.nodes)
+		batches++
 	}
 
 	assert.True(t, q.IsEmpty())
-
-	assert.Equal(t, 10, items)
+	assert.Equal(t, 10, batches)
+	assert.Equal(t, 10, totalTxs)
 }
 
 func Test_queueWithTime(t *testing.T) {
 	q := NewLockFreeQueue()
 
-	enqueueItems(t, q, 1, 10)
+	enqueueBatches(t, q, 1, 10)
 
 	validFromMillis := time.Now().Add(-100 * time.Millisecond).UnixMilli()
-	_, _, _, found := q.dequeue(validFromMillis)
+	_, found := q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
 	time.Sleep(50 * time.Millisecond)
 
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
-	_, _, _, found = q.dequeue(validFromMillis)
+	_, found = q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
 	time.Sleep(100 * time.Millisecond)
 
-	items := 0
+	batches := 0
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
 
 	for {
-		node, txInpoints, time64, found := q.dequeue(validFromMillis)
+		batch, found := q.dequeueBatch(validFromMillis)
 		if !found {
 			break
 		}
 
-		assert.Equal(t, uint64(items), node.Fee) // nolint:gosec
-		assert.Equal(t, subtree.TxInpoints{}, txInpoints)
-		assert.Greater(t, time64, int64(0))
-
-		items++
+		assert.Greater(t, batch.time, int64(0))
+		batches++
 	}
 
 	assert.True(t, q.IsEmpty())
-	assert.Equal(t, 10, items)
+	assert.Equal(t, 10, batches)
 
-	enqueueItems(t, q, 1, 10)
+	enqueueBatches(t, q, 1, 10)
 
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
-	_, _, _, found = q.dequeue(validFromMillis)
+	_, found = q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
 	time.Sleep(50 * time.Millisecond)
 
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
-	_, _, _, found = q.dequeue(validFromMillis)
+	_, found = q.dequeueBatch(validFromMillis)
 	require.False(t, found)
 
 	time.Sleep(100 * time.Millisecond)
 
-	items = 0
+	batches = 0
 	validFromMillis = time.Now().Add(-100 * time.Millisecond).UnixMilli()
 
 	for {
-		node, txInpoints, time64, found := q.dequeue(validFromMillis)
+		batch, found := q.dequeueBatch(validFromMillis)
 		if !found {
 			break
 		}
 
-		assert.Equal(t, uint64(items), node.Fee)
-		assert.Equal(t, subtree.TxInpoints{}, txInpoints)
-		assert.Greater(t, time64, int64(0))
-
-		items++
+		assert.Greater(t, batch.time, int64(0))
+		batches++
 	}
 
 	assert.True(t, q.IsEmpty())
-	assert.Equal(t, 10, items)
+	assert.Equal(t, 10, batches)
 }
 
 func Test_queue2Threads(t *testing.T) {
 	q := NewLockFreeQueue()
 
-	enqueueItems(t, q, 2, 10)
+	enqueueBatches(t, q, 2, 10)
 
-	items := 0
+	batches := 0
 
 	for {
-		node, _, time64, found := q.dequeue(0)
+		batch, found := q.dequeueBatch(0)
 		if !found {
 			break
 		}
 
-		items++
+		batches++
 
-		t.Logf("Item: %d, %d\n", node.Fee, time64)
+		t.Logf("Batch: time=%d, txs=%d\n", batch.time, len(batch.nodes))
 	}
 
 	assert.True(t, q.IsEmpty())
-	assert.Equal(t, 20, items)
+	assert.Equal(t, 20, batches)
 
-	enqueueItems(t, q, 2, 10)
+	enqueueBatches(t, q, 2, 10)
 
-	items = 0
+	batches = 0
 
 	for {
-		node, _, time64, found := q.dequeue(0)
+		batch, found := q.dequeueBatch(0)
 		if !found {
 			break
 		}
 
-		items++
+		batches++
 
-		t.Logf("Item: %d, %d\n", node.Fee, time64)
+		t.Logf("Batch: time=%d, txs=%d\n", batch.time, len(batch.nodes))
 	}
 
 	assert.True(t, q.IsEmpty())
-	assert.Equal(t, 20, items)
+	assert.Equal(t, 20, batches)
 }
 
 func Test_queueLarge(t *testing.T) {
@@ -175,61 +167,62 @@ func Test_queueLarge(t *testing.T) {
 
 	q := NewLockFreeQueue()
 
-	enqueueItems(t, q, 1, 10_000_000)
+	enqueueBatches(t, q, 1, 10_000_000)
 
 	startTime := time.Now()
 
-	items := 0
+	batches := 0
 
 	for {
-		_, _, _, found := q.dequeue(0)
+		_, found := q.dequeueBatch(0)
 		if !found {
 			break
 		}
 
-		items++
+		batches++
 	}
 
-	t.Logf("Time empty %d items: %s\n", items, time.Since(startTime))
+	t.Logf("Time empty %d batches: %s\n", batches, time.Since(startTime))
 	t.Logf("Mem used for queue: %s\n", printAlloc())
 
 	assert.True(t, q.IsEmpty())
-	assert.Equal(t, 10_000_000, items)
+	assert.Equal(t, 10_000_000, batches)
 
 	runtime.GC()
 
-	enqueueItems(t, q, 1_000, 10_000)
+	enqueueBatches(t, q, 1_000, 10_000)
 
 	startTime = time.Now()
 
-	items = 0
+	batches = 0
 
 	for {
-		_, _, _, found := q.dequeue(0)
+		_, found := q.dequeueBatch(0)
 		if !found {
 			break
 		}
 
-		items++
+		batches++
 	}
 
-	t.Logf("Time empty %d items: %s\n", items, time.Since(startTime))
+	t.Logf("Time empty %d batches: %s\n", batches, time.Since(startTime))
 	t.Logf("Mem used after dequeue: %s\n", printAlloc())
 	runtime.GC()
 	t.Logf("Mem used after dequeue after GC: %s\n", printAlloc())
 
 	assert.True(t, q.IsEmpty())
-	assert.Equal(t, 10_000_000, items)
+	assert.Equal(t, 10_000_000, batches)
 }
 
-// enqueueItems adds test items to a queue for testing.
+// enqueueBatches adds test batches to a queue for testing.
+// Each batch contains a single transaction for testing simplicity.
 //
 // Parameters:
 //   - t: Testing instance
 //   - q: Queue to populate
 //   - threads: Number of concurrent threads
-//   - iter: Number of iterations per thread
-func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
+//   - iter: Number of iterations per thread (each iteration enqueues one batch)
+func enqueueBatches(t *testing.T, q *LockFreeQueue, threads, iter int) {
 	startTime := time.Now()
 
 	var wg sync.WaitGroup
@@ -242,17 +235,21 @@ func enqueueItems(t *testing.T, q *LockFreeQueue, threads, iter int) {
 
 			for i := 0; i < iter; i++ {
 				u := (n * iter) + i
-				q.enqueue(subtree.Node{
-					Hash:        chainhash.Hash{},
-					Fee:         uint64(u),
-					SizeInBytes: 0,
-				}, subtree.TxInpoints{})
+				// Each batch contains a single transaction
+				q.enqueueBatch(
+					[]subtree.Node{{
+						Hash:        chainhash.Hash{},
+						Fee:         uint64(u),
+						SizeInBytes: 0,
+					}},
+					[]*subtree.TxInpoints{{}},
+				)
 			}
 		}(n)
 	}
 
 	wg.Wait()
-	t.Logf("Time queue %d items: %s\n", threads*iter, time.Since(startTime))
+	t.Logf("Time queue %d batches: %s\n", threads*iter, time.Since(startTime))
 }
 
 // Benchmark functions for performance testing
@@ -265,7 +262,7 @@ func BenchmarkQueue(b *testing.B) {
 
 	go func() {
 		for {
-			_, _, _, found := q.dequeue(0)
+			_, found := q.dequeueBatch(0)
 			if !found {
 				time.Sleep(1 * time.Millisecond)
 			}
@@ -273,31 +270,34 @@ func BenchmarkQueue(b *testing.B) {
 	}()
 
 	for i := 0; i < b.N; i++ {
-		q.enqueue(subtree.Node{
-			Hash:        chainhash.Hash{},
-			Fee:         uint64(i),
-			SizeInBytes: 0,
-		}, subtree.TxInpoints{})
+		q.enqueueBatch(
+			[]subtree.Node{{
+				Hash:        chainhash.Hash{},
+				Fee:         uint64(i),
+				SizeInBytes: 0,
+			}},
+			[]*subtree.TxInpoints{{}},
+		)
 	}
 }
 
 // BenchmarkAtomicPointer tests atomic pointer operations.
 func BenchmarkAtomicPointer(b *testing.B) {
-	var v atomic.Pointer[TxIDAndFee]
+	var v atomic.Pointer[TxBatch]
 
-	t1 := &TxIDAndFee{
-		node: subtree.Node{
+	t1 := &TxBatch{
+		nodes: []subtree.Node{{
 			Hash:        chainhash.Hash{},
 			Fee:         1,
 			SizeInBytes: 0,
-		},
+		}},
 	}
-	t2 := &TxIDAndFee{
-		node: subtree.Node{
+	t2 := &TxBatch{
+		nodes: []subtree.Node{{
 			Hash:        chainhash.Hash{},
 			Fee:         1,
 			SizeInBytes: 0,
-		},
+		}},
 	}
 
 	for i := 0; i < b.N; i++ {

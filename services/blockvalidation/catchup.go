@@ -942,7 +942,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 
 				// Validate the block using standard validation
 				// Note: ValidateBlockWithOptions now automatically stores invalid blocks with invalid=true
-				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, nil, opts); err != nil {
+				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, opts); err != nil {
 					u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
 
 					// ValidateBlockWithOptions already stored the block as invalid if it's a consensus violation

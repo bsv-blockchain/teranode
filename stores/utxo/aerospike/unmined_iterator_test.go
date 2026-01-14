@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	as "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,7 +82,7 @@ func Test_extractCreatedAt(t *testing.T) {
 		bins := map[string]interface{}{}
 		_, err := it.extractCreatedAt(bins)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "created_at not found")
+		assert.Contains(t, err.Error(), "createdAt not found")
 	})
 
 	t.Run("NilCreatedAt", func(t *testing.T) {
@@ -91,7 +91,7 @@ func Test_extractCreatedAt(t *testing.T) {
 		}
 		_, err := it.extractCreatedAt(bins)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "created_at not found")
+		assert.Contains(t, err.Error(), "createdAt not found")
 	})
 
 	t.Run("InvalidCreatedAtType", func(t *testing.T) {
@@ -100,7 +100,7 @@ func Test_extractCreatedAt(t *testing.T) {
 		}
 		_, err := it.extractCreatedAt(bins)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "created_at not int64")
+		assert.Contains(t, err.Error(), "createdAt not int64")
 	})
 }
 
@@ -190,10 +190,10 @@ func Test_unminedTxIterator_Close(t *testing.T) {
 			done:      false,
 		}
 
-		// This should panic because we're calling Close() on nil recordset
-		assert.Panics(t, func() {
-			_ = it.Close()
-		})
+		// Should not panic - nil recordset is handled gracefully
+		err := it.Close()
+		assert.NoError(t, err)
+		assert.True(t, it.done)
 	})
 
 	t.Run("CloseSetsDoneFlag", func(t *testing.T) {
@@ -201,10 +201,25 @@ func Test_unminedTxIterator_Close(t *testing.T) {
 			done: false,
 		}
 
-		// Test that done flag gets set (ignoring the panic from nil recordset)
-		assert.Panics(t, func() {
-			_ = it.Close()
-		})
+		// Test that done flag gets set
+		err := it.Close()
+		assert.NoError(t, err)
+		assert.True(t, it.done)
+	})
+
+	t.Run("CloseMultipleTimes", func(t *testing.T) {
+		it := &unminedTxIterator{
+			done: false,
+		}
+
+		// First close
+		err := it.Close()
+		assert.NoError(t, err)
+		assert.True(t, it.done)
+
+		// Second close should be safe
+		err = it.Close()
+		assert.NoError(t, err)
 		assert.True(t, it.done)
 	})
 }
@@ -285,11 +300,15 @@ func Test_Next_EdgeCases(t *testing.T) {
 
 	t.Run("ChannelClosed", func(t *testing.T) {
 		// Create a closed channel to simulate end of iteration
-		resultChan := make(chan *as.Result)
+		resultChan := make(chan []*utxo.UnminedTransaction)
 		close(resultChan)
 
+		errorChan := make(chan error, 1)
+		close(errorChan)
+
 		it := &unminedTxIterator{
-			result: resultChan,
+			resultChan: resultChan,
+			errorChan:  errorChan,
 		}
 
 		// With nil recordset, should return early with nil/nil
@@ -330,8 +349,8 @@ func Test_closeWithLogging(t *testing.T) {
 			store:     &Store{},
 		}
 
-		// This should panic when calling Close on nil recordset
-		assert.Panics(t, func() {
+		// Should not panic - nil recordset is handled gracefully
+		assert.NotPanics(t, func() {
 			it.closeWithLogging()
 		})
 	})
