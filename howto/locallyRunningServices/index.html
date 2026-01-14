@@ -859,6 +859,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#running-a-local-testnet-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🌐 Running a Local Testnet Network
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#additional-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Additional Resources
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1302,6 +1324,34 @@
     
   
     Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
   
 
     
@@ -6623,6 +6673,28 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#running-a-local-testnet-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        🌐 Running a Local Testnet Network
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#additional-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Additional Resources
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6928,6 +7000,86 @@ utxostore.dev.<span class="o">[</span>YOUR_CONTEXT<span class="o">]</span><span 
 </code></pre></div>
 <p>Remember to replace <code>[YOUR_CONTEXT]</code> with your actual username throughout all commands.</p>
 <p>This guide aims to provide a streamlined process for running services and nodes during development.</p>
+<h2 id="running-a-local-testnet-network">🌐 Running a Local Testnet Network</h2>
+<p>For a complete testnet deployment with automated setup wizard and network configuration, see the <strong><a href="https://github.com/bsv-blockchain/teranode-teratestnet">Teranode Teratestnet Repository</a></strong>.</p>
+<p>The teratestnet repository provides:</p>
+<ul>
+<li><strong><code>start-teratestnet.sh</code></strong> - Interactive wizard for automated setup</li>
+<li><strong>Configuration helpers</strong> - Automated domain/URL setup (via ngrok or custom domain)</li>
+<li><strong>Docker Compose orchestration</strong> - Pre-configured multi-service deployment</li>
+<li><strong>Network setup</strong> - Automatic connectivity configuration</li>
+<li><strong>Reset and upgrade utilities</strong> - Simplified data management and version updates</li>
+</ul>
+<p><strong>Key differences from this repository:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Teranode (this repo)</th>
+<th>Teranode Teratestnet</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup approach</td>
+<td>Manual configuration</td>
+<td>Wizard-based automation</td>
+</tr>
+<tr>
+<td>Target audience</td>
+<td>Developers</td>
+<td>Miners and operators</td>
+</tr>
+<tr>
+<td>Configuration</td>
+<td>Requires settings_local.conf</td>
+<td>Interactive prompts</td>
+</tr>
+<tr>
+<td>Network setup</td>
+<td>Manual</td>
+<td>Automated (ngrok or custom)</td>
+</tr>
+<tr>
+<td>Service management</td>
+<td>Individual service control</td>
+<td>Docker Compose orchestration</td>
+</tr>
+</tbody>
+</table>
+<p><strong>When to use each:</strong></p>
+<ul>
+<li>
+<p><strong>Use this repository</strong> for:</p>
+<ul>
+<li>Core development and testing</li>
+<li>Individual service development</li>
+<li>Custom configurations</li>
+<li>Contributing to Teranode codebase</li>
+</ul>
+</li>
+<li>
+<p><strong>Use teratestnet repository</strong> for:</p>
+<ul>
+<li>Quick testnet deployment</li>
+<li>Mining operations</li>
+<li>Production-like testnet environment</li>
+<li>Users wanting automated setup</li>
+</ul>
+</li>
+</ul>
+<p><strong>Getting started with teratestnet:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Clone the teratestnet repository</span>
+git<span class="w"> </span>clone<span class="w"> </span>https://github.com/bsv-blockchain/teranode-teratestnet.git
+<span class="nb">cd</span><span class="w"> </span>teranode-teratestnet
+
+<span class="c1"># Run the setup wizard</span>
+./start-teratestnet.sh
+
+<span class="c1"># For help and options</span>
+./start-teratestnet.sh<span class="w"> </span>--help
+</code></pre></div>
+<h2 id="additional-resources">Additional Resources</h2>
 <p>If you encounter any issues, consult the detailed documentation or reach out to the development team for assistance.</p>
 
 

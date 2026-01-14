@@ -1014,6 +1014,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
@@ -8034,7 +8062,7 @@ sudo<span class="w"> </span>chown<span class="w"> </span><span class="nv">$USER<
 <h4 id="step-3-export-utxo-data">Step 3: Export UTXO Data</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Export UTXO set from Bitcoin SV node</span>
 <span class="c1"># Replace /mnt/bitcoin-sv-data with your actual SV node data directory</span>
-<span class="c1"># Instead of latest, you could use a specific version of teranode. </span>
+<span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
 <span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
 docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-v<span class="w"> </span>/mnt/bitcoin-sv-data:/home/ubuntu/bitcoin-data:ro<span class="w"> </span><span class="se">\</span>
@@ -8137,18 +8165,46 @@ ls<span class="w"> </span>-la<span class="w"> </span>/mnt/teranode/seed/export/
 <p><strong>How to find it:</strong> Extract the hash from your exported filenames (the part before <code>.utxo-headers</code> or <code>.utxo-set</code>)</p>
 </div>
 <h4 id="step-3-run-seeder">Step 3: Run Seeder</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Create a temporary seeder pod</span>
-<span class="c1"># Instead of latest, you could use a specific version of teranode. </span>
+<div class="highlight"><pre><span></span><code><span class="c1"># Create a temporary seeder pod with proper configmap and volume mounts</span>
+<span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
 <span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
 kubectl<span class="w"> </span>run<span class="w"> </span>teranode-seeder<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--image<span class="o">=</span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--restart<span class="o">=</span>Never<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--rm<span class="w"> </span>-i<span class="w"> </span>--tty<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--<span class="w"> </span>/app/teranode-cli<span class="w"> </span>seeder<span class="w"> </span><span class="se">\</span>
-<span class="w">        </span>-inputDir<span class="w"> </span>/mnt/teranode/seed/export<span class="w"> </span><span class="se">\</span>
-<span class="w">        </span>-hash<span class="w"> </span>0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
+<span class="w">    </span>--overrides<span class="o">=</span><span class="s1">&#39;</span>
+<span class="s1">{</span>
+<span class="s1">  &quot;spec&quot;: {</span>
+<span class="s1">    &quot;containers&quot;: [</span>
+<span class="s1">      {</span>
+<span class="s1">        &quot;name&quot;: &quot;teranode-seeder&quot;,</span>
+<span class="s1">        &quot;image&quot;: &quot;ghcr.io/bsv-blockchain/teranode:latest&quot;,</span>
+<span class="s1">        &quot;command&quot;: [&quot;/app/teranode-cli&quot;],</span>
+<span class="s1">        &quot;args&quot;: [&quot;seeder&quot;, &quot;-inputDir&quot;, &quot;/mnt/teranode/seed/export&quot;, &quot;-hash&quot;, &quot;0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af&quot;],</span>
+<span class="s1">        &quot;envFrom&quot;: [{</span>
+<span class="s1">          &quot;configMapRef&quot;: {</span>
+<span class="s1">            &quot;name&quot;: &quot;teranode-operator-config&quot;</span>
+<span class="s1">          }</span>
+<span class="s1">        }],</span>
+<span class="s1">        &quot;volumeMounts&quot;: [{</span>
+<span class="s1">          &quot;name&quot;: &quot;shared-storage&quot;,</span>
+<span class="s1">          &quot;mountPath&quot;: &quot;/mnt/teranode&quot;</span>
+<span class="s1">        }]</span>
+<span class="s1">      }</span>
+<span class="s1">    ],</span>
+<span class="s1">    &quot;volumes&quot;: [{</span>
+<span class="s1">      &quot;name&quot;: &quot;shared-storage&quot;,</span>
+<span class="s1">      &quot;persistentVolumeClaim&quot;: {</span>
+<span class="s1">        &quot;claimName&quot;: &quot;shared-pvc&quot;</span>
+<span class="s1">      }</span>
+<span class="s1">    }]</span>
+<span class="s1">  }</span>
+<span class="s1">}&#39;</span>
 </code></pre></div>
+<blockquote>
+<p><strong>Important:</strong> The seeder pod must have the same configmap (teranode-operator-config) and volume mounts as the regular Teranode pods to access the correct database and storage configuration.</p>
+</blockquote>
 <h4 id="step-4-monitor-seeding-progress">Step 4: Monitor Seeding Progress</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Monitor seeder logs</span>
 kubectl<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>teranode-seeder<span class="w"> </span>-n<span class="w"> </span>teranode-operator
@@ -8237,16 +8293,41 @@ kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </sp
 <div class="highlight"><pre><span></span><code><span class="c1"># Scale down services</span>
 kubectl<span class="w"> </span>patch<span class="w"> </span>cluster<span class="w"> </span>teranode-cluster<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;enabled&quot;:false}}&#39;</span>
 
-<span class="c1"># Run seeder</span>
-<span class="c1"># Instead of latest, you could use a specific version of teranode. </span>
+<span class="c1"># Run seeder with proper configmap and volume mounts</span>
+<span class="c1"># Instead of latest, you could use a specific version of teranode.</span>
 <span class="c1"># Check for tagged versions here ghcr.io/bsv-blockchain/teranode</span>
 kubectl<span class="w"> </span>run<span class="w"> </span>teranode-seeder<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--image<span class="o">=</span>ghcr.io/bsv-blockchain/teranode:latest<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--restart<span class="o">=</span>Never<span class="w"> </span>--rm<span class="w"> </span>-i<span class="w"> </span>--tty<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--<span class="w"> </span>/app/teranode-cli<span class="w"> </span>seeder<span class="w"> </span><span class="se">\</span>
-<span class="w">        </span>-inputDir<span class="w"> </span>/mnt/teranode/seed/export<span class="w"> </span><span class="se">\</span>
-<span class="w">        </span>-hash<span class="w"> </span>&lt;blockhash-from-filename&gt;
+<span class="w">    </span>--overrides<span class="o">=</span><span class="s1">&#39;</span>
+<span class="s1">{</span>
+<span class="s1">  &quot;spec&quot;: {</span>
+<span class="s1">    &quot;containers&quot;: [</span>
+<span class="s1">      {</span>
+<span class="s1">        &quot;name&quot;: &quot;teranode-seeder&quot;,</span>
+<span class="s1">        &quot;image&quot;: &quot;ghcr.io/bsv-blockchain/teranode:latest&quot;,</span>
+<span class="s1">        &quot;command&quot;: [&quot;/app/teranode-cli&quot;],</span>
+<span class="s1">        &quot;args&quot;: [&quot;seeder&quot;, &quot;-inputDir&quot;, &quot;/mnt/teranode/seed/export&quot;, &quot;-hash&quot;, &quot;&lt;blockhash-from-filename&gt;&quot;],</span>
+<span class="s1">        &quot;envFrom&quot;: [{</span>
+<span class="s1">          &quot;configMapRef&quot;: {</span>
+<span class="s1">            &quot;name&quot;: &quot;teranode-operator-config&quot;</span>
+<span class="s1">          }</span>
+<span class="s1">        }],</span>
+<span class="s1">        &quot;volumeMounts&quot;: [{</span>
+<span class="s1">          &quot;name&quot;: &quot;shared-storage&quot;,</span>
+<span class="s1">          &quot;mountPath&quot;: &quot;/mnt/teranode&quot;</span>
+<span class="s1">        }]</span>
+<span class="s1">      }</span>
+<span class="s1">    ],</span>
+<span class="s1">    &quot;volumes&quot;: [{</span>
+<span class="s1">      &quot;name&quot;: &quot;shared-storage&quot;,</span>
+<span class="s1">      &quot;persistentVolumeClaim&quot;: {</span>
+<span class="s1">        &quot;claimName&quot;: &quot;shared-pvc&quot;</span>
+<span class="s1">      }</span>
+<span class="s1">    }]</span>
+<span class="s1">  }</span>
+<span class="s1">}&#39;</span>
 </code></pre></div>
 <h3 id="expected-timeline_2">Expected Timeline</h3>
 <table>

@@ -1008,6 +1008,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../howto/miners/kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
@@ -5195,6 +5223,45 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#debug-toggles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debug Toggles
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Debug Toggles">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#debug-toggle-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debug Toggle Details
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hierarchical-relationships" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hierarchical Relationships
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#http-security-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6466,6 +6533,45 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#debug-toggles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debug Toggles
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Debug Toggles">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#debug-toggle-details" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Debug Toggle Details
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hierarchical-relationships" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hierarchical Relationships
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#http-security-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6864,6 +6970,74 @@
 </tr>
 </tbody>
 </table>
+<h3 id="debug-toggles">Debug Toggles</h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Debug.All</td>
+<td>bool</td>
+<td>false</td>
+<td>debug_all</td>
+<td>Enable every subsystem debug log</td>
+</tr>
+<tr>
+<td>Debug.File</td>
+<td>bool</td>
+<td>false</td>
+<td>debug_file</td>
+<td>Low-level filesystem operation logs</td>
+</tr>
+<tr>
+<td>Debug.Blobstore</td>
+<td>bool</td>
+<td>false</td>
+<td>debug_blobstore</td>
+<td>High-level blob store API call logs with stack traces</td>
+</tr>
+<tr>
+<td>Debug.UTXOStore</td>
+<td>bool</td>
+<td>false</td>
+<td>debug_utxostore</td>
+<td>UTXO store file operation logs</td>
+</tr>
+</tbody>
+</table>
+<h4 id="debug-toggle-details">Debug Toggle Details</h4>
+<p><strong>Prerequisites</strong>: All debug toggles require <code>logLevel = DEBUG</code> to emit logs. Setting a debug flag without DEBUG log level has no effect.</p>
+<p><strong><code>debug_file</code></strong> - Low-level filesystem operations:
+- Detailed logs of file system I/O operations
+- File paths, byte counts, checksums, DAH cleanup operations
+- Use when debugging: disk space issues, file I/O problems, filesystem-level errors
+- Example logs: <code>"[File] SetFromReader start key=... type=... size=..."</code>, <code>"[File] removing expired file: ..."</code></p>
+<p><strong><code>debug_blobstore</code></strong> - High-level blob store API tracing:
+- Logs all blob store API calls (Get, Set, Exists, Del, etc.) with 5-level deep call stacks
+- Shows which code is calling blob store operations and why
+- Use when debugging: application-level blob access patterns, API usage tracking
+- Example logs: <code>"[BlobStore][logger][Get] key ... fileType ... : called from ..."</code>
+- Note: Only active when <code>?logger=true</code> is set in blob store URL configuration</p>
+<p><strong><code>debug_utxostore</code></strong> - UTXO store file operations:
+- Similar to <code>debug_file</code> but specific to UTXO store file operations
+- Use when debugging UTXO-specific storage issues</p>
+<p><strong><code>debug_all</code></strong> - Enable all subsystems:
+- Shortcut to enable all debug flags at once
+- Equivalent to setting all individual flags to true
+- Use for comprehensive debugging or when you're unsure which subsystem is involved</p>
+<h4 id="hierarchical-relationships">Hierarchical Relationships</h4>
+<p>Debug flags have hierarchical dependencies:
+- <code>debug_file = true</code> → enables both File logs AND Blobstore logs (when <code>?logger=true</code> is set)
+- <code>debug_blobstore = true</code> → enables only Blobstore logs
+- <code>debug_all = true</code> → enables ALL debug logs across all subsystems</p>
+<p>This hierarchy exists because file-level operations are the foundation of blob store operations. When debugging filesystem issues, you typically want to see both layers.</p>
 <h3 id="http-security-settings">HTTP Security Settings</h3>
 <table>
 <thead>
@@ -7085,6 +7259,7 @@
 <li><code>PrettyLogs = true</code>: Human-readable colored output (development)</li>
 <li><code>JSONLogging = true</code>: Structured JSON logs (production)</li>
 <li>Cannot enable both <code>PrettyLogs</code> and <code>JSONLogging</code> simultaneously</li>
+<li>Subsystem debug toggles (<code>debug_*</code>) still require <code>logLevel = DEBUG</code></li>
 </ul>
 <h3 id="https-configuration">HTTPS Configuration</h3>
 <ul>

@@ -1008,6 +1008,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../howto/miners/kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
@@ -3407,6 +3435,34 @@
     <span class="md-ellipsis">
       
         Storage Errors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#93-known-performance-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 Known Performance Limitations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9.3 Known Performance Limitations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-performance-during-block-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catchup Performance During Block Sync
       
     </span>
   </a>
@@ -7033,6 +7089,34 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#93-known-performance-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.3 Known Performance Limitations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9.3 Known Performance Limitations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#catchup-performance-during-block-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Catchup Performance During Block Sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -7859,6 +7943,52 @@ Explanation of the sequences:</p>
 <li>Implements transaction-based operations with the store to maintain consistency.</li>
 <li>Reports persistent storage errors through health endpoints.</li>
 </ul>
+<h3 id="93-known-performance-limitations">9.3 Known Performance Limitations</h3>
+<h4 id="catchup-performance-during-block-sync">Catchup Performance During Block Sync</h4>
+<p><strong>Issue:</strong> Block synchronization (catchup) can become progressively slower as the blockchain grows, particularly on deployments with large block counts.</p>
+<p><strong>Root Cause:</strong></p>
+<p>The blockchain store uses a recursive CTE (Common Table Expression) query to traverse the chain when storing blocks:</p>
+<div class="highlight"><pre><span></span><code><span class="k">WITH</span><span class="w"> </span><span class="k">RECURSIVE</span><span class="w"> </span><span class="n">ChainBlocks</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="p">(</span>
+<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">parent_id</span>
+<span class="w">    </span><span class="k">FROM</span><span class="w"> </span><span class="n">blocks</span>
+<span class="w">    </span><span class="k">WHERE</span><span class="w"> </span><span class="n">hash</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">$</span><span class="mi">1</span>
+<span class="w">    </span><span class="k">UNION</span><span class="w"> </span><span class="k">ALL</span>
+<span class="w">    </span><span class="k">SELECT</span><span class="w"> </span><span class="n">bb</span><span class="p">.</span><span class="n">id</span><span class="p">,</span><span class="w"> </span><span class="n">bb</span><span class="p">.</span><span class="n">parent_id</span>
+<span class="w">    </span><span class="k">FROM</span><span class="w"> </span><span class="n">blocks</span><span class="w"> </span><span class="n">bb</span>
+<span class="w">    </span><span class="k">JOIN</span><span class="w"> </span><span class="n">ChainBlocks</span><span class="w"> </span><span class="n">cb</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">bb</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cb</span><span class="p">.</span><span class="n">parent_id</span>
+<span class="w">    </span><span class="k">WHERE</span><span class="w"> </span><span class="n">bb</span><span class="p">.</span><span class="n">id</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">cb</span><span class="p">.</span><span class="n">id</span>
+<span class="p">)</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">id</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">ChainBlocks</span>
+<span class="k">LIMIT</span><span class="w"> </span><span class="err">$</span><span class="mi">2</span>
+</code></pre></div>
+<p>This query can become expensive as the blockchain grows. The issue is compounded by the current caching strategy:</p>
+<ol>
+<li>Query results are cached in <code>responseCache</code> for performance</li>
+<li>Every time <code>StoreBlock()</code> is called, it calls <code>ResetResponseCache()</code> which invalidates the entire cache</li>
+<li>The next block storage operation must re-run the expensive recursive query from scratch</li>
+<li>During catchup, this results in the query being executed for every single block</li>
+</ol>
+<p><strong>Impact:</strong></p>
+<p>On large blockchains (&gt;1.7M blocks), index scan counts can reach hundreds of billions, causing catchup speeds to drop from initial rates to as low as 6-7 blocks per minute.</p>
+<p><strong>Tracking:</strong></p>
+<p>This is a known issue being tracked in internal issue #4374.</p>
+<p><strong>Potential Optimization:</strong></p>
+<p>Instead of invalidating the entire cache on each block store, the cache could be incrementally updated:</p>
+<ul>
+<li>Reuse existing cached chain traversal results</li>
+<li>Append the new block to the cached chain</li>
+<li>Only invalidate cache entries that are directly affected by the new block</li>
+<li>This would reduce the recursive query to a one-time cost at startup</li>
+</ul>
+<p><strong>Current Workaround:</strong></p>
+<p>For faster initial synchronization:</p>
+<ul>
+<li>Use the seeder with exported UTXO data instead of full catchup</li>
+<li>See <a href="../../../howto/miners/kubernetes/minersHowToSyncTheNode/">How to Sync the Node</a> for seeding procedures</li>
+<li>Seeding bypasses the incremental block-by-block catchup process</li>
+</ul>
+<p><strong>Status:</strong></p>
+<p>Performance optimization work is ongoing and may be addressed in future releases.</p>
 <h2 id="10-other-resources">10. Other Resources</h2>
 <ul>
 <li><a href="../../../references/services/blockchain_reference/">Blockchain Reference</a></li>

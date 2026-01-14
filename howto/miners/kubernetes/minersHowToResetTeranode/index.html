@@ -1014,6 +1014,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
@@ -6529,7 +6557,7 @@ kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> <
 <h2 id="database-cleanup">Database Cleanup</h2>
 <h3 id="aerospike-cleanup">Aerospike Cleanup</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># Get Aerospike pod name</span>
-<span class="nv">AEROSPIKE_POD</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>aerospike<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span>
+<span class="nv">AEROSPIKE_POD</span><span class="o">=</span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{range .items[*]}{.metadata.name}{&quot;\n&quot;}{end}&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>aero<span class="k">)</span>
 
 <span class="c1"># Access Aerospike pod</span>
 kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="nv">$AEROSPIKE_POD</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>bash
@@ -6586,7 +6614,7 @@ kubectl<span class="w"> </span>delete<span class="w"> </span>pvc<span class="w">
 <span class="c1"># Or manually create it if needed</span>
 
 <span class="c1"># Alternatively, access a pod with the PVC mounted and clean specific directories</span>
-kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;pod-with-pvc&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/app/data/*
+kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>&lt;pod-with-pvc&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>/data/teranode-operator/*
 </code></pre></div>
 <h2 id="restart-services">Restart Services</h2>
 <p>Once cleanup is complete, scale services back up:</p>

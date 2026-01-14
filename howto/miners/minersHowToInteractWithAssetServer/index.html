@@ -1014,6 +1014,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
@@ -6813,29 +6841,61 @@
 <li>
 <p>GET <code>/api/v1/blocks/:hash</code></p>
 <ul>
-<li>Description: Retrieves multiple blocks starting with the specified hash</li>
+<li>Description: Retrieves multiple consecutive blocks starting with the specified hash, traversing backward through the chain</li>
 <li>
 <p>Parameters:</p>
 <ul>
 <li><code>hash</code>: Starting block hash (hex string)</li>
-<li><code>n</code> (optional): Number of blocks to retrieve</li>
+<li><code>n</code> (optional): Number of blocks to retrieve (default: 100, max: 1000)</li>
 </ul>
 </li>
 <li>
-<p>Returns: Block data in binary format</p>
+<p>Returns: Concatenated block data in binary format (application/octet-stream)</p>
 </li>
+<li><strong>Important:</strong> All blocks are concatenated without delimiters. Clients must parse blocks sequentially:<ol>
+<li>Read 80-byte block header</li>
+<li>Read VarInt transaction count</li>
+<li>Read VarInt size in bytes</li>
+<li>Read VarInt subtree count, then subtree hashes (32 bytes each)</li>
+<li>Read coinbase transaction</li>
+<li>Read VarInt block height</li>
+<li>Repeat for next block</li>
+</ol>
+</li>
+<li><strong>Note:</strong> When downloading in a browser, the file may appear to contain only one block. The full data is present but requires sequential parsing. Use <code>/json</code> endpoint for easier inspection.</li>
 </ul>
 </li>
 <li>
 <p>GET <code>/api/v1/blocks/:hash/hex</code></p>
 <ul>
-<li>Description: Same as above but in hexadecimal format</li>
+<li>Description: Same as above but returns hexadecimal-encoded string</li>
+<li>
+<p>Parameters:</p>
+<ul>
+<li><code>hash</code>: Starting block hash (hex string)</li>
+<li><code>n</code> (optional): Number of blocks to retrieve (default: 100, max: 1000)</li>
+</ul>
+</li>
+<li>
+<p>Returns: Hex string of concatenated block bytes (text/plain)</p>
+</li>
 </ul>
 </li>
 <li>
 <p>GET <code>/api/v1/blocks/:hash/json</code></p>
 <ul>
-<li>Description: Same as above but in JSON format</li>
+<li>Description: Same as above but returns structured JSON array of blocks</li>
+<li>
+<p>Parameters:</p>
+<ul>
+<li><code>hash</code>: Starting block hash (hex string)</li>
+<li><code>n</code> (optional): Number of blocks to retrieve (default: 100, max: 1000)</li>
+</ul>
+</li>
+<li>
+<p>Returns: JSON array containing parsed block objects with all fields</p>
+</li>
+<li><strong>Recommended:</strong> Use this endpoint for easier parsing and inspection of multiple blocks</li>
 </ul>
 </li>
 <li>

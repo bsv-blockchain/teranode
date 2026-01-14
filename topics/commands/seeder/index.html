@@ -1008,6 +1008,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../howto/miners/kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
@@ -3953,6 +3981,34 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#8-known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Known Limitations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Known Limitations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#missing-miner-information-in-v1-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Missing Miner Information in V1 Format
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6373,6 +6429,34 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#8-known-limitations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Known Limitations
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Known Limitations">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#missing-miner-information-in-v1-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Missing Miner Information in V1 Format
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6554,6 +6638,42 @@
 <li><code>channelSize</code>: Size of the channel for UTXO processing (default: 1000).</li>
 <li><code>workerCount</code>: Number of worker goroutines for UTXO processing (default: 500).</li>
 <li><code>skipStore</code>: Boolean flag to skip storing UTXOs (for testing purposes).</li>
+</ul>
+<h2 id="8-known-limitations">8. Known Limitations</h2>
+<h3 id="missing-miner-information-in-v1-format">Missing Miner Information in V1 Format</h3>
+<p><strong>Current Behavior (V1 format - U-H-1.0):</strong></p>
+<p>Blocks seeded using the V1 UTXO headers format will not have miner information populated in the blockchain store. This is because:</p>
+<ol>
+<li>The V1 headers file format only contains:</li>
+<li>Block hash (32 bytes)</li>
+<li>Block height (4 bytes)</li>
+<li>Transaction count (8 bytes)</li>
+<li>
+<p>Block header (80 bytes)</p>
+</li>
+<li>
+<p>Miner information is extracted from the coinbase transaction using <code>util.ExtractCoinbaseMiner()</code></p>
+</li>
+<li>
+<p>V1 format does not include coinbase transactions in the headers file</p>
+</li>
+</ol>
+<p><strong>Result:</strong> Seeded blocks will show empty miner information when queried through the Asset Server or blockchain APIs.</p>
+<p><strong>Resolution:</strong></p>
+<p>The V2 format (U-H-2.0) includes coinbase transactions in the headers file and will properly populate miner information during seeding. This update is available in commit <code>bb10c7d12</code> and will be merged to main in a future release.</p>
+<p>The V2 format:</p>
+<ul>
+<li>Maintains backwards compatibility with V1 headers files</li>
+<li>Includes the full coinbase transaction for each block</li>
+<li>Allows the seeder to extract and store miner information correctly</li>
+<li>Supports both legacy V1 imports and new V2 exports</li>
+</ul>
+<p><strong>Workaround:</strong></p>
+<p>For existing deployments using V1 format seeds:</p>
+<ul>
+<li>Blocks mined after the seeding point will have proper miner information</li>
+<li>Historical seeded blocks will continue to show empty miner data until re-seeded with V2 format</li>
+<li>This does not affect blockchain validation or UTXO correctness</li>
 </ul>
 
 

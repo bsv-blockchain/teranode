@@ -1008,6 +1008,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../howto/miners/kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
@@ -2881,10 +2909,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#6-configuration-options" class="md-nav__link">
+  <a href="#6-internal-implementation-options" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6. Configuration Options
+        6. Internal Implementation Options
       
     </span>
   </a>
@@ -6614,10 +6642,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#6-configuration-options" class="md-nav__link">
+  <a href="#6-internal-implementation-options" class="md-nav__link">
     <span class="md-ellipsis">
       
-        6. Configuration Options
+        6. Internal Implementation Options
       
     </span>
   </a>
@@ -6750,7 +6778,7 @@
 </ul>
 </li>
 <li><a href="#5-data-model-impact">Data Model Impact</a></li>
-<li><a href="#6-configuration-options">Configuration Options</a></li>
+<li><a href="#6-internal-implementation-options">Internal Implementation Options</a></li>
 <li><a href="#7-flow-diagrams">Flow Diagrams</a></li>
 <li><a href="#8-related-documentation">Related Documentation</a></li>
 </ol>
@@ -6978,16 +7006,29 @@
 </tbody>
 </table>
 <p>This field is part of the UTXO record and is set to <code>true</code> when a transaction is initially created, then set to <code>false</code> after successful addition to Block Assembly or when the transaction is mined in a block.</p>
-<h2 id="6-configuration-options">6. Configuration Options</h2>
-<p>The behavior of the Two-Phase Transaction Commit process can be configured through the following options:</p>
-<p><strong>Validator Service:</strong></p>
-<div class="highlight"><pre><span></span><code>WithIgnoreLocked(bool) - When set to true, the validator will ignore the locked flag when processing transactions that are part of a block
-</code></pre></div>
-<p>In the Validator Options struct:</p>
+<h2 id="6-internal-implementation-options">6. Internal Implementation Options</h2>
+<p>The Two-Phase Transaction Commit process uses several internal options to handle different validation scenarios:</p>
+<p><strong>IgnoreLocked Option:</strong></p>
+<p>The <code>WithIgnoreLocked</code> option controls whether the validator will ignore the locked flag when spending UTXOs:</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Options</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="nx">IgnoreLocked</span><span class="w"> </span><span class="kt">bool</span>
 <span class="p">}</span>
+
+<span class="kd">func</span><span class="w"> </span><span class="nx">WithIgnoreLocked</span><span class="p">(</span><span class="nx">ignoreLocked</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="nx">Option</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">o</span><span class="w"> </span><span class="o">*</span><span class="nx">Options</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nx">o</span><span class="p">.</span><span class="nx">IgnoreLocked</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">ignoreLocked</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
 </code></pre></div>
+<p><strong>Usage:</strong></p>
+<p>This option is <strong>always set to <code>true</code></strong> when validating blocks (see <code>services/subtreevalidation/</code>). This is necessary because:</p>
+<ol>
+<li>Transactions in a received block have already been validated and locked during initial propagation</li>
+<li>When validating the entire block, these transactions need to be re-validated for block consensus</li>
+<li>The locked flag must be ignored to allow this re-validation without conflicts</li>
+<li>This is an internal implementation detail, not a user-configurable setting</li>
+</ol>
+<p><strong>Note:</strong> This is not exposed as a configuration setting in <code>settings.conf</code> because it must always be <code>true</code> for block validation to work correctly. The option exists in the code for API flexibility and testing purposes, but in production it is always used with the value <code>true</code>.</p>
 <h2 id="7-flow-diagrams">7. Flow Diagrams</h2>
 <p>The following diagrams illustrate the two-phase commit process from different perspectives. Together, they provide a complete view of how transactions move through the system from validation to final commitment.</p>
 <h3 id="71-two-phase-commit-overview">7.1. Two-Phase Commit Overview</h3>

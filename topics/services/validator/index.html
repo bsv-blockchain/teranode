@@ -1008,6 +1008,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../howto/miners/kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
@@ -7444,13 +7472,6 @@ However, the Validator can also be started as a service, allowing to interact wi
 <p>The Validator leverages concurrency to optimize transaction processing performance:</p>
 <ol>
 <li>
-<p><strong>Parallel UTXO Saving</strong>:</p>
-<ul>
-<li>The <code>saveInParallel</code> flag enables concurrent UTXO updates</li>
-<li>Improves throughput by processing multiple transactions simultaneously</li>
-</ul>
-</li>
-<li>
 <p><strong>Batching</strong>:</p>
 <ul>
 <li>Transactions can be validated in batches for higher throughput</li>
@@ -7504,12 +7525,12 @@ However, the Validator can also be started as a service, allowing to interact wi
 <h3 id="configuration-settings-affecting-validator-behavior">Configuration Settings Affecting Validator Behavior</h3>
 <p>The Validator service behavior is controlled by several key configuration parameters:</p>
 <ul>
-<li><strong><code>KafkaMaxMessageBytes</code></strong> (default: 1MB): Controls size-based routing - large transactions that exceed this threshold are routed via HTTP instead of Kafka to avoid message size limitations.</li>
-<li><strong><code>UseLocalValidator</code></strong> (default: false): Determines whether to use a local validator instance or connect to a remote validator service via gRPC.</li>
-<li><strong><code>KafkaWorkers</code></strong> (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.</li>
-<li><strong><code>HTTPRateLimit</code></strong> (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.</li>
-<li><strong><code>VerboseDebug</code></strong> (default: false): Enables detailed validation logging for troubleshooting.</li>
+<li><strong><code>validator_kafkaWorkers</code></strong> (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.</li>
+<li><strong><code>validator_httpRateLimit</code></strong> (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.</li>
+<li><strong><code>validator_verbose_debug</code></strong> (default: false): Enables detailed validation logging for troubleshooting.</li>
+<li><strong><code>validator_useLocalValidator</code></strong> (default: false): Determines whether to use a local validator instance or connect to a remote validator service via gRPC.</li>
 </ul>
+<p><strong>Note:</strong> While these settings are available in the codebase, they are advanced options and may not be listed in the default <code>settings.conf</code> file. For a complete list of all available settings, see the <a href="../../../references/settings/services/validator_settings/">Validator Settings Reference</a>.</p>
 <h3 id="rejected-transaction-handling">Rejected Transaction Handling</h3>
 <p>When the Transaction Validator Service identifies an invalid transaction, it employs a Kafka-based notification system to inform other components of the system. Here's an overview of this process:</p>
 <p><img alt="tx_validation_p2p_subscribers.svg" src="../img/plantuml/validator/tx_validation_p2p_subscribers.svg" /></p>
@@ -7599,7 +7620,7 @@ However, the Validator can also be started as a service, allowing to interact wi
 <li><a href="../../datamodel/transaction_data_model/">Transaction Data Model</a>: Comprehensive documentation covering both standard Bitcoin format and Extended Format (BIP-239), including automatic format conversion and storage strategies.</li>
 </ul>
 <h2 id="5-technology">5. Technology</h2>
-<p>The code snippet you've provided utilizes a variety of technologies and libraries, each serving a specific purpose within the context of a Bitcoin SV (BSV) blockchain-related application. Here's a breakdown of these technologies:</p>
+<p>The code snippets you have been provided utilize a variety of technologies and libraries, each serving a specific purpose within the context of a Bitcoin SV (BSV) blockchain-related application. Here's a breakdown of these technologies:</p>
 <ol>
 <li>
 <p><strong>Go (Golang)</strong>: The programming language used for the entire codebase.</p>

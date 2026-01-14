@@ -786,6 +786,45 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Local Development Debugging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-1-run-with-debugger-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: Run with Debugger (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-attach-to-running-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: Attach to Running Process
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-3-start-via-delve-and-attach-remotely" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 3: Start via Delve and Attach Remotely
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -1405,6 +1444,34 @@
     
   
     Kubernetes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
   
 
     
@@ -6770,6 +6837,45 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Local Development Debugging">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#option-1-run-with-debugger-recommended" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 1: Run with Debugger (Recommended)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-2-attach-to-running-process" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 2: Attach to Running Process
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#option-3-start-via-delve-and-attach-remotely" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Option 3: Start via Delve and Attach Remotely
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -7121,7 +7227,9 @@ If you receive an error <code>ModuleNotFoundError: No module named 'yaml'</code>
 <h3 id="72-debugging-teranode">7.2. Debugging Teranode</h3>
 <p>Teranode supports debugging using Delve, the Go debugger. You can use any IDE that supports Delve, including VS Code, GoLand, or the Delve CLI directly.</p>
 <h4 id="local-development-debugging">Local Development Debugging</h4>
-<p>To debug Teranode during local development:</p>
+<p>To debug Teranode during local development, you have several options:</p>
+<h5 id="option-1-run-with-debugger-recommended">Option 1: Run with Debugger (Recommended)</h5>
+<p><strong>This is the most reliable method and works on all platforms including M3/M4 Macs.</strong></p>
 <ol>
 <li>
 <p><strong>Build with debug symbols</strong>:</p>
@@ -7130,7 +7238,43 @@ If you receive an error <code>ModuleNotFoundError: No module named 'yaml'</code>
 <p>This enables debug flags (<code>-N -l</code>) that disable optimizations and inlining, making debugging easier.</p>
 </li>
 <li>
-<p><strong>Attach your debugger</strong> to the running Teranode process using your preferred IDE or tool.</p>
+<p><strong>Run with your IDE's debugger</strong>:</p>
+<ul>
+<li><strong>GoLand</strong>: Use "Run" → "Debug" or press <code>Ctrl+D</code> (Linux/Windows) / <code>⌃D</code> (Mac)</li>
+<li><strong>VS Code</strong>: Use "Run and Debug" panel or press <code>F5</code> after configuring launch.json</li>
+</ul>
+</li>
+</ol>
+<h5 id="option-2-attach-to-running-process">Option 2: Attach to Running Process</h5>
+<p><strong>Note: This method does not work on Apple M3/M4 Macs due to architecture limitations.</strong></p>
+<ol>
+<li>Build and start Teranode as normal</li>
+<li>Find the process ID: <code>ps aux | grep teranode</code></li>
+<li>Attach your debugger to the PID:<ul>
+<li><strong>GoLand</strong>: "Run" → "Attach to Process"</li>
+<li><strong>VS Code</strong>: Use "attach" configuration in launch.json</li>
+</ul>
+</li>
+</ol>
+<h5 id="option-3-start-via-delve-and-attach-remotely">Option 3: Start via Delve and Attach Remotely</h5>
+<p>This method allows you to start the application with Delve and attach your IDE remotely:</p>
+<ol>
+<li>
+<p><strong>Install Delve</strong> (if not already installed):</p>
+<div class="highlight"><pre><span></span><code>go<span class="w"> </span>install<span class="w"> </span>github.com/go-delve/delve/cmd/dlv@latest
+</code></pre></div>
+</li>
+<li>
+<p><strong>Start Teranode with Delve</strong>:</p>
+<div class="highlight"><pre><span></span><code>dlv<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>./teranode.run<span class="w"> </span>--headless<span class="w"> </span>--listen<span class="o">=</span>:2345<span class="w"> </span>--api-version<span class="o">=</span><span class="m">2</span><span class="w"> </span>--accept-multiclient
+</code></pre></div>
+</li>
+<li>
+<p><strong>Attach your IDE to Delve</strong>:</p>
+<ul>
+<li><strong>GoLand</strong>: Create a "Go Remote" run configuration pointing to <code>localhost:2345</code></li>
+<li><strong>VS Code</strong>: Use a remote attach configuration in launch.json with port 2345</li>
+</ul>
 </li>
 </ol>
 <h4 id="remote-debugging-kubernetes-deployments">Remote Debugging (Kubernetes Deployments)</h4>

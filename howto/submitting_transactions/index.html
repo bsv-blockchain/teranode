@@ -1002,6 +1002,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../miners/kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
@@ -6490,6 +6518,7 @@
 <h2 id="submission-methods">Submission Methods</h2>
 <p>Teranode provides a gRPC API for transaction submission, offering high performance and low latency.</p>
 <h3 id="grpc-api">gRPC API</h3>
+<p>The Propagation service accepts transactions via gRPC. Successful submissions return without error, while rejected transactions return an error with details.</p>
 <p><strong>Go Example:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="kn">package</span><span class="w"> </span><span class="nx">main</span>
 
@@ -6506,7 +6535,7 @@
 <span class="p">)</span>
 
 <span class="kd">func</span><span class="w"> </span><span class="nx">submitTransactionGRPC</span><span class="p">(</span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">nodeAddr</span><span class="w"> </span><span class="kt">string</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// Connect to Teranode</span>
+<span class="w">    </span><span class="c1">// Connect to Teranode Propagation service (default port: 8086)</span>
 <span class="w">    </span><span class="nx">conn</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">grpc</span><span class="p">.</span><span class="nx">Dial</span><span class="p">(</span><span class="nx">nodeAddr</span><span class="p">,</span><span class="w"> </span><span class="nx">grpc</span><span class="p">.</span><span class="nx">WithTransportCredentials</span><span class="p">(</span><span class="nx">insecure</span><span class="p">.</span><span class="nx">NewCredentials</span><span class="p">()))</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;failed to connect: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
@@ -6520,17 +6549,14 @@
 <span class="w">    </span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">cancel</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">WithTimeout</span><span class="p">(</span><span class="nx">context</span><span class="p">.</span><span class="nx">Background</span><span class="p">(),</span><span class="w"> </span><span class="mi">10</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Second</span><span class="p">)</span>
 <span class="w">    </span><span class="k">defer</span><span class="w"> </span><span class="nx">cancel</span><span class="p">()</span>
 
-<span class="w">    </span><span class="nx">response</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">client</span><span class="p">.</span><span class="nx">ProcessTransaction</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">propagation_api</span><span class="p">.</span><span class="nx">ProcessTransactionRequest</span><span class="p">{</span>
+<span class="w">    </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">client</span><span class="p">.</span><span class="nx">ProcessTransaction</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">propagation_api</span><span class="p">.</span><span class="nx">ProcessTransactionRequest</span><span class="p">{</span>
 <span class="w">        </span><span class="nx">Tx</span><span class="p">:</span><span class="w"> </span><span class="nx">tx</span><span class="p">.</span><span class="nx">Bytes</span><span class="p">(),</span>
 <span class="w">    </span><span class="p">})</span>
 <span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
 <span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;failed to process transaction: %w&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
 <span class="w">    </span><span class="p">}</span>
 
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">Status</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nx">propagation_api</span><span class="p">.</span><span class="nx">Status_SUCCESS</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;transaction rejected: %s&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">response</span><span class="p">.</span><span class="nx">RejectReason</span><span class="p">)</span>
-<span class="w">    </span><span class="p">}</span>
-
+<span class="w">    </span><span class="c1">// Success - transaction accepted</span>
 <span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span>
 <span class="p">}</span>
 </code></pre></div>
@@ -6571,11 +6597,14 @@
 <p><strong>Cause</strong>: One or more inputs have already been spent.</p>
 <p><strong>Solution</strong>: Verify UTXO status before creating transactions. The first transaction to reach the node wins.</p>
 <h3 id="error-response-example">Error Response Example</h3>
-<div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;status&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;REJECTED&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;reject_reason&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;transaction validation failed: parent transaction 5f3a... not found&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;tx_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc123...&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;error_code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;MISSING_PARENT&quot;</span>
+<p>When a transaction is rejected, the gRPC call returns an error. Extract the error message from the gRPC error:</p>
+<div class="highlight"><pre><span></span><code><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="nx">client</span><span class="p">.</span><span class="nx">ProcessTransaction</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">propagation_api</span><span class="p">.</span><span class="nx">ProcessTransactionRequest</span><span class="p">{</span>
+<span class="w">    </span><span class="nx">Tx</span><span class="p">:</span><span class="w"> </span><span class="nx">tx</span><span class="p">.</span><span class="nx">Bytes</span><span class="p">(),</span>
+<span class="p">})</span>
+<span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// Error contains rejection reason</span>
+<span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Transaction rejected: %v\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// Example error: &quot;rpc error: code = InvalidArgument desc = transaction validation failed: parent transaction 5f3a... not found&quot;</span>
 <span class="p">}</span>
 </code></pre></div>
 <h2 id="best-practices">Best Practices</h2>
@@ -6677,7 +6706,7 @@ curl<span class="w"> </span>http://localhost:8090/utxo/output_hash/json
 <li><strong>Teranode accepts both standard and extended transaction formats</strong></li>
 <li><strong>Standard format is recommended for most use cases</strong></li>
 <li><strong>Automatic extension happens transparently during validation</strong></li>
-<li><strong>HTTP and gRPC APIs are available for submission</strong></li>
+<li><strong>gRPC API (Propagation service) is used for transaction submission</strong></li>
 <li><strong>Performance difference between formats is negligible</strong></li>
 <li><strong>Proper error handling and retries are essential</strong></li>
 </ul>

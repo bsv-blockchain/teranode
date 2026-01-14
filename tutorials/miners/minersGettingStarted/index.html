@@ -1324,6 +1324,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AWS POC Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../howto/miners/kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
@@ -6759,6 +6787,18 @@ git<span class="w"> </span>clone<span class="w"> </span>git@github.com:bsv-block
 <div class="highlight"><pre><span></span><code><span class="c1"># Access the dashboard at http://localhost:8090/admin (default credentials bitcoin:bitcoin)</span>
 <span class="c1"># Navigate to FSM State section and select RUNNING or LEGACYSYNCING</span>
 </code></pre></div>
+<blockquote>
+<p><strong>Note:</strong> The embedded dashboard is only available when Teranode is built with dashboard support (default in Docker images). The dashboard provides:</p>
+<ul>
+<li><code>/admin</code> - FSM management, block invalidation/revalidation (requires authentication)</li>
+<li><code>/viewer</code> - Blockchain viewer (blocks, transactions, UTXOs, subtrees)</li>
+<li><code>/home</code> - Node overview and statistics</li>
+<li><code>/peers</code> - Peer management and reputation</li>
+<li><code>/network</code> - Network status and connected nodes</li>
+<li><code>/p2p</code> - P2P message monitor</li>
+</ul>
+<p>For comprehensive dashboard documentation, see <a href="../../../topics/dashboard/">Dashboard Documentation</a>.</p>
+</blockquote>
 <h4 id="option-2-using-teranode-cli">Option 2: Using teranode-cli</h4>
 <div class="highlight"><pre><span></span><code><span class="c1"># Transition to Run mode</span>
 docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>RUNNING
@@ -6792,7 +6832,18 @@ docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"
 </code></pre></div>
 <ul>
 <li>
-<p>Access monitoring dashboard:</p>
+<p>Access the built-in Teranode dashboard:</p>
+<ul>
+<li><strong>Service Viewer</strong>: <a href="http://localhost:8090/viewer">http://localhost:8090/viewer</a> - View blocks, transactions, UTXOs, and subtrees</li>
+<li><strong>Admin Interface</strong>: <a href="http://localhost:8090/admin">http://localhost:8090/admin</a> (credentials: bitcoin/bitcoin) - FSM state management and block operations</li>
+<li><strong>Home Overview</strong>: <a href="http://localhost:8090/home">http://localhost:8090/home</a> - Node statistics and block graphs</li>
+<li><strong>Peer Management</strong>: <a href="http://localhost:8090/peers">http://localhost:8090/peers</a> - Connected peers and reputation scores</li>
+<li><strong>Network Status</strong>: <a href="http://localhost:8090/network">http://localhost:8090/network</a> - Connected nodes and chain status</li>
+<li>For complete dashboard features, see <a href="../../../topics/dashboard/">Dashboard Documentation</a></li>
+</ul>
+</li>
+<li>
+<p>Access Grafana monitoring (metrics and time-series data):</p>
 <ul>
 <li>Open Grafana: <a href="http://localhost:3005">http://localhost:3005</a></li>
 <li>Login with the default credentials: admin/admin</li>
