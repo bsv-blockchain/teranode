@@ -122,7 +122,7 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 					// Subtree data should never contain the coinbase, but if it does due to
 					// older buggy code, we need to skip it to avoid duplication
 					// Include the subtreeIdx check to avoid needing to do string comparison every iteration
-					if subtreeIdx == 0 && tx.TxIDChainHash().String() == coinbaseTxID.String() {
+					if subtreeIdx == 0 && tx.TxIDChainHash().IsEqual(coinbaseTxID) {
 						continue
 					}
 
