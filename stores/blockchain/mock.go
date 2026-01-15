@@ -622,6 +622,10 @@ func (m *MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []u
 	return true, nil
 }
 
+func (m *MockStore) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	return false, nil
+}
+
 func (m *MockStore) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 	panic(implementMe)
 }

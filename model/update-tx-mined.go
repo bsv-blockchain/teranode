@@ -24,7 +24,10 @@ type txMinedStatus interface {
 
 // blockchainClientI defines minimal blockchain client interface for double-spend checking
 type blockchainClientI interface {
-	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
+	// CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
+	// This is used for slow-path double-spend detection on fork blocks where we need to check against
+	// the fork's ancestor chain rather than the main chain.
+	CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error)
 }
 
 type txMinedMessage struct {
@@ -366,6 +369,9 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	}
 
 	// Phase 2 (Slow Path): Check collected old block IDs via blockchain service
+	// Check if any old block IDs are ancestors of the current block being processed.
+	// This handles both main chain blocks and fork blocks correctly by checking
+	// against the block's own ancestor chain rather than the main chain.
 	if len(oldBlockIDs) > 0 && blockchainClient != nil && !unsetMined {
 		logger.Debugf("[UpdateTxMinedStatus][%s] checking %d old block IDs via blockchain service (slow path)", block.Hash().String(), len(oldBlockIDs))
 
@@ -381,17 +387,18 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 			oldBlockIDsSlice = append(oldBlockIDsSlice, bID)
 		}
 
-		// Query blockchain: returns true if ANY block ID is in current chain
-		isInCurrentChain, err := blockchainClient.CheckBlockIsInCurrentChain(ctx, oldBlockIDsSlice)
+		// Query blockchain: returns true if ANY block ID is an ancestor of the current block
+		// This correctly handles fork blocks by checking against the fork's ancestor chain
+		isAncestor, err := blockchainClient.CheckBlockIsAncestorOfBlock(ctx, oldBlockIDsSlice, block.Hash())
 		if err != nil {
 			return errors.NewProcessingError("[UpdateTxMinedStatus][%s] failed to check old block IDs against blockchain: %v (queried %d unique IDs)", block.Hash().String(), err, len(oldBlockIDsSlice))
 		}
 
-		if isInCurrentChain {
+		if isAncestor {
 			return errors.NewBlockInvalidError("[UpdateTxMinedStatus][%s] block contains a transaction already on our chain (slow path detected, checked %d unique old block IDs)", block.Hash().String(), len(oldBlockIDsSlice))
 		}
 
-		logger.Debugf("[UpdateTxMinedStatus][%s] slow path check passed - %d old block IDs not on current chain", block.Hash().String(), len(oldBlockIDsSlice))
+		logger.Debugf("[UpdateTxMinedStatus][%s] slow path check passed - %d old block IDs not ancestors of this block", block.Hash().String(), len(oldBlockIDsSlice))
 	}
 
 	// Check if there were any SetMinedMulti errors

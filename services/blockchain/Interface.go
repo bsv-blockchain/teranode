@@ -728,6 +728,24 @@ type ClientI interface {
 	// - Error if the check operation fails
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
 
+	// CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
+	//
+	// This is used for double-spend detection on fork blocks where we need to check against
+	// the fork's ancestor chain rather than the main chain. When processing a fork block,
+	// we need to verify that transactions were not already mined in ancestor blocks of that
+	// specific fork, not the main chain. This allows the same transaction to legitimately
+	// exist in blocks on different competing chains.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - blockIDs: Array of block IDs to check for ancestry
+	// - blockHash: Hash of the block to check ancestry against
+	//
+	// Returns:
+	// - Boolean indicating whether any of the block IDs are ancestors of the specified block
+	// - Error if the check operation fails
+	CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error)
+
 	// GetChainTips retrieves information about all known tips in the block tree.
 	//
 	// This method returns a list of all chain tips, including the main chain tip and any

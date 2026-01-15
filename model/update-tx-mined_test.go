@@ -457,7 +457,7 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 		// Start the first call in a goroutine
 		done1 := make(chan error)
 		go func() {
-			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 			done1 <- err
 		}()
 
@@ -465,7 +465,7 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 		<-processingStarted
 
 		// Second call should be ignored immediately (duplicate detection)
-		err2 := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		err2 := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 		require.Error(t, err2) // Should return parent not mined error
 		assert.Contains(t, err2.Error(), "already being processed")
 
@@ -498,12 +498,12 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 		done2 := make(chan error)
 
 		go func() {
-			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore1, block, 15, []uint32{}, true)
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore1, block, 15, []uint32{}, true, nil)
 			done1 <- err
 		}()
 
 		go func() {
-			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore2, block, 16, []uint32{}, true)
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore2, block, 16, []uint32{}, true, nil)
 			done2 <- err
 		}()
 
@@ -1188,11 +1188,13 @@ type mockBlockchainClientForSlowPath struct {
 	checkBlockResult bool
 	checkBlockError  error
 	calledWith       []uint32
+	calledWithHash   *chainhash.Hash
 	wasCalled        bool
 }
 
-func (m *mockBlockchainClientForSlowPath) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+func (m *mockBlockchainClientForSlowPath) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
 	m.calledWith = blockIDs
+	m.calledWithHash = blockHash
 	m.wasCalled = true
 	return m.checkBlockResult, m.checkBlockError
 }

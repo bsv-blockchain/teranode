@@ -629,6 +629,46 @@ func (c *Client) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint
 	return resp.GetIsPartOfCurrentChain(), nil
 }
 
+// CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
+// This is used for double-spend detection on fork blocks where we need to check against
+// the fork's ancestor chain rather than the main chain.
+func (c *Client) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	if len(blockIDs) == 0 {
+		return false, nil
+	}
+
+	// Get the ancestor chain of block IDs from the specified block
+	// We request enough headers to cover the maximum possible block ID we're checking
+	maxBlockID := uint64(0)
+	for _, id := range blockIDs {
+		if uint64(id) > maxBlockID {
+			maxBlockID = uint64(id)
+		}
+	}
+
+	// Get ancestor block IDs - we need at least maxBlockID ancestors to check all given IDs
+	// Adding a buffer to ensure we get enough
+	ancestorIDs, err := c.GetBlockHeaderIDs(ctx, blockHash, maxBlockID+1)
+	if err != nil {
+		return false, err
+	}
+
+	// Build a set of ancestor IDs for fast lookup
+	ancestorSet := make(map[uint32]bool, len(ancestorIDs))
+	for _, id := range ancestorIDs {
+		ancestorSet[id] = true
+	}
+
+	// Check if any of the given block IDs are in the ancestor set
+	for _, id := range blockIDs {
+		if ancestorSet[id] {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // GetChainTips retrieves information about all known tips in the block tree.
 func (c *Client) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 	c.logger.Debugf("[Blockchain Client] Getting chain tips")
