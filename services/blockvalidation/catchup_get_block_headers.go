@@ -319,18 +319,6 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 			), nil, err
 		}
 
-		// Check memory limit before appending
-		if len(allCatchupHeaders)+len(blockHeaders) > maxAccumulatedHeaders {
-			remainingCapacity := maxAccumulatedHeaders - len(allCatchupHeaders)
-			if remainingCapacity > 0 {
-				u.logger.Warnf("[catchup][%s] truncating %d headers to %d to stay within memory limit", chainTipHash.String(), len(blockHeaders), remainingCapacity)
-				blockHeaders = blockHeaders[:remainingCapacity]
-				allCatchupHeaders = append(allCatchupHeaders, blockHeaders...)
-			}
-			stopReason = fmt.Sprintf("Memory limit reached (%d headers)", maxAccumulatedHeaders)
-			break
-		}
-
 		// Append new headers to our collection
 		if len(blockHeaders) > 0 {
 			headersToAppend := blockHeaders
@@ -343,6 +331,19 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 					headersToAppend = blockHeaders[1:]
 					u.logger.Debugf("[catchup][%s] iteration %d: skipping duplicate header %s", chainTipHash.String(), iteration, blockHeaders[0].Hash().String())
 				}
+			}
+
+			// Check memory limit after duplicate removal
+			if len(allCatchupHeaders)+len(headersToAppend) > maxAccumulatedHeaders {
+				remainingCapacity := maxAccumulatedHeaders - len(allCatchupHeaders)
+				if remainingCapacity > 0 {
+					u.logger.Warnf("[catchup][%s] truncating %d headers to %d to stay within memory limit", chainTipHash.String(), len(headersToAppend), remainingCapacity)
+					headersToAppend = headersToAppend[:remainingCapacity]
+					allCatchupHeaders = append(allCatchupHeaders, headersToAppend...)
+					totalHeadersFetched += len(headersToAppend)
+				}
+				stopReason = fmt.Sprintf("Memory limit reached (%d headers)", maxAccumulatedHeaders)
+				break
 			}
 
 			// Only append if we have headers after skipping duplicates

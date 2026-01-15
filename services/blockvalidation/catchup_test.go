@@ -3613,3 +3613,131 @@ func TestSuboptimalCommonAncestorCausesHeightCalculationIssue(t *testing.T) {
 		t.Logf("Checkpoint validation passed - the fix works!")
 	}
 }
+
+// TestCatchup_MemoryLimitAfterDuplicateRemoval tests that the memory limit check
+// happens AFTER duplicate removal, not before. This prevents premature termination
+// when the raw header count exceeds the limit but the actual headers to append
+// (after removing duplicates) would fit within the limit.
+//
+// Bug scenario:
+// - allCatchupHeaders has 10,000 headers (from iteration 1)
+// - maxAccumulatedHeaders is 10,001
+// - Iteration 2 returns [header9999, header10000] (2 headers, first is duplicate)
+// - BUGGY: 10,000 + 2 = 10,002 > 10,001 → truncates to 1, appends DUPLICATE header9999
+// - FIXED: After duplicate removal, only header10000 is new → 10,000 + 1 = 10,001 → appends correctly
+func TestCatchup_MemoryLimitAfterDuplicateRemoval(t *testing.T) {
+	ctx := context.Background()
+
+	// Create test server
+	server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	// Set memory limit to 10,001 - just enough for 10,000 + 1 new header after duplicate removal
+	// But with the bug, 10,000 + 2 = 10,002 > 10,001 triggers premature truncation
+	const maxHeaders = 10_001
+	server.settings.BlockValidation.CatchupMaxAccumulatedHeaders = maxHeaders
+
+	// Build a chain of 10,002 headers (indices 0-10001)
+	// Iteration 1: returns 10,000 headers (0-9999)
+	// Iteration 2: returns 2 headers (9999 duplicate, 10000 new)
+	numHeaders := 10_002
+	allHeaders := testhelpers.CreateTestHeaders(t, numHeaders)
+
+	// Create target block (last header in chain)
+	targetBlock := &model.Block{
+		Header: allHeaders[numHeaders-1],
+		Height: uint32(numHeaders),
+	}
+
+	// Create "best block" - the starting point for catchup
+	bestBlock := &model.Block{
+		Header: allHeaders[0],
+		Height: 1,
+	}
+
+	// Mock blockchain client calls
+	mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Header.Hash()).Return(false, nil)
+	mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
+
+	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+		bestBlock.Header,
+		&model.BlockHeaderMeta{Height: bestBlock.Height, ID: 1},
+		nil,
+	)
+
+	locatorHashes := []*chainhash.Hash{bestBlock.Header.Hash()}
+	mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).Return(locatorHashes, nil)
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, errors.NewServiceError("not found")).Maybe()
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	// Track which iteration we're on
+	callCount := 0
+
+	httpmock.RegisterResponder(
+		"GET",
+		`=~^http://test-peer/headers_from_common_ancestor/.*`,
+		func(req *http.Request) (*http.Response, error) {
+			callCount++
+
+			var headers []*model.BlockHeader
+
+			if callCount == 1 {
+				// First iteration: return exactly 10,000 headers (0-9999)
+				// This is maxBlockHeadersPerRequest, so it will continue to iteration 2
+				headers = allHeaders[0:10_000]
+			} else {
+				// Second iteration: return headers 9999-10000 (2 headers)
+				// First header (9999) is a duplicate of last from iteration 1
+				// Header 10000 is new
+				// With bug: 10,000 + 2 = 10,002 > 10,001 → truncates to 1, appends duplicate
+				// With fix: After removing duplicate, 10,000 + 1 = 10,001 ≤ 10,001 → appends new header
+				headers = allHeaders[9999:10001]
+			}
+
+			headerBytes := testhelpers.HeadersToBytes(headers)
+			return httpmock.NewBytesResponse(200, headerBytes), nil
+		},
+	)
+
+	// Execute catchup
+	result, _, err := server.catchupGetBlockHeaders(ctx, targetBlock, "peer-test-001", "http://test-peer")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	t.Logf("Result: %d headers, stop reason: %s, iterations: %d", len(result.Headers), result.StopReason, callCount)
+
+	// Check for duplicates in the result - this is the key bug indicator
+	seenHashes := make(map[chainhash.Hash]int)
+	for i, h := range result.Headers {
+		hash := *h.Hash()
+		if prevIdx, exists := seenHashes[hash]; exists {
+			t.Errorf("BUG DETECTED: Duplicate header at indices %d and %d (hash: %s)",
+				prevIdx, i, hash.String())
+		}
+		seenHashes[hash] = i
+	}
+
+	// Verify we have the expected number of headers
+	assert.Equal(t, maxHeaders, len(result.Headers),
+		"Should have exactly %d headers after memory limit enforcement", maxHeaders)
+
+	// Verify headers are sequential (no gaps, no duplicates)
+	for i := 0; i < len(result.Headers) && i < len(allHeaders); i++ {
+		expectedHash := allHeaders[i].Hash()
+		actualHash := result.Headers[i].Hash()
+		assert.True(t, expectedHash.IsEqual(actualHash),
+			"Header at index %d should be allHeaders[%d], got different hash", i, i)
+	}
+
+	// The last header should be header 10000 (index 10000), not header 9999 repeated
+	if len(result.Headers) > 0 {
+		lastHeader := result.Headers[len(result.Headers)-1]
+		expectedLastHeader := allHeaders[10000] // With fix, should be header 10000
+
+		assert.True(t, lastHeader.Hash().IsEqual(expectedLastHeader.Hash()),
+			"Last header should be header 10000 (unique), not a duplicate of header 9999")
+	}
+}
