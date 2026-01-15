@@ -333,11 +333,31 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 		// Append new headers to our collection
 		if len(blockHeaders) > 0 {
-			allCatchupHeaders = append(allCatchupHeaders, blockHeaders...)
-			totalHeadersFetched += len(blockHeaders)
+			headersToAppend := blockHeaders
+
+			// Skip first header after first iteration - GetBlockHeadersFromOldest includes the starting block,
+			// which is a duplicate of the last header from the previous iteration
+			if iteration > 1 && len(allCatchupHeaders) > 0 {
+				// Verify the first header is indeed a duplicate before skipping
+				if blockHeaders[0].Hash().IsEqual(allCatchupHeaders[len(allCatchupHeaders)-1].Hash()) {
+					headersToAppend = blockHeaders[1:]
+					u.logger.Debugf("[catchup][%s] iteration %d: skipping duplicate header %s", chainTipHash.String(), iteration, blockHeaders[0].Hash().String())
+				}
+			}
+
+			// Only append if we have headers after skipping duplicates
+			if len(headersToAppend) > 0 {
+				allCatchupHeaders = append(allCatchupHeaders, headersToAppend...)
+				totalHeadersFetched += len(headersToAppend)
+			} else {
+				// All headers were duplicates - we've reached the chain tip
+				u.logger.Debugf("[catchup][%s] iteration %d: all headers were duplicates, stopping", chainTipHash.String(), iteration)
+				stopReason = "All headers were duplicates (chain tip reached)"
+				break
+			}
 
 			// Check if we've reached the target block
-			for _, header := range blockHeaders {
+			for _, header := range headersToAppend {
 				if header.Hash().IsEqual(blockUpTo.Hash()) {
 					reachedTarget = true
 					stopReason = "Reached target block"
