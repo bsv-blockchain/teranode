@@ -252,6 +252,9 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 
 			hashes := make([]*chainhash.Hash, 0, maxMinedBatchSize)
 
+			// Local slice to collect old block IDs - merged at end to reduce lock contention
+			localOldBlockIDs := make([]uint32, 0)
+
 			for idx := 0; idx < len(subtree.Nodes); idx++ {
 				if subtree.Nodes[idx].Hash.IsEqual(subtreepkg.CoinbasePlaceholderHash) {
 					if subtreeIdx != 0 || idx != 0 {
@@ -300,10 +303,8 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 											continue
 										}
 
-										// Phase 2: Slow path - collect old block IDs for batch query
-										oldBlockIDsMu.Lock()
-										oldBlockIDs = append(oldBlockIDs, bID)
-										oldBlockIDsMu.Unlock()
+										// Phase 2: Slow path - collect locally (merged at end)
+										localOldBlockIDs = append(localOldBlockIDs, bID)
 									}
 								}
 							}
@@ -348,16 +349,21 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 										continue
 									}
 
-									// Phase 2: Slow path - collect old block IDs for batch query
-									oldBlockIDsMu.Lock()
-									oldBlockIDs = append(oldBlockIDs, bID)
-									oldBlockIDsMu.Unlock()
+									// Phase 2: Slow path - collect locally (merged at end)
+									localOldBlockIDs = append(localOldBlockIDs, bID)
 								}
 							}
 						}
 					}
 
 				}
+			}
+
+			// Merge local old block IDs into shared slice with single lock operation
+			if len(localOldBlockIDs) > 0 {
+				oldBlockIDsMu.Lock()
+				oldBlockIDs = append(oldBlockIDs, localOldBlockIDs...)
+				oldBlockIDsMu.Unlock()
 			}
 
 			return nil
