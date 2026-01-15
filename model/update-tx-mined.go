@@ -372,6 +372,9 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 	// Check if any old block IDs are ancestors of the current block being processed.
 	// This handles both main chain blocks and fork blocks correctly by checking
 	// against the block's own ancestor chain rather than the main chain.
+	if len(oldBlockIDs) > 0 && blockchainClient == nil && !unsetMined {
+		logger.Warnf("[UpdateTxMinedStatus][%s] %d old block IDs need slow-path checking but blockchainClient is nil - double-spend detection may be incomplete", block.Hash().String(), len(oldBlockIDs))
+	}
 	if len(oldBlockIDs) > 0 && blockchainClient != nil && !unsetMined {
 		logger.Debugf("[UpdateTxMinedStatus][%s] checking %d old block IDs via blockchain service (slow path)", block.Hash().String(), len(oldBlockIDs))
 

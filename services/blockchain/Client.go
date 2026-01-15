@@ -637,36 +637,15 @@ func (c *Client) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uin
 		return false, nil
 	}
 
-	// Get the ancestor chain of block IDs from the specified block
-	// We request enough headers to cover the maximum possible block ID we're checking
-	maxBlockID := uint64(0)
-	for _, id := range blockIDs {
-		if uint64(id) > maxBlockID {
-			maxBlockID = uint64(id)
-		}
-	}
-
-	// Get ancestor block IDs - we need at least maxBlockID ancestors to check all given IDs
-	// Adding a buffer to ensure we get enough
-	ancestorIDs, err := c.GetBlockHeaderIDs(ctx, blockHash, maxBlockID+1)
+	resp, err := c.client.CheckBlockIsAncestorOfBlock(ctx, &blockchain_api.CheckBlockIsAncestorOfBlockRequest{
+		BlockIDs:  blockIDs,
+		BlockHash: blockHash[:],
+	})
 	if err != nil {
-		return false, err
+		return false, errors.UnwrapGRPC(err)
 	}
 
-	// Build a set of ancestor IDs for fast lookup
-	ancestorSet := make(map[uint32]bool, len(ancestorIDs))
-	for _, id := range ancestorIDs {
-		ancestorSet[id] = true
-	}
-
-	// Check if any of the given block IDs are in the ancestor set
-	for _, id := range blockIDs {
-		if ancestorSet[id] {
-			return true, nil
-		}
-	}
-
-	return false, nil
+	return resp.GetIsAncestor(), nil
 }
 
 // GetChainTips retrieves information about all known tips in the block tree.
