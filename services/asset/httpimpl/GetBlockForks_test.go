@@ -146,4 +146,110 @@ func TestGetBlockForks(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, echoErr.Code)
 		assert.Equal(t, "STORAGE_ERROR (69): error getting block header", echoErr.Message)
 	})
+
+	t.Run("Queried block not in GetBlockHeadersFromHeight results", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		// Create a child block that has testBlockHeader as its parent
+		childBlockHeader := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  testBlockHeader.Hash(),
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      234254767,
+			Bits:           model.NBit{},
+			Nonce:          234342,
+		}
+		childBlockMeta := &model.BlockHeaderMeta{
+			ID:          1234567890,
+			Height:      2,
+			TxCount:     125,
+			SizeInBytes: 321,
+			Miner:       "child_miner",
+			BlockTime:   234254767,
+			Timestamp:   234254767,
+			ChainWork:   []byte("chainwork"),
+		}
+
+		// GetBlockHeader returns the queried block's header and meta
+		mockRepo.On("GetBlockHeader", mock.Anything, mock.Anything).Return(testBlockHeader, testBlockHeaderMeta, nil).Once()
+		// GetBlockHeadersFromHeight returns only the child block, NOT the queried block
+		// This simulates the scenario that caused the bug
+		mockRepo.On("GetBlockHeadersFromHeight", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]*model.BlockHeader{childBlockHeader},
+			[]*model.BlockHeaderMeta{childBlockMeta},
+			nil,
+		).Once()
+
+		echoContext.SetPath("/block/forks/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues(testBlockHeader.String())
+
+		err := httpServer.GetBlockForks(echoContext)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+		assert.Equal(t, echo.MIMEApplicationJSON, responseRecorder.Header().Get("Content-Type"))
+
+		var response map[string]interface{}
+		err = json.Unmarshal(responseRecorder.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		require.NotNil(t, response)
+		tree := response["tree"].(map[string]interface{})
+		// Verify the root block uses metadata from GetBlockHeader (testBlockHeaderMeta)
+		assert.Equal(t, float64(testBlockHeaderMeta.ID), tree["id"])
+		assert.Equal(t, testBlockHeader.String(), tree["hash"])
+		assert.Equal(t, testBlockHeaderMeta.Miner, tree["miner"])
+		assert.Equal(t, float64(testBlockHeaderMeta.Height), tree["height"])
+		assert.Equal(t, float64(testBlockHeaderMeta.SizeInBytes), tree["size"])
+
+		// The child should be correctly linked
+		children := tree["children"].([]interface{})
+		assert.Len(t, children, 1)
+		childTree := children[0].(map[string]interface{})
+		assert.Equal(t, float64(childBlockMeta.ID), childTree["id"])
+		assert.Equal(t, "child_miner", childTree["miner"])
+	})
+
+	t.Run("Large block size exceeding uint32 max", func(t *testing.T) {
+		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
+
+		// Create metadata with size larger than uint32 max (4,294,967,295)
+		// This is the actual bug reported in issue #4439
+		largeBlockMeta := &model.BlockHeaderMeta{
+			ID:          999,
+			Height:      100,
+			TxCount:     5000000000,   // 5 billion txs (exceeds uint32 max)
+			SizeInBytes: 101402061086, // ~101GB (the actual value from the bug report)
+			Miner:       "large_block_miner",
+			BlockTime:   234254767,
+			Timestamp:   234254767,
+			ChainWork:   []byte("chainwork"),
+		}
+
+		mockRepo.On("GetBlockHeader", mock.Anything, mock.Anything).Return(testBlockHeader, largeBlockMeta, nil).Once()
+		mockRepo.On("GetBlockHeadersFromHeight", mock.Anything, mock.Anything, mock.Anything).Return(
+			[]*model.BlockHeader{testBlockHeader},
+			[]*model.BlockHeaderMeta{largeBlockMeta},
+			nil,
+		).Once()
+
+		echoContext.SetPath("/block/forks/:hash")
+		echoContext.SetParamNames("hash")
+		echoContext.SetParamValues(testBlockHeader.String())
+
+		err := httpServer.GetBlockForks(echoContext)
+		require.NoError(t, err)
+
+		assert.Equal(t, http.StatusOK, responseRecorder.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(responseRecorder.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		tree := response["tree"].(map[string]interface{})
+		// Verify the large values are correctly returned without overflow
+		assert.Equal(t, float64(101402061086), tree["size"])
+		assert.Equal(t, float64(5000000000), tree["tx_count"])
+	})
 }
