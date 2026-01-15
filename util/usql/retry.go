@@ -2,9 +2,10 @@ package usql
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"strings"
 	"time"
 
@@ -100,11 +101,26 @@ func calculateBackoff(attempt int, baseDelay time.Duration) time.Duration {
 	// Add jitter (±25%)
 	jitterRange := int64(delay / 4)
 	if jitterRange > 0 {
-		jitter := time.Duration(rand.Int63n(jitterRange*2) - jitterRange)
-		delay += jitter
+		jitter, err := cryptoJitter(jitterRange * 2)
+		if err == nil {
+			delay += time.Duration(jitter - jitterRange)
+		}
 	}
 
 	return delay
+}
+
+func cryptoJitter(max int64) (int64, error) {
+	if max <= 0 {
+		return 0, nil
+	}
+
+	value, err := rand.Int(rand.Reader, big.NewInt(max))
+	if err != nil {
+		return 0, err
+	}
+
+	return value.Int64(), nil
 }
 
 func normalizeContext(ctx context.Context) context.Context {

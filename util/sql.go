@@ -110,10 +110,6 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 		if poolSettings.RetryBaseDelay == 0 {
 			poolSettings.RetryBaseDelay = tSettings.Postgres.RetryBaseDelay
 		}
-		// RetryEnabled is a bool, so we check if service setting is explicitly false
-		if !servicePoolSettings.RetryEnabled && tSettings.Postgres.RetryEnabled {
-			poolSettings.RetryEnabled = tSettings.Postgres.RetryEnabled
-		}
 	}
 
 	// Configure connection pool settings
@@ -134,7 +130,7 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 		poolSettings.MaxIdleConns,
 		poolSettings.ConnMaxLifetime,
 		poolSettings.ConnMaxIdleTime)
-	
+
 	logger.Infof("PostgreSQL retry configured: MaxAttempts=%d, BaseDelay=%v, Enabled=%v",
 		poolSettings.RetryMaxAttempts,
 		poolSettings.RetryBaseDelay,
