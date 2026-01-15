@@ -6,7 +6,6 @@ on:
 permissions:
   contents: read
   pull-requests: read
-  id-token: write
   packages: read
 
 env:
@@ -65,6 +64,8 @@ jobs:
           mkdir -p data/postgres
 
       - name: Start Teranode nodes with 3 block generators (docker compose up)
+        # Note: coinbase and tx-blaster services are excluded by default (require 'with-coinbase' profile)
+        # The block-generator services use curl to generate blocks internally
         run: docker compose -f compose/docker-compose-3blasters.yml up -d
 
       - name: Wait for mining to complete (all nodes at height 110+ and in sync)
@@ -152,8 +153,8 @@ jobs:
           name: container-logs
           path: container-logs/
 
-      - name: Stop Teranode nodes (docker compose down for teranode-1/2/3)
-        run: docker compose -f compose/docker-compose-3blasters.yml down teranode1 teranode2 teranode3
+      - name: Stop Teranode nodes and block generators (keep postgres and aerospike running)
+        run: docker compose -f compose/docker-compose-3blasters.yml stop teranode1 teranode2 teranode3 block-generator-1 block-generator-2 block-generator-3
 
       - name: Build chainintegrity binary
         run: make build-chainintegrity
