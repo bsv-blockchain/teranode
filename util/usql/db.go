@@ -46,10 +46,8 @@ func (db *DB) Query(query string, args ...interface{}) (*sql.Rows, error) {
 		stat.NewStat(query).AddTime(start)
 	}()
 
-	// Use context.Background() for non-context queries
-	ctx := context.Background()
-	
-	return retryQueryOperation(ctx, db.retryConfig, func() (*sql.Rows, error) {
+	// Use default context for non-context queries
+	return retryQueryOperation(context.TODO(), db.retryConfig, func() (*sql.Rows, error) {
 		return db.DB.Query(query, args...)
 	})
 }
@@ -95,10 +93,8 @@ func (db *DB) Exec(query string, args ...interface{}) (sql.Result, error) {
 		stat.NewStat(query).AddTime(start)
 	}()
 
-	// Use context.Background() for non-context exec
-	ctx := context.Background()
-	
-	return retryExecOperation(ctx, db.retryConfig, func() (sql.Result, error) {
+	// Use default context for non-context exec
+	return retryExecOperation(context.TODO(), db.retryConfig, func() (sql.Result, error) {
 		return db.DB.Exec(query, args...)
 	})
 }

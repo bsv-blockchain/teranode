@@ -107,8 +107,16 @@ func calculateBackoff(attempt int, baseDelay time.Duration) time.Duration {
 	return delay
 }
 
+func normalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
 // retryOperation executes an operation with retry logic
 func retryOperation(ctx context.Context, config RetryConfig, operation func() error) error {
+	ctx = normalizeContext(ctx)
 	if !config.Enabled {
 		return operation()
 	}
@@ -161,6 +169,7 @@ func retryOperation(ctx context.Context, config RetryConfig, operation func() er
 
 // retryQueryOperation is a specialized version for Query operations that return *sql.Rows
 func retryQueryOperation(ctx context.Context, config RetryConfig, operation func() (*sql.Rows, error)) (*sql.Rows, error) {
+	ctx = normalizeContext(ctx)
 	if !config.Enabled {
 		return operation()
 	}
@@ -214,6 +223,7 @@ func retryQueryOperation(ctx context.Context, config RetryConfig, operation func
 
 // retryExecOperation is a specialized version for Exec operations that return sql.Result
 func retryExecOperation(ctx context.Context, config RetryConfig, operation func() (sql.Result, error)) (sql.Result, error) {
+	ctx = normalizeContext(ctx)
 	if !config.Enabled {
 		return operation()
 	}
