@@ -207,7 +207,7 @@ func testLongestChainWithDoubleSpendTransaction(t *testing.T, utxoStore string) 
 	// Scenario: Transaction with multiple outputs gets consumed differently across forks
 	// Parent tx creates multiple outputs [O1, O2, O3]
 	// Fork A: Contains tx1 spending O1 and tx2 spending O2
-	// Fork B: Contains tx3 spending all outputs [O2, O3]
+	// Fork B: Contains tx3 spending outputs [O2, O3]
 
 	td, block3 := setupLongestChainTest(t, utxoStore)
 	defer func() {
@@ -224,13 +224,14 @@ func testLongestChainWithDoubleSpendTransaction(t *testing.T, utxoStore string) 
 	parentTx, err := td.CreateParentTransactionWithNOutputs(t, block1.CoinbaseTx, 4)
 	require.NoError(t, err)
 
-	// Mine parentTx first so we have confirmed UTXOs
+	// Mine parentTx first
 	_, block4 := td.CreateTestBlock(t, block3, 4000, parentTx)
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4, "legacy", false), "Failed to process block")
 	t.Logf("WaitForBlockBeingMined(t, block4): %s", block4.Hash().String())
 	td.WaitForBlockBeingMined(t, block4)
-	t.Logf("WaitForBlock(t, block4, blockWait): %s", block4.Hash().String())
-	td.WaitForBlock(t, block4, blockWait)
+	td.WaitForBlockHeight(t, block4, blockWait)
+	// t.Logf("WaitForBlock(t, block4, blockWait): %s", block4.Hash().String())
+	// td.WaitForBlock(t, block4, blockWait)
 	t.Logf("VerifyNotInBlockAssembly(t, parentTx): %s", parentTx.TxIDChainHash().String())
 	td.VerifyNotInBlockAssembly(t, parentTx)
 	t.Logf("VerifyOnLongestChainInUtxoStore(t, parentTx): %s", parentTx.TxIDChainHash().String())
@@ -258,8 +259,9 @@ func testLongestChainWithDoubleSpendTransaction(t *testing.T, utxoStore string) 
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "legacy", false), "Failed to process block")
 	t.Logf("WaitForBlockBeingMined(t, block5a): %s", block5a.Hash().String())
 	td.WaitForBlockBeingMined(t, block5a)
-	t.Logf("WaitForBlock(t, block5a, blockWait): %s", block5a.Hash().String())
-	td.WaitForBlock(t, block5a, blockWait)
+	td.WaitForBlockHeight(t, block5a, blockWait)
+	// t.Logf("WaitForBlock(t, block5a, blockWait): %s", block5a.Hash().String())
+	// td.WaitForBlock(t, block5a, blockWait)
 
 	// 0 -> 1 ... 2 -> 3 -> 4 -> 5a (*) [tx1, tx2, parentTx2]
 
@@ -295,8 +297,8 @@ func testLongestChainWithDoubleSpendTransaction(t *testing.T, utxoStore string) 
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block6b, "legacy", false, false), "Failed to process block")
 	t.Logf("WaitForBlockBeingMined(t, block6b): %s", block6b.Hash().String())
 	td.WaitForBlockBeingMined(t, block6b)
-	t.Logf("WaitForBlock(t, block6b, blockWait): %s", block6b.Hash().String())
-	td.WaitForBlock(t, block6b, blockWait)
+	// t.Logf("WaitForBlock(t, block6b, blockWait): %s", block6b.Hash().String())
+	// td.WaitForBlock(t, block6b, blockWait)
 
 	//                        / 5a [tx1, tx2, parentTx2]
 	// 0 -> 1 ... 2 -> 3 -> 4
@@ -355,8 +357,8 @@ func testLongestChainInvalidateFork(t *testing.T, utxoStore string) {
 	_, block4a := td.CreateTestBlock(t, block3, 4001, parentTxWith3Outputs, childTx1, childTx2)
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", false, true), "Failed to process block")
 	td.WaitForBlockBeingMined(t, block4a)
-	t.Logf("WaitForBlock(t, block4a, blockWait): %s", block4a.Hash().String())
-	td.WaitForBlock(t, block4a, blockWait)
+	// t.Logf("WaitForBlock(t, block4a, blockWait): %s", block4a.Hash().String())
+	// td.WaitForBlock(t, block4a, blockWait)
 
 	// 0 -> 1 ... 2 -> 3 -> 4a (*)
 
@@ -379,8 +381,8 @@ func testLongestChainInvalidateFork(t *testing.T, utxoStore string) {
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5b, "legacy", true), "Failed to process block")
 	t.Logf("WaitForBlockBeingMined(t, block5b): %s", block5b.Hash().String())
 	td.WaitForBlockBeingMined(t, block5b)
-	t.Logf("WaitForBlock(t, block5b, blockWait): %s", block5b.Hash().String())
-	td.WaitForBlock(t, block5b, blockWait)
+	// t.Logf("WaitForBlock(t, block5b, blockWait): %s", block5b.Hash().String())
+	// td.WaitForBlock(t, block5b, blockWait)
 
 	// 0 -> 1 ... 2 -> 3 -> 4b -> 5b (*)
 	td.VerifyInBlockAssembly(t, childTx1)
@@ -393,7 +395,7 @@ func testLongestChainInvalidateFork(t *testing.T, utxoStore string) {
 	_, err = td.BlockchainClient.InvalidateBlock(t.Context(), block5b.Hash())
 	require.NoError(t, err)
 
-	td.WaitForBlock(t, block4a, blockWait)
+	td.WaitForBlockHeight(t, block4a, blockWait)
 
 	// 0 -> 1 ... 2 -> 3 -> 4a
 
@@ -409,8 +411,8 @@ func testLongestChainInvalidateFork(t *testing.T, utxoStore string) {
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "legacy", false, true), "Failed to process block")
 	t.Logf("WaitForBlockBeingMined(t, block5a): %s", block5a.Hash().String())
 	td.WaitForBlockBeingMined(t, block5a)
-	t.Logf("WaitForBlock(t, block5a, blockWait): %s", block5a.Hash().String())
-	td.WaitForBlock(t, block5a, blockWait)
+	// t.Logf("WaitForBlock(t, block5a, blockWait): %s", block5a.Hash().String())
+	// td.WaitForBlock(t, block5a, blockWait)
 
 	td.VerifyNotInBlockAssembly(t, childTx1)
 	td.VerifyNotInBlockAssembly(t, childTx2)
@@ -429,8 +431,8 @@ func testLongestChainInvalidateFork(t *testing.T, utxoStore string) {
 	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block6a, "legacy", false, true), "Failed to process block")
 	t.Logf("WaitForBlockBeingMined(t, block6a): %s", block6a.Hash().String())
 	td.WaitForBlockBeingMined(t, block6a)
-	t.Logf("WaitForBlock(t, block6a, blockWait): %s", block6a.Hash().String())
-	td.WaitForBlock(t, block6a, blockWait)
+	// t.Logf("WaitForBlock(t, block6a, blockWait): %s", block6a.Hash().String())
+	// td.WaitForBlock(t, block6a, blockWait)
 
 	t.Logf("FINAL VERIFICATIONS:")
 	td.VerifyNotInBlockAssembly(t, childTx1)
