@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -32,40 +33,40 @@ import (
 
 // NodeConfig holds the configuration for connecting to a teranode instance from the host
 type NodeConfig struct {
-	Name           string
-	BlockchainURL  string // PostgreSQL URL for blockchain store
-	UtxoStoreURL   string // Aerospike URL for UTXO store
-	SubtreeStore   string // File path for subtree store
-	TxStore        string // File path for tx store
-	ExternalStore  string // File path for external store (used by UTXO)
+	Name          string
+	BlockchainURL string // PostgreSQL URL for blockchain store
+	UtxoStoreURL  string // Aerospike URL for UTXO store
+	SubtreeStore  string // File path for subtree store
+	TxStore       string // File path for tx store
+	ExternalStore string // File path for external store (used by UTXO)
 }
 
 // nodeConfigs contains hardcoded configurations for the 3 teranode instances
 // These match the docker-compose-3blasters.yml port mappings
 var nodeConfigs = []NodeConfig{
 	{
-		Name:           "teranode1",
-		BlockchainURL:  "postgres://miner1:miner1@localhost:15432/teranode1",
-		UtxoStoreURL:   "aerospike://localhost:3100/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8",
-		SubtreeStore:   "file://./data/teranode1/subtreestore",
-		TxStore:        "file://./data/teranode1/txstore",
-		ExternalStore:  "file://./data/teranode1/external",
+		Name:          "teranode1",
+		BlockchainURL: "postgres://miner1:miner1@localhost:15432/teranode1",
+		UtxoStoreURL:  "aerospike://localhost:3100/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8",
+		SubtreeStore:  "file://./data/teranode1/subtreestore",
+		TxStore:       "file://./data/teranode1/txstore",
+		ExternalStore: "file://./data/teranode1/external",
 	},
 	{
-		Name:           "teranode2",
-		BlockchainURL:  "postgres://miner2:miner2@localhost:15432/teranode2",
-		UtxoStoreURL:   "aerospike://localhost:3200/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8",
-		SubtreeStore:   "file://./data/teranode2/subtreestore",
-		TxStore:        "file://./data/teranode2/txstore",
-		ExternalStore:  "file://./data/teranode2/external",
+		Name:          "teranode2",
+		BlockchainURL: "postgres://miner2:miner2@localhost:15432/teranode2",
+		UtxoStoreURL:  "aerospike://localhost:3200/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8",
+		SubtreeStore:  "file://./data/teranode2/subtreestore",
+		TxStore:       "file://./data/teranode2/txstore",
+		ExternalStore: "file://./data/teranode2/external",
 	},
 	{
-		Name:           "teranode3",
-		BlockchainURL:  "postgres://miner3:miner3@localhost:15432/teranode3",
-		UtxoStoreURL:   "aerospike://localhost:3300/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8",
-		SubtreeStore:   "file://./data/teranode3/subtreestore",
-		TxStore:        "file://./data/teranode3/txstore",
-		ExternalStore:  "file://./data/teranode3/external",
+		Name:          "teranode3",
+		BlockchainURL: "postgres://miner3:miner3@localhost:15432/teranode3",
+		UtxoStoreURL:  "aerospike://localhost:3300/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8",
+		SubtreeStore:  "file://./data/teranode3/subtreestore",
+		TxStore:       "file://./data/teranode3/txstore",
+		ExternalStore: "file://./data/teranode3/external",
 	},
 }
 
@@ -287,7 +288,7 @@ func fetchBlockHeaders(nodeConfig NodeConfig, debug bool, logfile string) ([]*mo
 	// Parse the blockchain URL directly from config
 	blockchainURL, err := url.Parse(nodeConfig.BlockchainURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse blockchain URL: %w", err)
+		return nil, errors.NewInvalidArgumentError("failed to parse blockchain URL: %v", err)
 	}
 
 	// Create minimal settings for the blockchain store
