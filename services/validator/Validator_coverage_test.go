@@ -765,7 +765,7 @@ func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
 	mockStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, errors.NewTxNotFoundError("tx not found"))
 
 	// Mock GetMeta to return existing tx (blessed scenario)
-	mockStore.On("GetMeta", mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
+	mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	options := &Options{}
 	txMetaData, err := v.validateInternal(ctx, tx, 100, options)

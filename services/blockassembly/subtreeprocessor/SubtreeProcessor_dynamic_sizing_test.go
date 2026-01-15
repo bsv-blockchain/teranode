@@ -70,7 +70,7 @@ func TestSubtreeProcessor_LowVolumeNeverIncreases(t *testing.T) {
 
 	// Test: High utilization but low volume (< 50 nodes per subtree)
 	t.Run("high utilization low volume keeps size", func(t *testing.T) {
-		stp.currentItemsPerFile = 8
+		stp.currentItemsPerFile.Store(8)
 
 		// Simulate 87.5% utilization (7 nodes in size-8 subtree)
 		// Populate the ring buffer
@@ -87,17 +87,17 @@ func TestSubtreeProcessor_LowVolumeNeverIncreases(t *testing.T) {
 			200 * time.Millisecond,
 		}
 
-		initialSize := stp.currentItemsPerFile
+		initialSize := stp.currentItemsPerFile.Load()
 		stp.adjustSubtreeSize()
 
 		// Size should NOT increase despite high utilization and fast creation
 		// because volume is low (7 nodes < 50 threshold)
-		require.Equal(t, initialSize, stp.currentItemsPerFile,
+		require.Equal(t, initialSize, stp.currentItemsPerFile.Load(),
 			"Size should not increase with low transaction volume")
 	})
 
 	t.Run("very low utilization decreases size", func(t *testing.T) {
-		stp.currentItemsPerFile = 32
+		stp.currentItemsPerFile.Store(32)
 
 		// Simulate 6.25% utilization (2 nodes in size-32 subtree)
 		r := stp.subtreeNodeCounts
@@ -110,15 +110,15 @@ func TestSubtreeProcessor_LowVolumeNeverIncreases(t *testing.T) {
 		stp.adjustSubtreeSize()
 
 		// Size should decrease when utilization is < 10%
-		require.Less(t, stp.currentItemsPerFile, 32,
+		require.Less(t, stp.currentItemsPerFile.Load(), int32(32),
 			"Size should decrease with very low utilization")
-		require.GreaterOrEqual(t, stp.currentItemsPerFile,
+		require.GreaterOrEqual(t, int(stp.currentItemsPerFile.Load()),
 			settings.BlockAssembly.MinimumMerkleItemsPerSubtree,
 			"Size should not go below minimum")
 	})
 
 	t.Run("moderate utilization maintains size", func(t *testing.T) {
-		stp.currentItemsPerFile = 16
+		stp.currentItemsPerFile.Store(16)
 
 		// Simulate 50% utilization (8 nodes in size-16 subtree)
 		r := stp.subtreeNodeCounts
@@ -128,11 +128,11 @@ func TestSubtreeProcessor_LowVolumeNeverIncreases(t *testing.T) {
 		}
 		stp.blockIntervals = []time.Duration{1 * time.Second}
 
-		initialSize := stp.currentItemsPerFile
+		initialSize := stp.currentItemsPerFile.Load()
 		stp.adjustSubtreeSize()
 
 		// Size should stay the same with moderate utilization
-		require.Equal(t, initialSize, stp.currentItemsPerFile,
+		require.Equal(t, initialSize, stp.currentItemsPerFile.Load(),
 			"Size should remain stable with moderate utilization")
 	})
 }
@@ -189,7 +189,7 @@ func TestSubtreeProcessor_UsageBasedCapping(t *testing.T) {
 	stp.Start(ctx)
 
 	t.Run("caps increase based on max observed nodes", func(t *testing.T) {
-		stp.currentItemsPerFile = 32
+		stp.currentItemsPerFile.Store(32)
 
 		// High utilization with moderate volume
 		// Max 27 nodes seen, average 25
@@ -211,12 +211,12 @@ func TestSubtreeProcessor_UsageBasedCapping(t *testing.T) {
 
 		// Size should be capped at 2x max observed (27*2=54 -> round to 64)
 		// Not allowed to go higher even though timing suggests it
-		require.LessOrEqual(t, stp.currentItemsPerFile, 64,
+		require.LessOrEqual(t, stp.currentItemsPerFile.Load(), int32(64),
 			"Size should be capped based on actual usage")
 	})
 
 	t.Run("allows increase when volume justifies it", func(t *testing.T) {
-		stp.currentItemsPerFile = 64
+		stp.currentItemsPerFile.Store(64)
 
 		// High utilization with high volume (> 50 nodes)
 		nodes := []int{60, 62, 58, 61, 59, 60, 61, 60, 60, 60}
@@ -233,11 +233,11 @@ func TestSubtreeProcessor_UsageBasedCapping(t *testing.T) {
 			200 * time.Millisecond,
 		}
 
-		initialSize := stp.currentItemsPerFile
+		initialSize := stp.currentItemsPerFile.Load()
 		stp.adjustSubtreeSize()
 
 		// Size should increase when volume is high enough
-		require.Greater(t, stp.currentItemsPerFile, initialSize,
+		require.Greater(t, stp.currentItemsPerFile.Load(), initialSize,
 			"Size should increase with high volume and fast creation")
 	})
 }
@@ -294,7 +294,7 @@ func TestSubtreeProcessor_RealWorldScenario(t *testing.T) {
 
 	t.Run("adapts to changing load patterns", func(t *testing.T) {
 		// Start with high load
-		stp.currentItemsPerFile = 1024
+		stp.currentItemsPerFile.Store(1024)
 		nodes := []int{900, 950, 920, 940, 910}
 		r := stp.subtreeNodeCounts
 		for _, n := range nodes {
@@ -304,12 +304,12 @@ func TestSubtreeProcessor_RealWorldScenario(t *testing.T) {
 		stp.blockIntervals = []time.Duration{500 * time.Millisecond}
 
 		stp.adjustSubtreeSize()
-		highLoadSize := stp.currentItemsPerFile
-		require.GreaterOrEqual(t, highLoadSize, 1024,
+		highLoadSize := stp.currentItemsPerFile.Load()
+		require.GreaterOrEqual(t, highLoadSize, int32(1024),
 			"Should maintain or increase size under high load")
 
 		// Transition to low load (2-4 tx/s scenario)
-		stp.currentItemsPerFile = highLoadSize
+		stp.currentItemsPerFile.Store(highLoadSize)
 		nodes = []int{3, 4, 2, 3, 4, 3, 2, 4, 3, 3}
 		r = stp.subtreeNodeCounts
 		for _, n := range nodes {
@@ -320,15 +320,15 @@ func TestSubtreeProcessor_RealWorldScenario(t *testing.T) {
 
 		// Should decrease over multiple adjustments
 		for i := 0; i < 5; i++ {
-			prevSize := stp.currentItemsPerFile
+			prevSize := stp.currentItemsPerFile.Load()
 			stp.adjustSubtreeSize()
 
 			// Each adjustment should decrease or maintain size, never increase
-			require.LessOrEqual(t, stp.currentItemsPerFile, prevSize,
+			require.LessOrEqual(t, stp.currentItemsPerFile.Load(), prevSize,
 				"Size should decrease or stay same under low load")
 
 			// Reset counters as the real code does
-			if stp.currentItemsPerFile < prevSize {
+			if stp.currentItemsPerFile.Load() < prevSize {
 				nodes = []int{3, 4, 2, 3, 4, 3, 2, 4, 3, 3}
 				r = stp.subtreeNodeCounts
 				for _, n := range nodes {
@@ -339,7 +339,7 @@ func TestSubtreeProcessor_RealWorldScenario(t *testing.T) {
 		}
 
 		// Should eventually reach a small size
-		require.LessOrEqual(t, stp.currentItemsPerFile, 64,
+		require.LessOrEqual(t, stp.currentItemsPerFile.Load(), int32(64),
 			"Size should decrease significantly under sustained low load")
 	})
 }
@@ -559,7 +559,7 @@ func TestSubtreeProcessor_MinimumSizeRespected(t *testing.T) {
 	stp.Start(ctx)
 
 	t.Run("never goes below minimum", func(t *testing.T) {
-		stp.currentItemsPerFile = 4 // At minimum
+		stp.currentItemsPerFile.Store(4) // At minimum
 
 		// Extremely low utilization that would normally trigger decrease
 		r := stp.subtreeNodeCounts
@@ -572,8 +572,8 @@ func TestSubtreeProcessor_MinimumSizeRespected(t *testing.T) {
 		stp.adjustSubtreeSize()
 
 		// Should stay at minimum
-		require.Equal(t, settings.BlockAssembly.MinimumMerkleItemsPerSubtree,
-			stp.currentItemsPerFile,
+		require.Equal(t, int32(settings.BlockAssembly.MinimumMerkleItemsPerSubtree),
+			stp.currentItemsPerFile.Load(),
 			"Size should not go below minimum")
 	})
 }
@@ -632,7 +632,7 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 
 	t.Run("scales up with sustained high volume", func(t *testing.T) {
 		// Start with a moderate size
-		stp.currentItemsPerFile = 64
+		stp.currentItemsPerFile.Store(64)
 
 		// Simulate high transaction volume (1000+ tx/s)
 		// With size 64, we'd be creating subtrees very frequently
@@ -651,23 +651,23 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 			50 * time.Millisecond,
 		}
 
-		initialSize := stp.currentItemsPerFile
+		initialSize := stp.currentItemsPerFile.Load()
 		stp.adjustSubtreeSize()
 
 		// Size should increase significantly due to high volume and fast creation
-		require.Greater(t, stp.currentItemsPerFile, initialSize,
+		require.Greater(t, stp.currentItemsPerFile.Load(), initialSize,
 			"Size should increase with high transaction volume")
 
 		// With ratio = 1000ms/50ms = 20, and starting at 64,
 		// new size would be 64*20 = 1280, rounded to 2048
 		// But capped at 2x per adjustment = 128
-		require.Equal(t, 128, stp.currentItemsPerFile,
+		require.Equal(t, int32(128), stp.currentItemsPerFile.Load(),
 			"Size should double with very high load")
 	})
 
 	t.Run("continues scaling with extreme volume", func(t *testing.T) {
 		// Now at 128, still seeing high volume
-		stp.currentItemsPerFile = 128
+		stp.currentItemsPerFile.Store(128)
 
 		// Even higher utilization now (120+ nodes per subtree)
 		r := stp.subtreeNodeCounts
@@ -687,13 +687,13 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		stp.adjustSubtreeSize()
 
 		// Should continue scaling up
-		require.Equal(t, 256, stp.currentItemsPerFile,
+		require.Equal(t, int32(256), stp.currentItemsPerFile.Load(),
 			"Should continue doubling with extreme load")
 	})
 
 	t.Run("scales to maximum with massive volume", func(t *testing.T) {
 		// Set near maximum to test ceiling
-		stp.currentItemsPerFile = 16384
+		stp.currentItemsPerFile.Store(16384)
 
 		// Extremely high volume - nearly full subtrees
 		r := stp.subtreeNodeCounts
@@ -713,14 +713,14 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		stp.adjustSubtreeSize()
 
 		// Should hit the maximum
-		require.Equal(t, settings.BlockAssembly.MaximumMerkleItemsPerSubtree,
-			stp.currentItemsPerFile,
+		require.Equal(t, int32(settings.BlockAssembly.MaximumMerkleItemsPerSubtree),
+			stp.currentItemsPerFile.Load(),
 			"Should reach maximum size with massive volume")
 	})
 
 	t.Run("scales down when volume decreases", func(t *testing.T) {
 		// Start at a high size from previous high volume
-		stp.currentItemsPerFile = 8192
+		stp.currentItemsPerFile.Store(8192)
 
 		// Volume has dropped significantly (only 100-200 tx per subtree)
 		r := stp.subtreeNodeCounts
@@ -741,15 +741,15 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		// With ratio = 1s/2s = 0.5, size should halve
 		// But utilization is also low (100-190 out of 8192 = ~2%)
 		// So it should decrease based on low utilization
-		require.Less(t, stp.currentItemsPerFile, 8192,
+		require.Less(t, stp.currentItemsPerFile.Load(), int32(8192),
 			"Size should decrease when volume drops")
-		require.LessOrEqual(t, stp.currentItemsPerFile, 4096,
+		require.LessOrEqual(t, stp.currentItemsPerFile.Load(), int32(4096),
 			"Should decrease significantly with low utilization")
 	})
 
 	t.Run("handles burst traffic correctly", func(t *testing.T) {
 		// Start at a reasonable size
-		stp.currentItemsPerFile = 256
+		stp.currentItemsPerFile.Store(256)
 
 		// Sudden burst - subtrees are completely full
 		r := stp.subtreeNodeCounts
@@ -768,11 +768,11 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		stp.adjustSubtreeSize()
 
 		// Should increase to handle burst
-		require.Greater(t, stp.currentItemsPerFile, 256,
+		require.Greater(t, stp.currentItemsPerFile.Load(), int32(256),
 			"Should increase size to handle burst traffic")
 
 		// Now simulate burst ending
-		stp.currentItemsPerFile = 512 // After increase
+		stp.currentItemsPerFile.Store(512) // After increase
 
 		// Traffic back to much lower (20-30 nodes per subtree)
 		r = stp.subtreeNodeCounts
@@ -791,7 +791,7 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		stp.adjustSubtreeSize()
 
 		// Should decrease back down (utilization ~5%)
-		require.Less(t, stp.currentItemsPerFile, 512,
+		require.Less(t, stp.currentItemsPerFile.Load(), int32(512),
 			"Should decrease after burst ends with low utilization")
 	})
 
@@ -802,7 +802,7 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		// we need subtree size of ~100,000
 
 		// Start small and let it scale
-		stp.currentItemsPerFile = 1024
+		stp.currentItemsPerFile.Store(1024)
 
 		// First adjustment - seeing 950+ nodes per subtree
 		r := stp.subtreeNodeCounts
@@ -820,16 +820,16 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		}
 
 		// Should scale up over multiple adjustments
-		sizes := []int{}
+		sizes := []int32{}
 		for i := 0; i < 5; i++ {
-			prevSize := stp.currentItemsPerFile
+			prevSize := stp.currentItemsPerFile.Load()
 			stp.adjustSubtreeSize()
-			sizes = append(sizes, stp.currentItemsPerFile)
+			sizes = append(sizes, stp.currentItemsPerFile.Load())
 
 			// Simulate continued high load
-			if stp.currentItemsPerFile > prevSize {
+			if stp.currentItemsPerFile.Load() > prevSize {
 				// Update node counts to match new size
-				newNodeCount := int(float64(stp.currentItemsPerFile) * 0.93) // 93% full
+				newNodeCount := int(float64(stp.currentItemsPerFile.Load()) * 0.93) // 93% full
 				r = stp.subtreeNodeCounts
 				for j := 0; j < 10; j++ {
 					r.Value = newNodeCount + (j % 10)
@@ -839,7 +839,7 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		}
 
 		// Should have scaled up significantly
-		require.Greater(t, stp.currentItemsPerFile, 1024,
+		require.Greater(t, stp.currentItemsPerFile.Load(), int32(1024),
 			"Should scale up from initial size")
 
 		// Log the scaling progression
@@ -848,9 +848,9 @@ func TestSubtreeProcessor_HighVolumeScaling(t *testing.T) {
 		// Final size should be appropriate for the load
 		// With 100ms intervals and needing to handle ~950 tx per subtree,
 		// optimal size would be around 2048-4096
-		require.GreaterOrEqual(t, stp.currentItemsPerFile, 2048,
+		require.GreaterOrEqual(t, stp.currentItemsPerFile.Load(), int32(2048),
 			"Should reach appropriate size for sustained high volume")
-		require.LessOrEqual(t, stp.currentItemsPerFile, 8192,
+		require.LessOrEqual(t, stp.currentItemsPerFile.Load(), int32(8192),
 			"Should not overshoot reasonable size")
 	})
 }
@@ -906,7 +906,7 @@ func TestSubtreeProcessor_VolumeThresholds(t *testing.T) {
 	stp.Start(ctx)
 
 	t.Run("just below threshold blocks increase", func(t *testing.T) {
-		stp.currentItemsPerFile = 64
+		stp.currentItemsPerFile.Store(64)
 
 		// 49 nodes per subtree - just below threshold
 		r := stp.subtreeNodeCounts
@@ -922,16 +922,16 @@ func TestSubtreeProcessor_VolumeThresholds(t *testing.T) {
 			100 * time.Millisecond,
 		}
 
-		initialSize := stp.currentItemsPerFile
+		initialSize := stp.currentItemsPerFile.Load()
 		stp.adjustSubtreeSize()
 
 		// Should NOT increase due to low volume check
-		require.Equal(t, initialSize, stp.currentItemsPerFile,
+		require.Equal(t, initialSize, stp.currentItemsPerFile.Load(),
 			"Should not increase with 49 nodes (below 50 threshold)")
 	})
 
 	t.Run("just above threshold allows increase", func(t *testing.T) {
-		stp.currentItemsPerFile = 64
+		stp.currentItemsPerFile.Store(64)
 
 		// 60 nodes per subtree - well above threshold and high utilization (93.75%)
 		r := stp.subtreeNodeCounts
@@ -947,16 +947,16 @@ func TestSubtreeProcessor_VolumeThresholds(t *testing.T) {
 			100 * time.Millisecond,
 		}
 
-		initialSize := stp.currentItemsPerFile
+		initialSize := stp.currentItemsPerFile.Load()
 		stp.adjustSubtreeSize()
 
 		// Should increase now that we're above threshold with high utilization
-		require.Greater(t, stp.currentItemsPerFile, initialSize,
+		require.Greater(t, stp.currentItemsPerFile.Load(), initialSize,
 			"Should increase with 60 nodes (above 50 threshold with high utilization)")
 	})
 
 	t.Run("exactly at threshold with high utilization allows increase", func(t *testing.T) {
-		stp.currentItemsPerFile = 60
+		stp.currentItemsPerFile.Store(60)
 
 		// Exactly 50 nodes per subtree - 83% utilization triggers high path
 		r := stp.subtreeNodeCounts
@@ -972,11 +972,11 @@ func TestSubtreeProcessor_VolumeThresholds(t *testing.T) {
 			100 * time.Millisecond,
 		}
 
-		initialSize := stp.currentItemsPerFile
+		initialSize := stp.currentItemsPerFile.Load()
 		stp.adjustSubtreeSize()
 
 		// Should increase at exactly 50 with high utilization
-		require.Greater(t, stp.currentItemsPerFile, initialSize,
+		require.Greater(t, stp.currentItemsPerFile.Load(), initialSize,
 			"Should increase with exactly 50 nodes when utilization > 80%")
 	})
 }

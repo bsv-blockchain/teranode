@@ -17,7 +17,6 @@ package blockvalidation
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -55,7 +54,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/greatroar/blobloom"
 	"github.com/jarcoal/httpmock"
 	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
@@ -390,7 +388,7 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	start := time.Now()
 
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
@@ -529,7 +527,7 @@ func TestBlockValidationValidateBlock(t *testing.T) {
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	start := time.Now()
 
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
 	require.NoError(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
@@ -617,8 +615,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbasePlaceholder(t *testing.T)
 	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	start := time.Now()
-	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
-	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
+	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
+	err = blockValidation.ValidateBlock(context.Background(), block, "legacy")
 	require.Error(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
@@ -709,8 +707,8 @@ func TestBlockValidationShouldNotAllowDuplicateCoinbaseTx(t *testing.T) {
 	tSettings.GlobalBlockHeightRetention = uint32(0)
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	start := time.Now()
-	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
-	err = blockValidation.ValidateBlock(context.Background(), block, "legacy", model.NewBloomStats())
+	// err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
+	err = blockValidation.ValidateBlock(context.Background(), block, "legacy")
 	require.Error(t, err)
 	t.Logf("Time taken: %s\n", time.Since(start))
 }
@@ -836,7 +834,7 @@ func TestInvalidBlockWithoutGenesisBlock(t *testing.T) {
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 	start := time.Now()
 
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
 	require.Error(t, err)
 
 	t.Logf("Time taken: %s\n", time.Since(start))
@@ -957,7 +955,7 @@ func TestInvalidChainWithoutGenesisBlock(t *testing.T) {
 
 	// When: The last block in the chain is validated
 	start := time.Now()
-	err = blockValidation.ValidateBlock(context.Background(), blocks[len(blocks)-1], "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), blocks[len(blocks)-1], "http://localhost:8000")
 
 	// Then: An error should be received because the chain does not connect to the Genesis block
 	require.Error(t, err)
@@ -1095,7 +1093,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 	// Test valid merkle root
-	err = blockValidation.ValidateBlock(context.Background(), validBlock, "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), validBlock, "http://localhost:8000")
 	require.NoError(t, err, "Block validation should succeed with valid merkle root")
 
 	// Create block with invalid merkle root
@@ -1129,7 +1127,7 @@ func TestBlockValidationMerkleTreeValidation(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test invalid merkle root
-	err = blockValidation.ValidateBlock(context.Background(), invalidBlock, "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), invalidBlock, "http://localhost:8000")
 	require.ErrorContains(t, err, "merkle root does not match")
 }
 
@@ -1337,7 +1335,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
 	// Test block validation - it should request the missing transaction
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost:8000")
 	require.NoError(t, err, "Block validation should succeed after retrieving missing transaction")
 
 	// Verify that the missing transaction was stored
@@ -1459,7 +1457,7 @@ func TestBlockValidationExcessiveBlockSize(t *testing.T) {
 			// Set the settings to avoid nil pointer dereference
 
 			// Validate the block
-			err = blockValidator.ValidateBlock(ctx, block, "test", nil)
+			err = blockValidator.ValidateBlock(ctx, block, "test")
 
 			if tt.expectError {
 				require.Error(t, err)
@@ -1598,7 +1596,7 @@ func TestBlockValidation_InvalidCoinbaseScriptLength(t *testing.T) {
 	block.CoinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x01}) // Too short
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
-	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "test")
 	require.ErrorContains(t, err, "BLOCK_INVALID")
 }
 
@@ -1831,7 +1829,7 @@ func TestBlockValidation_DoubleSpendInBlock(t *testing.T) {
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 
-	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "http://localhost")
 	require.Error(t, err)
 	require.ErrorContains(t, err, "BLOCK_INVALID")
 	require.ErrorContains(t, err, "has duplicate inputs")
@@ -1945,7 +1943,7 @@ func TestBlockValidation_InvalidTransactionChainOrdering(t *testing.T) {
 	)
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
-	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "test")
 	require.Error(t, err)
 	require.ErrorContains(t, err, "BLOCK_INVALID")
 	require.ErrorContains(t, err, "comes before parent transaction")
@@ -2057,7 +2055,7 @@ func TestBlockValidation_InvalidParentBlock(t *testing.T) {
 	)
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
-	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "test")
 	require.Error(t, err)
 }
 
@@ -2161,116 +2159,6 @@ func Test_checkOldBlockIDs(t *testing.T) {
 		err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, &model.Block{})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "are not from current chain")
-	})
-}
-
-func Test_createAppendBloomFilter(t *testing.T) {
-	logger := ulogger.TestLogger{}
-
-	blockHeader := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  &chainhash.Hash{},
-		HashMerkleRoot: &chainhash.Hash{},
-		Timestamp:      uint32(time.Now().Unix()), //nolint:gosec
-		Bits:           model.NBit{},
-		Nonce:          0,
-	}
-
-	// Create a test block with specified size and valid header
-	block := &model.Block{
-		Header:           blockHeader,
-		SizeInBytes:      123,
-		TransactionCount: 1,
-		CoinbaseTx:       tx1,                 // Using tx1 from test setup
-		Subtrees:         []*chainhash.Hash{}, // Initialize empty subtrees slice
-	}
-
-	t.Run("smoke test", func(t *testing.T) {
-		blockchainMock := &blockchain.Mock{}
-
-		blockValidation := &BlockValidation{
-			logger:                        logger,
-			blockchainClient:              blockchainMock,
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
-			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			subtreeStore:                  blobmemory.New(),
-			settings:                      test.CreateBaseTestSettings(t),
-		}
-
-		blockchainMock.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{
-			Height: 100,
-		}, nil)
-
-		err := blockValidation.createAppendBloomFilter(t.Context(), block)
-		require.NoError(t, err)
-	})
-
-	t.Run("check the bloom filter", func(t *testing.T) {
-		blockchainMock := &blockchain.Mock{}
-
-		blockValidation := &BlockValidation{
-			logger:                        logger,
-			blockchainClient:              blockchainMock,
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
-			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			subtreeStore:                  blobmemory.New(),
-			settings:                      test.CreateBaseTestSettings(t),
-		}
-
-		blockchainMock.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{
-			Height: 100,
-		}, nil)
-
-		// create subtree with transactions
-		subtree, err := subtreepkg.NewTreeByLeafCount(4)
-		require.NoError(t, err)
-
-		txs := make([]chainhash.Hash, 0, 4)
-
-		for i := uint64(0); i < 4; i++ {
-			txHash := chainhash.HashH([]byte(fmt.Sprintf("txHash_%d", i)))
-			require.NoError(t, subtree.AddNode(txHash, i, i))
-
-			txs = append(txs, txHash)
-		}
-
-		subtreeBytes, err := subtree.Serialize()
-		require.NoError(t, err)
-
-		err = blockValidation.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
-		require.NoError(t, err)
-
-		// clone the block
-		blockClone := &model.Block{
-			Header:           block.Header,
-			CoinbaseTx:       block.CoinbaseTx,
-			TransactionCount: block.TransactionCount,
-			SizeInBytes:      block.SizeInBytes,
-			Subtrees:         []*chainhash.Hash{subtree.RootHash()},
-			SubtreeSlices:    []*subtreepkg.Subtree{subtree},
-			Height:           100,
-		}
-
-		err = blockValidation.createAppendBloomFilter(t.Context(), blockClone)
-		require.NoError(t, err)
-
-		// get the bloomfilter and check whether all the transactions are in there
-		bloomFilter, ok := blockValidation.recentBlocksBloomFilters.Get(*blockClone.Hash())
-		require.True(t, ok, "bloom filter should be present in the map")
-		require.NotNil(t, bloomFilter)
-
-		for _, txHash := range txs {
-			// check whether the transaction is in the bloom filter
-			n64 := binary.BigEndian.Uint64(txHash[:])
-			assert.True(t, bloomFilter.Filter.Has(n64), "bloom filter should match the transaction: "+txHash.String())
-		}
-
-		// check for some random transaction
-		randomTxHash := chainhash.HashH([]byte("randomTxHash"))
-		n64 := binary.BigEndian.Uint64(randomTxHash[:])
-		require.False(t, bloomFilter.Filter.Has(n64), "bloom filter should not match the random transaction")
 	})
 }
 
@@ -2420,7 +2308,7 @@ func TestBlockValidation_ParentAndChildInSameBlock(t *testing.T) {
 	)
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
-	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "test")
 	require.NoError(t, err, "Block with parent and child tx in correct order should be valid")
 }
 
@@ -2540,7 +2428,7 @@ func TestBlockValidation_TransactionChainInSameBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
-	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "test")
 	require.NoError(t, err, "Block with transaction chain in correct order should be valid")
 }
 
@@ -2643,7 +2531,7 @@ func TestBlockValidation_DuplicateTransactionInBlock(t *testing.T) {
 	require.NoError(t, err)
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
-	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "test")
 	require.Error(t, err, "Block with duplicate transaction should be invalid")
 	// Optionally check for a specific error message if the implementation provides one
 	require.ErrorContains(t, err, "duplicate transaction")
@@ -2689,8 +2577,6 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 		subtreeStore:                  subtreeStore,
 		txStore:                       txStore,
 		utxoStore:                     utxoStore,
-		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-		bloomFilterRetentionSize:      0,
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
@@ -2698,8 +2584,6 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
-		bloomFilterStats:              model.NewBloomStats(),
 		setMinedChan:                  make(chan *chainhash.Hash, 1),
 		revalidateBlockChan:           revalidateChan,
 		stats:                         gocore.NewStat("blockvalidation"),
@@ -2748,7 +2632,7 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 	}
 
 	// Call ValidateBlock (should trigger ReValidateBlock due to header error)
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(ctx, block, "test")
 	require.Error(t, err)
 	t.Logf("ValidateBlock error: %v", err)
 
@@ -2794,17 +2678,13 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		subtreeStore:                  subtreeStore,
 		txStore:                       txStore,
 		utxoStore:                     txMetaStore,
-		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-		bloomFilterRetentionSize:      0,
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
-		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		bloomFilterStats:              model.NewBloomStats(),
 		setMinedChan:                  make(chan *chainhash.Hash, 1),
 		revalidateBlockChan:           make(chan revalidateBlockData, 1),
 		stats:                         gocore.NewStat("blockvalidation"),
@@ -2939,16 +2819,6 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		uint64(coinbaseTx.Size()+parentTx.Size()+childTx1.Size()), //nolint:gosec
 		100, 0,
 	)
-
-	blockHash := block.Header.Hash()
-	// Create a proper bloom filter with initialized Filter field
-	bloomFilter := &model.BlockBloomFilter{
-		BlockHash:    blockHash,
-		Filter:       blobloom.NewOptimized(blobloom.Config{Capacity: 1000, FPRate: 0.01}),
-		CreationTime: time.Now(),
-		BlockHeight:  100,
-	}
-	bv.recentBlocksBloomFilters.Set(*blockHash, bloomFilter)
 
 	// Update the GetBlockHeaders mock to return the actual block header
 	// This ensures the bloom filter hash matches between storage and retrieval
@@ -3219,7 +3089,7 @@ func TestBlockValidation_OptimisticMining_InValidBlock(t *testing.T) {
 	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes)
 	require.NoError(t, err)
 
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats(), false)
+	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.NoError(t, err)
 
 	// Wait for the goroutine to call InvalidateBlock
@@ -3336,7 +3206,7 @@ func TestBlockValidation_SetMined_UpdatesTxMeta(t *testing.T) {
 	require.NoError(t, err)
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
-	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "test")
 	require.NoError(t, err, "Block should be valid")
 
 	err = blockValidation.setTxMinedStatus(context.Background(), block.Hash())
@@ -3456,7 +3326,7 @@ func TestBlockValidation_SetMinedChan_TriggersSetTxMined(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "test")
 	require.NoError(t, err, "Block should be valid")
 
 	blockHash := block.Hash()
@@ -3586,7 +3456,7 @@ func TestBlockValidation_BlockchainSubscription_TriggersSetMined(t *testing.T) {
 	mockBlockchain.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil)
 
 	blockValidation := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
-	err = blockValidation.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	err = blockValidation.ValidateBlock(context.Background(), block, "test")
 	require.NoError(t, err, "Block should be valid")
 
 	blockHash := block.Hash()
@@ -3714,8 +3584,6 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		subtreeStore:                  subtreeStore,
 		txStore:                       txStore,
 		utxoStore:                     txMetaStore,
-		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-		bloomFilterRetentionSize:      0,
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(0),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
@@ -3724,13 +3592,11 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
-		bloomFilterStats:              model.NewBloomStats(),
 		setMinedChan:                  make(chan *chainhash.Hash, 1),
 		stats:                         gocore.NewStat("blockvalidation"),
 	}
 
-	err = bv.ValidateBlock(context.Background(), block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(context.Background(), block, "test")
 	t.Logf("ValidateBlock error type: %T, value: %v", err, err)
 	require.Error(t, err)
 

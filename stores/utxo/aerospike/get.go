@@ -301,9 +301,9 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
 //   - hash: Transaction hash to retrieve metadata for
+//   - data: Pre-allocated meta.Data struct to populate with the retrieved metadata
 //
 // Returns:
-//   - *meta.Data: Transaction metadata including UTXOs, block references, and status, or nil if not found
 //   - error: Any error encountered during retrieval
 //
 // This method is more efficient than Get() when you only need metadata fields such as:
@@ -311,8 +311,17 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.
 //   - Block height and block ID references
 //   - Transaction flags (coinbase, frozen status)
 //   - Subtree indices and validation data
-func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return s.get(ctx, hash, utxo.MetaFields)
+func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	result, err := s.get(ctx, hash, utxo.MetaFields)
+	if err != nil {
+		return err
+	}
+
+	if result != nil {
+		*data = *result
+	}
+
+	return nil
 }
 
 // get is an internal method that retrieves transaction data using batch processing.

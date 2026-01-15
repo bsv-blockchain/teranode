@@ -152,19 +152,41 @@ Many endpoints support multiple response formats, indicated by the URL path or a
     - Returns: JSON array of block data
 
 - GET `/api/v1/blocks/:hash`
-    - Description: Retrieves multiple blocks starting with the specified hash
+    - Description: Retrieves multiple consecutive blocks starting with the specified hash, traversing backward through the chain
     - Parameters:
 
         - `hash`: Starting block hash (hex string)
-        - `n` (optional): Number of blocks to retrieve
+        - `n` (optional): Number of blocks to retrieve (default: 100, max: 1000)
 
-    - Returns: Block data in binary format
+    - Returns: Concatenated block data in binary format (application/octet-stream)
+    - **Important:** All blocks are concatenated without delimiters. Clients must parse blocks sequentially:
+        1. Read 80-byte block header
+        2. Read VarInt transaction count
+        3. Read VarInt size in bytes
+        4. Read VarInt subtree count, then subtree hashes (32 bytes each)
+        5. Read coinbase transaction
+        6. Read VarInt block height
+        7. Repeat for next block
+    - **Note:** When downloading in a browser, the file may appear to contain only one block. The full data is present but requires sequential parsing. Use `/json` endpoint for easier inspection.
 
 - GET `/api/v1/blocks/:hash/hex`
-    - Description: Same as above but in hexadecimal format
+    - Description: Same as above but returns hexadecimal-encoded string
+    - Parameters:
+
+        - `hash`: Starting block hash (hex string)
+        - `n` (optional): Number of blocks to retrieve (default: 100, max: 1000)
+
+    - Returns: Hex string of concatenated block bytes (text/plain)
 
 - GET `/api/v1/blocks/:hash/json`
-    - Description: Same as above but in JSON format
+    - Description: Same as above but returns structured JSON array of blocks
+    - Parameters:
+
+        - `hash`: Starting block hash (hex string)
+        - `n` (optional): Number of blocks to retrieve (default: 100, max: 1000)
+
+    - Returns: JSON array containing parsed block objects with all fields
+    - **Recommended:** Use this endpoint for easier parsing and inspection of multiple blocks
 
 - GET `/api/v1/lastblocks`
     - Description: Retrieves the most recent blocks in the blockchain

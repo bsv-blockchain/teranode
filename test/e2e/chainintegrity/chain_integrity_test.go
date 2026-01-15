@@ -105,12 +105,12 @@ func createNode(t *testing.T, _ context.Context, nodeNumber int) *daemon.TestDae
 	storeType := "aerospike"
 
 	node := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:         true,
-		EnableP2P:         true,
-		EnableValidator:   true,
-		UTXOStoreType:     storeType,
-		SkipRemoveDataDir: nodeNumber > 1, // Only first node cleans the shared parent data dir; subsequent nodes share it
-		EnableFullLogging: true,
+		EnableRPC:          true,
+		EnableP2P:          true,
+		EnableValidator:    true,
+		UTXOStoreType:      storeType,
+		SkipRemoveDataDir:  nodeNumber > 1, // Only first node cleans the shared parent data dir; subsequent nodes share it
+		EnableDebugLogging: true,
 		SettingsOverrideFunc: func(s *settings.Settings) {
 			// Apply MultiNodeSettings for unique identity and separate stores per node
 			test.MultiNodeSettings(nodeNumber)(s)

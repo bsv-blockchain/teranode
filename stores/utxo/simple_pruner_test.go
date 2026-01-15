@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 // Simple test that covers the early return path to boost coverage
@@ -39,7 +40,9 @@ func TestCleanupCutoffCalculation(t *testing.T) {
 	mockStore := new(MockUtxostore)
 	// Mock GetUnminedTxIterator to return empty iterator
 	// Block height 15 - retention 5 = cutoff 10
-	mockIter := &MockUnminedTxIterator{} // Returns nil, nil by default (empty)
+	mockIter := &MockUnminedTxIterator{}
+	mockIter.On("Next", mock.Anything).Return(([]*UnminedTransaction)(nil), nil).Once()
+	mockIter.On("Close").Return(nil)
 	mockStore.On("GetUnminedTxIterator").Return(mockIter, nil)
 
 	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 15, settings, logger)

@@ -382,9 +382,10 @@ func (c *KafkaAsyncProducer) Stop() error {
 
 	// Close the publish channel to signal the publish goroutine to exit
 	c.channelMu.Lock()
-	if c.publishChannel != nil {
-		close(c.publishChannel)
-		c.publishChannel = nil
+	ch := c.publishChannel
+	if ch != nil {
+		c.publishChannel = nil // Set to nil BEFORE closing to prevent sends to closed channel
+		close(ch)
 	}
 	c.channelMu.Unlock()
 

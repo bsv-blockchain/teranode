@@ -34,6 +34,7 @@ nav:
           - Installation:
               - Docker: howto/miners/docker/minersHowToInstallation.md
               - Kubernetes: howto/miners/kubernetes/minersHowToInstallation.md
+              - AWS POC Setup: staging/TeranodePOC/AWS-POC-Setup.md
               - Deprecated: howto/miners/kubernetes/minersHowToInstallationDeprecated.md
           - Configuration:
               - Docker: howto/miners/docker/minersHowToConfigureTheNode.md

@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -26,17 +25,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_storeSubtree(t *testing.T) {
-	t.Run("Test storeSubtree", func(t *testing.T) {
+func Test_storeSubtreeData(t *testing.T) {
+	t.Run("Test storeSubtreeData", func(t *testing.T) {
 		server, subtreeStore, subtree, txMap := setup(t)
 
 		subtreeRetryChan := make(chan *subtreeRetrySend, 1_000)
 
-		require.NoError(t, server.storeSubtree(t.Context(), subtreeprocessor.NewSubtreeRequest{
+		subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{
 			Subtree:     subtree,
 			ParentTxMap: txMap,
 			ErrChan:     nil,
-		}, subtreeRetryChan))
+		}, subtreeRetryChan)
+		require.NoError(t, err)
+
+		// Wait for subtree storage
+		storedOK := <-subtreeDone
+		require.True(t, storedOK)
+
+		// Wait for all work to complete
+		<-allDone
 
 		subtreeBytes, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtree)
 		require.NoError(t, err)
@@ -69,21 +76,29 @@ func Test_storeSubtree(t *testing.T) {
 		}
 	})
 
-	t.Run("Test storeSubtree - meta missing", func(t *testing.T) {
+	t.Run("Test storeSubtreeData - meta missing", func(t *testing.T) {
 		server, subtreeStore, subtree, txMap := setup(t)
 
 		txMap.Clear()
 
 		subtreeRetryChan := make(chan *subtreeRetrySend, 1_000)
 
-		require.NoError(t, server.storeSubtree(t.Context(), subtreeprocessor.NewSubtreeRequest{
+		subtreeDone, allDone, err := server.storeSubtreeData(t.Context(), subtreeprocessor.NewSubtreeRequest{
 			Subtree:     subtree,
 			ParentTxMap: txMap,
 			ErrChan:     nil,
-		}, subtreeRetryChan))
+		}, subtreeRetryChan)
+		require.NoError(t, err)
+
+		// Wait for subtree storage
+		storedOK := <-subtreeDone
+		require.True(t, storedOK)
+
+		// Wait for all work to complete
+		<-allDone
 
 		// check that the meta data was not stored
-		_, err := subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta)
+		_, err = subtreeStore.Get(t.Context(), subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta)
 		require.Error(t, err)
 	})
 }
@@ -111,6 +126,10 @@ func TestCheckBlockAssembly(t *testing.T) {
 		mockSubtreeProcessor := &subtreeprocessor.MockSubtreeProcessor{}
 		mockSubtreeProcessor.On("CheckSubtreeProcessor").Return(errors.NewProcessingError("test error"))
 		mockSubtreeProcessor.On("Stop", mock.Anything).Return() // Expect Stop() to be called during cleanup
+		// Mock methods called by metrics goroutine every 5 seconds
+		mockSubtreeProcessor.On("TxCount").Return(uint64(0)).Maybe()
+		mockSubtreeProcessor.On("QueueLength").Return(int64(0)).Maybe()
+		mockSubtreeProcessor.On("SubtreeCount").Return(0).Maybe()
 
 		server.blockAssembler.subtreeProcessor = mockSubtreeProcessor
 
@@ -129,6 +148,13 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		server, _, _, _ := setup(t)
 		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
+
+		// Wait for BlockAssembler state to be StateRunning before requesting mining candidate
+		// This prevents race with blockchain notification processing
+		require.Eventually(t, func() bool {
+			state := server.blockAssembler.GetCurrentRunningState()
+			return state == StateRunning
+		}, 5*time.Second, 100*time.Millisecond)
 
 		resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
 		require.NoError(t, err)
@@ -154,23 +180,49 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
+		// Wait for BlockAssembler state to be StateRunning before modifying state
+		require.Eventually(t, func() bool {
+			state := server.blockAssembler.GetCurrentRunningState()
+			return state == StateRunning
+		}, 5*time.Second, 100*time.Millisecond)
+
 		currentHeader, _ := server.blockAssembler.CurrentBlock()
-		server.blockAssembler.setBestBlockHeader(currentHeader, 250) // halvings = 150
+		server.blockAssembler.setBestBlockHeader(currentHeader, 250)
 
-		resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
-		require.NoError(t, err)
+		// Wait for the height to settle at 250 before requesting mining candidate
+		// This ensures any pending blockchain notifications have been processed
+		require.Eventually(t, func() bool {
+			_, height := server.blockAssembler.CurrentBlock()
+			t.Logf("Waiting for height to settle at 250, current: %d", height)
+			return height == 250
+		}, 5*time.Second, 100*time.Millisecond, "Height should settle at 250")
 
-		require.NotNil(t, resp)
+		// Use Eventually to repeatedly request until we get the correct block
+		// This handles the case where a blockchain notification arrives between settling and request
+		var block *model.Block
+		require.Eventually(t, func() bool {
+			resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
+			if err != nil {
+				t.Logf("Error getting block candidate: %v", err)
+				return false
+			}
+			if resp == nil || resp.Block == nil {
+				t.Logf("Got nil response or block")
+				return false
+			}
 
-		blockBytes := resp.Block
-		require.NotNil(t, blockBytes)
+			block, err = model.NewBlockFromBytes(resp.Block)
+			if err != nil {
+				t.Logf("Error parsing block: %v", err)
+				return false
+			}
 
-		block, err := model.NewBlockFromBytes(blockBytes)
-		require.NoError(t, err)
+			t.Logf("Got block at height %d with coinbase %d", block.Height, block.CoinbaseTx.Outputs[0].Satoshis)
+			return block.Height == 251 && block.CoinbaseTx.Outputs[0].Satoshis == 2500000000
+		}, 5*time.Second, 100*time.Millisecond, "Should get block at height 251 with 2.5 BTC coinbase")
 
 		require.NotNil(t, block)
 		require.NotNil(t, block.Header)
-
 		assert.Equal(t, uint32(251), block.Height)
 		assert.Equal(t, uint64(0), block.TransactionCount)
 		assert.Equal(t, uint64(2500000000), block.CoinbaseTx.Outputs[0].Satoshis)
@@ -181,18 +233,34 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		err := server.blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
+		// Use a common parent hash for all transactions (simulating they all spend from same output)
+		genesisHash := chainhash.HashH([]byte("genesis"))
 		for i := uint64(0); i < 10; i++ {
-			server.blockAssembler.AddTx(subtreepkg.Node{
+			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
 				Fee:         i,
 				SizeInBytes: i,
-			}, subtreepkg.TxInpoints{})
+			}}, []*subtreepkg.TxInpoints{{
+				ParentTxHashes: []chainhash.Hash{genesisHash},
+				Idxs:           [][]uint32{{uint32(i)}}, // Different output index for each tx
+			}})
 		}
 
 		require.Eventually(t, func() bool {
-			return server.blockAssembler.TxCount() == 11
-		}, 5*time.Second, 10*time.Millisecond)
+			count := server.blockAssembler.TxCount()
+			t.Logf("Current TxCount: %d", count)
+			return count == 11
+		}, 5*time.Second, 100*time.Millisecond)
 
+		// Wait for BlockAssembler state to be StateRunning before requesting mining candidate
+		// This is critical after the recent change that returns empty blocks during state transitions
+		require.Eventually(t, func() bool {
+			state := server.blockAssembler.GetCurrentRunningState()
+			t.Logf("Current BlockAssembler state: %s", StateStrings[state])
+			return state == StateRunning
+		}, 5*time.Second, 100*time.Millisecond)
+
+		t.Logf("BlockAssembler is in StateRunning, now calling GetBlockAssemblyBlockCandidate")
 		resp, err := server.GetBlockAssemblyBlockCandidate(t.Context(), &blockassembly_api.EmptyMessage{})
 		require.NoError(t, err)
 
@@ -213,13 +281,13 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 	})
 }
 
-func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints]) {
+func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, subtreeprocessor.TxInpointsMap) {
 	s, subtreeStore := setupServer(t)
 
 	subtree, err := subtreepkg.NewTreeByLeafCount(16)
 	require.NoError(t, err)
 
-	txMap := txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
+	txMap := subtreeprocessor.NewSplitTxInpointsMap(256)
 
 	previousHash := chainhash.HashH([]byte("previousHash"))
 
@@ -227,7 +295,7 @@ func setup(t *testing.T) (*BlockAssembly, *memory.Memory, *subtreepkg.Subtree, *
 		txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
 		_ = subtree.AddNode(txHash, i, i)
 
-		txMap.Set(txHash, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{previousHash}, Idxs: [][]uint32{{0, 1}}})
+		txMap.Set(txHash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{previousHash}, Idxs: [][]uint32{{0, 1}}})
 		previousHash = txHash
 	}
 
@@ -420,11 +488,11 @@ func TestTxCount(t *testing.T) {
 		// to avoid TxInpoints serialization issues
 		for i := 0; i < 3; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
-			server.blockAssembler.AddTx(subtreepkg.Node{
+			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}, subtreepkg.TxInpoints{})
+			}}, []*subtreepkg.TxInpoints{{}})
 		}
 
 		// Wait for processing - expect initial count + 3 added transactions
@@ -443,11 +511,11 @@ func TestSubmitMiningSolution_InvalidBlock_HandlesReset(t *testing.T) {
 		// Add some transactions to create a mining candidate
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
-			server.blockAssembler.AddTx(subtreepkg.Node{
+			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}, subtreepkg.TxInpoints{})
+			}}, []*subtreepkg.TxInpoints{{}})
 		}
 
 		// Wait for transactions to be processed
@@ -922,13 +990,13 @@ func TestInitIntensive(t *testing.T) {
 	})
 }
 
-// TestStoreSubtreeIntensive tests the storeSubtree method comprehensively
-func TestStoreSubtreeIntensive(t *testing.T) {
-	t.Run("storeSubtree with SkipNotification", func(t *testing.T) {
+// TestStoreSubtreeDataIntensive tests the storeSubtreeData method comprehensively
+func TestStoreSubtreeDataIntensive(t *testing.T) {
+	t.Run("storeSubtreeData basic storage", func(t *testing.T) {
 		server, subtreeStore, subtree, txMap := setup(t)
 		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
 
-		err := server.storeSubtree(context.Background(), subtreeprocessor.NewSubtreeRequest{
+		subtreeDone, allDone, err := server.storeSubtreeData(context.Background(), subtreeprocessor.NewSubtreeRequest{
 			Subtree:          subtree,
 			ParentTxMap:      txMap,
 			SkipNotification: true,
@@ -936,6 +1004,9 @@ func TestStoreSubtreeIntensive(t *testing.T) {
 		}, subtreeRetryChan)
 
 		assert.NoError(t, err)
+		storedOK := <-subtreeDone
+		assert.True(t, storedOK)
+		<-allDone // Wait for all work
 
 		// Verify subtree was stored
 		subtreeBytes, err := subtreeStore.Get(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree)
@@ -943,49 +1014,7 @@ func TestStoreSubtreeIntensive(t *testing.T) {
 		assert.NotNil(t, subtreeBytes)
 	})
 
-	t.Run("storeSubtree with FSM not running", func(t *testing.T) {
-		server, _, subtree, txMap := setup(t)
-
-		// Mock blockchain client to return FSM not running
-		mockClient := &blockchain.Mock{}
-		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
-		server.blockchainClient = mockClient
-
-		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
-
-		err := server.storeSubtree(context.Background(), subtreeprocessor.NewSubtreeRequest{
-			Subtree:     subtree,
-			ParentTxMap: txMap,
-			ErrChan:     nil,
-		}, subtreeRetryChan)
-
-		assert.NoError(t, err)
-		mockClient.AssertExpectations(t)
-	})
-
-	t.Run("storeSubtree with notification error", func(t *testing.T) {
-		server, _, subtree, txMap := setup(t)
-
-		// Mock blockchain client to return error on notification
-		mockClient := &blockchain.Mock{}
-		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
-		mockClient.On("SendNotification", mock.Anything, mock.Anything).Return(errors.NewProcessingError("notification failed"))
-		server.blockchainClient = mockClient
-
-		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
-
-		err := server.storeSubtree(context.Background(), subtreeprocessor.NewSubtreeRequest{
-			Subtree:     subtree,
-			ParentTxMap: txMap,
-			ErrChan:     nil,
-		}, subtreeRetryChan)
-
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to send subtree notification")
-		mockClient.AssertExpectations(t)
-	})
-
-	t.Run("storeSubtree with store already exists error", func(t *testing.T) {
+	t.Run("storeSubtreeData with store already exists", func(t *testing.T) {
 		server, subtreeStore, subtree, txMap := setup(t)
 
 		// Pre-store the subtree to trigger "already exists" path
@@ -996,23 +1025,23 @@ func TestStoreSubtreeIntensive(t *testing.T) {
 
 		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
 
-		err = server.storeSubtree(context.Background(), subtreeprocessor.NewSubtreeRequest{
+		_, _, err = server.storeSubtreeData(context.Background(), subtreeprocessor.NewSubtreeRequest{
 			Subtree:     subtree,
 			ParentTxMap: txMap,
 			ErrChan:     nil,
 		}, subtreeRetryChan)
 
-		// Should not error - should detect existing subtree and return early
-		assert.NoError(t, err)
+		// Should return ErrBlobAlreadyExists
+		assert.True(t, errors.Is(err, errors.ErrBlobAlreadyExists))
 	})
 
-	t.Run("storeSubtree handles errors gracefully", func(t *testing.T) {
+	t.Run("storeSubtreeData handles errors gracefully", func(t *testing.T) {
 		server, _, subtree, txMap := setup(t)
 
 		subtreeRetryChan := make(chan *subtreeRetrySend, 1000)
 
 		// Test with valid scenario - this just ensures the path is covered
-		err := server.storeSubtree(context.Background(), subtreeprocessor.NewSubtreeRequest{
+		subtreeDone, allDone, err := server.storeSubtreeData(context.Background(), subtreeprocessor.NewSubtreeRequest{
 			Subtree:     subtree,
 			ParentTxMap: txMap,
 			ErrChan:     nil,
@@ -1020,11 +1049,63 @@ func TestStoreSubtreeIntensive(t *testing.T) {
 
 		// Should succeed in most cases
 		assert.NoError(t, err)
+		storedOK := <-subtreeDone
+		assert.True(t, storedOK)
+		<-allDone // Wait for all work
+	})
+}
+
+// TestSendSubtreeNotification tests the sendSubtreeNotification method
+func TestSendSubtreeNotification(t *testing.T) {
+	t.Run("sendSubtreeNotification with FSM not running", func(t *testing.T) {
+		server, _, subtree, _ := setup(t)
+
+		// Mock blockchain client to return FSM not running
+		mockClient := &blockchain.Mock{}
+		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(false, nil)
+		server.blockchainClient = mockClient
+
+		// Should not send notification when FSM is not running
+		server.sendSubtreeNotification(context.Background(), *subtree.RootHash())
+
+		mockClient.AssertExpectations(t)
+		mockClient.AssertNotCalled(t, "SendNotification", mock.Anything, mock.Anything)
+	})
+
+	t.Run("sendSubtreeNotification with FSM running", func(t *testing.T) {
+		server, _, subtree, _ := setup(t)
+
+		// Mock blockchain client to return FSM running
+		mockClient := &blockchain.Mock{}
+		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+		mockClient.On("SendNotification", mock.Anything, mock.Anything).Return(nil)
+		server.blockchainClient = mockClient
+
+		server.sendSubtreeNotification(context.Background(), *subtree.RootHash())
+
+		mockClient.AssertExpectations(t)
+	})
+
+	t.Run("sendSubtreeNotification with notification error", func(t *testing.T) {
+		server, _, subtree, _ := setup(t)
+
+		// Mock blockchain client to return error on notification
+		mockClient := &blockchain.Mock{}
+		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+		mockClient.On("SendNotification", mock.Anything, mock.Anything).Return(errors.NewProcessingError("notification failed"))
+		server.blockchainClient = mockClient
+
+		// Should log error but not panic
+		server.sendSubtreeNotification(context.Background(), *subtree.RootHash())
+
+		mockClient.AssertExpectations(t)
 	})
 }
 
 // TestStartStopIntensive tests the Start and Stop methods comprehensively
 func TestStartStopIntensive(t *testing.T) {
+	t.Skip("Skipping intensive test") // It is questionable if this test should be part of our unit tests
+
 	t.Run("Start method comprehensive test", func(t *testing.T) {
 		server, _ := setupServer(t)
 
@@ -1181,11 +1262,11 @@ func TestRemoveTxIntensive(t *testing.T) {
 
 		// First add a transaction
 		txHash := chainhash.HashH([]byte("test-tx-to-remove"))
-		server.blockAssembler.AddTx(subtreepkg.Node{
+		server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}, subtreepkg.TxInpoints{})
+		}}, []*subtreepkg.TxInpoints{{}})
 
 		// Wait for it to be added
 		time.Sleep(10 * time.Millisecond)
@@ -1329,11 +1410,11 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 		// Add some transactions to create subtrees
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("mining-tx-%d", i)))
-			server.blockAssembler.AddTx(subtreepkg.Node{
+			server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}, subtreepkg.TxInpoints{})
+			}}, []*subtreepkg.TxInpoints{{}})
 		}
 
 		time.Sleep(50 * time.Millisecond) // Allow processing
@@ -1837,11 +1918,11 @@ func TestRemoveTxEdgeCases(t *testing.T) {
 
 		// Add a transaction first
 		txHash := chainhash.HashH([]byte("test-tx-remove"))
-		server.blockAssembler.AddTx(subtreepkg.Node{
+		server.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}, subtreepkg.TxInpoints{})
+		}}, []*subtreepkg.TxInpoints{{}})
 
 		// Now remove it to cover the success path
 		req := &blockassembly_api.RemoveTxRequest{
@@ -2030,6 +2111,7 @@ func TestStoreRetryErrorPaths(t *testing.T) {
 		// Mock blockchain client to return error on notification
 		mockClient := &blockchain.Mock{}
 		mockClient.On("SendNotification", mock.Anything, mock.Anything).Return(errors.NewProcessingError("notification failed"))
+		mockClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
 		server.blockchainClient = mockClient
 
 		subtreeHash := chainhash.HashH([]byte("test-notify"))

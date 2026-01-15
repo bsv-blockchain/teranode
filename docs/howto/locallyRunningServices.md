@@ -271,4 +271,56 @@ Remember to replace `[YOUR_CONTEXT]` with your actual username throughout all co
 
 This guide aims to provide a streamlined process for running services and nodes during development.
 
+## 🌐 Running a Local Testnet Network
+
+For a complete testnet deployment with automated setup wizard and network configuration, see the **[Teranode Teratestnet Repository](https://github.com/bsv-blockchain/teranode-teratestnet)**.
+
+The teratestnet repository provides:
+
+- **`start-teratestnet.sh`** - Interactive wizard for automated setup
+- **Configuration helpers** - Automated domain/URL setup (via ngrok or custom domain)
+- **Docker Compose orchestration** - Pre-configured multi-service deployment
+- **Network setup** - Automatic connectivity configuration
+- **Reset and upgrade utilities** - Simplified data management and version updates
+
+**Key differences from this repository:**
+
+| Feature | Teranode (this repo) | Teranode Teratestnet |
+|---------|----------------------|----------------------|
+| Setup approach | Manual configuration | Wizard-based automation |
+| Target audience | Developers | Miners and operators |
+| Configuration | Requires settings_local.conf | Interactive prompts |
+| Network setup | Manual | Automated (ngrok or custom) |
+| Service management | Individual service control | Docker Compose orchestration |
+
+**When to use each:**
+
+- **Use this repository** for:
+    - Core development and testing
+    - Individual service development
+    - Custom configurations
+    - Contributing to Teranode codebase
+
+- **Use teratestnet repository** for:
+    - Quick testnet deployment
+    - Mining operations
+    - Production-like testnet environment
+    - Users wanting automated setup
+
+**Getting started with teratestnet:**
+
+```bash
+# Clone the teratestnet repository
+git clone https://github.com/bsv-blockchain/teranode-teratestnet.git
+cd teranode-teratestnet
+
+# Run the setup wizard
+./start-teratestnet.sh
+
+# For help and options
+./start-teratestnet.sh --help
+```
+
+## Additional Resources
+
 If you encounter any issues, consult the detailed documentation or reach out to the development team for assistance.

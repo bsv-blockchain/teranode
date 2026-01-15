@@ -58,13 +58,15 @@ func TestValidateParentChain_BatchingAndOrdering(t *testing.T) {
 			parentTxHashes[i] = parentHash
 
 			tx := &utxo.UnminedTransaction{
-				Hash: &parentHash,
-				TxInpoints: subtree.TxInpoints{
+				Node: &subtree.Node{
+					Hash:        parentHash,
+					Fee:         1000,
+					SizeInBytes: 250,
+				},
+				TxInpoints: &subtree.TxInpoints{
 					ParentTxHashes: []chainhash.Hash{{}}, // Empty hash means mined parent
 					Idxs:           [][]uint32{{0}},
 				},
-				Fee:       1000,
-				Size:      250,
 				CreatedAt: i,
 			}
 			unminedTxs = append(unminedTxs, tx)
@@ -80,13 +82,15 @@ func TestValidateParentChain_BatchingAndOrdering(t *testing.T) {
 			childTxHashes[i] = childHash
 
 			tx := &utxo.UnminedTransaction{
-				Hash: &childHash,
-				TxInpoints: subtree.TxInpoints{
+				Node: &subtree.Node{
+					Hash:        childHash,
+					Fee:         1000,
+					SizeInBytes: 250,
+				},
+				TxInpoints: &subtree.TxInpoints{
 					ParentTxHashes: []chainhash.Hash{parentTxHashes[i]},
 					Idxs:           [][]uint32{{0}},
 				},
-				Fee:       1000,
-				Size:      250,
 				CreatedAt: 50 + i,
 			}
 			unminedTxs = append(unminedTxs, tx)
@@ -99,13 +103,15 @@ func TestValidateParentChain_BatchingAndOrdering(t *testing.T) {
 		}
 
 		grandchildTx := &utxo.UnminedTransaction{
-			Hash: &grandchildHash,
-			TxInpoints: subtree.TxInpoints{
+			Node: &subtree.Node{
+				Hash:        grandchildHash,
+				Fee:         1000,
+				SizeInBytes: 250,
+			},
+			TxInpoints: &subtree.TxInpoints{
 				ParentTxHashes: []chainhash.Hash{childTxHashes[0]}, // Depends on tx at index 50
 				Idxs:           [][]uint32{{0}},
 			},
-			Fee:       1000,
-			Size:      250,
 			CreatedAt: 100,
 		}
 		unminedTxs = append(unminedTxs, grandchildTx)
@@ -212,25 +218,29 @@ func TestValidateParentChain_BatchingAndOrdering(t *testing.T) {
 
 		// Child transaction (index 0) - depends on parent at index 1
 		childTx := &utxo.UnminedTransaction{
-			Hash: &childHash,
-			TxInpoints: subtree.TxInpoints{
+			Node: &subtree.Node{
+				Hash:        childHash,
+				Fee:         1000,
+				SizeInBytes: 250,
+			},
+			TxInpoints: &subtree.TxInpoints{
 				ParentTxHashes: []chainhash.Hash{parentHash},
 				Idxs:           [][]uint32{{0}},
 			},
-			Fee:       1000,
-			Size:      250,
 			CreatedAt: 0,
 		}
 
 		// Parent transaction (index 1) - no unmined parents
 		parentTx := &utxo.UnminedTransaction{
-			Hash: &parentHash,
-			TxInpoints: subtree.TxInpoints{
+			Node: &subtree.Node{
+				Hash:        parentHash,
+				Fee:         1000,
+				SizeInBytes: 250,
+			},
+			TxInpoints: &subtree.TxInpoints{
 				ParentTxHashes: []chainhash.Hash{{}}, // Empty hash = mined parent
 				Idxs:           [][]uint32{{0}},
 			},
-			Fee:       1000,
-			Size:      250,
 			CreatedAt: 1,
 		}
 

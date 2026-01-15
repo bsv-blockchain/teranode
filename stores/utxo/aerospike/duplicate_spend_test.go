@@ -15,18 +15,18 @@ import (
 // TestDuplicateSpendLargeTx tests that duplicate spend attempts on a transaction
 // with more than utxoBatchSize outputs don't cause spentExtraRecs to exceed totalExtraRecs
 func TestDuplicateSpendLargeTx(t *testing.T) {
+	batchSize := 2
+	numOutputs := 10
+
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	// Set batch size to 128 as in production
-	tSettings.UtxoStore.UtxoBatchSize = 128
+	tSettings.UtxoStore.UtxoBatchSize = batchSize
 
 	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 	t.Cleanup(func() {
 		deferFn()
 	})
-
-	// Create a transaction with 1001 outputs (this will create 8 records: 1 master + 7 extra)
-	numOutputs := 1001
 
 	// Build a transaction with many outputs
 	largeTx := bt.NewTx()
@@ -64,7 +64,7 @@ func TestDuplicateSpendLargeTx(t *testing.T) {
 	totalExtraRecs, ok := rec.Bins["totalExtraRecs"].(int)
 	require.True(t, ok)
 	// With 1001 outputs and batch size 128, we should have 7 extra records
-	expectedExtraRecs := (numOutputs - 1) / 128 // 1001/128 = 7 (since first 128 go in master)
+	expectedExtraRecs := (numOutputs / batchSize) - 1
 	assert.Equal(t, expectedExtraRecs, totalExtraRecs)
 
 	// spentExtraRecs should not exist yet
@@ -132,7 +132,7 @@ func TestDuplicateSpendLargeTx(t *testing.T) {
 		"spentExtraRecs changed from %d to %d after duplicate spend attempt",
 		spentExtraRecsAfterFirst, spentExtraRecsAfterDuplicate)
 
-	// Try a third time to be really sure
+	// // Try a third time to be really sure
 	spends3, err := store.Spend(ctx, spendingTx, store.GetBlockHeight()+1)
 	require.NoError(t, err, "Failed on third spend attempt")
 	require.NotNil(t, spends3)

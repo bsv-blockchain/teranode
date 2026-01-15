@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmappkg "github.com/bsv-blockchain/go-tx-map"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -517,7 +518,7 @@ func BenchmarkChannelSendReceive(b *testing.B) {
 	}()
 
 	subtree, _ := subtreepkg.NewTreeByLeafCount(4)
-	txMap := txmappkg.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
+	txMap := NewSplitTxInpointsMap(1)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -684,6 +685,208 @@ func TestOverheadBreakdownDetailed(t *testing.T) {
 	t.Log("- If 1 vs 2 differ significantly: rotation overhead")
 	t.Log("- If 3 is significant: TxMap duplicate detection overhead")
 	t.Log("- If 4 > (2 + 3): channel/coordination overhead")
+}
+
+// =============================================================================
+// PARALLEL PROCESSING BENCHMARKS
+// These benchmarks test the parallelGetAndSetIfNotExists optimization
+// =============================================================================
+
+// BenchmarkParallelGetAndSetIfNotExists benchmarks the parallel processing
+// optimization at various node counts.
+func BenchmarkParallelGetAndSetIfNotExists(b *testing.B) {
+	testCases := []struct {
+		name      string
+		nodeCount int
+	}{
+		{name: "1k_nodes", nodeCount: 1000},
+		{name: "10k_nodes", nodeCount: 10000},
+		{name: "50k_nodes", nodeCount: 50000},
+		{name: "100k_nodes", nodeCount: 100000},
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
+			defer cleanup()
+
+			// Pre-generate nodes and currentTxMap
+			nodes := make([]subtreepkg.Node, tc.nodeCount)
+			currentTxMap := NewSplitTxInpointsMap(splitMapBuckets)
+			for i := 0; i < tc.nodeCount; i++ {
+				hash := benchmarkTxHashPool[i%benchmarkTxPoolSize]
+				nodes[i] = subtreepkg.Node{Hash: hash, Fee: uint64(i), SizeInBytes: 250}
+				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+			}
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				// Reset stp.currentTxMap for each iteration
+				stp.currentTxMap = NewSplitTxInpointsMap(splitMapBuckets)
+				wasInserted := make([]bool, len(nodes))
+
+				_ = stp.parallelGetAndSetIfNotExists(nodes, currentTxMap, 0,
+					stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency, wasInserted)
+			}
+
+			b.StopTimer()
+			b.ReportMetric(float64(tc.nodeCount), "nodes")
+		})
+	}
+}
+
+// BenchmarkSequentialGetAndSetIfNotExists benchmarks the sequential path
+// for comparison with parallel processing.
+func BenchmarkSequentialGetAndSetIfNotExists(b *testing.B) {
+	testCases := []struct {
+		name      string
+		nodeCount int
+	}{
+		{name: "1k_nodes", nodeCount: 1000},
+		{name: "10k_nodes", nodeCount: 10000},
+		{name: "50k_nodes", nodeCount: 50000},
+		{name: "100k_nodes", nodeCount: 100000},
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
+			defer cleanup()
+
+			// Pre-generate nodes and currentTxMap
+			nodes := make([]subtreepkg.Node, tc.nodeCount)
+			currentTxMap := NewSplitTxInpointsMap(splitMapBuckets)
+			for i := 0; i < tc.nodeCount; i++ {
+				hash := benchmarkTxHashPool[i%benchmarkTxPoolSize]
+				nodes[i] = subtreepkg.Node{Hash: hash, Fee: uint64(i), SizeInBytes: 250}
+				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+			}
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				// Reset stp.currentTxMap for each iteration
+				stp.currentTxMap = NewSplitTxInpointsMap(splitMapBuckets)
+
+				// Sequential path (original implementation)
+				for _, node := range nodes {
+					nodeParents, found := currentTxMap.Get(node.Hash)
+					if !found {
+						continue
+					}
+					stp.currentTxMap.SetIfNotExists(node.Hash, nodeParents)
+				}
+			}
+
+			b.StopTimer()
+			b.ReportMetric(float64(tc.nodeCount), "nodes")
+		})
+	}
+}
+
+// BenchmarkProcessOwnBlockSubtreeNodesParallel benchmarks the full processOwnBlockSubtreeNodes
+// function with parallel processing enabled.
+func BenchmarkProcessOwnBlockSubtreeNodesParallel(b *testing.B) {
+	testCases := []struct {
+		name      string
+		nodeCount int
+	}{
+		{name: "1k_nodes", nodeCount: 1000},
+		{name: "10k_nodes", nodeCount: 10000},
+		{name: "100k_nodes", nodeCount: 100000},
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
+			defer cleanup()
+
+			// Enable parallel path
+			stp.settings.BlockAssembly.ParallelSetIfNotExistsThreshold = 100
+
+			// Pre-generate nodes and currentTxMap
+			nodes := make([]subtreepkg.Node, tc.nodeCount)
+			currentTxMap := NewSplitTxInpointsMap(splitMapBuckets)
+			for i := 0; i < tc.nodeCount; i++ {
+				hash := benchmarkTxHashPool[i%benchmarkTxPoolSize]
+				nodes[i] = subtreepkg.Node{Hash: hash, Fee: uint64(i), SizeInBytes: 250}
+				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+			}
+
+			block := &model.Block{
+				Header: blockHeader,
+			}
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				// Reset state for each iteration
+				stp.currentTxMap = NewSplitTxInpointsMap(splitMapBuckets)
+				stp.currentSubtree.Store(nil)
+				stp.chainedSubtrees = nil
+
+				_ = stp.processOwnBlockSubtreeNodes(block, nodes, currentTxMap, 0, nil, true)
+			}
+
+			b.StopTimer()
+			b.ReportMetric(float64(tc.nodeCount), "nodes")
+		})
+	}
+}
+
+// BenchmarkProcessOwnBlockSubtreeNodesSequential benchmarks the full processOwnBlockSubtreeNodes
+// function with sequential processing (high threshold to disable parallel).
+func BenchmarkProcessOwnBlockSubtreeNodesSequential(b *testing.B) {
+	testCases := []struct {
+		name      string
+		nodeCount int
+	}{
+		{name: "1k_nodes", nodeCount: 1000},
+		{name: "10k_nodes", nodeCount: 10000},
+		{name: "100k_nodes", nodeCount: 100000},
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc.name, func(b *testing.B) {
+			stp, cleanup := setupSubtreeProcessorForBenchB(b, 1024)
+			defer cleanup()
+
+			// Disable parallel path with high threshold
+			stp.settings.BlockAssembly.ParallelSetIfNotExistsThreshold = 10_000_000
+
+			// Pre-generate nodes and currentTxMap
+			nodes := make([]subtreepkg.Node, tc.nodeCount)
+			currentTxMap := NewSplitTxInpointsMap(splitMapBuckets)
+			for i := 0; i < tc.nodeCount; i++ {
+				hash := benchmarkTxHashPool[i%benchmarkTxPoolSize]
+				nodes[i] = subtreepkg.Node{Hash: hash, Fee: uint64(i), SizeInBytes: 250}
+				currentTxMap.Set(hash, &subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+			}
+
+			block := &model.Block{
+				Header: blockHeader,
+			}
+
+			b.ResetTimer()
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				// Reset state for each iteration
+				stp.currentTxMap = NewSplitTxInpointsMap(splitMapBuckets)
+				stp.currentSubtree.Store(nil)
+				stp.chainedSubtrees = nil
+
+				_ = stp.processOwnBlockSubtreeNodes(block, nodes, currentTxMap, 0, nil, true)
+			}
+
+			b.StopTimer()
+			b.ReportMetric(float64(tc.nodeCount), "nodes")
+		})
+	}
 }
 
 func setupSubtreeProcessorForBenchB(b *testing.B, itemsPerSubtree int) (*SubtreeProcessor, func()) {

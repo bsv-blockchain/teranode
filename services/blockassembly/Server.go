@@ -271,6 +271,20 @@ func (ba *BlockAssembly) Init(ctx context.Context) (err error) {
 	go ba.runNewSubtreeListener(ctx, newSubtreeChan, subtreeRetryChan)
 	go ba.runBlockSubmissionListener(ctx)
 
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				ba.logger.Infof("Stopping block assembler metrics updater")
+				return
+			case <-time.After(5 * time.Second):
+				prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
+				prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
+				prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
+			}
+		}
+	}()
+
 	return nil
 }
 
@@ -293,44 +307,178 @@ func (ba *BlockAssembly) runSubtreeRetryProcessor(ctx context.Context, subtreeRe
 	}
 }
 
+// subtreeStorageWork represents a unit of work for subtree storage workers.
+type subtreeStorageWork struct {
+	seq      uint64                             // sequence number for ordering notifications
+	request  subtreeprocessor.NewSubtreeRequest // the subtree request to process
+	doneChan chan *subtreeStorageResult         // channel to signal completion
+}
+
+// subtreeStorageResult represents the result of a subtree storage operation.
+type subtreeStorageResult struct {
+	seq              uint64                             // sequence number for ordering
+	request          subtreeprocessor.NewSubtreeRequest // original request
+	err              error                              // error from storage operation
+	skipNotification bool                               // whether notification should be skipped
+	storedOK         bool                               // true if subtree was stored successfully
+}
+
 // runNewSubtreeListener handles incoming requests for new subtrees.
-// It stores subtrees and invalidates mining candidate cache when new subtrees are available.
+// It uses a worker pool for parallel storage and ensures notifications are sent in order.
 func (ba *BlockAssembly) runNewSubtreeListener(ctx context.Context, newSubtreeChan <-chan subtreeprocessor.NewSubtreeRequest, subtreeRetryChan chan *subtreeRetrySend) {
+	numWorkers := ba.settings.BlockAssembly.SubtreeStorageWorkers
+	if numWorkers <= 0 {
+		numWorkers = 4
+	}
+
+	workChan := make(chan *subtreeStorageWork, numWorkers*2)
+	resultChan := make(chan *subtreeStorageResult, numWorkers*2)
+
+	// Start storage workers
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ba.subtreeStorageWorker(ctx, workChan, subtreeRetryChan, resultChan)
+		}()
+	}
+
+	// Start notification sender (processes results in order)
+	notifyDone := make(chan struct{})
+	go func() {
+		defer close(notifyDone)
+		ba.subtreeNotificationSender(ctx, resultChan)
+	}()
+
+	var seq uint64
 	for {
 		select {
 		case <-ctx.Done():
 			ba.logger.Infof("Stopping subtree listener")
+			close(workChan)
+			wg.Wait()
+			close(resultChan)
+			<-notifyDone
 			return
 
 		case newSubtreeRequest := <-newSubtreeChan:
-			err := ba.storeSubtree(ctx, newSubtreeRequest, subtreeRetryChan)
-			if err != nil {
-				ba.logger.Errorf(err.Error())
+			ba.logger.Infof("[runNewSubtreeListener][%s] New subtree request: %d", newSubtreeRequest.Subtree.RootHash().String(), seq)
+			work := &subtreeStorageWork{
+				seq:     seq,
+				request: newSubtreeRequest,
 			}
+			seq++
 
-			// Smart cache invalidation: only invalidate if significant change
-			// Get current state from subtree processor
-			currentTxCount := uint32(ba.blockAssembler.TxCount())
-			currentSubtreeCount := ba.blockAssembler.SubtreeCount()
-
-			// Calculate actual total size by summing all subtree sizes
-			var currentSize uint64
-			subtrees := ba.blockAssembler.GetChainedSubtrees()
-			for _, st := range subtrees {
-				currentSize += st.SizeInBytes
+			select {
+			case workChan <- work:
+			case <-ctx.Done():
+				return
 			}
+		}
+	}
+}
 
-			if ba.blockAssembler.shouldInvalidateCache(currentTxCount, currentSize, currentSubtreeCount) {
-				ba.logger.Debugf("[Server] Invalidating cache: significant change detected (txs=%d, size=%d, subtrees=%d)",
-					currentTxCount, currentSize, currentSubtreeCount)
-				ba.blockAssembler.invalidateMiningCandidateCache()
+// subtreeStorageWorker processes subtree storage work items in parallel.
+func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-chan *subtreeStorageWork, subtreeRetryChan chan *subtreeRetrySend, resultChan chan<- *subtreeStorageResult) {
+	for work := range workChan {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		result := &subtreeStorageResult{
+			seq:              work.seq,
+			request:          work.request,
+			skipNotification: work.request.SkipNotification,
+		}
+
+		ba.logger.Infof("[subtreeStorageWorker][%s] Storing subtree (seq=%d)", work.request.Subtree.RootHash().String(), work.seq)
+
+		// Store subtree and meta
+		subtreeDone, allDone, err := ba.storeSubtreeData(ctx, work.request, subtreeRetryChan)
+		result.err = err
+
+		if err != nil {
+			if errors.Is(err, errors.ErrBlobAlreadyExists) {
+				// Already exists is success for notification purposes
+				result.storedOK = true
+				result.err = nil
 			} else {
-				ba.logger.Debugf("[Server] Keeping cache valid: minor change (txs=%d, size=%d, subtrees=%d)",
-					currentTxCount, currentSize, currentSubtreeCount)
+				ba.logger.Errorf(err.Error())
+				result.storedOK = false
 			}
+		} else {
+			// Wait for subtree storage to complete (notification can be sent)
+			result.storedOK = <-subtreeDone
+		}
 
-			if newSubtreeRequest.ErrChan != nil {
-				newSubtreeRequest.ErrChan <- err
+		// Send result for ordered notification processing
+		select {
+		case resultChan <- result:
+		case <-ctx.Done():
+			return
+		}
+
+		// Smart cache invalidation: only invalidate if significant change
+		currentTxCount := uint32(ba.blockAssembler.TxCount())
+		currentSubtreeCount := ba.blockAssembler.SubtreeCount()
+
+		var currentSize uint64
+		subtrees := ba.blockAssembler.GetChainedSubtrees()
+		for _, st := range subtrees {
+			currentSize += st.SizeInBytes
+		}
+
+		if ba.blockAssembler.shouldInvalidateCache(currentTxCount, currentSize, currentSubtreeCount) {
+			ba.logger.Debugf("[Server] Invalidating cache: significant change detected (txs=%d, size=%d, subtrees=%d)", currentTxCount, currentSize, currentSubtreeCount)
+			ba.blockAssembler.invalidateMiningCandidateCache()
+		} else {
+			ba.logger.Debugf("[Server] Keeping cache valid: minor change (txs=%d, size=%d, subtrees=%d)", currentTxCount, currentSize, currentSubtreeCount)
+		}
+
+		// Wait for all work to complete before sending response to caller
+		if allDone != nil {
+			<-allDone
+		}
+
+		// Send error back to caller if channel exists
+		if work.request.ErrChan != nil {
+			work.request.ErrChan <- result.err
+		}
+	}
+}
+
+// subtreeNotificationSender sends subtree notifications in order after storage completes.
+func (ba *BlockAssembly) subtreeNotificationSender(ctx context.Context, resultChan <-chan *subtreeStorageResult) {
+	pending := make(map[uint64]*subtreeStorageResult)
+	var nextSeq uint64
+
+	for result := range resultChan {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		pending[result.seq] = result
+
+		// Process all consecutive results we have
+		for {
+			r, ok := pending[nextSeq]
+			if !ok {
+				break
+			}
+			delete(pending, nextSeq)
+			nextSeq++
+
+			// Send notification if needed
+			if !r.skipNotification && r.storedOK {
+				ba.logger.Infof("[BlockAssembly:Init][%s] sending subtree notification", r.request.Subtree.RootHash().String())
+				ba.sendSubtreeNotification(ctx, *r.request.Subtree.RootHash())
+			} else {
+				ba.logger.Infof("[BlockAssembly:Init][%s] skipping subtree notification (skip=%v, stored=%v)", r.request.Subtree.RootHash().String(), r.skipNotification, r.storedOK)
 			}
 		}
 	}
@@ -454,13 +602,19 @@ func (ba *BlockAssembly) handleRetryLogic(ctx context.Context, subtreeRetry *sub
 }
 
 // sendSubtreeNotification sends a notification about a successfully stored subtree.
+// It only sends the notification if the FSM is in the running state.
 func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHash chainhash.Hash) {
-	// TODO #145
-	// the repository in the blob server sometimes cannot find subtrees that were just stored
-	// this is the dumbest way we can think of to fix it, at least temporarily
-	time.Sleep(20 * time.Millisecond)
+	isRunning, err := ba.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
+	if err != nil {
+		ba.logger.Errorf("[BlockAssembly:sendSubtreeNotification][%s] failed to get current state: %s", subtreeHash.String(), err)
+		return
+	}
 
-	if err := ba.blockchainClient.SendNotification(ctx, &blockchain.Notification{
+	if !isRunning {
+		return
+	}
+
+	if err = ba.blockchainClient.SendNotification(ctx, &blockchain.Notification{
 		Type:     model.NotificationType_Subtree,
 		Hash:     (&subtreeHash)[:],
 		Base_URL: "",
@@ -468,103 +622,90 @@ func (ba *BlockAssembly) sendSubtreeNotification(ctx context.Context, subtreeHas
 			Metadata: nil,
 		},
 	}); err != nil {
-		ba.logger.Errorf("[BlockAssembly:Init][%s] failed to send subtree notification: %s", subtreeHash.String(), err)
+		ba.logger.Errorf("[BlockAssembly:sendSubtreeNotification][%s] failed to send subtree notification: %s", subtreeHash.String(), err)
 	}
 }
 
-// storeSubtree stores a completed subtree to the subtree store with retry capability.
-// This method handles the persistence of newly created subtrees to the blob store,
-// ensuring they are available for block assembly and mining operations. It includes
-// existence checking to avoid duplicate storage and implements retry logic for
-// handling transient storage failures.
-//
-// The function performs the following operations:
-// - Checks if the subtree already exists in the store to avoid duplicates
-// - Serializes the subtree data and metadata for storage
-// - Attempts to store the subtree with error handling
-// - Queues failed storage attempts for retry with exponential backoff
-//
-// This is a critical operation for maintaining the integrity of the block assembly
-// process, as subtrees must be persistently stored before they can be included
-// in mining candidates.
+// storeSubtreeData stores the subtree data and metadata to the blob store.
+// It returns two channels:
+//   - subtreeDone: signals when subtree storage is complete (bool = success)
+//   - allDone: signals when all work including meta storage is complete
 //
 // Parameters:
-//   - ctx: Context for the storage operation, allowing for cancellation and timeouts
+//   - ctx: Context for the storage operation
 //   - subtreeRequest: Request containing the subtree to store and associated metadata
 //   - subtreeRetryChan: Channel for queuing failed storage attempts for retry
 //
 // Returns:
-//   - error: Any error encountered during storage, excluding retryable failures which are queued
-func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtreeprocessor.NewSubtreeRequest, subtreeRetryChan chan *subtreeRetrySend) (err error) {
+//   - subtreeDone: Channel that sends true when subtree stored OK, false on failure
+//   - allDone: Channel that closes when all work is complete
+//   - err: Any error encountered during setup
+func (ba *BlockAssembly) storeSubtreeData(ctx context.Context, subtreeRequest subtreeprocessor.NewSubtreeRequest, subtreeRetryChan chan *subtreeRetrySend) (subtreeDone <-chan bool, allDone <-chan struct{}, err error) {
 	subtree := subtreeRequest.Subtree
 
-	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "storeSubtree",
+	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "storeSubtreeData",
 		tracing.WithParentStat(ba.stats),
-		tracing.WithCounter(prometheusBlockAssemblerSubtreeCreated),
-		tracing.WithLogMessage(ba.logger, "[BlockAssembly:Init][%s] new subtree notification from assembly: len %d", subtree.RootHash().String(), subtree.Length()),
+		tracing.WithHistogram(prometheusBlockAssemblerSubtreeStoredHist),
+		tracing.WithLogMessage(ba.logger, "[BlockAssembly:storeSubtreeData][%s] storing subtree: len %d", subtree.RootHash().String(), subtree.Length()),
 	)
 	defer deferFn()
 
-	// start1, stat1, _ := util.NewStatFromContext(ctx, "newSubtreeChan", channelStats)
-	// check whether this subtree already exists in the store, which would mean it has already been announced
+	// Check whether this subtree already exists in the store
 	if ok, _ := ba.subtreeStore.Exists(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree); ok {
-		// subtree already exists, nothing to do
-		ba.logger.Debugf("[BlockAssembly:Init][%s] subtree already exists", subtree.RootHash().String())
-		return
+		ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists", subtree.RootHash().String())
+		return nil, nil, errors.ErrBlobAlreadyExists
 	}
 
-	var subtreeBytes []byte
-
-	if subtreeBytes, err = subtree.Serialize(); err != nil {
-		return errors.NewProcessingError("[BlockAssembly:storeSubtree][%s] failed to serialize subtree", subtree.RootHash().String(), err)
+	// Serialize subtree
+	subtreeBytes, err := subtree.Serialize()
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("[BlockAssembly:storeSubtreeData][%s] failed to serialize subtree", subtree.RootHash().String(), err)
 	}
 
 	dah := ba.blockAssembler.utxoStore.GetBlockHeight() + ba.settings.GlobalBlockHeightRetention
 
-	if subtreeRequest.ParentTxMap != nil {
-		// create and store the subtree meta
-		subtreeMeta := subtreepkg.NewSubtreeMeta(subtreeRequest.Subtree)
-		subtreeMetaMissingTxs := false
+	subtreeDoneCh := make(chan bool, 1)
+	subtreeStorageDone := make(chan struct{}) // Separate signal for coordinator
+	metaDoneCh := make(chan struct{})
+	allDoneCh := make(chan struct{})
 
-		for idx, node := range subtreeRequest.Subtree.Nodes {
-			if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-				txInpoints, found := subtreeRequest.ParentTxMap.Get(node.Hash)
-				if !found {
-					ba.logger.Errorf("[BlockAssembly:storeSubtree][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
+	// Build, serialize, and store subtree meta in background
+	if subtreeRequest.ParentTxMap != nil && ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
+		go func() {
+			defer close(metaDoneCh)
+			subtreeMeta := subtreepkg.NewSubtreeMeta(subtreeRequest.Subtree)
 
-					subtreeMetaMissingTxs = true
+			for idx, node := range subtreeRequest.Subtree.Nodes {
+				if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+					txInpoints, found := subtreeRequest.ParentTxMap.Get(node.Hash)
+					if !found {
+						ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to find parent tx hashes for node %s: parent transaction not found in ParentTxMap", subtreeRequest.Subtree.RootHash().String(), node.Hash.String())
+						return
+					}
 
-					break
-				}
-
-				if err = subtreeMeta.SetTxInpoints(idx, txInpoints); err != nil {
-					ba.logger.Errorf("[BlockAssembly:storeSubtree][%s] failed to set parent tx hashes: %s", node.Hash.String(), err)
-
-					subtreeMetaMissingTxs = true
-
-					break
+					if err := subtreeMeta.SetTxInpoints(idx, *txInpoints); err != nil {
+						ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to set parent tx hashes: %s", node.Hash.String(), err)
+						return
+					}
 				}
 			}
-		}
 
-		if !subtreeMetaMissingTxs {
 			subtreeMetaBytes, err := subtreeMeta.Serialize()
 			if err != nil {
-				return errors.NewStorageError("[BlockAssembly:storeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
+				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to serialize subtree meta: %s", subtree.RootHash().String(), err)
+				return
 			}
 
-			if err = ba.subtreeStore.Set(ctx,
+			if err := ba.subtreeStore.Set(ctx,
 				subtree.RootHash()[:],
 				fileformat.FileTypeSubtreeMeta,
 				subtreeMetaBytes,
 				options.WithDeleteAt(dah),
 			); err != nil {
 				if errors.Is(err, errors.ErrBlobAlreadyExists) {
-					ba.logger.Debugf("[BlockAssembly:storeSubtree][%s] subtree meta already exists", subtree.RootHash().String())
+					ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree meta already exists", subtree.RootHash().String())
 				} else {
-					ba.logger.Errorf("[BlockAssembly:storeSubtree][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
-
-					// add to retry saving the subtree
+					ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree meta: %s", subtree.RootHash().String(), err)
 					subtreeRetryChan <- &subtreeRetrySend{
 						subtreeHash:      *subtree.RootHash(),
 						subtreeBytes:     subtreeBytes,
@@ -573,61 +714,47 @@ func (ba *BlockAssembly) storeSubtree(ctx context.Context, subtreeRequest subtre
 					}
 				}
 			}
-		}
+		}()
+	} else {
+		close(metaDoneCh)
 	}
 
-	if err = ba.subtreeStore.Set(ctx,
-		subtree.RootHash()[:],
-		fileformat.FileTypeSubtree,
-		subtreeBytes,
-		options.WithDeleteAt(dah), // this sets the DAH for the subtree, it must be updated when a block is mined
-	); err != nil {
-		if errors.Is(err, errors.ErrBlobAlreadyExists) {
-			ba.logger.Debugf("[BlockAssembly:storeSubtree][%s] subtree already exists", subtree.RootHash().String())
-		} else {
-			ba.logger.Errorf("[BlockAssembly:storeSubtree][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
-
-			// add to retry saving the subtree
-			// no need to retry the subtree meta, we have already stored that
-			subtreeRetryChan <- &subtreeRetrySend{
-				subtreeHash:  *subtree.RootHash(),
-				subtreeBytes: subtreeBytes,
-				retries:      0,
+	// Store subtree in background
+	go func() {
+		defer close(subtreeStorageDone) // Signal coordinator when done
+		storedOK := true
+		if err := ba.subtreeStore.Set(ctx,
+			subtree.RootHash()[:],
+			fileformat.FileTypeSubtree,
+			subtreeBytes,
+			options.WithDeleteAt(dah),
+		); err != nil {
+			if errors.Is(err, errors.ErrBlobAlreadyExists) {
+				ba.logger.Debugf("[BlockAssembly:storeSubtreeData][%s] subtree already exists", subtree.RootHash().String())
+			} else {
+				ba.logger.Errorf("[BlockAssembly:storeSubtreeData][%s] failed to store subtree: %s", subtree.RootHash().String(), err)
+				subtreeRetryChan <- &subtreeRetrySend{
+					subtreeHash:  *subtree.RootHash(),
+					subtreeBytes: subtreeBytes,
+					retries:      0,
+				}
+				storedOK = false
 			}
 		}
+		subtreeDoneCh <- storedOK
+		close(subtreeDoneCh)
+	}()
 
-		return nil
-	}
+	// Coordinator: wait for both and signal all done
+	// Note: We wait on subtreeStorageDone (not subtreeDoneCh) to avoid racing
+	// with the worker that reads the storedOK value from subtreeDoneCh.
+	go func() {
+		defer close(allDoneCh)
+		<-subtreeStorageDone
+		<-metaDoneCh
+	}()
 
-	if subtreeRequest.SkipNotification {
-		return nil
-	}
-
-	isRunning, err := ba.blockchainClient.IsFSMCurrentState(ctx, blockchain.FSMStateRUNNING)
-	if err != nil {
-		return errors.NewProcessingError("[BlockAssembly:storeSubtree][%s] failed to get current state", subtree.RootHash().String(), err)
-	}
-
-	// only send notification if the FSM is in the running state
-	if isRunning {
-		// TODO #145
-		// the repository in the blob server sometimes cannot find subtrees that were just stored
-		// this is the dumbest way we can think of to fix it, at least temporarily
-		time.Sleep(20 * time.Millisecond)
-
-		if err = ba.blockchainClient.SendNotification(ctx, &blockchain.Notification{
-			Type:     model.NotificationType_Subtree,
-			Hash:     subtree.RootHash()[:],
-			Base_URL: "",
-			Metadata: &blockchain.NotificationMetadata{
-				Metadata: nil,
-			},
-		}); err != nil {
-			return errors.NewServiceError("[BlockAssembly:storeSubtree][%s] failed to send subtree notification", subtree.RootHash().String(), err)
-		}
-	}
-
-	return nil
+	return subtreeDoneCh, allDoneCh, nil
 }
 
 // Start begins the BlockAssembly service operation.
@@ -722,9 +849,6 @@ func (ba *BlockAssembly) Stop(ctx context.Context) error {
 	return nil
 }
 
-// txsProcessed tracks the total number of transactions processed atomically
-var txsProcessed = atomic.Uint64{}
-
 // AddTx adds a transaction to the block assembly.
 //
 // Parameters:
@@ -738,20 +862,12 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "AddTx",
 		tracing.WithParentStat(ba.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyAddTx),
+		tracing.WithCounter(prometheusBlockAssemblyAddTxCounter),
 		tracing.WithTag("txid", utils.ReverseAndHexEncodeSlice(req.Txid)),
 		tracing.WithLogMessage(ba.logger, "[AddTx][%s] add tx called", utils.ReverseAndHexEncodeSlice(req.Txid)),
 	)
 
 	defer func() {
-		if txsProcessed.Load()%1000 == 0 {
-			// we should NOT be setting this on every call, it's a waste of resources
-			prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-			prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
-			prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
-		}
-
-		txsProcessed.Inc()
-
 		deferFn()
 	}()
 
@@ -760,17 +876,24 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 			errors.NewProcessingError("invalid txid length: %d for %s", len(req.Txid), utils.ReverseAndHexEncodeSlice(req.Txid)))
 	}
 
-	txInpoints, err := subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
+	ba.logger.Debugf("[AddTx] added tx %s to block assembler", chainhash.Hash(req.Txid).String())
+
+	var txInpoints subtreepkg.TxInpoints
+	if ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
+		txInpoints, err = subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
+		if err != nil {
+			return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
+		}
+	} else {
+		// Create empty TxInpoints if not storing for subtree meta
+		txInpoints = subtreepkg.TxInpoints{}
 	}
 
 	if !ba.settings.BlockAssembly.Disabled {
-		ba.blockAssembler.AddTx(subtreepkg.Node{
-			Hash:        chainhash.Hash(req.Txid),
-			Fee:         req.Fee,
-			SizeInBytes: req.Size,
-		}, txInpoints)
+		ba.blockAssembler.AddTxBatch(
+			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
+			[]*subtreepkg.TxInpoints{&txInpoints},
+		)
 	}
 
 	return &blockassembly_api.AddTxResponse{
@@ -839,9 +962,6 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 		tracing.WithDebugLogMessage(ba.logger, "[AddTxBatch] called with %d transactions", len(batch.GetTxRequests())),
 	)
 	defer func() {
-		prometheusBlockAssemblerTransactions.Set(float64(ba.blockAssembler.TxCount()))
-		prometheusBlockAssemblerQueuedTransactions.Set(float64(ba.blockAssembler.QueueLength()))
-		prometheusBlockAssemblerSubtrees.Set(float64(ba.blockAssembler.SubtreeCount()))
 		deferFn()
 	}()
 
@@ -850,32 +970,173 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("no tx requests in batch"))
 	}
 
-	// this is never used, so we can remove it
-	for _, req := range requests {
-		startTxTime := time.Now()
+	// Build batch arrays
+	nodes := make([]subtreepkg.Node, len(requests))
+	txInpointsList := make([]*subtreepkg.TxInpoints, len(requests))
 
-		txInpoints, err := subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
-		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
+	var err error
+
+	for i, req := range requests {
+		var txInpoints subtreepkg.TxInpoints
+		if ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
+			txInpoints, err = subtreepkg.NewTxInpointsFromBytes(req.TxInpoints)
+			if err != nil {
+				return nil, errors.WrapGRPC(errors.NewProcessingError("unable to deserialize tx inpoints", err))
+			}
+		} else {
+			// Create empty TxInpoints if not storing for subtree meta
+			txInpoints = subtreepkg.TxInpoints{}
 		}
 
-		// create the subtree node
-		if !ba.settings.BlockAssembly.Disabled {
-			ba.blockAssembler.AddTx(subtreepkg.Node{
-				Hash:        chainhash.Hash(req.Txid),
-				Fee:         req.Fee,
-				SizeInBytes: req.Size,
-			}, txInpoints)
+		nodes[i] = subtreepkg.Node{
+			Hash:        chainhash.Hash(req.Txid),
+			Fee:         req.Fee,
+			SizeInBytes: req.Size,
+		}
+		txInpointsList[i] = &txInpoints
+	}
 
-			prometheusBlockAssemblyAddTx.Observe(float64(time.Since(startTxTime).Microseconds()) / 1_000_000)
+	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
+
+	// Add entire batch in one call
+	if !ba.settings.BlockAssembly.Disabled {
+		ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
+	}
+
+	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
+}
+
+// AddTxBatchColumnar processes a batch of transactions using columnar data format.
+// This method provides improved performance over AddTxBatch by reducing deserialization
+// overhead and GC pressure through better memory locality and fewer allocations.
+//
+// OPTIMIZATION: TxInpoints are now pre-deserialized by the Client (which runs on multiple machines)
+// and sent in columnar format. The Server reconstructs TxInpoints directly from columnar data
+// WITHOUT calling NewTxInpointsFromBytes, eliminating deserialization work on the single-machine Server.
+//
+// The columnar format stores all transaction data in packed arrays:
+// - All TXIDs in a single byte slice (32 bytes each)
+// - All fees in a single array
+// - All sizes in a single array
+// - All parent tx hashes concatenated
+// - Offset tables for parent hashes and vout indices
+//
+// Expected performance improvements:
+// - Eliminates per-transaction TxInpoints deserialization on Server
+// - Shifts deserialization work to distributed Clients
+// - Reduces Server CPU usage significantly
+// - Lower GC pressure from fewer intermediate allocations
+//
+// Parameters:
+//   - ctx: Context for cancellation
+//   - req: Columnar batch request with packed transaction data
+//
+// Returns:
+//   - *blockassembly_api.AddTxBatchResponse: Response indicating success
+//   - error: Any error encountered during batch processing
+func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassembly_api.AddTxBatchColumnarRequest) (*blockassembly_api.AddTxBatchResponse, error) {
+	_, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "AddTxBatchColumnar",
+		tracing.WithParentStat(ba.stats),
+		tracing.WithDebugLogMessage(ba.logger, "[AddTxBatchColumnar] called with columnar batch"),
+	)
+	defer func() {
+		deferFn()
+	}()
+
+	// Validate request structure
+	if len(req.TxidsPacked)%32 != 0 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("txids_packed length must be divisible by 32"))
+	}
+
+	txCount := len(req.TxidsPacked) / 32
+	if txCount == 0 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("no transactions in batch"))
+	}
+
+	if len(req.Fees) != txCount || len(req.Sizes) != txCount {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("mismatched array lengths: txids=%d, fees=%d, sizes=%d", txCount, len(req.Fees), len(req.Sizes)))
+	}
+
+	// Validate columnar TxInpoints structure
+	if len(req.ParentTxOffsets) != txCount+1 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError(
+			"parent_tx_offsets must have exactly txCount+1 elements (got %d, expected %d)",
+			len(req.ParentTxOffsets), txCount+1))
+	}
+
+	if len(req.ParentTxHashesPacked)%32 != 0 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("parent_tx_hashes_packed length must be divisible by 32"))
+	}
+
+	totalParentHashes := len(req.ParentTxHashesPacked) / 32
+	if len(req.VoutIdxOffsets) != totalParentHashes+1 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("vout_idx_offsets must have exactly (total_parent_hashes+1) elements (got %d, expected %d)", len(req.VoutIdxOffsets), totalParentHashes+1))
+	}
+
+	if ba.settings.BlockAssembly.Disabled {
+		return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
+	}
+
+	// Build batch arrays
+	nodes := make([]subtreepkg.Node, txCount)
+	txInpointsList := make([]*subtreepkg.TxInpoints, txCount)
+
+	// Process each transaction using column-oriented access
+	for i := 0; i < txCount; i++ {
+		// Extract TXID (32 bytes) - no allocation, just slice reference
+		txidStart := i * 32
+		txid := req.TxidsPacked[txidStart : txidStart+32]
+
+		// Reconstruct TxInpoints from columnar data WITHOUT deserialization
+		// This is the key optimization - we build TxInpoints directly from pre-parsed data
+		parentHashStart := req.ParentTxOffsets[i]
+		parentHashEnd := req.ParentTxOffsets[i+1]
+		numParentHashes := parentHashEnd - parentHashStart
+
+		// Pre-allocate slices with exact capacity to avoid reallocation
+		parentTxHashes := make([]chainhash.Hash, numParentHashes)
+		idxs := make([][]uint32, numParentHashes)
+
+		for j := uint32(0); j < numParentHashes; j++ {
+			parentHashIdx := parentHashStart + j
+
+			// Extract parent hash (32 bytes) - no allocation, direct copy
+			hashOffset := parentHashIdx * 32
+			copy(parentTxHashes[j][:], req.ParentTxHashesPacked[hashOffset:hashOffset+32])
+
+			// Extract vout indices for this parent hash
+			voutIdxStart := req.VoutIdxOffsets[parentHashIdx]
+			voutIdxEnd := req.VoutIdxOffsets[parentHashIdx+1]
+
+			// Reference the vout indices slice directly - no allocation
+			idxs[j] = req.ParentVoutIndices[voutIdxStart:voutIdxEnd]
+		}
+
+		// Build node and txInpoints for this transaction
+		nodes[i] = subtreepkg.Node{
+			Hash:        chainhash.Hash(txid),
+			Fee:         req.Fees[i],
+			SizeInBytes: req.Sizes[i],
+		}
+
+		if ba.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
+			txInpointsList[i] = &subtreepkg.TxInpoints{
+				ParentTxHashes: parentTxHashes,
+				Idxs:           idxs,
+			}
+		} else {
+			txInpointsList[i] = &subtreepkg.TxInpoints{}
 		}
 	}
 
-	resp := &blockassembly_api.AddTxBatchResponse{
-		Ok: true,
+	prometheusBlockAssemblyAddTxCounter.Add(float64(len(nodes))) // gosec:nolint
+
+	// Add entire batch in one call
+	if !ba.settings.BlockAssembly.Disabled {
+		ba.blockAssembler.AddTxBatch(nodes, txInpointsList)
 	}
 
-	return resp, nil
+	return &blockassembly_api.AddTxBatchResponse{Ok: true}, nil
 }
 
 // TxCount returns the total number of transactions processed.
@@ -1153,7 +1414,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	// check fully valid, including whether difficulty in header is low enough
 	// TODO add more checks to the Valid function, like whether the parent/child relationships are OK
-	if ok, err := block.Valid(ctx, ba.logger, ba.subtreeStore, nil, nil, nil, nil, nil, nil, ba.settings); !ok {
+	if ok, err := block.Valid(ctx, ba.logger, ba.subtreeStore, nil, nil, nil, nil, ba.settings); !ok {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
 
 		// the subtreeprocessor created an invalid block, we must reset
@@ -1390,27 +1651,37 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 		return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting subtree count", err)
 	}
 
-	subtreeHashes := ba.blockAssembler.subtreeProcessor.GetSubtreeHashes()
+	// this will block when the subtree processor is busy with someting else
+	// wait only 1 second for this and continue
+	subtreeHashesChan := make(chan []chainhash.Hash, 1)
+	go func() {
+		subtreeHashesChan <- ba.blockAssembler.subtreeProcessor.GetSubtreeHashes()
+	}()
+
+	var subtreeHashes []chainhash.Hash
+	select {
+	case subtreeHashes = <-subtreeHashesChan:
+		// Successfully retrieved subtree hashes
+	case <-time.After(1 * time.Second):
+		// Timeout occurred, continue with empty slice
+		subtreeHashes = []chainhash.Hash{}
+	}
+
 	subtreeHashesStrings := make([]string, 0, len(subtreeHashes))
 	for _, hash := range subtreeHashes {
 		subtreeHashesStrings = append(subtreeHashesStrings, hash.String())
 	}
 
-	removeMap := ba.blockAssembler.subtreeProcessor.GetRemoveMap()
-	removeMapLen32, err := safeconversion.IntToUint32(removeMap.Length())
+	removeMapLen32, err := safeconversion.IntToUint32(ba.blockAssembler.subtreeProcessor.GetRemoveMapLength())
 	if err != nil {
 		return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting remove map length", err)
 	}
 
 	currentHeader, currentHeight := ba.blockAssembler.CurrentBlock()
 
-	subtreeSize := uint32(0)
-	if currentSubtree := ba.blockAssembler.subtreeProcessor.GetCurrentSubtree(); currentSubtree != nil {
-		// convert to uint32, safe as subtree size cannot exceed uint32
-		subtreeSize, err = safeconversion.IntToUint32(currentSubtree.Size())
-		if err != nil {
-			return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting current subtree size", err)
-		}
+	subtreeSize, err := safeconversion.IntToUint32(ba.blockAssembler.subtreeProcessor.GetCurrentSubtreeSize())
+	if err != nil {
+		return nil, errors.NewProcessingError("[GetBlockAssemblyState] error converting current subtree size", err)
 	}
 
 	return &blockassembly_api.StateMessage{

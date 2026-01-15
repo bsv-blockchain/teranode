@@ -31,7 +31,7 @@ const (
 func verifyTxInpointsViaIterator(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx, expectedParentTxHash *chainhash.Hash) {
 	t.Helper()
 
-	it, err := td.UtxoStore.GetUnminedTxIterator(false)
+	it, err := td.UtxoStore.GetUnminedTxIterator(true)
 	require.NoError(t, err, "Should be able to get unmined tx iterator")
 	defer it.Close()
 
@@ -39,18 +39,21 @@ func verifyTxInpointsViaIterator(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx,
 	found := false
 
 	for {
-		unminedTx, err := it.Next(td.Ctx)
+		unminedTxBatch, err := it.Next(td.Ctx)
 		if err != nil {
 			t.Fatalf("Error iterating unmined transactions: %v", err)
 		}
-		if unminedTx == nil {
+		if len(unminedTxBatch) == 0 {
 			break
 		}
+
+		unminedTx := unminedTxBatch[0]
+
 		if unminedTx.Skip {
 			continue
 		}
 
-		if unminedTx.Hash != nil && unminedTx.Hash.String() == expectedTxHash.String() {
+		if unminedTx.Hash.String() == expectedTxHash.String() {
 			found = true
 			t.Logf("Found transaction %s in iterator with %d parent tx hashes",
 				unminedTx.Hash.String(), len(unminedTx.TxInpoints.ParentTxHashes))
@@ -535,6 +538,7 @@ func testExternalTransactionTxInpointsParsingViaIterator(t *testing.T, utxoStore
 				s.ChainCfgParams.CoinbaseMaturity = 2
 				// Set low batch size so transactions with >2 outputs become external
 				s.UtxoStore.UtxoBatchSize = lowUtxoBatchSize
+				s.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
 			},
 		),
 	})

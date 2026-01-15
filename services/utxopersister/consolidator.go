@@ -213,7 +213,7 @@ func (c *consolidator) ConsolidateBlockRange(ctx context.Context, startBlock, en
 		}
 
 		r, err := us.GetUTXODeletionsReader(ctx)
-		if err != nil {
+		if err != nil && !errors.Is(err, errors.ErrBlobNotFound) {
 			return err
 		}
 

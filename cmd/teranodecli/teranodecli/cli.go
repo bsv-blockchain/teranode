@@ -49,6 +49,10 @@ var commandHelp = map[string]string{
 	"resetblockassembly":      "Reset block assembly state",
 	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
 	"validate-utxo-set":       "Validate UTXO set file",
+	"subtreebench":            "Benchmark SubtreeProcessor throughput with CPU and memory profiling",
+	"loadunminedbench":        "Benchmark loadUnminedTransactions with CPU and memory profiling",
+	"txmapbench":              "Benchmark CreateTransactionMap with CPU and memory profiling",
+	"remainderbench":          "Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling",
 	"monitor":                 "Live TUI dashboard for monitoring node status",
 	"logs":                    "Interactive log viewer with filtering and search",
 }
@@ -71,8 +75,9 @@ func setupCommand(name string) *Command {
 		FlagSet:     flag.NewFlagSet(name, flag.ExitOnError),
 	}
 
-	// Add common help flag to all commands
+	// Add common help and printSettings flag to all commands
 	cmd.FlagSet.Bool("help", false, "Show help for this command")
+	cmd.FlagSet.Bool("printSettings", false, "Print settings")
 
 	return cmd
 }
@@ -201,6 +206,7 @@ func Start(args []string, version, commit string) {
 		hash := cmd.FlagSet.String("hash", "", "Hash of the UTXO set / headers to process.")
 		skipHeaders := cmd.FlagSet.Bool("skipHeaders", false, "Skip processing headers.")
 		skipUTXOs := cmd.FlagSet.Bool("skipUTXOs", false, "Skip processing UTXOs.")
+		force := cmd.FlagSet.Bool("force", false, "Force processing even if lastProcessed.dat exists.")
 		cmd.Execute = func(args []string) error {
 			if *inputDir == "" {
 				return errors.NewProcessingError("Please provide an inputDir")
@@ -210,7 +216,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Please provide a hash")
 			}
 
-			seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs)
+			seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force)
 
 			return nil
 		}
@@ -428,6 +434,45 @@ func Start(args []string, version, commit string) {
 
 			return nil
 		}
+	case "subtreebench":
+		subtreeSize := cmd.FlagSet.Int("subtree-size", 1_048_576, "Size of subtree")
+		producers := cmd.FlagSet.Int("producers", 16, "Number of producer goroutines")
+		iterations := cmd.FlagSet.Int("iterations", 10_000_000, "Number of transactions to process")
+		cpuProfile := cmd.FlagSet.String("cpu-profile", "cpu.prof", "Output file for CPU profile")
+		memProfile := cmd.FlagSet.String("mem-profile", "mem.prof", "Output file for memory profile")
+		duration := cmd.FlagSet.Int("duration", 0, "Duration to run benchmark in seconds (0 for iteration-based, processes all items)")
+
+		cmd.Execute = func(args []string) error {
+			return runSubtreeBenchmark(*subtreeSize, *producers, *iterations, *duration, *cpuProfile, *memProfile)
+		}
+	case "loadunminedbench":
+		txCount := cmd.FlagSet.Int("tx-count", 1_000_000, "Number of transactions")
+		fullScan := cmd.FlagSet.Bool("full-scan", false, "Use full scan mode")
+		cpuProfile := cmd.FlagSet.String("cpu-profile", "loadunmined_cpu.prof", "CPU profile output")
+		memProfile := cmd.FlagSet.String("mem-profile", "loadunmined_mem.prof", "Memory profile output")
+		aerospikeURL := cmd.FlagSet.String("aerospike-url", "", "Aerospike URL (empty=testcontainer)")
+
+		cmd.Execute = func(args []string) error {
+			return runLoadUnminedBenchmark(*txCount, *fullScan, *cpuProfile, *memProfile, *aerospikeURL)
+		}
+	case "txmapbench":
+		numSubtrees := cmd.FlagSet.Int("subtrees", 100, "Number of subtrees")
+		txsPerSubtree := cmd.FlagSet.Int("txs-per-subtree", 1_048_576, "Transactions per subtree")
+		cpuProfile := cmd.FlagSet.String("cpu-profile", "createtransactionmap_cpu.prof", "CPU profile output")
+		memProfile := cmd.FlagSet.String("mem-profile", "createtransactionmap_mem.prof", "Memory profile output")
+
+		cmd.Execute = func(args []string) error {
+			return runCreateTxMapBenchmark(*numSubtrees, *txsPerSubtree, *cpuProfile, *memProfile)
+		}
+	case "remainderbench":
+		numSubtrees := cmd.FlagSet.Int("subtrees", 100, "Number of subtrees")
+		txsPerSubtree := cmd.FlagSet.Int("txs-per-subtree", 1_048_576, "Transactions per subtree")
+		cpuProfile := cmd.FlagSet.String("cpu-profile", "processremaindertxanddequeue_cpu.prof", "CPU profile output")
+		memProfile := cmd.FlagSet.String("mem-profile", "processremaindertxanddequeue_mem.prof", "Memory profile output")
+
+		cmd.Execute = func(args []string) error {
+			return runProcessRemainderBenchmark(*numSubtrees, *txsPerSubtree, *cpuProfile, *memProfile)
+		}
 	default:
 		fmt.Printf("Unknown command: %s\n\n", command)
 		printUsage()
@@ -445,6 +490,10 @@ func Start(args []string, version, commit string) {
 		fmt.Printf("Usage of %s:\n", cmd.Name)
 		cmd.FlagSet.PrintDefaults()
 		os.Exit(0)
+	}
+
+	if printSettings := cmd.FlagSet.Lookup("printSettings"); printSettings != nil && printSettings.Value.String() == "true" {
+		cmdSettings.PrintSettings(logger, tSettings, version, commit)
 	}
 
 	// Execute the command

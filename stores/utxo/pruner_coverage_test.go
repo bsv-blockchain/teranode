@@ -19,12 +19,12 @@ type mockIterator struct {
 	mock.Mock
 }
 
-func (m *mockIterator) Next(ctx context.Context) (*UnminedTransaction, error) {
+func (m *mockIterator) Next(ctx context.Context) ([]*UnminedTransaction, error) {
 	args := m.Called(ctx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*UnminedTransaction), args.Error(1)
+	return args.Get(0).([]*UnminedTransaction), args.Error(1)
 }
 
 func (m *mockIterator) Err() error {
@@ -77,12 +77,14 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 
 		// Create mock iterator
 		mockIter := new(mockIterator)
-		mockIter.On("Next", mock.Anything).Return(&UnminedTransaction{
-			Hash:         &hash1,
-			TxInpoints:   txInpoints,
-			UnminedSince: 4, // Old enough (cutoff is 5)
+		mockIter.On("Next", mock.Anything).Return([]*UnminedTransaction{
+			{
+				Node:         &subtree.Node{Hash: hash1},
+				TxInpoints:   &txInpoints,
+				UnminedSince: 4, // Old enough (cutoff is 5)
+			},
 		}, nil).Once()
-		mockIter.On("Next", mock.Anything).Return((*UnminedTransaction)(nil), nil).Once() // End iteration
+		mockIter.On("Next", mock.Anything).Return(([]*UnminedTransaction)(nil), nil).Once() // End iteration
 		mockIter.On("Close").Return(nil)
 
 		mockStore.On("GetUnminedTxIterator").Return(mockIter, nil)

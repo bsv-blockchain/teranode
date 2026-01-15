@@ -244,8 +244,8 @@ type Store interface {
 	// Delete removes a UTXO and its associated metadata from the store.
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 
-	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error)    // Remove? Only used in tests
-	GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) // Remove?
+	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
+	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 
 	// Blockchain specific functions
 

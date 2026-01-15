@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -580,4 +581,80 @@ func TestPeerRegistry_CatchupMetrics_ConcurrentAccess(t *testing.T) {
 	assert.Equal(t, int64(50), info.InteractionSuccesses)
 	assert.Equal(t, int64(30), info.InteractionFailures)
 	assert.NotZero(t, info.AvgResponseTime)
+}
+
+func TestSanitizePeerName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "normal name",
+			input:    "Bitcoin-SV-Node-1.0",
+			expected: "Bitcoin-SV-Node-1.0",
+		},
+		{
+			name:     "name with spaces",
+			input:    "My Bitcoin Node",
+			expected: "My Bitcoin Node",
+		},
+		{
+			name:     "XSS attempt with script tags",
+			input:    "<script>alert('xss')</script>",
+			expected: "scriptalert(xss)/script",
+		},
+		{
+			name:     "HTML injection attempt",
+			input:    "<img src=x onerror=alert(1)>",
+			expected: "img src=x onerror=alert(1)",
+		},
+		{
+			name:     "name too long",
+			input:    strings.Repeat("A", 200),
+			expected: strings.Repeat("A", maxPeerNameLength),
+		},
+		{
+			name:     "control characters",
+			input:    "Node\x00\x01\x02\x03Name",
+			expected: "NodeName",
+		},
+		{
+			name:     "special chars removed",
+			input:    "Node<>&'\"\\Name",
+			expected: "NodeName",
+		},
+		{
+			name:     "unicode characters removed",
+			input:    "Node™®©Name",
+			expected: "NodeName",
+		},
+		{
+			name:     "safe punctuation allowed",
+			input:    "teranode-v1.0_test/node.1",
+			expected: "teranode-v1.0_test/node.1",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "whitespace only",
+			input:    "   ",
+			expected: "",
+		},
+		{
+			name:     "leading and trailing whitespace",
+			input:    "  Node Name  ",
+			expected: "Node Name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := sanitizePeerName(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }

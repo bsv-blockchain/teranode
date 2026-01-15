@@ -41,18 +41,20 @@ type testUtxoStore struct {
 	txMetaMap map[string]*utxometa.Data
 }
 
-func (t *testUtxoStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*utxometa.Data, error) {
-	if meta, ok := t.txMetaMap[hash.String()]; ok {
-		return meta, nil
+func (t *testUtxoStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *utxometa.Data) error {
+	if m, ok := t.txMetaMap[hash.String()]; ok {
+		*data = *m
+		return nil
 	}
 	// Return generic metadata as fallback
-	return &utxometa.Data{
+	*data = utxometa.Data{
 		Fee:         100,
 		SizeInBytes: 200,
 		TxInpoints:  subtreepkg.TxInpoints{},
 		IsCoinbase:  false,
 		Conflicting: false,
-	}, nil
+	}
+	return nil
 }
 
 func (t *testUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*utxometa.Data, error) {

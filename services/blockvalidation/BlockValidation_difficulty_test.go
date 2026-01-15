@@ -153,7 +153,7 @@ func TestValidateBlock_IncorrectDifficultyBits(t *testing.T) {
 	require.NoError(t, err)
 
 	// Validate the block - it should fail due to incorrect difficulty bits
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(ctx, block, "test")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "incorrect difficulty bits")
 
@@ -284,7 +284,7 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 	require.NoError(t, err)
 
 	// Validate the block - it should fail due to not meeting target difficulty
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(ctx, block, "test")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "does not meet target difficulty")
 
@@ -434,7 +434,7 @@ func TestValidateBlock_ValidDifficulty(t *testing.T) {
 	require.NoError(t, err)
 
 	// Validate the block - it should succeed
-	err = bv.ValidateBlock(ctx, block, "test", model.NewBloomStats())
+	err = bv.ValidateBlock(ctx, block, "test")
 	require.NoError(t, err)
 
 	// Verify all mocks were called

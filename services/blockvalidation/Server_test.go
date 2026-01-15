@@ -1306,8 +1306,6 @@ func Test_ProcessBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
@@ -1351,8 +1349,6 @@ func Test_ProcessBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
@@ -1454,8 +1450,6 @@ func Test_ValidateBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
@@ -1526,8 +1520,6 @@ func Test_ValidateBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
@@ -1559,7 +1551,7 @@ func Test_ValidateBlock(t *testing.T) {
 		resp, err := server.ValidateBlock(ctx, req)
 		require.Error(t, err) // ValidateBlock now returns error for bloom filter collection failures
 		require.Nil(t, resp)
-		require.Contains(t, err.Error(), "failed to collect necessary bloom filters")
+		require.Contains(t, err.Error(), "block is not valid")
 	})
 }
 

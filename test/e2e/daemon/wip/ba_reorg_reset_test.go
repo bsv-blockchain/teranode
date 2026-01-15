@@ -104,7 +104,7 @@ func TestReorgTransactionPropagation(t *testing.T) {
 	_, block3B := td.CreateTestBlock(t, forkBlock, nonce)
 	require.NotNil(t, block3B)
 
-	err = td.BlockValidation.ValidateBlock(td.Ctx, block3B, "", nil)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block3B, "")
 	require.NoError(t, err)
 	t.Logf("Fork block created at height: %d", block3B.Height)
 
@@ -120,13 +120,13 @@ func TestReorgTransactionPropagation(t *testing.T) {
 	nonce++
 	_, block4B := td.CreateTestBlock(t, block3B, nonce)
 	require.NotNil(t, block4B)
-	err = td.BlockValidation.ValidateBlock(td.Ctx, block4B, "", nil)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block4B, "")
 	require.NoError(t, err)
 
 	nonce++
 	_, block5B := td.CreateTestBlock(t, block4B, nonce)
 	require.NotNil(t, block5B)
-	err = td.BlockValidation.ValidateBlock(td.Ctx, block5B, "", nil)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block5B, "")
 	require.NoError(t, err)
 
 	td.WaitForBlock(t, block5B, 10*time.Second, true)
@@ -169,7 +169,7 @@ func TestReorgTransactionPropagation(t *testing.T) {
 	// Create block4B and mine it
 	_, block6B := td.CreateTestBlock(t, block5B, nonce, parentTxB, childTxB)
 	require.NotNil(t, block6B)
-	err = td.BlockValidation.ValidateBlock(td.Ctx, block6B, "legacy", nil)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block6B, "legacy")
 	require.NoError(t, err)
 
 	td.WaitForBlock(t, block6B, 10*time.Second, true)
@@ -207,7 +207,7 @@ func TestReorgTransactionPropagation(t *testing.T) {
 		nonce++
 		_, newBlock := td.CreateTestBlock(t, previousBlock, nonce)
 		require.NotNil(t, newBlock)
-		err = td.BlockValidation.ValidateBlock(td.Ctx, newBlock, "legacy", nil)
+		err = td.BlockValidation.ValidateBlock(td.Ctx, newBlock, "legacy")
 		require.NoError(t, err)
 		previousBlock = newBlock
 		t.Logf("Mined block %d on chain A at height: %d", i+1, newBlock.Height)
@@ -246,7 +246,7 @@ func TestReorgTransactionPropagation(t *testing.T) {
 	// because their input (coinbase from block3B) is now orphaned.
 	_, block9A := td.CreateTestBlock(t, previousBlock, nonce, parentTxB, childTxB)
 	require.NotNil(t, block9A)
-	err = td.BlockValidation.ValidateBlock(td.Ctx, block9A, "legacy", nil, true)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block9A, "legacy", true)
 	require.Error(t, err)
 	// td.WaitForBlock(t, block9A, 10*time.Second, true)
 
