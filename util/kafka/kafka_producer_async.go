@@ -413,7 +413,10 @@ func (c *KafkaAsyncProducer) BrokersURL() []string {
 
 // Publish sends a message to the producer's publish channel.
 func (c *KafkaAsyncProducer) Publish(msg *Message) {
-	if c.closed.Load() {
+	c.channelMu.RLock()
+	defer c.channelMu.RUnlock()
+
+	if c.closed.Load() || c.publishChannel == nil {
 		return
 	}
 

@@ -3417,7 +3417,7 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 
 	// This should succeed - checkpoint at height 10 should match
 	assert.NoError(t, err, "Checkpoint validation should succeed")
-	assert.False(t, catchupCtx.useQuickValidation, "Quick validation is currently disabled (needs more testing)")
+	assert.True(t, catchupCtx.useQuickValidation, "Quick validation should be enabled when checkpoints are verified")
 }
 
 // TestCheckpointValidationSkipsCheckpointsBelowAncestor verifies that checkpoint validation
