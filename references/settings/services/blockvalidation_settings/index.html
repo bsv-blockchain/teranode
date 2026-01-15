@@ -5534,6 +5534,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#two-phase-double-spend-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two-Phase Double-Spend Detection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#channel-buffer-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6389,6 +6400,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#two-phase-double-spend-detection" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two-Phase Double-Spend Detection
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#channel-buffer-management" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6823,6 +6845,13 @@
 <td>Periodic processing interval</td>
 </tr>
 <tr>
+<td>RecentBlockIDsLimit</td>
+<td>uint64</td>
+<td>50000</td>
+<td>blockvalidation_recentBlockIDsLimit</td>
+<td><strong>CRITICAL</strong> - Fast-path double-spend checking window</td>
+</tr>
+<tr>
 <td>MaxParallelForks</td>
 <td>int</td>
 <td>4</td>
@@ -6909,6 +6938,14 @@
 <ul>
 <li><code>SecretMiningThreshold</code> uses <code>PreviousBlockHeaderCount</code> for analysis</li>
 <li>Detection triggers when block difference exceeds threshold</li>
+</ul>
+<h3 id="two-phase-double-spend-detection">Two-Phase Double-Spend Detection</h3>
+<ul>
+<li><code>RecentBlockIDsLimit</code> controls the size of the fast-path in-memory block ID window</li>
+<li>Transactions mined in blocks within this window are detected immediately (fast path)</li>
+<li>Transactions mined in older blocks trigger a blockchain service query (slow path)</li>
+<li>Larger values use more memory but reduce slow-path queries</li>
+<li>Default of 50,000 covers approximately 347 days of blocks at 10-minute intervals</li>
 </ul>
 <h3 id="channel-buffer-management">Channel Buffer Management</h3>
 <ul>
