@@ -179,7 +179,8 @@ func (u *BlockValidation) createAllUTXOs(ctx context.Context, block *model.Block
 			continue
 		}
 
-		tx := txW.tx // Capture for goroutine
+		tx := txW.tx                 // Capture for goroutine
+		subtreeIdx := txW.subtreeIdx // Capture for goroutine
 
 		if tx == nil {
 			return errors.NewProcessingError("[createAllUTXOs][%s] invalid nil transaction at index %d", block.Hash().String(), idx)
@@ -187,10 +188,10 @@ func (u *BlockValidation) createAllUTXOs(ctx context.Context, block *model.Block
 
 		g.Go(func() error {
 			// create the UTXO
-			if _, err := u.utxoStore.Create(gCtx, txW.tx, block.Height, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+			if _, err := u.utxoStore.Create(gCtx, tx, block.Height, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
 				BlockID:     block.ID,
 				BlockHeight: block.Height,
-				SubtreeIdx:  txW.subtreeIdx,
+				SubtreeIdx:  subtreeIdx,
 			}), utxo.WithLocked(true)); err != nil && !errors.Is(err, errors.ErrTxExists) {
 				return errors.NewProcessingError("[createAllUTXOs][%s] failed to create UTXO for tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 			}
@@ -367,8 +368,9 @@ func (u *BlockValidation) getBlockTransactions(ctx context.Context, block *model
 			txsMu.Lock()
 			for idx, tx := range subtreeData.Txs {
 				if tx == nil {
-					// coinbase tx is the first tx in the first subtree
-					if subtreeIdx != 0 && idx != 0 {
+					// coinbase tx is the first tx in the first subtree (subtreeIdx=0, idx=0)
+					// A nil tx at any other position is invalid
+					if subtreeIdx != 0 || idx != 0 {
 						return errors.NewProcessingError("[getBlockTransactions][%s] unexpected nil tx at index %d in subtree %s", block.Hash().String(), idx, subtreeHash.String())
 					}
 

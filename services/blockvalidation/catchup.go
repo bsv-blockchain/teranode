@@ -633,9 +633,9 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 
 	if checkpointsChecked > 0 {
 		u.logger.Infof("[catchup][%s] Successfully verified %d checkpoint(s) in header chain", catchupCtx.blockUpTo.Hash().String(), checkpointsChecked)
-		catchupCtx.useQuickValidation = false // quick validation is turned off for now, need more testing
+		catchupCtx.useQuickValidation = true // enabled: BlockAssembly sync check added in tryQuickValidation
 	} else {
-		catchupCtx.useQuickValidation = false
+		catchupCtx.useQuickValidation = false // no checkpoints verified, use normal validation
 	}
 
 	return nil
@@ -990,6 +990,22 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 	// If block is not eligible for quick validation, use normal validation
 	if !canUseQuickValidation {
 		return true, nil
+	}
+
+	// Wait for block assembly to be ready before quick validation.
+	// This ensures coinbase UTXOs are created by BlockAssembly before we try to spend them.
+	// Without this check, quick validation could outpace BlockAssembly by more than the
+	// coinbase maturity period (100 blocks), causing attempts to spend non-existent UTXOs.
+	if err := blockassemblyutil.WaitForBlockAssemblyReady(
+		ctx,
+		u.logger,
+		u.blockAssemblyClient,
+		block.Height,
+		u.settings.BlockValidation.MaxBlocksBehindBlockAssembly,
+	); err != nil {
+		u.logger.Warnf("[tryQuickValidation][%s] block assembly not ready, falling back to normal validation: %v",
+			block.Hash().String(), err)
+		return true, nil // Fall back to normal validation
 	}
 
 	// Quick validation: create UTXOs for the block and validate transactions in parallel
