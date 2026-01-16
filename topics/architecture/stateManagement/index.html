@@ -6800,7 +6800,7 @@
 <li><strong>LegacySync</strong>: Transitions to <em>LegacySyncing</em> from <em>Idle</em></li>
 <li><strong>Run</strong>: Transitions to <em>Running</em> from <em>Idle</em>, <em>LegacySyncing</em> or <em>CatchingBlocks</em></li>
 <li><strong>CatchupBlocks</strong>: Transitions to <em>CatchingBlocks</em> from <em>Running</em></li>
-<li><strong>Stop</strong>: Transitions to <em>Idle</em> from <em>LegacySyncing</em>, <em>Running</em>, or <em>CatchingBlocks</em></li>
+<li><strong>Stop</strong>: Transitions to <em>Idle</em> from <em>LegacySyncing</em> or <em>Running</em></li>
 </ul>
 <p>Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command <code>go run services/blockchain/fsm_visualizer/main.go</code>. The generated <code>docs/state-machine.diagram.md</code> can be visualized using <a href="https://mermaid.live/">https://mermaid.live/</a>.</p>
 <h2 id="3-functionality">3. Functionality</h2>
@@ -6857,7 +6857,7 @@
 <li>❌ Create blocks (mine candidates)</li>
 </ul>
 <p>All services will wait for the FSM to transition to the <code>Running</code> state (either directly or after going through a <code>Legacy Sync</code> step) before starting their operations. As such, the node should see no activity until the FSM transitions to the <code>Running</code> state.</p>
-<p>The node can also return back to the <code>Idle</code> state from any other state, however this can only be triggered by a manual / external request.</p>
+<p>The node can also return back to the <code>Idle</code> state from <code>Running</code> or <code>LegacySyncing</code>, however this can only be triggered by a manual / external request.</p>
 <h4 id="332-fsm-legacy-syncing-state">3.3.2. FSM: Legacy Syncing State</h4>
 <p>When a node is starting up, it may need to perform a legacy sync. This is a full block sync performed against legacy BSV nodes. In this state:</p>
 <p>Allowed Operations in Legacy Syncing State:</p>
