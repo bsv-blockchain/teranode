@@ -14,8 +14,163 @@ permissions:
   contents: read
   pull-requests: read
   id-token: write
+  packages: write
 
 jobs:
+  # Chain Integrity Test with 3 block generators
+  chainintegrity:
+    name: Chain Integrity Test
+    runs-on: teranode-runner-16-core
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and load Docker image locally
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6
+        with:
+          context: .
+          load: true
+          tags: teranode:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Remove old data and recreate directories
+        run: |
+          rm -rf data
+          mkdir -p data/postgres
+
+      - name: Start Teranode nodes with 3 block generators (docker compose up)
+        run: docker compose -f compose/docker-compose-3blasters.yml up -d
+
+      - name: Wait for mining to complete (all nodes at height 120+ and in sync)
+        run: |
+          set -e
+          REQUIRED_HEIGHT=120
+          MAX_ATTEMPTS=120  # 10 minutes with 5s sleep
+          SLEEP=5
+
+          # Function to check for errors in all teranode container logs at once
+          check_errors() {
+            # Get current time for this check
+            local current_time
+            current_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+            # Check for errors - if last_check_time is empty, it will check all logs
+            local since_param=""
+            if [ ! -z "$last_check_time" ]; then
+              since_param="--since=$last_check_time"
+            fi
+
+            # Single command pattern that works for both initial and subsequent checks
+            local errors
+            errors=$(docker compose -f compose/docker-compose-3blasters.yml logs --no-color $since_param teranode1 teranode2 teranode3 | grep -i "| ERROR |" || true)
+
+            # Update timestamp for next check
+            last_check_time=$current_time
+
+            if [[ ! -z "$errors" ]]; then
+              echo "ERROR: Found error logs in teranode containers:"
+              echo "$errors"
+              return 1
+            fi
+            return 0
+          }
+
+          # Initialize empty for first check to get all logs
+          last_check_time=""
+
+          for ((i=1; i<=MAX_ATTEMPTS; i++)); do
+            h1=$(curl -s http://localhost:18090/api/v1/bestblockheader/json | jq -r .height)
+            h2=$(curl -s http://localhost:28090/api/v1/bestblockheader/json | jq -r .height)
+            h3=$(curl -s http://localhost:38090/api/v1/bestblockheader/json | jq -r .height)
+            echo "Attempt $i: heights: $h1 $h2 $h3"
+
+            # Check for errors in all teranode containers
+            if ! check_errors; then
+              echo "Errors found in container logs. Exiting."
+              exit 1
+            fi
+
+            if [[ -z "$h1" || -z "$h2" || -z "$h3" ]]; then
+              if [[ $i -gt 10 ]]; then
+                echo "Error: One or more nodes are not responding after 10 attempts. Exiting."
+                exit 1
+              else
+                echo "Warning: One or more nodes are not responding. Continuing..."
+              fi
+            fi
+            if [[ "$h1" =~ ^[0-9]+$ && "$h2" =~ ^[0-9]+$ && "$h3" =~ ^[0-9]+$ ]]; then
+              if [[ $h1 -ge $REQUIRED_HEIGHT && $h2 -ge $REQUIRED_HEIGHT && $h3 -ge $REQUIRED_HEIGHT ]]; then
+                echo "All nodes have reached height $REQUIRED_HEIGHT or greater."
+                exit 0
+              fi
+            fi
+            sleep $SLEEP
+          done
+          echo "Timeout waiting for all nodes to reach height $REQUIRED_HEIGHT."
+          exit 1
+
+      - name: Collect Docker container logs
+        if: failure()
+        run: |
+          mkdir -p container-logs
+          containers=$(docker ps -a --format "{{.Names}}")
+          for container in $containers; do
+            echo "Collecting logs for container: $container"
+            docker logs "$container" > "container-logs/$container.log" 2>&1 || true
+          done
+
+      - name: Upload container logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: container-logs
+          path: container-logs/
+
+      - name: Stop Teranode nodes (docker compose down for teranode-1/2/3)
+        run: docker compose -f compose/docker-compose-3blasters.yml down teranode1 teranode2 teranode3
+
+      - name: Build chainintegrity binary
+        run: make build-chainintegrity
+
+      - name: Run chainintegrity test
+        run: ./chainintegrity.run --logfile=chainintegrity --debug | tee chainintegrity_output.log
+
+      - name: Check for hash mismatch and fail if found
+        run: |
+          if grep -q "All filtered log file hashes differ! No majority consensus among nodes." chainintegrity_output.log; then
+            echo "Chain integrity test failed: all log file hashes differ, no majority consensus."
+            exit 1
+          fi
+
+      - name: Upload chainintegrity logs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chainintegrity-logs
+          path: |
+            chainintegrity*.log
+            chainintegrity*.filtered.log
+
+      - name: Cleanup (docker compose down)
+        if: always()
+        run: docker compose -f compose/docker-compose-3blasters.yml down
   run-daemon-tests:
     runs-on: teranode-runner-16-core
     steps:

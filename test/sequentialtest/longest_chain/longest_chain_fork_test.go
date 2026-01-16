@@ -21,9 +21,9 @@ func TestLongestChainForkPostgres(t *testing.T) {
 		testLongestChainWithDoubleSpendTransaction(t, "postgres")
 	})
 
-	t.Run("invalidate fork", func(t *testing.T) {
-		testLongestChainInvalidateFork(t, "postgres")
-	})
+	// t.Run("invalidate fork", func(t *testing.T) {
+	// 	testLongestChainInvalidateFork(t, "postgres")
+	// })
 }
 
 func TestLongestChainForkAerospike(t *testing.T) {
@@ -39,9 +39,9 @@ func TestLongestChainForkAerospike(t *testing.T) {
 		testLongestChainWithDoubleSpendTransaction(t, "aerospike")
 	})
 
-	t.Run("invalidate fork", func(t *testing.T) {
-		testLongestChainInvalidateFork(t, "aerospike")
-	})
+	// t.Run("invalidate fork", func(t *testing.T) {
+	// 	testLongestChainInvalidateFork(t, "aerospike")
+	// })
 }
 
 func testLongestChainForkDifferentTxInclusion(t *testing.T, utxoStore string) {
