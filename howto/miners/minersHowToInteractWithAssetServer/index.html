@@ -7159,50 +7159,52 @@
 <h3 id="utxo-endpoints">UTXO Endpoints</h3>
 <ul>
 <li>
-<p>GET <code>/api/v1/utxo/:hash</code></p>
+<p>GET <code>/api/v1/utxo/:hash?vout=N</code></p>
 <ul>
-<li>Description: Retrieves UTXO information in binary format</li>
+<li>Description: Retrieves UTXO spend information for a specific transaction output</li>
 <li>
 <p>Parameters:</p>
 <ul>
-<li><code>hash</code>: UTXO transaction hash (hex string)</li>
-<li><code>vout</code> (required): Output index (query parameter)</li>
+<li><code>hash</code>: Transaction hash (hex string) - the transaction containing the UTXO</li>
+<li><code>vout</code> (<strong>required</strong>): Output index (query parameter) - which output in the transaction</li>
 </ul>
 </li>
 <li>
-<p>Returns: UTXO data in binary format</p>
+<p>Returns: UTXO spend data in binary format</p>
 </li>
+<li><strong>Example</strong>: <code>GET /api/v1/utxo/9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995?vout=0</code></li>
+<li><strong>Note</strong>: The vout parameter is mandatory. Omitting it will return 400 Bad Request.</li>
 </ul>
 </li>
 <li>
-<p>GET <code>/api/v1/utxo/:hash/hex</code></p>
+<p>GET <code>/api/v1/utxo/:hash/hex?vout=N</code></p>
 <ul>
-<li>Description: Retrieves UTXO information in hexadecimal format</li>
+<li>Description: Same as above but in hexadecimal format</li>
 <li>
 <p>Parameters:</p>
 <ul>
-<li><code>hash</code>: UTXO transaction hash (hex string)</li>
-<li><code>vout</code> (required): Output index (query parameter)</li>
+<li><code>hash</code>: Transaction hash (hex string)</li>
+<li><code>vout</code> (<strong>required</strong>): Output index (query parameter)</li>
 </ul>
 </li>
 <li>
-<p>Returns: UTXO data as hex string</p>
+<p>Returns: UTXO spend data as hex string</p>
 </li>
 </ul>
 </li>
 <li>
-<p>GET <code>/api/v1/utxo/:hash/json</code></p>
+<p>GET <code>/api/v1/utxo/:hash/json?vout=N</code></p>
 <ul>
-<li>Description: Retrieves UTXO information in JSON format</li>
+<li>Description: Same as above but in JSON format</li>
 <li>
 <p>Parameters:</p>
 <ul>
-<li><code>hash</code>: UTXO transaction hash (hex string)</li>
-<li><code>vout</code> (required): Output index (query parameter)</li>
+<li><code>hash</code>: Transaction hash (hex string)</li>
+<li><code>vout</code> (<strong>required</strong>): Output index (query parameter)</li>
 </ul>
 </li>
 <li>
-<p>Returns: UTXO data in structured JSON format</p>
+<p>Returns: UTXO spend data in structured JSON format with status and spending information</p>
 </li>
 </ul>
 </li>
@@ -7687,7 +7689,7 @@
       <div class="md-copyright">
   
     <div class="md-copyright__highlight">
-      Copyright © 2025 BSV Blockchain Org.
+      Copyright © 2026 BSV Blockchain Org.
     </div>
   
   
