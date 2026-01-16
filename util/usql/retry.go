@@ -192,6 +192,7 @@ func retryQueryOperation(ctx context.Context, config RetryConfig, operation func
 
 	var lastErr error
 	var rows *sql.Rows
+	var err error
 
 	for attempt := 0; attempt <= config.MaxAttempts; attempt++ {
 		// Record retry attempt metric
@@ -200,7 +201,7 @@ func retryQueryOperation(ctx context.Context, config RetryConfig, operation func
 		}
 
 		// Execute the operation
-		rows, err := operation()
+		rows, err = operation()
 		if err == nil {
 			// Success - record metric if this was a retry
 			if attempt > 0 {
@@ -210,6 +211,10 @@ func retryQueryOperation(ctx context.Context, config RetryConfig, operation func
 		}
 
 		lastErr = err
+		if rows != nil {
+			_ = rows.Close()
+			rows = nil
+		}
 
 		// Don't retry non-retriable errors
 		if !isRetriable(err) {
@@ -246,6 +251,7 @@ func retryExecOperation(ctx context.Context, config RetryConfig, operation func(
 
 	var lastErr error
 	var result sql.Result
+	var err error
 
 	for attempt := 0; attempt <= config.MaxAttempts; attempt++ {
 		// Record retry attempt metric
@@ -254,7 +260,7 @@ func retryExecOperation(ctx context.Context, config RetryConfig, operation func(
 		}
 
 		// Execute the operation
-		result, err := operation()
+		result, err = operation()
 		if err == nil {
 			// Success - record metric if this was a retry
 			if attempt > 0 {
@@ -264,6 +270,7 @@ func retryExecOperation(ctx context.Context, config RetryConfig, operation func(
 		}
 
 		lastErr = err
+		result = nil
 
 		// Don't retry non-retriable errors
 		if !isRetriable(err) {
