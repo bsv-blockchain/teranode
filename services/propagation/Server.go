@@ -481,7 +481,7 @@ func (ps *PropagationServer) handleSingleTx(_ context.Context) echo.HandlerFunc 
 		// Process the transaction and return appropriate response
 		err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: body})
 		if err != nil {
-			return c.String(http.StatusInternalServerError, "Failed to process transaction: "+err.Error())
+			return c.String(http.StatusInternalServerError, "Failed to process transaction: "+errors.UserMessage(err))
 		}
 
 		return c.String(http.StatusOK, "OK")
@@ -540,7 +540,7 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 
 		go func() {
 			for err := range processErrors {
-				errStr += err.Error() + "\n"
+				errStr += errors.UserMessage(err) + "\n"
 
 				processingErrorWg.Done()
 			}
@@ -748,7 +748,7 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 	if err := ps.processTransaction(ctx, req); err != nil {
 		ctxLogger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
 
-		return nil, errors.WrapGRPC(err)
+		return nil, errors.WrapGRPCPublic(err)
 	}
 
 	return &propagation_api.EmptyMessage{}, nil
@@ -810,7 +810,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 			if err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
 			}); err != nil {
-				e := errors.Wrap(err)
+				e := errors.WrapPublic(err)
 				// Use context-aware logger for trace correlation
 				ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, e)
 
@@ -826,7 +826,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	if err := g.Wait(); err != nil {
 		ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] failed to process transaction batch: %v", err)
 
-		return nil, errors.WrapGRPC(err)
+		return nil, errors.WrapGRPCPublic(err)
 	}
 
 	return response, nil

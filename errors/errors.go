@@ -665,6 +665,87 @@ func WrapGRPC(err error) error {
 	}
 }
 
+// UserMessage returns a concise, user-facing error message without wrapped error chains or data.
+// It is intended for external surfaces (HTTP/gRPC) where internal details should not be exposed.
+func UserMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	if isGRPCWrappedError(err) {
+		err = UnwrapGRPC(err)
+	}
+
+	var tErr *Error
+	if errors.As(err, &tErr) && tErr != nil {
+		return fmt.Sprintf("%s (%d): %s", tErr.code.String(), tErr.code, tErr.message)
+	}
+
+	var tProtoErr *TError
+	if errors.As(err, &tProtoErr) && tProtoErr != nil {
+		return fmt.Sprintf("%s (%d): %s", tProtoErr.Code.String(), tProtoErr.Code, tProtoErr.Message)
+	}
+
+	return "internal error"
+}
+
+// PublicError returns a sanitized Error suitable for returning to external callers.
+// It strips wrapped errors, file/line/function details, and error data.
+func PublicError(err error) *Error {
+	if err == nil {
+		return nil
+	}
+
+	if isGRPCWrappedError(err) {
+		err = UnwrapGRPC(err)
+	}
+
+	var tErr *Error
+	if errors.As(err, &tErr) && tErr != nil {
+		return &Error{
+			code:    tErr.code,
+			message: tErr.message,
+		}
+	}
+
+	var tProtoErr *TError
+	if errors.As(err, &tProtoErr) && tProtoErr != nil {
+		return &Error{
+			code:    tProtoErr.Code,
+			message: tProtoErr.Message,
+		}
+	}
+
+	return &Error{
+		code:    ERR_ERROR,
+		message: "internal error",
+	}
+}
+
+// WrapGRPCPublic wraps an error for gRPC without exposing internal details.
+func WrapGRPCPublic(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	publicErr := PublicError(err)
+	if publicErr == nil {
+		return nil
+	}
+
+	st := status.New(ErrorCodeToGRPCCode(publicErr.code), publicErr.message)
+	return st.Err()
+}
+
+// WrapPublic converts an error into a TError without wrapped details for external use.
+func WrapPublic(err error) *TError {
+	if err == nil {
+		return nil
+	}
+
+	return Wrap(PublicError(err))
+}
+
 // UnwrapGRPC unwraps a gRPC error and returns the underlying Error type.
 func UnwrapGRPC(err error) *Error {
 	if err == nil {
