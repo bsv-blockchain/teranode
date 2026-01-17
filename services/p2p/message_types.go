@@ -6,6 +6,7 @@ type NodeStatusMessage struct {
 	ClientName          string   `json:"client_name"` // Name of this node client
 	Type                string   `json:"type"`
 	BaseURL             string   `json:"base_url"`
+	PropagationURL      string   `json:"propagation_url,omitempty"` // Optional URL for peers to use for propagating txs (defaults to BaseURL if empty)
 	Version             string   `json:"version"`
 	CommitHash          string   `json:"commit_hash"`
 	BestBlockHash       string   `json:"best_block_hash"`

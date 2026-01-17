@@ -185,6 +185,7 @@ type AssetSettings struct {
 	HTTPPort                int
 	SignHTTPResponses       bool
 	EchoDebug               bool
+	PropagationPublicURL    string // Optional URL for peers to use for propagating txs (defaults to HTTPPublicAddress if empty)
 
 	// Concurrency limits for repository methods (0 = unlimited)
 	ConcurrencyGetTransaction         int
