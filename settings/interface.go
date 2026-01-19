@@ -351,6 +351,7 @@ type BlockValidationSettings struct {
 	FetchNumWorkers         int // Number of worker goroutines for parallel processing (default: 16)
 	FetchBufferSize         int // Buffer size for channels (default: 50)
 	SubtreeFetchConcurrency int // Concurrent subtree fetches per block (default: 8)
+	SubtreeBatchSize        int // Subtrees to process per batch in quick validation (default: 16)
 	// Transaction extension timeout
 	ExtendTransactionTimeout time.Duration // Timeout for extending transactions (default: 120s)
 	// Concurrency limits
@@ -359,6 +360,9 @@ type BlockValidationSettings struct {
 	NearForkThreshold int // Heights within this range are considered "near" forks (default: coinbase maturity / 2)
 	MaxParallelForks  int // Maximum number of forks to process in parallel (default: 4)
 	MaxTrackedForks   int // Maximum total number of forks to track (default: 1000)
+	// Pipeline processing settings
+	SubtreeBatchPrefetchDepth    int // Batches to prefetch ahead in pipeline (default: 2, 0=sequential)
+	SubtreeBatchWriteConcurrency int // Concurrent subtree file writes per batch (default: 64)
 }
 
 type ValidatorSettings struct {

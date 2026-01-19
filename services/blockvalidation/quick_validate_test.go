@@ -130,10 +130,19 @@ func TestQuickValidateBlock(t *testing.T) {
 		// Verify AddBlock was called with correct parameters
 		suite.MockBlockchain.AssertCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
-		arguments := suite.MockBlockchain.Calls[1].Arguments
-		if len(arguments) < 2 {
-			t.Fatalf("Expected at least 2 arguments, got %d", len(arguments))
+		// Find the AddBlock call in the mock calls
+		var addBlockCall *mock.Call
+		for i := range suite.MockBlockchain.Calls {
+			if suite.MockBlockchain.Calls[i].Method == "AddBlock" {
+				addBlockCall = &suite.MockBlockchain.Calls[i]
+				break
+			}
 		}
+		require.NotNil(t, addBlockCall, "AddBlock should have been called")
+
+		arguments := addBlockCall.Arguments
+		require.GreaterOrEqual(t, len(arguments), 4, "AddBlock should have at least 4 arguments")
+
 		addedBlock := arguments.Get(1).(*model.Block)
 		assert.Equal(t, uint32(100), addedBlock.Height, "Block height should be set correctly")
 		assert.Equal(t, block.Header.Hash(), addedBlock.Header.Hash(), "Block hash should match")
@@ -154,135 +163,8 @@ func TestQuickValidateBlock(t *testing.T) {
 	})
 }
 
-// TestQuickValidationComponents tests the individual components of quick validation
-func TestQuickValidationComponents(t *testing.T) {
-	t.Run("CreateAllUTXOs_Success", func(t *testing.T) {
-		// Setup test suite
-		suite := NewCatchupTestSuite(t)
-		defer suite.Cleanup()
-
-		// Create test data
-		block := testhelpers.CreateTestBlockWithSubtrees(t, 100)
-		txs := testhelpers.CreateTestTransactions(t, 2)
-		txWrappers := make([]txWrapper, len(txs))
-
-		// Setup UTXO store expectations for all transactions
-		for idx, tx := range txs {
-			suite.MockUTXOStore.On("Create", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil)
-
-			txWrappers[idx] = txWrapper{tx: tx, subtreeIdx: 0}
-		}
-
-		// Execute createAllUTXOs
-		err := suite.Server.blockValidation.createAllUTXOs(suite.Ctx, block, txWrappers)
-
-		// Verify success
-		assert.NoError(t, err, "Should successfully create all UTXOs")
-
-		// Verify all mock expectations were met
-		suite.MockUTXOStore.AssertExpectations(t)
-	})
-
-	t.Run("CreateAllUTXOs_Error", func(t *testing.T) {
-		suite := NewCatchupTestSuite(t)
-		defer suite.Cleanup()
-
-		block := testhelpers.CreateTestBlockWithSubtrees(t, 100)
-		txs := testhelpers.CreateTestTransactions(t, 1)
-		txWrappers := []txWrapper{{tx: txs[0], subtreeIdx: 0}}
-
-		// Setup UTXO store to return error
-		suite.MockUTXOStore.On("Create", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewServiceError("database connection failed"))
-
-		// Execute createAllUTXOs
-		err := suite.Server.blockValidation.createAllUTXOs(suite.Ctx, block, txWrappers)
-
-		// Verify error is propagated
-		assert.Error(t, err, "Should propagate UTXO creation errors")
-		assert.Contains(t, err.Error(), "failed to create", "Error should indicate UTXO creation failure")
-	})
-
-	t.Run("CreateAllUTXOs_ConcurrencyTest", func(t *testing.T) {
-		suite := NewCatchupTestSuite(t)
-		defer suite.Cleanup()
-
-		// Create many transactions to test concurrency limiting
-		block := testhelpers.CreateTestBlockWithSubtrees(t, 100)
-		txs := testhelpers.CreateTestTransactions(t, 20) // Test with multiple transactions
-		txWrappers := make([]txWrapper, len(txs))
-
-		// Setup UTXO store expectations for all transactions
-		for idx, tx := range txs {
-			suite.MockUTXOStore.On("Create", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil)
-			txWrappers[idx] = txWrapper{tx: tx, subtreeIdx: 0}
-		}
-
-		// Execute createAllUTXOs
-		err := suite.Server.blockValidation.createAllUTXOs(suite.Ctx, block, txWrappers)
-
-		// Verify success even with many transactions
-		assert.NoError(t, err, "Should handle large number of transactions with concurrency limits")
-
-		// Verify all mock expectations were met
-		suite.MockUTXOStore.AssertExpectations(t)
-	})
-}
-
-// TestValidateAllTransactions tests transaction validation with proper options
-func TestValidateAllTransactions(t *testing.T) {
-	t.Run("ValidationSuccess", func(t *testing.T) {
-		suite := NewCatchupTestSuite(t)
-		defer suite.Cleanup()
-
-		// Create test data
-		block := testhelpers.CreateTestBlockWithSubtrees(t, 100)
-		txs := testhelpers.CreateTestTransactions(t, 3)
-		txWrappers := make([]txWrapper, len(txs))
-
-		// Setup UTXO store expectations for validator internal calls
-		for idx, tx := range txs {
-			// The validator may call Create during validation
-			suite.MockUTXOStore.On("Create", mock.Anything, tx, mock.Anything, mock.Anything).Return(&meta.Data{}, nil).Maybe()
-			// Setup UTXO store expectations for spending transactions
-			suite.MockUTXOStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
-			txWrappers[idx] = txWrapper{tx: tx, subtreeIdx: 0}
-		}
-
-		// Execute validateAllTransactions
-		err := suite.Server.blockValidation.spendAllTransactions(suite.Ctx, block, txWrappers)
-
-		// Verify success
-		assert.NoError(t, err, "Should successfully validate all transactions")
-	})
-
-	t.Run("ValidationWithManyTransactions", func(t *testing.T) {
-		suite := NewCatchupTestSuite(t)
-		defer suite.Cleanup()
-
-		// Create many transactions to test concurrency limiting
-		block := testhelpers.CreateTestBlockWithSubtrees(t, 100)
-		txs := testhelpers.CreateTestTransactions(t, 15) // Test with multiple transactions
-		txWrappers := make([]txWrapper, len(txs))
-
-		// Setup UTXO store expectations for validator internal calls
-		for idx, tx := range txs {
-			// The validator may call Create during validation
-			suite.MockUTXOStore.On("Create", mock.Anything, tx, mock.Anything, mock.Anything).Return(&meta.Data{}, nil).Maybe()
-			// Setup UTXO store expectations for spending transactions
-			suite.MockUTXOStore.On("Spend", mock.Anything, tx, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
-			txWrappers[idx] = txWrapper{tx: tx, subtreeIdx: 0}
-		}
-
-		// Execute validateAllTransactions
-		err := suite.Server.blockValidation.spendAllTransactions(suite.Ctx, block, txWrappers)
-
-		// Verify success even with many transactions
-		assert.NoError(t, err, "Should handle large number of transactions with concurrency limits")
-	})
-}
-
-// TestGetBlockTransactions tests transaction retrieval (simplified)
-func TestGetBlockTransactions(t *testing.T) {
+// TestProcessBlockSubtrees tests subtree processing (simplified)
+func TestProcessBlockSubtrees(t *testing.T) {
 	t.Run("EmptySubtrees", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
@@ -302,8 +184,8 @@ func TestGetBlockTransactions(t *testing.T) {
 			Subtrees:         []*chainhash.Hash{}, // Empty subtrees
 		}
 
-		// Execute getBlockTransactions
-		_, err := suite.Server.blockValidation.getBlockTransactions(suite.Ctx, block)
+		// Execute processBlockSubtrees
+		_, err := suite.Server.blockValidation.processBlockSubtrees(suite.Ctx, block)
 
 		// Verify error
 		assert.Error(t, err, "Should fail when block has no subtrees")
@@ -370,4 +252,140 @@ func TestQuickValidationDecisionLogic(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions tests that existing transactions
+// have their mined info updated when ErrTxExists is returned during quick validation.
+// This is critical for crash recovery scenarios where UTXOs may have been created with
+// a different BlockID in a previous failed attempt.
+func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
+	t.Run("all new transactions - no SetMinedMulti call", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		// Create test transactions - need 4 to get 3 regular txs after skipping coinbase
+		txs := transactions.CreateTestTransactionChainWithCount(t, 4)
+		regularTxs := txs[1:3] // Get exactly 2 transactions
+
+		// Setup block
+		block := testhelpers.CreateTestBlocks(t, 1)[0]
+		block.Height = 100
+		block.ID = 50
+
+		// Create batch with 2 subtrees, each containing 1 transaction
+		batch := &SubtreeProcessingBatch{
+			batchTxs:   regularTxs,
+			txRanges:   [][2]int{{0, 1}, {1, 2}}, // subtree 0: tx 0, subtree 1: tx 1
+			batchStart: 0,
+			batchEnd:   2,
+		}
+
+		// Mock Create to succeed (no ErrTxExists)
+		suite.MockUTXOStore.On("Create", mock.Anything, mock.Anything, uint32(100), mock.Anything).
+			Return(&meta.Data{}, nil).Maybe()
+
+		// Mock Spend - need to clear the default and set our own
+		suite.MockUTXOStore.ExpectedCalls = filterCalls(suite.MockUTXOStore.ExpectedCalls, "Spend")
+		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return([]*utxo.Spend{}, nil).Maybe()
+
+		// SetMinedMulti should NOT be called since all txs are new
+
+		err := suite.Server.blockValidation.createAndSpendUTXOsForBatch(suite.Ctx, block, batch)
+		require.NoError(t, err)
+
+		// Verify Create was called for each transaction
+		suite.MockUTXOStore.AssertNumberOfCalls(t, "Create", 2)
+		// Verify SetMinedMulti was NOT called
+		suite.MockUTXOStore.AssertNotCalled(t, "SetMinedMulti", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("all existing transactions - SetMinedMulti called", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		// Create test transactions
+		txs := transactions.CreateTestTransactionChainWithCount(t, 4)
+		regularTxs := txs[1:3] // Get exactly 2 transactions
+
+		// Setup block
+		block := testhelpers.CreateTestBlocks(t, 1)[0]
+		block.Height = 100
+		block.ID = 50
+
+		// Create batch with 2 subtrees, each containing 1 transaction
+		batch := &SubtreeProcessingBatch{
+			batchTxs:   regularTxs,
+			txRanges:   [][2]int{{0, 1}, {1, 2}},
+			batchStart: 0,
+			batchEnd:   2,
+		}
+
+		// Mock Create to return ErrTxExists for all transactions
+		suite.MockUTXOStore.On("Create", mock.Anything, mock.Anything, uint32(100), mock.Anything).
+			Return((*meta.Data)(nil), errors.ErrTxExists).Maybe()
+
+		// Mock SetMinedMulti - should be called with both transaction hashes
+		suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.MatchedBy(func(hashes []*chainhash.Hash) bool {
+			return len(hashes) == 2
+		}), mock.MatchedBy(func(info utxo.MinedBlockInfo) bool {
+			return info.BlockID == 50 && info.BlockHeight == 100
+		})).Return(map[chainhash.Hash][]uint32{}, nil).Once()
+
+		// Mock Spend - clear default and set our own
+		suite.MockUTXOStore.ExpectedCalls = filterCalls(suite.MockUTXOStore.ExpectedCalls, "Spend")
+		suite.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return([]*utxo.Spend{}, nil).Maybe()
+
+		err := suite.Server.blockValidation.createAndSpendUTXOsForBatch(suite.Ctx, block, batch)
+		require.NoError(t, err)
+
+		// Verify SetMinedMulti was called
+		suite.MockUTXOStore.AssertCalled(t, "SetMinedMulti", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("SetMinedMulti error is propagated", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		// Create test transactions
+		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+		regularTxs := txs[1:2] // Get exactly 1 transaction
+
+		// Setup block
+		block := testhelpers.CreateTestBlocks(t, 1)[0]
+		block.Height = 100
+		block.ID = 50
+
+		// Create batch with 1 subtree containing 1 transaction
+		batch := &SubtreeProcessingBatch{
+			batchTxs:   regularTxs,
+			txRanges:   [][2]int{{0, 1}},
+			batchStart: 0,
+			batchEnd:   1,
+		}
+
+		// Mock Create to return ErrTxExists
+		suite.MockUTXOStore.On("Create", mock.Anything, mock.Anything, uint32(100), mock.Anything).
+			Return((*meta.Data)(nil), errors.ErrTxExists).Maybe()
+
+		// Mock SetMinedMulti to return an error
+		suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(map[chainhash.Hash][]uint32{}, errors.NewProcessingError("database error")).Once()
+
+		err := suite.Server.blockValidation.createAndSpendUTXOsForBatch(suite.Ctx, block, batch)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to update mined info")
+	})
+}
+
+// filterCalls removes mock expectations for a specific method
+func filterCalls(calls []*mock.Call, methodToRemove string) []*mock.Call {
+	filtered := make([]*mock.Call, 0)
+	for _, call := range calls {
+		if call.Method != methodToRemove {
+			filtered = append(filtered, call)
+		}
+	}
+	return filtered
 }
