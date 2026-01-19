@@ -89,7 +89,7 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 			ConnMaxIdleTime:  servicePoolSettings.ConnMaxIdleTime,
 			RetryMaxAttempts: servicePoolSettings.RetryMaxAttempts,
 			RetryBaseDelay:   servicePoolSettings.RetryBaseDelay,
-			RetryEnabled:     servicePoolSettings.RetryEnabled,
+			RetryEnabled:     tSettings.Postgres.RetryEnabled,
 		}
 		// Use global defaults for zero values
 		if poolSettings.MaxOpenConns == 0 {
