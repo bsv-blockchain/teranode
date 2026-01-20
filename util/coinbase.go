@@ -32,6 +32,11 @@ func ExtractCoinbaseHeight(coinbaseTx *bt.Tx) (uint32, error) {
 // ExtractCoinbaseMiner extracts the miner identification string from a coinbase transaction.
 // This parses the arbitrary text portion of the coinbase script, cleaning and formatting it.
 func ExtractCoinbaseMiner(coinbaseTx *bt.Tx) (string, error) {
+	if len(coinbaseTx.Inputs) == 0 {
+		return "", errors.NewBlockCoinbaseMissingHeightError("coinbase transaction has no inputs")
+	}
+
+	// Extract both height and miner text from the first input of the coinbase transaction
 	_, miner, err := extractCoinbaseHeightAndText(*coinbaseTx.Inputs[0].UnlockingScript)
 	if err != nil && errors.Is(err, errors.ErrBlockCoinbaseMissingHeight) {
 		err = nil

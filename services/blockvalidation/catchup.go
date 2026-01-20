@@ -76,6 +76,14 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	)
 	defer deferFn()
 
+	// override with checkpoint from settings
+	if u.settings.BlockValidation.CatchupCheckpointHash != "" && u.settings.BlockValidation.CatchupCheckpointHeight != 0 {
+		checkpointHash, _ := chainhash.NewHashFromStr(u.settings.BlockValidation.CatchupCheckpointHash)
+		u.settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{
+			{Height: u.settings.BlockValidation.CatchupCheckpointHeight, Hash: checkpointHash},
+		}
+	}
+
 	// Validate that we have a baseURL for making HTTP requests
 	if baseURL == "" {
 		return errors.NewInvalidArgumentError("baseURL is required for catchup")

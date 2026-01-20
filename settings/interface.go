@@ -338,10 +338,12 @@ type BlockValidationSettings struct {
 	PeriodicProcessingInterval                time.Duration // Interval for periodic processing of blocks with mined_set=false (default: 1 minute)
 	RecentBlockIDsLimit                       uint64        // Maximum number of recent block IDs to load for double-spend checking (default: 50000)
 	// Catchup configuration
-	CatchupMaxRetries            int // Maximum number of retries for catchup operations
-	CatchupIterationTimeout      int // Timeout in seconds for each catchup iteration
-	CatchupOperationTimeout      int // Timeout in seconds for the entire catchup operation
-	CatchupMaxAccumulatedHeaders int // Maximum headers to accumulate during catchup (default: 100000)
+	CatchupMaxRetries            int    // Maximum number of retries for catchup operations
+	CatchupIterationTimeout      int    // Timeout in seconds for each catchup iteration
+	CatchupOperationTimeout      int    // Timeout in seconds for the entire catchup operation
+	CatchupMaxAccumulatedHeaders int    // Maximum headers to accumulate during catchup (default: 100000)
+	CatchupCheckpointHash        string // Optional checkpoint block hash to use during catchup (overrides automatic selection if set)
+	CatchupCheckpointHeight      int32  // Optional checkpoint block height to use during catchup (overrides automatic selection if set)
 	// Circuit breaker configuration
 	CircuitBreakerFailureThreshold int // Number of consecutive failures before opening circuit
 	CircuitBreakerSuccessThreshold int // Number of consecutive successes before closing circuit
