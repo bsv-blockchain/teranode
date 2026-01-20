@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -644,8 +645,13 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 		t.Errorf("Failed to stop daemon %s: %v", td.Settings.ClientName, err)
 	}
 
-	// Cancel context first to trigger HTTP server shutdowns
+	// Cancel context after daemon stop to trigger graceful shutdown of any remaining
+	// context-dependent components (HTTP servers, Kafka producers, etc.)
 	td.ctxCancel()
+
+	// Allow background goroutines (batchers, Kafka workers) to complete their cleanup.
+	// This prevents race conditions where goroutines try to access resources being closed.
+	runtime.Gosched()
 
 	// Shutdown the logger to prevent race conditions on testing.T access
 	// Background goroutines may still be running and trying to log errors
