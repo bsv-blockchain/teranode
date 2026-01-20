@@ -26,8 +26,8 @@
   let display: DetailTab
 
   $: tab = ready ? $page.url.searchParams.get('tab') ?? '' : ''
-  $: display = tab === DetailTab.json ? DetailTab.json : 
-              tab === DetailTab.merkleproof ? DetailTab.merkleproof : 
+  $: display = tab === DetailTab.json ? DetailTab.json :
+              tab === DetailTab.merkleproof ? DetailTab.merkleproof :
               DetailTab.overview
 
   let result: any = null
@@ -57,10 +57,19 @@
     let failed = false
     result = null
 
-    // get subtree data
-    const r1: any = await api.getItemData({ type: api.ItemType.subtree, hash: hash })
+    // get subtree data - fetch a reasonable amount for the overview (100 nodes should be enough)
+    // The JSON tab will fetch its own paginated data
+    const r1: any = await api.getSubtreeNodes({ hash: hash, offset: 0, limit: 100 })
     if (r1.ok) {
-      tmpData = r1.data
+      // Extract data from paginated response
+      const subtreeData = r1.data.data
+      const pagination = r1.data.pagination
+
+      tmpData = {
+        ...subtreeData,
+        // Store pagination info for reference
+        totalNodes: pagination.totalRecords,
+      }
     } else {
       failed = true
       failure(r1.error.message)
@@ -88,7 +97,7 @@
       expandedData: {
         height: tmpData.Height,
         hash,
-        transactionCount: tmpData.Nodes.length,
+        transactionCount: tmpData.totalNodes || (tmpData.Nodes ? tmpData.Nodes.length : 0),
         fee: tmpData.Fees,
         size: tmpData.SizeInBytes,
       },

@@ -12,8 +12,11 @@
   import { Button, Icon } from '$lib/components'
   import JSONTree from '$internal/components/json-tree/index.svelte'
   import Card from '$internal/components/card/index.svelte'
+  import Pager from '$internal/components/pager/index.svelte'
   import i18n from '$internal/i18n'
   import { getItemApiUrl, ItemType } from '$internal/api'
+  import * as api from '$internal/api'
+  import { failure } from '$lib/utils/notifications'
 
   const dispatch = createEventDispatcher()
 
@@ -21,6 +24,7 @@
   const fieldKey = `${baseKey}.fields`
 
   $: t = $i18n.t
+  $: i18nLocal = { t, baseKey: 'comp.pager' }
 
   $: collapse = $mediaSize < MediaSize.sm
 
@@ -33,12 +37,48 @@
   $: isJson = display === DetailTab.json
   $: isMerkleProof = display === DetailTab.merkleproof
 
+  let paginatedData: any = null
+  let page = 1
+  let pageSize = 20
+  let totalItems = 0
+
+  $: totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
+  $: showPagerNav = totalPages > 1
+  $: showPagerSize = showPagerNav || (totalPages === 1 && paginatedData?.Nodes?.length > 5)
+
   function onDisplay(value) {
     dispatch('display', { value })
   }
 
   function onReverseHash(hash) {
     reverseHashParam(hash)
+  }
+
+  function onPage(e) {
+    const pageData = e.detail
+    page = pageData.value.page
+    pageSize = pageData.value.pageSize
+  }
+
+  async function fetchPaginatedData(hash, page, pageSize) {
+    const result: any = await api.getSubtreeNodes({
+      hash,
+      offset: (page - 1) * pageSize,
+      limit: pageSize,
+    })
+    if (result.ok) {
+      paginatedData = result.data.data
+      const pagination = result.data.pagination
+      pageSize = pagination.limit
+      page = Math.floor(pagination.offset / pageSize) + 1
+      totalItems = pagination.totalRecords
+    } else {
+      failure(result.error.message)
+    }
+  }
+
+  $: if (isJson && expandedData?.hash) {
+    fetchPaginatedData(expandedData.hash, page, pageSize)
   }
 </script>
 
@@ -156,9 +196,47 @@
         </div>
       </div>
     {:else if isJson}
-      <div class="json">
-        <div><JSONTree {data} /></div>
+      <div class="json-header">
+        <Pager
+          i18n={i18nLocal}
+          expandUp={true}
+          {totalItems}
+          showPageSize={false}
+          showQuickNav={false}
+          showNav={showPagerNav}
+          value={{
+            page,
+            pageSize,
+          }}
+          hasBoundaryRight={true}
+          on:change={onPage}
+        />
       </div>
+      <div class="json">
+        {#if paginatedData}
+          <div><JSONTree data={paginatedData} /></div>
+        {:else}
+          <div class="loading">Loading...</div>
+        {/if}
+      </div>
+      {#if showPagerSize}
+        <div class="json-footer">
+          <Pager
+            i18n={i18nLocal}
+            expandUp={true}
+            {totalItems}
+            showPageSize={showPagerSize}
+            showQuickNav={showPagerNav}
+            showNav={showPagerNav}
+            value={{
+              page,
+              pageSize,
+            }}
+            hasBoundaryRight={true}
+            on:change={onPage}
+          />
+        </div>
+      {/if}
     {:else if isMerkleProof}
       <div class="merkle-proof">
       </div>
@@ -182,9 +260,17 @@
     border-bottom: 1px solid #0a1018;
   }
 
-  .json {
+  .json-header {
     box-sizing: var(--box-sizing);
     margin-top: 32px;
+    width: 100%;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .json {
+    box-sizing: var(--box-sizing);
+    margin-top: 16px;
 
     padding: 25px;
     border-radius: 10px;
@@ -192,6 +278,20 @@
 
     width: 100%;
     overflow-x: auto;
+  }
+
+  .json-footer {
+    box-sizing: var(--box-sizing);
+    margin-top: 16px;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+  }
+
+  .loading {
+    color: rgba(255, 255, 255, 0.66);
+    text-align: center;
+    padding: 40px;
   }
 
   .merkle-proof {
