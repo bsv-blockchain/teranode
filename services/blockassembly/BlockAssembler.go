@@ -1567,44 +1567,60 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 	// are necessarily going to be on the same height
 
 	baBestBlockHeader, baBestBlockHeight := b.CurrentBlock()
-	startingHeight := height
-
-	if height > baBestBlockHeight {
-		startingHeight = baBestBlockHeight
+	if baBestBlockHeader == nil {
+		return nil, nil, errors.NewProcessingError("best block header is nil, reorg not possible")
 	}
 
-	// Get block locator for current chain
-	currentChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, baBestBlockHeader.Hash(), startingHeight)
-	if err != nil {
-		return nil, nil, errors.NewServiceError("error getting block locator for current chain", err)
-	}
+	var err error
 
-	// Get block locator for the new best block
-	newChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, header.Hash(), startingHeight)
-	if err != nil {
-		return nil, nil, errors.NewServiceError("error getting block locator for new chain", err)
-	}
+	currentHash := baBestBlockHeader.Hash()
+	currentHeight := baBestBlockHeight
+	newHash := header.Hash()
+	newHeight := height
 
-	// Find common ancestor using locators
-	var (
-		commonAncestor     *model.BlockHeader
-		commonAncestorMeta *model.BlockHeaderMeta
-	)
-
-	for _, currentHash := range currentChainLocator {
-		for _, newHash := range newChainLocator {
-			if currentHash.IsEqual(newHash) {
-				commonAncestor, commonAncestorMeta, err = b.blockchainClient.GetBlockHeader(ctx, currentHash)
-				if err != nil {
-					return nil, nil, errors.NewServiceError("error getting common ancestor header", err)
-				}
-
-				goto FoundAncestor
-			}
+	for currentHeight > newHeight {
+		currentHeader, _, getErr := b.blockchainClient.GetBlockHeader(ctx, currentHash)
+		if getErr != nil {
+			return nil, nil, errors.NewServiceError("error getting current chain header while finding common ancestor", getErr)
 		}
+		currentHash = currentHeader.HashPrevBlock
+		currentHeight--
 	}
 
-FoundAncestor:
+	for newHeight > currentHeight {
+		newHeader, _, getErr := b.blockchainClient.GetBlockHeader(ctx, newHash)
+		if getErr != nil {
+			return nil, nil, errors.NewServiceError("error getting new chain header while finding common ancestor", getErr)
+		}
+		newHash = newHeader.HashPrevBlock
+		newHeight--
+	}
+
+	for !currentHash.IsEqual(newHash) {
+		if currentHeight == 0 || newHeight == 0 {
+			break
+		}
+
+		currentHeader, _, getErr := b.blockchainClient.GetBlockHeader(ctx, currentHash)
+		if getErr != nil {
+			return nil, nil, errors.NewServiceError("error getting current chain header while finding common ancestor", getErr)
+		}
+		newHeader, _, getErr := b.blockchainClient.GetBlockHeader(ctx, newHash)
+		if getErr != nil {
+			return nil, nil, errors.NewServiceError("error getting new chain header while finding common ancestor", getErr)
+		}
+
+		currentHash = currentHeader.HashPrevBlock
+		currentHeight--
+		newHash = newHeader.HashPrevBlock
+		newHeight--
+	}
+
+	commonAncestor, commonAncestorMeta, err := b.blockchainClient.GetBlockHeader(ctx, currentHash)
+	if err != nil {
+		return nil, nil, errors.NewServiceError("error getting common ancestor header", err)
+	}
+
 	if commonAncestor == nil || commonAncestorMeta == nil {
 		return nil, nil, errors.NewProcessingError("common ancestor not found, reorg not possible")
 	}
@@ -1654,7 +1670,7 @@ FoundAncestor:
 	maxGetReorgHashes := b.settings.BlockAssembly.MaxGetReorgHashes
 	if len(filteredMoveBack) > maxGetReorgHashes {
 		currentHeader, currentHeight := b.CurrentBlock()
-		b.logger.Errorf("reorg is too big, max block reorg: current hash: %s, current height: %d, new hash: %s, new height: %d, common ancestor hash: %s, common ancestor height: %d, move down block count: %d, move up block count: %d, current locator: %v, new block locator: %v", currentHeader.Hash(), currentHeight, header.Hash(), height, commonAncestor.Hash(), commonAncestorMeta.Height, len(filteredMoveBack), len(moveForwardBlockHeaders), currentChainLocator, newChainLocator)
+		b.logger.Errorf("reorg is too big, max block reorg: current hash: %s, current height: %d, new hash: %s, new height: %d, common ancestor hash: %s, common ancestor height: %d, move down block count: %d, move up block count: %d", currentHeader.Hash(), currentHeight, header.Hash(), height, commonAncestor.Hash(), commonAncestorMeta.Height, len(filteredMoveBack), len(moveForwardBlockHeaders))
 		return nil, nil, errors.NewProcessingError("reorg is too big, max block reorg: %d", maxGetReorgHashes)
 	}
 

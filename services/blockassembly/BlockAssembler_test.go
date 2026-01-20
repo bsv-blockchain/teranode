@@ -611,6 +611,48 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		assert.Equal(t, blockHeader3.Hash(), moveForwardBlockHeaders[0].header.Hash())
 		assert.Equal(t, blockHeader4.Hash(), moveForwardBlockHeaders[1].header.Hash())
 	})
+
+	t.Run("getReorgBlocks - invalidated fork tip", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		require.NotNil(t, items)
+
+		// Build two competing chains from height 1:
+		// Main chain: 1 -> 2A -> 3A
+		// Fork chain: 1 -> 2B -> 3B (invalidated)
+		h2a := &model.BlockHeader{Version: 1, HashPrevBlock: blockHeader1.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 22, Bits: *bits}
+		h3a := &model.BlockHeader{Version: 1, HashPrevBlock: h2a.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 23, Bits: *bits}
+		h2b := &model.BlockHeader{Version: 1, HashPrevBlock: blockHeader1.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 32, Bits: *bits}
+		h3b := &model.BlockHeader{Version: 1, HashPrevBlock: h2b.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 33, Bits: *bits}
+
+		err := items.addBlock(blockHeader1)
+		require.NoError(t, err)
+		err = items.addBlock(h2a)
+		require.NoError(t, err)
+		err = items.addBlock(h3a)
+		require.NoError(t, err)
+		err = items.addBlock(h2b)
+		require.NoError(t, err)
+		err = items.addBlock(h3b)
+		require.NoError(t, err)
+
+		// Simulate BlockAssembler currently being on the fork tip (3B @ height 3)
+		items.blockAssembler.setBestBlockHeader(h3b, 3)
+
+		// Invalidate fork tip so blockchain best becomes 3A; reorg should move back 3B and 2B
+		_, err = items.blockchainClient.InvalidateBlock(t.Context(), h3b.Hash())
+		require.NoError(t, err)
+
+		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), h3a, 3)
+		require.NoError(t, err)
+
+		require.Len(t, moveBackBlockHeaders, 2)
+		assert.Equal(t, h3b.Hash(), moveBackBlockHeaders[0].header.Hash())
+		assert.Equal(t, h2b.Hash(), moveBackBlockHeaders[1].header.Hash())
+
+		require.Len(t, moveForwardBlockHeaders, 2)
+		assert.Equal(t, h2a.Hash(), moveForwardBlockHeaders[0].header.Hash())
+		assert.Equal(t, h3a.Hash(), moveForwardBlockHeaders[1].header.Hash())
+	})
 }
 
 // setupBlockAssemblyTest prepares a test environment for block assembly.
