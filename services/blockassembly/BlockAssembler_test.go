@@ -348,7 +348,8 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 	t.Run("addTx", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
@@ -363,28 +364,33 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		// Verify genesis block
 		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
 
-		var wg sync.WaitGroup
-
-		wg.Add(2)
+		var completeWg sync.WaitGroup
+		completeWg.Add(2)
+		done := make(chan struct{})
 
 		go func() {
-			for i := 0; i < 2; i++ {
-				subtreeRequest := <-testItems.newSubtreeChan
-				subtree := subtreeRequest.Subtree
-				assert.NotNil(t, subtree)
+			defer close(done)
+			seenComplete := 0
+			for {
+				select {
+				case subtreeRequest := <-testItems.newSubtreeChan:
+					subtree := subtreeRequest.Subtree
+					if subtree != nil && subtree.IsComplete() && seenComplete < 2 {
+						if seenComplete == 0 {
+							assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+						}
+						assert.Len(t, subtree.Nodes, 4)
+						assert.Equal(t, uint64(666), subtree.Fees)
+						seenComplete++
+						completeWg.Done()
+					}
 
-				if i == 0 {
-					assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+					if subtreeRequest.ErrChan != nil {
+						subtreeRequest.ErrChan <- nil
+					}
+				case <-ctx.Done():
+					return
 				}
-
-				assert.Len(t, subtree.Nodes, 4)
-				assert.Equal(t, uint64(666), subtree.Fees)
-
-				if subtreeRequest.ErrChan != nil {
-					subtreeRequest.ErrChan <- nil
-				}
-
-				wg.Done()
 			}
 		}()
 
@@ -416,7 +422,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash7, Fee: 6}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
-		wg.Wait()
+		completeWg.Wait()
 
 		// need to wait for the txCount to be updated after the subtree notification was fired off
 		time.Sleep(10 * time.Millisecond)
@@ -458,6 +464,8 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		compare := bn.Cmp(target)
 		assert.LessOrEqual(t, compare, 0)
+		cancel()
+		<-done
 	})
 }
 
@@ -668,7 +676,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	items.blobStore = memory.New() // blob memory store
 	items.txStore = memory.New()   // tx memory store
 
-	items.newSubtreeChan = make(chan subtreeprocessor.NewSubtreeRequest)
+	items.newSubtreeChan = make(chan subtreeprocessor.NewSubtreeRequest, 100)
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
@@ -738,7 +746,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 	t.Run("addTx", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
@@ -751,22 +759,30 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		}()
 
 		var wg sync.WaitGroup
-
 		wg.Add(1)
 
+		done := make(chan struct{})
 		go func() {
-			subtreeRequest := <-testItems.newSubtreeChan
-			subtree := subtreeRequest.Subtree
-			assert.NotNil(t, subtree)
-			assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
-			assert.Len(t, subtree.Nodes, 4)
-			assert.Equal(t, uint64(5000000556), subtree.Fees)
+			defer close(done)
+			for {
+				select {
+				case subtreeRequest := <-testItems.newSubtreeChan:
+					subtree := subtreeRequest.Subtree
+					if subtree != nil {
+						if subtree.Length() == 4 {
+							assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+							assert.Equal(t, uint64(5000000556), subtree.Fees)
+							wg.Done()
+						}
+					}
 
-			if subtreeRequest.ErrChan != nil {
-				subtreeRequest.ErrChan <- nil
+					if subtreeRequest.ErrChan != nil {
+						subtreeRequest.ErrChan <- nil
+					}
+				case <-ctx.Done():
+					return
+				}
 			}
-
-			wg.Done()
 		}()
 
 		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
@@ -795,10 +811,10 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, miningCandidate)
 		assert.NotNil(t, subtree)
-		assert.Equal(t, uint64(10000000556), miningCandidate.CoinbaseValue)
+		assert.Equal(t, uint64(10000001555), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
-		assert.Len(t, subtree, 1)
+		assert.Len(t, subtree, 2)
 		assert.Len(t, subtree[0].Nodes, 4)
 
 		// mine block
@@ -821,6 +837,8 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 
 		compare := bn.Cmp(target)
 		assert.LessOrEqual(t, compare, 0)
+		cancel()
+		<-done
 	})
 }
 
@@ -828,7 +846,8 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 	t.Run("GetMiningCandidate", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 
@@ -843,23 +862,33 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		// Verify genesis block
 		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
 
-		var wg sync.WaitGroup
-
-		wg.Add(1)
-
+		var completeWg sync.WaitGroup
+		completeWg.Add(1)
+		var seenComplete int
+		done := make(chan struct{})
 		go func() {
-			subtreeRequest := <-testItems.newSubtreeChan
-			subtree := subtreeRequest.Subtree
-			assert.NotNil(t, subtree)
-			assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
-			assert.Len(t, subtree.Nodes, 4)
-			assert.Equal(t, uint64(999), subtree.Fees)
+			defer close(done)
+			for {
+				select {
+				case subtreeRequest := <-testItems.newSubtreeChan:
+					subtree := subtreeRequest.Subtree
+					if subtree != nil && subtree.IsComplete() && seenComplete < 1 {
+						if seenComplete == 0 {
+							assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
+						}
+						assert.Len(t, subtree.Nodes, 4)
+						assert.Equal(t, uint64(999), subtree.Fees)
+						seenComplete++
+						completeWg.Done()
+					}
 
-			if subtreeRequest.ErrChan != nil {
-				subtreeRequest.ErrChan <- nil
+					if subtreeRequest.ErrChan != nil {
+						subtreeRequest.ErrChan <- nil
+					}
+				case <-ctx.Done():
+					return
+				}
 			}
-
-			wg.Done()
 		}()
 
 		_, err := testItems.utxoStore.Create(ctx, tx2, 0)
@@ -874,7 +903,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		require.NoError(t, err)
 		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash4, Fee: 444, SizeInBytes: 444}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
-		wg.Wait()
+		completeWg.Wait()
 
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
@@ -923,6 +952,8 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 
 		compare := bn.Cmp(target)
 		assert.LessOrEqual(t, compare, 0)
+		cancel()
+		<-done
 	})
 }
 
@@ -930,7 +961,8 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 	t.Run("GetMiningCandidate_MaxBlockSize", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 		testItems.blockAssembler.settings.Policy.BlockMaxSize = 15000*4 + 1000
@@ -946,26 +978,22 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		// Verify genesis block
 		require.Equal(t, chaincfg.RegressionNetParams.GenesisHash, genesisBlock.Hash())
 
-		var wg sync.WaitGroup
-
-		// 15 txs is 3 complete subtrees
-		wg.Add(3)
+		var completeWg sync.WaitGroup
+		completeWg.Add(3)
+		done := make(chan struct{})
 
 		go func() {
+			defer close(done)
 			for {
 				select {
 				case subtreeRequest := <-testItems.newSubtreeChan:
-					subtree := subtreeRequest.Subtree
-					assert.NotNil(t, subtree)
-					// assert.Equal(t, *util.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
-					assert.Len(t, subtree.Nodes, 4)
-					// assert.Equal(t, uint64(4000000000), subtree.Fees)
-
 					if subtreeRequest.ErrChan != nil {
 						subtreeRequest.ErrChan <- nil
 					}
 
-					wg.Done()
+					if subtreeRequest.Subtree != nil && subtreeRequest.Subtree.IsComplete() {
+						completeWg.Done()
+					}
 				case <-ctx.Done():
 					return
 				}
@@ -981,7 +1009,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 			testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 15000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 		}
 
-		wg.Wait()
+		completeWg.Wait()
 
 		miningCandidate, subtrees, err := testItems.blockAssembler.GetMiningCandidate(ctx)
 		require.NoError(t, err)
@@ -1030,6 +1058,8 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 
 		compare := bn.Cmp(target)
 		assert.LessOrEqual(t, compare, 0)
+		cancel()
+		<-done
 	})
 }
 
@@ -1243,6 +1273,8 @@ func createTestSettings(t *testing.T) *settings.Settings {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Policy.BlockMaxSize = 1000000
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 4
+	tSettings.BlockAssembly.SubtreeAnnouncementInterval = 24 * time.Hour
+	tSettings.BlockAssembly.UseDynamicSubtreeSize = false
 	tSettings.BlockAssembly.SubtreeProcessorBatcherSize = 1
 	tSettings.BlockAssembly.DoubleSpendWindow = 1000
 	tSettings.BlockAssembly.MaxGetReorgHashes = 10000
