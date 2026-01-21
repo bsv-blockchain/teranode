@@ -1575,52 +1575,39 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 		return nil, nil, errors.NewProcessingError("best block header is nil, reorg not possible")
 	}
 
-	var err error
-
-	currentHash := baBestBlockHeader.Hash()
-	currentHeight := baBestBlockHeight
-	newHash := header.Hash()
-	newHeight := height
-
-	for currentHeight > newHeight {
-		currentHeader, _, getErr := b.blockchainClient.GetBlockHeader(ctx, currentHash)
-		if getErr != nil {
-			return nil, nil, errors.NewServiceError("error getting current chain header while finding common ancestor", getErr)
-		}
-		currentHash = currentHeader.HashPrevBlock
-		currentHeight--
+	startingHeight := baBestBlockHeight
+	if height < startingHeight {
+		startingHeight = height
 	}
 
-	for newHeight > currentHeight {
-		newHeader, _, getErr := b.blockchainClient.GetBlockHeader(ctx, newHash)
-		if getErr != nil {
-			return nil, nil, errors.NewServiceError("error getting new chain header while finding common ancestor", getErr)
-		}
-		newHash = newHeader.HashPrevBlock
-		newHeight--
+	currentChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, baBestBlockHeader.Hash(), startingHeight)
+	if err != nil {
+		return nil, nil, errors.NewServiceError("error getting current chain block locator", err)
 	}
 
-	for !currentHash.IsEqual(newHash) {
-		if currentHeight == 0 || newHeight == 0 {
+	newChainLocator, err := b.blockchainClient.GetBlockLocator(ctx, header.Hash(), startingHeight)
+	if err != nil {
+		return nil, nil, errors.NewServiceError("error getting new chain block locator", err)
+	}
+
+	newChainLocatorSet := make(map[chainhash.Hash]struct{}, len(newChainLocator))
+	for _, h := range newChainLocator {
+		newChainLocatorSet[*h] = struct{}{}
+	}
+
+	var commonAncestorHash *chainhash.Hash
+	for _, currentHash := range currentChainLocator {
+		if _, ok := newChainLocatorSet[*currentHash]; ok {
+			commonAncestorHash = currentHash
 			break
 		}
-
-		currentHeader, _, getErr := b.blockchainClient.GetBlockHeader(ctx, currentHash)
-		if getErr != nil {
-			return nil, nil, errors.NewServiceError("error getting current chain header while finding common ancestor", getErr)
-		}
-		newHeader, _, getErr := b.blockchainClient.GetBlockHeader(ctx, newHash)
-		if getErr != nil {
-			return nil, nil, errors.NewServiceError("error getting new chain header while finding common ancestor", getErr)
-		}
-
-		currentHash = currentHeader.HashPrevBlock
-		currentHeight--
-		newHash = newHeader.HashPrevBlock
-		newHeight--
 	}
 
-	commonAncestor, commonAncestorMeta, err := b.blockchainClient.GetBlockHeader(ctx, currentHash)
+	if commonAncestorHash == nil {
+		return nil, nil, errors.NewProcessingError("common ancestor not found, reorg not possible")
+	}
+
+	commonAncestor, commonAncestorMeta, err := b.blockchainClient.GetBlockHeader(ctx, commonAncestorHash)
 	if err != nil {
 		return nil, nil, errors.NewServiceError("error getting common ancestor header", err)
 	}

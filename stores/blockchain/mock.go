@@ -152,9 +152,41 @@ func (m *MockStore) GetBlockByHeight(ctx context.Context, height uint32) (*model
 
 // GetBlockInChainByHeightHash retrieves a block at a specific height in a chain determined by the start hash.
 func (m *MockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint32, hash *chainhash.Hash) (*model.Block, bool, error) {
-	block, err := m.GetBlockByHeight(ctx, height)
-	if err != nil {
-		return nil, false, err
+	if hash == nil {
+		block, err := m.GetBlockByHeight(ctx, height)
+		if err != nil {
+			return nil, false, err
+		}
+		return block, false, nil
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	block, ok := m.Blocks[*hash]
+	if !ok {
+		return nil, false, errors.ErrBlockNotFound
+	}
+
+	if block.Height < height {
+		return nil, false, errors.ErrBlockNotFound
+	}
+
+	for block.Height > height {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+
+		if block.Header == nil || block.Header.HashPrevBlock == nil {
+			return nil, false, errors.ErrBlockNotFound
+		}
+
+		parent, parentOK := m.Blocks[*block.Header.HashPrevBlock]
+		if !parentOK {
+			return nil, false, errors.ErrBlockNotFound
+		}
+
+		block = parent
 	}
 
 	return block, false, nil
