@@ -168,6 +168,16 @@ func (m *MockStore) GetBlockInChainByHeightHash(ctx context.Context, height uint
 		return nil, false, errors.ErrBlockNotFound
 	}
 
+	// for tests that build chains where blocks are not linked by HashPrevBlock
+	// (e.g. every block points to the zero hash). In that case, use the height index.
+	if block.Header == nil || block.Header.HashPrevBlock == nil || block.Header.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+		blockAtHeight, ok := m.BlockByHeight[height]
+		if !ok {
+			return nil, false, errors.ErrBlockNotFound
+		}
+		return blockAtHeight, false, nil
+	}
+
 	if block.Height < height {
 		return nil, false, errors.ErrBlockNotFound
 	}
