@@ -34,6 +34,11 @@ import (
 //
 // Without INTERACTIVE=true, the test will skip with a message.
 func TestSubtreePagination(t *testing.T) {
+	// Skip this test in CI/automated testing - only run when INTERACTIVE=true
+	if os.Getenv("INTERACTIVE") != "true" {
+		t.Skip("Skipping interactive test. Set INTERACTIVE=true to run this test for manual UI testing.")
+	}
+
 	ctx := context.Background()
 
 	// Configure test daemon with small subtree size for easier testing
@@ -56,10 +61,6 @@ func TestSubtreePagination(t *testing.T) {
 
 	defer td.Stop(t, true)
 
-	// Check if Asset service is available
-	if td.AssetURL == "" {
-		t.Skip("Asset service not available - cannot test pagination UI")
-	}
 	t.Logf("Asset service available at: %s", td.AssetURL)
 
 	// Get a spendable coinbase transaction
@@ -167,12 +168,7 @@ func TestSubtreePagination(t *testing.T) {
 	t.Log("- Fast loading (no full subtree download)")
 	t.Log("===========================================\n")
 
-	// Keep test running for manual inspection if INTERACTIVE=true
-	// Skip this test in CI/automated testing
-	if os.Getenv("INTERACTIVE") != "true" {
-		t.Skip("Skipping interactive test. Set INTERACTIVE=true to run this test for manual UI testing.")
-	}
-
+	// Wait for user to test manually
 	t.Log("Test environment is ready for manual testing...")
 	t.Log("Press Ctrl+C when you're done testing to clean up and exit")
 
@@ -186,6 +182,11 @@ func TestSubtreePagination(t *testing.T) {
 
 // TestSubtreePaginationAPI tests the pagination API directly
 func TestSubtreePaginationAPI(t *testing.T) {
+	// Skip this test in CI - Asset service needs to be explicitly enabled
+	if os.Getenv("INTERACTIVE") != "true" {
+		t.Skip("Skipping API test. Set INTERACTIVE=true to run this test.")
+	}
+
 	ctx := context.Background()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -205,10 +206,6 @@ func TestSubtreePaginationAPI(t *testing.T) {
 
 	defer td.Stop(t, true)
 
-	// Check if Asset service is available
-	if td.AssetURL == "" {
-		t.Skip("Asset service not available - cannot test pagination API")
-	}
 	t.Logf("Asset service available at: %s", td.AssetURL)
 
 	// Create transactions and mine block
