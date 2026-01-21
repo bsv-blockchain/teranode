@@ -72,30 +72,7 @@ func TestServerOperations(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("SetDAH", func(t *testing.T) {
-		key := []byte("testKey2")
-		value := []byte("testValue2")
-
-		err := client.Set(t.Context(), key, fileformat.FileTypeTesting, value)
-		require.NoError(t, err)
-
-		err = client.SetDAH(t.Context(), key, fileformat.FileTypeTesting, 1)
-		require.NoError(t, err)
-
-		err = blobServer.setCurrentBlockHeight(2)
-		require.NoError(t, err)
-
-		// Wait for DAH cleanup to complete with retry
-		var getErr error
-		for i := 0; i < 10; i++ {
-			time.Sleep(100 * time.Millisecond)
-			_, getErr = client.Get(context.Background(), key, fileformat.FileTypeTesting)
-			if getErr != nil {
-				break
-			}
-		}
-		assert.Error(t, getErr)
-	})
+	// SetDAH test removed - automatic DAH cleanup now handled by pruner service, not file store
 
 	t.Run("Exists", func(t *testing.T) {
 		key := []byte("testKey3")

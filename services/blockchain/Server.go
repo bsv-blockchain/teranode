@@ -1290,6 +1290,30 @@ func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockc
 	}, nil
 }
 
+// CheckBlockIsAncestorOfBlock verifies if any of the given block IDs are ancestors of a specific block.
+// This is used for double-spend detection on fork blocks where we check against the fork's ancestor chain.
+func (b *Blockchain) CheckBlockIsAncestorOfBlock(ctx context.Context, req *blockchain_api.CheckBlockIsAncestorOfBlockRequest) (*blockchain_api.CheckBlockIsAncestorOfBlockResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "CheckBlockIsAncestorOfBlock",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainCheckBlockIsAncestorOfBlock),
+	)
+	defer deferFn()
+
+	blockHash, err := chainhash.NewHash(req.BlockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][CheckBlockIsAncestorOfBlock] request's hash is not valid", err))
+	}
+
+	result, err := b.store.CheckBlockIsAncestorOfBlock(ctx, req.BlockIDs, blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.CheckBlockIsAncestorOfBlockResponse{
+		IsAncestor: result,
+	}, nil
+}
+
 // GetChainTips retrieves information about all known tips in the block tree.
 func (b *Blockchain) GetChainTips(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetChainTipsResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetChainTips",
@@ -2387,6 +2411,17 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
 	priorState := b.finiteStateMachine.Current()
+
+	// Prevent manual transitions from CATCHINGBLOCKS state
+	// The state should only exit CATCHINGBLOCKS programmatically when catchup completes
+	if priorState == blockchain_api.FSMStateType_CATCHINGBLOCKS.String() {
+		// Only allow RUN event (catchup completion) to exit CATCHINGBLOCKS
+		if eventReq.Event != blockchain_api.FSMEventType_RUN {
+			errMsg := "cannot manually transition from CATCHINGBLOCKS state - catchup must complete first"
+			b.logger.Warnf("[Blockchain Server] %s (attempted event: %v)", errMsg, eventReq.Event)
+			return nil, errors.NewInvalidArgumentError(errMsg)
+		}
+	}
 
 	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
 	if err != nil {

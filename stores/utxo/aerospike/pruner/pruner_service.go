@@ -67,6 +67,9 @@ type Options struct {
 	// GetPersistedHeight returns the last block height processed by block persister
 	// Used to coordinate cleanup with block persister progress (can be nil)
 	GetPersistedHeight func() uint32
+
+	// Observers is a list of observers to notify when pruning completes
+	Observers []pruner.Observer
 }
 
 // Service manages background jobs for cleaning up records based on block height
@@ -83,6 +86,7 @@ type Service struct {
 	ctx         context.Context
 	indexWaiter IndexWaiter
 	indexReady  atomic.Bool
+	notifier    *PrunerEventNotifier
 
 	// Configuration values extracted from settings for performance
 	utxoBatchSize                  int
@@ -171,6 +175,11 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 	// Use the configured batch policy from settings (configured via aerospike_batchPolicy URL)
 	batchPolicy := util.GetAerospikeBatchPolicy(tSettings)
 
+	notifier := NewPrunerEventNotifier()
+	for _, observer := range opts.Observers {
+		notifier.AddObserver(observer)
+	}
+
 	service := &Service{
 		logger:                         opts.Logger,
 		client:                         opts.Client,
@@ -179,6 +188,7 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 		set:                            opts.Set,
 		ctx:                            opts.Ctx,
 		indexWaiter:                    opts.IndexWaiter,
+		notifier:                       notifier,
 		queryPolicy:                    queryPolicy,
 		writePolicy:                    writePolicy,
 		batchWritePolicy:               batchWritePolicy,
@@ -231,6 +241,12 @@ func (s *Service) Start(ctx context.Context) {
 // This should be called after service creation to wire up coordination with block persister.
 func (s *Service) SetPersistedHeightGetter(getter func() uint32) {
 	s.getPersistedHeight = getter
+}
+
+// AddObserver adds an observer to be notified when pruning completes.
+// This method is thread-safe and can be called after service creation.
+func (s *Service) AddObserver(observer pruner.Observer) {
+	s.notifier.AddObserver(observer)
 }
 
 // getConfigValue queries Aerospike for a specific configuration parameter
@@ -561,6 +577,8 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, n
 	}
 
 	prometheusUtxoCleanupBatch.Observe(float64(elapsed.Microseconds()) / 1_000_000)
+
+	s.notifier.NotifyPruneComplete(blockHeight, totalProcessed)
 
 	return totalProcessed, nil
 }

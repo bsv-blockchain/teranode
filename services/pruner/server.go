@@ -2,8 +2,11 @@
 // parents and delete-at-height (DAH) records in the UTXO store.
 //
 // Trigger mechanism (event-driven):
-// 1. Primary: BlockPersisted notifications (when block persister is running and pruner_forceIgnoreBlockPersisterHeight=false)
-// 2. Fallback: Block notifications with mined_set=true wait (when persister not running OR pruner_forceIgnoreBlockPersisterHeight=true)
+// The pruning trigger mode is controlled by pruner_block_trigger setting:
+//   - "OnBlockPersisted" (default): Pruning triggers on BlockPersisted notifications from block persister.
+//     If block persister is not running, automatically falls back to Block notifications.
+//   - "OnBlockMined": Pruning triggers on Block notifications after block has mined_set=true,
+//     regardless of block persister status.
 //
 // Pruner operations only execute when safe to do so (i.e., when block assembly is in "running"
 // state and not performing reorgs or resets).
@@ -104,6 +107,13 @@ func (s *Server) Init(ctx context.Context) error {
 	// Set persisted height getter for block persister coordination
 	s.prunerService.SetPersistedHeightGetter(s.GetLastPersistedHeight)
 
+	// Validate block trigger mode
+	blockTrigger := s.settings.Pruner.BlockTrigger
+	if blockTrigger != settings.PrunerBlockTriggerOnBlockPersisted && blockTrigger != settings.PrunerBlockTriggerOnBlockMined {
+		return errors.NewConfigurationError("pruner_block_trigger must be either '%s' or '%s' (got '%s')",
+			settings.PrunerBlockTriggerOnBlockPersisted, settings.PrunerBlockTriggerOnBlockMined, blockTrigger)
+	}
+
 	// Subscribe to blockchain notifications for event-driven pruning:
 	// - BlockPersisted: Triggers pruning when block persister completes (primary)
 	// - Block: Waits for mined_set=true and triggers if persister not running (fallback)
@@ -118,9 +128,9 @@ func (s *Server) Init(ctx context.Context) error {
 		for notification := range subscriptionCh {
 			switch notification.Type {
 			case model.NotificationType_BlockPersisted:
-				// Skip BlockPersisted notifications if forced to use Block notifications
-				if s.settings.Pruner.ForceIgnoreBlockPersisterHeight {
-					s.logger.Debugf("Ignoring BlockPersisted notification (pruner_forceIgnoreBlockPersisterHeight=true)")
+				// Skip BlockPersisted notifications if using OnBlockMined trigger mode
+				if s.settings.Pruner.BlockTrigger == settings.PrunerBlockTriggerOnBlockMined {
+					s.logger.Debugf("Ignoring BlockPersisted notification (pruner_block_trigger=%s)", s.settings.Pruner.BlockTrigger)
 					continue
 				}
 
@@ -157,10 +167,9 @@ func (s *Server) Init(ctx context.Context) error {
 				// Check if we should ignore block persister height
 				persistedHeight := s.lastPersistedHeight.Load()
 
-				// Skip Block notifications if persister is running AND we're not forcing to ignore it
-				if persistedHeight > 0 && !s.settings.Pruner.ForceIgnoreBlockPersisterHeight {
-					// Block persister is running - BlockPersisted notifications will handle pruning
-					s.logger.Debugf("Block notification received but Block Persister is active (persisted height: %d), using BlockPersisted notifications instead", persistedHeight)
+				// Skip Block notifications if using OnBlockPersisted trigger mode AND persister is running
+				if s.settings.Pruner.BlockTrigger == settings.PrunerBlockTriggerOnBlockPersisted {
+					s.logger.Debugf("Block notification received but pruner configured for BlockPersisted trigger (persisted height: %d)", persistedHeight)
 					continue
 				}
 

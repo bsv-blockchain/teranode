@@ -1,5 +1,7 @@
 package util
 
+import "github.com/bsv-blockchain/teranode/settings"
+
 // DetermineStorageMode determines whether this node is a full node or pruned node.
 // A full node has the block persister running and within the retention window (default: 288 blocks).
 // Since data isn't purged until older than the retention period, a node can serve as "full"
@@ -10,9 +12,16 @@ package util
 //   - blockPersisterHeight: The height up to which blocks have been persisted (0 if block persister not running)
 //   - bestHeight: The current best block height
 //   - retentionWindow: The block height retention window (use 0 for default of 288 blocks)
+//   - prunerBlockTrigger: The pruner block trigger mode ("OnBlockPersisted" or "OnBlockMined")
 //
 // Returns "full" or "pruned" - never returns empty string.
-func DetermineStorageMode(blockPersisterHeight uint32, bestHeight uint32, retentionWindow uint32) string {
+func DetermineStorageMode(blockPersisterHeight uint32, bestHeight uint32, retentionWindow uint32, prunerBlockTrigger string) string {
+	// If pruner is configured to ignore block persister (OnBlockMined mode),
+	// the node cannot be considered "full" because it's pruning before persistence
+	if prunerBlockTrigger == settings.PrunerBlockTriggerOnBlockMined {
+		return "pruned"
+	}
+
 	// If block persister height is 0, it means persister is not running
 	if blockPersisterHeight == 0 {
 		return "pruned"

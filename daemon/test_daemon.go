@@ -43,6 +43,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/test/utils/containers"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
@@ -85,6 +86,7 @@ type TestDaemon struct {
 	privKey               *bec.PrivateKey
 	rpcURL                *url.URL
 	skipContainerCleanup  bool
+	prunerObserver        *testPrunerObserver
 	t                     *testing.T // Reference to testing.T for unified logging
 }
 
@@ -96,6 +98,8 @@ type TestOptions struct {
 	EnableP2P               bool
 	EnableRPC               bool
 	EnableValidator         bool
+	EnableBlockPersister    bool
+	EnablePruner            bool
 	SettingsOverrideFunc    func(*settings.Settings)
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
@@ -251,6 +255,19 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		appSettings.P2P.GRPCAddress = clientAddr
 	}
 
+	if opts.EnableBlockPersister {
+		_, listenAddr, _, err = util.GetListener(appSettings.Context, "blockpersister", "http://", ":0")
+		require.NoError(t, err)
+		appSettings.BlockPersister.HTTPListenAddress = listenAddr
+	}
+
+	if opts.EnablePruner {
+		_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "pruner", "", ":0")
+		require.NoError(t, err)
+		appSettings.Pruner.GRPCListenAddress = listenAddr
+		appSettings.Pruner.GRPCAddress = clientAddr
+	}
+
 	// P2P HTTP
 	_, listenAddr, clientAddr, err = util.GetListener(appSettings.Context, "p2p", "http://", ":0")
 	require.NoError(t, err)
@@ -337,6 +354,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	// This ensures all store paths (blockstore, quorum, etc.) use the test-specific path
 	// Always set DataFolder and QuorumPath to test-specific directory
 	appSettings.DataFolder = path
+
 	// Override QuorumPath to ensure it uses the test-specific directory
 	// This prevents tests from sharing the same quorum directory
 	// appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
@@ -458,6 +476,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		services = append(services, "-legacy=1")
 	}
 
+	if opts.EnableBlockPersister {
+		services = append(services, "-blockpersister=1")
+	}
+
+	if opts.EnablePruner {
+		services = append(services, "-pruner=1")
+	}
+
 	go d.Start(logger, services, appSettings, readyCh)
 
 	select {
@@ -562,7 +588,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		assetURL += appSettings.Asset.APIPrefix
 	}
 
-	return &TestDaemon{
+	td := &TestDaemon{
 		AssetURL:              assetURL,
 		BlockAssembler:        blockAssembler.GetBlockAssembler(),
 		BlockAssemblyClient:   blockAssemblyClient,
@@ -585,6 +611,31 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		skipContainerCleanup:  opts.SkipContainerCleanup,
 		t:                     t,
 	}
+
+	if opts.EnablePruner {
+		prunerObserver := newTestPrunerObserver(t)
+		td.prunerObserver = prunerObserver
+
+		// Register the observer with the pruner service
+		aerospikeStore, ok := utxoStore.(*aerospike.Store)
+		if !ok {
+			t.Logf("Warning: UtxoStore is not an Aerospike store, cannot register pruner observer")
+			t.Fail()
+		}
+
+		prunerService, err := aerospikeStore.GetPrunerService()
+		if err != nil {
+			t.Logf("Warning: Failed to get pruner service: %v", err)
+		} else if prunerService != nil {
+			prunerService.AddObserver(prunerObserver)
+			t.Logf("✓ Pruner observer registered with pruner service")
+		} else {
+			t.Logf("Warning: Pruner service is nil")
+		}
+
+	}
+
+	return td
 }
 
 // Stop stops the TestDaemon instance and cleans up resources.
@@ -1010,6 +1061,21 @@ func (td *TestDaemon) WaitForTransactionInBlockAssembly(tx *bt.Tx, timeout time.
 		// Transaction not found yet, wait before checking again
 		time.Sleep(checkInterval)
 	}
+}
+
+func (td *TestDaemon) WaitForPruner(t *testing.T, timeout time.Duration) {
+	if td.prunerObserver == nil {
+		return
+	}
+
+	t.Log("Phase 4: Waiting for pruner to remove spent parent transactions...")
+	// The pruner runs periodically. We need to wait for it to prune the old transactions.
+	// With GlobalBlockHeightRetention=1, transactions older than 1 block should be pruned.
+	// Current height is 10, so we wait for the pruner to complete its cycle.
+	t.Logf("Waiting for pruner to complete pruning cycle...")
+	prunedHeight, recordsProcessed, err := td.prunerObserver.waitForPrune(timeout)
+	require.NoError(t, err, "Timeout waiting for pruner to complete")
+	t.Logf("✓ Pruner completed pruning up to height %d, processed %d records", prunedHeight, recordsProcessed)
 }
 
 // CreateTransaction creates a new transaction with a single input from the parent transaction.
@@ -2063,5 +2129,40 @@ func (td *TestDaemon) WaitForBlockAssemblyToProcessTx(t *testing.T, txHashStr st
 				return
 			}
 		}
+	}
+}
+
+type pruneEvent struct {
+	height           uint32
+	recordsProcessed int64
+}
+
+type testPrunerObserver struct {
+	t              *testing.T
+	pruneCompleted chan pruneEvent
+}
+
+func newTestPrunerObserver(t *testing.T) *testPrunerObserver {
+	return &testPrunerObserver{
+		t:              t,
+		pruneCompleted: make(chan pruneEvent, 10),
+	}
+}
+
+func (o *testPrunerObserver) OnPruneComplete(height uint32, recordsProcessed int64) {
+	o.t.Logf("✓ Pruner callback invoked for height %d with %d records processed", height, recordsProcessed)
+	select {
+	case o.pruneCompleted <- pruneEvent{height: height, recordsProcessed: recordsProcessed}:
+	default:
+		o.t.Logf("Warning: pruneCompleted channel is full, dropping event for height %d", height)
+	}
+}
+
+func (o *testPrunerObserver) waitForPrune(timeout time.Duration) (uint32, int64, error) {
+	select {
+	case event := <-o.pruneCompleted:
+		return event.height, event.recordsProcessed, nil
+	case <-time.After(timeout):
+		return 0, 0, errors.NewProcessingError("timeout waiting for prune completion")
 	}
 }

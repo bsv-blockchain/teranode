@@ -90,12 +90,15 @@ func (l *UnifiedTestLogger) New(serviceName string, options ...Option) Logger {
 		h.Helper()
 	}
 
-	return &UnifiedTestLogger{
+	newLogger := &UnifiedTestLogger{
 		t:           l.t,
 		testName:    l.testName,
 		serviceName: serviceName,
 		cancelFn:    l.cancelFn,
 	}
+	newLogger.logLevel.Store(l.logLevel.Load())
+
+	return newLogger
 }
 
 // Duplicate creates a copy of the logger with optional modifications.
@@ -104,12 +107,15 @@ func (l *UnifiedTestLogger) Duplicate(options ...Option) Logger {
 		h.Helper()
 	}
 
-	return &UnifiedTestLogger{
+	newLogger := &UnifiedTestLogger{
 		t:           l.t,
 		testName:    l.testName,
 		serviceName: l.serviceName,
 		cancelFn:    l.cancelFn,
 	}
+	newLogger.logLevel.Store(l.logLevel.Load())
+
+	return newLogger
 }
 
 // prefix returns the formatted prefix for log messages.

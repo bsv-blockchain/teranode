@@ -62,6 +62,12 @@ services:
       service: blockassembly
     <<: *teranode-settings
 
+  pruner:
+    extends:
+      file: ../base/docker-teranode.yml
+      service: pruner
+    <<: *teranode-settings
+
   # Read the [Teranode Network](../README.md) documentation before enabling the peer service
   #  peer:
   #    extends:

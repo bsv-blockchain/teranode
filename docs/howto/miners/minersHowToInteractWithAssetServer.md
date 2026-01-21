@@ -333,32 +333,34 @@ Many endpoints support multiple response formats, indicated by the URL path or a
 
 ### UTXO Endpoints
 
-- GET `/api/v1/utxo/:hash`
-    - Description: Retrieves UTXO information in binary format
+- GET `/api/v1/utxo/:hash?vout=N`
+    - Description: Retrieves UTXO spend information for a specific transaction output
     - Parameters:
 
-        - `hash`: UTXO transaction hash (hex string)
-        - `vout` (required): Output index (query parameter)
+        - `hash`: Transaction hash (hex string) - the transaction containing the UTXO
+        - `vout` (**required**): Output index (query parameter) - which output in the transaction
 
-    - Returns: UTXO data in binary format
+    - Returns: UTXO spend data in binary format
+    - **Example**: `GET /api/v1/utxo/9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995?vout=0`
+    - **Note**: The vout parameter is mandatory. Omitting it will return 400 Bad Request.
 
-- GET `/api/v1/utxo/:hash/hex`
-    - Description: Retrieves UTXO information in hexadecimal format
+- GET `/api/v1/utxo/:hash/hex?vout=N`
+    - Description: Same as above but in hexadecimal format
     - Parameters:
 
-        - `hash`: UTXO transaction hash (hex string)
-        - `vout` (required): Output index (query parameter)
+        - `hash`: Transaction hash (hex string)
+        - `vout` (**required**): Output index (query parameter)
 
-    - Returns: UTXO data as hex string
+    - Returns: UTXO spend data as hex string
 
-- GET `/api/v1/utxo/:hash/json`
-    - Description: Retrieves UTXO information in JSON format
+- GET `/api/v1/utxo/:hash/json?vout=N`
+    - Description: Same as above but in JSON format
     - Parameters:
 
-        - `hash`: UTXO transaction hash (hex string)
-        - `vout` (required): Output index (query parameter)
+        - `hash`: Transaction hash (hex string)
+        - `vout` (**required**): Output index (query parameter)
 
-    - Returns: UTXO data in structured JSON format
+    - Returns: UTXO spend data in structured JSON format with status and spending information
 
 - GET `/api/v1/utxos/:hash/json`
     - Description: Retrieves all UTXOs for a given transaction

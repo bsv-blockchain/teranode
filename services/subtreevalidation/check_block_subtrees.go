@@ -687,6 +687,10 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		addedToOrphanage atomic.Uint64
 	)
 
+	// Track successfully validated transactions per level for parent metadata
+	// Only transactions that successfully validate should be included in parent metadata
+	successfulTxsByLevel := make(map[uint32]map[chainhash.Hash]bool)
+
 	// Process each level in series, but all transactions within a level in parallel
 	for level := uint32(0); level <= maxLevel; level++ {
 		levelTxs := txsPerLevel[level]
@@ -695,6 +699,10 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		}
 
 		u.logger.Debugf("[processTransactionsInLevels] Processing level %d/%d with %d transactions", level+1, maxLevel+1, len(levelTxs))
+
+		// Initialize success tracking for this level
+		successfulTxsByLevel[level] = make(map[chainhash.Hash]bool, len(levelTxs))
+		var successfulTxsMutex sync.Mutex
 
 		// PHASE 2 OPTIMIZATION: Extend transactions with in-block parent outputs
 		// This avoids Aerospike fetches for intra-block dependencies (~500MB+ savings)
@@ -717,6 +725,15 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 				if totalExtended > 0 {
 					u.logger.Debugf("[processTransactionsInLevels] Extended %d inputs from previous level for level %d", totalExtended, level)
 				}
+			}
+
+			// Build parent metadata for Level 1+ to enable UTXO store skip
+			// CRITICAL: Only include transactions that successfully validated
+			// This prevents validation bypass when child references failed parent
+			parentMetadata := buildParentMetadata(txsPerLevel[level-1], blockHeight, successfulTxsByLevel[level-1])
+			if len(parentMetadata) > 0 {
+				processedValidatorOptions.ParentMetadata = parentMetadata
+				u.logger.Debugf("[processTransactionsInLevels] Level %d: Providing metadata for %d successfully validated parent transactions from level %d", level, len(parentMetadata), level-1)
 			}
 		}
 
@@ -745,6 +762,10 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 					// TX_EXISTS is not an error - transaction was already validated
 					if errors.Is(err, errors.ErrTxExists) {
 						u.logger.Debugf("[processTransactionsInLevels] Transaction %s already exists, skipping", tx.TxIDChainHash().String())
+						// Mark as successful since it already exists
+						successfulTxsMutex.Lock()
+						successfulTxsByLevel[level][*tx.TxIDChainHash()] = true
+						successfulTxsMutex.Unlock()
 						return nil
 					}
 
@@ -777,6 +798,11 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 					return nil // Don't fail the entire level
 				}
+
+				// Validation succeeded - mark transaction as successful
+				successfulTxsMutex.Lock()
+				successfulTxsByLevel[level][*tx.TxIDChainHash()] = true
+				successfulTxsMutex.Unlock()
 
 				if txMeta == nil {
 					u.logger.Debugf("[processTransactionsInLevels] Transaction metadata is nil for %s", tx.TxIDChainHash().String())
@@ -831,6 +857,34 @@ func buildParentMapFromLevel(parentLevelTxs []missingTx) map[chainhash.Hash]*bt.
 		}
 	}
 	return parentMap
+}
+
+// buildParentMetadata creates a map of parent transaction metadata for use by the validator.
+// This allows the validator to skip UTXO store lookups for in-block parents.
+//
+// CRITICAL: Only includes transactions that successfully validated (present in successfulTxs).
+// This prevents validation bypass where child references a failed parent transaction.
+//
+// The metadata includes block height (where the parent will be mined) which is needed
+// for coinbase maturity checks and other validation rules.
+func buildParentMetadata(parentLevelTxs []missingTx, blockHeight uint32, successfulTxs map[chainhash.Hash]bool) map[chainhash.Hash]*validator.ParentTxMetadata {
+	if len(parentLevelTxs) == 0 || len(successfulTxs) == 0 {
+		return nil
+	}
+
+	metadata := make(map[chainhash.Hash]*validator.ParentTxMetadata, len(successfulTxs))
+	for _, mTx := range parentLevelTxs {
+		if mTx.tx != nil {
+			txHash := *mTx.tx.TxIDChainHash()
+			// Only include transactions that successfully validated
+			if successfulTxs[txHash] {
+				metadata[txHash] = &validator.ParentTxMetadata{
+					BlockHeight: blockHeight,
+				}
+			}
+		}
+	}
+	return metadata
 }
 
 // extendTxWithInBlockParents extends a transaction's inputs with parent output data

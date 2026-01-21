@@ -348,8 +348,8 @@ services:
 
   coinbase1:
     <<: *teranode-coinbase-base
-    # profiles:
-    #   - skip
+    profiles:
+      - with-coinbase
     container_name: coinbase1
     depends_on:
       - teranode1
@@ -405,8 +405,8 @@ services:
     restart: no
 
   coinbase2:
-    # profiles:
-    #   - skip
+    profiles:
+      - with-coinbase
     <<: *teranode-coinbase-base
     container_name: coinbase2
     depends_on:
@@ -459,8 +459,8 @@ services:
 
   coinbase3:
     <<: *teranode-coinbase-base
-    # profiles:
-    #   - skip
+    profiles:
+      - with-coinbase
     container_name: coinbase3
     depends_on:
       - teranode3
@@ -490,8 +490,8 @@ services:
 
   tx-blaster-1:
     <<: *teranode-coinbase-base
-    # profiles:
-    #   - skip
+    profiles:
+      - with-coinbase
     container_name: tx-blaster-1
     depends_on:
       - coinbase1
@@ -519,8 +519,8 @@ services:
 
   tx-blaster-2:
     <<: *teranode-coinbase-base
-    # profiles:
-    #   - skip
+    profiles:
+      - with-coinbase
     container_name: tx-blaster-2
     depends_on:
       - coinbase2
@@ -546,8 +546,8 @@ services:
       - ../data/txblaster2:/app/data
 
   tx-blaster-3:
-    # profiles:
-    #   - skip
+    profiles:
+      - with-coinbase
     <<: *teranode-coinbase-base
     container_name: tx-blaster-3
     depends_on:

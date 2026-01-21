@@ -1,11 +1,14 @@
 package p2p
 
 import (
+	"context"
+	"net/http"
 	"sort"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -203,12 +206,26 @@ func (ps *PeerSelector) isEligible(p *PeerInfo, criteria SelectionCriteria) bool
 		return false
 	}
 
-	// Check sync attempt cooldown if specified
+	// Check sync attempt cooldown BEFORE health check (avoids re-checking failed peers)
 	if criteria.SyncAttemptCooldown > 0 && !p.LastSyncAttempt.IsZero() {
 		timeSinceLastAttempt := time.Since(p.LastSyncAttempt)
 		if timeSinceLastAttempt < criteria.SyncAttemptCooldown {
 			ps.logger.Debugf("[PeerSelector] Peer %s attempted recently (%v ago, cooldown: %v)",
 				p.ID, timeSinceLastAttempt.Round(time.Second), criteria.SyncAttemptCooldown)
+			return false
+		}
+	}
+
+	// Check HTTP availability if enabled
+	// Note: Health check failures are NOT recorded as sync attempts - they're filtered out early.
+	// The caller (SyncCoordinator) will record sync attempt after selecting the peer.
+	if ps.settings != nil && ps.settings.P2P.HealthCheckEnabled {
+		ps.logger.Debugf("[PeerSelector] Checking availability for peer %s", p.ID)
+
+		isHealthy, err := checkPeerAvailability(context.Background(), p.DataHubURL)
+
+		if !isHealthy {
+			ps.logger.Debugf("[PeerSelector] Peer %s is unhealthy: %v", p.ID, err)
 			return false
 		}
 	}
@@ -230,4 +247,22 @@ func (ps *PeerSelector) isEligibleFullNode(p *PeerInfo, criteria SelectionCriter
 	}
 
 	return true
+}
+
+// checkPeerAvailability tests if a peer's DataHub URL is reachable via HTTP.
+// DataHubURL already includes /api/v1 prefix, so we just append the endpoint path.
+// Uses existing util/health infrastructure with built-in 2s timeout.
+func checkPeerAvailability(ctx context.Context, dataHubURL string) (bool, error) {
+	if dataHubURL == "" {
+		return false, nil
+	}
+
+	// DataHubURL format: "https://host/api/v1"
+	// Append /bestblockheader to get full endpoint path
+	checker := health.CheckHTTPServer(dataHubURL, "/bestblockheader")
+
+	statusCode, _, err := checker(ctx, false)
+
+	// Only accept 200 OK - API endpoints should return exactly 200
+	return statusCode == http.StatusOK, err
 }

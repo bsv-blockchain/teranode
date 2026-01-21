@@ -122,6 +122,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 			1,
 			[]uint32{0},
 			true,
+			nil,
 			false,
 		)
 		require.NoError(t, err)
@@ -168,6 +169,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 			1,
 			[]uint32{0},
 			false,
+			nil,
 			true,
 		)
 		require.NoError(t, err)
@@ -263,7 +265,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		// Chain contains block IDs 5 and 10
 		chainBlockIDs := []uint32{5, 10}
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true, nil)
 
 		// Should get BlockInvalidError because transaction was already mined in block 5 (on current chain)
 		require.Error(t, err)
@@ -287,7 +289,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		// Chain contains different block IDs
 		chainBlockIDs := []uint32{5, 10, 15}
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true, nil)
 
 		// Should succeed because transactions are not on current chain
 		require.NoError(t, err)
@@ -308,7 +310,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 
 		chainBlockIDs := []uint32{5, 10, 15}
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true, nil)
 
 		// Should succeed because it's the same block being mined
 		require.NoError(t, err)
@@ -329,7 +331,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		// Empty chain block IDs - should skip validation
 		chainBlockIDs := []uint32{}
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true, nil)
 
 		require.NoError(t, err)
 
@@ -353,7 +355,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		chainBlockIDs := []uint32{1000, 1100, 1200, 1300, 1400, 1500, 1600}
 
 		// Trying to mine block 1600 which contains a transaction already in block 1000
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 1600, chainBlockIDs, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 1600, chainBlockIDs, true, nil)
 
 		// Should get BlockInvalidError because transaction was already mined in block 1000 (on same chain)
 		// even though it's way outside the old retention*2 window (which would have been ~576 blocks)
@@ -401,7 +403,7 @@ func TestUpdateTxMinedStatus_ContextCancellation(t *testing.T) {
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
 			Return(emptyBlockIDsMap, errors.NewStorageError("storage error")).Maybe()
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "context canceled")
@@ -455,7 +457,7 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 		// Start the first call in a goroutine
 		done1 := make(chan error)
 		go func() {
-			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 			done1 <- err
 		}()
 
@@ -463,7 +465,7 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 		<-processingStarted
 
 		// Second call should be ignored immediately (duplicate detection)
-		err2 := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		err2 := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 		require.Error(t, err2) // Should return parent not mined error
 		assert.Contains(t, err2.Error(), "already being processed")
 
@@ -496,12 +498,12 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 		done2 := make(chan error)
 
 		go func() {
-			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore1, block, 15, []uint32{}, true)
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore1, block, 15, []uint32{}, true, nil)
 			done1 <- err
 		}()
 
 		go func() {
-			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore2, block, 16, []uint32{}, true)
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore2, block, 16, []uint32{}, true, nil)
 			done2 <- err
 		}()
 
@@ -544,7 +546,7 @@ func TestUpdateTxMinedStatus_ConfigurationDisabled(t *testing.T) {
 	setWorkerSettings(tSettings)
 
 	// Should not call SetMinedMulti when disabled
-	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, block, 15, []uint32{}, true)
+	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, block, 15, []uint32{}, true, nil)
 
 	require.NoError(t, err)
 	// Allow some time for any async processing to complete
@@ -593,7 +595,7 @@ func TestUpdateTxMinedStatus_DifferentBatchSizes(t *testing.T) {
 	freshMockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
 		Return(expectedBlockIDsMap, nil).Times(2) // 2 calls: first with 2 hashes, second with 1 hash
 
-	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, multiTxBlock, 15, []uint32{}, true)
+	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, multiTxBlock, 15, []uint32{}, true, nil)
 
 	require.NoError(t, err)
 	// Allow some time for any async processing to complete
@@ -644,7 +646,7 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 			}).
 			Return(expectedBlockIDsMap, nil).Once()
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -673,7 +675,7 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
 			Return(expectedBlockIDsMap, nil).Once()
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, wrongPosBlock, 15, []uint32{}, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, wrongPosBlock, 15, []uint32{}, true, nil)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -730,7 +732,7 @@ func TestUpdateTxMinedStatus_ConcurrentProcessing(t *testing.T) {
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
 			Return(expectedBlockIDsMap, nil).Times(3)
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -758,7 +760,7 @@ func TestUpdateTxMinedStatus_MissingSubtree(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{newTx(1).TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{nil} // Missing subtree
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "missing subtree")
@@ -816,7 +818,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -848,7 +850,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		// Chain contains block IDs that conflict
 		chainBlockIDsMap := map[uint32]bool{5: true, 10: true, 15: true}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
@@ -878,7 +880,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, disabledSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, disabledSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		require.NoError(t, err)
 		mockStore.AssertNotCalled(t, "SetMinedMulti")
@@ -918,7 +920,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		// Chain contains block ID 5 and 15
 		chainBlockIDsMap := map[uint32]bool{5: true, 15: true}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should fail because tx1 conflicts (block ID 5 is on current chain)
 		require.Error(t, err)
@@ -951,7 +953,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{5: true, 10: true}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should succeed because no existing block IDs to conflict with
 		require.NoError(t, err)
@@ -988,7 +990,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should succeed without calling SetMinedMulti (no nodes to process)
 		require.NoError(t, err)
@@ -1014,7 +1016,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should succeed without calling SetMinedMulti (all placeholders skipped)
 		require.NoError(t, err)
@@ -1056,7 +1058,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, largeBatchSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, largeBatchSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -1099,7 +1101,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, boundarySettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, boundarySettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -1136,7 +1138,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		chainBlockIDsMap := map[uint32]bool{}
 
 		// Call with unsetMined=false (valid block) - errors should be returned
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should return error for valid blocks when SetMinedMulti fails
 		require.Error(t, err)
@@ -1171,10 +1173,194 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		chainBlockIDsMap := map[uint32]bool{}
 
 		// Call with unsetMined=true (invalid block) - errors should be logged but not returned
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, true)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, true)
 
 		// Should NOT return error for invalid blocks - errors are logged only
 		require.NoError(t, err)
+
+		mockStore.AssertExpectations(t)
+	})
+}
+
+// mockBlockchainClientForSlowPath is a simple mock implementation of blockchainClientI for testing slow-path detection
+// We define it locally to avoid import cycles since services/blockchain imports model
+type mockBlockchainClientForSlowPath struct {
+	checkBlockResult bool
+	checkBlockError  error
+	calledWith       []uint32
+	calledWithHash   *chainhash.Hash
+	wasCalled        bool
+}
+
+func (m *mockBlockchainClientForSlowPath) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	m.calledWith = blockIDs
+	m.calledWithHash = blockHash
+	m.wasCalled = true
+	return m.checkBlockResult, m.checkBlockError
+}
+
+func TestUpdateTxMinedStatus_SlowPathDetection(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UpdateTxMinedStatus = true
+	setWorkerSettings(tSettings)
+
+	t.Run("should detect collision via slow-path when block ID is not in chainBlockIDsMap", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(100)
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *testTx.TxIDChainHash()},
+				},
+			},
+		}
+
+		// SetMinedMulti returns block ID 5 (which is NOT in chainBlockIDsMap)
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {5},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		// chainBlockIDsMap only contains block ID 10 (not 5)
+		chainBlockIDsMap := map[uint32]bool{10: true}
+
+		// Mock blockchain client returns true (block 5 is on current chain)
+		mockClient := &mockBlockchainClientForSlowPath{checkBlockResult: true}
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, mockClient, false)
+
+		// Should get BlockInvalidError because slow-path detected collision
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "slow path")
+		assert.Contains(t, err.Error(), "transaction already on our chain")
+
+		// Verify the blockchain client was called with block ID 5
+		require.True(t, mockClient.wasCalled)
+		require.Contains(t, mockClient.calledWith, uint32(5))
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should not error when slow-path finds block IDs not on current chain", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(200)
+		block := &Block{}
+		block.Height = 200
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *testTx.TxIDChainHash()},
+				},
+			},
+		}
+
+		// SetMinedMulti returns block ID 99 (which is NOT in chainBlockIDsMap)
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {99},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		// chainBlockIDsMap does not contain block ID 99
+		chainBlockIDsMap := map[uint32]bool{10: true, 20: true}
+
+		// Mock blockchain client returns false (block 99 is NOT on current chain - orphaned block)
+		mockClient := &mockBlockchainClientForSlowPath{checkBlockResult: false}
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 25, chainBlockIDsMap, true, mockClient, false)
+
+		// Should succeed because block 99 is not on current chain
+		require.NoError(t, err)
+
+		// Verify the blockchain client was called
+		require.True(t, mockClient.wasCalled)
+		require.Contains(t, mockClient.calledWith, uint32(99))
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should skip slow-path when unsetMined is true", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(300)
+		block := &Block{}
+		block.Height = 300
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *testTx.TxIDChainHash()},
+				},
+			},
+		}
+
+		// SetMinedMulti returns block ID 5 (which is NOT in chainBlockIDsMap)
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {5},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		chainBlockIDsMap := map[uint32]bool{10: true}
+
+		// Mock blockchain client - should NOT be called when unsetMined is true
+		mockClient := &mockBlockchainClientForSlowPath{checkBlockResult: true}
+
+		// unsetMined=true should skip slow-path check
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, mockClient, true)
+
+		require.NoError(t, err)
+
+		// Verify the blockchain client was NOT called
+		require.False(t, mockClient.wasCalled)
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should handle blockchain client error gracefully", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(400)
+		block := &Block{}
+		block.Height = 400
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *testTx.TxIDChainHash()},
+				},
+			},
+		}
+
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {5},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		chainBlockIDsMap := map[uint32]bool{10: true}
+
+		// Mock blockchain client returns an error
+		mockClient := &mockBlockchainClientForSlowPath{checkBlockError: errors.NewStorageError("database error")}
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, mockClient, false)
+
+		// Should return error from blockchain client
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to check old block IDs")
 
 		mockStore.AssertExpectations(t)
 	})

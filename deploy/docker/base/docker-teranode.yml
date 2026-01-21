@@ -1,6 +1,6 @@
 x-teranode-base:
   &teranode-base
-  image: ghcr.io/bsv-blockchain/teranode:v0.12.4
+  image: ghcr.io/bsv-blockchain/teranode:v0.13.1
   networks:
     - teranode-network
   volumes:
@@ -170,4 +170,20 @@ services:
     depends_on:
       blockchain:
         condition: service_healthy
+    restart: on-failure
+
+  pruner:
+    <<: *teranode-base
+    container_name: pruner
+    entrypoint: [ "/app/entrypoint.sh" ]
+    command: [ "-pruner=1" ]
+    depends_on:
+      blockchain:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "netstat", "-ltn", "|", "grep", "-c", "8096" ]
+      interval: 5s
+      timeout: 30s
+      retries: 10
+      start_period: 7s
     restart: on-failure
