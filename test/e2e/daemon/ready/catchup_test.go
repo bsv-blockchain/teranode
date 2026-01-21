@@ -145,7 +145,10 @@ func TestCatchup(t *testing.T) {
 
 		// Phase 9: Wait for node2 to sync to node1's block height
 		t.Log("Phase 9: Waiting for node2 to reach block 10...")
+		node1BestBlock, err := node1.BlockchainClient.GetBlock(node1.Ctx, node1BestHeader.Hash())
+		require.NoError(t, err)
 		node2.WaitForBlockhash(t, node1BestHeader.Hash(), 60*time.Second)
+		node2.WaitForBlockHeight(t, node1BestBlock, 60*time.Second)
 
 		// Verify node2 reached the same height
 		node2BestHeader, node2Meta, err := node2.BlockchainClient.GetBestBlockHeader(node2.Ctx)
