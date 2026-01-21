@@ -797,6 +797,7 @@ func TestBlockPersisterUTXOAdditionsAndDeletions(t *testing.T) {
 		// Check additions - should contain the outputs from our transaction
 		additionsReader, err := utxoSet.GetUTXOAdditionsReader(node.Ctx)
 		require.NoError(t, err, "Failed to get utxo-additions reader for block %d", i+1)
+		defer additionsReader.Close()
 
 		additionsCount := 0
 		foundOurTx := false
@@ -823,7 +824,6 @@ func TestBlockPersisterUTXOAdditionsAndDeletions(t *testing.T) {
 				}
 			}
 		}
-		additionsReader.Close()
 
 		require.True(t, foundOurTx, "Our transaction should be in the utxo-additions file for block %d", i+1)
 		t.Logf("  Total transactions in additions: %d (includes coinbase)", additionsCount)
@@ -831,6 +831,7 @@ func TestBlockPersisterUTXOAdditionsAndDeletions(t *testing.T) {
 		// Check deletions - should contain the spent output from the previous transaction
 		deletionsReader, err := utxoSet.GetUTXODeletionsReader(node.Ctx)
 		require.NoError(t, err, "Failed to get utxo-deletions reader for block %d", i+1)
+		defer deletionsReader.Close()
 
 		deletionsCount := 0
 		foundSpentOutput := false
@@ -864,7 +865,6 @@ func TestBlockPersisterUTXOAdditionsAndDeletions(t *testing.T) {
 				t.Logf("  Found our spent output in deletions: %s:%d", deletion.TxID.String(), deletion.Index)
 			}
 		}
-		deletionsReader.Close()
 
 		require.True(t, foundSpentOutput, "The spent output should be in the utxo-deletions file for block %d", i+1)
 		t.Logf("  Total deletions: %d", deletionsCount)

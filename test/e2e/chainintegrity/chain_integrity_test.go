@@ -751,8 +751,7 @@ func verifyUTXOFiles(t *testing.T, ctx context.Context, node *daemon.TestDaemon,
 			if err != nil {
 				t.Errorf("Failed to get utxo-additions reader for block %s: %v", blockHash, err)
 			} else {
-				txCount := 0
-				utxoCount := 0
+				defer additionsReader.Close()
 				for {
 					utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(ctx, additionsReader)
 					if err == io.EOF {
@@ -767,11 +766,7 @@ func verifyUTXOFiles(t *testing.T, ctx context.Context, node *daemon.TestDaemon,
 					if utxoWrapper.Height != height {
 						t.Errorf("UTXO height mismatch in block %s: expected %d, got %d", blockHash, height, utxoWrapper.Height)
 					}
-
-					txCount++
-					utxoCount += len(utxoWrapper.UTXOs)
 				}
-				additionsReader.Close()
 				additionsOK = true
 			}
 		}
@@ -793,7 +788,7 @@ func verifyUTXOFiles(t *testing.T, ctx context.Context, node *daemon.TestDaemon,
 			if err != nil {
 				t.Errorf("Failed to get utxo-deletions reader for block %s: %v", blockHash, err)
 			} else {
-				deletionCount := 0
+				defer deletionsReader.Close()
 				for {
 					deletion, err := utxopersister.NewUTXODeletionFromReader(deletionsReader)
 					if err == io.EOF {
@@ -814,10 +809,7 @@ func verifyUTXOFiles(t *testing.T, ctx context.Context, node *daemon.TestDaemon,
 					if isEOFMarker {
 						break
 					}
-
-					deletionCount++
 				}
-				deletionsReader.Close()
 				deletionsOK = true
 			}
 		}
