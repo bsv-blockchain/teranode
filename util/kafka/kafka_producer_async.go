@@ -21,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
 	"github.com/bsv-blockchain/teranode/util/retry"
+	"github.com/ordishs/go-utils"
 	"github.com/rcrowley/go-metrics"
 )
 
@@ -421,7 +422,7 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	c.channelMu.RUnlock()
 
 	if ch != nil {
-		ch <- msg
+		utils.SafeSend(ch, msg)
 	}
 }
 

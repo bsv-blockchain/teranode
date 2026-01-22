@@ -84,6 +84,12 @@ func (s *Service) SetPersistedHeightGetter(getter func() uint32) {
 	s.getPersistedHeight = getter
 }
 
+// AddObserver adds an observer to be notified when pruning completes.
+// This is a no-op for the SQL pruner service as it doesn't support observers yet.
+func (s *Service) AddObserver(observer pruner.Observer) {
+	// No-op: SQL pruner doesn't support observers yet
+}
+
 // Prune removes transactions marked for deletion at or before the specified height.
 // Returns the number of records processed and any error encountered.
 // This method is synchronous and blocks until pruning completes or context is cancelled.
