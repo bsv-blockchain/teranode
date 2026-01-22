@@ -48,7 +48,6 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 	if err := acquireSemaphorePermit(ctx, repo.semGetLegacyBlockReader, "GetLegacyBlockReader"); err != nil {
 		return nil, err
 	}
-	// Note: semaphore will be released when the returned reader is closed
 
 	returnWireBlock := len(wireBlock) > 0 && wireBlock[0]
 
@@ -60,11 +59,15 @@ func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhas
 
 	r, w := io.Pipe()
 
+	// Release semaphore after initial setup is complete but before streaming begins.
+	// The semaphore protects the database query (GetBlockByHash) and pipe creation,
+	// but streaming is I/O-bound and doesn't need CPU-based concurrency limiting.
+	// File operations have their own semaphore protection (readSemaphore with 768 slots).
+	// This allows unlimited concurrent streams while protecting database/initialization.
+	releaseSemaphorePermit(repo.semGetLegacyBlockReader)
+
 	g, gCtx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
-		// Release semaphore when goroutine completes (after all Aerospike reads are done)
-		defer releaseSemaphorePermit(repo.semGetLegacyBlockReader)
-
 		if err = repo.writeLegacyBlockHeader(w, block, returnWireBlock); err != nil {
 			_ = w.CloseWithError(io.ErrClosedPipe)
 			_ = r.CloseWithError(err)
