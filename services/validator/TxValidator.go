@@ -265,17 +265,6 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 	// 	return err
 	// }
 
-	// SAO - https://bitcoin.stackexchange.com/questions/83805/did-the-introduction-of-verifyscript-cause-a-backwards-incompatible-change-to-co
-	// SAO - The rule enforcing that unlocking scripts must be "push only" became more relevant and started being enforced with the
-	//       introduction of Segregated Witness (SegWit) which activated at height 481824.  BCH Forked before this at height 478559
-	//       and therefore let's not enforce this check until then.
-	if tv.interpreter.Interpreter() != TxInterpreterGoBDK && blockHeight > tv.settings.ChainCfgParams.UahfForkHeight {
-		// 9) The unlocking script (scriptSig) can only push numbers on the stack
-		if err := tv.pushDataCheck(tx); err != nil {
-			return err
-		}
-	}
-
 	// 10) Reject if the sum of input values is less than sum of output values
 	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
 	if !validationOptions.SkipPolicyChecks {
@@ -465,30 +454,11 @@ func isUnspendableOutput(script *bscript.Script) bool {
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	total := uint64(0)
 
-	// Note: We use > instead of >= to exclude the Genesis activation block itself
-	// because transactions in block 620538 were created before Genesis rules existed
-	isGenesisActivated := blockHeight > tv.settings.ChainCfgParams.GenesisActivationHeight
-
 	for index, output := range tx.Outputs {
-		// Check P2SH output after genesis activation
-		if !validationOptions.SkipPolicyChecks && isGenesisActivated && output.LockingScript.IsP2SH() {
-			// See https://github.com/bitcoin-sv/teranode/issues/4333
-			return errors.NewTxInvalidError("transaction output %d is p2sh after genesis activation", index)
-		}
 
 		if output.Satoshis > MaxSatoshis {
 			return errors.NewTxInvalidError("transaction output %d satoshis is invalid", index)
 		}
-
-		// Check dust limit after genesis activation
-		// Dust checks are policy rules, not consensus rules - they only apply to mempool/relay
-		if !validationOptions.SkipPolicyChecks && isGenesisActivated {
-			// Only enforce dust limit for spendable outputs when RequireStandard is true
-			if tv.settings.ChainCfgParams.RequireStandard && output.Satoshis < DustLimit && !isUnspendableOutput(output.LockingScript) {
-				return errors.NewTxInvalidError("zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix")
-			}
-		}
-
 		total += output.Satoshis
 	}
 
@@ -804,28 +774,6 @@ func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, validationOptions *Options) error 
 					return errors.NewTxInvalidError("transaction unlocking scripts have too many sigops (%d)", numSigOps)
 				}
 			}
-		}
-	}
-
-	return nil
-}
-
-// pushDataCheck validates that transaction input scripts contain only data pushes.
-func (tv *TxValidator) pushDataCheck(tx *bt.Tx) error {
-	for index, input := range tx.Inputs {
-		if input.UnlockingScript == nil {
-			return errors.NewTxInvalidError("transaction input %d unlocking script is empty", index)
-		}
-
-		parser := interpreter.DefaultOpcodeParser{}
-		parsedUnlockingScript, err := parser.Parse(input.UnlockingScript)
-
-		if err != nil {
-			return err
-		}
-
-		if !parsedUnlockingScript.IsPushOnly() {
-			return errors.NewTxInvalidError("transaction input %d unlocking script is not push only", index)
 		}
 	}
 
