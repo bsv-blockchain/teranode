@@ -2,7 +2,7 @@ package daemon
 
 import (
 	bdksecp256k1 "github.com/bitcoin-sv/bdk/module/gobdk/secp256k1"
-	sdkinterpreter "github.com/bitcoin-sv/go-sdk/script/interpreter"
+	sdkinterpreter "github.com/bsv-blockchain/go-sdk/script/interpreter"
 	"github.com/bsv-blockchain/go-bt/v2/bscript/interpreter"
 	"github.com/ordishs/gocore"
 )

@@ -10,8 +10,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/bitcoin-sv/alert-system/app/config"
-	"github.com/bitcoin-sv/go-sdk/script"
+	"github.com/bsv-blockchain/go-alert-system/app/config"
+	"github.com/bsv-blockchain/go-sdk/script"
 	"github.com/bsv-blockchain/go-bn/models"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"

@@ -48,7 +48,7 @@ The Service features are:
 
 > **Note**: For information about how the Alert service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
-The Alert Service uses the third party `github.com/bitcoin-sv/alert-system` library. This library provides the ability to subscribe to a private P2P network where other BSV nodes participate, and subscribes to topics where Alert related messages are received.
+The Alert Service uses the third party `github.com/bsv-blockchain/go-alert-system` library. This library provides the ability to subscribe to a private P2P network where other BSV nodes participate, and subscribes to topics where Alert related messages are received.
 Based on the received messages, the Alert Service handles the UTXO freezing, unfreezing, reassignment, block invalidation and peer management operations.
 
 ![Alert_Service_Container_Diagram.png](img/Alert_Service_Container_Diagram.png)
@@ -214,7 +214,7 @@ The Alert Service initializes the necessary components and services to start pro
 
 7. **Bitcoin-specific Libraries:**
     - Uses `github.com/bsv-blockchain/go-bt/v2` for Bitcoin transaction handling.
-    - Integrates with `github.com/bitcoin-sv/alert-system` for core alert functionality.
+    - Integrates with `github.com/bsv-blockchain/go-alert-system` for core alert functionality.
 
 ## 4. Directory Structure and Main Files
 

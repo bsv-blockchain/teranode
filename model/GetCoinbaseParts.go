@@ -41,7 +41,7 @@ import (
 	"encoding/hex"
 	"log"
 
-	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
+	base58 "github.com/bsv-blockchain/go-sdk/compat/base58" //nolint:depguard
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 )
