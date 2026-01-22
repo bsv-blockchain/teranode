@@ -461,35 +461,6 @@ func isUnspendableOutput(script *bscript.Script) bool {
 	return false
 }
 
-// isStandardInputScript checks if an input script (unlocking script) is standard
-// Standard input scripts should only contain data pushes (no other opcodes)
-// This uses the same interpreter as the SV node for consistency
-// Before UAHF height, all scripts are considered standard (no push-only requirement)
-func isStandardInputScript(script *bscript.Script, blockHeight uint32, uahfHeight uint32) bool {
-	// Before UAHF, there was no push-only requirement for input scripts
-	if blockHeight <= uahfHeight {
-		// Any parseable script is considered standard before UAHF
-		// Return true unless script is nil
-		return script != nil
-	}
-
-	if script == nil {
-		// Nil scripts are not standard (matches pushDataCheck behavior)
-		return false
-	}
-
-	// Use the same parser as pushDataCheck for consistency
-	parser := interpreter.DefaultOpcodeParser{}
-	parsedScript, err := parser.Parse(script)
-	if err != nil {
-		// If we can't parse the script, it's not standard
-		return false
-	}
-
-	// Check if the parsed script is push-only
-	return parsedScript.IsPushOnly()
-}
-
 // checkOutputs validates transaction outputs according to consensus and policy rules.
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	total := uint64(0)
@@ -772,7 +743,6 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 	// Get configuration settings
 	minConf := tv.settings.Policy.GetMinConfConsolidationInput()
 	maxInputScriptSize := tv.settings.Policy.GetMaxConsolidationInputScriptSize()
-	acceptNonStdInputs := tv.settings.Policy.GetAcceptNonStdConsolidationInput()
 
 	// Dust return transactions don't require confirmations
 	if isDustReturn {
@@ -802,9 +772,7 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 
 		// Rule 5: Standard Script Rule
 		// If acceptNonStdConsolidationInput = 0, all inputs must use standard scripts
-		if !acceptNonStdInputs && !isStandardInputScript(input.UnlockingScript, currentHeight, tv.settings.ChainCfgParams.UahfForkHeight) {
-			return false
-		}
+		// This is checked in bdk
 	}
 
 	// Transaction qualifies as a consolidation transaction
