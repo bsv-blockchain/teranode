@@ -148,39 +148,12 @@ jobs:
         run: |
           if [ ! -f feature-benchmarks.json ]; then
             echo "Creating mock feature benchmarks"
-            cat > feature-benchmarks.json << 'EOF'
-{
-  "version": "1.0",
-  "timestamp": "2026-01-23T13:10:00Z",
-  "git": {
-    "commit": "def5678901234567890abcdef5678901234567890",
-    "branch": "feature"
-  },
-  "benchmarks": [
-    {"name": "BenchmarkGetTransactionJSON", "ns_per_op": 60000, "bytes_per_op": 12190, "allocs_per_op": 120, "iterations": 104190},
-    {"name": "BenchmarkGetTransactionBinary", "ns_per_op": 40061, "bytes_per_op": 5216, "allocs_per_op": 65, "iterations": 144621},
-    {"name": "BenchmarkGetTransactionHex", "ns_per_op": 40518, "bytes_per_op": 5876, "allocs_per_op": 68, "iterations": 146862}
-  ]
-}
-EOF
+            cp .github/workflows/mock-main-benchmarks.json feature-benchmarks.json
+            sed -i 's/"main"/"feature"/g; s/59718/60000/g; s/abc1234/def5678/g' feature-benchmarks.json
           fi
           if [ ! -f main-benchmarks.json ]; then
             echo "Creating mock main benchmarks"
-            cat > main-benchmarks.json << 'EOF'
-{
-  "version": "1.0",
-  "timestamp": "2026-01-23T13:00:00Z",
-  "git": {
-    "commit": "abc1234567890abcdef1234567890abcdef123456",
-    "branch": "main"
-  },
-  "benchmarks": [
-    {"name": "BenchmarkGetTransactionJSON", "ns_per_op": 59718, "bytes_per_op": 12190, "allocs_per_op": 120, "iterations": 104190},
-    {"name": "BenchmarkGetTransactionBinary", "ns_per_op": 40061, "bytes_per_op": 5216, "allocs_per_op": 65, "iterations": 144621},
-    {"name": "BenchmarkGetTransactionHex", "ns_per_op": 40518, "bytes_per_op": 5876, "allocs_per_op": 68, "iterations": 146862}
-  ]
-}
-EOF
+            cp .github/workflows/mock-main-benchmarks.json main-benchmarks.json
           fi
           echo "Benchmarks ready for comparison"
           ls -la *.json
@@ -190,11 +163,39 @@ EOF
         continue-on-error: true
         run: |
           echo "=== Comparing Feature vs Main ==="
-          go run ./cmd/compare-benchmarks \
-            -current feature-benchmarks.json \
-            -baseline main-benchmarks.json \
-            -output comparison-report.md \
-            -threshold 5.0
+          if [ -d ./cmd/compare-benchmarks ]; then
+            go run ./cmd/compare-benchmarks \
+              -current feature-benchmarks.json \
+              -baseline main-benchmarks.json \
+              -output comparison-report.md \
+              -threshold 5.0
+          else
+            echo "Compare script not yet available, generating placeholder report"
+            cat > comparison-report.md << 'REPORT'
+## 📊 Benchmark Comparison Report (Mock Data)
+
+**Baseline:** `main` (abc1234)
+
+**Current:** `feature` (def5678)
+
+### Summary
+
+- **Regressions (>5.0%):** 0 ❌
+- **Improvements (>5.0%):** 0 ✅
+- **Unchanged:** 3 ✓
+
+### Detailed Results
+
+| Benchmark | Baseline | Current | Change | Allocs | Status |
+|-----------|----------|---------|--------|--------|--------|
+| GetTransactionJSON-4 | 59718 ns/op | 60000 ns/op | +0.5% | +0.0% | ✓ |
+| GetTransactionBinary-4 | 40061 ns/op | 40061 ns/op | +0.0% | +0.0% | ✓ |
+| GetTransactionHex-4 | 40518 ns/op | 40518 ns/op | +0.0% | +0.0% | ✓ |
+
+---
+*Threshold: 5.0% | Generated at 2026-01-23T13:10:00Z*
+REPORT
+          fi
 
       - name: Display report
         if: always()
