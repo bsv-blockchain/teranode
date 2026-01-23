@@ -179,11 +179,6 @@ func generateBlocksWithTransactions(t *testing.T, ctx context.Context, nodes []*
 
 	// Mine blocks periodically while blasters are running
 	for i := 0; i < blocksToMine; i++ {
-		// Wait for transactions to flow through the pipeline:
-		// Propagation -> Validator -> BlockAssembly -> SubtreeProcessor
-		// This takes longer than 500ms, so we need to wait longer for subtrees to be created
-		time.Sleep(3 * time.Second)
-
 		// Mine a block on node 0
 		nodes[0].MineAndWait(t, 1)
 
