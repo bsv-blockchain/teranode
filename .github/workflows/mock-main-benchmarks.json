@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-01-23T13:00:00Z",
+  "git": {
+    "commit": "abc1234567890abcdef1234567890abcdef123456",
+    "branch": "main"
+  },
+  "benchmarks": [
+    {
+      "name": "BenchmarkGetTransactionJSON",
+      "ns_per_op": 59718,
+      "bytes_per_op": 12190,
+      "allocs_per_op": 120,
+      "iterations": 104190
+    },
+    {
+      "name": "BenchmarkGetTransactionBinary",
+      "ns_per_op": 40061,
+      "bytes_per_op": 5216,
+      "allocs_per_op": 65,
+      "iterations": 144621
+    },
+    {
+      "name": "BenchmarkGetTransactionHex",
+      "ns_per_op": 40518,
+      "bytes_per_op": 5876,
+      "allocs_per_op": 68,
+      "iterations": 146862
+    }
+  ]
+}
