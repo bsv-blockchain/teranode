@@ -5,8 +5,8 @@ on:
     paths:
       - 'services/asset/**'
       - '.github/workflows/benchmark-compare.yaml'
-      - 'scripts/parse-benchmarks.go'
-      - 'scripts/compare-benchmarks.go'
+      - 'cmd/parse-benchmarks/**'
+      - 'cmd/compare-benchmarks/**'
 
 permissions:
   contents: read
@@ -47,7 +47,7 @@ jobs:
 
       - name: Parse results
         run: |
-          go run ./scripts/parse-benchmarks.go \
+          go run ./cmd/parse-benchmarks \
             -input feature-benchmark-output.txt \
             -output feature-benchmarks.json \
             -commit "${{ github.sha }}" \
@@ -93,7 +93,7 @@ jobs:
 
       - name: Parse results
         run: |
-          go run ./scripts/parse-benchmarks.go \
+          go run ./cmd/parse-benchmarks \
             -input main-benchmark-output.txt \
             -output main-benchmarks.json \
             -commit "$(git rev-parse HEAD)" \
@@ -137,7 +137,7 @@ jobs:
         continue-on-error: true
         run: |
           echo "=== Comparing Feature vs Main ==="
-          go run ./scripts/compare-benchmarks.go \
+          go run ./cmd/compare-benchmarks \
             -current feature-benchmarks.json \
             -baseline main-benchmarks.json \
             -output comparison-report.md \
