@@ -1447,6 +1447,7 @@ func TestCreateAndSendRawTransaction(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
+		UTXOStoreType:   "aerospike",
 		SettingsOverrideFunc: test.ComposeSettings(
 			test.SystemTestSettings(),
 			func(settings *settings.Settings) {

@@ -38,6 +38,10 @@ func calculateSpeed(duration time.Duration, sizeInKB float64) float64 {
 // URL Parameters:
 //   - hash: Subtree hash (hex string)
 //
+// Query Parameters (JSON mode only):
+//   - offset: Starting index for pagination (default: 0)
+//   - limit: Maximum number of nodes to return (default: 20, max: 100)
+//
 // HTTP Response Formats:
 //
 //  1. JSON (mode = JSON):
@@ -45,16 +49,23 @@ func calculateSpeed(duration time.Duration, sizeInKB float64) float64 {
 //     Content-Type: application/json
 //     Body:
 //     {
-//     "height": <int>,
-//     "fees": <uint64>,
-//     "size_in_bytes": <uint64>,
-//     "fee_hash": "<string>",
-//     "nodes": [
-//     // Array of subtree nodes
+//     "data": {
+//     "Height": <int>,
+//     "Fees": <uint64>,
+//     "SizeInBytes": <uint64>,
+//     "FeeHash": "<string>",
+//     "Nodes": [
+//     // Array of subtree nodes (paginated)
 //     ],
-//     "conflicting_nodes": [
+//     "ConflictingNodes": [
 //     // Array of conflicting node hashes
 //     ]
+//     },
+//     "pagination": {
+//     "offset": <int>,
+//     "limit": <int>,
+//     "totalRecords": <int>
+//     }
 //     }
 //
 //  2. Binary (mode = BINARY_STREAM):
@@ -133,7 +144,37 @@ func (h *HTTP) GetSubtree(mode ReadMode) func(c echo.Context) error {
 				}
 			}
 
-			return c.JSONPretty(200, subtree, "  ")
+			offset, limit, err := h.getLimitOffset(c)
+			if err != nil {
+				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+			}
+
+			totalNodes := subtree.Length()
+			if offset >= totalNodes {
+				offset = 0
+			}
+
+			end := min(offset+limit, totalNodes)
+
+			paginatedNodes := subtree.Nodes[offset:end]
+
+			response := ExtendedResponse{
+				Data: map[string]any{
+					"Height":           subtree.Height,
+					"Fees":             subtree.Fees,
+					"SizeInBytes":      subtree.SizeInBytes,
+					"FeeHash":          &subtree.FeeHash,
+					"Nodes":            paginatedNodes,
+					"ConflictingNodes": subtree.ConflictingNodes,
+				},
+				Pagination: Pagination{
+					Offset:       offset,
+					Limit:        limit,
+					TotalRecords: totalNodes,
+				},
+			}
+
+			return c.JSONPretty(200, response, "  ")
 		}
 
 		// get subtree reader is much more efficient than get subtree

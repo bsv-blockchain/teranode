@@ -171,12 +171,12 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 
 				switch notification.Type {
 				case model.NotificationType_FSMState:
-					c.logger.Infof("[Blockchain] Received FSM state notification for %s: %s", source, notification.GetMetadata().String())
+					c.logger.Debugf("[Blockchain] Received FSM state notification for %s: %s", source, notification.GetMetadata().String())
 					// update the local FSM state variable
 					metadata := notification.Metadata.Metadata
 					newState := FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])
 					c.fmsState.Store(&newState)
-					c.logger.Infof("[Blockchain] Updated FSM state in c.fsmState: %s ", c.fmsState.Load())
+					c.logger.Debugf("[Blockchain] Updated FSM state in c.fsmState: %s ", c.fmsState.Load())
 				default:
 					// send the notification to all subscribers
 					c.subscribersMu.Lock()
@@ -627,6 +627,25 @@ func (c *Client) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint
 	}
 
 	return resp.GetIsPartOfCurrentChain(), nil
+}
+
+// CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
+// This is used for double-spend detection on fork blocks where we need to check against
+// the fork's ancestor chain rather than the main chain.
+func (c *Client) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	if len(blockIDs) == 0 {
+		return false, nil
+	}
+
+	resp, err := c.client.CheckBlockIsAncestorOfBlock(ctx, &blockchain_api.CheckBlockIsAncestorOfBlockRequest{
+		BlockIDs:  blockIDs,
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.GetIsAncestor(), nil
 }
 
 // GetChainTips retrieves information about all known tips in the block tree.

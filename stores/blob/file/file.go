@@ -31,9 +31,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -76,19 +74,12 @@ type File struct {
 	logger ulogger.Logger
 	// options contains default options for blob operations
 	options *options.Options
-	// fileDAHs maps filenames to their Delete-At-Height values for expiration tracking
-	fileDAHs map[string]uint32
-	// fileDAHsMu protects concurrent access to the fileDAHs map
-	fileDAHsMu sync.Mutex
-	// fileDAHsCtxCancel is used to stop the DAH cleanup background process on close
-	fileDAHsCtxCancel context.CancelFunc
 	// currentBlockHeight tracks the current blockchain height for DAH processing
 	currentBlockHeight atomic.Uint32
 	// persistSubDir is an optional subdirectory for organization within the base path
 	persistSubDir string
 	// longtermClient is an optional secondary storage backend for hybrid storage models
 	longtermClient longtermStore
-	cleanupCh      chan struct{}
 }
 
 func (s *File) debugEnabled() bool {
@@ -379,8 +370,6 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 	return newStore(logger, storeURL, opts...)
 }
 
-var fileCleanerOnce sync.Map
-
 func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*File, error) {
 	logger = logger.New("file")
 
@@ -435,16 +424,11 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 		}
 	}
 
-	fileDAHsCtx, fileDAHsCtxCancel := context.WithCancel(context.Background())
-
 	fileStore := &File{
-		path:              path,
-		logger:            logger,
-		options:           options,
-		fileDAHs:          make(map[string]uint32),
-		fileDAHsCtxCancel: fileDAHsCtxCancel,
-		persistSubDir:     options.PersistSubDir,
-		cleanupCh:         make(chan struct{}, 1),
+		path:          path,
+		logger:        logger,
+		options:       options,
+		persistSubDir: options.PersistSubDir,
 	}
 
 	// Check if longterm storage options are provided
@@ -473,203 +457,16 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	if options.BlockHeightCh != nil {
 		go func() {
 			for {
-				select {
-				case <-fileDAHsCtx.Done():
-					return
-				case blockHeight := <-options.BlockHeightCh:
-					fileStore.SetCurrentBlockHeight(blockHeight)
-				}
+				fileStore.SetCurrentBlockHeight(<-options.BlockHeightCh)
 			}
 		}()
 	}
-
-	_, loaded := fileCleanerOnce.LoadOrStore(storeURL.String(), true)
-	if !loaded { // i.e. it was stored and not loaded
-		// load dah's in the background and start the dah cleaner
-		go func() {
-			if err := fileStore.loadDAHs(); err != nil {
-				fileStore.logger.Warnf("[File] failed to load dahs: %v", err)
-			}
-		}()
-	}
-
-	// start the dah cleaner
-	go fileStore.dahCleaner(fileDAHsCtx)
 
 	return fileStore, nil
 }
 
 func (s *File) SetCurrentBlockHeight(height uint32) {
 	s.currentBlockHeight.Store(height)
-
-	select {
-	case s.cleanupCh <- struct{}{}:
-	default: // Channel is full; we are already cleaning up.
-	}
-}
-
-func (s *File) loadDAHs() error {
-	s.logger.Infof("[File] Loading file DAHs: %s", s.path)
-
-	// Clean up any leftover .dah.tmp files from incomplete writes
-	// Only remove files older than 10 minutes to avoid interfering with active writes
-	tmpFiles, err := findFilesByExtension(s.path, "dah.tmp")
-	if err == nil && len(tmpFiles) > 0 {
-		now := time.Now()
-		cleanupThreshold := 10 * time.Minute
-		var cleaned int
-
-		for _, tmpFile := range tmpFiles {
-			// Use anonymous function to create scope for defer statements.
-			// In Go, defer inside a loop doesn't execute until the outer function returns,
-			// which would cause semaphore permits to accumulate and not be released until
-			// the entire loop completes. The anonymous function ensures defer executes
-			// after each iteration, properly releasing permits and preventing resource exhaustion.
-			func() {
-				// Protect file stat operation
-				ctx := context.Background()
-				if err := acquireReadPermit(ctx); err != nil {
-					s.logger.Warnf("[File] failed to acquire read permit for stat: %v", err)
-					return
-				}
-				defer releaseReadPermit()
-
-				info, err := os.Stat(tmpFile)
-				if err != nil {
-					return
-				}
-
-				// Check if file is older than the threshold
-				if now.Sub(info.ModTime()) > cleanupThreshold {
-					// Protect file removal operation
-					if err := acquireWritePermit(ctx); err != nil {
-						s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-						return
-					}
-					defer releaseWritePermit()
-
-					err := os.Remove(tmpFile)
-					if err != nil && !os.IsNotExist(err) {
-						s.logger.Warnf("[File] failed to remove leftover tmp file: %s", tmpFile)
-					} else {
-						cleaned++
-					}
-				}
-			}()
-		}
-
-		if cleaned > 0 {
-			s.logger.Infof("[File] Cleaned up %d leftover .dah.tmp files (older than %v)", cleaned, cleanupThreshold)
-		}
-	}
-
-	// Clean up any leftover general .tmp files from incomplete SetFromReader writes
-	// Only remove files older than 10 minutes to avoid interfering with active writes
-	generalTmpFiles, err := findFilesByExtension(s.path, ".tmp")
-	if err == nil && len(generalTmpFiles) > 0 {
-		now := time.Now()
-		cleanupThreshold := 10 * time.Minute
-		var cleaned int
-
-		for _, tmpFile := range generalTmpFiles {
-			// Skip .dah.tmp files (already handled above) and .sha256.tmp files (hash temp files)
-			if strings.HasSuffix(tmpFile, ".dah.tmp") || strings.HasSuffix(tmpFile, ".sha256.tmp") {
-				continue
-			}
-
-			func() {
-				ctx := context.Background()
-				if err := acquireReadPermit(ctx); err != nil {
-					s.logger.Warnf("[File] failed to acquire read permit for stat: %v", err)
-					return
-				}
-				defer releaseReadPermit()
-
-				info, err := os.Stat(tmpFile)
-				if err != nil {
-					return
-				}
-
-				// Check if file is older than the threshold
-				if now.Sub(info.ModTime()) > cleanupThreshold {
-					if err := acquireWritePermit(ctx); err != nil {
-						s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-						return
-					}
-					defer releaseWritePermit()
-
-					err := os.Remove(tmpFile)
-					if err != nil && !os.IsNotExist(err) {
-						s.logger.Warnf("[File] failed to remove leftover tmp file: %s", tmpFile)
-					} else {
-						cleaned++
-					}
-				}
-			}()
-		}
-
-		if cleaned > 0 {
-			s.logger.Infof("[File] Cleaned up %d leftover .tmp files (older than %v)", cleaned, cleanupThreshold)
-		}
-	}
-
-	// get all files in the directory that end with .dah
-	files, err := findFilesByExtension(s.path, ".dah")
-	if err != nil {
-		return errors.NewStorageError("[File] failed to find DAH files", err)
-	}
-
-	var dah uint32
-
-	for _, fileName := range files {
-		// Use anonymous function to create scope for defer statements.
-		// In Go, defer inside a loop doesn't execute until the outer function returns,
-		// which would cause semaphore permits to accumulate and not be released until
-		// the entire loop completes. The anonymous function ensures defer executes
-		// after each iteration, properly releasing permits and preventing resource exhaustion.
-		func() {
-			if fileName[len(fileName)-4:] != ".dah" {
-				return
-			}
-
-			dah, err = s.readDAHFromFile(fileName)
-			if err != nil {
-				// Log the error but continue processing other files
-				s.logger.Warnf("[File] error reading DAH file %s: %v", fileName, err)
-
-				// If it's an invalid DAH file (0 or corrupt), remove it
-				var terr *errors.Error
-				if errors.As(err, &terr) && terr.Code() == errors.ERR_PROCESSING {
-					s.logger.Warnf("[File] removing invalid DAH file during initialization: %s", fileName)
-					// Protect file removal operation
-					ctx := context.Background()
-					if err := acquireWritePermit(ctx); err != nil {
-						s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-						return
-					}
-					defer releaseWritePermit()
-
-					removeErr := os.Remove(fileName)
-					if removeErr != nil && !os.IsNotExist(removeErr) {
-						s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName)
-					}
-				}
-				return
-			}
-
-			// This should not happen anymore with the validation in readDAHFromFile
-			if dah == 0 {
-				s.logger.Warnf("[File] unexpected DAH value 0 for file %s", fileName)
-				return
-			}
-
-			s.fileDAHsMu.Lock()
-			s.fileDAHs[fileName[:len(fileName)-4]] = dah
-			s.fileDAHsMu.Unlock()
-		}()
-	}
-
-	return nil
 }
 
 // readDAHFromFile_internal reads a DAH value from file WITHOUT semaphore protection.
@@ -716,9 +513,9 @@ func (s *File) readDAHFromFile(fileName string) (uint32, error) {
 	return s.readDAHFromFile_internal(fileName)
 }
 
-// writeDAHToFile_internal writes a DAH value to file WITHOUT semaphore protection.
+// writeDAHToFileInternal writes a DAH value to file WITHOUT semaphore protection.
 // Caller must hold appropriate semaphore.
-func (s *File) writeDAHToFile_internal(dahFilename string, dah uint32) error {
+func (s *File) writeDAHToFileInternal(dahFilename string, dah uint32) error {
 	// Validate DAH value before writing
 	if dah == 0 {
 		return errors.NewProcessingError("[File] attempted to write invalid DAH value 0 to file %s", dahFilename)
@@ -744,169 +541,7 @@ func (s *File) writeDAHToFile(dahFilename string, dah uint32) error {
 	}
 	defer releaseWritePermit()
 
-	return s.writeDAHToFile_internal(dahFilename, dah)
-}
-
-func (s *File) dahCleaner(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.cleanupCh:
-			s.cleanupExpiredFiles()
-		}
-	}
-}
-
-func (s *File) cleanupExpiredFiles() {
-	s.debugf("[File] Cleaning file DAHs")
-
-	filesToRemove := s.getExpiredFiles()
-	for _, fileName := range filesToRemove {
-		s.cleanupExpiredFile(fileName)
-	}
-}
-
-func (s *File) getExpiredFiles() []string {
-	s.fileDAHsMu.Lock()
-	filesToRemove := make([]string, 0, len(s.fileDAHs))
-
-	currentBlockHeight := s.currentBlockHeight.Load()
-
-	s.debugf("[File] current block height is %d", currentBlockHeight)
-
-	for fileName, dah := range s.fileDAHs {
-		if dah <= currentBlockHeight {
-			filesToRemove = append(filesToRemove, fileName)
-			s.debugf("[File] removing expired file: %s", fileName)
-		}
-	}
-	s.fileDAHsMu.Unlock()
-
-	return filesToRemove
-}
-
-func (s *File) cleanupExpiredFile(fileName string) {
-	// check if the DAH file still exists, even if the map says it has expired, another process might have updated it
-	dah, err := s.readDAHFromFile(fileName + ".dah")
-	if err != nil {
-		// If it's a processing error (invalid DAH value or corrupt file), clean it up
-		if errors.Is(err, errors.ErrProcessing) {
-			s.logger.Warnf("[File] invalid DAH file detected during cleanup: %s, error: %v", fileName+".dah", err)
-			s.removeDAHFromMap(fileName)
-
-			// Remove the invalid DAH file, but keep the blob files
-			// Protect file removal operation
-			ctx := context.Background()
-			if err := acquireWritePermit(ctx); err != nil {
-				s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-				return
-			}
-			defer releaseWritePermit()
-
-			removeErr := os.Remove(fileName + ".dah")
-
-			if removeErr != nil && !os.IsNotExist(removeErr) {
-				s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName+".dah")
-			}
-		} else if errors.Is(err, errors.ErrNotFound) {
-			s.removeDAHFromMap(fileName)
-			s.debugf("[File] DAH file not found during cleanup, removing from map: %s", fileName+".dah")
-		} else {
-			s.debugf("[File] failed to read DAH from file: %s, error: %v", fileName+".dah", err)
-		}
-		return
-	}
-
-	// This should not happen anymore with the validation in readDAHFromFile
-	if dah == 0 {
-		s.removeDAHFromMap(fileName)
-		s.logger.Warnf("[File] unexpected DAH value 0, removing: %s", fileName+".dah")
-
-		// Remove the invalid DAH file, but keep the blob files
-		// Protect file removal operation
-		ctx := context.Background()
-		if err := acquireWritePermit(ctx); err != nil {
-			s.logger.Warnf("[File] failed to acquire write permit for removal: %v", err)
-			return
-		}
-		defer releaseWritePermit()
-
-		err := os.Remove(fileName + ".dah")
-		if err != nil && !os.IsNotExist(err) {
-			s.logger.Warnf("[File] failed to remove invalid DAH file: %s", fileName+".dah")
-		}
-
-		return
-	}
-
-	if !s.shouldRemoveFile(fileName, dah) {
-		return
-	}
-
-	s.debugf("[File] removing expired file: %s", fileName)
-	s.removeFiles(fileName)
-	s.removeDAHFromMap(fileName)
-}
-
-func (s *File) shouldRemoveFile(fileName string, fileDAH uint32) bool {
-	currentBlockHeight := s.currentBlockHeight.Load()
-
-	if fileDAH > currentBlockHeight {
-		// Update the DAH in our map
-		s.fileDAHsMu.Lock()
-		mapDAH := s.fileDAHs[fileName]
-		s.fileDAHs[fileName] = fileDAH
-		s.fileDAHsMu.Unlock()
-
-		s.debugf("[File] DAH file %s has DAH of %d, but map has %d",
-			fileName+".dah",
-			fileDAH,
-			mapDAH)
-
-		return false
-	}
-
-	return true
-}
-
-// removeFiles_internal removes files WITHOUT semaphore protection.
-// Caller must hold appropriate semaphore.
-func (s *File) removeFiles_internal(fileName string) {
-	// Use the Del method to allow logger.go to log the removal to help with troubleshooting
-	// FileTypeUnknown is "", which will remove the file, checksum and dah files
-	// err := s.Del(context.Background(), []byte(fileName), fileformat.FileTypeUnknown)
-
-	if err := os.Remove(fileName); err != nil && !os.IsNotExist(err) {
-		s.logger.Warnf("[File] failed to remove file: %s", fileName)
-	}
-
-	if err := os.Remove(fileName + ".dah"); err != nil && !os.IsNotExist(err) {
-		s.logger.Warnf("[File] failed to remove DAH file: %s", fileName+".dah")
-	}
-
-	if err := os.Remove(fileName + checksumExtension); err != nil && !os.IsNotExist(err) {
-		s.logger.Warnf("[File] failed to remove checksum file: %s", fileName+checksumExtension)
-	}
-}
-
-// removeFiles removes files WITH semaphore protection.
-// Use this when caller doesn't already hold a semaphore.
-func (s *File) removeFiles(fileName string) {
-	ctx := context.Background()
-	if err := acquireWritePermit(ctx); err != nil {
-		s.logger.Warnf("[File] failed to acquire write permit for file removal: %v", err)
-		return
-	}
-	defer releaseWritePermit()
-
-	s.removeFiles_internal(fileName)
-}
-
-func (s *File) removeDAHFromMap(fileName string) {
-	s.fileDAHsMu.Lock()
-	delete(s.fileDAHs, fileName)
-	s.fileDAHsMu.Unlock()
+	return s.writeDAHToFileInternal(dahFilename, dah)
 }
 
 // Health checks the health status of the file-based blob store.
@@ -986,10 +621,6 @@ func (s *File) Health(ctx context.Context, _ bool) (int, string, error) {
 // Returns:
 //   - error: Always returns nil
 func (s *File) Close(_ context.Context) error {
-	s.debugf("[File] Close invoked for path=%s", s.path)
-	// stop DAH cleaner
-	s.fileDAHsCtxCancel()
-
 	return nil
 }
 
@@ -1216,20 +847,13 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 	if dah > 0 {
 		dahFilename := fileName + ".dah"
 		// Use _internal variant since this is called from SetFromReader which holds writeSemaphore
-		if err := s.writeDAHToFile_internal(dahFilename, dah); err != nil {
+		if err := s.writeDAHToFileInternal(dahFilename, dah); err != nil {
 			return "", err
 		}
-
-		s.fileDAHsMu.Lock()
-		s.fileDAHs[fileName] = dah
-		s.fileDAHsMu.Unlock()
 	} else {
 		// delete DAH file, if it existed
 		_ = os.Remove(fileName + ".dah")
 
-		s.fileDAHsMu.Lock()
-		delete(s.fileDAHs, fileName)
-		s.fileDAHsMu.Unlock()
 	}
 
 	return fileName, nil
@@ -1275,10 +899,6 @@ func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 	}
 
 	if newDAH == 0 {
-		s.fileDAHsMu.Lock()
-		delete(s.fileDAHs, fileName)
-		s.fileDAHsMu.Unlock()
-
 		// delete the DAH file
 		if err = os.Remove(fileName + ".dah"); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -1303,15 +923,10 @@ func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 	// write DAH to file
 	// Use _internal variant since we already hold writeSemaphore
 	dahFilename := fileName + ".dah"
-	if err = s.writeDAHToFile_internal(dahFilename, newDAH); err != nil {
+	if err = s.writeDAHToFileInternal(dahFilename, newDAH); err != nil {
 		return err
 	}
 
-	s.fileDAHsMu.Lock()
-	s.fileDAHs[fileName] = newDAH
-	s.fileDAHsMu.Unlock()
-
-	s.debugf("[File] SetDAH completed key=%s type=%s newDAH=%d", keyHex, fileType, newDAH)
 	return nil
 }
 
@@ -1337,21 +952,14 @@ func (s *File) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 		return 0, errors.ErrNotFound
 	}
 
-	// Get the DAH from the map
-	s.fileDAHsMu.Lock()
-	dah, ok := s.fileDAHs[fileName]
-	s.fileDAHsMu.Unlock()
-
-	if !ok {
-		// check whether the DAH file exists, it could have been created by another process
-		dah, err = s.readDAHFromFile(fileName + ".dah")
-		if err != nil {
-			if errors.Is(err, errors.ErrNotFound) {
-				return 0, nil
-			}
-
-			return 0, err
+	// check whether the DAH file exists, it could have been created by another process
+	dah, err := s.readDAHFromFile(fileName + ".dah")
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			return 0, nil
 		}
+
+		return 0, err
 	}
 
 	s.debugf("[File] GetDAH result key=%s type=%s dah=%d", keyHex, fileType, dah)
@@ -1630,64 +1238,4 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 	return nil
 }
 
-// findFilesByExtension performs directory traversal to find files by extension.
-// NOTE: This is intentionally not semaphore-protected since it's a bulk scanning
-// operation that doesn't open many file descriptors simultaneously. It's called
-// infrequently (at startup and during background DAH loading).
-func findFilesByExtension(root, ext string) ([]string, error) {
-	var a []string
-
-	// Normalize extension: remove leading dot if present for 'find' command
-	// filepath.Ext returns extension with leading dot, but find pattern needs "*.<ext>"
-	extForFind := strings.TrimPrefix(ext, ".")
-
-	useFind := runtime.GOOS == "linux" || runtime.GOOS == "darwin"
-
-	// Check if 'find' is available
-	if useFind {
-		if _, err := exec.LookPath("find"); err == nil {
-			pattern := "*." + extForFind
-			cmd := exec.Command("find", root, "-type", "f", "-name", pattern)
-
-			var out bytes.Buffer
-
-			cmd.Stdout = &out
-			if err := cmd.Run(); err != nil {
-				return nil, err
-			}
-
-			for _, line := range strings.Split(out.String(), "\n") {
-				if line != "" {
-					a = append(a, line)
-				}
-			}
-
-			return a, nil
-		}
-	}
-
-	// Normalize extension: ensure it has a leading dot for filepath.Ext comparison
-	extForWalk := ext
-	if !strings.HasPrefix(extForWalk, ".") {
-		extForWalk = "." + extForWalk
-	}
-
-	err := filepath.Walk(root, func(s string, d os.FileInfo, e error) error {
-		if e != nil {
-			return e
-		}
-
-		// Use HasSuffix instead of filepath.Ext to support multi-dot extensions
-		// filepath.Ext("file.dah.tmp") returns ".tmp", not ".dah.tmp"
-		if strings.HasSuffix(d.Name(), extForWalk) {
-			a = append(a, s)
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return a, nil
-}
+// findFilesByExtension removed - was only used by loadDAHs which has been removed

@@ -366,9 +366,9 @@ func (it *unminedTxIterator) processRecord(ctx context.Context, bins map[string]
 	if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
 		txInpoints, err = it.processTransactionInpoints(ctx, txData, bins)
 		if err != nil {
-			if it.fullScan {
+			if it.fullScan && txData.unminedSince == 0 {
 				// In full scan mode, if we encounter an error processing inpoints and the transaction
-				// has block IDs, it has already been mined. We can skip it.
+				// is mined (unminedSince == 0), we can skip it since it's already on the main chain.
 				return &utxo.UnminedTransaction{
 					Node: &subtree.Node{
 						Hash:        *txData.hash,

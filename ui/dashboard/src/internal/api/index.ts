@@ -194,6 +194,16 @@ export function getSubtreeTxs(data: {
   })
 }
 
+export function getSubtreeNodes(data: {
+  hash: string
+  offset: number
+  limit: number
+}): Promise<ApiResponse<any>> {
+  return get<any>(`${baseUrl}/subtree/${data.hash}/json`, {
+    query: { offset: String(data.offset), limit: String(data.limit) },
+  })
+}
+
 export function searchItem(data: { q: string }): Promise<ApiResponse<any>> {
   return get<any>(`${baseUrl}/search?${new URLSearchParams(data)}`, {})
 }

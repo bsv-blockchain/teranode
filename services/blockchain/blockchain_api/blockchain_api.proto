@@ -96,6 +96,10 @@ service BlockchainAPI {
   // CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
   rpc CheckBlockIsInCurrentChain(CheckBlockIsCurrentChainRequest) returns (CheckBlockIsCurrentChainResponse) {}
 
+  // CheckBlockIsAncestorOfBlock verifies if specified blocks are ancestors of a given block.
+  // Used for double-spend detection on fork blocks where we check against the fork's ancestor chain.
+  rpc CheckBlockIsAncestorOfBlock(CheckBlockIsAncestorOfBlockRequest) returns (CheckBlockIsAncestorOfBlockResponse) {}
+
   // GetChainTips retrieves information about all known tips in the block tree.
   rpc GetChainTips(google.protobuf.Empty) returns (GetChainTipsResponse) {}
 
@@ -414,6 +418,17 @@ message GetBlockHeaderResponse {
 // CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.
 message CheckBlockIsCurrentChainResponse {
   bool isPartOfCurrentChain = 1;  // True if blocks are in main chain
+}
+
+// CheckBlockIsAncestorOfBlockRequest checks if blocks are ancestors of a specific block.
+message CheckBlockIsAncestorOfBlockRequest {
+  repeated uint32 blockIDs = 1;  // List of block IDs to check
+  bytes blockHash = 2;           // Hash of the block to check ancestry against
+}
+
+// CheckBlockIsAncestorOfBlockResponse indicates if any blocks are ancestors.
+message CheckBlockIsAncestorOfBlockResponse {
+  bool isAncestor = 1;  // True if any block ID is an ancestor
 }
 
 // SubscribeRequest initiates a subscription to blockchain events.

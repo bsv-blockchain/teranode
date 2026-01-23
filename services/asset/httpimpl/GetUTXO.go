@@ -4,11 +4,15 @@ package httpimpl
 import (
 	"encoding/hex"
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 )
@@ -82,10 +86,11 @@ import (
 func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 	return func(c echo.Context) error {
 		hashStr := c.Param("hash")
+		voutStr := c.QueryParam("vout")
 
 		ctx, _, deferFn := tracing.Tracer("asset").Start(c.Request().Context(), "GetUTXO_http",
 			tracing.WithParentStat(AssetStat),
-			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetUTXO in %s for %s: %s", mode, c.Request().RemoteAddr, hashStr),
+			tracing.WithDebugLogMessage(h.logger, "[Asset_http] GetUTXO in %s for %s: %s?vout=%s", mode, c.Request().RemoteAddr, hashStr, voutStr),
 		)
 
 		defer deferFn()
@@ -94,15 +99,54 @@ func (h *HTTP) GetUTXO(mode ReadMode) func(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash length").Error())
 		}
 
-		hash, err := chainhash.NewHashFromStr(hashStr)
+		txHash, err := chainhash.NewHashFromStr(hashStr)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid hash format", err).Error())
 		}
 
+		if voutStr == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("missing required query parameter: vout").Error())
+		}
+
+		vout, err := strconv.ParseUint(voutStr, 10, 32)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid vout format", err).Error())
+		}
+
+		voutUint32, err := safeconversion.Uint64ToUint32(vout)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("vout out of range", err).Error())
+		}
+
+		// Fetch the transaction to get the output for UTXO hash calculation
+		txBytes, err := h.repository.GetTransaction(ctx, txHash)
+		if err != nil {
+			if errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrTxNotFound) || strings.Contains(err.Error(), "not found") {
+				return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("transaction not found").Error())
+			}
+
+			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error retrieving transaction", err).Error())
+		}
+
+		tx, err := bt.NewTxFromBytes(txBytes)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error parsing transaction", err).Error())
+		}
+
+		if voutUint32 >= uint32(len(tx.Outputs)) {
+			return echo.NewHTTPError(http.StatusNotFound, errors.NewNotFoundError("UTXO not found: output index out of range").Error())
+		}
+
+		output := tx.Outputs[voutUint32]
+		utxoHash, err := util.UTXOHashFromOutput(txHash, output, voutUint32)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, errors.NewProcessingError("error calculating UTXO hash", err).Error())
+		}
+
 		utxoResponse, err := h.repository.GetUtxo(ctx, &utxo.Spend{
-			TxID:         nil,
-			Vout:         0,
-			UTXOHash:     hash,
+			TxID:         txHash,
+			Vout:         voutUint32,
+			UTXOHash:     utxoHash,
 			SpendingData: nil,
 		})
 		if err != nil {

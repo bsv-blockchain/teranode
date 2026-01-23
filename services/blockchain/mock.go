@@ -443,6 +443,12 @@ func (m *Mock) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32
 	return args.Bool(0), args.Error(1)
 }
 
+// CheckBlockIsAncestorOfBlock mocks the CheckBlockIsAncestorOfBlock method
+func (m *Mock) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, blockIDs, blockHash)
+	return args.Bool(0), args.Error(1)
+}
+
 // GetChainTips mocks the GetChainTips method
 func (m *Mock) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
 	args := m.Called(ctx)
@@ -664,6 +670,11 @@ type mockStoreCheckBlockChain struct {
 
 func (m *mockStoreCheckBlockChain) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	args := m.Called(ctx, blockIDs)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *mockStoreCheckBlockChain) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, blockIDs, blockHash)
 	return args.Bool(0), args.Error(1)
 }
 

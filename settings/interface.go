@@ -15,6 +15,13 @@ const (
 
 // Settings is the main configuration structure containing all Teranode settings.
 // Individual settings categories are defined in separate files for organization.
+
+// Pruner block trigger mode constants
+const (
+	PrunerBlockTriggerOnBlockPersisted = "OnBlockPersisted" // Trigger on BlockPersisted notifications (default)
+	PrunerBlockTriggerOnBlockMined     = "OnBlockMined"     // Trigger on Block notifications with mined_set=true
+)
+
 type Settings struct {
 	Commit                       string   // Runtime-computed from build info
 	Version                      string   // Runtime-computed from build info

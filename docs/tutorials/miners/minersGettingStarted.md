@@ -180,8 +180,16 @@ curl http://localhost:8090/health
 
     - Open Grafana: <http://localhost:3005>
     - Login with the default credentials: admin/admin
-    - Navigate to the "Teranode - Service Overview" dashboard for key metrics
-    - Explore other dashboards for detailed service metrics. For example, you can check the Legacy sync metrics in the "Teranode - Legacy Service" dashboard.
+
+> **Note:** The docker compose configuration in this repository includes Grafana but does not include pre-configured Teranode dashboards. You will see an empty Grafana instance that can collect metrics but won't have the "Teranode" folder with pre-built service dashboards.
+>
+> For a complete deployment with pre-configured Grafana dashboards (Teranode Service Overview, Legacy Service metrics, etc.), use the **[teranode-teratestnet repository](https://github.com/bsv-blockchain/teranode-teratestnet)** which includes:
+>
+> - Pre-built Grafana dashboards for all Teranode services
+> - Automated setup and configuration
+> - Production-ready monitoring visualization
+>
+> You can also manually create custom dashboards in Grafana by connecting to the Prometheus data source at `http://prometheus:9090`.
 
 ### Common Issues
 

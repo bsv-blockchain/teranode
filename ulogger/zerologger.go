@@ -69,6 +69,10 @@ func NewZeroLogger(service string, options ...Option) *ZLoggerWrapper {
 
 func prettyZeroLogger(service string, opts *Options, jsonLoggingEnabled bool) *ZLoggerWrapper {
 	isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+
+	// Cache working directory once at logger initialization to avoid expensive syscall on every log message
+	cachedCwd, _ := os.Getwd()
+
 	output := zerolog.ConsoleWriter{
 		Out:        os.Stdout,
 		NoColor:    !isTerminal,
@@ -123,8 +127,8 @@ func prettyZeroLogger(service string, opts *Options, jsonLoggingEnabled bool) *Z
 		}
 
 		if len(c) > 0 {
-			if cwd, err := os.Getwd(); err == nil {
-				if rel, err := filepath.Rel(cwd, c); err == nil {
+			if cachedCwd != "" {
+				if rel, err := filepath.Rel(cachedCwd, c); err == nil {
 					c = rel
 				}
 			}

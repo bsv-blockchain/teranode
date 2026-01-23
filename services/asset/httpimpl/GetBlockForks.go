@@ -45,8 +45,8 @@ type forksTree struct {
 	Hash      string      `json:"hash"`       // Block hash in string format
 	Miner     string      `json:"miner"`      // Miner information if available
 	Height    uint32      `json:"height"`     // Block height in the chain
-	TxCount   uint32      `json:"tx_count"`   // Number of transactions in the block
-	Size      uint32      `json:"size"`       // Block size in bytes
+	TxCount   uint64      `json:"tx_count"`   // Number of transactions in the block
+	Size      uint64      `json:"size"`       // Block size in bytes
 	BlockTime uint32      `json:"block_time"` // Block timestamp
 	Timestamp uint32      `json:"timestamp"`  // Block creation timestamp
 	Link      forksLink   `json:"link"`       // Link information for visualization
@@ -197,27 +197,17 @@ func (h *HTTP) GetBlockForks(c echo.Context) (err error) {
 		metasMap[*blockHeader.Hash()] = metas[idx]
 	}
 
-	txCountUint32, err := safeconversion.Uint64ToUint32(metasMap[*blockHash].TxCount)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid tx count parameter", err).Error())
-	}
-
-	sizeUint32, err := safeconversion.Uint64ToUint32(metasMap[*blockHash].SizeInBytes)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, errors.NewInvalidArgumentError("invalid size parameter", err).Error())
-	}
-
 	// add the root block to the forks
 	blockForks := forks{
 		Tree: forksTree{
 			Hash:      blockHash.String(),
-			ID:        metasMap[*blockHash].ID,
-			Miner:     metasMap[*blockHash].Miner,
-			Height:    metasMap[*blockHash].Height,
-			TxCount:   txCountUint32,
-			Size:      sizeUint32,
-			BlockTime: metasMap[*blockHash].BlockTime,
-			Timestamp: metasMap[*blockHash].Timestamp,
+			ID:        meta.ID,
+			Miner:     meta.Miner,
+			Height:    meta.Height,
+			TxCount:   meta.TxCount,
+			Size:      meta.SizeInBytes,
+			BlockTime: meta.BlockTime,
+			Timestamp: meta.Timestamp,
 			Link: forksLink{
 				Name:      "Link " + blockHash.String(),
 				NodeName:  blockHash.String(),
@@ -262,8 +252,8 @@ func addChildrenToBlockForks(tree *forksTree, blockHeadersParentChild map[chainh
 			ID:        metasMap[*child.Hash()].ID,
 			Miner:     metasMap[*child.Hash()].Miner,
 			Height:    metasMap[*child.Hash()].Height,
-			TxCount:   uint32(metasMap[*child.Hash()].TxCount),     //nolint:gosec
-			Size:      uint32(metasMap[*child.Hash()].SizeInBytes), //nolint:gosec
+			TxCount:   metasMap[*child.Hash()].TxCount,
+			Size:      metasMap[*child.Hash()].SizeInBytes,
 			BlockTime: metasMap[*child.Hash()].BlockTime,
 			Timestamp: metasMap[*child.Hash()].Timestamp,
 			Link: forksLink{
