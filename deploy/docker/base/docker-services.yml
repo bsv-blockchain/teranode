@@ -74,22 +74,20 @@ services:
 
   kafka-console-shared:
     container_name: kafka-console-shared
-    image: docker.redpanda.com/redpandadata/console:latest
+    image: docker.redpanda.com/redpandadata/console:v3.2.2
     networks:
       - teranode-network
     restart: on-failure
-    entrypoint: /bin/sh
-    command: -c "echo \"$$CONSOLE_CONFIG_FILE\" > /tmp/config.yml; /app/console"
     environment:
-      CONFIG_FILEPATH: /tmp/config.yml
-      CONSOLE_CONFIG_FILE: |
-        kafka:
-          brokers: ["kafka-shared:9092"]
-          schemaRegistry:
-            enabled: true
-            urls: ["http://kafka-shared:8081"]
+      CONFIG_FILEPATH: /etc/console/config.yml
+    volumes:
+      - ../../../errors/error.proto:/etc/protos/errors/error.proto:ro
+      - ../../../util/kafka/kafka_message/kafka_messages.proto:/etc/protos/kafka_messages.proto:ro
+      - ../../../model/model.proto:/etc/protos/model.proto:ro
+      - ../../../services/propagation/propagation_api/propagation_api.proto:/etc/protos/propagation_api.proto:ro
+      - ../base/kafka-console-config.yml:/etc/console/config.yml:ro
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8082:8080"
     depends_on:
       - kafka-shared
 
@@ -161,6 +159,31 @@ services:
       - ${DATA_PATH}/aerospike/smd:/opt/aerospike/smd
       - ${DATA_PATH}/aerospike/asmt:/backup/indexes
     entrypoint: ["/bin/bash", "/aerospike-asmt-wrapper.sh"]
+    privileged: true  # Allow the container to access raw devices
+    hostname: aerospike
+
+  # Aerospike TN, single node in evaluation mode
+  aerospike-tn:
+    container_name: aerospike
+    image: ghcr.io/bsv-blockchain/aerospike-server:8.0.0-3
+    networks:
+      - teranode-network
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+    environment:
+      # JEMalloc tuning: release memory back to OS more aggressively
+      # dirty_decay_ms: time before dirty pages are purged (default 10000ms)
+      # muzzy_decay_ms: time before muzzy pages are released to OS (default 10000ms)
+      # background_thread: enables background thread for decay operations
+      MALLOC_CONF: "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000"
+    stop_grace_period: 600s # to allow ASMT to backup the indexes for warm restarts
+    volumes:
+      - ./aerospike-tn.conf:/etc/aerospike.conf
+      - ${DATA_PATH}/aerospike/data:/opt/aerospike/data
+      - ${DATA_PATH}/aerospike/smd:/opt/aerospike/smd
+      - ${DATA_PATH}/aerospike/asmt:/backup/indexes
+    entrypoint: ["asd", "--foreground", "--config-file", "/etc/aerospike.conf"]
     privileged: true  # Allow the container to access raw devices
     hostname: aerospike
 

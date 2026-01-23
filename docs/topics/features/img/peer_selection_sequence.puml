@@ -1,0 +1,58 @@
+@startuml peer_selection_sequence
+!theme plain
+skinparam backgroundColor white
+skinparam sequenceMessageAlign center
+
+title Two-Phase Peer Selection Process
+
+participant "Block Validation\nService" as BV
+participant "Peer Selector" as PS
+participant "Peer Registry" as PR
+
+BV -> PS: SelectSyncPeer(criteria)
+activate PS
+
+PS -> PR: GetAllPeers()
+activate PR
+PR --> PS: []PeerInfo
+deactivate PR
+
+== Phase 1: Full Node Selection ==
+
+PS -> PS: Filter eligible peers
+note right
+  - Not banned
+  - Has DataHub URL
+  - Height > 0
+  - Reputation >= 20.0
+  - Not in cooldown
+end note
+
+PS -> PS: Filter for "full" storage mode
+
+alt Full nodes available
+  PS -> PS: Sort by:\n1. Reputation (desc)\n2. Ban score (asc)\n3. Height (desc)\n4. Peer ID
+  PS -> PS: Select top candidate
+  PS --> BV: Selected full node peer
+else No full nodes available
+
+  == Phase 2: Pruned Node Fallback ==
+
+  alt Fallback enabled
+    PS -> PS: Filter non-full peers
+    PS -> PS: Sort by:\n1. Reputation (desc)\n2. Ban score (asc)\n3. Height (asc)\n4. Peer ID
+    note right
+      Prefer youngest pruned
+      nodes to minimize
+      UTXO pruning risk
+    end note
+    PS -> PS: Select top candidate
+    PS --> BV: Selected pruned node peer
+  else Fallback disabled
+    PS --> BV: No peer available
+  end
+end
+
+deactivate PS
+
+@enduml

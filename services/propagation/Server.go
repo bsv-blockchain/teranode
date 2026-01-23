@@ -1071,6 +1071,7 @@ func (ps *PropagationServer) validateTransactionViaKafka(btTx *bt.Tx) error {
 
 	ps.logger.Debugf("[ProcessTransaction][%s] sending transaction to validator kafka channel", btTx.TxID())
 	ps.validatorKafkaProducerClient.Publish(&kafka.Message{
+		Key:   []byte(btTx.TxID()),
 		Value: value,
 	})
 
@@ -1102,6 +1103,10 @@ func (ps *PropagationServer) storeTransaction(ctx context.Context, btTx *bt.Tx) 
 
 	if ps.txStore != nil {
 		if err := ps.txStore.Set(ctx, btTx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, btTx.SerializeBytes()); err != nil {
+			// Duplicate transactions are acceptable - the transaction already exists
+			if errors.Is(err, errors.ErrBlobAlreadyExists) {
+				return nil
+			}
 			// TODO make this resilient to errors
 			// write it to secondary store (Kafka) and retry?
 			return err

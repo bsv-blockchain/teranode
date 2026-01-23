@@ -3,6 +3,8 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
+// Package legacy implements a Bitcoin SV legacy protocol server that handles peer-to-peer communication
+// and blockchain synchronization using the traditional Bitcoin network protocol.
 package legacy
 
 import (
@@ -11,7 +13,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net"
 	"os"
@@ -29,7 +30,6 @@ import (
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -141,6 +141,15 @@ var _ net.Addr = simpleAddr{}
 
 // broadcastMsg provides the ability to house a bitcoin message to be broadcast
 // to all connected peers except specified excluded peers.
+//
+// This structure is used by the server's message broadcasting system to efficiently
+// distribute protocol messages (blocks, transactions, inventory announcements) to
+// multiple peers while allowing selective exclusion of specific peers.
+//
+// Fields:
+//   - message: The wire protocol message to broadcast (MsgBlock, MsgTx, MsgInv, etc.)
+//   - excludePeers: List of peers that should not receive this message, typically
+//     used to avoid sending a message back to the peer that originally sent it
 type broadcastMsg struct {
 	message      wire.Message
 	excludePeers []*serverPeer
@@ -524,11 +533,16 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 		return nil
 	}
 
-	// Ignore peers that aren't running Bitcoin
-	if strings.Contains(msg.UserAgent, "ABC") || strings.Contains(msg.UserAgent, "Cash") || strings.Contains(msg.UserAgent, "Unlimited") {
-		sp.server.logger.Debugf("Rejecting peer %s for not running compatible Bitcoin", sp.Peer)
+	// Only allow connections from peers running Bitcoin SV
+	// This prevents connections from BCH/BTC/BTG and other incompatible forks
+	userAgent := msg.UserAgent
+	if !strings.Contains(userAgent, "Bitcoin SV") && !strings.Contains(userAgent, "BSV") {
+		sp.server.logger.Warnf("Rejecting and banning peer %s with non-Bitcoin SV user agent: %s", sp.Peer, userAgent)
 
-		reason := "Sorry, you are not running Bitcoin"
+		// Ban the peer to prevent repeated connection attempts from incompatible clients
+		sp.server.BanPeer(sp)
+
+		reason := "Only Bitcoin SV clients are supported"
 
 		return wire.NewMsgReject(msg.Command(), wire.RejectNonstandard, reason)
 	}
@@ -917,8 +931,14 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 		tracing.WithHistogram(peerServerMetrics["OnGetHeaders"]),
 	)
 
-	// Ignore OnGetHeaders requests if not in sync.
-	if !sp.server.syncManager.IsCurrent() {
+	// Don't serve headers to other peers while we're actively syncing in headers-first mode.
+	// Serving headers during checkpoint sync causes significant delays (18s+ per batch) due to:
+	// - Database query contention (querying 2000 headers per peer)
+	// - Multiple peers requesting headers simultaneously
+	// - Competition with our own header processing
+	// This prevents the sync from timing out (3-minute lastBlockTime limit).
+	if sp.server.syncManager.IsHeadersFirstMode() {
+		sp.server.logger.Debugf("Ignoring getheaders request from %s: node is syncing in headers-first mode", sp)
 		return
 	}
 
@@ -939,19 +959,21 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 		return
 	}
 
-	blockHeaders, _, err := sp.server.blockchainClient.GetBlockHeadersToCommonAncestor(sp.ctx, bestHeader.Hash(), msg.BlockLocatorHashes, wire.MaxBlockHeadersPerMsg)
+	blockHeaders, _, err := sp.server.blockchainClient.GetBlockHeadersFromCommonAncestor(sp.ctx, bestHeader.Hash(), util.HashPointersToValues(msg.BlockLocatorHashes), wire.MaxBlockHeadersPerMsg)
 	if err != nil {
-		sp.server.logger.Errorf("Failed to fetch block headers to common ancestor: %v", err)
+		sp.server.logger.Errorf("Failed to fetch block headers from common ancestor: %v", err)
 	}
 
 	// Send found headers to the requesting peer.
 	wireBlockHeaders := make([]*wire.BlockHeader, 0, len(blockHeaders))
 
 	for _, blockHeader := range blockHeaders {
-		if blockHeader.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
-			// skip genesis block
-			continue
-		}
+		// Note: We now include genesis block for proper header chain continuity
+		// SVNode needs genesis to validate the chain from block 0
+		// if blockHeader.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+		// 	// skip genesis block
+		// 	continue
+		// }
 
 		wireBlockHeaders = append(wireBlockHeaders, blockHeader.ToWireBlockHeader())
 
@@ -1156,7 +1178,7 @@ func (sp *serverPeer) OnReject(p *peer.Peer, msg *wire.MsgReject) {
 		tracing.WithHistogram(peerServerMetrics["OnReject"]),
 	)
 
-	sp.server.logger.Warnf("Received reject message from peer %s, code: %s, reason: %s", p, msg.Code.String(), msg.Reason)
+	sp.server.logger.Warnf("Received reject message from peer %s, cmd: %s, code: %s, reason: %s, hash: %s", p, msg.Cmd, msg.Code.String(), msg.Reason, msg.Hash.String())
 }
 
 // OnNotFound logs all not found messages received from the remote peer.
@@ -1343,12 +1365,13 @@ func (s *server) getTxFromStore(hash *chainhash.Hash) (*bsvutil.Tx, int64, error
 // connected peer.  An error is returned if the block hash is not known.
 func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<- struct{},
 	waitChan <-chan struct{}, encoding wire.MessageEncoding) error {
-	// use a concurrent store to make sure we do not request the legacy block multiple times
-	// for different peers. This makes sure we serve the block from a local cache store and not from the utxo store.
-	reader, err := s.concurrentStore.Get(s.ctx, *hash, fileformat.FileTypeMsgBlock, func() (io.ReadCloser, error) {
-		url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
-		return util.DoHTTPRequestBodyReader(s.ctx, url)
-	})
+	// Stream directly from Asset Server without disk caching.
+	// For large blocks (4GB+), the disk I/O overhead of ConcurrentBlob causes timeouts.
+	// The Asset Server handles caching internally, so we stream directly to avoid:
+	// 1. Writing the entire block to disk (slow, causes context deadline exceeded)
+	// 2. Reading it back from disk (additional I/O overhead)
+	url := fmt.Sprintf("%s/block_legacy/%s?wire=1", s.assetHTTPAddress, hash.String())
+	reader, err := util.DoHTTPRequestBodyReader(s.ctx, url)
 	if err != nil {
 		sp.server.logger.Errorf("Unable to fetch requested block %v: %v", hash, err)
 
@@ -1363,9 +1386,12 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 		_ = reader.Close()
 	}()
 
-	var msgBlock wire.MsgBlock
-	if err = msgBlock.Deserialize(reader); err != nil {
-		sp.server.logger.Errorf("Unable to deserialize requested block hash %v: %v", hash, err)
+	// Use RawBlockMessage to avoid deserialize/serialize overhead for large blocks.
+	// This reads raw bytes directly and writes them to the wire, bypassing the
+	// expensive process of creating Go structs for millions of transactions.
+	rawBlockMsg, err := NewRawBlockMessage(reader)
+	if err != nil {
+		sp.server.logger.Errorf("Unable to read requested block hash %v: %v", hash, err)
 
 		if doneChan != nil {
 			doneChan <- struct{}{}
@@ -1390,7 +1416,7 @@ func (s *server) pushBlockMsg(sp *serverPeer, hash *chainhash.Hash, doneChan cha
 		dc = doneChan
 	}
 
-	sp.QueueMessageWithEncoding(&msgBlock, dc, encoding)
+	sp.QueueMessageWithEncoding(rawBlockMsg, dc, encoding)
 
 	// When the peer requests the final block that was advertised in
 	// response to a getblocks message which requested more blocks than
@@ -1772,6 +1798,7 @@ func (s *server) handleRelayInvMsg(state *peerState, msg relayMsg) {
 			// }
 
 			s.handleRelayTxMsg(sp, msg, feeFilter)
+			return
 		}
 	})
 }
@@ -2658,6 +2685,8 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	if tSettings.ChainCfgParams.Name == "testnet" {
 		activeNetParams = &testNetParams
+	} else if tSettings.ChainCfgParams.Name == "teratestnet" {
+		activeNetParams = &teraTestNetParams
 	} else if tSettings.ChainCfgParams.Name == "regtest" {
 		activeNetParams = &regressionNetParams
 	}
@@ -2694,11 +2723,47 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	services &^= wire.SFNodeBloom
 	// cfg.NoCFilters
 	services &^= wire.SFNodeCF
-	// cfg.Prune
 
-	services &^= wire.SFNodeNetwork
-	services |= wire.SFNodeNetworkLimited
-	// services |= wire.SFNodeNetwork
+	// Determine node type (full vs pruned) based on block persister status
+	// This uses the same logic as the P2P service to ensure consistent advertising
+	var bestHeight uint32
+	var blockPersisterHeight uint32
+
+	// Get current best height and block persister height
+	if blockchainClient != nil {
+		if _, bestBlockMeta, err := blockchainClient.GetBestBlockHeader(ctx); err == nil && bestBlockMeta != nil {
+			bestHeight = bestBlockMeta.Height
+		}
+
+		// Query block persister height from blockchain state
+		if stateData, err := blockchainClient.GetState(ctx, "BlockPersisterHeight"); err == nil && len(stateData) >= 4 {
+			blockPersisterHeight = binary.LittleEndian.Uint32(stateData)
+		}
+	}
+
+	retentionWindow := uint32(0)
+	if tSettings.GlobalBlockHeightRetention > 0 {
+		retentionWindow = tSettings.GlobalBlockHeightRetention
+	}
+
+	prunerBlockTrigger := ""
+	if tSettings != nil {
+		prunerBlockTrigger = tSettings.Pruner.BlockTrigger
+	}
+
+	storage := util.DetermineStorageMode(blockPersisterHeight, bestHeight, retentionWindow, prunerBlockTrigger)
+	logger.Infof("Legacy service determined storage mode: %s (persisterHeight=%d, bestHeight=%d, retention=%d)",
+		storage, blockPersisterHeight, bestHeight, retentionWindow)
+
+	if storage == "full" {
+		// Advertise as full node
+		services |= wire.SFNodeNetwork
+		services &^= wire.SFNodeNetworkLimited
+	} else {
+		// Advertise as pruned node
+		services &^= wire.SFNodeNetwork
+		services |= wire.SFNodeNetworkLimited
+	}
 
 	peersDir := cfg.DataDir
 	if !tSettings.Legacy.SavePeers {

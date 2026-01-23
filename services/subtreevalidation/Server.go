@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -117,14 +116,8 @@ type Server struct {
 	// invalidSubtreeDeDuplicateMap is used to de-duplicate invalid subtree messages
 	invalidSubtreeDeDuplicateMap *expiringmap.ExpiringMap[string, struct{}]
 
-	// orphanage is used to store transactions that are missing parents that can be validated later
-	orphanage *expiringmap.ExpiringMap[chainhash.Hash, *bt.Tx]
-
-	// orphanageLock is used to make sure we only process the orphanage once at a time
-	orphanageLock sync.Mutex
-
-	// pauseSubtreeProcessing is used to pause subtree processing while a block is being processed
-	pauseSubtreeProcessing atomic.Bool
+	// orphanage manages orphaned transactions that are missing their parent transactions
+	orphanage *Orphanage
 
 	// bestBlockHeader is used to store the current best block header
 	bestBlockHeader atomic.Pointer[model.BlockHeader]
@@ -134,6 +127,10 @@ type Server struct {
 
 	// currentBlockIDsMap is used to store the current block IDs for the current best block height
 	currentBlockIDsMap atomic.Pointer[map[uint32]bool]
+
+	// p2pClient interfaces with the P2P service
+	// Used to report successful subtree fetches to improve peer reputation
+	p2pClient P2PClientI
 }
 
 var (
@@ -179,6 +176,7 @@ func New(
 	blockchainClient blockchain.ClientI,
 	subtreeConsumerClient kafka.KafkaConsumerGroupI,
 	txmetaConsumerClient kafka.KafkaConsumerGroupI,
+	p2pClient P2PClientI,
 ) (*Server, error) {
 	u := &Server{
 		logger:                            logger,
@@ -195,16 +193,16 @@ func New(
 		subtreeConsumerClient:             subtreeConsumerClient,
 		txmetaConsumerClient:              txmetaConsumerClient,
 		invalidSubtreeDeDuplicateMap:      expiringmap.New[string, struct{}](time.Minute * 1),
-		orphanage:                         expiringmap.New[chainhash.Hash, *bt.Tx](tSettings.SubtreeValidation.OrphanageTimeout),
+		p2pClient:                         p2pClient,
 	}
 
 	var err error
 
-	u.orphanage.WithEvictionFunction(func(hash chainhash.Hash, tx *bt.Tx) bool {
-		u.logger.Debugf("[SubtreeValidation] Orphanage eviction for tx %s", hash.String())
-
-		return false
-	})
+	// Initialize orphanage
+	u.orphanage, err = NewOrphanage(tSettings.SubtreeValidation.OrphanageTimeout, tSettings.SubtreeValidation.OrphanageMaxSize, logger)
+	if err != nil {
+		return nil, errors.NewConfigurationError("Failed to create orphanage: %v", err)
+	}
 
 	once.Do(func() {
 		quorumPath := tSettings.SubtreeValidation.QuorumPath
@@ -537,9 +535,8 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 // allowing in-progress operations to complete when possible and releasing
 // all resources properly. It follows a consistent shutdown sequence that:
 // 1. Stops accepting new requests
-// 2. Pauses Kafka consumers to prevent new messages from being processed
-// 3. Waits for in-progress operations to complete (with reasonable timeouts)
-// 4. Closes connections and releases resources
+// 2. Waits for in-progress operations to complete (with reasonable timeouts)
+// 3. Closes connections and releases resources
 //
 // The method is designed to be called when the service needs to be terminated,
 // either for normal shutdown or in response to system signals.
@@ -818,9 +815,6 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 }
 
 func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, blockHeight uint32, blockIds map[uint32]bool) {
-	u.orphanageLock.Lock()
-	defer u.orphanageLock.Unlock()
-
 	initialLength := u.orphanage.Len()
 
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processOrphans",
@@ -850,7 +844,7 @@ func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, b
 			})
 		}
 
-		maxLevel, txsPerLevel, err := u.prepareTxsPerLevel(ctx, orphanMissingTxs)
+		maxLevel, txsPerLevel, err := u.selectPrepareTxsPerLevel(ctx, orphanMissingTxs)
 		if err != nil {
 			u.logger.Errorf("[CheckSubtreeFromBlock] Failed to prepare transactions per level: %v", err)
 			return
@@ -865,7 +859,7 @@ func (u *Server) processOrphans(ctx context.Context, blockHash chainhash.Hash, b
 				tx := mTx.tx
 
 				g.Go(func() error {
-					txMeta, txErr := u.blessMissingTransaction(gCtx, blockHash, tx, blockHeight+1, blockIds, processedValidatorOptions)
+					txMeta, txErr := u.blessMissingTransaction(gCtx, blockHash, chainhash.Hash{}, tx, blockHeight+1, blockIds, processedValidatorOptions)
 					if txErr == nil && txMeta != nil {
 						// transaction was successfully blessed, now remove it from the orphanage
 						u.orphanage.Delete(*tx.TxIDChainHash())

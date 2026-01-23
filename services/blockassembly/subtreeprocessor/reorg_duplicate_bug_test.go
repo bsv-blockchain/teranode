@@ -8,7 +8,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/model"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
@@ -50,8 +49,14 @@ func setupTestSubtreeProcessor(t *testing.T) *SubtreeProcessor {
 	})
 
 	// Create SubtreeProcessor
-	stp, err := NewSubtreeProcessor(context.Background(), ulogger.TestLogger{}, settings, blobStore, nil, utxoStore, newSubtreeChan)
+	stp, err := NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, settings, blobStore, nil, utxoStore, newSubtreeChan)
 	require.NoError(t, err)
+
+	// Start processing and ensure cleanup
+	stp.Start(t.Context())
+	t.Cleanup(func() {
+		stp.Stop(context.Background())
+	})
 
 	return stp
 }
@@ -66,19 +71,19 @@ func TestReorgDuplicateTransactionBug(t *testing.T) {
 
 		// Create a transaction that will appear in multiple subtrees
 		duplicateTxHash := chainhash.HashH([]byte("duplicate_tx_in_reorg"))
-		duplicateNode := subtreepkg.SubtreeNode{
+		duplicateNode := subtreepkg.Node{
 			Hash:        duplicateTxHash,
 			Fee:         1000,
 			SizeInBytes: 250,
 		}
 
 		// Create some unique transactions for variety
-		uniqueTx1 := subtreepkg.SubtreeNode{
+		uniqueTx1 := subtreepkg.Node{
 			Hash:        chainhash.HashH([]byte("unique_1")),
 			Fee:         500,
 			SizeInBytes: 200,
 		}
-		uniqueTx2 := subtreepkg.SubtreeNode{
+		uniqueTx2 := subtreepkg.Node{
 			Hash:        chainhash.HashH([]byte("unique_2")),
 			Fee:         600,
 			SizeInBytes: 180,
@@ -113,7 +118,7 @@ func TestReorgDuplicateTransactionBug(t *testing.T) {
 		require.NoError(t, err)
 		// Add filler to make it look more realistic
 		fillerHash := chainhash.HashH([]byte("filler"))
-		err = subtree3.AddSubtreeNode(subtreepkg.SubtreeNode{Hash: fillerHash, Fee: 300, SizeInBytes: 150})
+		err = subtree3.AddSubtreeNode(subtreepkg.Node{Hash: fillerHash, Fee: 300, SizeInBytes: 150})
 		require.NoError(t, err)
 
 		// Simulate the state during a reorg where we're processing our own block
@@ -128,7 +133,7 @@ func TestReorgDuplicateTransactionBug(t *testing.T) {
 
 		// Create currentTxMap that contains all the transactions
 		// This simulates the state where these transactions were in the mempool
-		currentTxMap := txmap.NewSyncedMap[chainhash.Hash, subtreepkg.TxInpoints]()
+		currentTxMap := NewSplitTxInpointsMap(256)
 
 		// Pre-populate currentTxMap with all transactions (simulating they were in mempool)
 		// Use a common parent hash instead of self-reference
@@ -136,7 +141,7 @@ func TestReorgDuplicateTransactionBug(t *testing.T) {
 		for _, subtree := range chainedSubtrees {
 			for _, node := range subtree.Nodes {
 				if !node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
-					currentTxMap.Set(node.Hash, subtreepkg.TxInpoints{
+					currentTxMap.Set(node.Hash, &subtreepkg.TxInpoints{
 						ParentTxHashes: []chainhash.Hash{parentHash}, // Use common parent instead of self-reference
 					})
 				}
@@ -218,8 +223,8 @@ func countTransactionInSubtreesForTest(stp *SubtreeProcessor, txHash chainhash.H
 	}
 
 	// Check current subtree
-	if stp.currentSubtree != nil {
-		for _, node := range stp.currentSubtree.Nodes {
+	if currentSubtree := stp.currentSubtree.Load(); currentSubtree != nil {
+		for _, node := range currentSubtree.Nodes {
 			if node.Hash.Equal(txHash) {
 				count++
 			}

@@ -46,14 +46,10 @@ type Server struct {
     // blockchainClient interfaces with the blockchain service to retrieve block data
     // and coordinate persistence operations with blockchain state
     blockchainClient blockchain.ClientI
-
-    // state manages the persister's internal state, tracking which blocks have been
-    // successfully persisted and allowing for recovery after interruptions
-    state *state.State
 }
 ```
 
-The `Server` type is the main structure for the Block Persister Service. It contains components for managing stores, blockchain interactions, and state management.
+The `Server` type is the main structure for the Block Persister Service. It contains components for managing stores and blockchain interactions.
 
 ## Functions
 
@@ -70,13 +66,13 @@ func New(
     subtreeStore blob.Store,
     utxoStore utxo.Store,
     blockchainClient blockchain.ClientI,
-    opts ...func(*Server)
+    opts ...func(*Server),
 ) *Server
 ```
 
 Creates a new instance of the `Server` with the provided dependencies.
 
-This constructor initializes all components required for block persistence operations, including stores, state management, and client connections. It accepts optional configuration functions to customize the server instance after construction.
+This constructor initializes all components required for block persistence operations, including stores and client connections. It accepts optional configuration functions to customize the server instance after construction.
 
 Parameters:
 
@@ -90,21 +86,6 @@ Parameters:
 - opts: Optional configuration functions to apply after construction
 
 Returns a fully constructed and configured Server instance ready for initialization.
-
-#### WithSetInitialState
-
-```go
-func WithSetInitialState(height uint32, hash *chainhash.Hash) func(*Server)
-```
-
-WithSetInitialState is an optional configuration function that sets the initial state of the block persister server. This can be used during initialization to establish a known starting point for block persistence operations.
-
-Parameters:
-
-- height: The blockchain height to set as the initial state
-- hash: The block hash corresponding to the specified height
-
-Returns a function that, when called with a Server instance, will set the initial state of that server. If the state cannot be set, an error is logged but not returned.
 
 #### Health
 
@@ -197,6 +178,14 @@ Returns an error if shutdown fails, or nil on successful shutdown.
 
 ### Internal Methods
 
+#### getNextBlockToProcess
+
+```go
+func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error)
+```
+
+Retrieves the next block that needs to be processed based on the current state and configuration. This method determines the next block to persist by comparing the last persisted block height with the current blockchain tip. It ensures blocks are persisted in sequence without gaps and respects the configured persistence age policy to control how far behind persistence can lag.
+
 #### persistBlock
 
 ```go
@@ -237,17 +226,16 @@ This is a core function of the blockpersister service that handles the complete 
 func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error)
 ```
 
-Retrieves the next block that needs to be processed based on the current state and configuration.
+Retrieves the next block that needs to be persisted to blob storage.
 
-This method determines the next block to persist by comparing the last persisted block height with the current blockchain tip. It ensures blocks are persisted in sequence without gaps and respects the configured persistence age policy to control how far behind persistence can lag.
+This method queries the database for blocks that haven't been persisted yet (persisted_at IS NULL) and aren't marked as invalid. The database stores block metadata and tracks persistence status, eliminating the need for external state files.
 
 !!! info "Processing Logic"
     The method follows these steps:
 
-    1. **Get the last persisted block height** from the state
-    2. **Get the current best block** from the blockchain
-    3. **If the difference exceeds BlockPersisterPersistAge**, return the next block
-    4. **Otherwise, return nil** to indicate no blocks need processing yet
+    1. **Query database** for blocks where `persisted_at IS NULL AND invalid = false`
+    2. **Retrieve one block** (limit=1) in ascending height order
+    3. **Return the block** if found, or nil if no blocks need processing
 
 **Parameters:**
 
@@ -315,41 +303,76 @@ This internal method handles the two-stage process of loading subtree informatio
 
 ### Subtree Processing
 
-#### ProcessSubtree
+Block persistence uses a **two-phase approach** to process subtrees efficiently while maintaining data integrity:
+
+#### Phase 1: CreateSubtreeDataFileStreaming
 
 ```go
-func (u *Server) ProcessSubtree(pCtx context.Context, subtreeHash chainhash.Hash, coinbaseTx *bt.Tx) error
+func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash chainhash.Hash, block *model.Block, subtreeIndex int) error
 ```
 
-Processes a subtree of transactions, validating and storing them.
-
-A subtree represents a hierarchical structure containing transaction references that make up part of a block. This method retrieves a subtree from the subtree store, processes all the transactions it contains, and creates subtree data for persistent storage.
+Creates subtree data files using streaming writes. This phase runs **in parallel** across all subtrees with configurable concurrency.
 
 !!! note "Processing Steps"
-    The process follows these key steps:
-
     1. **Check if subtree data already exists** - if it does, just set DAH and skip processing
     2. **Retrieve the subtree** from the subtree store using its hash
-    3. **Create subtree data** from the subtree structure
-    4. **Add coinbase transaction** if the first node is a coinbase placeholder
-    5. **Process transaction metadata** using the store
-    6. **Serialize and store** the complete subtree data
+    3. **Load transaction metadata** from the UTXO store (batched or individual)
+    4. **Stream write** the subtree data file using `SubtreeDataWriter`
+    5. **Abort on error** - incomplete files are automatically cleaned up
 
-!!! tip "Performance Optimization"
-    The method includes an optimization to skip processing if subtree data already exists, only updating the Delete-At-Height (DAH) setting for persistence.
+#### Phase 2: ProcessSubtreeUTXOStreaming
 
-**Parameters:**
+```go
+func (u *Server) ProcessSubtreeUTXOStreaming(ctx context.Context, subtreeHash chainhash.Hash, utxoDiff *utxopersister.UTXOSet) error
+```
 
-- `pCtx`: Parent context for the operation, used for cancellation and tracing
-- `subtreeHash`: Hash identifier of the subtree to process
-- `coinbaseTx`: The coinbase transaction for the block containing this subtree
+Processes UTXO changes by reading from the subtree data files. This phase runs **sequentially** to maintain UTXO ordering.
 
-**Returns** an error if any part of the subtree processing fails. Errors are wrapped with appropriate context to identify the specific failure point (storage, processing, etc.).
+!!! note "Processing Steps"
+    1. **Open subtree data file** for streaming read
+    2. **Process each transaction** through the UTXO diff tracker
+    3. **Record additions and deletions** to the UTXO set
 
-!!! warning "Atomicity Note"
-    Processing is not atomic across multiple subtrees - each subtree is processed individually, allowing partial block processing to succeed even if some subtrees fail.
+#### SubtreeDataWriter
 
-#### WriteTxs
+```go
+type SubtreeDataWriter struct {
+    storer      *filestorer.FileStorer
+    nextBatchID int
+    // ... additional fields
+}
+```
+
+The `SubtreeDataWriter` provides **ordered batch writes** for subtree data. It ensures batches are written in the correct order even when produced concurrently.
+
+**Key Methods:**
+
+- `WriteBatch(batchID int, txData [][]byte) error`: Writes a batch of transaction data at the specified position
+- `Close() error`: Finalizes the file (aborts if batches are pending)
+- `Abort(err error)`: Aborts the write operation without finalizing
+
+!!! tip "Error Safety"
+    If `Close()` is called while batches are still pending (gaps in batch sequence), the writer automatically aborts instead of finalizing an incomplete file.
+
+#### Helper Functions
+
+##### readSubtree
+
+```go
+func (u *Server) readSubtree(ctx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Subtree, error)
+```
+
+Reads a subtree from the subtree store by its hash. This method attempts to retrieve the subtree from storage, trying both regular subtree files and subtrees marked for checking if the primary lookup fails.
+
+##### processTxMetaUsingStore
+
+```go
+func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData) error
+```
+
+Processes transaction metadata using the UTXO store. This method handles the retrieval and processing of transaction metadata for all transactions in a subtree, with support for both batched and individual transaction processing modes.
+
+#### Legacy: WriteTxs
 
 ```go
 func WriteTxs(_ context.Context, logger ulogger.Logger, writer *filestorer.FileStorer, txs []*bt.Tx, utxoDiff *utxopersister.UTXOSet) error
@@ -395,7 +418,6 @@ The service uses settings from the `settings.Settings` structure, primarily focu
 
 #### Storage Configuration
 
-- **`Block.StateFile`**: File path for state storage. This file maintains persistence state across service restarts.
 - **`Block.BlockStore`**: Block store URL. Defines the location of the blob store used for block data.
 
 #### Network Configuration
@@ -404,7 +426,6 @@ The service uses settings from the `settings.Settings` structure, primarily focu
 
 #### Processing Configuration
 
-- **`Block.BlockPersisterPersistAge`**: Age threshold (in blocks) for block persistence. Controls how far behind the current tip blocks will be persisted. Higher values allow more blocks to accumulate before persistence occurs.
 - **`Block.BlockPersisterPersistSleep`**: Sleep duration between processing attempts when no blocks are available to process. Specified in milliseconds.
 - **`Block.BatchMissingTransactions`**: When true, enables batched retrieval of transaction metadata, which improves performance for high transaction volumes by reducing individual store requests.
 
@@ -418,15 +439,6 @@ The service uses settings from the `settings.Settings` structure, primarily focu
     - **Subtree Store**: Storage for block subtrees containing transaction references
     - **UTXO Store**: Storage for the current UTXO set and processing changes
 
-## State Management
-
-The service maintains persistence state through the `state.State` component:
-
-!!! gear "State Management Features"
-    - **Tracks last persisted block height** for sequential processing
-    - **Manages block hash records** for integrity verification
-    - **Provides atomic state updates** for consistency
-
 ## Error Handling
 
 !!! warning "Error Handling Strategy"
@@ -435,7 +447,54 @@ The service maintains persistence state through the `state.State` component:
     - **Storage errors**: Trigger retries after delay
     - **Processing errors**: Logged with context for debugging
     - **Configuration errors**: Prevent service startup
-    - **State management errors**: Trigger recovery procedures
+    - **Database errors**: Logged and service retries after delay
+
+### Streaming Write Error Recovery
+
+The Block Persister uses streaming writes via `FileStorer` and `SubtreeDataWriter` to efficiently handle large files without loading them entirely into memory. These streaming writers implement a **success-flag pattern** to ensure incomplete files are never finalized:
+
+!!! abstract "Abort Mechanism"
+    When an error occurs during streaming writes (e.g., missing transaction metadata, store failures):
+
+    1. **FileStorer.Abort()** is called instead of `Close()`
+    2. The underlying `io.PipeWriter` is closed with an error via `CloseWithError()`
+    3. The blob store's `SetFromReader` detects the error and **removes the temporary file**
+    4. No incomplete file is left in the blob store
+
+**Pattern used in Block Persister:**
+
+```go
+storer, err := filestorer.NewFileStorer(ctx, logger, settings, store, key, fileType)
+if err != nil {
+    return err
+}
+
+var writeSucceeded bool
+defer func() {
+    if writeSucceeded {
+        storer.Close(ctx)  // Finalizes the file
+    } else {
+        storer.Abort(err)  // Removes temp file, no incomplete data saved
+    }
+}()
+
+// ... streaming write operations ...
+
+writeSucceeded = true
+return nil
+```
+
+!!! tip "SubtreeDataWriter"
+    The `SubtreeDataWriter` wraps `FileStorer` and provides an `Abort()` method that propagates to the underlying storer. If `Close()` is called while batches are still pending (indicating incomplete processing), it automatically aborts instead of finalizing.
+
+### Temporary File Cleanup
+
+The file-based blob store implements automatic cleanup of stale temporary files:
+
+- Temporary files use `.tmp` extension during writes
+- On successful write, temp files are atomically renamed to final names
+- On error/abort, temp files are immediately deleted
+- During store initialization, stale `.tmp` files older than 10 minutes are automatically cleaned up
 
 ## Metrics
 
@@ -462,20 +521,28 @@ Required components:
 ### Block Processing Loop
 
 !!! abstract "Block Processing Steps"
-    1. **Check for next block** to process based on persistence age
+    1. **Query database** for blocks not yet persisted
     2. **Retrieve block data** if available
     3. **Persist block data** to storage
-    4. **Update state** with successful persistence
+    4. **Mark block as persisted** in database via `SetBlockPersistedAt`
     5. **Sleep** if no blocks available or on error
 
-### Subtree Processing Flow
+### Subtree Processing Flow (Two-Phase)
 
-!!! abstract "Subtree Processing Steps"
-    1. **Retrieve subtree data** from store
-    2. **Process transaction metadata** for all transactions
-    3. **Write transactions** to storage
-    4. **Update UTXO set** with changes
-    5. **Handle errors** with appropriate recovery
+!!! abstract "Phase 1: Create Subtree Data Files (Parallel)"
+    1. **Check if subtree data exists** - skip if already created
+    2. **Retrieve subtree structure** from subtree store
+    3. **Load transaction metadata** from UTXO store (batched)
+    4. **Stream write subtree data** using `SubtreeDataWriter`
+    5. **Abort on error** - incomplete files are cleaned up automatically
+
+!!! abstract "Phase 2: Process UTXO Changes (Sequential)"
+    1. **Open subtree data file** for streaming read
+    2. **Process each transaction** through UTXO diff tracker
+    3. **Record additions and deletions** to UTXO set files
+
+!!! tip "Performance Benefit"
+    Phase 1 runs in parallel across all subtrees with configurable concurrency, while Phase 2 runs sequentially to maintain UTXO ordering. This separation allows maximum parallelism for I/O-bound file creation while ensuring correct UTXO state.
 
 ## Health Checks
 

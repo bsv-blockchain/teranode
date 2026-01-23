@@ -16,7 +16,10 @@ export const addNumCommas = (value, round = -1, defaultValue = '') => {
     return defaultValue
   }
   if (round !== -1) {
-    value = value.toFixed(round)
+    return new Intl.NumberFormat(undefined, {
+      minimumFractionDigits: round,
+      maximumFractionDigits: round,
+    }).format(value)
   }
   return new Intl.NumberFormat().format(value)
 }

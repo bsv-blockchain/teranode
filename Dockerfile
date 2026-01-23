@@ -30,13 +30,13 @@ RUN echo "Building Git SHA: ${GIT_SHA}"
 
 # Build with $BUILD_JOBS parallel jobs
 RUN if [ "$TXMETA_SMALL_TAG" = "true" ]; then \
-      TXMETA_SMALL_TAG=true GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
+      CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} TXMETA_SMALL_TAG=true GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
     else \
-      GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
+      CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build -j ${BUILD_JOBS}; \
     fi
 
 # Build teranode-cli
-RUN GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build-teranode-cli
+RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GIT_VERSION="${GIT_VERSION}" GIT_COMMIT="${GIT_COMMIT}" GIT_SHA="${GIT_SHA}" make build-teranode-cli
 
 # This could be run in the ${BASE_IMG} so we don't have to do it on every build, but it's not a big deal and this is pretty quick
 ENV GOPATH=/go
@@ -57,6 +57,11 @@ RUN chmod +x ./wait.sh
 
 ENV LD_LIBRARY_PATH=/app:${LD_LIBRARY_PATH}
 ENV PATH=/app:$PATH
+
+# Set GOGC=200 to reduce GC aggressiveness (default is 100)
+# Higher values trade memory for less frequent GC pauses
+# Can be overridden at deployment time via docker-compose or Kubernetes
+ENV GOGC=200
 
 # Set the entrypoint to the library
 ENTRYPOINT ["./teranode.run"]

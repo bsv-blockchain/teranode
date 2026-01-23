@@ -15,6 +15,7 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/test"
 	postgres "github.com/bsv-blockchain/teranode/test/longtest/util/postgres"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/ordishs/gocore"
@@ -43,15 +44,17 @@ func TestShouldAllowFairTxUseRpcWithPostgres(t *testing.T) {
 	pgStore := fmt.Sprintf("postgres://teranode:teranode@localhost:%s/teranode?expiration=5m", pg.Port)
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(tSettings *settings.Settings) {
-			url, err := url.Parse(pgStore)
-			require.NoError(t, err)
-			tSettings.BlockChain.StoreURL = url
-			tSettings.Coinbase.Store = url
-			tSettings.UtxoStore.UtxoStore = url
-		},
+		EnableRPC: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(tSettings *settings.Settings) {
+				url, err := url.Parse(pgStore)
+				require.NoError(t, err)
+				tSettings.BlockChain.StoreURL = url
+				tSettings.Coinbase.Store = url
+				tSettings.UtxoStore.UtxoStore = url
+			},
+		),
 	})
 
 	defer td.Stop(t)
@@ -263,8 +266,8 @@ func TestShouldNotProcessNonFinalTxWithPostgres(t *testing.T) {
 	defer SharedTestLock.Unlock()
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		SettingsContext: "dev.system.test",
+		EnableRPC:            true,
+		SettingsOverrideFunc: test.SystemTestSettings(),
 	})
 
 	defer td.Stop(t)

@@ -105,12 +105,8 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	defer func() {
 		err = errors.Join(err, rows.Close())
 
+		// Invalidate response cache to ensure cached blocks reflect updated invalid field
 		s.ResetResponseCache()
-
-		if err = s.ResetBlocksCache(ctx); err != nil {
-			err = errors.Join(err, errors.NewStorageError("error clearing caches", err))
-			return
-		}
 	}()
 
 	for rows.Next() {

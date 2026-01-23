@@ -171,12 +171,12 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 
 				switch notification.Type {
 				case model.NotificationType_FSMState:
-					c.logger.Infof("[Blockchain] Received FSM state notification for %s: %s", source, notification.GetMetadata().String())
+					c.logger.Debugf("[Blockchain] Received FSM state notification for %s: %s", source, notification.GetMetadata().String())
 					// update the local FSM state variable
 					metadata := notification.Metadata.Metadata
 					newState := FSMStateType(blockchain_api.FSMStateType_value[metadata["destination"]])
 					c.fmsState.Store(&newState)
-					c.logger.Infof("[Blockchain] Updated FSM state in c.fsmState: %s ", c.fmsState.Load())
+					c.logger.Debugf("[Blockchain] Updated FSM state in c.fsmState: %s ", c.fmsState.Load())
 				default:
 					// send the notification to all subscribers
 					c.subscribersMu.Lock()
@@ -627,6 +627,25 @@ func (c *Client) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint
 	}
 
 	return resp.GetIsPartOfCurrentChain(), nil
+}
+
+// CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
+// This is used for double-spend detection on fork blocks where we need to check against
+// the fork's ancestor chain rather than the main chain.
+func (c *Client) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	if len(blockIDs) == 0 {
+		return false, nil
+	}
+
+	resp, err := c.client.CheckBlockIsAncestorOfBlock(ctx, &blockchain_api.CheckBlockIsAncestorOfBlockRequest{
+		BlockIDs:  blockIDs,
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.GetIsAncestor(), nil
 }
 
 // GetChainTips retrieves information about all known tips in the block tree.
@@ -1364,6 +1383,17 @@ func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash
 	return nil
 }
 
+func (c *Client) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.ClearBlockMinedSet(ctx, &blockchain_api.ClearBlockMinedSetRequest{
+		BlockHash: blockHash[:],
+	})
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
 // GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 // This method identifies and returns blocks that have been processed and stored
 // but have not yet completed the mining pipeline and been marked as mined.
@@ -2078,4 +2108,36 @@ func (c *Client) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.H
 	}
 
 	return nil
+}
+
+// SetBlockPersistedAt updates the persisted_at timestamp for a block.
+// This marks the block as having been persisted to blob storage.
+func (c *Client) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	_, err := c.client.SetBlockPersistedAt(ctx, &blockchain_api.SetBlockPersistedAtRequest{
+		BlockHash: blockHash.CloneBytes(),
+	})
+
+	return err
+}
+
+// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+func (c *Client) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	resp, err := c.client.GetBlocksNotPersisted(ctx, &blockchain_api.GetBlocksNotPersistedRequest{
+		Limit: int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	blocks := make([]*model.Block, len(resp.BlockBytes))
+
+	for i, blockBytes := range resp.BlockBytes {
+		block, err := model.NewBlockFromBytes(blockBytes)
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to deserialize block", err)
+		}
+		blocks[i] = block
+	}
+
+	return blocks, nil
 }

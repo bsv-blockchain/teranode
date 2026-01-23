@@ -14,10 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -780,11 +783,12 @@ func TestHealth(t *testing.T) {
 
 	t.Run("readiness check - with mock blockchain client", func(t *testing.T) {
 		// Create a mock blockchain client
-		mockBlockchainClient := &mockBlockchainClient{
-			healthFunc: func(ctx context.Context, checkLiveness bool) (int, string, error) {
-				return http.StatusOK, "Blockchain healthy", nil
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("Health", mock.Anything, mock.Anything).Return(
+			http.StatusOK, "Blockchain healthy", nil,
+		)
+		runningState := blockchain_api.FSMStateType_RUNNING
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -823,11 +827,12 @@ func TestHealth(t *testing.T) {
 
 	t.Run("readiness check - unhealthy dependency", func(t *testing.T) {
 		// Create a mock blockchain client that reports unhealthy
-		mockBlockchainClient := &mockBlockchainClient{
-			healthFunc: func(ctx context.Context, checkLiveness bool) (int, string, error) {
-				return http.StatusServiceUnavailable, "Database connection failed", assert.AnError
-			},
-		}
+		mockBlockchainClient := &blockchain.Mock{}
+		mockBlockchainClient.On("Health", mock.Anything, mock.Anything).Return(
+			http.StatusServiceUnavailable, "Database connection failed", assert.AnError,
+		)
+		runningState := blockchain_api.FSMStateType_RUNNING
+		mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		s := &RPCServer{
 			logger:           logger,
@@ -839,7 +844,7 @@ func TestHealth(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusServiceUnavailable, status)
 		assert.Contains(t, message, `"status":"503"`)
-		assert.Contains(t, message, `Database connection failed`)
+		assert.Contains(t, message, `BlockchainClient`)
 	})
 }
 
@@ -909,7 +914,7 @@ func TestNewServer(t *testing.T) {
 			},
 		}
 
-		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil)
+		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil, nil, nil)
 
 		require.Error(t, err)
 		assert.Nil(t, server)
@@ -921,9 +926,13 @@ func TestNewServer(t *testing.T) {
 			Asset: settings.AssetSettings{
 				HTTPAddress: "not a valid url",
 			},
+			Propagation: settings.PropagationSettings{
+				GRPCAddresses: []string{"localhost:9090"},
+				HTTPAddresses: []string{"http://localhost:9091"},
+			},
 		}
 
-		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil)
+		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil, nil, nil)
 
 		require.Error(t, err)
 		assert.Nil(t, server)
@@ -935,12 +944,16 @@ func TestNewServer(t *testing.T) {
 			Asset: settings.AssetSettings{
 				HTTPAddress: "http://localhost:8090",
 			},
+			Propagation: settings.PropagationSettings{
+				GRPCAddresses: []string{"localhost:9090"},
+				HTTPAddresses: []string{"http://localhost:9091"},
+			},
 			RPC: settings.RPCSettings{
 				RPCListenerURL: nil, // Missing listener URL
 			},
 		}
 
-		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil)
+		server, err := NewServer(logger, settings, nil, nil, nil, nil, nil, nil, nil, nil)
 
 		require.Error(t, err)
 		assert.Nil(t, server)

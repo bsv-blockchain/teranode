@@ -7,6 +7,8 @@
 package subtreeprocessor
 
 import (
+	"context"
+
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -14,6 +16,9 @@ import (
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/stretchr/testify/mock"
 )
+
+// check that MockSubtreeProcessor implements Interface
+var _ Interface = (*MockSubtreeProcessor)(nil)
 
 // MockSubtreeProcessor implements a mock version of the Interface for testing.
 // This mock provides controllable implementations of all Interface methods,
@@ -32,14 +37,19 @@ type MockSubtreeProcessor struct {
 	mock.Mock
 }
 
-func (m *MockSubtreeProcessor) GetCurrentTxMap() *txmap.SyncedMap[chainhash.Hash, subtree.TxInpoints] {
+func (m *MockSubtreeProcessor) GetCurrentTxMap() TxInpointsMap {
 	args := m.Called()
-	return args.Get(0).(*txmap.SyncedMap[chainhash.Hash, subtree.TxInpoints])
+	return args.Get(0).(TxInpointsMap)
 }
 
-func (m *MockSubtreeProcessor) GetRemoveMap() *txmap.SwissMap {
+func (m *MockSubtreeProcessor) GetRemoveMap() txmap.TxMap {
 	args := m.Called()
-	return args.Get(0).(*txmap.SwissMap)
+	return args.Get(0).(txmap.TxMap)
+}
+
+func (m *MockSubtreeProcessor) GetRemoveMapLength() int {
+	args := m.Called()
+	return args.Int(0)
 }
 
 func (m *MockSubtreeProcessor) GetCurrentRunningState() State {
@@ -50,6 +60,10 @@ func (m *MockSubtreeProcessor) GetCurrentRunningState() State {
 func (m *MockSubtreeProcessor) GetCurrentLength() int {
 	args := m.Called()
 	return args.Int(0)
+}
+
+func (m *MockSubtreeProcessor) Start(ctx context.Context) {
+	m.Called(ctx)
 }
 
 func (m *MockSubtreeProcessor) Reset(blockHeader *model.BlockHeader, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block, isLegacySync bool, postProcess func() error) ResetResponse {
@@ -72,6 +86,11 @@ func (m *MockSubtreeProcessor) GetCurrentSubtree() *subtree.Subtree {
 		return nil
 	}
 	return args.Get(0).(*subtree.Subtree)
+}
+
+func (m *MockSubtreeProcessor) GetCurrentSubtreeSize() int {
+	args := m.Called()
+	return args.Get(0).(int)
 }
 
 func (m *MockSubtreeProcessor) GetChainedSubtrees() []*subtree.Subtree {
@@ -122,13 +141,24 @@ func (m *MockSubtreeProcessor) SubtreeCount() int {
 	return args.Int(0)
 }
 
-// Add implements Interface.Add
-func (m *MockSubtreeProcessor) Add(node subtree.SubtreeNode, txInpoints subtree.TxInpoints) {
-	m.Called(node, txInpoints)
+// AddBatch implements Interface.AddBatch
+func (m *MockSubtreeProcessor) AddBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
+	m.Called(nodes, txInpoints)
 }
 
-func (m *MockSubtreeProcessor) AddDirectly(node subtree.SubtreeNode, txInpoints subtree.TxInpoints, skipNotification bool) error {
+func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
 	args := m.Called(node, txInpoints, skipNotification)
+
+	if args.Get(0) == nil {
+		return nil
+	}
+
+	return args.Error(0)
+}
+
+// AddNodesDirectly implements Interface.AddNodesDirectly
+func (m *MockSubtreeProcessor) AddNodesDirectly(txs []*utxostore.UnminedTransaction, skipNotification bool) error {
+	args := m.Called(txs, skipNotification)
 
 	if args.Get(0) == nil {
 		return nil
@@ -156,8 +186,8 @@ func (m *MockSubtreeProcessor) Reorg(moveBackBlocks []*model.Block, modeUpBlocks
 }
 
 // Remove implements Interface.Remove
-func (m *MockSubtreeProcessor) Remove(hash chainhash.Hash) error {
-	args := m.Called(hash)
+func (m *MockSubtreeProcessor) Remove(ctx context.Context, hash chainhash.Hash) error {
+	args := m.Called(ctx, hash)
 	return args.Error(0)
 }
 
@@ -170,4 +200,14 @@ func (m *MockSubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*subtr
 // InitCurrentBlockHeader implements Interface.InitCurrentBlockHeader
 func (m *MockSubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHeader) {
 	m.Called(blockHeader)
+}
+
+func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+// Stop implements Interface.Stop
+func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
+	m.Called(ctx)
 }

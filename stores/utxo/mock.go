@@ -71,15 +71,18 @@ func (m *MockUtxostore) GetSpend(ctx context.Context, spend *Spend) (*SpendRespo
 
 // GetMeta mocks the retrieval of complete transaction metadata from the UTXO store.
 // Returns the configured mock response for full metadata lookup operations.
-func (m *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	args := m.Called(ctx, hash)
-	return args.Get(0).(*meta.Data), args.Error(1)
+func (m *MockUtxostore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	args := m.Called(ctx, hash, data)
+	if result := args.Get(0); result != nil {
+		*data = *result.(*meta.Data)
+	}
+	return args.Error(0)
 }
 
 // Spend mocks the spending of transaction outputs in the UTXO store.
 // Returns the configured mock response for transaction spending operations.
-func (m *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...IgnoreFlags) ([]*Spend, error) {
-	args := m.Called(ctx, tx, ignoreFlags)
+func (m *MockUtxostore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error) {
+	args := m.Called(ctx, tx, blockHeight, ignoreFlags)
 	return args.Get(0).([]*Spend), args.Error(1)
 }
 
@@ -203,6 +206,13 @@ func (m *MockUtxostore) GetMedianBlockTime() uint32 {
 	return args.Get(0).(uint32)
 }
 
+// GetBlockState mocks the retrieval of an atomic snapshot of both block height and median block time.
+// Returns the configured mock response for block state queries.
+func (m *MockUtxostore) GetBlockState() BlockState {
+	args := m.Called()
+	return args.Get(0).(BlockState)
+}
+
 // QueryOldUnminedTransactions mocks the querying of old unmined transactions before a cutoff height.
 // Returns the configured mock response for old unmined transaction queries.
 func (m *MockUtxostore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
@@ -225,16 +235,24 @@ func (m *MockUtxostore) ProcessExpiredPreservations(ctx context.Context, current
 }
 
 // MockUnminedTxIterator is a simple mock implementation of utxo.UnminedTxIterator for testing
-type MockUnminedTxIterator struct{}
+type MockUnminedTxIterator struct {
+	mock.Mock
+}
 
-func (m *MockUnminedTxIterator) Next(ctx context.Context) (*UnminedTransaction, error) {
-	return nil, nil // No more transactions
+func (m *MockUnminedTxIterator) Next(ctx context.Context) ([]*UnminedTransaction, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*UnminedTransaction), args.Error(1)
 }
 
 func (m *MockUnminedTxIterator) Err() error {
-	return nil
+	args := m.Called()
+	return args.Error(0)
 }
 
 func (m *MockUnminedTxIterator) Close() error {
-	return nil
+	args := m.Called()
+	return args.Error(0)
 }

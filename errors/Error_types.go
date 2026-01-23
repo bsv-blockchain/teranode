@@ -17,6 +17,7 @@ var (
 	ErrBlockInvalidFormat         = New(ERR_BLOCK_INVALID_FORMAT, "block format is invalid")
 	ErrBlockNotFound              = New(ERR_BLOCK_NOT_FOUND, "block not found")
 	ErrBlockParentNotMined        = New(ERR_BLOCK_PARENT_NOT_MINED, "block parent not mined")
+	ErrCatchupInProgress          = New(ERR_CATCHUP_IN_PROGRESS, "catchup in progress")
 	ErrConfiguration              = New(ERR_CONFIGURATION, "configuration error")
 	ErrContextCanceled            = New(ERR_CONTEXT_CANCELED, "context canceled")
 	ErrError                      = New(ERR_ERROR, "generic error")
@@ -156,6 +157,11 @@ func NewSubtreeError(message string, params ...interface{}) *Error {
 	return New(ERR_SUBTREE_ERROR, message, params...)
 }
 
+// NewSubtreeExistsError creates a new error with the subtree exists error code.
+func NewSubtreeExistsError(message string, params ...interface{}) *Error {
+	return New(ERR_SUBTREE_EXISTS, message, params...)
+}
+
 // NewTxNotFoundError creates a new error with the transaction not found error code.
 func NewTxNotFoundError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_NOT_FOUND, message, params...)
@@ -194,6 +200,11 @@ func NewTxConflictingError(message string, params ...interface{}) *Error {
 // NewTxLockedError creates a new error with the transaction locked error code.
 func NewTxLockedError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_LOCKED, message, params...)
+}
+
+// NewTxCreatingError creates a new error with the transaction creating error code.
+func NewTxCreatingError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_CREATING, message, params...)
 }
 
 // NewTxCoinbaseImmatureError creates a new error with the transaction coinbase immature error code.
@@ -279,6 +290,11 @@ func NewUtxoError(message string, params ...interface{}) *Error {
 // NewStateInitializationError creates a new error with the state initialization error code.
 func NewStateInitializationError(message string, params ...interface{}) *Error {
 	return New(ERR_STATE_INITIALIZATION, message, params...)
+}
+
+// NewCatchupInProgressError creates a new error with the catchup in progress error code.
+func NewCatchupInProgressError(message string, params ...interface{}) *Error {
+	return New(ERR_CATCHUP_IN_PROGRESS, message, params...)
 }
 
 // NewStateError creates a new error with the state error code.

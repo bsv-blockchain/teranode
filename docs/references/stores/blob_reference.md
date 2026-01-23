@@ -172,6 +172,7 @@ Note: `{key}` is a base64-encoded blob identifier and `{fileType}` is the file e
 3. **DAH Management**: Allows setting and retrieving Delete-At-Height values for blob lifecycle management.
 4. **Streaming**: Supports streaming for both storing and retrieving blobs.
 5. **Metadata Support**: Allows retrieving header and footer metadata from blobs.
+6. **Atomic Writes with Error Recovery**: `SetFromReader` uses temporary files and atomic rename, with automatic cleanup on errors.
 
 ## Error Handling
 
@@ -212,3 +213,44 @@ The service can be configured with various options through the `options.StoreOpt
 - Shutdown timeout: 5 seconds
 
 Query parameters are automatically converted to `options.FileOption` using `options.QueryToFileOptions()` for per-request configuration.
+
+## Streaming Write Safety (SetFromReader)
+
+The `SetFromReader` method provides safe streaming writes with automatic error recovery:
+
+### Atomic Write Pattern
+
+The file-based blob store implements atomic writes using temporary files:
+
+1. Data is written to a temporary file (`.tmp` extension)
+2. On success, the temp file is atomically renamed to the final filename
+3. On error (including reader errors), the temp file is automatically deleted
+
+### Abort Support via io.Pipe
+
+When using `io.Pipe` for streaming writes, callers can abort the write by calling `pipeWriter.CloseWithError(err)`:
+
+```go
+reader, writer := io.Pipe()
+
+go func() {
+    // Write data...
+    if err := someOperation(); err != nil {
+        // Abort: temp file will be cleaned up
+        writer.CloseWithError(err)
+        return
+    }
+    writer.Close()  // Success: file will be finalized
+}()
+
+err := store.SetFromReader(ctx, key, fileType, reader)
+```
+
+When the pipe is closed with an error:
+- `io.Copy` inside `SetFromReader` receives the error
+- The defer cleanup removes the temporary file
+- No incomplete data is left in storage
+
+### Stale Temporary File Cleanup
+
+During store initialization, the file store automatically cleans up stale `.tmp` files that are older than 10 minutes. This handles cases where the process crashed during a write operation.

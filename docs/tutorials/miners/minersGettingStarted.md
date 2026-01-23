@@ -96,7 +96,7 @@ cd $YOUR_WORKING_DIR/teranode/deploy/docker/testnet
 - Pull required images:
 
 ```bash
-docker-compose pull
+docker compose pull
 ```
 
 ### Step 3: Start Teranode
@@ -104,33 +104,51 @@ docker-compose pull
 - Launch all services:
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 Force the node to transition to Run mode:
 
+#### Option 1: Using Admin Dashboard (Easiest)
+
 ```bash
-grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.Run
+# Access the dashboard at http://localhost:8090/admin (default credentials bitcoin:bitcoin)
+# Navigate to FSM State section and select RUNNING or LEGACYSYNCING
 ```
 
-or LegacySync mode:
+> **Note:** The embedded dashboard is only available when Teranode is built with dashboard support (default in Docker images). The dashboard provides:
+>
+> - `/admin` - FSM management, block invalidation/revalidation (requires authentication)
+> - `/viewer` - Blockchain viewer (blocks, transactions, UTXOs, subtrees)
+> - `/home` - Node overview and statistics
+> - `/peers` - Peer management and reputation
+> - `/network` - Network status and connected nodes
+> - `/p2p` - P2P message monitor
+>
+> For comprehensive dashboard documentation, see [Dashboard Documentation](../../topics/dashboard.md).
+
+#### Option 2: Using teranode-cli
 
 ```bash
-grpcurl -plaintext localhost:8087 blockchain_api.BlockchainAPI.LegacySync
+# Transition to Run mode
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate RUNNING
+
+# Or transition to LegacySync mode
+docker exec -it blockchain teranode-cli setfsmstate --fsmstate LEGACYSYNCING
 ```
 
 - Verify services are running:
 
 ```bash
-docker-compose ps
+docker compose ps
 ```
 
 - Check individual service logs:
 
 ```bash
 # Example commands
-docker-compose logs asset
-docker-compose logs blockchain
+docker compose logs asset
+docker compose logs blockchain
 ```
 
 - Verify legacy sync status:
@@ -138,7 +156,7 @@ docker-compose logs blockchain
 When the node is started for the first time, its first action is to perform a initial blockchain sync. You can check the sync progress by checking the Legacy service logs:
 
 ```bash
-docker-compose logs legacy
+docker compose logs legacy
 ```
 
 ### Step 4: Verify Installation
@@ -149,24 +167,41 @@ docker-compose logs legacy
 curl http://localhost:8090/health
 ```
 
-- Access monitoring dashboard:
+- Access the built-in Teranode dashboard:
 
-    - Open Grafana: http://localhost:3005
+    - **Service Viewer**: <http://localhost:8090/viewer> - View blocks, transactions, UTXOs, and subtrees
+    - **Admin Interface**: <http://localhost:8090/admin> (credentials: bitcoin/bitcoin) - FSM state management and block operations
+    - **Home Overview**: <http://localhost:8090/home> - Node statistics and block graphs
+    - **Peer Management**: <http://localhost:8090/peers> - Connected peers and reputation scores
+    - **Network Status**: <http://localhost:8090/network> - Connected nodes and chain status
+    - For complete dashboard features, see [Dashboard Documentation](../../topics/dashboard.md)
+
+- Access Grafana monitoring (metrics and time-series data):
+
+    - Open Grafana: <http://localhost:3005>
     - Login with the default credentials: admin/admin
-    - Navigate to the "Teranode - Service Overview" dashboard for key metrics
-    - Explore other dashboards for detailed service metrics. For example, you can check the Legacy sync metrics in the "Teranode - Legacy Service" dashboard.
+
+> **Note:** The docker compose configuration in this repository includes Grafana but does not include pre-configured Teranode dashboards. You will see an empty Grafana instance that can collect metrics but won't have the "Teranode" folder with pre-built service dashboards.
+>
+> For a complete deployment with pre-configured Grafana dashboards (Teranode Service Overview, Legacy Service metrics, etc.), use the **[teranode-teratestnet repository](https://github.com/bsv-blockchain/teranode-teratestnet)** which includes:
+>
+> - Pre-built Grafana dashboards for all Teranode services
+> - Automated setup and configuration
+> - Production-ready monitoring visualization
+>
+> You can also manually create custom dashboards in Grafana by connecting to the Prometheus data source at `http://prometheus:9090`.
 
 ### Common Issues
 
 1. **Services fail to start**
 
-    - Check logs: `docker-compose logs`
+    - Check logs: `docker compose logs`
     - Verify disk space: `df -h`
     - Ensure all ports are available
 
 2. **Cannot connect to services**
 
-    - Verify services are running: `docker-compose ps`
+    - Verify services are running: `docker compose ps`
     - Check service logs for specific errors
     - Ensure ports are not blocked by firewall
 
@@ -176,37 +211,37 @@ curl http://localhost:8090/health
 
 1. View all services status:
 
-```bash
-docker-compose ps
-```
+    ```bash
+    docker compose ps
+    ```
 
 2. Check blockchain sync:
 
-```bash
-curl http://localhost:8090/api/v1/blockstats
-```
+    ```bash
+    curl http://localhost:8090/api/v1/blockstats
+    ```
 
 3. Monitor specific service logs:
 
-```bash
-docker-compose logs -f legacy
-docker-compose logs -f blockchain
-docker-compose logs -f asset
-```
+    ```bash
+    docker compose logs -f legacy
+    docker compose logs -f blockchain
+    docker compose logs -f asset
+    ```
 
 ### Working with Transactions
 
 1. Get transaction details:
 
-```bash
-curl http://localhost:8090/api/v1/tx/<txid>
-```
+    ```bash
+    curl http://localhost:8090/api/v1/tx/<txid>
+    ```
 
 ### Monitoring Your Node
 
 1. Access Grafana dashboards:
 
-    - Open http://localhost:3005
+    - Open <http://localhost:3005>
     - Navigate to "TERANODE Service Overview"
 
 2. Key metrics to watch:
@@ -220,52 +255,52 @@ curl http://localhost:8090/api/v1/tx/<txid>
 
 1. View logs:
 
-```bash
-# All services
-docker-compose logs
+    ```bash
+    # All services
+    docker compose logs
 
-# Specific service
-docker-compose logs blockchain
-```
+    # Specific service
+    docker compose logs blockchain
+    ```
 
 2. Check disk usage:
 
-```bash
-df -h
-```
+    ```bash
+    df -h
+    ```
 
 3. Restart a specific service:
 
-```bash
-docker-compose restart blockchain
-```
+    ```bash
+    docker compose restart blockchain
+    ```
 
 4. Restart all services:
 
-```bash
-docker-compose down
-docker-compose up -d
-```
+    ```bash
+    docker compose down
+    docker compose up -d
+    ```
 
 ### Common Operations
 
 1. Check current block height:
 
-```bash
-curl http://localhost:8090/api/v1/bestblockheader/json
-```
+    ```bash
+    curl http://localhost:8090/api/v1/bestblockheader/json
+    ```
 
 2. Get block information:
 
-```bash
-curl http://localhost:8090/api/v1/block/<blockhash>
-```
+    ```bash
+    curl http://localhost:8090/api/v1/block/<blockhash>
+    ```
 
 3. Check UTXO status:
 
-```bash
-curl http://localhost:8090/api/v1/utxo/<utxohash>
-```
+    ```bash
+    curl http://localhost:8090/api/v1/utxo/<utxohash>
+    ```
 
 ### Next Steps
 
@@ -277,7 +312,7 @@ curl http://localhost:8090/api/v1/utxo/<utxohash>
 1. [Installation Guide](../../howto/miners/docker/minersHowToInstallation.md)
 2. [Starting and Stopping Teranode](../../howto/miners/docker/minersHowToStopStartDockerTeranode.md)
 3. [Configuration Guide](../../howto/miners/docker/minersHowToConfigureTheNode.md)
-4. [Blockchain Synchronization](../../howto/miners/minersHowToSyncTheNode.md)
+4. [Blockchain Synchronization](../../howto/miners/docker/minersHowToSyncTheNode.md)
 5. [Update Procedures](../../howto/miners/docker/minersUpdatingTeranode.md)
 6. [Troubleshooting Guide](../../howto/miners/docker/minersHowToTroubleshooting.md)
 7. [Security Best Practices](../../howto/miners/docker/minersSecurityBestPractices.md)
@@ -287,9 +322,9 @@ curl http://localhost:8090/api/v1/utxo/<utxohash>
 1. [Installation with Kubernetes Operator](../../howto/miners/kubernetes/minersHowToInstallation.md)
 2. [Starting and Stopping Teranode](../../howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode.md)
 3. [Configuration Guide](../../howto/miners/kubernetes/minersHowToConfigureTheNode.md)
-4. [Blockchain Synchronization](../../howto/miners/minersHowToSyncTheNode.md)
+4. [Blockchain Synchronization](../../howto/miners/kubernetes/minersHowToSyncTheNode.md)
 5. [Update Procedures](../../howto/miners/kubernetes/minersUpdatingTeranode.md)
-6. [Backup Procedures](../../howto/miners/kubernetes/minersHowToBackup.md)
+6. [Backup Procedures](../../howto/miners/minersHowToBackup.md)
 7. [Troubleshooting Guide](../../howto/miners/kubernetes/minersHowToTroubleshooting.md)
 8. [Security Best Practices](../../howto/miners/kubernetes/minersSecurityBestPractices.md)
 9. [Remote Debugging Guide](../../howto/howToRemoteDebugTeranode.md)

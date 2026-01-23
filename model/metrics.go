@@ -14,9 +14,6 @@ var (
 	prometheusBlockCheckMerkleRoot        prometheus.Histogram
 	prometheusBlockGetSubtrees            prometheus.Histogram
 	prometheusBlockGetAndValidateSubtrees prometheus.Histogram
-	prometheusBloomQueryCounter           prometheus.Gauge
-	prometheusBloomPositiveCounter        prometheus.Gauge
-	prometheusBloomFalsePositiveCounter   prometheus.Gauge
 )
 
 var (
@@ -79,33 +76,6 @@ func _initPrometheusMetrics() {
 			Name:      "get_and_validate_subtrees",
 			Help:      "Histogram of Block.GetAndValidateSubtrees",
 			Buckets:   util.MetricsBucketsMilliSeconds,
-		},
-	)
-
-	prometheusBloomQueryCounter = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "bloom_filter_query_counter",
-			Help:      "Number of queries to the bloom filter",
-		},
-	)
-
-	prometheusBloomPositiveCounter = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "bloom_filter_positive_counter",
-			Help:      "Number of positive from the bloom filter",
-		},
-	)
-
-	prometheusBloomFalsePositiveCounter = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "block",
-			Name:      "bloom_filter_false_positive_counter",
-			Help:      "Number of false positives from the bloom filter",
 		},
 	)
 }

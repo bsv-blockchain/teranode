@@ -55,7 +55,7 @@ func TestGetMerkleProofBUMPFormats(t *testing.T) {
 	// Create mock subtree with proper initialization
 	mockSubtree, err := subtree.NewTreeByLeafCount(2)
 	require.NoError(t, err)
-	mockSubtree.Nodes = []subtree.SubtreeNode{
+	mockSubtree.Nodes = []subtree.Node{
 		{Hash: *txHash},
 		{Hash: chainhash.Hash{}},
 	}

@@ -43,205 +43,277 @@ Example:
 memory://test_blocks?partitions=2&consumer_ratio=1
 ```
 
-**Usage**: The memory scheme is automatically detected by the Kafka utilities and enables in-memory message passing for unit tests and development environments. This eliminates the need for a running Kafka cluster during testing.
+**Usage**: Automatically enabled for dev/test contexts (`KAFKA_SCHEMA.dev = memory` in settings.conf). Eliminates need for running Kafka cluster during development. For Docker-based Kafka, override with `KAFKA_SCHEMA.dev = kafka` in `settings_local.conf`.
 
 ## URL Parameters
 
-### Consumer Configuration Parameters
-
-When configuring Kafka consumers via URL, the following query parameters are supported:
+### Consumer Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `partitions` | int | 1 | Number of topic partitions to consume from |
-| `consumer_ratio` | int | 1 | Ratio for scaling consumer count (partitions/consumer_ratio) |
-| `replay` | int | 1 | Whether to replay messages from beginning (1=true, 0=false) |
-| `group_id` | string | - | Consumer group identifier for coordination |
+| `partitions` | int | 1 | Number of topic partitions |
+| `replay` | int | 1 | Start from beginning (1) or latest (0) for new consumer groups |
+| `offsetReset` | string | "" | Offset reset strategy: "latest", "earliest", or "" (uses replay). Overrides replay setting |
+| `maxProcessingTime` | int | 100 | Max time (ms) to process a message before Sarama stops fetching. Must exceed actual processing time |
+| `sessionTimeout` | int | 10000 | Time (ms) broker waits for heartbeat before considering consumer dead. Must be >= 3 * heartbeatInterval |
+| `heartbeatInterval` | int | 3000 | Frequency (ms) of heartbeats sent to broker |
+| `rebalanceTimeout` | int | 60000 | Max time (ms) for all consumers to join rebalance |
+| `channelBufferSize` | int | 256 | Number of messages buffered in internal channels |
+| `consumerTimeout` | int | 90000 | Watchdog timeout (ms). Triggers recovery if no messages received and Setup() not called |
+
+### Producer Parameters (Async)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `partitions` | int | 1 | Number of topic partitions |
+| `replication` | int | 1 | Replication factor |
+| `retention` | string | "600000" | Message retention period in milliseconds (10 minutes default) |
+| `segment_bytes` | string | "1073741824" | Maximum size of a single log segment file (1GB default) |
+| `flush_bytes` | int | 1048576 | Bytes to accumulate before flushing (1MB default) |
+| `flush_messages` | int | 50000 | Messages to accumulate before flushing |
+| `flush_frequency` | duration | "10s" | Maximum time between flushes |
+
+### Producer Parameters (Sync)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `partitions` | int | 1 | Number of topic partitions |
+| `replication` | int | 1 | Replication factor |
+| `retention` | string | "600000" | Message retention period in milliseconds (10 minutes default) |
+| `segment_bytes` | string | "1073741824" | Maximum size of a single log segment file (1GB default) |
+| `flush_bytes` | int | 1024 | Bytes to accumulate before flushing |
 
 **Example Consumer URL:**
 
 ```text
-kafka://localhost:9092/transactions?partitions=4&consumer_ratio=2&replay=0&group_id=validator-group
+kafka://localhost:9092/subtrees?partitions=8&sessionTimeout=15000&heartbeatInterval=5000&maxProcessingTime=30000
 ```
 
-### Producer Configuration Parameters
-
-When configuring Kafka producers via URL, the following query parameters are supported:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `partitions` | int | 1 | Number of topic partitions to create |
-| `replication` | int | 1 | Replication factor for topic |
-| `retention` | string | "600000" | Message retention period (ms) |
-| `segment_bytes` | string | "1073741824" | Segment size in bytes (1GB) |
-| `flush_bytes` | int | varies | Flush threshold in bytes (1MB async, 1KB sync) |
-| `flush_messages` | int | 50000 | Number of messages before flush |
-| `flush_frequency` | string | "10s" | Time-based flush frequency |
-| `flush_timeout` | Duration | 10s | Maximum time to wait before flushing pending messages |
-
-**Example Producer URL:**
+**Example Async Producer URL:**
 
 ```text
-kafka://localhost:9092/blocks?partitions=2&replication=3&retention=3600000&flush_frequency=5s
+kafka://localhost:9092/blocks?partitions=4&replication=3&retention=3600000&flush_frequency=5s&flush_messages=100000
 ```
 
-## Parameter Details
+## Individual Settings
 
-### partitions
+### Topic Names
 
-- **Type**: Integer
-- **Default**: 1
-- **Description**: Number of partitions for the topic
-- **Impact**: Higher values increase parallelism but also resource usage
+| Setting | Default | Environment Variable | Usage |
+|---------|---------|---------------------|-------|
+| Blocks | "blocks" | KAFKA_BLOCKS | Block data messages |
+| BlocksFinal | "blocks-final" | KAFKA_BLOCKS_FINAL | Finalized block announcements |
+| InvalidBlocks | "invalid-blocks" | KAFKA_INVALID_BLOCKS | Invalid block notifications |
+| InvalidSubtrees | "invalid-subtrees" | KAFKA_INVALID_SUBTREES | Invalid subtree notifications |
+| LegacyInv | "legacy-inv" | KAFKA_LEGACY_INV | Legacy inventory messages |
+| RejectedTx | "rejectedtx" | KAFKA_REJECTEDTX | Rejected transaction notifications |
+| Subtrees | "subtrees" | KAFKA_SUBTREES | Subtree data messages |
+| TxMeta | "txmeta" | KAFKA_TXMETA | Transaction metadata |
+| UnitTest | "unittest" | KAFKA_UNITTEST | Unit testing |
 
-### replication
+### Connection Settings
 
-- **Type**: Integer
-- **Default**: 1
-- **Description**: Replication factor for the topic
-- **Impact**: Higher values improve fault tolerance but increase storage requirements
+| Setting | Default | Environment Variable | Usage |
+|---------|---------|---------------------|-------|
+| Hosts | "localhost:9092" | KAFKA_HOSTS | Comma-separated broker addresses |
+| Port | 9092 | KAFKA_PORT | Default port when not in hosts |
+| Partitions | 1 | KAFKA_PARTITIONS | Default partition count |
+| ReplicationFactor | 1 | KAFKA_REPLICATION_FACTOR | Default replication factor |
 
-### consumer_ratio
+### Consumer Group Settings
 
-- **Type**: Integer
-- **Default**: 1
-- **Description**: Ratio of consumers to partitions for load balancing
-- **Formula**: `consumers = partitions / consumer_ratio`
-- **Impact**: Higher values reduce concurrency, lower values increase consumer count
-- **Example**: `kafka://localhost:9092/blocks?consumer_ratio=2` creates half as many consumers as partitions
+**Consumer Group ID Pattern:** `{serviceName}.{clientName}`
 
-### retention
+Examples:
+- `blockvalidation.defaultClientName`
+- `subtreevalidation.mynode`
+- `p2p.node1`
 
-- **Type**: String (milliseconds)
-- **Default**: "600000" (10 minutes)
-- **Description**: How long messages are retained
-- **Impact**: Longer retention increases storage requirements
+**Special Case - Block Persister TxMeta:** `{serviceName}.{clientName}.{random16chars}`
 
-### segment_bytes
+The Block Persister appends a random 16-character suffix to its TxMeta consumer group ID, allowing multiple instances to independently process all messages.
 
-- **Type**: String/Integer
-- **Default**: "1073741824" (1GB)
-- **Description**: Maximum size of a single log segment file
-- **Impact**: Smaller values create more files but allow more granular cleanup
-- **Example**: `kafka://localhost:9092/blocks?segment_bytes=536870912` (512MB)
+**Auto-Commit Behavior:**
 
-### flush_bytes
+| Topic | Auto-Commit | Reason |
+|-------|-------------|--------|
+| Blocks | Disabled | Critical - must not miss messages |
+| RejectedTx | Enabled | Can tolerate message loss |
+| Subtrees | Enabled | Can tolerate message loss |
+| TxMeta | Enabled | Cache population - can tolerate loss |
+| ValidatorTxs | Enabled | Optional feature |
+| InvalidBlocks | Enabled | Optional feature |
+| InvalidSubtrees | Enabled | Optional feature |
 
-- **Type**: Integer
-- **Default**: 1024
-- **Description**: Number of bytes to accumulate before forcing a flush
-- **Impact**: Larger values improve throughput but increase risk of data loss
+### TLS Settings
 
-### flush_messages
+| Setting | Default | Environment Variable | Usage |
+|---------|---------|---------------------|-------|
+| EnableTLS | false | KAFKA_ENABLE_TLS | Enable TLS encryption |
+| TLSSkipVerify | false | KAFKA_TLS_SKIP_VERIFY | Skip certificate verification (testing only) |
+| TLSCAFile | "" | KAFKA_TLS_CA_FILE | CA certificate file path (optional for custom CA) |
+| TLSCertFile | "" | KAFKA_TLS_CERT_FILE | Client certificate file path (required with TLSKeyFile for mutual TLS) |
+| TLSKeyFile | "" | KAFKA_TLS_KEY_FILE | Client key file path (required with TLSCertFile for mutual TLS) |
 
-- **Type**: Integer
-- **Default**: 50000
-- **Description**: Number of messages to accumulate before forcing a flush
-- **Impact**: Larger values improve throughput but increase risk of data loss
+**TLS Requirements:**
 
-### flush_frequency
+- `TLSCertFile` and `TLSKeyFile` must both be provided together for mutual TLS authentication
+- `TLSSkipVerify=true` should only be used in development/testing environments
+- When `EnableTLS=true`, all Kafka connections use TLS encryption
 
-- **Type**: Duration (e.g., "5s")
-- **Default**: "10s" (10 seconds)
-- **Description**: Maximum time between flushes
-- **Impact**: Longer durations improve throughput but increase risk of data loss
+### Debug Settings
 
-### flush_timeout
+| Setting | Default | Environment Variable | Usage |
+|---------|---------|---------------------|-------|
+| EnableDebugLogging | false | kafka_enable_debug_logging | Verbose Sarama logging |
 
-- **Type**: Duration
-- **Default**: 10s
-- **Description**: Maximum time to wait before flushing pending messages
-- **Usage**: Producer timeout configuration
-- **Impact**: Ensures messages are sent even with low throughput
+## URL-Based Configuration
 
-### replay
+### Config URL Settings
 
-- **Type**: Integer (boolean: 0 or 1)
-- **Default**: 1 (true)
-- **Description**: Whether to replay messages from the beginning for new consumer groups
-- **Impact**: Controls initial behavior of new consumers
+| Setting | Environment Variable | Usage |
+|---------|---------------------|-------|
+| ValidatorTxsConfig | kafka_validatortxsConfig | Validator transaction messages |
+| TxMetaConfig | kafka_txmetaConfig | Transaction metadata |
+| LegacyInvConfig | kafka_legacyInvConfig | Legacy inventory messages |
+| BlocksFinalConfig | kafka_blocksFinalConfig | Finalized blocks |
+| RejectedTxConfig | kafka_rejectedTxConfig | Rejected transactions |
+| InvalidBlocksConfig | kafka_invalidBlocksConfig | Invalid blocks |
+| InvalidSubtreesConfig | kafka_invalidSubtreesConfig | Invalid subtrees |
+| SubtreesConfig | kafka_subtreesConfig | Subtrees |
+| BlocksConfig | kafka_blocksConfig | Blocks |
 
-## Auto-Commit Behavior by Topic
+## Configuration Priority
 
-Teranode implements different auto-commit strategies based on message criticality and service requirements.
+URL-based configuration overrides individual settings when provided:
 
-### Critical Topics (Auto-Commit: false)
+1. **URL Config** (e.g., `InvalidBlocksConfig`) - highest priority
+2. **Individual Settings** (e.g., `InvalidBlocks`, `Hosts`, `Port`) - fallback
 
-These topics require guaranteed message processing and cannot tolerate message loss:
+## Consumer Timeout Constraints
 
-- **`kafka_blocksConfig`**: Block distribution for validation
-  - **Reason**: Missing blocks would break blockchain validation
-  - **Consumer Behavior**: Manual commit after successful processing
-  - **Failure Handling**: Message redelivery on processing failure
-
-- **`kafka_blocksFinalConfig`**: Finalized blocks for storage
-  - **Reason**: Missing finalized blocks would corrupt blockchain state
-  - **Consumer Behavior**: Manual commit after successful storage
-  - **Failure Handling**: Message redelivery on storage failure
-
-### Non-Critical Topics (Auto-Commit: true)
-
-These topics can tolerate occasional message loss for performance:
-
-- **TxMeta Cache (Subtree Validation)**: `autoCommit=true`
-  - Rationale: Metadata can be regenerated if lost
-  - Performance priority over strict delivery guarantees
-
-- **Rejected Transactions (P2P)**: `autoCommit=true`
-  - Rationale: Rejection notifications are not critical for consistency
-  - Network efficiency prioritized
-
-## Service-Specific Kafka Settings
-
-### Kafka Consumer Concurrency
-
-**Important**: Kafka consumer concurrency in Teranode is controlled through the `consumer_ratio` URL parameter for each topic. The actual number of consumers is calculated as:
-
-```text
-consumerCount = partitions / consumer_ratio
+**Critical Validation Rule:**
+```
+sessionTimeout >= 3 * heartbeatInterval
 ```
 
-Common consumer ratios in use:
+This constraint is enforced by Sarama. Consumer creation will fail if violated.
 
-- `consumer_ratio=1`: One consumer per partition (maximum parallelism)
-- `consumer_ratio=4`: One consumer per 4 partitions (balanced approach)
+**Example Valid Configuration:**
 
-### Propagation Service Settings
+- `heartbeatInterval=5000` (5s)
+- `sessionTimeout=15000` (15s) ✓ Valid: 15000 >= 3 * 5000
 
-- **`validator_kafka_maxMessageBytes`**: Size threshold for routing decisions
-  - **Purpose**: Determines when to use HTTP fallback vs Kafka
-  - **Default**: 1048576 (1MB)
-  - **Usage**: Large transactions routed via HTTP to avoid Kafka message size limits
+**Example Invalid Configuration:**
 
-### Validator Service Settings
+- `heartbeatInterval=5000` (5s)  
+- `sessionTimeout=10000` (10s) ✗ Invalid: 10000 < 15000
 
-- **`validator_kafkaWorkers`**: Number of concurrent Kafka processing workers
-  - **Purpose**: Controls parallel transaction processing capacity
-  - **Tuning**: Should match CPU cores and expected transaction volume
-  - **Integration**: Works with Block Assembly via direct gRPC (not Kafka)
+## Consumer Watchdog
+
+The consumer watchdog monitors for stuck consumers and automatically recovers by recreating the consumer group.
+
+**Behavior:**
+
+- Checks every 30 seconds
+- Triggers recovery if `Consume()` is stuck for longer than `consumerTimeout` (default 90s)
+- Detects RefreshMetadata hangs and offset-related issues
+- Automatically recreates consumer group on recovery
+
+**Configuration:**
+
+- `consumerTimeout` URL parameter (default: 90000ms)
+
+## Service Usage
+
+### Block Assembly Service
+- **Producer**: `BlocksConfig` - publishes blocks
+- **Producer**: `SubtreesConfig` - publishes subtrees
+
+### Block Validation Service
+- **Consumer**: `BlocksConfig` - consumes blocks for validation
+- **Producer**: `InvalidBlocksConfig` - publishes invalid blocks (optional)
+
+### Blockchain Service
+- **Producer**: `BlocksFinalConfig` - publishes finalized blocks
+
+### Subtree Validation Service
+- **Consumer**: `SubtreesConfig` - consumes subtrees for validation
+- **Producer**: `InvalidSubtreesConfig` - publishes invalid subtrees (optional)
+
+### Validator Service
+- **Consumer**: `ValidatorTxsConfig` - consumes transactions for validation (optional)
+- **Producer**: `ValidatorTxsConfig` - publishes validation results (optional)
+- **Producer**: `RejectedTxConfig` - publishes rejected transactions
+
+### Propagation Service
+- **Consumer**: `RejectedTxConfig` - consumes rejected transactions
+
+### Block Persister Service
+- **Consumer**: `TxMetaConfig` - consumes transaction metadata (with random consumer group suffix)
+
+### Legacy Service
+- **Producer**: `LegacyInvConfig` - publishes legacy inventory messages
+- **Consumer**: `BlocksFinalConfig` - consumes finalized blocks
+- **Consumer**: `TxMetaConfig` - consumes transaction metadata
+
+### P2P Service
+
+- Uses `InvalidBlocksConfig` or constructs URL from `InvalidBlocks`, `Hosts`, `Port`
+- Applies TLS settings from KafkaSettings
+- Consumer group: `{topic}-consumer`
+
+### Legacy Service
+
+- Uses `LegacyInvConfig`, `BlocksFinalConfig`, `TxMetaConfig`
+- Applies TLS settings from KafkaSettings
+
+### Blockchain Service
+
+- Uses async producer for block notifications
+- Applies TLS settings from KafkaSettings
 
 ## Configuration Examples
 
-### High-Throughput Service (Propagation)
+### High-Throughput Producer
 
 ```text
-kafka_validatortxsConfig=kafka://localhost:9092/validator-txs?partitions=8&consumer_ratio=2&flush_frequency=1s
+kafka://localhost:9092/blocks?partitions=8&replication=3&retention=3600000&flush_bytes=10485760&flush_messages=100000&flush_frequency=5s
 ```
 
-This configuration creates 4 consumers (8 partitions / 2 ratio) with aggressive flushing for low latency.
-
-### Critical Service (Block Validation)
+### Slow Processing Consumer
 
 ```text
-kafka_blocksConfig=kafka://localhost:9092/blocks?partitions=4&consumer_ratio=1&retention=3600000
+kafka://localhost:9092/subtrees?partitions=4&maxProcessingTime=30000&sessionTimeout=60000&heartbeatInterval=20000&consumerTimeout=120000
 ```
 
-This configuration creates 4 consumers (maximum parallelism) with 1-hour retention for reliability.
-
-### Development/Testing
+### Low-Latency Producer
 
 ```text
-memory://test_blocks?partitions=2&consumer_ratio=1
+kafka://localhost:9092/txmeta?partitions=4&flush_bytes=524288&flush_messages=1000&flush_frequency=1s
 ```
 
-This configuration uses in-memory Kafka simulation for testing without infrastructure dependencies.
+### Offset Reset Consumer
+
+```text
+kafka://localhost:9092/blocks?partitions=2&offsetReset=latest&replay=0
+```
+
+### TLS-Enabled Configuration
+
+Environment variables:
+```bash
+KAFKA_ENABLE_TLS=true
+KAFKA_TLS_CA_FILE=/path/to/ca.pem
+KAFKA_TLS_CERT_FILE=/path/to/client-cert.pem
+KAFKA_TLS_KEY_FILE=/path/to/client-key.pem
+kafka_blocksConfig=kafka://broker1:9093,broker2:9093/blocks?partitions=4
+```
+
+**Note:** `KAFKA_TLS_CERT_FILE` and `KAFKA_TLS_KEY_FILE` must both be provided for mutual TLS authentication. Omit both for server-only TLS.
+
+### Memory Testing
+
+```text
+memory://test_blocks?partitions=2&replay=1
+```

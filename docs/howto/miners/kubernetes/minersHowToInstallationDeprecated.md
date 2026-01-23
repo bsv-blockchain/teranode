@@ -105,7 +105,7 @@ Teranode requires an initial block synchronization to function properly. There a
 
 #### Initial Data Set Installation
 
-To speed up the initial synchronization process, you have the option to seed Teranode from pre-existing data. To know more about this approach, please refer to the [How to Sync the Node](../minersHowToSyncTheNode.md) guide.
+To speed up the initial synchronization process, you have the option to seed Teranode from pre-existing data. To know more about this approach, please refer to the [How to Sync the Node](minersHowToSyncTheNode.md) guide.
 
 Pros:
 
@@ -203,17 +203,17 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 
 1. **Clone the Teranode repository:**
 
-   ```bash
-   cd $YOUR_WORKING_DIR
-   git clone git@github.com:bsv-blockchain/teranode-operator.git
-   cd teranode-operator
-   ```
+    ```bash
+    cd $YOUR_WORKING_DIR
+    git clone git@github.com:bsv-blockchain/teranode-operator.git
+    cd teranode-operator
+    ```
 
 2. **Create the BSVA CatalogSource in the OLM namespace:**
 
-   ```bash
-   kubectl create -f olm/catalog-source.yaml
-   ```
+    ```bash
+    kubectl create -f olm/catalog-source.yaml
+    ```
 
 ### Step 4: Create Target Namespace
 
@@ -227,61 +227,61 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 
 1. **(Optional) If you're deploying to a namespace other than 'teranode-operator', modify the OperatorGroup to specify your installation namespace:**
 
-   ```bash
-   echo "  - <your-namespace>" >> olm/og.yaml
-   ```
+    ```bash
+    echo "  - <your-namespace>" >> olm/og.yaml
+    ```
 
 2. **Create the OperatorGroup and Subscription resources:**
 
-   ```bash
-   kubectl create -f olm/og.yaml -n teranode-operator
-   kubectl create -f olm/subscription.yaml -n teranode-operator
-   ```
+    ```bash
+    kubectl create -f olm/og.yaml -n teranode-operator
+    kubectl create -f olm/subscription.yaml -n teranode-operator
+    ```
 
 ### Step 6: Verify Deployment
 
 1. **Check if all pods are running** (your output should be similar to the below):
 
-   ```bash
-   # Check catalog source pod
-   kubectl get pods -n olm
-   ```
+    ```bash
+    # Check catalog source pod
+    kubectl get pods -n olm
+    ```
 
-   ```bash
-   NAME                                READY   STATUS    RESTARTS   AGE
-   bsva-catalog-8922m                  1/1     Running   0          22s
-   catalog-operator-577f8b4bf5-sczlj   1/1     Running   0          86m
-   olm-operator-8685b95f84-8wkf4       1/1     Running   0          86m
-   operatorhubio-catalog-thvck         1/1     Running   0          85m
-   packageserver-b54f9549f-kzqn9       1/1     Running   0          85m
-   packageserver-b54f9549f-tr24v       1/1     Running   0          85m
-   ```
+    ```bash
+    NAME                                READY   STATUS    RESTARTS   AGE
+    bsva-catalog-8922m                  1/1     Running   0          22s
+    catalog-operator-577f8b4bf5-sczlj   1/1     Running   0          86m
+    olm-operator-8685b95f84-8wkf4       1/1     Running   0          86m
+    operatorhubio-catalog-thvck         1/1     Running   0          85m
+    packageserver-b54f9549f-kzqn9       1/1     Running   0          85m
+    packageserver-b54f9549f-tr24v       1/1     Running   0          85m
+    ```
 
-   ```bash
-   # Check operator deployment
-   kubectl get pods -n teranode-operator
-   ```
+    ```bash
+    # Check operator deployment
+    kubectl get pods -n teranode-operator
+    ```
 
-   ```bash
-   NAME                                                              READY   STATUS      RESTARTS   AGE
-   asset-5cc5745c75-6m5gf                                            1/1     Running     0          3d11h
-   asset-5cc5745c75-84p58                                            1/1     Running     0          3d11h
-   block-assembly-649dfd8596-k8q29                                   1/1     Running     0          3d11h
-   block-assembly-649dfd8596-njdgn                                   1/1     Running     0          3d11h
-   block-persister-57784567d6-tdln7                                  1/1     Running     0          3d11h
-   block-persister-57784567d6-wdx84                                  1/1     Running     0          3d11h
-   block-validator-6c4bf46f8b-bvxmm                                  1/1     Running     0          3d11h
-   blockchain-ccbbd894c-k95z9                                        1/1     Running     0          3d11h
-   dkr-ecr-eu-north-1-amazonaws-com-teranode-operator-bundle-v0-1    1/1     Running     0          3d11h
-   ede69fe8f248328195a7b76b2fc4c65a4ae7b7185126cdfd54f61c7eadffnzv   0/1     Completed   0          3d11h
-   miner-6b454ff67c-jsrgv                                            1/1     Running     0          3d11h
-   peer-6845bc4749-24ms4                                             1/1     Running     0          3d11h
-   propagation-648cd4cc56-cw5bp                                      1/1     Running     0          3d11h
-   propagation-648cd4cc56-sllxb                                      1/1     Running     0          3d11h
-   subtree-validator-7879f559d5-9gg9c                                1/1     Running     0          3d11h
-   subtree-validator-7879f559d5-x2dd4                                1/1     Running     0          3d11h
-   teranode-operator-controller-manager-768f498c4d-mk49k             2/2     Running     0          3d11h
-   ```
+    ```bash
+    NAME                                                              READY   STATUS      RESTARTS   AGE
+    asset-5cc5745c75-6m5gf                                            1/1     Running     0          3d11h
+    asset-5cc5745c75-84p58                                            1/1     Running     0          3d11h
+    block-assembly-649dfd8596-k8q29                                   1/1     Running     0          3d11h
+    block-assembly-649dfd8596-njdgn                                   1/1     Running     0          3d11h
+    block-persister-57784567d6-tdln7                                  1/1     Running     0          3d11h
+    block-persister-57784567d6-wdx84                                  1/1     Running     0          3d11h
+    block-validator-6c4bf46f8b-bvxmm                                  1/1     Running     0          3d11h
+    blockchain-ccbbd894c-k95z9                                        1/1     Running     0          3d11h
+    dkr-ecr-eu-north-1-amazonaws-com-teranode-operator-bundle-v0-1    1/1     Running     0          3d11h
+    ede69fe8f248328195a7b76b2fc4c65a4ae7b7185126cdfd54f61c7eadffnzv   0/1     Completed   0          3d11h
+    miner-6b454ff67c-jsrgv                                            1/1     Running     0          3d11h
+    peer-6845bc4749-24ms4                                             1/1     Running     0          3d11h
+    propagation-648cd4cc56-cw5bp                                      1/1     Running     0          3d11h
+    propagation-648cd4cc56-sllxb                                      1/1     Running     0          3d11h
+    subtree-validator-7879f559d5-9gg9c                                1/1     Running     0          3d11h
+    subtree-validator-7879f559d5-x2dd4                                1/1     Running     0          3d11h
+    teranode-operator-controller-manager-768f498c4d-mk49k             2/2     Running     0          3d11h
+    ```
 
 2. **Ensure all services show a status of "Running" or "Completed".**
 
@@ -289,9 +289,9 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 
 1. **Verify that ingress resources are created for Asset, Peer, and Propagation services:**
 
-   ```bash
-   kubectl get ingress
-   ```
+    ```bash
+    kubectl get ingress
+    ```
 
 2. **Configure your ingress controller or external load balancer as needed.**
 
@@ -304,15 +304,15 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 
 1. **Force the node to transition to Run mode:**
 
-   ```bash
-   grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.Run
-   ```
+    ```bash
+    kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate RUNNING
+    ```
 
 2. **Or LegacySync mode:**
 
-   ```bash
-   grpcurl -plaintext SERVER:8087 blockchain_api.BlockchainAPI.LegacySync
-   ```
+    ```bash
+    kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate --fsmstate LEGACYSYNCING
+    ```
 
 ### Step 10: Access Monitoring Tools
 
@@ -338,22 +338,22 @@ Standard Kubernetes logging and troubleshooting approaches apply. Users can use 
 
 1. Check pod status:
 
-   ```bash
-   kubectl describe pod <pod-name>
-   ```
+    ```bash
+    kubectl describe pod <pod-name>
+    ```
 
 2. View pod logs:
 
-   ```bash
-   kubectl logs <pod-name>
-   ```
+    ```bash
+    kubectl logs <pod-name>
+    ```
 
 3. Verify ConfigMaps and Secrets:
 
-   ```bash
-   kubectl get configmaps
-   kubectl get secrets
-   ```
+    ```bash
+    kubectl get configmaps
+    kubectl get secrets
+    ```
 
 Additional Notes:
 
@@ -367,9 +367,7 @@ Additional Notes:
 
 ## Optimizations
 
-When running on a box without a public IP, you should enable `legacy_config_Upnp` (in your settings), so you don't get banned by the SV Nodes.
-
-If you have local access to SV Nodes, you can use them to speed up the initial block synchronization too. You can set `legacy_connect_peers: "172.x.x.x:8333|10.x.x.x:8333"` in your `docker-compose.yml` to force the legacy service to only connect to those peers.
+If you have local access to SV Nodes, you can use them to speed up the initial block synchronization. You can configure specific peer connections in your ConfigMap by setting `legacy_config_ConnectPeers: "172.x.x.x:8333|10.x.x.x:8333"` to force the legacy service to only connect to those peers.
 
 ## Reference - Settings
 

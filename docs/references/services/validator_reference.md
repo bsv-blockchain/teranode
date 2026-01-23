@@ -135,7 +135,7 @@ type Validator struct {
     txValidator                   TxValidatorI
     utxoStore                     utxo.Store
     blockAssembler                blockassembly.Store
-    saveInParallel                bool
+    blockchainClient              blockchain.ClientI
     stats                         *gocore.Stat
     txmetaKafkaProducerClient     kafka.KafkaAsyncProducerI
     rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
@@ -148,7 +148,7 @@ type Validator struct {
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, store utxo.Store,
     txMetaKafkaProducerClient kafka.KafkaAsyncProducerI,
     rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI,
-    blockAssemblyClient blockassembly.ClientI) (Interface, error)
+    blockAssemblyClient blockassembly.ClientI, blockchainClient blockchain.ClientI) (Interface, error)
 ```
 
 Creates a new `Validator` instance with the provided configuration. It initializes the validator with the given logger, UTXO store, and Kafka producers. Returns an error if initialization fails.

@@ -104,6 +104,7 @@ func TestTryQuickValidation(t *testing.T) {
 		// Mock for successful quick validation
 		suite.MockBlockchain.On("GetNextBlockID", mock.Anything).Return(uint64(1), nil).Once()
 		suite.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+		suite.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Once()
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 		block.Height = 100
@@ -146,7 +147,6 @@ func TestTryQuickValidation(t *testing.T) {
 		assert.NoError(t, err, "should handle not found error gracefully")
 		assert.True(t, shouldTryNormal, "should return true to fallback to normal validation")
 	})
-
 }
 
 // TestValidateBlocksOnChannel_ErrorHandling tests the error handling changes in validateBlocksOnChannel

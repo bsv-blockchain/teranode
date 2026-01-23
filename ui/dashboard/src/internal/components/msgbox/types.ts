@@ -70,6 +70,7 @@ export interface NodeStatusMessage extends P2PMessageBase {
   client_name?: string
   miner_name?: string
   listen_mode: string
+  storage?: string
   chain_work?: string
   sync_peer_id?: string
   sync_peer_height?: number

@@ -7,12 +7,16 @@ import (
 	"os"
 	"sort"
 
+	"github.com/bsv-blockchain/teranode/cmd/aerospikekafkaconnector"
 	"github.com/bsv-blockchain/teranode/cmd/aerospikereader"
 	"github.com/bsv-blockchain/teranode/cmd/bitcointoutxoset"
 	"github.com/bsv-blockchain/teranode/cmd/checkblock"
 	"github.com/bsv-blockchain/teranode/cmd/checkblocktemplate"
 	"github.com/bsv-blockchain/teranode/cmd/filereader"
 	"github.com/bsv-blockchain/teranode/cmd/getfsmstate"
+	"github.com/bsv-blockchain/teranode/cmd/logs"
+	"github.com/bsv-blockchain/teranode/cmd/monitor"
+	"github.com/bsv-blockchain/teranode/cmd/reconsiderblock"
 	"github.com/bsv-blockchain/teranode/cmd/resetblockassembly"
 	"github.com/bsv-blockchain/teranode/cmd/seeder"
 	"github.com/bsv-blockchain/teranode/cmd/setfsmstate"
@@ -28,18 +32,29 @@ import (
 
 // commandHelp stores the command descriptions
 var commandHelp = map[string]string{
-	"filereader":         "File Reader",
-	"aerospikereader":    "Aerospike Reader",
-	"seeder":             "Seeder",
-	"getfsmstate":        "Get the current FSM State",
-	"setfsmstate":        "Set the FSM State",
-	"settings":           "Settings",
-	"export-blocks":      "Export blockchain to CSV",
-	"import-blocks":      "Import blockchain from CSV",
-	"checkblocktemplate": "Check block template",
-	"checkblock":         "Check block - fetches a block and validates it using the block validation service",
-	"fix-chainwork":      "Fix incorrect chainwork values in blockchain database",
-	"validate-utxo-set":  "Validate UTXO set file",
+	"filereader":              "File Reader",
+	"aerospikereader":         "Aerospike Reader",
+	"aerospikekafkaconnector": "Read Aerospike CDC from Kafka and filter by txID bin",
+	"bitcointoutxoset":        "Bitcoin to Utxoset",
+	"seeder":                  "Seeder",
+	"utxopersister":           "Utxo Persister",
+	"getfsmstate":             "Get the current FSM State",
+	"setfsmstate":             "Set the FSM State",
+	"settings":                "Settings",
+	"export-blocks":           "Export blockchain to CSV",
+	"import-blocks":           "Import blockchain from CSV",
+	"checkblocktemplate":      "Check block template",
+	"checkblock":              "Check block - fetches a block and validates it using the block validation service",
+	"reconsiderblock":         "Reconsider a block that was previously marked as invalid",
+	"resetblockassembly":      "Reset block assembly state",
+	"fix-chainwork":           "Fix incorrect chainwork values in blockchain database",
+	"validate-utxo-set":       "Validate UTXO set file",
+	"subtreebench":            "Benchmark SubtreeProcessor throughput with CPU and memory profiling",
+	"loadunminedbench":        "Benchmark loadUnminedTransactions with CPU and memory profiling",
+	"txmapbench":              "Benchmark CreateTransactionMap with CPU and memory profiling",
+	"remainderbench":          "Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling",
+	"monitor":                 "Live TUI dashboard for monitoring node status",
+	"logs":                    "Interactive log viewer with filtering and search",
 }
 
 var dangerousCommands = map[string]bool{}
@@ -60,8 +75,9 @@ func setupCommand(name string) *Command {
 		FlagSet:     flag.NewFlagSet(name, flag.ExitOnError),
 	}
 
-	// Add common help flag to all commands
+	// Add common help and printSettings flag to all commands
 	cmd.FlagSet.Bool("help", false, "Show help for this command")
+	cmd.FlagSet.Bool("printSettings", false, "Print settings")
 
 	return cmd
 }
@@ -161,6 +177,25 @@ func Start(args []string, version, commit string) {
 
 			return nil
 		}
+	case "aerospikekafkaconnector":
+		kafkaURL := cmd.FlagSet.String("kafka-url", "", "Kafka broker URL (required, e.g., kafka://localhost:9092/aerospike-cdc)")
+		txid := cmd.FlagSet.String("txid", "", "Filter by 64-char hex transaction ID (optional)")
+		namespace := cmd.FlagSet.String("namespace", "", "Filter by Aerospike namespace (optional)")
+		set := cmd.FlagSet.String("set", "txmeta", "Filter by Aerospike set")
+		statsInterval := cmd.FlagSet.Int("stats-interval", 30, "Statistics logging interval in seconds")
+
+		cmd.Execute = func(args []string) error {
+			if *kafkaURL == "" {
+				return errors.NewProcessingError("--kafka-url is required")
+			}
+
+			if *txid != "" && len(*txid) != 64 {
+				return errors.NewProcessingError("Invalid txid: must be 64 hex characters")
+			}
+
+			return aerospikekafkaconnector.ReadAerospikeKafka(
+				logger, tSettings, *kafkaURL, *txid, *namespace, *set, *statsInterval)
+		}
 	case "utxopersister":
 		cmd.Execute = func(args []string) error {
 			utxopersister.RunUtxoPersister(logger, tSettings)
@@ -171,6 +206,7 @@ func Start(args []string, version, commit string) {
 		hash := cmd.FlagSet.String("hash", "", "Hash of the UTXO set / headers to process.")
 		skipHeaders := cmd.FlagSet.Bool("skipHeaders", false, "Skip processing headers.")
 		skipUTXOs := cmd.FlagSet.Bool("skipUTXOs", false, "Skip processing UTXOs.")
+		force := cmd.FlagSet.Bool("force", false, "Force processing even if lastProcessed.dat exists.")
 		cmd.Execute = func(args []string) error {
 			if *inputDir == "" {
 				return errors.NewProcessingError("Please provide an inputDir")
@@ -180,7 +216,7 @@ func Start(args []string, version, commit string) {
 				return errors.NewProcessingError("Please provide a hash")
 			}
 
-			seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs)
+			seeder.Seeder(logger, tSettings, *inputDir, *hash, *skipHeaders, *skipUTXOs, *force)
 
 			return nil
 		}
@@ -217,6 +253,17 @@ func Start(args []string, version, commit string) {
 		cmd.Execute = func(args []string) error {
 			getfsmstate.FetchFSMState(logger, tSettings)
 			return nil
+		}
+	case "monitor":
+		cmd.Execute = func(args []string) error {
+			return monitor.Run(logger, tSettings)
+		}
+	case "logs":
+		logFile := cmd.FlagSet.String("file", "./logs/teranode.log", "Path to log file")
+		bufferSize := cmd.FlagSet.Int("buffer", 10000, "Number of log entries to keep in memory")
+
+		cmd.Execute = func(args []string) error {
+			return logs.Run(*logFile, *bufferSize)
 		}
 	case "setfsmstate":
 		targetFsmState := cmd.FlagSet.String("fsmstate", "", "target fsm state (accepted values: running, idle, catchingblocks, legacysyncing)")
@@ -307,6 +354,14 @@ func Start(args []string, version, commit string) {
 
 			return nil
 		}
+	case "reconsiderblock":
+		cmd.Execute = func(args []string) error {
+			if len(args) != 1 {
+				return errors.NewProcessingError("Usage: reconsiderblock <blockhash>")
+			}
+
+			return reconsiderblock.ReconsiderBlock(logger, tSettings, args[0])
+		}
 	case "resetblockassembly":
 		fullReset := cmd.FlagSet.Bool("full-reset", false, "Perform a full reset, including clearing mempool and unmined transactions")
 
@@ -379,6 +434,45 @@ func Start(args []string, version, commit string) {
 
 			return nil
 		}
+	case "subtreebench":
+		subtreeSize := cmd.FlagSet.Int("subtree-size", 1_048_576, "Size of subtree")
+		producers := cmd.FlagSet.Int("producers", 16, "Number of producer goroutines")
+		iterations := cmd.FlagSet.Int("iterations", 10_000_000, "Number of transactions to process")
+		cpuProfile := cmd.FlagSet.String("cpu-profile", "cpu.prof", "Output file for CPU profile")
+		memProfile := cmd.FlagSet.String("mem-profile", "mem.prof", "Output file for memory profile")
+		duration := cmd.FlagSet.Int("duration", 0, "Duration to run benchmark in seconds (0 for iteration-based, processes all items)")
+
+		cmd.Execute = func(args []string) error {
+			return runSubtreeBenchmark(*subtreeSize, *producers, *iterations, *duration, *cpuProfile, *memProfile)
+		}
+	case "loadunminedbench":
+		txCount := cmd.FlagSet.Int("tx-count", 1_000_000, "Number of transactions")
+		fullScan := cmd.FlagSet.Bool("full-scan", false, "Use full scan mode")
+		cpuProfile := cmd.FlagSet.String("cpu-profile", "loadunmined_cpu.prof", "CPU profile output")
+		memProfile := cmd.FlagSet.String("mem-profile", "loadunmined_mem.prof", "Memory profile output")
+		aerospikeURL := cmd.FlagSet.String("aerospike-url", "", "Aerospike URL (empty=testcontainer)")
+
+		cmd.Execute = func(args []string) error {
+			return runLoadUnminedBenchmark(*txCount, *fullScan, *cpuProfile, *memProfile, *aerospikeURL)
+		}
+	case "txmapbench":
+		numSubtrees := cmd.FlagSet.Int("subtrees", 100, "Number of subtrees")
+		txsPerSubtree := cmd.FlagSet.Int("txs-per-subtree", 1_048_576, "Transactions per subtree")
+		cpuProfile := cmd.FlagSet.String("cpu-profile", "createtransactionmap_cpu.prof", "CPU profile output")
+		memProfile := cmd.FlagSet.String("mem-profile", "createtransactionmap_mem.prof", "Memory profile output")
+
+		cmd.Execute = func(args []string) error {
+			return runCreateTxMapBenchmark(*numSubtrees, *txsPerSubtree, *cpuProfile, *memProfile)
+		}
+	case "remainderbench":
+		numSubtrees := cmd.FlagSet.Int("subtrees", 100, "Number of subtrees")
+		txsPerSubtree := cmd.FlagSet.Int("txs-per-subtree", 1_048_576, "Transactions per subtree")
+		cpuProfile := cmd.FlagSet.String("cpu-profile", "processremaindertxanddequeue_cpu.prof", "CPU profile output")
+		memProfile := cmd.FlagSet.String("mem-profile", "processremaindertxanddequeue_mem.prof", "Memory profile output")
+
+		cmd.Execute = func(args []string) error {
+			return runProcessRemainderBenchmark(*numSubtrees, *txsPerSubtree, *cpuProfile, *memProfile)
+		}
 	default:
 		fmt.Printf("Unknown command: %s\n\n", command)
 		printUsage()
@@ -396,6 +490,10 @@ func Start(args []string, version, commit string) {
 		fmt.Printf("Usage of %s:\n", cmd.Name)
 		cmd.FlagSet.PrintDefaults()
 		os.Exit(0)
+	}
+
+	if printSettings := cmd.FlagSet.Lookup("printSettings"); printSettings != nil && printSettings.Value.String() == "true" {
+		cmdSettings.PrintSettings(logger, tSettings, version, commit)
 	}
 
 	// Execute the command

@@ -573,6 +573,10 @@ func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.H
 	panic(implementMe)
 }
 
+func (m *MockStore) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	panic(implementMe)
+}
+
 func (m *MockStore) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
 	panic(implementMe)
 }
@@ -592,6 +596,16 @@ func (m *MockStore) GetBlocksSubtreesNotSet(ctx context.Context) ([]*model.Block
 	return []*model.Block{}, nil
 }
 
+// SetBlockPersistedAt marks a block as persisted to blob storage.
+func (m *MockStore) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	return nil
+}
+
+// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+func (m *MockStore) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	return []*model.Block{}, nil
+}
+
 func (m *MockStore) GetBlocksByTime(ctx context.Context, fromTime, toTime time.Time) ([][]byte, error) {
 	panic(implementMe)
 }
@@ -606,6 +620,10 @@ func (m *MockStore) ExportBlockDB(ctx context.Context, hash *chainhash.Hash) (*f
 
 func (m *MockStore) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	return true, nil
+}
+
+func (m *MockStore) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	return false, nil
 }
 
 func (m *MockStore) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {

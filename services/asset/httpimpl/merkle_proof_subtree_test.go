@@ -18,12 +18,12 @@ func TestMerkleProofUsingGoSubtreePackage(t *testing.T) {
 		numTxs := 128 // Power of 2 for clean tree
 
 		// Create subtree nodes (transaction hashes)
-		nodes := make([]subtree.SubtreeNode, numTxs)
+		nodes := make([]subtree.Node, numTxs)
 		for i := 0; i < numTxs; i++ {
 			// Create unique hash for each transaction
 			data := []byte{byte(i), byte(i >> 8)}
 			hash := chainhash.DoubleHashH(data)
-			nodes[i] = subtree.SubtreeNode{
+			nodes[i] = subtree.Node{
 				Hash: hash,
 			}
 		}
@@ -145,7 +145,7 @@ func TestMerkleProofUsingGoSubtreePackage(t *testing.T) {
 		// as would happen in block assembly
 
 		// Create 4 subtree roots (as SubtreeNodes)
-		subtreeRoots := []subtree.SubtreeNode{
+		subtreeRoots := []subtree.Node{
 			{Hash: hashFromString("1111111111111111111111111111111111111111111111111111111111111111")},
 			{Hash: hashFromString("2222222222222222222222222222222222222222222222222222222222222222")},
 			{Hash: hashFromString("3333333333333333333333333333333333333333333333333333333333333333")},

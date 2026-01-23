@@ -1,4 +1,6 @@
 SHELL=/bin/bash
+# Temp disabled for now until all tests are green
+.SHELLFLAGS=-o pipefail -c
 
 DEBUG_FLAGS=
 TXMETA_TAG=
@@ -15,6 +17,12 @@ ifndef GIT_VERSION
   GIT_TAG := $(shell ./scripts/determine-git-version.sh --makefile | grep "^GIT_TAG=" | cut -d'=' -f2)
   GIT_TIMESTAMP := $(shell ./scripts/determine-git-version.sh --makefile | grep "^GIT_TIMESTAMP=" | cut -d'=' -f2)
 endif
+
+# Cross-compilation environment variables
+# These can be overridden when calling make, e.g.: make build GOOS=linux GOARCH=amd64
+CGO_ENABLED ?= 1
+GOOS ?= $(shell go env GOOS)
+GOARCH ?= $(shell go env GOARCH)
 
 .PHONY: set_debug_flags
 set_debug_flags:
@@ -87,31 +95,31 @@ clean_backup:
 
 .PHONY: build-teranode-with-dashboard
 build-teranode-with-dashboard: set_debug_flags set_txmetacache_flag build-dashboard
-	go build -mod=readonly -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -X main.StartFromState=${START_FROM_STATE}"  -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-teranode
 build-teranode: set_debug_flags set_txmetacache_flag
-	go build -mod=readonly -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-teranode-no-debug
 build-teranode-no-debug: set_txmetacache_flag
-	go build -mod=readonly -a -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -s -w" -gcflags "-l -B" -o teranode_no_debug.run .
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -a -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION} -s -w" -gcflags "-l -B" -o teranode_no_debug.run .
 
 .PHONY: build-teranode-ci
 build-teranode-ci: set_debug_flags set_txmetacache_flag
-	go build -mod=readonly -race -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -race -tags aerospike,${TXMETA_TAG} --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o teranode.run .
 
 .PHONY: build-chainintegrity
 build-chainintegrity: set_debug_flags
-	go build -o chainintegrity.run ./compose/cmd/chainintegrity/
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -o chainintegrity.run ./compose/cmd/chainintegrity/
 
 .PHONY: build-tx-blaster
 build-tx-blaster: set_debug_flags
-	go build --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build --trimpath -ldflags="-X main.commit=${GIT_COMMIT} -X main.version=${GIT_VERSION}" -gcflags "all=${DEBUG_FLAGS}" -o blaster.run ./cmd/txblaster/
 
 .PHONY: build-teranode-cli
 build-teranode-cli:
-	go build -mod=readonly -o teranode-cli ./cmd/teranodecli
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -mod=readonly -o teranode-cli ./cmd/teranodecli
 
 # .PHONY: build-propagation-blaster
 # build-propagation-blaster: set_debug_flags
@@ -144,17 +152,18 @@ build-dashboard:
 .PHONY: install-tools
 install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
+	go install gotest.tools/gotestsum@latest
 
-# make test will run all tests in the project except for the ones in the test directory
 .PHONY: test
 test:
-	@mkdir -p /tmp/teranode-test-results
-	set -o pipefail && go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | SETTINGS_CONTEXT=test xargs go test -v -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out 2>&1 | tee /tmp/teranode-test-results/test-results.txt | grep -v "ld: warning:"
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 
 # run tests in the test/longtest directory
 .PHONY: longtest
 longtest:
-	SETTINGS_CONTEXT=test go test -v -race -tags "testtxmetacache" -count=1 -timeout=5m -parallel 1 -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
 
 # run tests in the test/sequentialtest directory in order, one by one
 .PHONY: sequentialtest
@@ -182,12 +191,20 @@ sequentialtest-aerospike:
 testall: test longtest sequentialtest
 
 # run tests in the test/e2e/daemon directory
+# Tests run in parallel by default - each test gets unique ports and data directories
 .PHONY: smoketest
 smoketest:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	# cd test/e2e/daemon && go test -race -tags "testtxmetacache" -count=1 -timeout=5m -parallel 1 -coverprofile=coverage.out ./test/e2e/daemon/ready/... 2>&1 | grep -v "ld: warning:"
-	cd test/e2e/daemon/ready && SETTINGS_CONTEXT=$(or $(settings_context),$(SETTINGS_CONTEXT_DEFAULT)) go test -v -count=1 -race -timeout=5m -parallel 1 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 2 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
 
+# run chain integrity tests - multi-node tests with deep chain verification
+# This test mines blocks across multiple nodes and verifies chain consistency
+.PHONY: chainintegrity
+chainintegrity:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/e2e/chainintegrity && gotestsum --format pkgname -- -v -count=1 -race -timeout=35m -run . 2>&1 | tee /tmp/teranode-test-results/chainintegrity-results.txt
 
 .PHONY: nightly-tests
 nightly-tests:
@@ -419,21 +436,21 @@ chain-integrity-test:
 	@echo "================================================"
 	@echo "Timestamp: $$(date)"
 	@echo ""
-	
+
 	# Step 1: Build chainintegrity binary
 	@echo "Step 1: Building chainintegrity binary..."
 	@echo "  - Compiling chainintegrity tool..."
 	$(MAKE) build-chainintegrity
 	@echo "  ✓ Chainintegrity binary built successfully"
 	@echo ""
-	
+
 	# Step 2: Clean up old data
 	@echo "Step 2: Cleaning up old data..."
 	@echo "  - Removing existing data directory..."
 	@rm -rf data
 	@echo "  ✓ Data directory cleaned up"
 	@echo ""
-	
+
 	# Step 3: Build teranode image locally
 	@echo "Step 3: Building teranode image locally..."
 	@echo "  - Logging into AWS ECR..."
@@ -443,7 +460,7 @@ chain-integrity-test:
 	@docker build -t teranode:latest .
 	@echo "  ✓ Teranode Docker image built successfully"
 	@echo ""
-	
+
 	# Step 4: Start Teranode nodes with 3 block generators
 	@echo "Step 4: Starting Teranode nodes with 3 block generators..."
 	@echo "  - Starting Docker Compose services..."
@@ -453,7 +470,7 @@ chain-integrity-test:
 	@sleep 10
 	@echo "  ✓ Services initialized"
 	@echo ""
-	
+
 	# Step 5: Wait for mining to complete (all nodes at height 120+ and in sync)
 	@echo "Step 5: Waiting for mining to complete (all nodes at height 120+ and in sync)..."
 	@echo "  - Target height: 120 blocks"
@@ -528,26 +545,26 @@ chain-integrity-test:
 		echo "Timeout waiting for all nodes to reach height $$REQUIRED_HEIGHT."; \
 		exit 1; \
 	fi
-	
+
 	# Step 6: Stop Teranode nodes (docker compose down for teranode-1/2/3)
 	@echo "Step 6: Stopping Teranode nodes..."
 	@docker compose -f compose/docker-compose-3blasters.yml down teranode1 teranode2 teranode3
-	
+
 	# Step 7: Run chainintegrity test
 	@echo "Step 7: Running chainintegrity test..."
 	@./chainintegrity.run --logfile=chainintegrity --debug | tee chainintegrity_output.log
-	
+
 	# Step 8: Check for hash mismatch and fail if found
 	@echo "Step 8: Checking for hash mismatch..."
 	@if grep -q "All filtered log file hashes differ! No majority consensus among nodes." chainintegrity_output.log; then \
 		echo "Chain integrity test failed: all log file hashes differ, no majority consensus."; \
 		exit 1; \
 	fi
-	
+
 	# Step 9: Cleanup
 	@echo "Step 9: Cleaning up..."
 	@docker compose -f compose/docker-compose-3blasters.yml down
-	
+
 	@echo "================================================"
 	@echo "✓ Chain Integrity Test completed successfully!"
 	@echo "✓ All nodes reached the required block height"
@@ -571,30 +588,30 @@ chain-integrity-test-custom:
 	@echo "================================================"
 	@echo "Timestamp: $$(date)"
 	@echo ""
-	
+
 	# Set default values if not provided
 	$(eval REQUIRED_HEIGHT ?= 120)
 	$(eval MAX_ATTEMPTS ?= 120)
 	$(eval SLEEP ?= 5)
-	
+
 	@echo "Using parameters: REQUIRED_HEIGHT=$(REQUIRED_HEIGHT), MAX_ATTEMPTS=$(MAX_ATTEMPTS), SLEEP=$(SLEEP)"
-	
+
 	# Step 1: Build chainintegrity binary
 	@echo "Step 1: Building chainintegrity binary..."
 	$(MAKE) build-chainintegrity
-	
+
 	# Step 2: Clean up old data
 	@echo "Step 2: Cleaning up old data..."
 	@rm -rf data
-	
+
 	# Step 3: Build teranode image locally
 	@echo "Step 3: Building teranode image locally..."
 	@docker build -t teranode:latest .
-	
+
 	# Step 4: Start Teranode nodes with 3 block generators
 	@echo "Step 4: Starting Teranode nodes with 3 block generators..."
 	@docker compose -f compose/docker-compose-3blasters.yml up -d
-	
+
 	# Step 5: Wait for mining to complete with custom parameters
 	@echo "Step 5: Waiting for mining to complete (all nodes at height $(REQUIRED_HEIGHT)+ and in sync)..."
 	@echo "This may take several minutes..."
@@ -665,26 +682,26 @@ chain-integrity-test-custom:
 		echo "Timeout waiting for all nodes to reach height $$REQUIRED_HEIGHT."; \
 		exit 1; \
 	fi
-	
+
 	# Step 6: Stop Teranode nodes (docker compose down for teranode-1/2/3)
 	@echo "Step 6: Stopping Teranode nodes..."
 	@docker compose -f compose/docker-compose-3blasters.yml down teranode1 teranode2 teranode3
-	
+
 	# Step 7: Run chainintegrity test
 	@echo "Step 7: Running chainintegrity test..."
 	@./chainintegrity.run --logfile=chainintegrity --debug | tee chainintegrity_output.log
-	
+
 	# Step 8: Check for hash mismatch and fail if found
 	@echo "Step 8: Checking for hash mismatch..."
 	@if grep -q "All filtered log file hashes differ! No majority consensus among nodes." chainintegrity_output.log; then \
 		echo "Chain integrity test failed: all log file hashes differ, no majority consensus."; \
 		exit 1; \
 	fi
-	
+
 	# Step 9: Cleanup
 	@echo "Step 9: Cleaning up..."
 	@docker compose -f compose/docker-compose-3blasters.yml down
-	
+
 	@echo "================================================"
 	@echo "Chain Integrity Test completed successfully!"
 	@echo "Log files generated:"

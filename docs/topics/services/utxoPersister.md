@@ -65,6 +65,8 @@ The service interacts with the storage system to read and write necessary files 
 
 The following diagram provides a deeper level of detail into the UTXO Persister Service's internal components and their interactions:
 
+> **Note**: This diagram represents a simplified component view showing the main architectural elements. The Server component orchestrates notification handling, block monitoring, and UTXO processing through its methods (`Start()`, `trigger()`, `processNextBlock()`), while the Consolidator is a temporary helper struct created during block range processing rather than a persistent service component.
+
 ![utxo_persister_detailed_component.svg](img/plantuml/utxopersister/utxo_persister_detailed_component.svg)
 
 ## 2. Functionality
@@ -86,55 +88,64 @@ The following diagram provides a deeper level of detail into the UTXO Persister 
 
 ![utxo_persister_processing_blocks.svg](img/plantuml/utxopersister/utxo_persister_processing_blocks.svg)
 
+The service processes new blocks through the following workflow:
+
+1. The service is triggered to process blocks either through blockchain notifications, a timer, or at startup.
+2. It verifies that the next block to process is sufficiently behind the current blockchain tip (at least 100 blocks) to ensure block finality.
+3. The service retrieves the necessary block headers and verifies chain continuity.
+4. For each block, it consolidates UTXO additions and deletions across the block range.
+5. The service creates a new UTXO set by applying additions and deletions to the previous block's UTXO set.
+6. The resulting UTXO set is written to storage, and the last processed height is updated.
+
 ### 2.3 Processing Blocks and Creating UTXO Sets
 
 The UTXO Persister processes blocks and creates UTXO sets as follows:
 
-1) **Trigger and Block Height Check**:
+1. **Trigger and Block Height Check**:
 
-- The service is triggered to process the next block (via notification, timer, or startup).
-- It checks if the next block to process is at least 100 blocks behind the current best block height.
+    - The service is triggered to process the next block (via notification, timer, or startup).
+    - It checks if the next block to process is at least 100 blocks behind the current best block height.
 
-2) **Block Headers Retrieval**:
+2. **Block Headers Retrieval**:
 
-- If processing is needed, the service retrieves block headers from either the Blockchain Store or Blockchain Client.
-- It verifies the chain continuity using these headers.
+    - If processing is needed, the service retrieves block headers from either the Blockchain Store or Blockchain Client.
+    - It verifies the chain continuity using these headers.
 
-3) **Last Set Verification**:
+3. **Last Set Verification**:
 
-- The service verifies the last UTXO set using `verifyLastSet()` to ensure data integrity.
+    - The service verifies the last UTXO set using `verifyLastSet()` to ensure data integrity.
 
-4) **Block Range Consolidation**:
+4. **Block Range Consolidation**:
 
-- A new Consolidator is created to process a range of blocks efficiently.
-- The `ConsolidateBlockRange()` method is called to handle multiple blocks at once if needed.
+    - A new Consolidator is created to process a range of blocks efficiently.
+    - The `ConsolidateBlockRange()` method is called to handle multiple blocks at once if needed.
 
-5) **UTXO Set Preparation**:
+5. **UTXO Set Preparation**:
 
-- The service calls `GetUTXOSetWithDeletionsMap()` to prepare the UTXO set for the new block.
-- This retrieves the UTXO deletions from the Block Store and creates a deletions map.
+    - The service calls `GetUTXOSetWithDeletionsMap()` to prepare the UTXO set for the new block.
+    - This retrieves the UTXO deletions from the Block Store and creates a deletions map.
 
-6) **UTXO Set Creation**:
+6. **UTXO Set Creation**:
 
-- The `CreateUTXOSet()` method is called on the UTXOSet object.
-- This method:
+    - The `CreateUTXOSet()` method is called on the UTXOSet object.
+    - This method:
 
-  - Retrieves the previous block's UTXO set from the Block Store.
-  - Applies the deletions from the deletions map.
-  - Incorporates new UTXOs from the block's transactions.
-  - Writes the new UTXO set to the Block Store.
+        - Retrieves the previous block's UTXO set from the Block Store.
+        - Applies the deletions from the deletions map.
+        - Incorporates new UTXOs from the block's transactions.
+        - Writes the new UTXO set to the Block Store.
 
-7) **Cleanup**:
+7. **Cleanup**:
 
-- If not skipped (based on configuration), the service deletes the previous block's UTXO set to save space.
+    - If not skipped (based on configuration), the service deletes the previous block's UTXO set to save space.
 
-8) **Update Last Processed Height**:
+8. **Update Last Processed Height**:
 
-- The service calls `writeLastHeight()` to update its record of the last processed block height.
+    - The service calls `writeLastHeight()` to update its record of the last processed block height.
 
-9) **Trigger Next Block Processing**:
+9. **Trigger Next Block Processing**:
 
-- The service initiates the processing of the next block, continuing the cycle.
+    - The service initiates the processing of the next block, continuing the cycle.
 
 If the current height is less than 100 blocks behind the best block height, the service waits for more confirmations before processing.
 
@@ -180,14 +191,21 @@ type UTXO struct {
 
 ### 3.3 Binary Encoding
 
-The UTXO is encoded into a binary format for efficient storage and retrieval:
+UTXOs are encoded into a binary format for efficient storage and retrieval. The encoding differs between individual UTXOs and UTXO wrappers:
 
-- 32 bytes: TxID
+**UTXO Encoding** (individual output within a transaction):
+
 - 4 bytes: Index (little-endian)
 - 8 bytes: Value (little-endian)
-- 4 bytes: Height and Coinbase flag (Height << 1 | CoinbaseFlag)
 - 4 bytes: Script length (little-endian)
 - Variable bytes: Script
+
+**UTXOWrapper Encoding** (transaction-level wrapper):
+
+- 32 bytes: TxID
+- 4 bytes: Encoded height and coinbase flag (Height << 1 | CoinbaseFlag)
+- 4 bytes: Number of UTXOs
+- Variable bytes: Serialized UTXOs (each UTXO encoded as above)
 
 ### 3.4 UTXO Set File
 
@@ -236,10 +254,20 @@ The UTXO set is persisted using a _FileStorer_, which writes the data to a blob 
 
 ## 5. Directory Structure and Main Files
 
-The Block Persister service is located in the `services/utxopersister` directory.
+The UTXO Persister service is located in the `services/utxopersister` directory.
 
 ```text
 ./services/utxopersister/
+│
+├── consolidator.go
+│   Manages consolidation of UTXO additions and deletions across multiple blocks
+│   to create accurate UTXO sets.
+│
+├── Footers.go
+│   Handles footer operations for UTXO files, including transaction and UTXO counts.
+│
+├── Headers.go
+│   Handles header parsing and validation for UTXO files.
 │
 ├── Server.go
 │   Main implementation of the UTXO Persister server. It contains the core logic for
@@ -248,14 +276,13 @@ The Block Persister service is located in the `services/utxopersister` directory
 ├── UTXO.go
 │   Defines the UTXO (Unspent Transaction Output) data structure and related methods.
 │
+├── UTXODeletion.go
+│   Implements the logic for UTXO deletions, which occur when UTXOs are spent in a transaction.
+│
 ├── UTXOSet.go
 │   Implements the UTXOSet structure and related methods.
 │
-├── UTXODeletion.go
-│   Implements the logic for UTXO deletions, which occur when UTXOs are spent in a transaction.
-|
 └── filestorer/
-    │
     └── FileStorer.go
         Implements a custom file storage mechanism, optimized for the specific
         needs of storing and retrieving UTXO data efficiently.
@@ -266,7 +293,7 @@ The Block Persister service is located in the `services/utxopersister` directory
 To run the UTXO Persister Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -UTXOPersister=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -utxopersister=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the UTXO Persister Service locally.

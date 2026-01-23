@@ -20,13 +20,13 @@ import (
 //   - []uint32: Array of block heights containing the subtree
 //   - []int: Array of subtree indices within each block
 //   - error: Any error encountered during the search
-func (r *Repository) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash) ([]uint32, []uint32, []int, error) {
+func (repo *Repository) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash) ([]uint32, []uint32, []int, error) {
 	if subtreeHash == nil {
 		return nil, nil, nil, errors.New("subtree hash cannot be nil")
 	}
 
 	// Check if subtree exists
-	exists, err := r.GetSubtreeExists(ctx, subtreeHash)
+	exists, err := repo.GetSubtreeExists(ctx, subtreeHash)
 	if err != nil {
 		return nil, nil, nil, errors.New(fmt.Sprintf("failed to check subtree existence: %s", err.Error()))
 	}
@@ -40,7 +40,7 @@ func (r *Repository) FindBlocksContainingSubtree(ctx context.Context, subtreeHas
 	// Limit to last 100 blocks for performance (matches previous behavior)
 	const maxSearchBlocks = 100
 
-	blocks, err := r.BlockchainClient.FindBlocksContainingSubtree(ctx, subtreeHash, maxSearchBlocks)
+	blocks, err := repo.BlockchainClient.FindBlocksContainingSubtree(ctx, subtreeHash, maxSearchBlocks)
 	if err != nil {
 		return nil, nil, nil, errors.New(fmt.Sprintf("failed to find blocks containing subtree: %s", err.Error()))
 	}

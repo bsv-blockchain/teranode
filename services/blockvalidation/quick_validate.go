@@ -24,9 +24,11 @@ import (
 )
 
 // bufioReaderPool reduces GC pressure by reusing bufio.Reader instances.
+// Using 32KB buffers provides excellent I/O performance for sequential reads
+// while dramatically reducing memory pressure and GC overhead (16x reduction from previous 512KB).
 var bufioReaderPool = sync.Pool{
 	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 512*1024) // 512KB buffer
+		return bufio.NewReaderSize(nil, 1024*1024) // Temp changed to 1MB buffer for scaling env - 32KB buffer - optimized for sequential I/O
 	},
 }
 
@@ -123,6 +125,15 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		}
 	}
 
+	// Update subtrees DAH and send BlockSubtreesSet notification
+	// This matches the normal validation flow and ensures:
+	// 1. Subtree retention periods are properly managed
+	// 2. BlockSubtreesSet notification is sent to trigger setMinedChan
+	// 3. Transactions are marked as mined in the UTXO store
+	if err = u.updateSubtreesDAH(ctx, block); err != nil {
+		return errors.NewProcessingError("[quickValidateBlock][%s] failed to update subtrees DAH", block.Hash().String(), err)
+	}
+
 	// Mark block as existing in cache
 	if err = u.SetBlockExists(block.Hash()); err != nil {
 		u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Hash().String(), err)
@@ -215,6 +226,16 @@ func (u *BlockValidation) spendAllTransactions(ctx context.Context, block *model
 	spendBatcherSize := u.settings.UtxoStore.SpendBatcherSize
 	spendBatcherConcurrency := u.settings.UtxoStore.SpendBatcherConcurrency
 
+	if block.Height == 0 {
+		// get the block height from the blockchain client
+		_, blockHeaderMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Hash())
+		if err != nil {
+			return errors.NewProcessingError("[spendAllTransactions][%s] failed to get block header for genesis block", block.Hash().String(), err)
+		}
+
+		block.Height = blockHeaderMeta.Height
+	}
+
 	// validate all the transactions in parallel
 	g, gCtx := errgroup.WithContext(ctx)                           // we don't want the tracing to be linked to these calls
 	util.SafeSetLimit(g, spendBatcherSize*spendBatcherConcurrency) // we limit the number of concurrent requests, to not overload Aerospike
@@ -227,7 +248,7 @@ func (u *BlockValidation) spendAllTransactions(ctx context.Context, block *model
 		}
 
 		g.Go(func() error {
-			if _, err := u.utxoStore.Spend(gCtx, tx, utxo.IgnoreFlags{IgnoreLocked: true}); err != nil {
+			if _, err := u.utxoStore.Spend(gCtx, tx, block.Height, utxo.IgnoreFlags{IgnoreLocked: true}); err != nil {
 				return errors.NewProcessingError("[spendAllTransactions][%s] failed to spend tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 			}
 

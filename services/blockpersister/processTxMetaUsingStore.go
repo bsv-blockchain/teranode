@@ -47,12 +47,12 @@ import (
 // The function handles special cases like coinbase transactions, which are placeholders not
 // present in the store. It also accounts for context cancellation to support clean shutdowns.
 // Concurrent access to shared state is protected using atomic operations to ensure thread safety.
-func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData) error {
+func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data) error {
 	ctx, _, deferFn := tracing.Tracer("blockpersister").Start(ctx, "processTxMetaUsingStore")
 	defer deferFn()
 
 	batchSize := u.settings.Block.ProcessTxMetaUsingStoreBatchSize
-	validateSubtreeInternalConcurrency := subtreepkg.Max(4, runtime.NumCPU()/2)
+	validateSubtreeInternalConcurrency := subtreepkg.Max(4, runtime.NumCPU()*2)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, validateSubtreeInternalConcurrency)
@@ -61,7 +61,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, subtree *subtreepk
 		subtreeLen = subtree.Length()
 	)
 
-	if u.settings.Block.BatchMissingTransactions {
+	if u.settings.BlockPersister.BatchMissingTransactions {
 		for i := 0; i < subtreeLen; i += batchSize {
 			i := i // capture range variable for goroutine
 

@@ -1,7 +1,5 @@
 # Teranode CLI Documentation
 
-Last Modified: 4-May-2025
-
 ## Overview
 
 The teranode-cli is a command-line interface tool for interacting with Teranode services. It provides various commands for maintenance, debugging, and operational tasks.
@@ -17,20 +15,24 @@ docker exec -it blockchain teranode-cli
 Usage: teranode-cli <command> [options]
 
     Available Commands:
+    aerospikekafkaconnector  Read Aerospike CDC from Kafka and filter by txID bin
     aerospikereader      Aerospike Reader
     bitcointoutxoset     Bitcoin to Utxoset
-    checkblock           Validate an existing block
+    checkblock           Check block - fetches a block and validates it using the block validation service
     checkblocktemplate   Check block template
     export-blocks        Export blockchain to CSV
     filereader           File Reader
     fix-chainwork        Fix incorrect chainwork values in blockchain database
     getfsmstate          Get the current FSM State
     import-blocks        Import blockchain from CSV
+    logs                 Interactive log viewer with filtering and search
+    monitor              Live TUI dashboard for monitoring node status
+    resetblockassembly   Reset block assembly state
     seeder               Seeder
     setfsmstate          Set the FSM State
     settings             Settings
     utxopersister        Utxo Persister
-    utxovalidator        Validate UTXO sets
+    validate-utxo-set    Validate UTXO set file
 
     Use 'teranode-cli <command> --help' for more information about a command
 
@@ -46,9 +48,14 @@ Usage: teranode-cli <command> [options]
 
 ### Data Management
 
-| Command            | Description                          | Key Options                                   |
-|--------------------|--------------------------------------|-----------------------------------------------|
-| `aerospikereader`  | Read transaction data from Aerospike | `<txid>` - Transaction ID to lookup           |
+| Command                    | Description                                  | Key Options                                   |
+|----------------------------|----------------------------------------------|-----------------------------------------------|
+| `aerospikekafkaconnector`  | Read Aerospike CDC from Kafka                | `--kafka-url` - Kafka broker URL (required)   |
+|                            |                                              | `--txid` - Filter by transaction ID           |
+|                            |                                              | `--namespace` - Filter by namespace           |
+|                            |                                              | `--set` - Filter by set (default: txmeta)     |
+|                            |                                              | `--stats-interval` - Stats interval (default: 30) |
+| `aerospikereader`          | Read transaction data from Aerospike         | `<txid>` - Transaction ID to lookup           |
 | `bitcointoutxoset` | Convert Bitcoin data to UTXO set     | `--bitcoinDir` - Location of bitcoin data     |
 |                    |                                      | `--outputDir` - Output directory for UTXO set |
 |                    |                                      | `--skipHeaders` - Skip processing headers     |
@@ -74,12 +81,11 @@ Usage: teranode-cli <command> [options]
 | `filereader`         | Read and process files        | `--verbose` - Enable verbose output                              |
 |                      |                               | `--checkHeights` - Check heights in UTXO headers                 |
 |                      |                               | `--useStore` - Use store                                         |
-| `utxovalidator`      | Validate UTXO sets            | `--inputDir` - Input directory containing UTXO data              |
-|                      |                               | `--blockHash` - Block hash to validate against                   |
-|                      |                               | `--verbose` - Enable verbose output                              |
+| `validate-utxo-set`  | Validate UTXO set file        | `--verbose` - Enable verbose output showing individual UTXOs     |
 | `getfsmstate`        | Get the current FSM state     | None                                                             |
 | `setfsmstate`        | Set the FSM state             | `--fsmstate` - Target FSM state                                  |
 |                      |                               | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
+| `resetblockassembly` | Reset block assembly state    | `--full-reset` - Perform full reset including clearing mempool  |
 
 ### Database Maintenance
 
@@ -91,7 +97,31 @@ Usage: teranode-cli <command> [options]
 |                      |                                                | `--start-height` - Starting block height (default: 650286)      |
 |                      |                                                | `--end-height` - Ending block height (default: 0 for tip)       |
 
+### Interactive Tools
+
+| Command   | Description                                       | Key Options                                                        |
+|-----------|---------------------------------------------------|--------------------------------------------------------------------|
+| `logs`    | Interactive TUI log viewer with real-time tailing | `--file` - Log file path (default: ./logs/teranode.log)            |
+|           |                                                   | `--buffer` - Log entries to keep in memory (default: 10000)        |
+| `monitor` | Live TUI dashboard for node monitoring            | None (uses settings from config)                                   |
+
 ## Detailed Command Reference
+
+### Aerospike Kafka Connector
+
+```bash
+teranode-cli aerospikekafkaconnector --kafka-url=<kafka-url> [options]
+```
+
+Reads Aerospike CDC (Change Data Capture) from Kafka and filters by transaction ID.
+
+Options:
+
+- `--kafka-url`: Kafka broker URL (required, e.g., kafka://localhost:9092/aerospike-cdc)
+- `--txid`: Filter by 64-character hex transaction ID (optional)
+- `--namespace`: Filter by Aerospike namespace (optional)
+- `--set`: Filter by Aerospike set (default: txmeta)
+- `--stats-interval`: Statistics logging interval in seconds (default: 30)
 
 ### Aerospike Reader
 
@@ -211,25 +241,34 @@ Options:
 - `--skipHeaders`: Skip processing headers
 - `--skipUTXOs`: Skip processing UTXOs
 
-### UTXO Validator
+### Reset Block Assembly
 
 ```bash
-teranode-cli utxovalidator --inputDir=<input-dir> [options]
+teranode-cli resetblockassembly [--full-reset]
 ```
 
-Validates UTXO sets by reading and verifying UTXO data from specified directories. This tool is useful for ensuring UTXO set integrity and detecting any inconsistencies.
+Resets the block assembly state. Useful for clearing stuck transactions or resetting mining state.
 
 Options:
 
-- `--inputDir`: Input directory containing UTXO data (required)
-- `--blockHash`: Specific block hash to validate against
-- `--verbose`: Enable verbose output for detailed validation information
-- `--batchSize`: Number of UTXOs to process in each batch (default: 10000)
+- `--full-reset`: Perform a comprehensive reset including clearing mempool and unmined transactions
+
+### Validate UTXO Set
+
+```bash
+teranode-cli validate-utxo-set [--verbose] <utxo-set-file-path>
+```
+
+Validates a UTXO set file for integrity and correctness. This tool is useful for ensuring UTXO set integrity and detecting any inconsistencies.
+
+Options:
+
+- `--verbose`: Enable verbose output showing individual UTXOs
 
 **Example:**
 
 ```bash
-teranode-cli utxovalidator --inputDir=/data/utxos --verbose
+teranode-cli validate-utxo-set --verbose /data/utxos/utxo-set.dat
 ```
 
 ### Fix Chainwork
@@ -249,6 +288,140 @@ Options:
 - `--end-height`: Ending block height (0 for current tip) (default: 0)
 
 ⚠️ **Warning**: This command modifies blockchain database records. Always run with `--dry-run=true` first to preview changes before applying them to production databases.
+
+### Logs (Interactive Log Viewer)
+
+```bash
+teranode-cli logs [--file=<path>] [--buffer=<size>]
+```
+
+An interactive TUI (Terminal User Interface) for viewing and filtering Teranode logs in real-time. The viewer supports service filtering, log level filtering, text search, and transaction ID tracking across services.
+
+Options:
+
+- `--file`: Path to log file (default: `./logs/teranode.log`)
+- `--buffer`: Number of log entries to keep in memory (default: 10000)
+
+#### Keyboard Shortcuts
+
+**Navigation:**
+
+| Key | Action |
+|-----|--------|
+| `j` / `k` or `up` / `down` | Scroll line by line |
+| `g` / `G` or `home` / `end` | Jump to top / bottom |
+| `pgup` / `pgdn` or `b` / `f` | Page up / down |
+| `ctrl+u` / `ctrl+d` | Half-page up / down |
+
+**Filtering and Search:**
+
+| Key | Action |
+|-----|--------|
+| `/` | Enter text search mode |
+| `s` | Enter service filter mode (comma-separated) |
+| `t` | Enter transaction ID search (64-char hex) |
+| `+` / `-` | Increase / decrease minimum log level |
+| `c` | Clear all filters |
+
+**Controls:**
+
+| Key | Action |
+|-----|--------|
+| `p` or `space` | Pause / resume auto-scroll |
+| `e` | Toggle error summary panel |
+| `r` | Toggle rate graph (logs/second) |
+| `m` | Toggle mouse mode (disable for text selection) |
+| `?` | Toggle help screen |
+| `q` or `ctrl+c` | Quit |
+
+#### Features
+
+- **Real-time tailing**: Automatically follows new log entries as they are written
+- **Service filtering**: Filter by one or more services (e.g., `p2p,validator,blockchain`)
+- **Log level filtering**: Show only logs at or above a minimum severity (DEBUG, INFO, WARN, ERROR, FATAL)
+- **Text search**: Case-insensitive search across log messages
+- **Transaction ID tracking**: Track a specific transaction across all services by its 64-character hex ID
+- **Error statistics**: View error and warning counts by service over the last 5 minutes
+- **Rate monitoring**: Sparkline graph showing log volume over the last 30 seconds
+
+**Example:**
+
+```bash
+# View logs from default location
+teranode-cli logs
+
+# View logs from a specific file with larger buffer
+teranode-cli logs --file=/var/log/teranode/teranode.log --buffer=50000
+```
+
+### Monitor (Node Dashboard)
+
+```bash
+teranode-cli monitor
+```
+
+A live TUI dashboard for monitoring Teranode node status. Displays real-time information about blockchain state, FSM status, connected peers, service health, and Aerospike cluster statistics.
+
+The monitor uses configuration from your settings files (`settings.conf`, `settings_local.conf`) to connect to services.
+
+#### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `s` | Toggle Settings view |
+| `h` | Toggle Health view |
+| `a` | Toggle Aerospike view |
+| `r` | Manual refresh |
+| `j` / `k` or `up` / `down` | Scroll (in Settings/Aerospike views) |
+| `g` / `G` or `home` / `end` | Jump to top / bottom |
+| `esc` | Return to Dashboard |
+| `q` or `ctrl+c` | Quit |
+
+#### Views
+
+**Dashboard (default):**
+
+- **Blockchain panel**: Height, block count, transaction count, average block size, last block age
+- **FSM State panel**: Current state (color-coded), service connectivity indicators
+- **Peers panel**: Connected peer count, top peers by height with reputation scores
+- **Services summary**: Compact health status for all services (BC, VAL, BV, BA, ST, P2P)
+- **Aerospike summary**: Connection status, object count, disk usage
+
+**Settings view (`s`):**
+
+Displays all active configuration settings organized by section: General, Blockchain, P2P, Validator, Block Assembly, Kafka, Aerospike, and Asset.
+
+**Health view (`h`):**
+
+Detailed service health table showing:
+
+- Service name and status (OK / DOWN / N/A)
+- Response latency in milliseconds
+- Status message
+
+**Aerospike view (`a`):**
+
+Comprehensive Aerospike statistics including:
+
+- Cluster info (nodes, connections, namespace)
+- Per-node statistics
+- Namespace metrics (objects, disk usage, throughput)
+- Critical alerts (stop_writes, hwm_breached)
+- Latency histograms
+
+#### Status Indicators
+
+- Green (`✓`): Healthy / Running
+- Orange: Idle / Syncing / Warning
+- Red (`✗`): Down / Error
+- Gray (`○`): Not configured
+
+**Example:**
+
+```bash
+# Launch the monitor dashboard
+teranode-cli monitor
+```
 
 ## Error Handling
 

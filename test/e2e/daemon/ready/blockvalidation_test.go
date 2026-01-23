@@ -4,18 +4,19 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/require"
 )
 
 func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 	defer td.Stop(t)
 
@@ -89,13 +90,13 @@ func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
 }
 
 func TestBlockValidationWithDoubleSpend(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 	defer td.Stop(t)
 
@@ -169,13 +170,13 @@ func TestBlockValidationWithDoubleSpend(t *testing.T) {
 }
 
 func TestBlockValidationWithDuplicateTransaction(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
 	})
 	defer td.Stop(t)
 
@@ -208,7 +209,7 @@ func TestBlockValidationWithDuplicateTransaction(t *testing.T) {
 	require.NoError(t, err, "failed to submit first child transaction")
 
 	_, block3 := td.CreateTestBlock(t, block2, 101, parentTx, childTx1, childTx1)
-	err = td.BlockValidation.ValidateBlock(td.Ctx, block3, "legacy", nil, true)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block3, "legacy", true)
 	require.Error(t, err)
 
 	t.Log("Block validation correctly handled duplicate transaction scenario")

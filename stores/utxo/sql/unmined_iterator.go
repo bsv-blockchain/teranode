@@ -34,6 +34,7 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 		,t.inserted_at
 		,t.locked
 		,t.coinbase
+		,t.unmined_since
 		FROM transactions t
 		WHERE t.unmined_since IS NOT NULL
 		  AND t.conflicting = false
@@ -50,7 +51,34 @@ func newUnminedTxIterator(store *Store) (*unminedTxIterator, error) {
 	return it, nil
 }
 
-func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction, error) {
+func (it *unminedTxIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
+	if it.done || it.err != nil || it.rows == nil {
+		return nil, it.err
+	}
+
+	// Read a batch of transactions (up to 16K to match Aerospike iterator batch size)
+	const batchSize = 1024
+	batch := make([]*utxo.UnminedTransaction, 0, batchSize)
+
+	for i := 0; i < batchSize; i++ {
+		tx, err := it.readOne(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if tx == nil {
+			break
+		}
+		batch = append(batch, tx)
+	}
+
+	if len(batch) == 0 {
+		return nil, nil
+	}
+
+	return batch, nil
+}
+
+func (it *unminedTxIterator) readOne(ctx context.Context) (*utxo.UnminedTransaction, error) {
 	if it.done || it.err != nil || it.rows == nil {
 		return nil, it.err
 	}
@@ -65,16 +93,17 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 	}
 
 	var (
-		id          uint64
-		txID        *chainhash.Hash
-		fee         uint64
-		sizeInBytes uint64
-		insertedAt  time.CustomTime
-		locked      bool
-		isCoinbase  bool
+		id           uint64
+		txID         *chainhash.Hash
+		fee          uint64
+		sizeInBytes  uint64
+		insertedAt   time.CustomTime
+		locked       bool
+		isCoinbase   bool
+		unminedSince uint32
 	)
 
-	if err := it.rows.Scan(&id, &txID, &fee, &sizeInBytes, &insertedAt, &locked, &isCoinbase); err != nil {
+	if err := it.rows.Scan(&id, &txID, &fee, &sizeInBytes, &insertedAt, &locked, &isCoinbase, &unminedSince); err != nil {
 		if err := it.Close(); err != nil {
 			it.store.logger.Warnf("failed to close iterator: %v", err)
 		}
@@ -202,13 +231,16 @@ func (it *unminedTxIterator) Next(ctx context.Context) (*utxo.UnminedTransaction
 	}
 
 	return &utxo.UnminedTransaction{
-		Hash:       txID,
-		Fee:        fee,
-		Size:       sizeInBytes,
-		TxInpoints: txInpoints,
-		CreatedAt:  int(insertedAt.UnixMilli()),
-		Locked:     locked,
-		BlockIDs:   blockIds,
+		Node: &subtree.Node{
+			Hash:        *txID,
+			Fee:         fee,
+			SizeInBytes: sizeInBytes,
+		},
+		TxInpoints:   &txInpoints,
+		CreatedAt:    int(insertedAt.UnixMilli()),
+		Locked:       locked,
+		BlockIDs:     blockIds,
+		UnminedSince: int(unminedSince),
 	}, nil
 }
 

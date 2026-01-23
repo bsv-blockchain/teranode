@@ -231,7 +231,7 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	require.NoError(t, err, "Failed to get free port for Asset")
 
 	// Configure settings - this will now pick up KAFKA_PORT and persister URLs from gocore.Config
-	appSettings := settings.NewSettings("docker.host.teranode3.daemon")
+	appSettings := settings.NewSettings()
 	appSettings.LocalTestStartFromState = "RUNNING"
 	appSettings.P2P.Port = p2pPort
 	appSettings.Asset.HTTPPort = assetPort
@@ -293,7 +293,7 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	var persisterHTTPPort int
 	persisterHTTPPort, err = getFreePort()
 	require.NoError(t, err, "Failed to get free port for persister HTTP")
-	appSettings.Block.PersisterHTTPListenAddress = fmt.Sprintf(":%d", persisterHTTPPort)
+	appSettings.BlockPersister.HTTPListenAddress = fmt.Sprintf(":%d", persisterHTTPPort)
 
 	// Use dynamic ports for all service gRPC listeners to avoid conflicts
 	var blockchainGRPCPort int
@@ -350,6 +350,12 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	appSettings.Coinbase.GRPCListenAddress = fmt.Sprintf(":%d", coinbaseGRPCPort)
 	appSettings.Coinbase.GRPCAddress = fmt.Sprintf("localhost:%d", coinbaseGRPCPort)
 
+	var prunerGRPCPort int
+	prunerGRPCPort, err = getFreePort()
+	require.NoError(t, err, "Failed to get free port for pruner gRPC")
+	appSettings.Pruner.GRPCListenAddress = fmt.Sprintf(":%d", prunerGRPCPort)
+	appSettings.Pruner.GRPCAddress = fmt.Sprintf("localhost:%d", prunerGRPCPort)
+
 	// Manually set BlockChain and UTXO StoreURL to SQLite memory
 	appSettings.BlockChain.StoreURL = sqlStoreURL
 	appSettings.UtxoStore.UtxoStore = sqlStoreURL
@@ -358,7 +364,7 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 
 	// Manually set blob stores to memory store
 	appSettings.Block.BlockStore = blobStoreURL
-	appSettings.Block.PersisterStore = blobStoreURL
+	appSettings.BlockPersister.Store = blobStoreURL
 	appSettings.Block.TxStore = blobStoreURL
 	appSettings.SubtreeValidation.SubtreeStore = blobStoreURL
 	appSettings.Legacy.TempStore = blobStoreURL
@@ -417,22 +423,13 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 
 	readyCh := make(chan struct{})
 
+	// Don't start p2p or alert service as these require network connectivity and p2p network which is not deterministic.
+
 	go func() {
 		d.Start(logger, []string{
-			"-blockchain=1",
-			"-blockassembly=1",
-			"-subtreevalidation=1",
-			"-blockvalidation=1",
-			"-validator=1",
-			"-propagation=1",
-			"-asset=1",
-			"-persister=1",
-			"-rpc=1",
-			"-alert=1", // @mrz - this now works, no more data race issue
-			"-p2p=1",
-			"-coinbase=1",
-			"-faucet=1",
-			"-legacy=1",
+			"-all=1",
+			"-p2p=0",
+			"-alert=0",
 		}, appSettings, readyCh)
 	}()
 
@@ -445,10 +442,6 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 		logger.Errorf("Timeout waiting for daemon and its services to be ready after %v: %v", startupTimeout, ctxStart.Err())
 		t.Fatalf("Timeout waiting for daemon and its services to be ready after %v", startupTimeout)
 	}
-
-	// additional sleep for alert service
-	// TODO - improve this - alert service should use a readyCh like all the other services
-	time.Sleep(5 * time.Second)
 
 	// Stop the daemon
 	err = d.Stop()

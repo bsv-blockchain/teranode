@@ -61,9 +61,6 @@ activate PodB
 PodB -> PodB: Check isPauseActive()
 activate PodB
 
-PodB -> PodB: Check local atomic flag (fast path)
-note right: Local flag = false
-
 PodB -> Storage: IsPauseActive() (distributed check)
 activate Storage
 Storage -> PauseLock: Check if lock exists and is fresh

@@ -116,6 +116,13 @@ func (s *Store) GetMedianBlockTime() uint32 {
 	return res
 }
 
+func (s *Store) GetBlockState() utxo.BlockState {
+	blockState := s.store.GetBlockState()
+	s.logger.Debugf("[UTXOStore][logger][GetBlockState] height: %d, medianTime: %d : %s", blockState.Height, blockState.MedianTime, caller())
+
+	return blockState
+}
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	s.logger.Debugf("[UTXOStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx, checkLiveness)
@@ -160,11 +167,11 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 	return data, err
 }
 
-func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	data, err := s.store.GetMeta(ctx, hash)
+func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	err := s.store.GetMeta(ctx, hash, data)
 	s.logger.Debugf("[UTXOStore][logger][GetMeta] hash %s data %v err %v : %s", hash.String(), data, err, caller())
 
-	return data, err
+	return err
 }
 
 func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
@@ -174,8 +181,8 @@ func (s *Store) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.
 	return data, err
 }
 
-func (s *Store) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
-	spends, err := s.store.Spend(ctx, tx, ignoreFlags...)
+func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+	spends, err := s.store.Spend(ctx, tx, blockHeight, ignoreFlags...)
 	spendDetails := make([]string, len(spends))
 
 	for i, spend := range spends {

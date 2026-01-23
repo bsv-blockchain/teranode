@@ -15,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/aerospike"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/util"
@@ -26,9 +27,9 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 	t.Skip()
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableValidator: true,
-		SettingsContext: "dev.system.test",
+		EnableRPC:            true,
+		EnableValidator:      true,
+		SettingsOverrideFunc: test.SystemTestSettings(),
 		// EnableFullLogging: true,
 	})
 
@@ -124,7 +125,7 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 
 		td.Logger.Infof("Transaction created: %s", spendingTx.String())
 
-		_, err = td.DistributorClient.SendTransaction(td.Ctx, spendingTx)
+		err = td.PropagationClient.ProcessTransaction(td.Ctx, spendingTx)
 
 		return spendingTx, err
 	}
@@ -182,17 +183,17 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 }
 
 func TestDeleteAtHeightHappyPath(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		// EnableFullLogging: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.GlobalBlockHeightRetention = 1
-		},
+		UTXOStoreType:   "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.GlobalBlockHeightRetention = 1
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
@@ -216,7 +217,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	require.NoError(t, err, "Failed to create parent transaction")
 
 	// Send the parent transaction
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, parentTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, parentTx)
 	require.NoError(t, err, "Failed to send parent transaction")
 
 	// Generate a block to confirm the parent transaction
@@ -257,7 +258,7 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	// Sign and send the spending transaction
 	err = spendingTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.GetPrivateKey(t)})
 	require.NoError(t, err)
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, spendingTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, spendingTx)
 	require.NoError(t, err)
 
 	// Generate a block to confirm the spending transaction
@@ -295,10 +296,12 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.GlobalBlockHeightRetention = 10
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.GlobalBlockHeightRetention = 10
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
@@ -321,7 +324,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	require.NoError(t, err, "Failed to create parent transaction")
 
 	// Send the parent transaction
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, parentTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, parentTx)
 	require.NoError(t, err, "Failed to send parent transaction")
 
 	// Generate a block to confirm the parent transaction
@@ -365,7 +368,7 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 	// Sign and send the spending transaction
 	err = spendingTx.FillAllInputs(td.Ctx, &unlocker.Getter{PrivateKey: td.GetPrivateKey(t)})
 	require.NoError(t, err)
-	_, err = td.DistributorClient.SendTransaction(td.Ctx, spendingTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, spendingTx)
 	require.NoError(t, err)
 
 	// make sure the tx is processed by blockassembly
@@ -417,8 +420,6 @@ func TestSubtreeBlockHeightRetention(t *testing.T) {
 
 func TestDeleteAtHeightHappyPath2(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
 	// Initialize test daemon with required services
 	// init aerospike
 	utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
@@ -432,12 +433,14 @@ func TestDeleteAtHeightHappyPath2(t *testing.T) {
 		EnableRPC:       true,
 		EnableValidator: true,
 		// EnableFullLogging: true,
-		SettingsContext: "dev.system.test",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.GlobalBlockHeightRetention = 1
-			settings.UtxoStore.UtxoStore = parsedURL
-			settings.GlobalBlockHeightRetention = 1
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(settings *settings.Settings) {
+				settings.GlobalBlockHeightRetention = 1
+				settings.UtxoStore.UtxoStore = parsedURL
+				settings.GlobalBlockHeightRetention = 1
+			},
+		),
 	})
 
 	defer td.Stop(t, true)
@@ -462,8 +465,8 @@ func TestDeleteAtHeightHappyPath2(t *testing.T) {
 	_, err = td.CallRPC(td.Ctx, "sendrawtransaction", []any{childTxBytes})
 	require.NoError(t, err)
 
-	waitForBlockAssemblyToProcessTx(t, td, parentTx.TxIDChainHash().String())
-	waitForBlockAssemblyToProcessTx(t, td, childTx.TxIDChainHash().String())
+	td.WaitForBlockAssemblyToProcessTx(t, parentTx.TxIDChainHash().String())
+	td.WaitForBlockAssemblyToProcessTx(t, childTx.TxIDChainHash().String())
 
 	td.MineAndWait(t, 1)
 

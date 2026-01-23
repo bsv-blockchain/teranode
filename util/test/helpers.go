@@ -24,6 +24,7 @@ func CreateBaseTestSettings(t TestingT) *settings.Settings {
 	tSettings.ChainCfgParams = &chainParams
 	tSettings.GlobalBlockHeightRetention = 10
 	tSettings.BlockValidation.OptimisticMining = false
+	tSettings.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
 
 	// We sometimes get 'hot key' errors while running the test
 	// To mitigate this, we use more aggressive retry settings with exponential backoff
@@ -31,10 +32,6 @@ func CreateBaseTestSettings(t TestingT) *settings.Settings {
 		Scheme:   "aerospike",
 		RawQuery: "MaxRetries=30&SleepBetweenRetries=50ms&SleepMultiplier=2&TotalTimeout=30s&SocketTimeout=10s",
 	}
-
-	// Initialize adjustment values to 0 for tests (use global value by default)
-	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
-	tSettings.SubtreeValidation.BlockHeightRetentionAdjustment = 0
 
 	return tSettings
 }

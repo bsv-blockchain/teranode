@@ -19,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -29,6 +30,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -276,41 +278,6 @@ func TestTtlCache(t *testing.T) {
 	assert.Equal(t, 0, cache.Len())
 }
 
-// TestSetInitialState validates the initial state setting functionality
-func TestSetInitialState(t *testing.T) {
-	hash, _ := chainhash.NewHashFromStr(txIds[0])
-	tSettings := test.CreateBaseTestSettings(t)
-	bp := New(context.Background(), nil, tSettings, nil, nil, nil, nil, WithSetInitialState(1, hash))
-
-	height, err := bp.state.GetLastPersistedBlockHeight()
-	assert.NoError(t, err)
-	assert.Equal(t, uint32(1), height)
-}
-
-// Additional comprehensive tests for Server functionality
-
-// TestSetInitialStateError validates error handling in initial state setting
-func TestSetInitialStateError(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Create a server with a state file path that will cause error
-	tSettings.Block.StateFile = "/invalid/path/that/does/not/exist/state.dat"
-
-	server := New(ctx, logger, tSettings, nil, nil, nil, nil)
-
-	hash, err := chainhash.NewHashFromStr(txIds[0])
-	require.NoError(t, err)
-
-	// Test the configuration function when state.AddBlock fails
-	configFunc := WithSetInitialState(100, hash)
-	assert.NotNil(t, configFunc)
-
-	// This should log error but not panic
-	configFunc(server)
-}
-
 // TestNewConstructor validates the New constructor functionality
 func TestNewConstructor(t *testing.T) {
 	ctx := context.Background()
@@ -328,7 +295,6 @@ func TestNewConstructor(t *testing.T) {
 	assert.Nil(t, server.utxoStore)
 	assert.Nil(t, server.blockchainClient)
 	assert.NotNil(t, server.stats)
-	assert.NotNil(t, server.state)
 }
 
 // TestNewWithOptions validates constructor with optional configuration
@@ -336,9 +302,6 @@ func TestNewWithOptions(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
-
-	hash, err := chainhash.NewHashFromStr(txIds[0])
-	require.NoError(t, err)
 
 	// Create server with WithSetInitialState option
 	serverWithOpts := New(
@@ -349,15 +312,9 @@ func TestNewWithOptions(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		WithSetInitialState(42, hash),
 	)
 
 	assert.NotNil(t, serverWithOpts)
-
-	// Verify the option was applied
-	height, err := serverWithOpts.state.GetLastPersistedBlockHeight()
-	assert.NoError(t, err)
-	assert.Equal(t, uint32(42), height)
 }
 
 // TestHealthLiveness validates liveness health check
@@ -430,107 +387,6 @@ func TestStop(t *testing.T) {
 
 	err := server.Stop(ctx)
 	assert.NoError(t, err)
-}
-
-// TestStateManagement validates state functionality
-func TestStateManagement(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Create a temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
-
-	server := New(ctx, logger, tSettings, nil, nil, nil, nil)
-
-	// Test initial state (should be 0)
-	height, err := server.state.GetLastPersistedBlockHeight()
-	assert.NoError(t, err)
-	assert.Equal(t, uint32(0), height)
-
-	// Add a block to state
-	hash, err := chainhash.NewHashFromStr(txIds[0])
-	require.NoError(t, err)
-
-	err = server.state.AddBlock(100, hash.String())
-	assert.NoError(t, err)
-
-	// Verify state was updated
-	height, err = server.state.GetLastPersistedBlockHeight()
-	assert.NoError(t, err)
-	assert.Equal(t, uint32(100), height)
-}
-
-// TestSetInitialStateEdgeCases validates edge cases
-func TestSetInitialStateEdgeCases(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	t.Run("ZeroHeight", func(t *testing.T) {
-		server := New(ctx, logger, tSettings, nil, nil, nil, nil)
-		hash, err := chainhash.NewHashFromStr(txIds[0])
-		require.NoError(t, err)
-
-		configFunc := WithSetInitialState(0, hash)
-		configFunc(server)
-
-		height, err := server.state.GetLastPersistedBlockHeight()
-		assert.NoError(t, err)
-		assert.Equal(t, uint32(0), height)
-	})
-
-	t.Run("MaxHeight", func(t *testing.T) {
-		server := New(ctx, logger, tSettings, nil, nil, nil, nil)
-		hash, err := chainhash.NewHashFromStr(txIds[0])
-		require.NoError(t, err)
-
-		configFunc := WithSetInitialState(4294967295, hash) // max uint32
-		configFunc(server)
-
-		height, err := server.state.GetLastPersistedBlockHeight()
-		assert.NoError(t, err)
-		assert.Equal(t, uint32(4294967295), height)
-	})
-}
-
-// TestStateFileIntegration validates state persistence across server instances
-func TestStateFileIntegration(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	stateFile := tempDir + "/test_blocks.dat"
-	tSettings.Block.StateFile = stateFile
-
-	// Create first server instance
-	server1 := New(ctx, logger, tSettings, nil, nil, nil, nil)
-
-	// Add some blocks
-	hash1, _ := chainhash.NewHashFromStr(txIds[0])
-	hash2, _ := chainhash.NewHashFromStr(txIds[1])
-
-	err := server1.state.AddBlock(10, hash1.String())
-	require.NoError(t, err)
-
-	err = server1.state.AddBlock(11, hash2.String())
-	require.NoError(t, err)
-
-	// Verify state
-	height, err := server1.state.GetLastPersistedBlockHeight()
-	assert.NoError(t, err)
-	assert.Equal(t, uint32(11), height)
-
-	// Create second server instance with same state file
-	server2 := New(ctx, logger, tSettings, nil, nil, nil, nil)
-
-	// Should read existing state
-	height, err = server2.state.GetLastPersistedBlockHeight()
-	assert.NoError(t, err)
-	assert.Equal(t, uint32(11), height)
 }
 
 // TestConcurrentOperations validates concurrent access safety
@@ -617,9 +473,13 @@ type MockBlockchainClient struct {
 	getBestBlockHeaderCalls     int
 	getBlockByHeightCalls       int
 	waitUntilFSMTransitionCalls int
+	getBlocksNotPersistedCalls  int
 
 	// Expected calls for verification
 	expectedGetBlockByHeightHeight uint32
+
+	// Blocks to return from GetBlocksNotPersisted
+	blocksNotPersisted []*model.Block
 }
 
 func NewMockBlockchainClient() *MockBlockchainClient {
@@ -697,10 +557,10 @@ func (m *MockBlockchainClient) SetFSMTransitionWaitTime(duration time.Duration) 
 }
 
 // GetCallCounts returns the number of times methods were called
-func (m *MockBlockchainClient) GetCallCounts() (health, bestHeader, blockByHeight, fsmTransition int) {
+func (m *MockBlockchainClient) GetCallCounts() (health, bestHeader, blockByHeight, fsmTransition, getBlocksNotPersisted int) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.healthCalls, m.getBestBlockHeaderCalls, m.getBlockByHeightCalls, m.waitUntilFSMTransitionCalls
+	return m.healthCalls, m.getBestBlockHeaderCalls, m.getBlockByHeightCalls, m.waitUntilFSMTransitionCalls, m.getBlocksNotPersistedCalls
 }
 
 // Health implements blockchain.ClientI
@@ -783,7 +643,18 @@ func (m *MockBlockchainClient) SendNotification(ctx context.Context, notificatio
 	return nil
 }
 func (m *MockBlockchainClient) GetBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.Block, error) {
-	return nil, nil
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Return a basic block with ID matching the hash
+	// This is a simple implementation for testing purposes
+	return &model.Block{
+		ID:     100, // Default ID
+		Height: 100,
+		Header: &model.BlockHeader{
+			HashPrevBlock: blockHash,
+		},
+	}, nil
 }
 func (m *MockBlockchainClient) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numberOfBlocks uint32) ([]*model.Block, error) {
 	return nil, nil
@@ -869,6 +740,9 @@ func (m *MockBlockchainClient) SetState(ctx context.Context, key string, data []
 func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
 	return nil
 }
+func (m *MockBlockchainClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	return nil
+}
 func (m *MockBlockchainClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
 	return false, nil
 }
@@ -888,6 +762,11 @@ func (m *MockBlockchainClient) GetBestHeightAndTime(ctx context.Context) (uint32
 	return 0, 0, nil
 }
 func (m *MockBlockchainClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	// Default to true - blocks are on the current chain unless specifically testing reorg scenarios
+	return true, nil
+}
+func (m *MockBlockchainClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	// Default to false - blocks are not ancestors unless specifically testing reorg scenarios
 	return false, nil
 }
 func (m *MockBlockchainClient) GetChainTips(ctx context.Context) ([]*model.ChainTip, error) {
@@ -926,6 +805,27 @@ func (m *MockBlockchainClient) LocateBlockHeaders(ctx context.Context, locator [
 	return nil, nil
 }
 func (m *MockBlockchainClient) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error {
+	return nil
+}
+func (m *MockBlockchainClient) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getBlocksNotPersistedCalls++
+
+	if len(m.blocksNotPersisted) == 0 {
+		return []*model.Block{}, nil
+	}
+
+	// Return up to 'limit' blocks
+	if limit > len(m.blocksNotPersisted) {
+		limit = len(m.blocksNotPersisted)
+	}
+
+	result := make([]*model.Block, limit)
+	copy(result, m.blocksNotPersisted[:limit])
+	return result, nil
+}
+func (m *MockBlockchainClient) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
 	return nil
 }
 
@@ -1026,10 +926,10 @@ func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error 
 func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return nil, nil
+func (m *MockUTXOStore) GetMeta(ctx context.Context, hash *chainhash.Hash, txMeta *meta.Data) error {
+	return nil
 }
-func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
+func (m *MockUTXOStore) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...utxo.IgnoreFlags) ([]*utxo.Spend, error) {
 	return nil, nil
 }
 func (m *MockUTXOStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
@@ -1081,408 +981,11 @@ func (m *MockUTXOStore) GetBlockHeight() uint32                 { return 0 }
 func (m *MockUTXOStore) SetMedianBlockTime(height uint32) error { return nil }
 func (m *MockUTXOStore) GetMedianBlockTime() uint32             { return 0 }
 
-// Comprehensive tests for getNextBlockToProcess method
-
-// TestGetNextBlockToProcess_NormalFlow tests successful block retrieval
-func TestGetNextBlockToProcess_NormalFlow(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
-	tSettings.Block.BlockPersisterPersistAge = 1
-
-	// Create mock blockchain client using existing blockchain.Mock
-	mockClient := &blockchain.Mock{}
-
-	// Create mock block header meta
-	blockHeaderMeta := &model.BlockHeaderMeta{
-		Height: 110,
+func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     m.GetBlockHeight(),
+		MedianTime: m.GetMedianBlockTime(),
 	}
-
-	// Create mock block
-	mockBlock := &model.Block{}
-	mockBlock.Height = 101
-
-	mockClient.On("GetBestBlockHeader", ctx).Return(
-		&model.BlockHeader{}, blockHeaderMeta, nil)
-	mockClient.On("GetBlockByHeight", ctx, uint32(101)).Return(
-		mockBlock, nil)
-
-	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
-
-	// Set initial persisted height
-	err := server.state.AddBlock(100, "block-100-hash")
-	require.NoError(t, err)
-
-	// Call getNextBlockToProcess
-	block, err := server.getNextBlockToProcess(ctx)
-
-	// Verify success
-	require.NoError(t, err)
-	require.NotNil(t, block)
-	assert.Equal(t, uint32(101), block.Height)
-
-	// Verify mock expectations
-	mockClient.AssertExpectations(t)
-}
-
-// TestGetNextBlockToProcess_NoBlocksToProcess tests when no blocks need processing
-func TestGetNextBlockToProcess_NoBlocksToProcess(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
-	tSettings.Block.BlockPersisterPersistAge = 10 // Large persist age
-
-	// Create mock blockchain client
-	mockClient := &blockchain.Mock{}
-
-	// Create mock block header meta with only 5 blocks ahead
-	blockHeaderMeta := &model.BlockHeaderMeta{
-		Height: 105,
-	}
-
-	mockClient.On("GetBestBlockHeader", ctx).Return(
-		&model.BlockHeader{}, blockHeaderMeta, nil)
-
-	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
-
-	// Set initial persisted height
-	err := server.state.AddBlock(100, "block-100-hash")
-	require.NoError(t, err)
-
-	// Call getNextBlockToProcess
-	block, err := server.getNextBlockToProcess(ctx)
-
-	// Verify no blocks to process
-	require.NoError(t, err)
-	assert.Nil(t, block)
-
-	// Verify mock expectations
-	mockClient.AssertExpectations(t)
-}
-
-// TestGetNextBlockToProcess_GetBestBlockHeaderError tests error handling when GetBestBlockHeader fails
-func TestGetNextBlockToProcess_GetBestBlockHeaderError(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
-
-	// Create mock blockchain client with error injection
-	mockClient := &blockchain.Mock{}
-	mockClient.On("GetBestBlockHeader", ctx).Return(
-		nil, nil, errors.NewError("blockchain client error"))
-
-	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
-
-	// Call getNextBlockToProcess
-	block, err := server.getNextBlockToProcess(ctx)
-
-	// Verify error handling
-	assert.Error(t, err)
-	assert.Nil(t, block)
-	assert.Contains(t, err.Error(), "failed to get best block header")
-
-	// Verify mock expectations
-	mockClient.AssertExpectations(t)
-}
-
-// TestGetNextBlockToProcess_GetBlockByHeightFailure tests error handling when GetBlockByHeight fails
-func TestGetNextBlockToProcess_GetBlockByHeightFailure(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
-	tSettings.Block.BlockPersisterPersistAge = 1
-
-	// Create mock blockchain client
-	mockClient := &blockchain.Mock{}
-
-	// Create mock block header meta
-	blockHeaderMeta := &model.BlockHeaderMeta{
-		Height: 110,
-	}
-
-	mockClient.On("GetBestBlockHeader", ctx).Return(
-		&model.BlockHeader{}, blockHeaderMeta, nil)
-	mockClient.On("GetBlockByHeight", ctx, uint32(101)).Return(
-		nil, errors.NewError("block retrieval error"))
-
-	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
-
-	// Set initial persisted height
-	err := server.state.AddBlock(100, "block-100-hash")
-	require.NoError(t, err)
-
-	// Call getNextBlockToProcess
-	block, err := server.getNextBlockToProcess(ctx)
-
-	// Verify error handling
-	assert.Error(t, err)
-	assert.Nil(t, block)
-	assert.Contains(t, err.Error(), "failed to get block headers by height")
-
-	// Verify mock expectations
-	mockClient.AssertExpectations(t)
-}
-
-// TestGetNextBlockToProcess_BlockRetrievalFailure tests error handling when block retrieval fails
-func TestGetNextBlockToProcess_BlockRetrievalFailure(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Set persist age to 10 blocks
-	tSettings.Block.BlockPersisterPersistAge = 10
-
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
-
-	// Create mock blockchain client
-	mockClient := NewMockBlockchainClient()
-	mockClient.SetBestBlockHeight(100) // Current tip at height 100
-	mockClient.SetGetBlockByHeightError(errors.NewError("block retrieval error"))
-
-	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
-
-	// Set initial state to height 50 (difference is 50, > persist age of 10)
-	hash, _ := chainhash.NewHashFromStr(txIds[0])
-	err := server.state.AddBlock(50, hash.String())
-	require.NoError(t, err)
-
-	// Call getNextBlockToProcess
-	block, err := server.getNextBlockToProcess(ctx)
-
-	// Verify error handling
-	assert.Error(t, err)
-	assert.Nil(t, block)
-	assert.Contains(t, err.Error(), "failed to get block headers by height")
-
-	// Verify both calls were made
-	_, bestHeaderCalls, blockByHeightCalls, _ := mockClient.GetCallCounts()
-	assert.Equal(t, 1, bestHeaderCalls)
-	assert.Equal(t, 1, blockByHeightCalls)
-	assert.Equal(t, uint32(51), mockClient.expectedGetBlockByHeightHeight) // 50 + 1
-}
-
-// TestGetNextBlockToProcess_EdgeCasePersistAge tests edge case where difference equals persist age
-func TestGetNextBlockToProcess_EdgeCasePersistAge(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Set persist age to 10 blocks
-	tSettings.Block.BlockPersisterPersistAge = 10
-
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
-
-	// Create mock blockchain client
-	mockClient := NewMockBlockchainClient()
-	mockClient.SetBestBlockHeight(100) // Current tip at height 100
-
-	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
-
-	// Set initial state to height 89 (difference is 11, which is > persist age of 10)
-	hash, _ := chainhash.NewHashFromStr(txIds[0])
-	err := server.state.AddBlock(89, hash.String())
-	require.NoError(t, err)
-
-	// Create expected block
-	prevHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
-	expectedBlockHeader := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  prevHash,
-		HashMerkleRoot: hash,
-		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{},
-		Nonce:          0,
-	}
-	expectedBlock, err := model.NewBlock(expectedBlockHeader, coinbaseTx, nil, 0, 0, 90, 0)
-	require.NoError(t, err)
-	mockClient.SetBlock(90, expectedBlock)
-
-	// Call getNextBlockToProcess
-	block, err := server.getNextBlockToProcess(ctx)
-
-	// Should return the block since difference (11) > persist age (10)
-	assert.NoError(t, err)
-	assert.NotNil(t, block)
-
-	// Test exactly at the boundary
-	err = server.state.AddBlock(90, hash.String())
-	require.NoError(t, err)
-
-	// Reset call counts
-	mockClient = NewMockBlockchainClient()
-	mockClient.SetBestBlockHeight(100)
-	server.blockchainClient = mockClient
-
-	// Call getNextBlockToProcess - difference is now exactly 10
-	block, err = server.getNextBlockToProcess(ctx)
-
-	// Should return nil since difference (10) == persist age (10), not >
-	assert.NoError(t, err)
-	assert.Nil(t, block)
-}
-
-// TestGetNextBlockToProcess_ZeroInitialHeight tests starting from height 0
-func TestGetNextBlockToProcess_ZeroInitialHeight(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Set persist age to 5 blocks
-	tSettings.Block.BlockPersisterPersistAge = 5
-
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
-
-	// Create mock blockchain client
-	mockClient := NewMockBlockchainClient()
-	mockClient.SetBestBlockHeight(10) // Current tip at height 10
-
-	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
-
-	// Don't set any initial state (height will be 0)
-	// Difference is 10, > persist age of 5, so should return block at height 1
-
-	// Create expected block
-	expectedHash, _ := chainhash.NewHashFromStr(txIds[0])
-	prevHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
-	expectedBlockHeader := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  prevHash,
-		HashMerkleRoot: expectedHash,
-		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{},
-		Nonce:          0,
-	}
-	expectedBlock, err := model.NewBlock(expectedBlockHeader, coinbaseTx, nil, 0, 0, 1, 0)
-	require.NoError(t, err)
-	mockClient.SetBlock(1, expectedBlock)
-
-	// Call getNextBlockToProcess
-	block, err := server.getNextBlockToProcess(ctx)
-
-	// Verify results
-	assert.NoError(t, err)
-	assert.NotNil(t, block)
-	assert.Equal(t, uint32(1), block.Height)
-	assert.Equal(t, uint32(1), mockClient.expectedGetBlockByHeightHeight)
-}
-
-// TestGetNextBlockToProcess_ConcurrentAccess tests thread safety
-func TestGetNextBlockToProcess_ConcurrentAccess(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Set persist age to 10 blocks
-	tSettings.Block.BlockPersisterPersistAge = 10
-
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
-
-	// Create mock blockchain client
-	mockClient := NewMockBlockchainClient()
-	mockClient.SetBestBlockHeight(100) // Current tip at height 100
-
-	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
-
-	// Set initial state to height 50
-	hash, _ := chainhash.NewHashFromStr(txIds[0])
-	err := server.state.AddBlock(50, hash.String())
-	require.NoError(t, err)
-
-	// Create expected block
-	prevHash, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000000")
-	expectedBlockHeader := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  prevHash,
-		HashMerkleRoot: hash,
-		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{},
-		Nonce:          0,
-	}
-	expectedBlock, err := model.NewBlock(expectedBlockHeader, coinbaseTx, nil, 0, 0, 51, 0)
-	require.NoError(t, err)
-	mockClient.SetBlock(51, expectedBlock)
-
-	const numGoroutines = 10
-	var wg sync.WaitGroup
-	results := make(chan error, numGoroutines)
-
-	// Run concurrent calls to getNextBlockToProcess
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, err := server.getNextBlockToProcess(ctx)
-			results <- err
-		}()
-	}
-
-	wg.Wait()
-	close(results)
-
-	// Verify all calls succeeded
-	errorCount := 0
-	for err := range results {
-		if err != nil {
-			errorCount++
-			t.Logf("Concurrent call error: %v", err)
-		}
-	}
-
-	// All calls should succeed (no race conditions)
-	assert.Equal(t, 0, errorCount)
-}
-
-// TestGetNextBlockToProcess_ContextCancellation tests context cancellation handling
-func TestGetNextBlockToProcess_ContextCancellation(t *testing.T) {
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
-
-	// Create mock blockchain client
-	mockClient := NewMockBlockchainClient()
-
-	server := New(context.Background(), logger, tSettings, nil, nil, nil, mockClient)
-
-	// Create cancelled context
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	// Call getNextBlockToProcess with cancelled context
-	block, err := server.getNextBlockToProcess(ctx)
-
-	// The method doesn't explicitly check context cancellation in all paths,
-	// but we should at least verify it doesn't panic
-	assert.Nil(t, block)
-	// Error may or may not contain context cancellation depending on where it fails
-	// We don't assert specific error content since it depends on where the cancellation is detected
-	_ = err // Acknowledge we received the error
 }
 
 // Comprehensive tests for Start method
@@ -1495,9 +998,7 @@ func TestStart_FSMTransitionError(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	// StateFile no longer used
 
 	// Create mock blockchain client with FSM transition error
 	mockClient := NewMockBlockchainClient()
@@ -1532,12 +1033,10 @@ func TestStart_HTTPServerSetup(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	// StateFile no longer used
 
 	// Set HTTP listen address to trigger HTTP server setup
-	tSettings.Block.PersisterHTTPListenAddress = "127.0.0.1:0"
+	tSettings.BlockPersister.HTTPListenAddress = "127.0.0.1:0"
 	// Use a simple memory store URL for HTTP server
 	memoryURL, err := url.Parse("memory://")
 	require.NoError(t, err)
@@ -1593,12 +1092,10 @@ func TestStart_HTTPServerConfigurationError(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	// StateFile no longer used
 
 	// Set HTTP listen address but no block store URL
-	tSettings.Block.PersisterHTTPListenAddress = "127.0.0.1:0"
+	tSettings.BlockPersister.HTTPListenAddress = "127.0.0.1:0"
 	tSettings.Block.BlockStore = nil // This will cause configuration error
 
 	// Create mock blockchain client
@@ -1634,15 +1131,13 @@ func TestStart_BlockProcessingLoop(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Set short sleep time for testing
-	tSettings.Block.BlockPersisterPersistSleep = 10 * time.Millisecond
-	tSettings.Block.BlockPersisterPersistAge = 5
+	tSettings.BlockPersister.PersistSleep = 10 * time.Millisecond
+	// PersistAge no longer used
 
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	// StateFile no longer used
 
 	// Don't set HTTP listen address
-	tSettings.Block.PersisterHTTPListenAddress = ""
+	tSettings.BlockPersister.HTTPListenAddress = ""
 
 	// Create mock blockchain client
 	mockClient := NewMockBlockchainClient()
@@ -1700,10 +1195,9 @@ func TestStart_BlockProcessingLoop(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Verify that blockchain client methods were called
-	_, bestHeaderCalls, _, fsmTransitionCalls := mockClient.GetCallCounts()
+	_, _, _, fsmTransitionCalls, getBlocksNotPersistedCalls := mockClient.GetCallCounts()
 	assert.Equal(t, 1, fsmTransitionCalls)
-	assert.GreaterOrEqual(t, bestHeaderCalls, 1) // Should have been called at least once
-	// Note: blockByHeightCalls might be 0 or 1 depending on timing of the processing loop
+	assert.GreaterOrEqual(t, getBlocksNotPersistedCalls, 1) // Should have been called at least once
 }
 
 // TestStart_BlockProcessingNoBlocks tests processing loop when no blocks need processing
@@ -1715,26 +1209,19 @@ func TestStart_BlockProcessingNoBlocks(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Set short sleep time for testing
-	tSettings.Block.BlockPersisterPersistSleep = 5 * time.Millisecond
-	tSettings.Block.BlockPersisterPersistAge = 10
+	tSettings.BlockPersister.PersistSleep = 5 * time.Millisecond
+	// PersistAge no longer used
 
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	// StateFile no longer used
 
 	// Don't set HTTP listen address
-	tSettings.Block.PersisterHTTPListenAddress = ""
+	tSettings.BlockPersister.HTTPListenAddress = ""
 
 	// Create mock blockchain client
 	mockClient := NewMockBlockchainClient()
 	mockClient.SetBestBlockHeight(20) // Set tip but not high enough to process
 
 	server := New(ctx, logger, tSettings, nil, nil, nil, mockClient)
-
-	// Set initial state to height 15 (difference is 5, less than persist age of 10)
-	hash, _ := chainhash.NewHashFromStr(txIds[0])
-	err := server.state.AddBlock(15, hash.String())
-	require.NoError(t, err)
 
 	// Channel to signal when ready
 	readyCh := make(chan struct{})
@@ -1761,10 +1248,9 @@ func TestStart_BlockProcessingNoBlocks(t *testing.T) {
 	// Wait for server to stop
 	time.Sleep(10 * time.Millisecond)
 
-	// Verify that blockchain client was called but no blocks were retrieved
-	_, bestHeaderCalls, blockByHeightCalls, _ := mockClient.GetCallCounts()
-	assert.GreaterOrEqual(t, bestHeaderCalls, 1) // Should have been called
-	assert.Equal(t, 0, blockByHeightCalls)       // Should not retrieve blocks
+	// Verify that blockchain client was called
+	_, _, _, _, getBlocksNotPersistedCalls := mockClient.GetCallCounts()
+	assert.GreaterOrEqual(t, getBlocksNotPersistedCalls, 1) // Should have been called
 }
 
 // TestStart_ContextCancellation tests proper context cancellation handling
@@ -1774,12 +1260,10 @@ func TestStart_ContextCancellation(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	// StateFile no longer used
 
 	// Don't set HTTP listen address
-	tSettings.Block.PersisterHTTPListenAddress = ""
+	tSettings.BlockPersister.HTTPListenAddress = ""
 
 	// Create mock blockchain client that takes some time to transition
 	mockClient := NewMockBlockchainClient()
@@ -1833,12 +1317,10 @@ func TestStart_ConcurrentReadyChannelClose(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	// StateFile no longer used
 
 	// Don't set HTTP listen address
-	tSettings.Block.PersisterHTTPListenAddress = ""
+	tSettings.BlockPersister.HTTPListenAddress = ""
 
 	// Create mock blockchain client
 	mockClient := NewMockBlockchainClient()
@@ -1883,15 +1365,13 @@ func TestStart_ProcessingLoopErrorHandling(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Set short sleep time for testing
-	tSettings.Block.BlockPersisterPersistSleep = 5 * time.Millisecond
-	tSettings.Block.BlockPersisterPersistAge = 5
+	tSettings.BlockPersister.PersistSleep = 5 * time.Millisecond
+	// PersistAge no longer used
 
-	// Create temp directory for state file
-	tempDir := t.TempDir()
-	tSettings.Block.StateFile = tempDir + "/blocks.dat"
+	// StateFile no longer used
 
 	// Don't set HTTP listen address
-	tSettings.Block.PersisterHTTPListenAddress = ""
+	tSettings.BlockPersister.HTTPListenAddress = ""
 
 	// Create mock blockchain client that will return errors
 	mockClient := NewMockBlockchainClient()
@@ -1926,8 +1406,8 @@ func TestStart_ProcessingLoopErrorHandling(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify that blockchain client was called multiple times (retries)
-	_, bestHeaderCalls, _, _ := mockClient.GetCallCounts()
-	assert.GreaterOrEqual(t, bestHeaderCalls, 1)
+	_, _, _, _, getBlocksNotPersistedCalls := mockClient.GetCallCounts()
+	assert.GreaterOrEqual(t, getBlocksNotPersistedCalls, 1)
 
 	// The processing loop should handle errors and continue running until context is cancelled
 }
@@ -1941,10 +1421,19 @@ func TestHealthReadiness_AllDependenciesHealthy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create healthy mock dependencies
-	mockBlockchainClient := NewMockBlockchainClient()
-	mockBlockStore := NewMockBlobStore()
-	mockSubtreeStore := NewMockBlobStore()
-	mockUTXOStore := NewMockUTXOStore()
+	runningState := blockchain.FSMStateRUNNING
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+
+	mockBlockStore := &blob.MockStore{}
+	mockBlockStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+
+	mockSubtreeStore := &blob.MockStore{}
+	mockSubtreeStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+
+	mockUTXOStore := &utxo.MockUtxostore{}
+	mockUTXOStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
 
 	server := New(ctx, logger, tSettings, mockBlockStore, mockSubtreeStore, mockUTXOStore, mockBlockchainClient)
 
@@ -1962,13 +1451,20 @@ func TestHealthReadiness_BlockchainClientUnhealthy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create unhealthy blockchain client
-	mockBlockchainClient := NewMockBlockchainClient()
-	mockBlockchainClient.SetHealthError(errors.NewProcessingError("blockchain client unhealthy"))
+	runningState := blockchain.FSMStateRUNNING
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusServiceUnavailable, "blockchain client unhealthy", errors.NewProcessingError("blockchain client unhealthy"))
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 	// Healthy other dependencies
-	mockBlockStore := NewMockBlobStore()
-	mockSubtreeStore := NewMockBlobStore()
-	mockUTXOStore := NewMockUTXOStore()
+	mockBlockStore := &blob.MockStore{}
+	mockBlockStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+
+	mockSubtreeStore := &blob.MockStore{}
+	mockSubtreeStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+
+	mockUTXOStore := &utxo.MockUtxostore{}
+	mockUTXOStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
 
 	server := New(ctx, logger, tSettings, mockBlockStore, mockSubtreeStore, mockUTXOStore, mockBlockchainClient)
 
@@ -1986,15 +1482,21 @@ func TestHealthReadiness_BlockStoreUnhealthy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create healthy blockchain client
-	mockBlockchainClient := NewMockBlockchainClient()
+	runningState := blockchain.FSMStateRUNNING
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 	// Create unhealthy block store
-	mockBlockStore := NewMockBlobStore()
-	mockBlockStore.SetHealthError(errors.NewProcessingError("block store unhealthy"))
+	mockBlockStore := &blob.MockStore{}
+	mockBlockStore.On("Health", mock.Anything, false).Return(http.StatusServiceUnavailable, "block store unhealthy", errors.NewProcessingError("block store unhealthy"))
 
 	// Healthy other dependencies
-	mockSubtreeStore := NewMockBlobStore()
-	mockUTXOStore := NewMockUTXOStore()
+	mockSubtreeStore := &blob.MockStore{}
+	mockSubtreeStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+
+	mockUTXOStore := &utxo.MockUtxostore{}
+	mockUTXOStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
 
 	server := New(ctx, logger, tSettings, mockBlockStore, mockSubtreeStore, mockUTXOStore, mockBlockchainClient)
 
@@ -2012,17 +1514,22 @@ func TestHealthReadiness_SubtreeStoreUnhealthy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create healthy blockchain client
-	mockBlockchainClient := NewMockBlockchainClient()
+	runningState := blockchain.FSMStateRUNNING
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 	// Create healthy block store
-	mockBlockStore := NewMockBlobStore()
+	mockBlockStore := &blob.MockStore{}
+	mockBlockStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
 
 	// Create unhealthy subtree store
-	mockSubtreeStore := NewMockBlobStore()
-	mockSubtreeStore.SetHealthError(errors.NewProcessingError("subtree store unhealthy"))
+	mockSubtreeStore := &blob.MockStore{}
+	mockSubtreeStore.On("Health", mock.Anything, false).Return(http.StatusServiceUnavailable, "subtree store unhealthy", errors.NewProcessingError("subtree store unhealthy"))
 
 	// Healthy UTXO store
-	mockUTXOStore := NewMockUTXOStore()
+	mockUTXOStore := &utxo.MockUtxostore{}
+	mockUTXOStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
 
 	server := New(ctx, logger, tSettings, mockBlockStore, mockSubtreeStore, mockUTXOStore, mockBlockchainClient)
 
@@ -2040,15 +1547,21 @@ func TestHealthReadiness_UTXOStoreUnhealthy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create healthy blockchain client
-	mockBlockchainClient := NewMockBlockchainClient()
+	runningState := blockchain.FSMStateRUNNING
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 	// Create healthy stores
-	mockBlockStore := NewMockBlobStore()
-	mockSubtreeStore := NewMockBlobStore()
+	mockBlockStore := &blob.MockStore{}
+	mockBlockStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+
+	mockSubtreeStore := &blob.MockStore{}
+	mockSubtreeStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
 
 	// Create unhealthy UTXO store
-	mockUTXOStore := NewMockUTXOStore()
-	mockUTXOStore.SetHealthError(errors.NewProcessingError("UTXO store unhealthy"))
+	mockUTXOStore := &utxo.MockUtxostore{}
+	mockUTXOStore.On("Health", mock.Anything, false).Return(http.StatusServiceUnavailable, "UTXO store unhealthy", errors.NewProcessingError("UTXO store unhealthy"))
 
 	server := New(ctx, logger, tSettings, mockBlockStore, mockSubtreeStore, mockUTXOStore, mockBlockchainClient)
 
@@ -2066,14 +1579,19 @@ func TestHealthReadiness_MultipleDependenciesUnhealthy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create multiple unhealthy dependencies
-	mockBlockchainClient := NewMockBlockchainClient()
-	mockBlockchainClient.SetHealthError(errors.NewProcessingError("blockchain client unhealthy"))
+	runningState := blockchain.FSMStateRUNNING
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusServiceUnavailable, "blockchain client unhealthy", errors.NewProcessingError("blockchain client unhealthy"))
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
-	mockBlockStore := NewMockBlobStore()
-	mockBlockStore.SetHealthError(errors.NewProcessingError("block store unhealthy"))
+	mockBlockStore := &blob.MockStore{}
+	mockBlockStore.On("Health", mock.Anything, false).Return(http.StatusServiceUnavailable, "block store unhealthy", errors.NewProcessingError("block store unhealthy"))
 
-	mockSubtreeStore := NewMockBlobStore()
-	mockUTXOStore := NewMockUTXOStore()
+	mockSubtreeStore := &blob.MockStore{}
+	mockSubtreeStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+
+	mockUTXOStore := &utxo.MockUtxostore{}
+	mockUTXOStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
 
 	server := New(ctx, logger, tSettings, mockBlockStore, mockSubtreeStore, mockUTXOStore, mockBlockchainClient)
 
@@ -2092,8 +1610,13 @@ func TestHealthReadiness_SomeDependenciesNil(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Only provide some dependencies (others will be nil)
-	mockBlockchainClient := NewMockBlockchainClient()
-	mockBlockStore := NewMockBlobStore()
+	runningState := blockchain.FSMStateRUNNING
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+
+	mockBlockStore := &blob.MockStore{}
+	mockBlockStore.On("Health", mock.Anything, false).Return(http.StatusOK, "healthy", nil)
 
 	server := New(ctx, logger, tSettings, mockBlockStore, nil, nil, mockBlockchainClient)
 
@@ -2128,11 +1651,11 @@ func TestHealthLiveness_AlwaysHealthy(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Create unhealthy dependencies - should not affect liveness check
-	mockBlockchainClient := NewMockBlockchainClient()
-	mockBlockchainClient.SetHealthError(errors.NewProcessingError("blockchain client unhealthy"))
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, mock.Anything).Return(http.StatusServiceUnavailable, "blockchain client unhealthy", errors.NewProcessingError("blockchain client unhealthy"))
 
-	mockBlockStore := NewMockBlobStore()
-	mockBlockStore.SetHealthError(errors.NewProcessingError("block store unhealthy"))
+	mockBlockStore := &blob.MockStore{}
+	mockBlockStore.On("Health", mock.Anything, mock.Anything).Return(http.StatusServiceUnavailable, "block store unhealthy", errors.NewProcessingError("block store unhealthy"))
 
 	server := New(ctx, logger, tSettings, mockBlockStore, nil, nil, mockBlockchainClient)
 
@@ -2149,7 +1672,7 @@ func TestHealthContext_Cancellation(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	mockBlockchainClient := NewMockBlockchainClient()
+	mockBlockchainClient := &blockchain.Mock{}
 	server := New(context.Background(), logger, tSettings, nil, nil, nil, mockBlockchainClient)
 
 	// Create cancelled context
@@ -2171,10 +1694,19 @@ func TestHealthConcurrency(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 
-	mockBlockchainClient := NewMockBlockchainClient()
-	mockBlockStore := NewMockBlobStore()
-	mockSubtreeStore := NewMockBlobStore()
-	mockUTXOStore := NewMockUTXOStore()
+	runningState := blockchain.FSMStateRUNNING
+	mockBlockchainClient := &blockchain.Mock{}
+	mockBlockchainClient.On("Health", mock.Anything, mock.Anything).Return(http.StatusOK, "healthy", nil)
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+
+	mockBlockStore := &blob.MockStore{}
+	mockBlockStore.On("Health", mock.Anything, mock.Anything).Return(http.StatusOK, "healthy", nil)
+
+	mockSubtreeStore := &blob.MockStore{}
+	mockSubtreeStore.On("Health", mock.Anything, mock.Anything).Return(http.StatusOK, "healthy", nil)
+
+	mockUTXOStore := &utxo.MockUtxostore{}
+	mockUTXOStore.On("Health", mock.Anything, mock.Anything).Return(http.StatusOK, "healthy", nil)
 
 	server := New(ctx, logger, tSettings, mockBlockStore, mockSubtreeStore, mockUTXOStore, mockBlockchainClient)
 

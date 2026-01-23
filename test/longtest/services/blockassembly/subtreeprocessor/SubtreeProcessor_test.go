@@ -14,7 +14,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
@@ -40,12 +39,12 @@ var (
 	hash1 = chainhash.HashH([]byte("tx1"))
 	hash2 = chainhash.HashH([]byte("tx2"))
 
-	node1 = subtreepkg.SubtreeNode{
+	node1 = subtreepkg.Node{
 		Hash:        hash1,
 		Fee:         1,
 		SizeInBytes: 1,
 	}
-	node2 = subtreepkg.SubtreeNode{
+	node2 = subtreepkg.Node{
 		Hash:        hash2,
 		Fee:         1,
 		SizeInBytes: 1,
@@ -64,7 +63,14 @@ func Test_DeserializeHashesFromReaderIntoBuckets(t *testing.T) {
 	_ = pprof.StartCPUProfile(f)
 	defer pprof.StopCPUProfile()
 
-	buckets, _, err := subtreeprocessor.DeserializeHashesFromReaderIntoBuckets(r, 16)
+	buckets := make(map[uint16][]chainhash.Hash, 16)
+	for i := 0; i < 16; i++ {
+		buckets[uint16(i)] = make([]chainhash.Hash, 0)
+	}
+
+	conflictingNodes := make([]chainhash.Hash, 0)
+
+	err := subtreeprocessor.DeserializeHashesFromReaderIntoBuckets(r, 16, &buckets, &conflictingNodes)
 	require.NoError(t, err)
 
 	f, _ = os.Create("mem.prof")
@@ -81,8 +87,7 @@ func Test_AddTx(t *testing.T) {
 		waitForSubtreeProcessorQueueToEmpty(t, stp)
 		assert.Equal(t, uint64(1), stp.TxCount(), "Expected tx count to be 1 at startup")
 
-		stp.Add(node1, parents)
-		stp.Add(node2, parents)
+		stp.AddBatch([]subtreepkg.Node{node1, node2}, []*subtreepkg.TxInpoints{&parents, &parents})
 
 		waitForSubtreeProcessorQueueToEmpty(t, stp)
 		assert.Equal(t, uint64(3), stp.TxCount(), "Expected tx count to be 2 after adding a transaction")
@@ -93,11 +98,11 @@ func Test_AddTx(t *testing.T) {
 
 		tx1NodeParents, ok := txMap.Get(node1.Hash)
 		require.True(t, ok)
-		assert.Equal(t, parents, tx1NodeParents, "Expected tx1 node to be in the currentTxMap")
+		assert.Equal(t, parents, *tx1NodeParents, "Expected tx1 node to be in the currentTxMap")
 
 		tx2NodeParents, ok := txMap.Get(node2.Hash)
 		require.True(t, ok)
-		assert.Equal(t, parents, tx2NodeParents, "Expected tx1 node to be in the currentTxMap")
+		assert.Equal(t, parents, *tx2NodeParents, "Expected tx1 node to be in the currentTxMap")
 	})
 }
 
@@ -154,7 +159,7 @@ func Test_MoveBlock(t *testing.T) {
 	})
 }
 
-func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees []*subtreepkg.Subtree, txMap *txmap.SyncedMap[chainhash.Hash, subtreepkg.TxInpoints]) []*chainhash.Hash {
+func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees []*subtreepkg.Subtree, txMap subtreeprocessor.TxInpointsMap) []*chainhash.Hash {
 	subtreeHashes := make([]*chainhash.Hash, 0, len(subtrees))
 
 	for _, subtree := range subtrees {
@@ -171,7 +176,7 @@ func storeMoveBlockSubtrees(t *testing.T, subtreeStore *memory.Memory, subtrees 
 				txInpoints, ok := txMap.Get(node.Hash)
 				require.True(t, ok)
 
-				require.NoError(t, subtreeMeta.SetTxInpoints(idx, txInpoints))
+				require.NoError(t, subtreeMeta.SetTxInpoints(idx, *txInpoints))
 			}
 		}
 
@@ -268,13 +273,13 @@ func initMoveBlock(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *memory.Me
 
 		hashes[hash] = i
 
-		node := subtreepkg.SubtreeNode{
+		node := subtreepkg.Node{
 			Hash:        hash,
 			Fee:         1,
 			SizeInBytes: 1,
 		}
 
-		stp.Add(node, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{hash1, hash2}, Idxs: [][]uint32{{0, 1}, {2, 3}}})
+		stp.AddBatch([]subtreepkg.Node{node}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{hash1, hash2}, Idxs: [][]uint32{{0, 1}, {2, 3}}}})
 	}
 
 	waitForSubtreeProcessorQueueToEmpty(t, stp)
@@ -311,8 +316,10 @@ func initSubtreeProcessor(t *testing.T) (*subtreeprocessor.SubtreeProcessor, *me
 
 	newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest, 1)
 
-	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(t.Context(), ulogger.TestLogger{}, tSettings, blobStore, blockchainClient, utxoStore, newSubtreeChan)
+	ctx := t.Context()
+	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, ulogger.TestLogger{}, tSettings, blobStore, blockchainClient, utxoStore, newSubtreeChan)
 	require.NoError(t, err)
+	subtreeProcessor.Start(ctx)
 
 	return subtreeProcessor, blobStore, newSubtreeChan
 }

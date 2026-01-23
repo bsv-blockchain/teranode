@@ -1,0 +1,46 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+
+
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/httpimpl/http.go)" as HTTPServer
+participant "Repository" as Repository
+
+' GET request for legacy block via REST endpoint
+Client -> HTTPServer : GET /rest/block/:hash.bin
+activate HTTPServer
+
+HTTPServer -> Repository : GetLegacyBlockReader(ctx, hash)
+activate Repository
+alt Legacy block found
+    Repository --> HTTPServer : Block reader (io.Reader)
+else Block not found
+    Repository --> HTTPServer : Data not found
+end
+deactivate Repository
+
+HTTPServer --> Client : Binary stream (application/octet-stream)
+deactivate HTTPServer
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml

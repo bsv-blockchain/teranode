@@ -148,8 +148,8 @@ There are 2 clients invoking this endpoint:
 1. **The `Asset Server` service:**
     - The `Asset Server` service calls the `GetBlock` method on the `Blockchain Service` to retrieve a block from the blockchain.
 
-- **The `Block Assembly` service:**
-  - The `Block Assembly` service calls the `GetBlock` method on the `Blockchain Service` to retrieve a block from the blockchain.
+2. **The `Block Assembly` service:**
+    - The `Block Assembly` service calls the `GetBlock` method on the `Blockchain Service` to retrieve a block from the blockchain.
 
 ### 2.5. Getting the last N blocks from the blockchain
 
@@ -307,7 +307,7 @@ For further detail, we show here the sequence for the `SetBlockSubtreesSet` call
 
 ## 3. gRPC Protobuf Definitions
 
-The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/blockchainProto.md).
+The Blockchain Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the [Blockchain Protobuf API Reference](../../references/protobuf_docs/blockchainProto.md).
 
 ## 4. Data Model
 
@@ -381,13 +381,9 @@ services/blockchain
 │   ├── blockchain_api_extra.go - Supplemental code extending or enhancing the auto-generated API code.
 │   ├── blockchain_api_grpc.pb.go - Auto-generated gRPC bindings from the `.proto` file, specifically for gRPC communication.
 │   └── fsm_extra.go - Additional logic related to the Finite State Machine (FSM) functionality.
-├── data
-|
-├── fsm.go
-│   - Implements the Finite State Machine logic for managing blockchain states.
-│
+├── fsm.go - Implements the Finite State Machine logic for managing blockchain states.
 ├── fsm_visualizer
-│   └── main.go  - A tool for visualizing the Finite State Machine structure.
+│   └── main.go - A tool for visualizing the Finite State Machine structure.
 │
 ├── metrics.go
 │   - Manages and implements functionality related to operational metrics of the Blockchain service.
@@ -467,7 +463,7 @@ stores/blockchain
 To run the Blockchain Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -Blockchain=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -blockchain=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Blockchain Service locally.
@@ -617,6 +613,67 @@ The service employs an optimized algorithm for tracking and selecting the longes
 
 - Implements transaction-based operations with the store to maintain consistency.
 - Reports persistent storage errors through health endpoints.
+
+### 9.3 Known Performance Limitations
+
+#### Catchup Performance During Block Sync
+
+**Issue:** Block synchronization (catchup) can become progressively slower as the blockchain grows, particularly on deployments with large block counts.
+
+**Root Cause:**
+
+The blockchain store uses a recursive CTE (Common Table Expression) query to traverse the chain when storing blocks:
+
+```sql
+WITH RECURSIVE ChainBlocks AS (
+    SELECT id, parent_id
+    FROM blocks
+    WHERE hash = $1
+    UNION ALL
+    SELECT bb.id, bb.parent_id
+    FROM blocks bb
+    JOIN ChainBlocks cb ON bb.id = cb.parent_id
+    WHERE bb.id != cb.id
+)
+SELECT id FROM ChainBlocks
+LIMIT $2
+```
+
+This query can become expensive as the blockchain grows. The issue is compounded by the current caching strategy:
+
+1. Query results are cached in `responseCache` for performance
+2. Every time `StoreBlock()` is called, it calls `ResetResponseCache()` which invalidates the entire cache
+3. The next block storage operation must re-run the expensive recursive query from scratch
+4. During catchup, this results in the query being executed for every single block
+
+**Impact:**
+
+On large blockchains (>1.7M blocks), index scan counts can reach hundreds of billions, causing catchup speeds to drop from initial rates to as low as 6-7 blocks per minute.
+
+**Tracking:**
+
+This is a known issue being tracked in internal issue #4374.
+
+**Potential Optimization:**
+
+Instead of invalidating the entire cache on each block store, the cache could be incrementally updated:
+
+- Reuse existing cached chain traversal results
+- Append the new block to the cached chain
+- Only invalidate cache entries that are directly affected by the new block
+- This would reduce the recursive query to a one-time cost at startup
+
+**Current Workaround:**
+
+For faster initial synchronization:
+
+- Use the seeder with exported UTXO data instead of full catchup
+- See [How to Sync the Node](../../howto/miners/kubernetes/minersHowToSyncTheNode.md) for seeding procedures
+- Seeding bypasses the incremental block-by-block catchup process
+
+**Status:**
+
+Performance optimization work is ongoing and may be addressed in future releases.
 
 ## 10. Other Resources
 

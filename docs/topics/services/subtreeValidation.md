@@ -4,11 +4,14 @@
 
 1. [Description](#1-description)
 2. [Functionality](#2-functionality)
-    - [2.1. Receiving UTXOs and warming up the TXMeta Cache](#21-receiving-utxos-and-warming-up-the-txmeta-cache)
-    - [2.2. Receiving subtrees for validation](#22-receiving-subtrees-for-validation)
-    - [2.3. Validating the Subtrees](#23-validating-the-subtrees)
-    - [2.4. Subtree Locking Mechanism](#24-subtree-locking-mechanism)
-    - [2.5. Distributed Pause Mechanism](#25-distributed-pause-mechanism)
+    - [2.1. Validator Integration](#21-validator-integration)
+    - [2.2. Receiving UTXOs and warming up the TXMeta Cache](#22-receiving-utxos-and-warming-up-the-txmeta-cache)
+    - [2.3. Receiving subtrees for validation](#23-receiving-subtrees-for-validation)
+    - [2.4. Validating the Subtrees](#24-validating-the-subtrees)
+    - [2.5. Subtree Locking Mechanism](#25-subtree-locking-mechanism)
+    - [2.6. Distributed Pause Mechanism](#26-distributed-pause-mechanism)
+    - [2.7. Orphanage Management](#27-orphanage-management)
+    - [2.8. Level Calculation for Merkle Trees](#28-level-calculation-for-merkle-trees)
 3. [gRPC Protobuf Definitions](#3-grpc-protobuf-definitions)
 4. [Data Model](#4-data-model)
 5. [Technology](#5-technology)
@@ -26,8 +29,9 @@ The Subtree Validator is responsible for ensuring the integrity and consistency 
 
 2. **Transaction Legitimacy**: Ensures all transactions within subtrees are valid, including checks for double-spending.
 
-3. **Decorates the Subtree with additional metadata**: Adds metadata to the subtree, to facilitate faster block validation at a later stage (by the Block Validation Service).
-    - Specifically, the subtree metadata will contain all of the transaction input outpoints ([TxInpoints](../datamodel/utxo_data_model.md#txinpoints-structure)). This decorated subtree can be validated and processed faster by the Block Validation Service, preventing unnecessary round trips to the UTXO Store.
+3. **Decorates the Subtree with additional metadata**
+
+    Adds metadata to the subtree, to facilitate faster block validation at a later stage (by the Block Validation Service). Specifically, the subtree metadata will contain all of the transaction input outpoints ([TxInpoints](../datamodel/utxo_data_model.md#txinpoints-structure)). This decorated subtree can be validated and processed faster by the Block Validation Service, preventing unnecessary round trips to the UTXO Store.
 
 > **Note**: For information about how the Subtree Validation service is initialized during daemon startup and how it interacts with other services, see the [Teranode Daemon Reference](../../references/teranodeDaemonReference.md#service-initialization-flow).
 
@@ -39,15 +43,27 @@ The Subtree Validation Service:
 - Validates the subtrees, after fetching them from the remote asset server.
 - Decorates the subtrees with additional metadata, and stores them in the Subtree Store.
 
-The P2P Service communicates with the Block Validation over either gRPC protocols.
+The P2P Service communicates with the Subtree Validation Service over the gRPC protocol.
 
 ![Subtree_Validation_Service_Component_Diagram.png](img/Subtree_Validation_Service_Component_Diagram.png)
 
-The detailed component diagram below shows the internal architecture of the Subtree Validation Service with code-verified connections:
+The detailed component diagram below shows the internal architecture of the Subtree Validation Service:
+
+> **Note**: This diagram represents a simplified component view showing the main architectural elements. The gRPC Server routes requests to handlers (`subtreeHandler.go`, `txmetaHandler.go`) which orchestrate validation logic, file-based locking, transaction fetching via HTTP, and interactions with external services. Kafka consumers process notifications and route them to the appropriate handlers for processing.
 
 ![Subtree_Validation_Component](img/plantuml/subtreevalidation/Subtree_Validation_Component.svg)
 
-### 1.1 Validator Integration
+Finally, note that the Subtree Validation service benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
+Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
+Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
+
+![lustre_fs.svg](img/plantuml/lustre_fs.svg)
+
+## 2. Functionality
+
+The subtree validator is a service that validates subtrees. After validating them, it will update the relevant stores accordingly.
+
+### 2.1. Validator Integration
 
 The Subtree Validation service interacts with the Validator service to validate transactions that might be missing during subtree processing. This interaction can happen in two different configurations:
 
@@ -67,31 +83,27 @@ The Subtree Validation service interacts with the Validator service to validate 
 
 This configuration is controlled by the settings passed to `GetValidatorClient()` in daemon.go.
 
-To improve performance, the Subtree Validation Service uses a caching mechanism for UTXO meta data (called `TX Meta Cache` for historical reasons). This prevents repeated fetch calls to the store by retaining recently loaded transactions in memory (for a limited time). This can be enabled or disabled via the `subtreevalidation_txMetaCacheEnabled` setting. The caching mechanism is implemented in the `txmetacache` package, and is used by the Subtree Validation Service:
+To improve performance, the Subtree Validation Service uses a caching mechanism for UTXO meta data (called `TX Meta Cache` for historical reasons). This prevents repeated fetch calls to the store by retaining recently loaded transactions in memory (for a limited time). This can be enabled or disabled via the `subtreevalidation_txMetaCacheEnabled` setting (Type: `bool`, Default: `true`, Impact: Significantly affects performance and memory usage patterns). The caching mechanism is implemented in the `txmetacache` package, and is used by the Subtree Validation Service:
 
 ```go
- // create a caching tx meta store
-    if gocore.Config().GetBool("subtreevalidation_txMetaCacheEnabled", true) {
-        logger.Infof("Using cached version of tx meta store")
-        u.utxoStore = txmetacache.NewTxMetaCache(ctx, ulogger.TestLogger{}, utxoStore)
-    } else {
-        u.utxoStore = utxoStore
+// create a caching tx meta store
+if tSettings.SubtreeValidation.TxMetaCacheEnabled {
+    logger.Infof("Using cached version of tx meta store")
+
+    var err error
+
+    u.utxoStore, err = txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, txmetacache.Unallocated)
+    if err != nil {
+        logger.Errorf("Failed to create tx meta cache: %v", err)
     }
+} else {
+    u.utxoStore = utxoStore
+}
 ```
 
 If this caching mechanism is enabled, the Subtree Validation Service will listen to the `kafka_txmetaConfig` Kafka topic, where the Transaction Validator posts new UTXO meta data. This data is then stored in the cache for quick access during subtree validation.
 
-Finally, note that the Subtree Validation service benefits of the use of Lustre Fs (filesystem). Lustre is a type of parallel distributed file system, primarily used for large-scale cluster computing. This filesystem is designed to support high-performance, large-scale data storage and workloads.
-Specifically for Teranode, these volumes are meant to be temporary holding locations for short-lived file-based data that needs to be shared quickly between various services
-Teranode microservices make use of the Lustre file system in order to share subtree and tx data, eliminating the need for redundant propagation of subtrees over grpc or message queues. The services sharing Subtree data through this system can be seen here:
-
-![lustre_fs.svg](img/plantuml/lustre_fs.svg)
-
-## 2. Functionality
-
-The subtree validator is a service that validates subtrees. After validating them, it will update the relevant stores accordingly.
-
-### 2.1. Receiving UTXOs and warming up the TXMeta Cache
+### 2.2. Receiving UTXOs and warming up the TXMeta Cache
 
 - The TX Validator service processes and validates new transactions.
 - After validating transactions, The Tx Validator Service sends them (in UTXO Meta format) to the Subtree Validation Service via Kafka.
@@ -100,7 +112,7 @@ The subtree validator is a service that validates subtrees. After validating the
 
 ![tx_validation_subtree_validation.svg](img/plantuml/validator/tx_validation_subtree_validation.svg)
 
-### 2.2. Receiving subtrees for validation
+### 2.3. Receiving subtrees for validation
 
 - The P2P service is responsible for receiving new subtrees from the network. When a new subtree is found, it will notify the subtree validation service via the Kafka `kafka_subtreesConfig` producer.
 
@@ -118,7 +130,7 @@ In addition to the P2P Service, the Block Validation service can also request fo
 
 The detail of how the subtree is validated will be described in the next section.
 
-### 2.3. Validating the Subtrees
+### 2.4. Validating the Subtrees
 
 In the previous section, the process of validating a subtree was described. Here, we will go into more detail about the validation process.
 
@@ -136,7 +148,7 @@ The validation process is as follows:
     - If the tx metadata is not found in the UTXO store, the Validator will fetch the UTXO from the remote asset server.
     - If the tx is not found, the tx will be marked as invalid, and the subtree validation will fail.
 
-### 2.4. Subtree Locking Mechanism
+### 2.5. Subtree Locking Mechanism
 
 To prevent concurrent validation of the same subtree, the service implements a file-based locking mechanism:
 
@@ -147,7 +159,7 @@ To prevent concurrent validation of the same subtree, the service implements a f
 
 The locking implementation is designed to be resilient across distributed systems by leveraging the shared filesystem.
 
-### 2.5. Distributed Pause Mechanism
+### 2.6. Distributed Pause Mechanism
 
 The Subtree Validation service implements a distributed pause mechanism that coordinates pausing across multiple pods in a Kubernetes cluster. This mechanism is essential for preventing UTXO state conflicts during block validation.
 
@@ -155,14 +167,14 @@ The Subtree Validation service implements a distributed pause mechanism that coo
 
 **Key Features:**
 
-1. **Distributed Lock**: Uses a special lock file `__SUBTREE_PAUSE__.lock` in shared storage (quorum path)
-2. **Heartbeat Updates**: The lock file timestamp is updated every `timeout/2` seconds (default: 5 seconds) to indicate the pause is still active
-3. **Automatic Crash Recovery**: Stale locks (older than the configured timeout) are automatically detected and cleaned up
+1. **Distributed Lock** — Uses a special lock file `__SUBTREE_PAUSE__.lock` in shared storage (quorum path)
+2. **Heartbeat Updates** — The lock file timestamp is updated every `timeout/2` seconds (default: 5 seconds) to indicate the pause is still active
+3. **Automatic Crash Recovery** — Stale locks (older than the configured timeout) are automatically detected and cleaned up
 4. **Two-Level Checking**:
 
     - Fast local atomic boolean check (no I/O)
     - Reliable distributed lock check when local flag is false
-5. **Graceful Fallback**: Falls back to local-only pause if quorum is not initialized (for tests)
+5. **Graceful Fallback** — Falls back to local-only pause if quorum is not initialized (for tests)
 
 **How It Works:**
 
@@ -170,8 +182,9 @@ The Subtree Validation service implements a distributed pause mechanism that coo
 2. A distributed lock is created in the shared storage with automatic heartbeat
 3. All other pods check `isPauseActive()` before processing subtrees:
 
-   - First checks local atomic flag (fast path)
-   - If local flag is false, checks for distributed lock
+    - First checks local atomic flag (fast path)
+    - If local flag is false, checks for distributed lock
+
 4. If pause is active, subtree processing is skipped
 5. When block validation completes, the lock is released
 6. If a pod crashes during validation, the lock becomes stale after the timeout period and is automatically cleaned up by other pods
@@ -183,9 +196,74 @@ The distributed pause mechanism uses existing subtree validation settings:
 - `subtree_quorum_path`: Path to shared storage for lock files
 - `subtree_quorum_absolute_timeout`: Timeout for lock staleness (default: 30 seconds)
 
+### 2.7. Orphanage Management
+
+The Subtree Validation service implements an orphanage mechanism to handle transactions that arrive before their parent transactions are available. This is essential for maintaining processing continuity when transactions arrive out of order.
+
+**What are Orphaned Transactions?**
+
+A transaction becomes "orphaned" when:
+
+- It references inputs from parent transactions that are not yet in the UTXO store
+- The parent transactions are expected to arrive shortly (e.g., in the same subtree or recent subtrees)
+
+**Orphanage Workflow:**
+
+1. **Detection** — During subtree validation, if a transaction's inputs cannot be found, it's placed in the orphanage
+2. **Tracking** — The orphanage tracks which parent transaction IDs are needed
+3. **Resolution** — When parent transactions are processed, orphaned children are automatically resolved
+4. **Timeout** — Orphaned transactions that remain unresolved after the timeout period are cleaned up
+
+**Configuration:**
+
+- `subtreevalidation_orphanageTimeout`: Duration before orphaned transactions are cleaned up (default: 30 seconds)
+
+**Benefits:**
+
+- Handles out-of-order transaction arrival gracefully
+- Prevents transaction validation failures due to timing issues
+- Maintains high throughput during burst traffic
+- Automatically recovers when parent transactions arrive
+
+### 2.8. Level Calculation for Merkle Trees
+
+The Subtree Validation service performs level calculation to optimize merkle tree processing. This feature improves performance by pre-calculating the hierarchical structure of subtrees.
+
+**What is Level Calculation?**
+
+Each subtree contains transactions organized in a merkle tree structure. Level calculation determines:
+
+- The number of levels in the merkle tree
+- The number of transactions at each level
+- Memory allocation requirements for processing
+
+**How It Works:**
+
+1. **Tree Analysis** — The service analyzes the subtree structure to determine the total number of transactions
+2. **Level Computation** — Calculates the number of levels needed based on transaction count
+3. **Pre-allocation** — Allocates memory slices based on calculated level sizes
+4. **Optimized Processing** — Processes the subtree level by level for optimal memory usage
+
+**Benefits:**
+
+- **Memory Efficiency** — Pre-allocates exact memory needed, reducing allocations
+- **Performance** — Avoids repeated slice growth during processing
+- **Predictability** — Known memory requirements before processing begins
+
+**Example:**
+
+For a subtree with 1,000 transactions:
+
+- Level 0 (leaves): 1,000 transaction hashes
+- Level 1: 500 intermediate nodes
+- Level 2: 250 nodes
+- ... and so on until the root
+
+The level calculation pre-determines this structure, allowing optimal memory allocation.
+
 ## 3. gRPC Protobuf Definitions
 
-The Subtree Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen [here](../../references/protobuf_docs/subtreevalidationProto.md).
+The Subtree Validation Service uses gRPC for communication between nodes. The protobuf definitions used for defining the service methods and message formats can be seen in the [Subtree Validation Protobuf Reference](../../references/protobuf_docs/subtreevalidationProto.md).
 
 ## 4. Data Model
 
@@ -251,7 +329,7 @@ The Subtree Validation Service uses gRPC for communication between nodes. The pr
 To run the Subtree Validation Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_USERNAME] go run -SubtreeValidation=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -subtreevalidation=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Subtree Validation Service locally.
@@ -259,7 +337,6 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 ## 8. Configuration Settings
 
 For comprehensive configuration documentation including all settings, defaults, and interactions, see the [subtree Validation Settings Reference](../../references/settings/services/subtreeValidation_settings.md).
-
 
 ## 9. Other Resources
 

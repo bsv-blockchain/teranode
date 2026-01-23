@@ -31,18 +31,18 @@ Tests are organized in two main locations:
 
 1. **Dedicated test folders** (`/test/[category]/`):
 
-   - `/test/tna/` - Node responsibilities tests
-   - `/test/tnb/` - Transaction validation tests
-   - `/test/tnd/` - Block propagation tests
-   - `/test/tnf/` - Longest chain tracking tests
-   - `/test/tnj/` - Consensus rules tests
-   - `/test/tec/` - Error handling tests
+    - `/test/tna/` - Node responsibilities tests
+    - `/test/tnb/` - Transaction validation tests
+    - `/test/tnd/` - Block propagation tests
+    - `/test/tnf/` - Longest chain tracking tests
+    - `/test/tnj/` - Consensus rules tests
+    - `/test/tec/` - Error handling tests
 
 2. **Integration tests** (`/test/e2e/daemon/`):
 
-   - `tnc*_test.go` - Block assembly tests
-   - `tne*_test.go` - Block validation tests
-   - Additional integration tests for various requirements
+    - `tnc*_test.go` - Block assembly tests
+    - `tne*_test.go` - Block validation tests
+    - Additional integration tests for various requirements
 
 Test files follow a naming convention: `tn[x][number]_test.go` where x is the category letter and number corresponds to the specific requirement.
 
@@ -124,30 +124,30 @@ The naming convention for files in this folder is as follows:
 For example:
 
 - `tna1_test.go` covers TNA-1: `Teranode must broadcast new transactions to all nodes (although new transaction broadcasts do not necessarily need to reach all nodes)`.
-  - **Implementation**: The test starts three distinct Teranode instances in Docker containers. It sends 35 transactions to the first node and verifies transaction propagation by checking that at least one of these transactions appears in subtree notifications received from the network, confirming the broadcast functionality.
+    - **Implementation**: The test starts three distinct Teranode instances in Docker containers. It sends 35 transactions to the first node and verifies transaction propagation by checking that at least one of these transactions appears in subtree notifications received from the network, confirming the broadcast functionality.
 
 - `tna2_test.go` covers TNA-2: `Teranode collects new transactions into a block`.
-  - **Implementation**: The test starts three Teranode instances in Docker containers and runs three sub-tests to verify transaction collection: (1) single transaction propagation - sending one transaction and verifying it appears in all nodes' block assembly, (2) multiple transaction propagation - sending 5 sequential transactions and confirming all appear in all nodes' block assembly, and (3) concurrent transaction propagation - sending 10 simultaneous transactions and verifying their presence in block assembly on all nodes.
+    - **Implementation**: The test starts three Teranode instances in Docker containers and runs three sub-tests to verify transaction collection: (1) single transaction propagation - sending one transaction and verifying it appears in all nodes' block assembly, (2) multiple transaction propagation - sending 5 sequential transactions and confirming all appear in all nodes' block assembly, and (3) concurrent transaction propagation - sending 10 simultaneous transactions and verifying their presence in block assembly on all nodes.
 
 - `tna4_test.go` covers TNA-4: `Teranode must broadcast the block to all nodes when it finds a proof-of-work`.
-  - **Implementation**: The test configures three Teranode nodes and sets up notification listeners on two receiving nodes. It sends transactions to the first node, mines a block containing these transactions, and then verifies that all receiving nodes get block notifications with the correct block hash. It also confirms that each node successfully stores the block in its blockchain database, proving complete block propagation across the network.
+    - **Implementation**: The test configures three Teranode nodes and sets up notification listeners on two receiving nodes. It sends transactions to the first node, mines a block containing these transactions, and then verifies that all receiving nodes get block notifications with the correct block hash. It also confirms that each node successfully stores the block in its blockchain database, proving complete block propagation across the network.
 
 - TNA-5: `Teranode must only accept the block if all transactions in it are valid and not already spent`
-  - **Implementation**: This requirement is covered extensively by the `test/sequentialtest/double_spend/double_spend_test.go` file, which contains comprehensive tests for double-spend detection and handling across multiple storage backends (SQLite, Postgres, and Aerospike). These tests verify:
-      1. **Single Double-Spend Detection**: Tests that Teranode can detect and properly handle simple double-spend attempts.
-      2. **Multiple Conflicting Transactions**: Verifies detection of multiple transactions conflicting with each other across different blocks.
-      3. **Transaction Chain Conflicts**: Tests handling of entire chains of transactions that conflict with each other.
-      4. **Double-Spend Forks**: Tests complex scenarios with competing chain forks containing conflicting transactions.
-      5. **Chain Reorganization**: Verifies proper handling of transaction status during chain reorganizations.
-      6. **Triple-Forked Chains**: Tests advanced scenarios with three competing chain forks.
-      7. **Nested Transaction Conflicts**: Ensures correct handling of nested transaction dependencies in double-spend scenarios.
-      8. **Frozen Transaction Handling**: Tests interaction of double-spends with frozen transactions.
+    - **Implementation**: This requirement is covered extensively by the `test/sequentialtest/double_spend/double_spend_test.go` file, which contains comprehensive tests for double-spend detection and handling across multiple storage backends (SQLite, Postgres, and Aerospike). These tests verify:
+        1. **Single Double-Spend Detection**: Tests that Teranode can detect and properly handle simple double-spend attempts.
+        2. **Multiple Conflicting Transactions**: Verifies detection of multiple transactions conflicting with each other across different blocks.
+        3. **Transaction Chain Conflicts**: Tests handling of entire chains of transactions that conflict with each other.
+        4. **Double-Spend Forks**: Tests complex scenarios with competing chain forks containing conflicting transactions.
+        5. **Chain Reorganization**: Verifies proper handling of transaction status during chain reorganizations.
+        6. **Triple-Forked Chains**: Tests advanced scenarios with three competing chain forks.
+        7. **Nested Transaction Conflicts**: Ensures correct handling of nested transaction dependencies in double-spend scenarios.
+        8. **Frozen Transaction Handling**: Tests interaction of double-spends with frozen transactions.
 
-      The tests confirm that Teranode correctly identifies double-spend attempts, properly marks conflicting transactions, and maintains UTXO integrity throughout chain reorganizations. Additional transaction validity checks are provided by the Block Development Kit (BDK) tests.
-  - These tests collectively ensure that Teranode only accepts blocks containing valid, non-double-spent transactions, fulfilling the TNA-5 requirement.
+        The tests confirm that Teranode correctly identifies double-spend attempts, properly marks conflicting transactions, and maintains UTXO integrity throughout chain reorganizations. Additional transaction validity checks are provided by the Block Development Kit (BDK) tests.
+    - These tests collectively ensure that Teranode only accepts blocks containing valid, non-double-spent transactions, fulfilling the TNA-5 requirement.
 
 - `tna6_test.go` covers TNA-6: `Teranode must express its acceptance of a block by working on creating the next block in the chain, using the hash of the accepted block as the previous hash`.
-  - **Implementation**: The test instantiates three Teranode nodes, mines a block on the first node, and then verifies that the block is accepted by checking that it becomes the best block. It then retrieves a mining candidate from each node and confirms that they all use the accepted block's hash as their previous hash, demonstrating that all nodes are building on top of the accepted block.
+    - **Implementation**: The test instantiates three Teranode nodes, mines a block on the first node, and then verifies that the block is accepted by checking that it becomes the best block. It then retrieves a mining candidate from each node and confirms that they all use the accepted block's hash as their previous hash, demonstrating that all nodes are building on top of the accepted block.
 
 ### Running TNA Tests
 
@@ -218,8 +218,9 @@ The naming convention for files in this folder is as follows:
 `tnb2_test.go` covers TNB-2: Teranode must validate transactions to ensure they follow consensus rules.
 
 - **Implementation**: The test includes multiple test cases:
-  1. **TestUTXOValidation**: Verifies that Teranode correctly validates transaction inputs against the UTXO set by creating a transaction using coinbase funds, sending it to a node, mining a block to confirm the transaction, and then attempting to double-spend the same UTXO. The test ensures that the double-spend is rejected, confirming that Teranode properly tracks and validates UTXO spending.
-  2. **TestScriptValidation**: Validates that Teranode correctly verifies transaction scripts by creating both valid and invalid signature scenarios. It creates a transaction with an invalid signature (using a different private key than the one that controls the UTXO) and verifies that Teranode rejects it, ensuring proper script execution and validation.
+
+    1. **TestUTXOValidation**: Verifies that Teranode correctly validates transaction inputs against the UTXO set by creating a transaction using coinbase funds, sending it to a node, mining a block to confirm the transaction, and then attempting to double-spend the same UTXO. The test ensures that the double-spend is rejected, confirming that Teranode properly tracks and validates UTXO spending.
+    2. **TestScriptValidation**: Validates that Teranode correctly verifies transaction scripts by creating both valid and invalid signature scenarios. It creates a transaction with an invalid signature (using a different private key than the one that controls the UTXO) and verifies that Teranode rejects it, ensuring proper script execution and validation.
 
 ##### Additional Network Policy and Integration Tests
 
@@ -328,18 +329,20 @@ The naming convention for these test files is:
 `tnc1_2_test.go` covers TNC-1.2: Teranode must refer to the hash of the previous block upon which the candidate block is being built.
 
 - **Implementation**: The test consists of two test cases:
-  1. **TestCheckPrevBlockHash**: This test sends transactions, mines a block, and then verifies that the mining candidate's previous hash reference matches the current best block hash. This ensures that new blocks are properly built on top of the current chain.
-  2. **TestPrevBlockHashAfterReorg**: This test creates a chain reorganization scenario by mining blocks on different nodes to create a longer chain. It then verifies that the mining candidate from the first node correctly updates to reference the tip of the longer chain. This confirms that Teranode properly handles chain reorganizations when building candidate blocks.
+
+    1. **TestCheckPrevBlockHash**: This test sends transactions, mines a block, and then verifies that the mining candidate's previous hash reference matches the current best block hash. This ensures that new blocks are properly built on top of the current chain.
+    2. **TestPrevBlockHashAfterReorg**: This test creates a chain reorganization scenario by mining blocks on different nodes to create a longer chain. It then verifies that the mining candidate from the first node correctly updates to reference the tip of the longer chain. This confirms that Teranode properly handles chain reorganizations when building candidate blocks.
 
 #### TNC-1.3: Coinbase Transaction
 
 `tnc1_3_test.go` covers TNC-1.3: Teranode must add a Coinbase transaction in the block, the amount of this transaction corresponding to the sum of the block reward and the sum of all transaction fees.
 
 - **Implementation**: The test contains multiple test cases:
-  1. **TestCandidateContainsAllTxs**: This test subscribes to blockchain notifications, sends multiple transactions, and verifies that the mining candidate contains all these transactions by checking subtree notifications and comparing Merkle proofs across different nodes.
-  2. **TestCheckHashPrevBlockCandidate**: A test that verifies the previous block hash is correctly referenced in the candidate block.
-  3. **TestCoinbaseTXAmount (TNC-1.3-TC-01)**: This test case specifically verifies the balance between the mining candidate coinbase value and the total output satoshis of the coinbase transaction, ensuring that the block reward is correctly calculated.
-  4. **TestCoinbaseTXAmount2 (TNC-1.3-TC-02)**: This test case focuses on fee calculation, ensuring that the fees from all transactions are correctly included in the coinbase amount.
+
+    1. **TestCandidateContainsAllTxs**: This test subscribes to blockchain notifications, sends multiple transactions, and verifies that the mining candidate contains all these transactions by checking subtree notifications and comparing Merkle proofs across different nodes.
+    2. **TestCheckHashPrevBlockCandidate**: A test that verifies the previous block hash is correctly referenced in the candidate block.
+    3. **TestCoinbaseTXAmount (TNC-1.3-TC-01)**: This test case specifically verifies the balance between the mining candidate coinbase value and the total output satoshis of the coinbase transaction, ensuring that the block reward is correctly calculated.
+    4. **TestCoinbaseTXAmount2 (TNC-1.3-TC-02)**: This test case focuses on fee calculation, ensuring that the fees from all transactions are correctly included in the coinbase amount.
 
 ### TNC2 Test Description
 
@@ -348,8 +351,9 @@ The naming convention for these test files is:
 `tnc2_1_test.go` covers TNC-2.1: Each candidate block must have a unique identifier.
 
 - **Implementation**: The test contains two test cases:
-  1. **TestUniqueCandidateIdentifiers**: This test obtains multiple mining candidates and verifies they have unique identifiers, both within the same height and across different block heights after mining. This ensures that each candidate has a proper identifier for tracking.
-  2. **TestConcurrentCandidateIdentifiers**: This test performs concurrent requests for mining candidates and verifies that all returned candidates have unique identifiers even under load. It creates 10 concurrent requests and checks that all returned IDs are unique, ensuring the candidate generation process maintains uniqueness under concurrent conditions.
+
+    1. **TestUniqueCandidateIdentifiers**: This test obtains multiple mining candidates and verifies they have unique identifiers, both within the same height and across different block heights after mining. This ensures that each candidate has a proper identifier for tracking.
+    2. **TestConcurrentCandidateIdentifiers**: This test performs concurrent requests for mining candidates and verifies that all returned candidates have unique identifiers even under load. It creates 10 concurrent requests and checks that all returned IDs are unique, ensuring the candidate generation process maintains uniqueness under concurrent conditions.
 
 ### Additional Block Assembly System Tests
 
@@ -510,12 +514,13 @@ The naming convention for files in this folder is descriptive, using names like 
 `locktime_test.go` covers the consensus rules regarding transaction locktime enforcement:
 
 - **Implementation**: The test runs multiple locktime scenarios to verify Teranode's enforcement of transaction locktimes. It tests four specific scenarios:
-  1. **Future Height Non-Final**: Transactions with a locktime set to a future block height and non-final sequence number, verifying they are not included in blocks.
-  2. **Future Height Final**: Transactions with a locktime set to a future block height but with a final sequence number (0xFFFFFFFF), confirming they are included in blocks despite the locktime.
-  3. **Future Timestamp Non-Final**: Transactions with a locktime set to a future timestamp and non-final sequence number, verifying they are not included in blocks.
-  4. **Future Timestamp Final**: Transactions with a locktime set to a future timestamp but with a final sequence number, confirming they are included in blocks despite the locktime.
 
-  These tests verify that Teranode correctly implements Bitcoin's locktime functionality, which allows transactions to be time-locked until a specific block height or time is reached, unless overridden by setting all input sequence numbers to 0xFFFFFFFF.
+    1. **Future Height Non-Final**: Transactions with a locktime set to a future block height and non-final sequence number, verifying they are not included in blocks.
+    2. **Future Height Final**: Transactions with a locktime set to a future block height but with a final sequence number (0xFFFFFFFF), confirming they are included in blocks despite the locktime.
+    3. **Future Timestamp Non-Final**: Transactions with a locktime set to a future timestamp and non-final sequence number, verifying they are not included in blocks.
+    4. **Future Timestamp Final**: Transactions with a locktime set to a future timestamp but with a final sequence number, confirming they are included in blocks despite the locktime.
+
+    These tests verify that Teranode correctly implements Bitcoin's locktime functionality, which allows transactions to be time-locked until a specific block height or time is reached, unless overridden by setting all input sequence numbers to 0xFFFFFFFF.
 
 ### Running TNJ Tests
 

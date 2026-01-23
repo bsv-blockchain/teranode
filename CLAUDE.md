@@ -182,6 +182,28 @@ The project includes a Bitcoin expert agent (`.claude/agents/bitcoin-expert.md`)
 - `largetxmetacache`: Production cache size
 - `aerospike`: Tests requiring Aerospike
 
+## Coding Conventions
+
+**All code must follow the standards defined in [`docs/references/codingConventions.md`](docs/references/codingConventions.md).**
+
+This includes:
+- Naming conventions (packages, variables, functions, interfaces, types, files)
+- Error handling patterns
+- Concurrency best practices
+- Testing standards (testify/require, table-driven tests)
+- Code formatting and linting rules
+- Commenting guidelines
+
+**Key highlights:**
+- File names: `snake_case.go` format (enforced by CI)
+- Variables: CamelCase for exported, camelCase for internal
+- Functions: VerbNoun pattern (CalculateTotal, ReadFile)
+- Getters: No "Get" prefix - use `Name()` not `GetName()`
+- Interfaces: Single-method ends in "-er" (Reader, Writer)
+- Tests: Use `require` from testify, avoid `t.Parallel()` unless testing concurrency
+- Error handling: Always check `if err != nil`, use `errors.New` not `fmt.Errorf`
+- Comments: Explain "why" not "what"
+
 ## Development Notes
 
 - Always run linting before commits: `make lint`
@@ -192,6 +214,54 @@ The project includes a Bitcoin expert agent (`.claude/agents/bitcoin-expert.md`)
 - Use TestContainers for integration tests requiring external services
 - Don't use mock blockchain client/store - you can use a real one using the sqlitememory store
 - Don't use mock kafka - you can use in_memory_kafka.go
+- **Log messages must always be on a single line** - never use multi-line log statements
+
+### Service Interface Design Pattern
+
+When creating or updating service interfaces and clients, follow this pattern to avoid exposing protobuf/gRPC types:
+
+**Interface Layer** (`Interface.go`):
+- Define interfaces using native Go types and existing domain types (e.g., `*PeerInfo`, `[]string`, `bool`, `error`)
+- Do NOT expose protobuf types (e.g., `*p2p_api.GetPeersResponse`) in interface signatures
+- Use simple, idiomatic Go return types: `error` for success/fail, `bool` for yes/no, `[]string` for lists
+- Prefer existing domain structs over creating new minimal types
+
+**Client Layer** (`Client.go`):
+- Keep the protobuf/gRPC import for internal use (e.g., `import "github.com/bsv-blockchain/teranode/services/p2p/p2p_api"`)
+- Maintain internal gRPC client field (e.g., `client p2p_api.PeerServiceClient`)
+- Public methods match the interface signatures (native types)
+- Convert between native types and protobuf types internally using helper functions
+
+**Benefits**:
+- Cleaner API boundaries between services
+- Reduces coupling to gRPC implementation details
+- Makes interfaces more testable (no protobuf dependencies needed for mocks)
+- Uses idiomatic Go types that are easier to work with
+
+**Example**:
+```go
+// Interface.go - Clean, no protobuf types
+type ClientI interface {
+    GetPeers(ctx context.Context) ([]*PeerInfo, error)
+    BanPeer(ctx context.Context, peerID string, duration int64, reason string) error
+    IsBanned(ctx context.Context, peerID string) (bool, error)
+    ListBanned(ctx context.Context) ([]string, error)
+}
+
+// Client.go - Internal conversion
+type Client struct {
+    client p2p_api.PeerServiceClient // gRPC client
+}
+
+func (c *Client) GetPeers(ctx context.Context) ([]*PeerInfo, error) {
+    resp, err := c.client.GetPeers(ctx, &emptypb.Empty{})
+    if err != nil {
+        return nil, err
+    }
+    // Convert p2p_api types to native PeerInfo
+    return convertFromAPIResponse(resp), nil
+}
+```
 
 ## Git Workflow (Fork Mode)
 

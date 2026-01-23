@@ -20,6 +20,9 @@ var (
 	// prometheusBlockAssemblyAddTx measures transaction addition time
 	prometheusBlockAssemblyAddTx prometheus.Histogram
 
+	// prometheusBlockAssemblyAddCounter counts number of transactions added
+	prometheusBlockAssemblyAddTxCounter prometheus.Counter
+
 	// prometheusBlockAssemblyRemoveTx measures transaction removal time
 	prometheusBlockAssemblyRemoveTx prometheus.Histogram
 
@@ -42,20 +45,37 @@ var (
 	prometheusBlockAssemblyUpdateSubtreesDAH prometheus.Histogram
 
 	// Additional metrics for block assembler operations
-	prometheusBlockAssemblerGetMiningCandidate     prometheus.Counter
-	prometheusBlockAssemblerSubtreeCreated         prometheus.Counter
-	prometheusBlockAssemblerTransactions           prometheus.Gauge
-	prometheusBlockAssemblerQueuedTransactions     prometheus.Gauge
-	prometheusBlockAssemblerSubtrees               prometheus.Gauge
-	prometheusBlockAssemblerTxMetaGetDuration      prometheus.Histogram
-	prometheusBlockAssemblerReorg                  prometheus.Counter
-	prometheusBlockAssemblerReorgDuration          prometheus.Histogram
-	prometheusBlockAssemblerGetReorgBlocksDuration prometheus.Histogram
-	prometheusBlockAssemblerUpdateBestBlock        prometheus.Histogram
-	prometheusBlockAssemblyBestBlockHeight         prometheus.Gauge
-	prometheusBlockAssemblyCurrentBlockHeight      prometheus.Gauge
-	prometheusBlockAssemblerCurrentState           prometheus.Gauge
-	prometheusBlockAssemblerGenerateBlocks         prometheus.Histogram
+	prometheusBlockAssemblerGetMiningCandidate          prometheus.Counter
+	prometheusBlockAssemblerSubtreeCreated              prometheus.Counter
+	prometheusBlockAssemblerTransactions                prometheus.Gauge
+	prometheusBlockAssemblerQueuedTransactions          prometheus.Gauge
+	prometheusBlockAssemblerSubtrees                    prometheus.Gauge
+	prometheusBlockAssemblerTxMetaGetDuration           prometheus.Histogram
+	prometheusBlockAssemblerReorg                       prometheus.Counter
+	prometheusBlockAssemblerReorgDuration               prometheus.Histogram
+	prometheusBlockAssemblerGetReorgBlocksDuration      prometheus.Histogram
+	prometheusBlockAssemblerUpdateBestBlock             prometheus.Histogram
+	prometheusBlockAssemblyBestBlockHeight              prometheus.Gauge
+	prometheusBlockAssemblyCurrentBlockHeight           prometheus.Gauge
+	prometheusBlockAssemblerCurrentState                prometheus.Gauge
+	prometheusBlockAssemblerStateTransitions            *prometheus.CounterVec
+	prometheusBlockAssemblerStateDuration               *prometheus.HistogramVec
+	prometheusBlockAssemblerGenerateBlocks              prometheus.Histogram
+	prometheusBlockAssemblerUtxoIndexReady              *prometheus.GaugeVec
+	prometheusBlockAssemblerUtxoIndexWaitDuration       *prometheus.HistogramVec
+	prometheusBlockAssemblerGetUnminedTxIteratorTime    *prometheus.HistogramVec
+	prometheusBlockAssemblerIteratorProcessingTime      *prometheus.HistogramVec
+	prometheusBlockAssemblerIteratorTransactionsTotal   *prometheus.CounterVec
+	prometheusBlockAssemblerIteratorTransactionsStats   *prometheus.CounterVec
+	prometheusBlockAssemblerMarkTransactionsTime        prometheus.Histogram
+	prometheusBlockAssemblerMarkTransactionsCount       prometheus.Counter
+	prometheusBlockAssemblerSortTransactionsTime        *prometheus.HistogramVec
+	prometheusBlockAssemblerValidateParentChainTime     prometheus.Histogram
+	prometheusBlockAssemblerValidateParentChainFiltered prometheus.Counter
+	prometheusBlockAssemblerAddDirectlyTime             prometheus.Histogram
+	prometheusBlockAssemblerAddDirectlyTotal            prometheus.Counter
+	prometheusBlockAssemblerAddDirectlyBatchTime        prometheus.Histogram
+	prometheusBlockAssemblerSubtreeStoredHist           prometheus.Histogram
 )
 
 var (
@@ -88,6 +108,15 @@ func _initPrometheusMetrics() {
 			Name:      "add_tx",
 			Help:      "Histogram of AddTx in the blockassembly service",
 			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyAddTxCounter = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "add_tx_counter",
+			Help:      "Number of transactions added in the blockassembly service",
 		},
 	)
 
@@ -149,12 +178,13 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	prometheusBlockAssemblerSubtreeCreated = promauto.NewCounter(
-		prometheus.CounterOpts{
+	prometheusBlockAssemblerSubtreeStoredHist = promauto.NewHistogram(
+		prometheus.HistogramOpts{
 			Namespace: "teranode",
 			Subsystem: "blockassembly",
-			Name:      "subtree_created",
-			Help:      "Number of subtrees created in the block assembler",
+			Name:      "subtree_stored",
+			Help:      "Histogram of subtree stored duration in block assembler",
+			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
 
@@ -279,12 +309,174 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusBlockAssemblerStateTransitions = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "state_transitions_total",
+			Help:      "Total number of state transitions",
+		},
+		[]string{"from", "to"},
+	)
+
+	prometheusBlockAssemblerStateDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "state_duration_seconds",
+			Help:      "Time spent in each state",
+			Buckets:   []float64{0.001, 0.01, 0.1, 0.5, 1, 2, 5, 10, 30, 60},
+		},
+		[]string{"state"},
+	)
+
 	prometheusBlockAssemblerGenerateBlocks = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
 			Subsystem: "blockassembly",
 			Name:      "generate_blocks",
 			Help:      "Histogram of generating blocks in block assembler",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockAssemblerUtxoIndexReady = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "utxo_index_ready",
+			Help:      "Status of UTXO index readiness (0=not ready, 1=ready, 2=error)",
+		},
+		[]string{"index_name"},
+	)
+
+	prometheusBlockAssemblerUtxoIndexWaitDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "utxo_index_wait_seconds",
+			Help:      "Time taken waiting for UTXO index to become ready",
+			Buckets:   []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120, 300},
+		},
+		[]string{"index_name", "status"},
+	)
+
+	prometheusBlockAssemblerGetUnminedTxIteratorTime = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "get_unmined_tx_iterator_seconds",
+			Help:      "Time taken to get unmined transaction iterator from UTXO store",
+			Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30},
+		},
+		[]string{"full_scan", "status"},
+	)
+
+	prometheusBlockAssemblerIteratorProcessingTime = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "iterator_processing_seconds",
+			Help:      "Time taken to process all transactions from the unmined iterator",
+			Buckets:   []float64{0.1, 0.5, 1, 5, 10, 30, 60, 120, 300, 600},
+		},
+		[]string{"full_scan"},
+	)
+
+	prometheusBlockAssemblerIteratorTransactionsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "iterator_transactions_total",
+			Help:      "Total number of transactions processed from the unmined iterator",
+		},
+		[]string{"full_scan"},
+	)
+
+	prometheusBlockAssemblerIteratorTransactionsStats = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "iterator_transactions_stats",
+			Help:      "Statistics about transactions processed from the iterator",
+		},
+		[]string{"full_scan", "category"},
+	)
+
+	prometheusBlockAssemblerMarkTransactionsTime = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "mark_transactions_on_longest_chain_seconds",
+			Help:      "Time taken to mark transactions as mined on longest chain",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockAssemblerMarkTransactionsCount = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "mark_transactions_on_longest_chain_total",
+			Help:      "Total number of transactions marked as mined on longest chain",
+		},
+	)
+
+	prometheusBlockAssemblerSortTransactionsTime = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "sort_transactions_seconds",
+			Help:      "Time taken to sort unmined transactions by createdAt",
+			Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10},
+		},
+		[]string{"transaction_count_bucket"},
+	)
+
+	prometheusBlockAssemblerValidateParentChainTime = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "validate_parent_chain_seconds",
+			Help:      "Time taken to validate parent chain for unmined transactions",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockAssemblerValidateParentChainFiltered = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "validate_parent_chain_filtered_total",
+			Help:      "Total number of transactions filtered out during parent chain validation",
+		},
+	)
+
+	prometheusBlockAssemblerAddDirectlyTime = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "add_directly_seconds",
+			Help:      "Time taken for individual AddDirectly calls to subtree processor",
+			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	prometheusBlockAssemblerAddDirectlyTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "add_directly_total",
+			Help:      "Total number of transactions added directly to subtree processor",
+		},
+	)
+
+	prometheusBlockAssemblerAddDirectlyBatchTime = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "add_directly_batch_seconds",
+			Help:      "Time taken to add all unmined transactions to subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)

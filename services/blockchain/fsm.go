@@ -13,8 +13,10 @@ import (
 
 // NewFiniteStateMachine creates a new finite state machine for the blockchain service.
 //
-// States: Idle, Running, CatchingBlocks, LegacySyncing
-// Events: Run, CatchupBlocks, LegacySync, Stop
+// States: IDLE, RUNNING, CATCHINGBLOCKS, LEGACYSYNCING
+// Events: RUN, CATCHUPBLOCKS, LEGACYSYNC, STOP
+//
+// Automatically sends notifications on state transitions and updates Prometheus metrics.
 func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 	// Define callbacks
 	callbacks := fsm.Callbacks{
@@ -70,7 +72,6 @@ func (b *Blockchain) NewFiniteStateMachine(opts ...func(*fsm.FSM)) *fsm.FSM {
 				Name: blockchain_api.FSMEventType_STOP.String(),
 				Src: []string{
 					blockchain_api.FSMStateType_RUNNING.String(),
-					blockchain_api.FSMStateType_CATCHINGBLOCKS.String(),
 					blockchain_api.FSMStateType_LEGACYSYNCING.String(),
 				},
 				Dst: blockchain_api.FSMStateType_IDLE.String(),

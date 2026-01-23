@@ -19,6 +19,9 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("block %s does not exist", blockHash.String())
 	}
 
+	// Invalidate response cache to ensure cached blocks reflect updated invalid field
+	defer s.ResetResponseCache()
+
 	// recursively update all children blocks to invalid in 1 query
 	q := `
 		UPDATE blocks
@@ -27,12 +30,6 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	`
 	if _, err = s.db.ExecContext(ctx, q, blockHash.CloneBytes()); err != nil {
 		return errors.NewStorageError("error updating block to invalid", err)
-	}
-
-	s.ResetResponseCache()
-
-	if err := s.ResetBlocksCache(ctx); err != nil {
-		return errors.NewStorageError("error clearing caches", err)
 	}
 
 	return nil

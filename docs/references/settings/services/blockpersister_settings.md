@@ -1,151 +1,120 @@
-# Block Persister Settings
+# Block Persister Service Settings
 
 **Related Topic**: [Block Persister Service](../../../topics/services/blockPersister.md)
 
-The Block Persister service configuration is organized into several categories that control different aspects of the service's behavior. All settings can be provided via environment variables or configuration files.
+## Configuration Settings
 
-## Storage Configuration
+Settings are organized under the `BlockPersister` struct in `settings.Settings`.
 
-### State Management
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| Store | *url.URL | "file://./data/blockstore" | blockpersister_store | **CRITICAL** - Block data storage location |
+| HTTPListenAddress | string | ":8083" | blockpersister_httpListenAddress | HTTP server for blob store access |
+| Concurrency | int | 8 | blockpersister_concurrency | **CRITICAL** - Parallel subtree processing, reduced by half in all-in-one mode |
+| BatchMissingTransactions | bool | true | blockpersister_batchMissingTransactions | Enable batched transaction metadata retrieval |
+| SkipUTXODelete | bool | false | blockpersister_skipUTXODelete | Skip UTXO deletion processing |
+| PersistSleep | time.Duration | 10s | blockpersister_persistSleep | Sleep duration when no blocks available or after errors |
+| ProcessUTXOFiles | bool | true | blockpersister_processUTXOFiles | Enable UTXO additions/deletions file generation |
 
-- **State File (`blockpersister_stateFile`)**
-  - Type: `string`
-  - Default Value: `"file://./data/blockpersister_state.txt"`
-    - Purpose: Maintains the persister's processing state (last persisted block height and hash)
-  - Format: Supports both local file paths (`file://./path`) and remote storage URLs
-    - Impact: Critical for recovery after service restart and maintaining processing continuity
-  - Recovery Implications: If this file is lost, the service will need to reprocess blocks from the beginning
+### Related Settings (from Block struct)
 
-### Block Storage
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| ProcessTxMetaUsingStoreBatchSize | int | 1024 | blockvalidation_processTxMetaUsingStore_BatchSize | **SHARED** - Transaction metadata batch size (shared with Block Validation service) |
+| BlockStore | *url.URL | "file://./data/blockstore" | blockstore | Required when HTTP server enabled |
 
-- **Block Store URL (`blockPersisterStore`)**
-  - Type: `*url.URL`
-  - Default Value: `"file://./data/blockstore"`
-    - Purpose: Defines where block data files are stored
-  - Supported Formats:
+## Configuration Dependencies
 
-    - S3: `s3://bucket-name/prefix`
-    - Local filesystem: `file://./path/to/dir`
-    - Impact: Determines the persistence mechanism and reliability characteristics
+### HTTP Server
 
-- **HTTP Listen Address (`blockPersister_httpListenAddress`)**
-  - Type: `string`
-  - Default Value: `":8083"`
-    - Purpose: Controls the network interface and port for the HTTP server that serves block data
-    - Usage: If empty, no HTTP server is started; when configured, enables external access to blob store
-  - Security Consideration: In production environments, should be configured based on network security requirements
+- When `HTTPListenAddress` is not empty, HTTP server starts
+- Requires valid `Block.BlockStore` URL or returns configuration error
 
-## Processing Configuration
+### Concurrency Management
 
-### Block Selection and Timing
+- `Concurrency` reduced by half when `IsAllInOneMode` is true
+- Minimum concurrency of 1 enforced
 
-- **Persist Age (`BlockPersisterPersistAge`)**
-  - Type: `uint32`
-  - Default Value: Not specified in settings (varies by configuration)
-    - Purpose: Determines how many blocks behind the tip the persister stays
-    - Impact: Critical for avoiding reorgs by ensuring blocks are sufficiently confirmed
-    - Example: If set to 100, only blocks that are at least 100 blocks deep are processed
-  - Tuning Advice:
+### Block Processing Strategy
 
-    - Lower values: More immediate processing but higher risk of reprocessing due to reorgs
-    - Higher values: More conservative approach with minimal reorg risk
+- `PersistSleep` controls polling frequency when idle and after errors
+- Database `persisted_at` column tracks which blocks have been persisted
 
-- **Persist Sleep (`BlockPersisterPersistSleep`)**
-  - Type: `time.Duration`
-  - Default Value: Not specified in settings (varies by configuration)
-    - Purpose: Sleep duration between polling attempts when no blocks are available to process
-    - Impact: Controls polling frequency and system load during idle periods
-  - Tuning Advice:
+### Transaction Processing
 
-    - Shorter durations: More responsive but higher CPU usage
-    - Longer durations: More resource-efficient but less responsive
+- When `BatchMissingTransactions` is true, uses `ProcessTxMetaUsingStoreBatchSize`
+- **Note**: `ProcessTxMetaUsingStoreBatchSize` uses the `blockvalidation_` prefix (not `blockpersister_`) as it's a shared setting with the Block Validation service. Both services use the same batch size for consistent transaction metadata processing.
 
-### Performance Tuning
+### UTXO File Processing
 
-- **Processing Concurrency (`blockpersister_concurrency`)**
-  - Type: `int`
-  - Default Value: `8`
-    - Purpose: Controls the number of concurrent goroutines for processing subtrees
-    - Impact: Directly affects CPU utilization, memory usage, and throughput
-  - Tuning Advice:
+- When `ProcessUTXOFiles` is true (default), generates `.utxo-additions` and `.utxo-deletions` files for each block
+- These files are used by the UTXO Persister service to maintain UTXO sets
+- Set to false to disable UTXO file generation for performance in scenarios where UTXO sets are not needed
 
-    - Optimal value typically depends on available CPU cores
-    - For systems with 8+ cores, the default value is usually appropriate
-    - For high-performance systems, consider increasing to match available cores
+## Service Dependencies
 
-- **Batch Missing Transactions (`blockpersister_batchMissingTransactions`)**
-  - Type: `bool`
-  - Default Value: `true`
-    - Purpose: Controls whether transactions are fetched in batches from the store
-    - Impact: Can significantly improve performance by reducing the number of individual queries
-  - Tuning Advice: Generally should be kept enabled unless encountering specific issues
+| Dependency | Interface | Usage |
+|------------|-----------|-------|
+| BlockStore | blob.Store | **CRITICAL** - Block data storage |
+| SubtreeStore | blob.Store | **CRITICAL** - Subtree data storage |
+| UTXOStore | utxo.Store | **CRITICAL** - UTXO operations and transaction metadata |
+| BlockchainClient | blockchain.ClientI | **CRITICAL** - Block retrieval and operations |
 
-- **Process TxMeta Using Store Batch Size (`blockvalidation_processTxMetaUsingStore_BatchSize`)**
-  - Type: `int`
-  - Default Value: `1024`
-    - Purpose: Controls the batch size when processing transaction metadata from the store
-    - Impact: Affects performance and memory usage when fetching transaction data
-  - Tuning Advice: Higher values improve throughput at the cost of increased memory usage
+## Validation Rules
 
-### UTXO Management
+| Setting | Validation | Error |
+|---------|------------|-------|
+| Block.BlockStore | Required when HTTP server enabled | "blockstore setting error" |
+| Store | Must be valid URL format | Store creation failure |
 
-- **Skip UTXO Delete (`SkipUTXODelete`)**
-  - Type: `bool`
-  - Default Value: `false`
-    - Purpose: Controls whether UTXO deletions are skipped during processing
-    - Impact: When enabled, improves performance but affects UTXO set completeness
-  - Usage Scenarios:
+## Configuration Examples
 
-    - Enable during initial sync or recovery to improve performance
-    - Disable for normal operation to maintain complete UTXO tracking
+### Basic Configuration
 
-## Configuration Interactions and Dependencies
-
-### Storage Backend Selection
-
-The Block Persister supports multiple storage backends through the `blockPersisterStore` URL:
-
-**Local Filesystem:**
-
-```text
-file://./path/to/directory
+```bash
+blockpersister_store=file://./data/blockstore
+blockpersister_persistSleep=10s
 ```
 
-- Best for: Development, testing, single-node deployments
-- Advantages: Simple setup, fast access, no external dependencies
-- Limitations: Not suitable for distributed deployments
+### High Performance Configuration
 
-**S3-Compatible Storage:**
-
-```text
-s3://bucket-name/prefix
+```bash
+blockpersister_concurrency=16
+blockpersister_batchMissingTransactions=true
+blockvalidation_processTxMetaUsingStore_BatchSize=2048
 ```
 
-- Best for: Production deployments, distributed systems, cloud environments
-- Advantages: Highly durable, scalable, supports distributed access
-- Considerations: Requires proper S3 credentials and network connectivity
+### HTTP Server Configuration
 
-### Performance vs. Accuracy Trade-offs
+```bash
+blockpersister_httpListenAddress=:8083
+blockstore=file://./data/blockstore
+```
 
-Several settings involve trade-offs between performance and data completeness:
+### Disable UTXO File Processing
 
-1. **`blockpersister_concurrency`**: Higher values improve throughput but increase resource usage
-2. **`SkipUTXODelete`**: When enabled, improves performance during sync but affects UTXO tracking completeness
-3. **`blockpersister_batchMissingTransactions`**: Batching improves efficiency but may increase latency for individual operations
+```bash
+blockpersister_processUTXOFiles=false
+```
 
-### State Management and Recovery
+## Migration Notes
 
-The `blockpersister_stateFile` is critical for service continuity:
+### Settings Reorganization
 
-- The state file tracks the last successfully persisted block
-- On restart, the service resumes from this point
-- If the state file is corrupted or lost, manual intervention may be required
-- Consider implementing regular backups of the state file for production systems
+The Block Persister settings have been reorganized into a dedicated `BlockPersisterSettings` struct. The following environment variable names have changed:
 
-### Timing and Synchronization
+| Old Variable | New Variable |
+|--------------|--------------|
+| blockPersisterStore | blockpersister_store |
+| blockPersister_httpListenAddress | blockpersister_httpListenAddress |
+| blockPersister_persistSleep | blockpersister_persistSleep |
 
-The interaction between `BlockPersisterPersistAge` and `BlockPersisterPersistSleep` controls the service's responsiveness:
+### Removed Settings
 
-- `BlockPersisterPersistAge` ensures blocks are sufficiently confirmed before persistence
-- `BlockPersisterPersistSleep` controls how frequently the service checks for new blocks to process
-- Together, these settings balance responsiveness against system load and reorg risk
+The following settings have been **removed** in the current version as persistence state is now tracked in the database:
+
+- `blockPersister_stateFile` - No longer needed, persistence tracked in database `persisted_at` column
+- `blockpersister_persistAge` - No longer needed, blocks processed as soon as they're available
+- `blockpersister_enableDefensiveReorgCheck` - No longer needed, reorg handling simplified
+
+If you have these settings in your configuration files, they can be safely removed.

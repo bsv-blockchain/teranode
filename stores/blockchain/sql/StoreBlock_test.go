@@ -16,6 +16,9 @@ import (
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 var (
@@ -230,8 +233,7 @@ func TestStoreBlock_InvalidBlock(t *testing.T) {
 	defer s.Close()
 
 	// Store block marked as invalid
-	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer",
-		options.WithInvalid(true))
+	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer", options.WithInvalid(true))
 	require.NoError(t, err)
 	assert.Greater(t, blockID, uint64(0))
 	assert.Equal(t, uint32(1), height)
@@ -272,9 +274,8 @@ func TestGetPreviousBlockInfo_FromDatabase(t *testing.T) {
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
 	require.NoError(t, err)
 
-	// Clear cache to force database lookup
-	err = s.ResetBlocksCache(context.Background())
-	require.NoError(t, err)
+	// Clear response cache to force database lookup
+	s.ResetResponseCache()
 
 	// Get previous block info - should come from database
 	id, chainWork, height, invalid, err := s.getPreviousBlockInfo(context.Background(), *block1.Hash())
@@ -311,9 +312,8 @@ func TestGetPreviousBlockInfo_ContextCancellation(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 
-	// Clear cache to force database lookup
-	err = s.ResetBlocksCache(context.Background())
-	require.NoError(t, err)
+	// Clear response cache to force database lookup
+	s.ResetResponseCache()
 
 	// Create cancelled context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -558,12 +558,13 @@ func TestStoreBlock_CacheManagement(t *testing.T) {
 	blockID, height, err := s.StoreBlock(context.Background(), block1, "test-peer")
 	require.NoError(t, err)
 
-	// Verify block was cached
-	cachedHeader, cachedMeta := s.blocksCache.GetBlockHeader(*block1.Hash())
-	assert.NotNil(t, cachedHeader)
-	assert.NotNil(t, cachedMeta)
-	assert.Equal(t, uint64(blockID), uint64(cachedMeta.ID))
-	assert.Equal(t, height, cachedMeta.Height)
+	// Verify block was stored in database
+	storedHeader, storedMeta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	assert.NotNil(t, storedHeader)
+	assert.NotNil(t, storedMeta)
+	assert.Equal(t, uint64(blockID), uint64(storedMeta.ID))
+	assert.Equal(t, height, storedMeta.Height)
 }
 
 func TestStoreBlock_MinerExtraction(t *testing.T) {
@@ -579,11 +580,12 @@ func TestStoreBlock_MinerExtraction(t *testing.T) {
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
 	require.NoError(t, err)
 
-	// Verify miner information was processed (stored in cache)
-	_, cachedMeta := s.blocksCache.GetBlockHeader(*block1.Hash())
-	require.NotNil(t, cachedMeta)
+	// Verify miner information was processed and stored in database
+	_, storedMeta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	require.NotNil(t, storedMeta)
 	// Miner extraction may or may not succeed depending on coinbase format
-	t.Logf("Extracted miner: %s", cachedMeta.Miner)
+	t.Logf("Extracted miner: %s", storedMeta.Miner)
 }
 
 func TestStoreBlock_SequenceOfBlocks(t *testing.T) {
@@ -664,11 +666,14 @@ func TestStoreBlock_InheritInvalidFromParent(t *testing.T) {
 	_, _, err = s.StoreBlock(context.Background(), block2, "test-peer")
 	require.NoError(t, err)
 
-	// Verify both blocks are marked as invalid in cache
-	_, meta1 := s.blocksCache.GetBlockHeader(*block1.Hash())
-	_, meta2 := s.blocksCache.GetBlockHeader(*block2.Hash())
-	assert.True(t, meta1.Invalid)
-	assert.True(t, meta2.Invalid) // Should inherit invalid status
+	// Verify both blocks are marked invalid in the database
+	_, meta, err := s.GetBlockHeader(t.Context(), block1.Hash())
+	require.NoError(t, err)
+	assert.True(t, meta.Invalid)
+
+	_, meta, err = s.GetBlockHeader(t.Context(), block2.Hash())
+	require.NoError(t, err)
+	assert.True(t, meta.Invalid)
 }
 
 func TestStoreBlock_ContextCancellationDuringPrevBlockLookup(t *testing.T) {
@@ -680,9 +685,8 @@ func TestStoreBlock_ContextCancellationDuringPrevBlockLookup(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 
-	// Clear cache to force database lookup
-	err = s.ResetBlocksCache(context.Background())
-	require.NoError(t, err)
+	// Clear response cache to force database lookup
+	s.ResetResponseCache()
 
 	// Create context that will be cancelled
 	ctx, cancel := context.WithCancel(context.Background())
@@ -703,9 +707,8 @@ func TestGetPreviousBlockData_ContextCancellation(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 
-	// Clear cache to force database lookup
-	err = s.ResetBlocksCache(context.Background())
-	require.NoError(t, err)
+	// Clear response cache to force database lookup
+	s.ResetResponseCache()
 
 	// Create orphan block that requires previous block lookup
 	nonExistentPrevHash, _ := chainhash.NewHashFromStr("3333333333333333333333333333333333333333333333333333333333333333")
@@ -778,9 +781,10 @@ func TestStoreBlock_SubtreeProcessing(t *testing.T) {
 	assert.Greater(t, blockID, uint64(0))
 	assert.Equal(t, uint32(1), height)
 
-	// Verify subtrees were processed
-	_, cachedMeta := s.blocksCache.GetBlockHeader(*block1.Hash())
-	assert.True(t, cachedMeta.SubtreesSet)
+	// Verify subtrees were processed by querying database
+	_, storedMeta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	assert.True(t, storedMeta.SubtreesSet)
 }
 
 func TestStoreBlock_TimeConversionHandling(t *testing.T) {
@@ -796,12 +800,13 @@ func TestStoreBlock_TimeConversionHandling(t *testing.T) {
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
 	require.NoError(t, err)
 
-	// Verify timestamp was set in metadata
-	_, cachedMeta := s.blocksCache.GetBlockHeader(*block1.Hash())
-	assert.Greater(t, cachedMeta.Timestamp, uint32(0))
+	// Verify timestamp was set in metadata by retrieving from database
+	_, storedMeta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	assert.Greater(t, storedMeta.Timestamp, uint32(0))
 }
 
-func TestStoreBlock_CacheFailureRecovery(t *testing.T) {
+func TestStoreBlock_ResponseCacheInvalidation(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
@@ -810,12 +815,106 @@ func TestStoreBlock_CacheFailureRecovery(t *testing.T) {
 	require.NoError(t, err)
 	defer s.Close()
 
-	// Store blocks normally - cache failure recovery is internal
+	// Store a block - should invalidate response cache
 	_, _, err = s.StoreBlock(context.Background(), block1, "test-peer")
 	require.NoError(t, err)
 
-	// The cache failure recovery logic is tested by the presence of ResetBlocksCache
-	// calls in the StoreBlock implementation, which are covered by the cache tests
+	// Verify block can be retrieved (cache invalidation succeeded)
+	_, meta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	require.NotNil(t, meta)
+}
+
+func TestStoreBlock_WithPersistedAt(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close()
+
+	ctx := context.Background()
+
+	// Store block without WithPersistedAt - should be NULL
+	blockID1, _, err := s.StoreBlock(ctx, block1, "test-peer")
+	require.NoError(t, err)
+
+	var persistedAt1 *string
+	err = s.db.QueryRowContext(ctx, "SELECT persisted_at FROM blocks WHERE id = ?", blockID1).Scan(&persistedAt1)
+	require.NoError(t, err)
+	assert.Nil(t, persistedAt1, "persisted_at should be NULL without WithPersistedAt")
+
+	// Store block with WithPersistedAt - should have timestamp
+	startTime := time.Now()
+	blockID2, _, err := s.StoreBlock(ctx, block2, "test-peer", options.WithPersistedAt())
+	require.NoError(t, err)
+	endTime := time.Now()
+
+	var persistedAt2 *string
+	err = s.db.QueryRowContext(ctx, "SELECT persisted_at FROM blocks WHERE id = ?", blockID2).Scan(&persistedAt2)
+	require.NoError(t, err)
+	require.NotNil(t, persistedAt2, "persisted_at should not be NULL with WithPersistedAt")
+
+	parsedTime, err := time.Parse("2006-01-02 15:04:05", *persistedAt2)
+	require.NoError(t, err, "persisted_at should be in valid datetime format")
+	assert.True(t, parsedTime.After(startTime.Add(-2*time.Second)), "persisted_at should be after start time")
+	assert.True(t, parsedTime.Before(endTime.Add(2*time.Second)), "persisted_at should be before end time")
+}
+
+func TestStoreBlock_WithPersistedAt_Postgres(t *testing.T) {
+	ctx := context.Background()
+
+	// Start PostgreSQL container
+	pgContainer, err := postgres.Run(ctx,
+		"postgres:13",
+		postgres.WithDatabase("testdb"),
+		postgres.WithUsername("testuser"),
+		postgres.WithPassword("testpass"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(5*time.Minute),
+		),
+	)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, pgContainer.Terminate(ctx))
+	}()
+
+	// Get connection string
+	connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	dbURL, err := url.Parse(connStr)
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	defer s.Close()
+
+	// Store block without WithPersistedAt - should be NULL
+	blockID1, _, err := s.StoreBlock(ctx, block1, "test-peer")
+	require.NoError(t, err)
+
+	var persistedAt1 *time.Time
+	err = s.db.QueryRowContext(ctx, "SELECT persisted_at FROM blocks WHERE id = $1", blockID1).Scan(&persistedAt1)
+	require.NoError(t, err)
+	assert.Nil(t, persistedAt1, "persisted_at should be NULL without WithPersistedAt")
+
+	// Store block with WithPersistedAt - should have timestamp
+	startTime := time.Now()
+	blockID2, _, err := s.StoreBlock(ctx, block2, "test-peer", options.WithPersistedAt())
+	require.NoError(t, err)
+	endTime := time.Now()
+
+	var persistedAt2 *time.Time
+	err = s.db.QueryRowContext(ctx, "SELECT persisted_at FROM blocks WHERE id = $1", blockID2).Scan(&persistedAt2)
+	require.NoError(t, err)
+	require.NotNil(t, persistedAt2, "persisted_at should not be NULL with WithPersistedAt")
+	assert.True(t, persistedAt2.After(startTime.Add(-2*time.Second)), "persisted_at should be after start time")
+	assert.True(t, persistedAt2.Before(endTime.Add(2*time.Second)), "persisted_at should be before end time")
 }
 
 func TestParseSQLError_NilError(t *testing.T) {

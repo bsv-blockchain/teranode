@@ -147,7 +147,7 @@ func (m *MockLogger) LogLevel() int {
 	if m.LogLevelFunc != nil {
 		return m.LogLevelFunc()
 	}
-	return 1 // INFO
+	return 0 // DEBUG
 }
 
 func (m *MockLogger) SetLogLevel(level string) {

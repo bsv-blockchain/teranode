@@ -102,14 +102,11 @@ func (s *CatchupTestSuite) createServer(t *testing.T) {
 		settings:                      tSettings,
 		blockchainClient:              s.MockBlockchain,
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
-		blockExists:                   expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
-		bloomFilterStats:              model.NewBloomStats(),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		utxoStore:                     s.MockUTXOStore,
 		validatorClient:               s.MockValidator,
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
-		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](100),
 		subtreeStore:                  blobmemory.New(),
-		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 	}
 
@@ -135,9 +132,6 @@ func (s *CatchupTestSuite) createServer(t *testing.T) {
 		processBlockNotify:  ttlcache.New[chainhash.Hash, bool](),
 		catchupAlternatives: ttlcache.New[chainhash.Hash, []processBlockCatchup](),
 		stats:               gocore.NewStat("test"),
-		peerMetrics: &catchup.CatchupMetrics{
-			PeerMetrics: make(map[string]*catchup.PeerCatchupMetrics),
-		},
 		peerCircuitBreakers: circuitBreakers,
 		headerChainCache:    catchup.NewHeaderChainCache(s.Logger),
 		isCatchingUp:        atomic.Bool{},

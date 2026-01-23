@@ -25,6 +25,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -37,6 +38,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
@@ -170,7 +172,7 @@ func readFile(ctx context.Context, filename string, ext fileformat.FileType, log
 		return handleUtxoAdditions(ctx, br)
 
 	case fileformat.FileTypeUtxoHeaders:
-		return handleUtxoHeaders(br)
+		return handleUtxoHeaders(header, br)
 
 	case fileformat.FileTypeUtxoDeletions:
 		return handleUtxoDeletions(br)
@@ -212,7 +214,7 @@ func handleSubtreeData(br *bufio.Reader, logger ulogger.Logger, settings *settin
 		return errors.NewProcessingError("error reading subtree", err)
 	}
 
-	var sd *subtree.SubtreeData
+	var sd *subtree.Data
 
 	sd, err = subtree.NewSubtreeDataFromReader(st, br)
 	if err != nil {
@@ -258,7 +260,7 @@ func handleSubtreeMeta(br *bufio.Reader, logger ulogger.Logger, settings *settin
 		return errors.NewProcessingError("error reading subtree", err)
 	}
 
-	var subtreeMeta *subtree.SubtreeMeta
+	var subtreeMeta *subtree.Meta
 
 	subtreeMeta, err = subtree.NewSubtreeMetaFromReader(st, br)
 	if err != nil {
@@ -443,11 +445,19 @@ func handleUtxoAdditions(ctx context.Context, br *bufio.Reader) error {
 }
 
 // handleUtxoHeaders processes FileTypeUtxoHeaders files.
-func handleUtxoHeaders(br *bufio.Reader) error {
+func handleUtxoHeaders(header fileformat.Header, br *bufio.Reader) error {
 	var (
 		count      int
 		lastHeight uint32
 	)
+
+	// Determine if this is V1 (without coinbase) or V2 (with coinbase)
+	isV1 := header.IsUtxoHeadersV1()
+	if isV1 {
+		fmt.Printf("Reading V1 utxo-headers (without coinbase transactions)\n")
+	} else {
+		fmt.Printf("Reading V2 utxo-headers (with coinbase transactions)\n")
+	}
 
 	// Read the last block hash and height that's written after the file header
 	var (
@@ -467,7 +477,7 @@ func handleUtxoHeaders(br *bufio.Reader) error {
 		fmt.Printf("Last block hash: %s, height: %d\n", hash.String(), height)
 
 		for {
-			uh, err := utxopersister.NewUTXOHeaderFromReader(br)
+			uh, err := utxopersister.NewUTXOHeaderFromReader(br, isV1)
 			if err != nil {
 				if errors.Is(err, io.EOF) {
 					break
@@ -654,7 +664,18 @@ func getBlockStore(logger ulogger.Logger, settings *settings.Settings) blob.Stor
 		panic("blockstore config not found")
 	}
 
-	blockStore, err := blob.NewStore(logger, blockStoreURL)
+	var err error
+
+	hashPrefix := -2
+
+	if blockStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		panic(err)
 	}

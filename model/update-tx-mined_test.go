@@ -80,7 +80,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 		}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{
 						Hash: *subtree.CoinbasePlaceholderHash,
 					},
@@ -96,7 +96,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 				},
 			},
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{
 						Hash: *tx4.TxIDChainHash(),
 					},
@@ -122,6 +122,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 			1,
 			[]uint32{0},
 			true,
+			nil,
 			false,
 		)
 		require.NoError(t, err)
@@ -168,6 +169,7 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 			1,
 			[]uint32{0},
 			false,
+			nil,
 			true,
 		)
 		require.NoError(t, err)
@@ -243,7 +245,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 	block.Subtrees = []*chainhash.Hash{testTx1.TxIDChainHash()}
 	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *testTx1.TxIDChainHash()},
 				{Hash: *testTx2.TxIDChainHash()},
 			},
@@ -263,7 +265,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		// Chain contains block IDs 5 and 10
 		chainBlockIDs := []uint32{5, 10}
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true, nil)
 
 		// Should get BlockInvalidError because transaction was already mined in block 5 (on current chain)
 		require.Error(t, err)
@@ -287,7 +289,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		// Chain contains different block IDs
 		chainBlockIDs := []uint32{5, 10, 15}
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true, nil)
 
 		// Should succeed because transactions are not on current chain
 		require.NoError(t, err)
@@ -308,7 +310,7 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 
 		chainBlockIDs := []uint32{5, 10, 15}
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true, nil)
 
 		// Should succeed because it's the same block being mined
 		require.NoError(t, err)
@@ -329,9 +331,37 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 		// Empty chain block IDs - should skip validation
 		chainBlockIDs := []uint32{}
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDs, true, nil)
 
 		require.NoError(t, err)
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should detect transaction mined outside retention window", func(t *testing.T) {
+		mockStore = &utxo.MockUtxostore{} // Reset mock
+
+		// Simulate a transaction that was mined in block 1000 (very old)
+		// but the chainBlockIDs includes all ancestors, not just retention*2
+		expectedBlockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx1.TxIDChainHash(): {1000}, // Mined in very old block 1000
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(expectedBlockIDsMap, nil).Once()
+
+		// Chain includes many blocks including the old block 1000
+		// This simulates unlimited depth fetch (the security fix)
+		chainBlockIDs := []uint32{1000, 1100, 1200, 1300, 1400, 1500, 1600}
+
+		// Trying to mine block 1600 which contains a transaction already in block 1000
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 1600, chainBlockIDs, true, nil)
+
+		// Should get BlockInvalidError because transaction was already mined in block 1000 (on same chain)
+		// even though it's way outside the old retention*2 window (which would have been ~576 blocks)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
+		assert.Contains(t, err.Error(), "1000") // Should mention the conflicting block ID
 
 		mockStore.AssertExpectations(t)
 	})
@@ -357,7 +387,7 @@ func TestUpdateTxMinedStatus_ContextCancellation(t *testing.T) {
 	block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *testTx.TxIDChainHash()},
 			},
 		},
@@ -373,12 +403,120 @@ func TestUpdateTxMinedStatus_ContextCancellation(t *testing.T) {
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
 			Return(emptyBlockIDsMap, errors.NewStorageError("storage error")).Maybe()
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "context canceled")
 	})
 
+}
+
+// TestUpdateTxMinedStatus_DuplicateDetection tests the duplicate block processing detection
+func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	tSettings.UtxoStore = settings.UtxoStoreSettings{
+		UpdateTxMinedStatus: true,
+		MaxMinedBatchSize:   10,
+		MaxMinedRoutines:    1,
+	}
+
+	testTx := newTx(100)
+	block := &Block{}
+	block.Height = 100
+	block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+	block.SubtreeSlices = []*subtree.Subtree{
+		{
+			Nodes: []subtree.Node{
+				{Hash: *testTx.TxIDChainHash()},
+			},
+		},
+	}
+
+	t.Run("should ignore duplicate calls for same block", func(t *testing.T) {
+		// Reset worker settings and in-flight tracking for this test
+		setWorkerSettings(tSettings)
+		inFlightBlocksMu.Lock()
+		inFlightBlocks = make(map[uint32]bool)
+		inFlightBlocksMu.Unlock()
+
+		mockStore := &utxo.MockUtxostore{}
+		expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
+
+		// Setup a controlled delay for SetMinedMulti to ensure we can test concurrent calls
+		processingStarted := make(chan struct{})
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Run(func(args mock.Arguments) {
+				close(processingStarted)
+				time.Sleep(50 * time.Millisecond) // Delay to ensure the second call happens during processing
+			}).
+			Return(expectedBlockIDsMap, nil).Once()
+
+		// Start the first call in a goroutine
+		done1 := make(chan error)
+		go func() {
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
+			done1 <- err
+		}()
+
+		// Wait for the first call to actually start processing
+		<-processingStarted
+
+		// Second call should be ignored immediately (duplicate detection)
+		err2 := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
+		require.Error(t, err2) // Should return parent not mined error
+		assert.Contains(t, err2.Error(), "already being processed")
+
+		// Wait for first call to complete
+		err1 := <-done1
+		require.NoError(t, err1)
+
+		// SetMinedMulti should only be called once (not twice)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should allow processing of different blocks concurrently", func(t *testing.T) {
+		// Reset worker settings and in-flight tracking for this test
+		setWorkerSettings(tSettings)
+		inFlightBlocksMu.Lock()
+		inFlightBlocks = make(map[uint32]bool)
+		inFlightBlocksMu.Unlock()
+
+		mockStore1 := &utxo.MockUtxostore{}
+		mockStore2 := &utxo.MockUtxostore{}
+		expectedBlockIDsMap := map[chainhash.Hash][]uint32{}
+
+		mockStore1.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(expectedBlockIDsMap, nil).Once()
+		mockStore2.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(expectedBlockIDsMap, nil).Once()
+
+		// Call with different block IDs
+		done1 := make(chan error)
+		done2 := make(chan error)
+
+		go func() {
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore1, block, 15, []uint32{}, true, nil)
+			done1 <- err
+		}()
+
+		go func() {
+			err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore2, block, 16, []uint32{}, true, nil)
+			done2 <- err
+		}()
+
+		// Both should complete successfully
+		err1 := <-done1
+		err2 := <-done2
+		require.NoError(t, err1)
+		require.NoError(t, err2)
+
+		// Both should have called SetMinedMulti
+		mockStore1.AssertExpectations(t)
+		mockStore2.AssertExpectations(t)
+	})
 }
 
 // TestUpdateTxMinedStatus_ConfigurationDisabled tests disabled configuration scenario
@@ -392,7 +530,7 @@ func TestUpdateTxMinedStatus_ConfigurationDisabled(t *testing.T) {
 	block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *testTx.TxIDChainHash()},
 			},
 		},
@@ -408,7 +546,7 @@ func TestUpdateTxMinedStatus_ConfigurationDisabled(t *testing.T) {
 	setWorkerSettings(tSettings)
 
 	// Should not call SetMinedMulti when disabled
-	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, block, 15, []uint32{}, true)
+	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, block, 15, []uint32{}, true, nil)
 
 	require.NoError(t, err)
 	// Allow some time for any async processing to complete
@@ -439,7 +577,7 @@ func TestUpdateTxMinedStatus_DifferentBatchSizes(t *testing.T) {
 	multiTxBlock.Subtrees = []*chainhash.Hash{multiTxHash}
 	multiTxBlock.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *newTx(1).TxIDChainHash()},
 				{Hash: *newTx(2).TxIDChainHash()},
 				{Hash: *newTx(3).TxIDChainHash()},
@@ -457,7 +595,7 @@ func TestUpdateTxMinedStatus_DifferentBatchSizes(t *testing.T) {
 	freshMockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
 		Return(expectedBlockIDsMap, nil).Times(2) // 2 calls: first with 2 hashes, second with 1 hash
 
-	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, multiTxBlock, 15, []uint32{}, true)
+	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, multiTxBlock, 15, []uint32{}, true, nil)
 
 	require.NoError(t, err)
 	// Allow some time for any async processing to complete
@@ -486,7 +624,7 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 	block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *subtree.CoinbasePlaceholderHash}, // Coinbase placeholder (should be skipped)
 				{Hash: *testTx.TxIDChainHash()},          // Regular transaction
 			},
@@ -508,7 +646,7 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 			}).
 			Return(expectedBlockIDsMap, nil).Once()
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -523,7 +661,7 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 		wrongPosBlock.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 		wrongPosBlock.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *testTx.TxIDChainHash()},          // Regular transaction first
 					{Hash: *subtree.CoinbasePlaceholderHash}, // Coinbase placeholder in wrong position
 				},
@@ -537,7 +675,7 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
 			Return(expectedBlockIDsMap, nil).Once()
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, wrongPosBlock, 15, []uint32{}, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, wrongPosBlock, 15, []uint32{}, true, nil)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -569,19 +707,19 @@ func TestUpdateTxMinedStatus_ConcurrentProcessing(t *testing.T) {
 	}
 	block.SubtreeSlices = []*subtree.Subtree{
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *newTx(1).TxIDChainHash()},
 				{Hash: *newTx(2).TxIDChainHash()},
 			},
 		},
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *newTx(3).TxIDChainHash()},
 				{Hash: *newTx(4).TxIDChainHash()},
 			},
 		},
 		{
-			Nodes: []subtree.SubtreeNode{
+			Nodes: []subtree.Node{
 				{Hash: *newTx(5).TxIDChainHash()},
 			},
 		},
@@ -594,7 +732,7 @@ func TestUpdateTxMinedStatus_ConcurrentProcessing(t *testing.T) {
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
 			Return(expectedBlockIDsMap, nil).Times(3)
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -622,7 +760,7 @@ func TestUpdateTxMinedStatus_MissingSubtree(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{newTx(1).TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{nil} // Missing subtree
 
-		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true)
+		err := UpdateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, []uint32{}, true, nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "missing subtree")
@@ -652,7 +790,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{subtreeHash}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *newTx(1).TxIDChainHash()},
 					{Hash: *newTx(2).TxIDChainHash()},
 					{Hash: *newTx(3).TxIDChainHash()},
@@ -680,7 +818,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -695,7 +833,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *testTx.TxIDChainHash()},
 				},
 			},
@@ -712,7 +850,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		// Chain contains block IDs that conflict
 		chainBlockIDsMap := map[uint32]bool{5: true, 10: true, 15: true}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
@@ -734,7 +872,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *testTx.TxIDChainHash()},
 				},
 			},
@@ -742,7 +880,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, disabledSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, disabledSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		require.NoError(t, err)
 		mockStore.AssertNotCalled(t, "SetMinedMulti")
@@ -761,7 +899,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{subtreeHash}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *tx1.TxIDChainHash()},
 					{Hash: *tx2.TxIDChainHash()},
 					{Hash: *tx3.TxIDChainHash()},
@@ -782,7 +920,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		// Chain contains block ID 5 and 15
 		chainBlockIDsMap := map[uint32]bool{5: true, 15: true}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should fail because tx1 conflicts (block ID 5 is on current chain)
 		require.Error(t, err)
@@ -801,7 +939,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *testTx.TxIDChainHash()},
 				},
 			},
@@ -815,7 +953,7 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{5: true, 10: true}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should succeed because no existing block IDs to conflict with
 		require.NoError(t, err)
@@ -846,13 +984,13 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{emptyHash}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{}, // Empty subtree
+				Nodes: []subtree.Node{}, // Empty subtree
 			},
 		}
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should succeed without calling SetMinedMulti (no nodes to process)
 		require.NoError(t, err)
@@ -868,7 +1006,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{placeholderHash}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *subtree.CoinbasePlaceholderHash}, // All placeholders
 					{Hash: *subtree.CoinbasePlaceholderHash},
 					{Hash: *subtree.CoinbasePlaceholderHash},
@@ -878,7 +1016,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should succeed without calling SetMinedMulti (all placeholders skipped)
 		require.NoError(t, err)
@@ -897,9 +1035,9 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		}
 
 		// Create subtree with many transactions
-		nodes := make([]subtree.SubtreeNode, 500)
+		nodes := make([]subtree.Node, 500)
 		for i := 0; i < 500; i++ {
-			nodes[i] = subtree.SubtreeNode{Hash: *newTx(uint32(i + 1)).TxIDChainHash()}
+			nodes[i] = subtree.Node{Hash: *newTx(uint32(i + 1)).TxIDChainHash()}
 		}
 
 		block := &Block{}
@@ -920,7 +1058,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, largeBatchSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, largeBatchSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -943,7 +1081,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{boundaryHash}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *newTx(1).TxIDChainHash()},
 					{Hash: *newTx(2).TxIDChainHash()},
 					{Hash: *newTx(3).TxIDChainHash()},
@@ -963,7 +1101,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		err := updateTxMinedStatus(ctx, logger, boundarySettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, boundarySettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		require.NoError(t, err)
 		mockStore.AssertExpectations(t)
@@ -982,7 +1120,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{tx1.TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *tx1.TxIDChainHash()},
 					{Hash: *tx2.TxIDChainHash()},
 					{Hash: *tx3.TxIDChainHash()},
@@ -1000,7 +1138,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		chainBlockIDsMap := map[uint32]bool{}
 
 		// Call with unsetMined=false (valid block) - errors should be returned
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, false)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
 
 		// Should return error for valid blocks when SetMinedMulti fails
 		require.Error(t, err)
@@ -1020,7 +1158,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
 		block.SubtreeSlices = []*subtree.Subtree{
 			{
-				Nodes: []subtree.SubtreeNode{
+				Nodes: []subtree.Node{
 					{Hash: *testTx.TxIDChainHash()},
 				},
 			},
@@ -1035,10 +1173,194 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		chainBlockIDsMap := map[uint32]bool{}
 
 		// Call with unsetMined=true (invalid block) - errors should be logged but not returned
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, true)
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, true)
 
 		// Should NOT return error for invalid blocks - errors are logged only
 		require.NoError(t, err)
+
+		mockStore.AssertExpectations(t)
+	})
+}
+
+// mockBlockchainClientForSlowPath is a simple mock implementation of blockchainClientI for testing slow-path detection
+// We define it locally to avoid import cycles since services/blockchain imports model
+type mockBlockchainClientForSlowPath struct {
+	checkBlockResult bool
+	checkBlockError  error
+	calledWith       []uint32
+	calledWithHash   *chainhash.Hash
+	wasCalled        bool
+}
+
+func (m *mockBlockchainClientForSlowPath) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	m.calledWith = blockIDs
+	m.calledWithHash = blockHash
+	m.wasCalled = true
+	return m.checkBlockResult, m.checkBlockError
+}
+
+func TestUpdateTxMinedStatus_SlowPathDetection(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UpdateTxMinedStatus = true
+	setWorkerSettings(tSettings)
+
+	t.Run("should detect collision via slow-path when block ID is not in chainBlockIDsMap", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(100)
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *testTx.TxIDChainHash()},
+				},
+			},
+		}
+
+		// SetMinedMulti returns block ID 5 (which is NOT in chainBlockIDsMap)
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {5},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		// chainBlockIDsMap only contains block ID 10 (not 5)
+		chainBlockIDsMap := map[uint32]bool{10: true}
+
+		// Mock blockchain client returns true (block 5 is on current chain)
+		mockClient := &mockBlockchainClientForSlowPath{checkBlockResult: true}
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, mockClient, false)
+
+		// Should get BlockInvalidError because slow-path detected collision
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "slow path")
+		assert.Contains(t, err.Error(), "transaction already on our chain")
+
+		// Verify the blockchain client was called with block ID 5
+		require.True(t, mockClient.wasCalled)
+		require.Contains(t, mockClient.calledWith, uint32(5))
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should not error when slow-path finds block IDs not on current chain", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(200)
+		block := &Block{}
+		block.Height = 200
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *testTx.TxIDChainHash()},
+				},
+			},
+		}
+
+		// SetMinedMulti returns block ID 99 (which is NOT in chainBlockIDsMap)
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {99},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		// chainBlockIDsMap does not contain block ID 99
+		chainBlockIDsMap := map[uint32]bool{10: true, 20: true}
+
+		// Mock blockchain client returns false (block 99 is NOT on current chain - orphaned block)
+		mockClient := &mockBlockchainClientForSlowPath{checkBlockResult: false}
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 25, chainBlockIDsMap, true, mockClient, false)
+
+		// Should succeed because block 99 is not on current chain
+		require.NoError(t, err)
+
+		// Verify the blockchain client was called
+		require.True(t, mockClient.wasCalled)
+		require.Contains(t, mockClient.calledWith, uint32(99))
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should skip slow-path when unsetMined is true", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(300)
+		block := &Block{}
+		block.Height = 300
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *testTx.TxIDChainHash()},
+				},
+			},
+		}
+
+		// SetMinedMulti returns block ID 5 (which is NOT in chainBlockIDsMap)
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {5},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		chainBlockIDsMap := map[uint32]bool{10: true}
+
+		// Mock blockchain client - should NOT be called when unsetMined is true
+		mockClient := &mockBlockchainClientForSlowPath{checkBlockResult: true}
+
+		// unsetMined=true should skip slow-path check
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, mockClient, true)
+
+		require.NoError(t, err)
+
+		// Verify the blockchain client was NOT called
+		require.False(t, mockClient.wasCalled)
+
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("should handle blockchain client error gracefully", func(t *testing.T) {
+		mockStore := &utxo.MockUtxostore{}
+
+		testTx := newTx(400)
+		block := &Block{}
+		block.Height = 400
+		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{
+				Nodes: []subtree.Node{
+					{Hash: *testTx.TxIDChainHash()},
+				},
+			},
+		}
+
+		blockIDsMap := map[chainhash.Hash][]uint32{
+			*testTx.TxIDChainHash(): {5},
+		}
+
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(blockIDsMap, nil).Once()
+
+		chainBlockIDsMap := map[uint32]bool{10: true}
+
+		// Mock blockchain client returns an error
+		mockClient := &mockBlockchainClientForSlowPath{checkBlockError: errors.NewStorageError("database error")}
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, mockClient, false)
+
+		// Should return error from blockchain client
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to check old block IDs")
 
 		mockStore.AssertExpectations(t)
 	})

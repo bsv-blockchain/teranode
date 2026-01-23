@@ -44,7 +44,7 @@ kubectl logs -n teranode-operator -l app=blockchain -f
 ### 3. Start Syncing (if needed)
 
 ```bash
-kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate legacysyncing
+kubectl exec -it $(kubectl get pods -n teranode-operator -l app=blockchain -o jsonpath='{.items[0].metadata.name}') -n teranode-operator -- teranode-cli setfsmstate -fsmstate running
 ```
 
 ## Stopping Teranode
@@ -83,4 +83,4 @@ kubectl delete -f kubernetes/teranode/teranode-configmap.yaml -n teranode-operat
 
 - [How to Install Teranode](minersHowToInstallation.md)
 - [Third Party Reference Documentation](../../../references/thirdPartySoftwareRequirements.md)
-- [Teranode Sync Guide](../../../howto/miners/minersHowToSyncTheNode.md)
+- [Teranode Sync Guide](minersHowToSyncTheNode.md)

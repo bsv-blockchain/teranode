@@ -301,6 +301,15 @@ type Store interface {
 	// Returns: Any error encountered
 	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
 
+	// ClearBlockMinedSet resets the mined_set flag to false for a block,
+	// triggering background job processing to update transaction states.
+	// Used during fork handling to re-process transactions on orphaned chains.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - blockHash: Hash of the block to reset
+	// Returns: Any error encountered
+	ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+
 	// GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 	// Parameters:
 	//   - ctx: Context for the operation
@@ -334,6 +343,16 @@ type Store interface {
 	//   - blockIDs: Slice of block IDs to check
 	// Returns: Boolean indicating if blocks are in current chain and any error encountered
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
+
+	// CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
+	// This is used for double-spend detection on fork blocks where we need to check against
+	// the fork's ancestor chain rather than the main chain.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - blockIDs: Slice of block IDs to check
+	//   - blockHash: Hash of the block to check ancestry against
+	// Returns: Boolean indicating if any block ID is an ancestor, and any error encountered
+	CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error)
 
 	// GetChainTips retrieves information about all known tips in the block tree.
 	// This method finds all blocks that have no children (tips) and determines their
@@ -381,4 +400,18 @@ type Store interface {
 	//   - clear: Boolean flag to determine if the timestamp should be cleared
 	// Returns: Any error encountered
 	SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error
+
+	// SetBlockPersistedAt updates the persisted_at timestamp for a block.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - blockHash: Hash of the block to update
+	// Returns: Any error encountered
+	SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error
+
+	// GetBlocksNotPersisted retrieves blocks that haven't been persisted yet.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - limit: Maximum number of blocks to return
+	// Returns: Slice of unpersisted blocks and any error encountered
+	GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error)
 }

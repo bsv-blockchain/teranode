@@ -2,7 +2,6 @@
 
 ## Index
 
-
 1. [Introduction](#1-introduction)
 2. [Key Concepts and Innovations](#2-key-concepts-and-innovations)
     - [2.1 Horizontal Scalability](#21-horizontal-scalability)
@@ -31,16 +30,15 @@ Teranode provides a robust node processing system for Bitcoin that can consisten
 
 Teranode is responsible for:
 
-* Validating and accepting or rejecting received transactions.
+- Validating and accepting or rejecting received transactions.
 
-* Building and assembling new subtrees and blocks.
+- Building and assembling new subtrees and blocks.
 
-* Validating and accepting or rejecting received or found subtrees and blocks.
+- Validating and accepting or rejecting received or found subtrees and blocks.
 
-* Adding found blocks to the Blockchain.
+- Adding found blocks to the Blockchain.
 
-* Managing Coinbase transactions and their spendability.
-
+- Managing Coinbase transactions and their spendability.
 
 ## 2. Key Concepts and Innovations
 
@@ -95,12 +93,11 @@ Unlike the fixed 1MB block size in the original Bitcoin implementation, Teranode
 | Feature                               | BTC                                                                                                                                                                                            | Teranode BSV                                                                                                                                                                                                                                                                          |
 |---------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **Transactions**                      | Standard Bitcoin transaction model.                                                                                                                                                            | Adopts an extended format with extra metadata, improving processing efficiency.                                                                                                                                                                                                       |
-| **SubTrees**                          | Not used.                                                                                                                                                                                      | A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots.  </br></br> Each subtree contains 1 million transactions. Subtrees are broadcast every second. </br></br>Broadcast frequently for faster and continuous data propagation. |
+| **SubTrees**                          | Not used.                                                                                                                                                                                      | A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots.  <br/><br/> Each subtree contains 1 million transactions. Subtrees are broadcast every second. <br/><br/>Broadcast frequently for faster and continuous data propagation. |
 | **Blocks**                            | Transactions are grouped into blocks. Direct transaction data is stored in the block. Each block is linked to the previous one by a cryptographic hash, forming a secure, chronological chain. | In the BSV blockchain, Bitcoin blocks are stored and propagated using an abstraction using subtrees of transaction IDs. This method significantly streamlines the validation process and synchronization among miners, optimizing the overall efficiency of the network.              |
 | **Block Size**                        | Originally capped at 1MB (1 Megabyte), restricting transactions per block.                                                                                                                     | Current BSV expands to 4GB (4 Gigabytes), increasing transaction capacity. <br/><br/>Teranode removes the size limit, enabling limitless transactions per block.                                                                                                                      |
-| **Processed Transactions per second** | 3.3 to 7 transactions per second.                                                                                                                                                              | Guaranteees a minimum of **1 million transactions per second** (100,000 x faster than BTC).                                                                                                                                                                                           |
+| **Processed Transactions per second** | 3.3 to 7 transactions per second.                                                                                                                                                              | Guarantees a minimum of **1 million transactions per second** (100,000 x faster than BTC).                                                                                                                                                                                           |
 | **Scalability Approach**              | Vertical scaling: Increases processing power of individual nodes. Limited by hardware capabilities of single machines. Monolithic architecture makes updates challenging.                      | Horizontal scaling: Distributes workload across multiple machines using a microservices architecture. Allows independent scaling of specific functions (e.g., transaction validation, block assembly). More cost-effective and flexible, with higher resilience to node failures.     |
-
 
 ## 3. System Architecture Overview
 
@@ -128,15 +125,14 @@ Key components of the Teranode architecture include:
     - P2P Service
     - P2P Bootstrap Service
     - Legacy Service
+    - RPC Service
 
 3. Stores:
 
-    - Stores:
+    - TX and Subtree Store
+    - UTXO Store
 
-        - TX and Subtree Store]
-        - UTXO Store
-
-3. Other Components:
+4. Other Components:
 
     - Kafka Message Broker
     - Miners
@@ -164,14 +160,13 @@ The Teranode data model introduces:
 
 The main differences can be seen in the table below:
 
-
 | Feature | BTC | BSV (pre-Teranode) | Teranode BSV |
 |---------|-----|-------------------|---------------|
 | **Transactions** | Standard Bitcoin transaction model. | Standard Bitcoin transaction model with restored original op_codes. | Adopts an extended format with extra metadata, improving processing efficiency. |
-| **SubTrees** | Not used. | Not used. Traditional block propagation. | A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots. </br></br> Each subtree contains 1 million transactions. Subtrees are broadcast every second. </br></br>Broadcast frequently for faster and continuous data propagation. |
+| **SubTrees** | Not used. | Not used. Traditional block propagation. | A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots. <br/><br/> Each subtree contains 1 million transactions. Subtrees are broadcast every second. <br/><br/>Broadcast frequently for faster and continuous data propagation. |
 | **Blocks** | Transactions are grouped into blocks. Direct transaction data is stored in the block. Each block is linked to the previous one by a cryptographic hash, forming a secure, chronological chain. | Same as BTC, with increased block size capacity. | In the BSV blockchain, Bitcoin blocks are stored and propagated using an abstraction using subtrees of transaction IDs. This method significantly streamlines the validation process and synchronization among miners, optimizing the overall efficiency of the network. |
 | **Block Size** | Originally capped at 1MB (1 Megabyte), restricting transactions per block. | Increased to 2GB, then to 4GB block size limit. | Current BSV expands to 4GB (4 Gigabytes), increasing transaction capacity. <br/><br/>Teranode removes the size limit, enabling limitless transactions per block. |
-| **Processed Transactions per second** | 3.3 to 7 transactions per second. | Up to several thousand transactions per second. | Guaranteees a minimum of **1 million transactions per second** (100,000 x faster than BTC). |
+| **Processed Transactions per second** | 3.3 to 7 transactions per second. | Up to several thousand transactions per second. | Guarantees a minimum of **1 million transactions per second** (100,000 x faster than BTC). |
 | **Mempool** | Maintains a memory pool of unconfirmed transactions waiting to be included in blocks. Size limited by node memory. | Similar to BTC, but with larger capacity due to increased memory limits. | No traditional mempool. Transactions are immediately processed and organized into subtrees. Continuous validation and subtree creation replaces mempool functionality. |
 
 &nbsp;
@@ -185,10 +180,10 @@ The main differences can be seen in the table below:
 ## 5. Node Workflow
 
 1. **Transaction Submission**: Transactions are received by all nodes via a broadcast service.
-2. **Transaction Validation**: The TX Validator Service checks each transaction against network rules.
-3. **Subtree Assembly**: The Block Assembly Service organizes transactions into subtrees.
-4. **Subtree Validation**: The Block Validation Service validates received subtrees.
-5. **Block Assembly**: The Block Assembly Service compiles block templates consisting of subtrees.
+2. **Transaction Validation**: The Validator Service checks each transaction against network rules.
+3. **Subtree Assembly**: The Block Assembly Service organizes validated transactions into subtrees.
+4. **Subtree Validation**: The Subtree Validation Service validates received subtrees.
+5. **Block Assembly**: The Block Assembly Service compiles block templates consisting of validated subtrees.
 6. **Block Validation**: When a valid block is found, it's sent to the Block Validation Service for final checks before being appended to the blockchain.
 
 ![ValidationSequenceDiagram.svg](img/ValidationSequenceDiagram.svg)
@@ -201,7 +196,6 @@ Teranode achieves high throughput through:
 - **Unbounded block size**: Allowing for potentially unlimited transactions per block.
 - **Subtree processing**: Enabling continuous validation of transaction batches.
 - **Extended transaction format**: Facilitating more efficient transaction processing.
-
 
 ## 7. Impact on End-Users and Developers
 
@@ -220,7 +214,6 @@ The Teranode architecture offers several benefits:
 - **Merkle root**: A single hash representing a set of transactions in a subtree or block.
 
 Please check the [Teranode BSV Glossary](../../references/glossary.md) for more terms and definitions.
-
 
 ## 9. Related Resources
 

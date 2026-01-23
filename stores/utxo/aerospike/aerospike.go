@@ -72,12 +72,11 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/cleanup"
+	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -124,6 +123,7 @@ type Store struct {
 	storeBatcher        batcherIfc[BatchStoreItem]
 	getBatcher          batcherIfc[batchGetItem]
 	spendBatcher        batcherIfc[batchSpend]
+	spendCircuitBreaker *circuitBreaker
 	outpointBatcher     batcherIfc[batchOutpoint]
 	incrementBatcher    batcherIfc[batchIncrement]
 	setDAHBatcher       batcherIfc[batchDAH]
@@ -132,8 +132,10 @@ type Store struct {
 	externalStore       blob.Store
 	utxoBatchSize       int
 	externalTxCache     *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
-	indexMutex          sync.Mutex // Mutex for index creation operations
-	indexOnce           sync.Once  // Ensures index creation/wait is only done once per process
+	externalStoreSem    chan struct{} // Semaphore to limit concurrent external storage operations
+	indexMutex          sync.Mutex    // Mutex for index creation operations
+	indexOnce           sync.Once     // Ensures index creation/wait is only done once per process
+	spendLuaPackages    []string      // Pre-initialized array of Lua package names for spend operations
 }
 
 // New creates a new Aerospike-based UTXO store.
@@ -170,7 +172,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, err
 	}
 
-	externalStore, err := blob.NewStore(logger, externalStoreURL)
+	// Create external store with DAH explicitly disabled
+	// External file lifecycle is managed by the Aerospike pruner service, not by DAH files
+	externalStore, err := blob.NewStore(logger, externalStoreURL, options.WithDisableDAH(true))
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +194,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		externalTxCache = util.NewExpiringConcurrentCache[chainhash.Hash, *bt.Tx](10 * time.Second)
 	}
 
+	// Initialize external store semaphore if concurrency limit is set
+	var externalStoreSem chan struct{}
+	if tSettings.UtxoStore.ExternalStoreConcurrency > 0 {
+		externalStoreSem = make(chan struct{}, tSettings.UtxoStore.ExternalStoreConcurrency)
+	}
+
 	s := &Store{
 		ctx:       ctx,
 		url:       aerospikeURL,
@@ -198,17 +208,26 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		setName:   setName,
 		logger:    logger,
 
-		settings:        tSettings,
-		externalStore:   externalStore,
-		utxoBatchSize:   utxoBatchSize,
-		externalTxCache: externalTxCache,
+		settings:         tSettings,
+		externalStore:    externalStore,
+		utxoBatchSize:    utxoBatchSize,
+		externalTxCache:  externalTxCache,
+		externalStoreSem: externalStoreSem,
+	}
+
+	// Initialize spendLuaPackages array with configurable count
+	if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {
+		s.spendLuaPackages = make([]string, s.settings.Aerospike.SeparateSpendUDFModuleCount)
+		for i := 0; i < s.settings.Aerospike.SeparateSpendUDFModuleCount; i++ {
+			s.spendLuaPackages[i] = LuaPackage + "_" + fmt.Sprintf("%d", i)
+		}
 	}
 
 	// Ensure index creation/wait is only done once per process
-	if cleanup.IndexName != "" {
+	if pruner.IndexName != "" {
 		s.indexOnce.Do(func() {
 			if s.client != nil && s.client.Client != nil {
-				exists, err := s.indexExists(cleanup.IndexName)
+				exists, err := s.indexExists(pruner.IndexName)
 				if err != nil {
 					s.logger.Errorf("Failed to check index existence: %v", err)
 					return
@@ -216,7 +235,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 				if !exists {
 					// Only one process should try to create the index
-					err := s.CreateIndexIfNotExists(ctx, cleanup.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC)
+					err := s.CreateIndexIfNotExists(ctx, pruner.IndexName, fields.DeleteAtHeight.String(), aerospike.NUMERIC)
 					if err != nil {
 						s.logger.Errorf("Failed to create index: %v", err)
 					}
@@ -261,10 +280,33 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, errors.NewStorageError("Failed to register udfLUA", err)
 	}
 
+	// register separate lua scripts for spending utxos in batches
+	if s.settings.Aerospike.SeparateSpendUDFModuleCount > 0 {
+		for _, packageName := range s.spendLuaPackages {
+			if err = registerLuaIfNecessary(logger, client, packageName, teranodeLUA); err != nil {
+				return nil, errors.NewStorageError("Failed to register udfLUA for spend batcher", err)
+			}
+		}
+	}
+
+	// Make sure the udf lua scripts are installed in the cluster
+	// update the version of the lua script when a new version is launched, do not re-use the old one
+	if err = registerLuaIfNecessary(logger, client, LuaPackageMined, teranodeLUA); err != nil {
+		return nil, errors.NewStorageError("Failed to register udfLUA mined", err)
+	}
+
 	spendBatchSize := s.settings.UtxoStore.SpendBatcherSize
 	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
 	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, true)
+
+	if failureThreshold := tSettings.UtxoStore.SpendCircuitBreakerFailureCount; failureThreshold > 0 {
+		s.spendCircuitBreaker = newCircuitBreaker(
+			failureThreshold,
+			tSettings.UtxoStore.SpendCircuitBreakerHalfOpenMax,
+			tSettings.UtxoStore.SpendCircuitBreakerCooldown,
+		)
+	}
 
 	outpointBatchSize := s.settings.UtxoStore.OutpointBatcherSize
 	outpointBatchDurationStr := s.settings.UtxoStore.OutpointBatcherDurationMillis
@@ -347,6 +389,13 @@ func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 
 func (s *Store) GetMedianBlockTime() uint32 {
 	return s.medianBlockTime.Load()
+}
+
+func (s *Store) GetBlockState() utxo.BlockState {
+	return utxo.BlockState{
+		Height:     s.blockHeight.Load(),
+		MedianTime: s.medianBlockTime.Load(),
+	}
 }
 
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -658,8 +707,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	for i, record := range batchRecords {
 		batchRecord := record.BatchRec()
 		if batchRecord.Err != nil {
-			s.logger.Warnf("[PreserveTransactions] Failed to preserve tx %s: %v",
-				txIDs[i].String(), batchRecord.Err)
+			s.logger.Warnf("[PreserveTransactions] Failed to preserve tx %s: %v", txIDs[i].String(), batchRecord.Err)
 			continue
 		}
 
@@ -674,23 +722,12 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 			switch res.Status {
 			case LuaStatusOK:
-				if res.Signal == LuaSignalPreserve {
-					// Handle external transaction preservation
-					if err := s.preserveUntilExternalTransaction(ctx, &txIDs[i], preserveUntilHeight); err != nil {
-						s.logger.Errorf("[PreserveTransactions] Failed to preserve external files for tx %s: %v",
-							txIDs[i].String(), err)
-						continue
-					}
-				}
-
 				preservedCount++
 			case LuaStatusError:
 				if res.ErrorCode == LuaErrorCodeTxNotFound {
-					s.logger.Warnf("[PreserveTransactions] Transaction not found for tx %s",
-						txIDs[i].String())
+					s.logger.Debugf("[PreserveTransactions] Transaction not found for tx %s", txIDs[i].String())
 				} else {
-					s.logger.Errorf("[PreserveTransactions] Error preserving tx %s: %s",
-						txIDs[i].String(), res.Message)
+					s.logger.Errorf("[PreserveTransactions] Error preserving tx %s: %s", txIDs[i].String(), res.Message)
 				}
 			}
 		} else {
@@ -699,67 +736,6 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	}
 
 	s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions", preservedCount, len(txIDs))
-
-	return nil
-}
-
-// preserveUntilExternalTransaction removes any existing Delete-At-Height (DAH) files
-// and creates .preservedUntil files for a transaction stored in external storage.
-// This is used to protect large transactions from automatic cleanup until a specific block height.
-//
-// Parameters:
-//   - ctx: Context for cancellation
-//   - txid: Transaction ID to preserve
-//   - preserveUntilHeight: Block height until which the transaction should be preserved
-//
-// Returns:
-//   - error: Any error encountered, or nil if successful or transaction not found
-func (s *Store) preserveUntilExternalTransaction(ctx context.Context, txid *chainhash.Hash, preserveUntilHeight uint32) error {
-	// First, try to clear any existing DAH for the transaction and create .preserveUntil file
-	if err := s.setPreserveUntilForExternalFile(ctx, txid[:], fileformat.FileTypeTx, preserveUntilHeight); err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
-			// Try the outputs if transaction not found
-			if err := s.setPreserveUntilForExternalFile(ctx, txid[:], fileformat.FileTypeOutputs, preserveUntilHeight); err != nil && !errors.Is(err, errors.ErrNotFound) {
-				return errors.NewStorageError("[preserveUntilExternalTransaction][%s] failed to preserve external transaction outputs",
-					txid,
-					err)
-			}
-		} else {
-			return errors.NewStorageError("[preserveUntilExternalTransaction][%s] failed to preserve external transaction",
-				txid,
-				err)
-		}
-	}
-
-	return nil
-}
-
-// setPreserveUntilForExternalFile removes any existing DAH file and creates .preserveUntil file
-func (s *Store) setPreserveUntilForExternalFile(ctx context.Context, key []byte, fileType fileformat.FileType, preserveUntilHeight uint32) error {
-	// First, clear any existing DAH file
-	if err := s.externalStore.SetDAH(ctx, key, fileType, 0); err != nil && !errors.Is(err, errors.ErrNotFound) {
-		return errors.NewStorageError("failed to clear DAH file", err)
-	}
-
-	// Check if the original file exists first
-	exists, err := s.externalStore.Exists(ctx, key, fileType)
-	if err != nil {
-		return errors.NewStorageError("failed to check if file exists", err)
-	}
-
-	if !exists {
-		return errors.ErrNotFound
-	}
-
-	// Create .preserveUntil file with the preserveUntilHeight value
-	preserveUntilData := []byte(fmt.Sprintf("%d", preserveUntilHeight))
-
-	if err := s.externalStore.Set(ctx, key, fileformat.FileTypePreserveUntil, preserveUntilData, options.WithSkipHeader(true)); err != nil {
-		return errors.NewStorageError("failed to create .preserveUntil file", err)
-	}
-
-	s.logger.Infof("Preserved external transaction %x until block %d (DAH cleared, .preserveUntil file created)",
-		key[:8], preserveUntilHeight) // Only log first 8 bytes of key for brevity
 
 	return nil
 }
@@ -779,8 +755,8 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 
 	queryPolicy := aerospike.NewQueryPolicy()
 	queryPolicy.MaxRetries = 3
-	queryPolicy.SocketTimeout = 30 * time.Second
-	queryPolicy.TotalTimeout = 120 * time.Second
+	queryPolicy.SocketTimeout = 5 * time.Minute
+	queryPolicy.TotalTimeout = 30 * time.Minute
 
 	recordset, err := s.client.Query(queryPolicy, stmt)
 	if err != nil {

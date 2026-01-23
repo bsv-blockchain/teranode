@@ -49,6 +49,15 @@ import (
 // before a reassigned UTXO becomes spendable.
 const ReAssignedUtxoSpendableAfterBlocks = 1_000
 
+// BlockState represents an atomic snapshot of blockchain state containing
+// both block height and median block time. This ensures consistency between
+// these values during validation, preventing race conditions that could occur
+// when reading them separately.
+type BlockState struct {
+	Height     uint32 // Current block height
+	MedianTime uint32 // Median time of recent blocks
+}
+
 // Spend represents a UTXO spending operation, containing both the UTXO being spent
 // and the transaction that spends it.
 type Spend struct {
@@ -122,7 +131,7 @@ type IgnoreFlags struct {
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
-	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked}
+	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
 	MetaFieldsWithTx = append(MetaFields, fields.Tx)
 )
@@ -235,13 +244,13 @@ type Store interface {
 	// Delete removes a UTXO and its associated metadata from the store.
 	Delete(ctx context.Context, hash *chainhash.Hash) error
 
-	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error)    // Remove? Only used in tests
-	GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) // Remove?
+	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
+	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 
 	// Blockchain specific functions
 
 	// Spend marks all the UTXOs of the transaction as spent.
-	Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
+	Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
 
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.
@@ -319,4 +328,9 @@ type Store interface {
 
 	// GetMedianBlockTime returns the current median block time from the store.
 	GetMedianBlockTime() uint32
+
+	// GetBlockState returns an atomic snapshot of both block height and median block time.
+	// This prevents race conditions that could occur when reading these values separately,
+	// ensuring consistency during validation operations.
+	GetBlockState() BlockState
 }

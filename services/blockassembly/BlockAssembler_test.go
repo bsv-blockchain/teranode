@@ -128,8 +128,7 @@ func setupBlockchainClient(t *testing.T, testItems *baTestItems) (*blockchain.Mo
 	testItems.blockAssembler.blockchainClient = blockchainClient
 
 	// Set the best block header before starting listeners
-	testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
-	testItems.blockAssembler.bestBlockHeight.Store(0)
+	testItems.blockAssembler.setBestBlockHeader(genesisBlock.Header, 0)
 
 	// Return nil for mock since we're using a real client
 	return nil, subChan, genesisBlock
@@ -174,6 +173,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 		blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
 		blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
 		blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 		subChan := make(chan *blockchain_api.Notification, 1)
 		// Send initial notification to mimic real blockchain service behavior
 		subChan <- &blockchain_api.Notification{
@@ -219,6 +221,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 			Hash: (&chainhash.Hash{}).CloneBytes(),
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
@@ -277,6 +282,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 		blockchainClient.On("SetState", mock.Anything, "BlockAssembler", mock.Anything).Return(nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
@@ -285,8 +293,10 @@ func TestBlockAssembly_Start(t *testing.T) {
 		err = blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
-		assert.Equal(t, uint32(1), blockAssembler.bestBlockHeight.Load())
-		assert.Equal(t, bestBlockHeader.Hash(), blockAssembler.bestBlockHeader.Load().Hash())
+		header, height := blockAssembler.CurrentBlock()
+
+		assert.Equal(t, uint32(1), height)
+		assert.Equal(t, bestBlockHeader.Hash(), header.Hash())
 	})
 
 	t.Run("Start with cleanup service enabled", func(t *testing.T) {
@@ -318,6 +328,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 			Hash: (&chainhash.Hash{}).CloneBytes(),
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
@@ -377,31 +390,31 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 
 		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash1, Fee: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash1, Fee: 111}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash2, Fee: 222}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash2, Fee: 222}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash3, Fee: 333}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash3, Fee: 333}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx4, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash4, Fee: 110}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash4, Fee: 110}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx5, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash5, Fee: 220}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash5, Fee: 220}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx6, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash6, Fee: 330}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash6, Fee: 330}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx7, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash7, Fee: 6}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash7, Fee: 6}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		wg.Wait()
 
@@ -508,7 +521,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		require.NotNil(t, items)
 
-		items.blockAssembler.bestBlockHeader.Store(blockHeader1)
+		items.blockAssembler.setBestBlockHeader(blockHeader1, 1)
 		_, _, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), nil, 0)
 		require.Error(t, err)
 	})
@@ -518,8 +531,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		// set the cached BlockAssembler items to the correct values
-		items.blockAssembler.bestBlockHeader.Store(blockHeader4)
-		items.blockAssembler.bestBlockHeight.Store(4)
+		items.blockAssembler.setBestBlockHeader(blockHeader4, 4)
 
 		err := items.addBlock(blockHeader1)
 		require.NoError(t, err)
@@ -563,8 +575,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NoError(t, err)
 
 		// set the cached BlockAssembler items to block 2
-		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
-		items.blockAssembler.bestBlockHeight.Store(2)
+		items.blockAssembler.setBestBlockHeader(blockHeader2, 2)
 
 		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), blockHeader3, 3)
 		require.NoError(t, err)
@@ -580,8 +591,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		// set the cached BlockAssembler items to the correct values
-		items.blockAssembler.bestBlockHeader.Store(blockHeader2)
-		items.blockAssembler.bestBlockHeight.Store(2)
+		items.blockAssembler.setBestBlockHeader(blockHeader2, 2)
 
 		err := items.addBlock(blockHeader1)
 		require.NoError(t, err)
@@ -657,16 +667,25 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 
 	// overwrite default subtree processor with a new one
 	ba.subtreeProcessor, err = subtreeprocessor.NewSubtreeProcessor(
-		context.Background(),
+		t.Context(),
 		ulogger.TestLogger{},
 		ba.settings,
 		nil,
-		nil,
+		items.blockchainClient,
 		nil,
 		items.newSubtreeChan,
-		subtreeprocessor.WithBatcherSize(1),
 	)
 	require.NoError(t, err)
+
+	// Ensure SubtreeProcessor is properly cleaned up when test ends
+	t.Cleanup(func() {
+		if ba.subtreeProcessor != nil {
+			ba.subtreeProcessor.Stop(context.Background())
+		}
+	})
+
+	// Start the subtree processor
+	ba.subtreeProcessor.Start(t.Context())
 
 	items.blockAssembler = ba
 
@@ -699,7 +718,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 			assert.NotNil(t, subtree)
 			assert.Equal(t, *subtreepkg.CoinbasePlaceholderHash, subtree.Nodes[0].Hash)
 			assert.Len(t, subtree.Nodes, 4)
-			assert.NotEqual(t, uint64(5000000556), subtree.Fees)
+			assert.Equal(t, uint64(5000000556), subtree.Fees)
 
 			if subtreeRequest.ErrChan != nil {
 				subtreeRequest.ErrChan <- nil
@@ -710,23 +729,23 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 
 		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash2, Fee: 222}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash2, Fee: 222}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash3, Fee: 334}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash3, Fee: 334}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx4, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash4, Fee: 444}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash4, Fee: 444}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx5, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash5, Fee: 555}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash5, Fee: 555}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		wg.Wait()
 
@@ -734,8 +753,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, miningCandidate)
 		assert.NotNil(t, subtree)
-		// assert.Equal(t, uint64(5000000667), miningCandidate.CoinbaseValue)
-		assert.NotEqual(t, uint64(10000000556), miningCandidate.CoinbaseValue)
+		assert.Equal(t, uint64(10000000556), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Len(t, subtree, 1)
@@ -802,22 +820,17 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 			wg.Done()
 		}()
 
-		// first add coinbase
-		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
+		_, err := testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 111}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
-
-		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
-		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash2, Fee: 222, SizeInBytes: 222}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash2, Fee: 222, SizeInBytes: 222}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash3, Fee: 333, SizeInBytes: 333}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash3, Fee: 333, SizeInBytes: 333}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx4, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *hash4, Fee: 444, SizeInBytes: 444}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *hash4, Fee: 444, SizeInBytes: 444}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		wg.Wait()
 
@@ -917,18 +930,13 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 			}
 		}()
 
-		for i := 0; i < 15; i++ {
+		for i := 1; i < 15; i++ {
 			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 			tx := newTx(uint32(i))
 			_, err := testItems.utxoStore.Create(ctx, tx, 0)
 			require.NoError(t, err)
 
-			if i == 0 {
-				// first add coinbase
-				testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 15000}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
-			} else {
-				testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 15000}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
-			}
+			testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 15000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 		}
 
 		wg.Wait()
@@ -1019,18 +1027,13 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 			wg.Done()
 		}()
 
-		for i := 0; i < 4; i++ {
+		for i := 1; i < 4; i++ {
 			// nolint:gosec // G404: Use of weak random number generator (math/rand instead of crypto/rand) (gosec)
 			tx := newTx(uint32(i))
 			_, err := testItems.utxoStore.Create(ctx, tx, 0)
 			require.NoError(t, err)
 
-			if i == 0 {
-				// first add coinbase
-				testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *subtreepkg.CoinbasePlaceholderHash, Fee: 5000000000, SizeInBytes: 100}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
-			} else {
-				testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 150000}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}}) // 0.15MB
-			}
+			testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{Hash: *tx.TxIDChainHash(), Fee: 1000000000, SizeInBytes: 150000}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}}) // 0.15MB
 		}
 
 		wg.Wait()
@@ -1100,7 +1103,8 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 
 		// Create the exact scenario from the bug report: fees only, no subsidy
 		height := uint32(1) // Height 1 (after genesis)
-		testItems.blockAssembler.bestBlockHeight.Store(height - 1)
+		currentHeader, _ := testItems.blockAssembler.CurrentBlock()
+		testItems.blockAssembler.setBestBlockHeader(currentHeader, height-1)
 
 		// Handle subtree processing
 		var wg sync.WaitGroup
@@ -1125,37 +1129,30 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 		tx2 := newTx(2)
 		tx3 := newTx(3)
 
-		// First add coinbase placeholder
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{
-			Hash:        *subtreepkg.CoinbasePlaceholderHash,
-			Fee:         0,
-			SizeInBytes: 100,
-		}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
-
 		// Add transactions to UTXO store and then to block assembler
 		_, err := testItems.utxoStore.Create(ctx, tx1, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 			Hash:        *tx1.TxIDChainHash(),
 			Fee:         200000, // 0.002 BSV
 			SizeInBytes: 250,
-		}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx2, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 			Hash:        *tx2.TxIDChainHash(),
 			Fee:         300000, // 0.003 BSV
 			SizeInBytes: 250,
-		}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		_, err = testItems.utxoStore.Create(ctx, tx3, 0)
 		require.NoError(t, err)
-		testItems.blockAssembler.AddTx(subtreepkg.SubtreeNode{
+		testItems.blockAssembler.AddTxBatch([]subtreepkg.Node{{
 			Hash:        *tx3.TxIDChainHash(),
 			Fee:         100000, // 0.001 BSV
 			SizeInBytes: 250,
-		}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+		}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 
 		wg.Wait()
 
@@ -1224,7 +1221,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test cache functionality by directly manipulating cache
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Set up cache manually with a fixed time for deterministic testing
 		testTime := time.Now()
@@ -1241,7 +1239,7 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 
 		// Verify cache validity check works
 		ba.cachedCandidate.mu.RLock()
-		currentHeight := ba.bestBlockHeight.Load()
+		_, currentHeight := ba.CurrentBlock()
 		isValid := ba.cachedCandidate.candidate != nil &&
 			ba.cachedCandidate.lastHeight == currentHeight &&
 			testTime.Sub(ba.cachedCandidate.lastUpdate) < 5*time.Second
@@ -1281,7 +1279,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
 
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Start listeners in a goroutine since it will wait for readyCh
 		go func() {
@@ -1289,17 +1288,18 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		}()
 
 		// First call
-		h := ba.bestBlockHeight.Load()
+		_, h := ba.CurrentBlock()
 		t.Logf("First call: height=%d", h)
 		candidate1, _, err1 := ba.GetMiningCandidate(ctx)
-		h = ba.bestBlockHeight.Load()
+		_, h = ba.CurrentBlock()
 		t.Logf("Check call: height=%d", h)
 		require.NoError(t, err1)
 		require.NotNil(t, candidate1)
 		assert.Equal(t, uint32(2), candidate1.Height)
 
 		// Change block height (simulate new block)
-		ba.bestBlockHeight.Store(2)
+		currentHeader, _ = ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 2)
 		ba.invalidateMiningCandidateCache()
 
 		// Second call - should generate new candidate due to height change
@@ -1328,7 +1328,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
 
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Start listeners in a goroutine since it will wait for readyCh
 		go func() {
@@ -1371,7 +1372,8 @@ func TestBlockAssembler_CachingFunctionality(t *testing.T) {
 		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
 
-		ba.bestBlockHeight.Store(1)
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 1)
 
 		// Clear any existing cache to ensure we test fresh generation
 		ba.cachedCandidate.mu.Lock()
@@ -1624,20 +1626,19 @@ func TestBlockAssembler_CacheInvalidation(t *testing.T) {
 		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
 		require.NoError(t, err)
 
-		ba.bestBlockHeader.Store(genesisBlock.Header)
-		ba.bestBlockHeight.Store(1)
+		ba.setBestBlockHeader(genesisBlock.Header, 1)
 
 		// Add transactions to trigger subtree creation
 		// Based on the test settings, we need 4 transactions to fill a subtree
-		testInpoints := make([]subtreepkg.TxInpoints, 4)
-
-		for i := 0; i < 4; i++ {
-			ba.AddTx(subtreepkg.SubtreeNode{
-				Hash:        *[]*chainhash.Hash{hash0, hash1, hash2, hash3}[i],
-				Fee:         100,
-				SizeInBytes: 250,
-			}, testInpoints[i])
-		}
+		ba.AddTxBatch(
+			[]subtreepkg.Node{
+				{Hash: *hash0, Fee: 100, SizeInBytes: 250},
+				{Hash: *hash1, Fee: 100, SizeInBytes: 250},
+				{Hash: *hash2, Fee: 100, SizeInBytes: 250},
+				{Hash: *hash3, Fee: 100, SizeInBytes: 250},
+			},
+			[]*subtreepkg.TxInpoints{{}, {}, {}, {}},
+		)
 
 		// Wait for subtree to be created and cache to be invalidated
 		time.Sleep(500 * time.Millisecond)
@@ -1645,6 +1646,198 @@ func TestBlockAssembler_CacheInvalidation(t *testing.T) {
 		// Verify cache was invalidated
 		ba.cachedCandidate.mu.RLock()
 		assert.Nil(t, ba.cachedCandidate.candidate, "Cache should be invalidated when new subtree is received")
+		ba.cachedCandidate.mu.RUnlock()
+	})
+}
+
+func TestBlockAssembler_SmartCacheInvalidation(t *testing.T) {
+	t.Run("Cache invalidates after configured max age", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Override the smart cache max age to 500ms for faster testing
+		ba.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge = 500 * time.Millisecond
+
+		// Setup cache with initial state
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastHeight = 1
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 100
+		ba.cachedCandidate.lastSizeInBytes = 50000
+		ba.cachedCandidate.lastSubtreeCount = 1
+		ba.cachedCandidate.mu.Unlock()
+
+		// Should NOT invalidate immediately (no significant change)
+		shouldInvalidate := ba.shouldInvalidateCache(100, 50000, 1)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate when no significant change")
+
+		// Wait for cache to age past max age
+		time.Sleep(600 * time.Millisecond)
+
+		// Should invalidate due to age
+		shouldInvalidate = ba.shouldInvalidateCache(100, 50000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate after max age")
+	})
+
+	t.Run("Cache invalidates on transaction count change > 10%", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 1000
+		ba.cachedCandidate.lastSizeInBytes = 500000
+		ba.cachedCandidate.lastSubtreeCount = 1
+		ba.cachedCandidate.mu.Unlock()
+
+		// 9% change - should NOT invalidate
+		shouldInvalidate := ba.shouldInvalidateCache(1090, 500000, 1)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate with 9%% tx count change")
+
+		// 11% change - should invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1110, 500000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 11%% tx count change")
+
+		// 11% decrease - should also invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(890, 500000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 11%% tx count decrease")
+	})
+
+	t.Run("Cache invalidates on block size change > 1MB", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 1000
+		ba.cachedCandidate.lastSizeInBytes = 10_000_000 // 10MB
+		ba.cachedCandidate.lastSubtreeCount = 1
+		ba.cachedCandidate.mu.Unlock()
+
+		// 900KB change - should NOT invalidate
+		shouldInvalidate := ba.shouldInvalidateCache(1000, 10_000_000+900_000, 1)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate with 900KB size change")
+
+		// 1.1MB change - should invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 10_000_000+1_100_000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 1.1MB size change")
+
+		// 1.1MB decrease - should also invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 10_000_000-1_100_000, 1)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with 1.1MB size decrease")
+	})
+
+	t.Run("Cache invalidates on subtree count change", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 1000
+		ba.cachedCandidate.lastSizeInBytes = 500000
+		ba.cachedCandidate.lastSubtreeCount = 5
+		ba.cachedCandidate.mu.Unlock()
+
+		// Same count - should NOT invalidate
+		shouldInvalidate := ba.shouldInvalidateCache(1000, 500000, 5)
+		assert.False(t, shouldInvalidate, "Cache should not invalidate with same subtree count")
+
+		// Different count - should invalidate
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 500000, 6)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with different subtree count")
+
+		shouldInvalidate = ba.shouldInvalidateCache(1000, 500000, 4)
+		assert.True(t, shouldInvalidate, "Cache should invalidate with decreased subtree count")
+	})
+
+	t.Run("Cache does not invalidate when no cache exists", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// No cache exists (nil candidate)
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = nil
+		ba.cachedCandidate.mu.Unlock()
+
+		// Should NOT invalidate (nothing to invalidate)
+		shouldInvalidate := ba.shouldInvalidateCache(1000, 500000, 5)
+		assert.False(t, shouldInvalidate, "Should not invalidate when no cache exists")
+	})
+
+	t.Run("Combined scenario - realistic high-load situation", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Set longer max age for this test
+		ba.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge = 10 * time.Second
+
+		// Setup cache with initial state
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 10000
+		ba.cachedCandidate.lastSizeInBytes = 50_000_000 // 50MB
+		ba.cachedCandidate.lastSubtreeCount = 10
+		ba.cachedCandidate.mu.Unlock()
+
+		// Simulate steady trickle of transactions (5% increase, 500KB increase)
+		// Should NOT invalidate (below thresholds)
+		shouldInvalidate := ba.shouldInvalidateCache(10500, 50_500_000, 10)
+		assert.False(t, shouldInvalidate, "Small steady increase should not invalidate cache")
+
+		// Simulate burst of transactions (15% increase, 2MB increase)
+		// Should invalidate due to tx count threshold
+		shouldInvalidate = ba.shouldInvalidateCache(11500, 52_000_000, 10)
+		assert.True(t, shouldInvalidate, "Burst of transactions should invalidate cache")
+
+		// Simulate new subtree completed
+		// Should invalidate due to subtree count change
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.mu.Unlock()
+		shouldInvalidate = ba.shouldInvalidateCache(11500, 52_000_000, 11)
+		assert.True(t, shouldInvalidate, "New subtree should invalidate cache")
+	})
+
+	t.Run("Cache metrics tracking", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+		ba := testItems.blockAssembler
+
+		// Setup cache and verify metrics are tracked
+		ba.cachedCandidate.mu.Lock()
+		ba.cachedCandidate.candidate = &model.MiningCandidate{Height: 1}
+		ba.cachedCandidate.lastUpdate = time.Now()
+		ba.cachedCandidate.lastTxCount = 500
+		ba.cachedCandidate.lastSizeInBytes = 250000
+		ba.cachedCandidate.lastSubtreeCount = 3
+		ba.cachedCandidate.mu.Unlock()
+
+		// Verify tracked values
+		ba.cachedCandidate.mu.RLock()
+		assert.Equal(t, uint32(500), ba.cachedCandidate.lastTxCount, "TX count should be tracked")
+		assert.Equal(t, uint64(250000), ba.cachedCandidate.lastSizeInBytes, "Size should be tracked")
+		assert.Equal(t, 3, ba.cachedCandidate.lastSubtreeCount, "Subtree count should be tracked")
 		ba.cachedCandidate.mu.RUnlock()
 	})
 }
@@ -1710,7 +1903,7 @@ func TestBlockAssembly_CurrentBlock(t *testing.T) {
 		genesisBlock, err := model.NewBlockFromBytes(buf.Bytes())
 		require.NoError(t, err)
 
-		testItems.blockAssembler.bestBlockHeader.Store(genesisBlock.Header)
+		testItems.blockAssembler.setBestBlockHeader(genesisBlock.Header, 0)
 
 		currentBlockHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
 		assert.Equal(t, genesisBlock.Hash(), currentBlockHeader.Hash())
@@ -1729,7 +1922,7 @@ func TestBlockAssembly_RemoveTx(t *testing.T) {
 		txHash := tx.TxIDChainHash()
 
 		// Since RemoveTx returns an error, we can test it
-		err := testItems.blockAssembler.RemoveTx(*txHash)
+		err := testItems.blockAssembler.RemoveTx(t.Context(), *txHash)
 		// The error might be that the tx doesn't exist, which is fine for this test
 		_ = err
 	})
@@ -1769,7 +1962,7 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		// Set skip wait for pending blocks
 		blockAssembler.SetSkipWaitForPendingBlocks(true)
 
-		err = blockAssembler.Start(context.Background())
+		err = blockAssembler.Start(t.Context())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to initialize state")
 	})
@@ -1782,6 +1975,8 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 
 		// Create a simple mock iterator that returns no transactions
 		mockIterator := &utxoStore.MockUnminedTxIterator{}
+		mockIterator.On("Next", mock.Anything, mock.Anything).Return([]*utxoStore.UnminedTransaction{}, nil)
+
 		mockUtxoStore.On("GetUnminedTxIterator").Return(mockIterator, nil)
 		mockUtxoStore.On("SetBlockHeight", mock.Anything).Return(nil)
 
@@ -1799,6 +1994,9 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		subChan := make(chan *blockchain_api.Notification, 1)
 		blockchainClient.On("SubscribeToNewBlock", mock.Anything).Return(subChan, nil)
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(blockchainSubscription, nil)
+		// Mock GetFSMCurrentState for parent preservation logic in Start()
+		runningState := blockchain.FSMStateRUNNING
+		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 		tSettings := createTestSettings(t)
 		newSubtreeChan := make(chan subtreeprocessor.NewSubtreeRequest)
@@ -1819,12 +2017,13 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		// Set skip wait for pending blocks
 		blockAssembler.SetSkipWaitForPendingBlocks(true)
 
-		err = blockAssembler.Start(context.Background())
+		err = blockAssembler.Start(t.Context())
 		require.NoError(t, err)
 
 		// Verify state was properly initialized
-		assert.NotNil(t, blockAssembler.bestBlockHeader.Load())
-		assert.Equal(t, uint32(0), blockAssembler.bestBlockHeight.Load())
+		header, height := blockAssembler.CurrentBlock()
+		assert.NotNil(t, header)
+		assert.Equal(t, uint32(0), height)
 	})
 }
 
@@ -1843,78 +2042,15 @@ func TestBlockAssembly_processNewBlockAnnouncement_ErrorHandling(t *testing.T) {
 		testItems.blockAssembler.blockchainClient = mockBlockchainClient
 
 		// Capture initial state
-		initialHeight := testItems.blockAssembler.bestBlockHeight.Load()
-		initialHeader := testItems.blockAssembler.bestBlockHeader.Load()
+		initialHeader, initialHeight := testItems.blockAssembler.CurrentBlock()
 
 		// Call processNewBlockAnnouncement directly
 		testItems.blockAssembler.processNewBlockAnnouncement(context.Background())
 
 		// Verify state remains unchanged after error
-		assert.Equal(t, initialHeight, testItems.blockAssembler.bestBlockHeight.Load())
-		assert.Equal(t, initialHeader, testItems.blockAssembler.bestBlockHeader.Load())
-	})
-}
-
-func TestBlockAssembly_setBestBlockHeader_CleanupServiceFailures(t *testing.T) {
-	t.Run("setBestBlockHeader handles cleanup service failures gracefully", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-
-		// Create a mock cleanup service that fails
-		mockCleanupService := &MockCleanupService{}
-		mockCleanupService.On("UpdateBlockHeight", mock.Anything, mock.Anything).Return(errors.NewProcessingError("cleanup service failed"))
-
-		// Set the cleanup service and mark it as loaded
-		testItems.blockAssembler.cleanupService = mockCleanupService
-		testItems.blockAssembler.cleanupServiceLoaded.Store(true)
-
-		// Create a new block header
-		newHeader := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  model.GenesisBlockHeader.Hash(),
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      1234567890,
-			Bits:           model.NBit{},
-			Nonce:          1234,
-		}
-		newHeight := uint32(1)
-
-		// Call setBestBlockHeader - should not panic or fail even if cleanup service fails
-		testItems.blockAssembler.setBestBlockHeader(newHeader, newHeight)
-
-		// Verify the block header was still set correctly
-		assert.Equal(t, newHeader, testItems.blockAssembler.bestBlockHeader.Load())
-		assert.Equal(t, newHeight, testItems.blockAssembler.bestBlockHeight.Load())
-
-		// Verify cleanup service was called
-		mockCleanupService.AssertCalled(t, "UpdateBlockHeight", newHeight, mock.Anything)
-	})
-
-	t.Run("setBestBlockHeader skips cleanup when cleanup service not loaded", func(t *testing.T) {
-		initPrometheusMetrics()
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-
-		// Ensure cleanup service is not loaded
-		testItems.blockAssembler.cleanupServiceLoaded.Store(false)
-
-		newHeader := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  model.GenesisBlockHeader.Hash(),
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      1234567890,
-			Bits:           model.NBit{},
-			Nonce:          1234,
-		}
-		newHeight := uint32(1)
-
-		// This should work without any cleanup service calls
-		testItems.blockAssembler.setBestBlockHeader(newHeader, newHeight)
-
-		// Verify the block header was set correctly
-		assert.Equal(t, newHeader, testItems.blockAssembler.bestBlockHeader.Load())
-		assert.Equal(t, newHeight, testItems.blockAssembler.bestBlockHeight.Load())
+		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
+		assert.Equal(t, initialHeight, currentHeight)
+		assert.Equal(t, initialHeader, currentHeader)
 	})
 }
 
@@ -1928,7 +2064,8 @@ func TestBlockAssembly_CoinbaseCalculationFix(t *testing.T) {
 
 		// Test the getMiningCandidate function directly with controlled fee values
 		ba := testItems.blockAssembler
-		ba.bestBlockHeight.Store(809) // Height from the original error
+		currentHeader, _ := ba.CurrentBlock()
+		ba.setBestBlockHeader(currentHeader, 809) // Height from the original error
 
 		// Create a test scenario that simulates the fee calculation
 		// The original error: coinbase output (5000000098) > fees + subsidy (5000000097)
@@ -1974,9 +2111,9 @@ func (m *MockCleanupService) Start(ctx context.Context) {
 	m.Called(ctx)
 }
 
-func (m *MockCleanupService) UpdateBlockHeight(height uint32, doneCh ...chan string) error {
-	args := m.Called(height, doneCh)
-	return args.Error(0)
+func (m *MockCleanupService) Prune(ctx context.Context, height uint32) (int64, error) {
+	args := m.Called(ctx, height)
+	return args.Get(0).(int64), args.Error(1)
 }
 
 func (m *MockCleanupService) SetPersistedHeightGetter(getter func() uint32) {
@@ -2000,6 +2137,9 @@ func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNo
 	ctx := context.Background()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
+
+	// Disable parent validation for this test as it tests edge cases with UTXO store states
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 	// Create a test tx and insert into UTXO store as unmined initially (unmined_since set)
 	tx := newTx(42)
@@ -2043,6 +2183,9 @@ func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStat
 	ctx := context.Background()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
+
+	// Disable parent validation for this test as it tests edge cases with UTXO store states
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 	// Prepare a mined tx on the main chain
 	tx := newTx(43)
@@ -2089,6 +2232,9 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 	ctx := context.Background()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
+
+	// Disable parent validation for this test as it tests transaction filtering logic independently
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
 
 	// Create two test transactions
 	tx1 := newTx(100)
@@ -2151,51 +2297,6 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 
 	// tx2 should be in the assembler (it's still unmined)
 	assert.True(t, containsHash(hashes, *txHash2), "unmined transaction not on current chain should be loaded into assembler")
-}
-
-// TestStartUnminedTransactionCleanupCoverage tests startUnminedTransactionCleanup method (52.2% coverage)
-func TestStartUnminedTransactionCleanupCoverage(t *testing.T) {
-	initPrometheusMetrics()
-
-	t.Run("startUnminedTransactionCleanup with cleanup enabled", func(t *testing.T) {
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// Test startUnminedTransactionCleanup - uses hardcoded 10-minute interval
-
-		// Test startUnminedTransactionCleanup
-		ba.startUnminedTransactionCleanup(ctx)
-
-		// Allow some time for cleanup to potentially run
-		time.Sleep(100 * time.Millisecond)
-
-		// Cancel context to stop cleanup
-		cancel()
-
-		// Test passes if no panic occurs
-		assert.True(t, true, "startUnminedTransactionCleanup should handle cleanup gracefully")
-	})
-
-	t.Run("startUnminedTransactionCleanup with cleanup disabled", func(t *testing.T) {
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// startUnminedTransactionCleanup uses hardcoded 10-minute interval
-
-		// Test startUnminedTransactionCleanup - should return early
-		ba.startUnminedTransactionCleanup(ctx)
-
-		// Test passes if method returns without starting goroutine
-		assert.True(t, true, "startUnminedTransactionCleanup should return early when disabled")
-	})
 }
 
 // TestResetCoverage tests reset method (60.5% coverage)
@@ -2403,7 +2504,7 @@ func TestWaitForPendingBlocksCoverage(t *testing.T) {
 		ba.SetSkipWaitForPendingBlocks(true)
 
 		// Test waitForPendingBlocks - should return immediately
-		_ = ba.waitForPendingBlocks(context.Background())
+		_ = ba.subtreeProcessor.WaitForPendingBlocks(context.Background())
 
 		// Should return immediately when skip is enabled
 		assert.True(t, true, "waitForPendingBlocks should skip when enabled")
@@ -2422,7 +2523,7 @@ func TestWaitForPendingBlocksCoverage(t *testing.T) {
 		defer cancel()
 
 		// Test waitForPendingBlocks with timeout
-		_ = ba.waitForPendingBlocks(ctx)
+		_ = ba.subtreeProcessor.WaitForPendingBlocks(ctx)
 
 		// Should handle timeout gracefully
 		assert.True(t, true, "waitForPendingBlocks should handle timeout")
@@ -2472,7 +2573,8 @@ func TestGetMiningCandidate_SendTimeoutResetsGenerationFlag(t *testing.T) {
 	ba := testItems.blockAssembler
 
 	// Set up the block assembler with a valid height
-	ba.bestBlockHeight.Store(1)
+	currentHeader, _ := ba.CurrentBlock()
+	ba.setBestBlockHeader(currentHeader, 1)
 
 	// Don't start the listeners, so the channel send will timeout
 
@@ -2516,32 +2618,4 @@ func TestGetMiningCandidate_SendTimeoutResetsGenerationFlag(t *testing.T) {
 	assert.False(t, ba.cachedCandidate.generating, "generating flag should still be reset")
 	assert.Nil(t, ba.cachedCandidate.generationChan, "generation channel should still be nil")
 	ba.cachedCandidate.mu.RUnlock()
-}
-
-// TestGetLastPersistedHeight tests the GetLastPersistedHeight method
-func TestGetLastPersistedHeight(t *testing.T) {
-	initPrometheusMetrics()
-
-	t.Run("GetLastPersistedHeight returns initial zero value", func(t *testing.T) {
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Initially should be 0
-		height := ba.GetLastPersistedHeight()
-		assert.Equal(t, uint32(0), height)
-	})
-
-	t.Run("GetLastPersistedHeight returns updated value", func(t *testing.T) {
-		testItems := setupBlockAssemblyTest(t)
-		require.NotNil(t, testItems)
-		ba := testItems.blockAssembler
-
-		// Store a value
-		ba.lastPersistedHeight.Store(uint32(100))
-
-		// Should return the stored value
-		height := ba.GetLastPersistedHeight()
-		assert.Equal(t, uint32(100), height)
-	})
 }

@@ -1,0 +1,9 @@
+networks:
+  teranode-network:
+    name: my-teranode-network
+
+services:
+  aerospike:
+    extends:
+      file: ../base/docker-services.yml
+      service: aerospike-tn

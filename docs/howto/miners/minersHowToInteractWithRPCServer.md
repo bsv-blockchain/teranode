@@ -1,7 +1,5 @@
 # How to Interact with the RPC Server
 
-Last Modified: 28-May-2025
-
 There are 2 primary ways to interact with the node, using the RPC Server, and using the Asset Server. This document will focus on the RPC Server. The RPC server provides a JSON-RPC interface for interacting with the node. Below is a list of implemented RPC methods with their parameters and return values.
 
 ## Teranode RPC HTTP API
@@ -15,9 +13,11 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 3. `getblockbyheight`: Retrieves a block by its height
 4. `getblockhash`: Returns the hash of a block at specified height
 5. `getblockheader`: Returns information about a block's header
-6. `getblockchaininfo`: Returns information about the blockchain
+6. `getblockchaininfo`: Returns information about the blockchain (available via RPC only, see example below)
 7. `invalidateblock`: Marks a block as invalid
-8. `reconsiderblock`: Removes invalidity status of a block
+8. `reconsiderblock`: Removes invalidity status of a block (performs full block validation)
+
+> **Note:** The `getblockchaininfo` RPC method is accessed via JSON-RPC, not via `teranode-cli`. For a visual view of blockchain state, use the blockchain viewer at <http://localhost:8090/viewer>
 
 ### Mining-related Methods
 
@@ -31,16 +31,17 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Parameters:
         None
 
-    - Returns: Object containing block height, current block size and weight, current difficulty, and estimated network hashrate
+    - Returns: Object containing block height, current block size, current block transaction count, current difficulty, estimated network hashrate, error messages, and chain name
 
 3. `getminingcandidate`: Obtain a mining candidate
     - Parameters:
 
         - Optional object containing:
 
-            - `coinbaseValue` (numeric, optional): Custom coinbase value in satoshis
+            - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response
+            - `verbosity` (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes
 
-    - Returns: Object containing candidate ID, previous block hash, coinbase transaction, and merkle branches
+    - Returns: Object containing candidate ID, previous block hash, coinbase value, and merkle proof
     - Example Request:
 
         ```json
@@ -52,14 +53,14 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
         }
         ```
 
-    - Example Request with custom coinbase value:
+    - Example Request with coinbase transaction and subtree hashes:
 
         ```json
         {
             "jsonrpc": "1.0",
             "id": "mining",
             "method": "getminingcandidate",
-            "params": [{"coinbaseValue": 5000000000}]
+            "params": [{"provideCoinbaseTx": true, "verbosity": 1}]
         }
         ```
 
@@ -70,18 +71,14 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
             "result": {
                 "id": "00000000000000000000000000000000...",
                 "prevhash": "000000000000000004a1b6d6fdfa0d0a...",
-                "coinbase": "01000000010000000000000000000000000000...",
                 "coinbaseValue": 5000000000,
                 "version": 536870912,
-                "merkleproof": [...],
+                "nBits": "180d60e3",
                 "time": 1621500000,
-                "bits": "180d60e3",
                 "height": 700001,
-                "nBits": 402947203,
                 "num_tx": 5620,
                 "sizeWithoutCoinbase": 2300000,
-                "minTime": 1621498888,
-                "fullCurrentTime": 1621500000
+                "merkleProof": [...]
             },
             "error": null,
             "id": "mining"
@@ -206,6 +203,16 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Returns: Boolean `true` if successful
     - Note: The UTXO must be frozen before it can be reassigned
 
+7. `getrawmempool`: Returns transaction IDs being processed for block assembly
+    - Parameters:
+
+        - `verbose` (boolean, optional): If true, returns detailed information about pending transactions
+    - Returns: 
+
+        - If verbose=false: Array of transaction IDs being prepared for the next block
+        - If verbose=true: Object with detailed information about transactions in the block assembly process
+    - Note: In Teranode's architecture, this returns transactions from the subtree-based block assembly system, not a traditional mempool. The method name is kept for Bitcoin Core compatibility.
+
 ### Network-related Methods
 
 1. `getinfo`: Returns information about the node
@@ -298,7 +305,7 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
     - Parameters:
         None
 
-    - Returns: String 'Teranode server stopping' when successful
+    - Returns: String 'bsvd stopping.' when successful
 
 2. `version`: Returns version information about the node
     - Parameters:

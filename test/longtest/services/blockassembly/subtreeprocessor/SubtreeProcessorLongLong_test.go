@@ -8,7 +8,6 @@ import (
 	"os"
 	"runtime/pprof"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -110,6 +109,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 		utxoStore,
 		newSubtreeChan,
 	)
+	stp.Start(context.Background())
 
 	for i, txid := range txIds {
 		hash, err := chainhash.NewHashFromStr(txid)
@@ -118,7 +118,7 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 		if i == 0 {
 			stp.GetCurrentSubtree().ReplaceRootNode(hash, 0, 0)
 		} else {
-			stp.Add(subtreepkg.SubtreeNode{Hash: *hash, Fee: 1}, subtreepkg.TxInpoints{ParentTxHashes: []chainhash.Hash{}})
+			stp.AddBatch([]subtreepkg.Node{{Hash: *hash, Fee: 1}}, []*subtreepkg.TxInpoints{{ParentTxHashes: []chainhash.Hash{}}})
 		}
 	}
 
@@ -169,41 +169,6 @@ func TestMoveForwardBlockLarge(t *testing.T) {
 	assert.Equal(t, 1001, stp.GetCurrentSubtree().Length())
 }
 
-func Test_TxIDAndFeeBatch(t *testing.T) {
-
-	batcher := st.NewTxIDAndFeeBatch(1000)
-
-	var wg sync.WaitGroup
-
-	batchCount := atomic.Uint64{}
-
-	for i := 0; i < 10_000; i++ {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
-			for j := 0; j < 1_000; j++ {
-				batch := batcher.Add(
-					st.NewTxIDAndFee(
-						subtreepkg.SubtreeNode{
-							Hash:        chainhash.Hash{},
-							Fee:         1,
-							SizeInBytes: 2,
-						},
-					),
-				)
-				if batch != nil {
-					batchCount.Add(1)
-				}
-			}
-		}()
-	}
-
-	wg.Wait()
-	assert.Equal(t, uint64(10_000), batchCount.Load())
-}
-
 func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 	t.Run("large", func(t *testing.T) {
 
@@ -233,6 +198,7 @@ func TestSubtreeProcessor_CreateTransactionMap(t *testing.T) {
 			utxoStore,
 			newSubtreeChan,
 		)
+		stp.Start(context.Background())
 
 		subtreeSize := uint64(1024 * 1024)
 		nrSubtrees := 10

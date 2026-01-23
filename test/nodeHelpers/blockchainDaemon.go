@@ -66,12 +66,15 @@ func NewBlockchainDaemon(t *testing.T) (*BlockchainDaemon, error) {
 	// Configure store URL
 	storeURL, _ := url.Parse("sqlite:///blockchainDB")
 	tSettings.BlockChain.StoreURL = storeURL
-	tSettings.Block.StoreCacheEnabled = false
 
 	// Use a dynamic port for blockchain gRPC to avoid conflicts with running nodes
 	blockchainPort := getFreePort(t)
 	tSettings.BlockChain.GRPCListenAddress = fmt.Sprintf("localhost:%d", blockchainPort)
 	tSettings.BlockChain.GRPCAddress = fmt.Sprintf("localhost:%d", blockchainPort)
+
+	// Use a dynamic port for blockchain HTTP to avoid conflicts with running nodes
+	blockchainHTTPPort := getFreePort(t)
+	tSettings.BlockChain.HTTPListenAddress = fmt.Sprintf("localhost:%d", blockchainHTTPPort)
 
 	// Initialize store
 	store, err := blockchain_store.NewStore(logger, storeURL, tSettings)

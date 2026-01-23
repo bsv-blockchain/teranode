@@ -769,14 +769,37 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		return nil, errors.WrapGRPC(err)
 	}
 
+	// Clear difficulty cache when chain state changes to prevent stale cached values
+	// from causing incorrect difficulty calculations during rapid block processing
+	b.difficulty.ResetCache()
+
 	b.logger.Infof("[AddBlock] stored block %s (ID: %d, height: %d)", block.Hash(), ID, height)
 
 	block.Height = height
 
 	b.logger.Debugf("[AddBlock] checking for Kafka producer: %v", b.blocksFinalKafkaAsyncProducer != nil)
 
+	// Only publish to Kafka if the block is valid. Invalid blocks (marked with OptionInvalid)
+	// should not be propagated to downstream consumers via the blocks_final topic.
+	if !request.OptionInvalid {
+		if err = b.sendKafkaBlockFinalNotification(block); err != nil {
+			b.logger.Errorf("[AddBlock] error sending Kafka notification for new block %s: %v", block.Hash(), err)
+		}
+	}
+
+	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: model.NotificationType_Block,
+		Hash: block.Hash().CloneBytes(),
+	}); err != nil {
+		b.logger.Errorf("[AddBlock] error sending notification for new block %s: %v", block.Hash(), err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+func (b *Blockchain) sendKafkaBlockFinalNotification(block *model.Block) error {
 	if b.blocksFinalKafkaAsyncProducer != nil {
-		key := block.Header.Hash().CloneBytes()
+		key := block.Header.Hash().String()
 
 		subtreeHashes := make([][]byte, len(block.Subtrees))
 		for i, subtreeHash := range block.Subtrees {
@@ -795,7 +818,7 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		value, err := proto.Marshal(message)
 		if err != nil {
 			b.logger.Errorf("[AddBlock] error creating block bytes: %v", err)
-			return nil, errors.WrapGRPC(err)
+			return err
 		}
 
 		if len(value) >= 500_000 { // kafka default limit is actually 1MB and we don't ever expecta block to be even close to that
@@ -803,19 +826,12 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		}
 
 		b.kafkaChan <- &kafka.Message{
-			Key:   key,
+			Key:   []byte(key),
 			Value: value,
 		}
 	}
 
-	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
-		Type: model.NotificationType_Block,
-		Hash: block.Hash().CloneBytes(),
-	}); err != nil {
-		b.logger.Errorf("[AddBlock] error sending notification for new block %s: %v", block.Hash(), err)
-	}
-
-	return &emptypb.Empty{}, nil
+	return nil
 }
 
 // GetBlock retrieves a block by its hash.
@@ -1275,6 +1291,30 @@ func (b *Blockchain) CheckBlockIsInCurrentChain(ctx context.Context, req *blockc
 
 	return &blockchain_api.CheckBlockIsCurrentChainResponse{
 		IsPartOfCurrentChain: result,
+	}, nil
+}
+
+// CheckBlockIsAncestorOfBlock verifies if any of the given block IDs are ancestors of a specific block.
+// This is used for double-spend detection on fork blocks where we check against the fork's ancestor chain.
+func (b *Blockchain) CheckBlockIsAncestorOfBlock(ctx context.Context, req *blockchain_api.CheckBlockIsAncestorOfBlockRequest) (*blockchain_api.CheckBlockIsAncestorOfBlockResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "CheckBlockIsAncestorOfBlock",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainCheckBlockIsAncestorOfBlock),
+	)
+	defer deferFn()
+
+	blockHash, err := chainhash.NewHash(req.BlockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewBlockNotFoundError("[Blockchain][CheckBlockIsAncestorOfBlock] request's hash is not valid", err))
+	}
+
+	result, err := b.store.CheckBlockIsAncestorOfBlock(ctx, req.BlockIDs, blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.CheckBlockIsAncestorOfBlockResponse{
+		IsAncestor: result,
 	}, nil
 }
 
@@ -1898,17 +1938,22 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	// Clear any cached difficulty that may depend on the previous best tip
 	b.difficulty.ResetCache()
 
-	// send notifications about the new latest block, so subscribers can update their state
-	bestBlock, _, err := b.store.GetBestBlockHeader(ctx)
-	if err != nil {
-		b.logger.Errorf("[Blockchain] Error getting best block header: %v", err)
-	} else {
-		if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
-			Type: model.NotificationType_Block,
-			Hash: bestBlock.Hash().CloneBytes(),
-		}); err != nil {
-			b.logger.Errorf("[Blockchain] Error sending notification for best block %s: %v", bestBlock.Hash(), err)
-		}
+	// send notification about the block being invalidated, this will trigger all listeners to reconsider best block
+	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: model.NotificationType_Block,
+		Hash: blockHash.CloneBytes(),
+	}); err != nil {
+		b.logger.Errorf("[Blockchain] Error sending notification for best block %s: %v", blockHash, err)
+	}
+
+	// send BlockMinedUnset notification to trigger immediate processing by BlockValidation
+	// This ensures transaction status is updated immediately for invalidated blocks
+	// instead of waiting for the periodic job (which runs every 1 minute in production)
+	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
+		Type: model.NotificationType_BlockMinedUnset,
+		Hash: blockHash.CloneBytes(),
+	}); err != nil {
+		b.logger.Errorf("[Blockchain] Error sending BlockMinedUnset notification for %s: %v", blockHash, err)
 	}
 
 	return &blockchain_api.InvalidateBlockResponse{
@@ -1976,6 +2021,15 @@ func (b *Blockchain) RevalidateBlock(ctx context.Context, request *blockchain_ap
 		return nil, errors.WrapGRPC(err)
 	}
 
+	block, _, err := b.store.GetBlock(ctx, blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	if err = b.sendKafkaBlockFinalNotification(block); err != nil {
+		b.logger.Errorf("[AddBlock] error sending Kafka notification for new block %s: %v", block.Hash(), err)
+	}
+
 	// send notification about the revalidated block
 	if _, err = b.SendNotification(ctx, &blockchain_api.Notification{
 		Type: model.NotificationType_Block,
@@ -2030,7 +2084,7 @@ func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.N
 	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RevalidateBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSendNotification),
-		tracing.WithDebugLogMessage(b.logger, "[SendNotification] called"),
+		tracing.WithLogMessage(b.logger, "[SendNotification] called for %s notification type %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.Type.String()),
 	)
 	defer deferFn()
 
@@ -2079,6 +2133,18 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 	return &emptypb.Empty{}, nil
 }
 
+// ClearBlockMinedSet resets the mined_set flag to false for a block.
+func (b *Blockchain) ClearBlockMinedSet(ctx context.Context, req *blockchain_api.ClearBlockMinedSetRequest) (*emptypb.Empty, error) {
+	blockHash := chainhash.Hash(req.BlockHash)
+
+	err := b.store.ClearBlockMinedSet(ctx, &blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 // GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
 func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty) (*blockchain_api.GetBlocksMinedNotSetResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocksMinedNotSet",
@@ -2102,6 +2168,52 @@ func (b *Blockchain) GetBlocksMinedNotSet(ctx context.Context, _ *emptypb.Empty)
 	}
 
 	return &blockchain_api.GetBlocksMinedNotSetResponse{
+		BlockBytes: blockBytes,
+	}, nil
+}
+
+// SetBlockPersistedAt marks a block as persisted in blob storage.
+func (b *Blockchain) SetBlockPersistedAt(ctx context.Context, req *blockchain_api.SetBlockPersistedAtRequest) (*emptypb.Empty, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "SetBlockPersistedAt",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainSetBlockPersistedAt),
+		tracing.WithDebugLogMessage(b.logger, "[SetBlockPersistedAt] called with hash %x", req.BlockHash),
+	)
+	defer deferFn()
+
+	blockHash := chainhash.Hash(req.BlockHash)
+
+	err := b.store.SetBlockPersistedAt(ctx, &blockHash)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+func (b *Blockchain) GetBlocksNotPersisted(ctx context.Context, req *blockchain_api.GetBlocksNotPersistedRequest) (*blockchain_api.GetBlocksNotPersistedResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocksNotPersisted",
+		tracing.WithParentStat(b.stats),
+		tracing.WithHistogram(prometheusBlockchainGetBlocksNotPersisted),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlocksNotPersisted] called with limit %d", req.Limit),
+	)
+	defer deferFn()
+
+	blocks, err := b.store.GetBlocksNotPersisted(ctx, int(req.Limit))
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockBytes := make([][]byte, len(blocks))
+	for i, block := range blocks {
+		blockBytes[i], err = block.Bytes()
+		if err != nil {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlocksNotPersisted] failed to serialize block", err))
+		}
+	}
+
+	return &blockchain_api.GetBlocksNotPersistedResponse{
 		BlockBytes: blockBytes,
 	}, nil
 }
@@ -2303,6 +2415,17 @@ func (b *Blockchain) SendFSMEvent(ctx context.Context, eventReq *blockchain_api.
 	b.logger.Infof("[Blockchain Server] Received FSM event req: %v, will send event to the FSM", eventReq)
 
 	priorState := b.finiteStateMachine.Current()
+
+	// Prevent manual transitions from CATCHINGBLOCKS state
+	// The state should only exit CATCHINGBLOCKS programmatically when catchup completes
+	if priorState == blockchain_api.FSMStateType_CATCHINGBLOCKS.String() {
+		// Only allow RUN event (catchup completion) to exit CATCHINGBLOCKS
+		if eventReq.Event != blockchain_api.FSMEventType_RUN {
+			errMsg := "cannot manually transition from CATCHINGBLOCKS state - catchup must complete first"
+			b.logger.Warnf("[Blockchain Server] %s (attempted event: %v)", errMsg, eventReq.Event)
+			return nil, errors.NewInvalidArgumentError(errMsg)
+		}
+	}
 
 	err := b.finiteStateMachine.Event(ctx, eventReq.Event.String())
 	if err != nil {

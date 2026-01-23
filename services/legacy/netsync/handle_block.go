@@ -109,7 +109,7 @@ func (sm *SyncManager) HandleBlockDirect(ctx context.Context, peer *peer.Peer, b
 	}()
 
 	// Wait for block assembly to be ready
-	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, uint32(sm.settings.ChainCfgParams.CoinbaseMaturity/2)); err != nil {
+	if err = blockassemblyutil.WaitForBlockAssemblyReady(ctx, sm.logger, sm.blockAssembly, blockHeight, sm.settings.BlockValidation.MaxBlocksBehindBlockAssembly); err != nil {
 		// block-assembly is still behind, so we cannot process this block
 		return err
 	}
@@ -201,7 +201,7 @@ func (sm *SyncManager) ProcessBlock(ctx context.Context, teranodeBlock *model.Bl
 
 	// send the block to the blockValidation for processing and validation
 	// all the block subtrees should have been validated in processSubtrees
-	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "legacy", ""); err != nil {
+	if err = sm.blockValidation.ProcessBlock(ctx, teranodeBlock, teranodeBlock.Height, "", "legacy"); err != nil {
 		if errors.Is(err, errors.ErrBlockExists) {
 			sm.logger.Infof("[SyncManager:processBlock][%s %d] block already exists", teranodeBlock.Hash().String(), teranodeBlock.Height)
 			return nil
@@ -333,7 +333,7 @@ func (sm *SyncManager) checkSubtreeFromBlock(ctx context.Context, block *bsvutil
 }
 
 func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, subtree *subtreepkg.Subtree,
-	subtreeData *subtreepkg.SubtreeData, subtreeMetaData *subtreepkg.SubtreeMeta, quickValidationMode bool) error {
+	subtreeData *subtreepkg.Data, subtreeMetaData *subtreepkg.Meta, quickValidationMode bool) error {
 	ctx, _, deferFn := tracing.Tracer("netsync").Start(ctx, "writeSubtree",
 		tracing.WithLogMessage(sm.logger, "[writeSubtree][%s] writing subtree for block %s height %d", subtree.RootHash().String(), block.Hash().String(), block.Height()),
 	)
@@ -374,6 +374,14 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			return errors.NewStorageError("[writeSubtree][%s] failed to create subtree file", subtree.RootHash().String(), err)
 		}
 
+		// Track whether write succeeded to determine whether to close or abort
+		var writeSucceeded bool
+		defer func() {
+			if !writeSucceeded {
+				storer.Abort(errors.NewProcessingError("[writeSubtree] write failed for subtree %s", subtree.RootHash().String()))
+			}
+		}()
+
 		// TODO Write header extra - *subtree.RootHash(), uint32(block.Height())
 
 		if _, err = storer.Write(subtreeBytes); err != nil {
@@ -383,6 +391,8 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 		if err = storer.Close(ctx); err != nil {
 			return errors.NewStorageError("error closing subtree file", err)
 		}
+
+		writeSucceeded = true
 
 		return nil
 	})
@@ -412,6 +422,14 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			return errors.NewStorageError("[writeSubtree][%s] failed to create subtree data file", subtree.RootHash().String(), err)
 		}
 
+		// Track whether write succeeded to determine whether to close or abort
+		var writeSucceeded bool
+		defer func() {
+			if !writeSucceeded {
+				storer.Abort(errors.NewProcessingError("[writeSubtree] write failed for subtree data %s", subtree.RootHash().String()))
+			}
+		}()
+
 		// TODO Write header extra - , *subtreeData.RootHash(), uint32(block.Height())
 
 		if _, err := storer.Write(subtreeDataBytes); err != nil {
@@ -421,6 +439,8 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 		if err = storer.Close(ctx); err != nil {
 			return errors.NewStorageError("error closing subtree data file", err)
 		}
+
+		writeSucceeded = true
 
 		return nil
 	})
@@ -453,6 +473,14 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 				return errors.NewStorageError("[writeSubtree][%s] failed to store subtree meta data", subtree.RootHash().String(), err)
 			}
 
+			// Track whether write succeeded to determine whether to close or abort
+			var writeSucceeded bool
+			defer func() {
+				if !writeSucceeded {
+					storer.Abort(errors.NewProcessingError("[writeSubtree] write failed for subtree meta %s", subtree.RootHash().String()))
+				}
+			}()
+
 			// TODO Write header extra - , *subtree.RootHash(), uint32(block.Height())
 
 			if _, err = storer.Write(subtreeBytes); err != nil {
@@ -462,6 +490,8 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 			if err = storer.Close(gCtx); err != nil {
 				return errors.NewStorageError("error closing subtree meta file", err)
 			}
+
+			writeSucceeded = true
 
 			return nil
 		})
@@ -746,7 +776,7 @@ func (sm *SyncManager) extendTransactions(ctx context.Context, block *bsvutil.Bl
 }
 
 func (sm *SyncManager) createSubtree(ctx context.Context, block *bsvutil.Block, txMap *txmap.SyncedMap[chainhash.Hash, *TxMapWrapper],
-	subtree *subtreepkg.Subtree, subtreeData *subtreepkg.SubtreeData, subtreeMetaData *subtreepkg.SubtreeMeta) (err error) {
+	subtree *subtreepkg.Subtree, subtreeData *subtreepkg.Data, subtreeMetaData *subtreepkg.Meta) (err error) {
 	_, _, deferFn := tracing.Tracer("netsync").Start(ctx, "createSubtree",
 		tracing.WithLogMessage(sm.logger, "[createSubtree] called for block %s / height %d", block.Hash(), block.Height()),
 	)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/internal/profiling"
 	"github.com/bsv-blockchain/teranode/services/alert"
 	"github.com/bsv-blockchain/teranode/services/asset"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
@@ -19,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
+	"github.com/bsv-blockchain/teranode/services/pruner"
 	"github.com/bsv-blockchain/teranode/services/rpc"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
@@ -68,6 +70,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 	startLegacy := d.shouldStart(serviceLegacyFormal, args)
 	startRPC := d.shouldStart(serviceRPCFormal, args)
 	startAlert := d.shouldStart(serviceAlertFormal, args)
+	startPruner := d.shouldStart(servicePrunerFormal, args)
 
 	// Create the application count based on the services that are going to be started
 	d.appCount += len(d.externalServices)
@@ -117,6 +120,7 @@ func (d *Daemon) startServices(ctx context.Context, logger ulogger.Logger, appSe
 		{startValidator, func() error { return d.startValidatorService(ctx, appSettings, createLogger) }},
 		{startPropagation, func() error { return d.startPropagationService(ctx, appSettings, createLogger) }},
 		{startLegacy, func() error { return d.startLegacyService(ctx, appSettings, createLogger) }},
+		{startPruner, func() error { return d.startPrunerService(ctx, appSettings, createLogger) }},
 	}
 
 	// Loop through and start each service if needed
@@ -178,8 +182,11 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 			mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
 			// fgprof support
-
 			mux.Handle("/debug/fgprof", fgprof.Handler())
+
+			// memory analyzer support (includes mmap, non-heap memory)
+			logger.Infof("Memory analyzer available on http://%s/debug/memory", profilerAddr)
+			mux.HandleFunc("/debug/memory", profiling.MemoryProfileHandler)
 
 			if appSettings.StatsPrefix != "" {
 				gocore.RegisterStatsHandlers(mux)
@@ -392,6 +399,25 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		return err
 	}
 
+	var blockvalidationClient blockvalidation.Interface
+
+	blockvalidationClient, err = d.daemonStores.GetBlockValidationClient(
+		ctx, createLogger(loggerBlockchainClient), appSettings,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Get the P2P client for the Asset service
+	var p2pClient p2p.ClientI
+
+	p2pClient, err = d.daemonStores.GetP2PClient(
+		ctx, createLogger(loggerP2P), appSettings,
+	)
+	if err != nil {
+		return err
+	}
+
 	// Initialize the Asset service with the necessary parts
 	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
 		createLogger(serviceAsset),
@@ -401,6 +427,8 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		subtreeStore,
 		blockPersisterStore,
 		blockchainClient,
+		blockvalidationClient,
+		p2pClient,
 	))
 }
 
@@ -423,17 +451,17 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 		return err
 	}
 
-	blockAssemblyClient, err := blockassembly.NewClient(ctx, createLogger("ba"), appSettings)
+	blockAssemblyClient, err := d.daemonStores.GetBlockAssemblyClient(ctx, createLogger("rpc"), appSettings)
 	if err != nil {
 		return err
 	}
 
-	peerClient, err := peer.NewClient(ctx, createLogger("peer"), appSettings)
+	legacyPeerClient, err := peer.NewClient(ctx, createLogger("rpc"), appSettings)
 	if err != nil {
 		return err
 	}
 
-	p2pClient, err := p2p.NewClient(ctx, createLogger("p2p"), appSettings)
+	p2pClient, err := d.daemonStores.GetP2PClient(ctx, createLogger("rpc"), appSettings)
 	if err != nil {
 		return err
 	}
@@ -441,7 +469,23 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 	// Create block validation client for RPC service
 	var blockValidationClient blockvalidation.Interface
 
-	blockValidationClient, err = d.daemonStores.GetBlockValidationClient(ctx, createLogger("blockvalidation"), appSettings)
+	blockValidationClient, err = d.daemonStores.GetBlockValidationClient(ctx, createLogger("rpc"), appSettings)
+	if err != nil {
+		return err
+	}
+
+	// Create blob store for the RPC service
+	var txStore blob.Store
+
+	txStore, err = d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	if err != nil {
+		return err
+	}
+
+	// Create validator client for the RPC service
+	var validatorClient validator.Interface
+
+	validatorClient, err = d.daemonStores.GetValidatorClient(ctx, createLogger(loggerTxValidator), appSettings)
 	if err != nil {
 		return err
 	}
@@ -449,13 +493,13 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 	// Create the RPC server with the necessary parts
 	var rpcServer *rpc.RPCServer
 
-	rpcServer, err = rpc.NewServer(createLogger(loggerRPC), appSettings, blockchainClient, blockValidationClient, utxoStore, blockAssemblyClient, peerClient, p2pClient)
+	rpcServer, err = rpc.NewServer(createLogger(loggerRPC), appSettings, blockchainClient, blockValidationClient, utxoStore, blockAssemblyClient, legacyPeerClient, p2pClient, txStore, validatorClient)
 	if err != nil {
 		return err
 	}
 
 	// Add the RPC service to the ServiceManager
-	if err := d.ServiceManager.AddService(serviceRPCFormal, rpcServer); err != nil {
+	if err = d.ServiceManager.AddService(serviceRPCFormal, rpcServer); err != nil {
 		return err
 	}
 
@@ -464,9 +508,17 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 
 // startAlertService initializes and adds the Alert service to the ServiceManager.
 func (d *Daemon) startAlertService(ctx context.Context, appSettings *settings.Settings,
-	createLogger func(string) ulogger.Logger) error {
+	createLogger func(string) ulogger.Logger) (err error) {
+	var (
+		blockchainClient    blockchain.ClientI
+		utxoStore           utxo.Store
+		blockAssemblyClient blockassembly.ClientI
+		peerClient          peer.ClientI
+		p2pClient           p2p.ClientI
+	)
+
 	// Create the blockchain client for the Alert service
-	blockchainClient, err := d.daemonStores.GetBlockchainClient(
+	blockchainClient, err = d.daemonStores.GetBlockchainClient(
 		ctx, createLogger(loggerBlockchainClient), appSettings, serviceAlert,
 	)
 	if err != nil {
@@ -474,33 +526,25 @@ func (d *Daemon) startAlertService(ctx context.Context, appSettings *settings.Se
 	}
 
 	// Create the UTXO store for the Alert service
-	var utxoStore utxo.Store
-
-	utxoStore, err = d.daemonStores.GetUtxoStore(ctx, createLogger(loggerUtxos), appSettings)
+	utxoStore, err = d.daemonStores.GetUtxoStore(ctx, createLogger(loggerAlert), appSettings)
 	if err != nil {
 		return err
 	}
 
 	// Create the block assembly client for the Alert service
-	var blockAssemblyClient *blockassembly.Client
-
-	blockAssemblyClient, err = blockassembly.NewClient(ctx, createLogger(loggerBlockAssembly), appSettings)
+	blockAssemblyClient, err = d.daemonStores.GetBlockAssemblyClient(ctx, createLogger(loggerAlert), appSettings)
 	if err != nil {
 		return err
 	}
 
 	// Create the peer client for the Alert service
-	var peerClient peer.ClientI
-
-	peerClient, err = peer.NewClient(ctx, createLogger(loggerPeerClient), appSettings)
+	peerClient, err = peer.NewClient(ctx, createLogger(loggerAlert), appSettings)
 	if err != nil {
 		return err
 	}
 
 	// Create the P2P client for the Alert service
-	var p2pClient p2p.ClientI
-
-	p2pClient, err = p2p.NewClient(ctx, createLogger(loggerP2P), appSettings)
+	p2pClient, err = d.daemonStores.GetP2PClient(ctx, createLogger(loggerAlert), appSettings)
 	if err != nil {
 		return err
 	}
@@ -736,6 +780,14 @@ func (d *Daemon) startValidationService(
 			return err
 		}
 
+		// Create the P2P client for the SubtreeValidation service
+		var p2pClient p2p.ClientI
+
+		p2pClient, err = d.daemonStores.GetP2PClient(ctx, createLogger(loggerP2P), appSettings)
+		if err != nil {
+			return err
+		}
+
 		// Create the SubtreeValidation service
 		var service *subtreevalidation.Server
 
@@ -750,6 +802,7 @@ func (d *Daemon) startValidationService(
 			blockchainClient,
 			subtreeConsumerClient,
 			txMetaConsumerClient,
+			p2pClient,
 		)
 		if err != nil {
 			return err
@@ -784,6 +837,14 @@ func (d *Daemon) startValidationService(
 			return err
 		}
 
+		// Create the P2P client for the BlockValidation service
+		var p2pClient p2p.ClientI
+
+		p2pClient, err = d.daemonStores.GetP2PClient(ctx, createLogger(loggerP2P), appSettings)
+		if err != nil {
+			return err
+		}
+
 		// Create the BlockValidation service
 		d.blockValidationSrv = blockvalidation.New(
 			createLogger(loggerBlockValidation),
@@ -795,6 +856,7 @@ func (d *Daemon) startValidationService(
 			blockchainClient,
 			kafkaConsumerClient,
 			blockAssemblyClient,
+			p2pClient,
 		)
 
 		// Add the BlockValidation service to the ServiceManager
@@ -1037,5 +1099,39 @@ func (d *Daemon) startLegacyService(
 		subtreeValidationClient,
 		blockValidationClient,
 		blockassemblyClient,
+	))
+}
+
+// startPrunerService initializes and adds the Pruner service to the ServiceManager.
+func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.Settings,
+	createLogger func(string) ulogger.Logger) error {
+	// Create the UTXO store for the Pruner service
+	utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger(loggerUtxos), appSettings)
+	if err != nil {
+		return err
+	}
+
+	// Create the blockchain client for the Pruner service
+	blockchainClient, err := d.daemonStores.GetBlockchainClient(
+		ctx, createLogger(loggerBlockchainClient), appSettings, servicePruner,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Create the block assembly client for the Pruner service
+	blockAssemblyClient, err := d.daemonStores.GetBlockAssemblyClient(ctx, createLogger(loggerBlockAssembly), appSettings)
+	if err != nil {
+		return err
+	}
+
+	// Add the Pruner service to the ServiceManager
+	return d.ServiceManager.AddService(servicePrunerFormal, pruner.New(
+		ctx,
+		createLogger(loggerPruner),
+		appSettings,
+		utxoStore,
+		blockchainClient,
+		blockAssemblyClient,
 	))
 }

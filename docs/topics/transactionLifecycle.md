@@ -49,6 +49,7 @@ The Propagation Service implements flexible validation routing based on configur
 The Validator performs comprehensive validation of each transaction:
 
 1. **Script Validation**: Executes input scripts against referenced outputs using configurable script interpreters (Go-BT, Go-SDK, or Go-BDK)
+
 2. **Consensus Rule Enforcement**: Validates against Bitcoin consensus rules including:
 
     - Transaction size limits
@@ -56,12 +57,15 @@ The Validator performs comprehensive validation of each transaction:
     - Non-dust output values
     - Script operation count limits
     - Signature verification
+
 3. **Policy Rule Enforcement**: Applies configurable node policies such as:
 
     - Minimum fee requirements
     - Script complexity limits
     - Custom validation rules
+
 4. **UTXO Verification**: Checks that all inputs reference valid, unspent outputs
+
 5. **UTXO Management**: Manages UTXO (Unspent Transaction Output) creation and spending
 
 After validation:

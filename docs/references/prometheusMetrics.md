@@ -17,6 +17,8 @@
 
 ## Asset Service HTTP Metrics
 
+All metrics are CounterVec type with labels: `function` (handler function name), `operation` (operation result).
+
 | Metric Name                                 | Type       | Description                         |
 |---------------------------------------------|------------|-------------------------------------|
 | `teranode_asset_http_get_transaction`       | CounterVec | Number of Get transactions ops      |
@@ -29,6 +31,7 @@
 | `teranode_asset_http_get_subtree_data`      | CounterVec | Number of Get subtree data ops      |
 | `teranode_asset_http_get_last_n_blocks`     | CounterVec | Number of Get last N blocks ops     |
 | `teranode_asset_http_get_utxo`              | CounterVec | Number of Get UTXO ops              |
+| `teranode_asset_http_get_merkle_proof`      | CounterVec | Number of Get merkle proof ops      |
 
 ## Block Assembly Service Metrics
 
@@ -43,6 +46,8 @@
 | `teranode_blockassembly_update_subtrees_dah`                  | Histogram | Histogram of updating subtrees DAH in the blockassembly service                  |
 | `teranode_blockassembly_block_assembler_get_mining_candidate` | Counter   | Number of calls to GetMiningCandidate in the block assembler                     |
 | `teranode_blockassembly_subtree_created`                      | Counter   | Number of subtrees created in the block assembler                                |
+| `teranode_blockassembly_cache_hits`                           | Counter   | Number of cache hits for mining candidates                                       |
+| `teranode_blockassembly_cache_misses`                         | Counter   | Number of cache misses for mining candidates                                     |
 | `teranode_blockassembly_transactions`                         | Gauge     | Number of transactions currently in the block assembler subtree processor        |
 | `teranode_blockassembly_queued_transactions`                  | Gauge     | Number of transactions currently queued in the block assembler subtree processor |
 | `teranode_blockassembly_subtrees`                             | Gauge     | Number of subtrees currently in the block assembler subtree processor            |
@@ -126,11 +131,36 @@
 | `teranode_blockvalidation_last_validated_blocks_cache` | Gauge     | Number of blocks in the last validated blocks cache               |
 | `teranode_blockvalidation_block_exists_cache`          | Gauge     | Number of blocks in the block exists cache                        |
 | `teranode_blockvalidation_subtree_exists_cache`        | Gauge     | Number of subtrees in the subtree exists cache                    |
-| `teranode_blockvalidation_catchup_peer_id`             | CounterVec | Number of catchup operations by peer ID                           |
-| `teranode_blockvalidation_catchup_success`             | CounterVec | Number of successful catchup operations                           |
-| `teranode_blockvalidation_catchup_error_type`          | CounterVec | Number of catchup operations by error type                        |
-| `teranode_blockvalidation_catchup_duration`            | Histogram | Duration of catchup operations                                    |
-| `teranode_blockvalidation_catchup_blocks_processed`    | Counter   | Total number of blocks processed during catchup                   |
+
+### Catchup Operation Metrics
+
+CounterVec and HistogramVec metrics use labels: `peer_id`, `success`, `error_type`, `priority`, `result`, `fork_id`, `reason`.
+
+| Metric Name                                                  | Type         | Description                                                      |
+|--------------------------------------------------------------|--------------|------------------------------------------------------------------|
+| `teranode_blockvalidation_catchup_duration_seconds`          | HistogramVec | Duration of catchup operations in seconds                        |
+| `teranode_blockvalidation_catchup_blocks_fetched_total`      | CounterVec   | Total number of blocks fetched during catchup                    |
+| `teranode_blockvalidation_catchup_headers_fetched_total`     | CounterVec   | Total number of headers fetched during catchup                   |
+| `teranode_blockvalidation_catchup_errors_total`              | CounterVec   | Total number of errors during catchup operations                 |
+| `teranode_blockvalidation_catchup_active`                    | Gauge        | Number of active catchup operations (0 or 1)                     |
+| `teranode_blockvalidation_priority_queue_size`               | GaugeVec     | Current size of the block priority queue by priority level       |
+| `teranode_blockvalidation_priority_queue_added_total`        | CounterVec   | Total number of blocks added to priority queue by priority level |
+| `teranode_blockvalidation_priority_queue_processed_total`    | CounterVec   | Total number of blocks processed from priority queue             |
+| `teranode_blockvalidation_fork_count`                        | Gauge        | Current number of active forks being tracked                     |
+| `teranode_blockvalidation_fork_processing_workers`           | Gauge        | Current number of active fork processing workers                 |
+| `teranode_blockvalidation_fork_blocks_processed_total`       | CounterVec   | Total number of blocks processed on forks by fork ID             |
+| `teranode_blockvalidation_fork_created_total`                | CounterVec   | Total number of forks created                                    |
+| `teranode_blockvalidation_fork_lifetime_seconds`             | Histogram    | Lifetime of forks in seconds                                     |
+| `teranode_blockvalidation_fork_depth_blocks`                 | Histogram    | Depth of forks in blocks                                         |
+| `teranode_blockvalidation_fork_resolved_total`               | CounterVec   | Total number of forks resolved                                   |
+| `teranode_blockvalidation_fork_resolution_depth_blocks`      | Histogram    | Depth at which forks were resolved in blocks                     |
+| `teranode_blockvalidation_fork_orphaned_total`               | Counter      | Total number of forks marked as orphaned                         |
+| `teranode_blockvalidation_processing_blocks_stuck`           | Gauge        | Number of blocks stuck in processing state                       |
+| `teranode_blockvalidation_fork_average_depth`                | Gauge        | Average depth of active forks in blocks                          |
+| `teranode_blockvalidation_fork_longest_depth`                | Gauge        | Longest active fork depth in blocks                              |
+| `teranode_blockvalidation_fork_average_lifetime_seconds`     | Gauge        | Average lifetime of active forks in seconds                      |
+| `teranode_blockvalidation_queue_skip_count`                  | Histogram    | Number of times blocks were skipped before processing            |
+| `teranode_blockvalidation_queue_wait_seconds`                | Histogram    | Time blocks spend in queue before processing                     |
 
 ## Legacy Peer Server Metrics
 
@@ -209,6 +239,7 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_rpc_get_mining_candidate`   | Histogram | Histogram of calls to handleGetMiningCandidate in the rpc service   |
 | `teranode_rpc_submit_mining_solution` | Histogram | Histogram of calls to handleSubmitMiningSolution in the rpc service |
 | `teranode_rpc_get_peer_info`          | Histogram | Histogram of calls to handleGetpeerinfo in the rpc service          |
+| `teranode_rpc_get_rawmempool`         | Histogram | Histogram of calls to handleGetRawmempool in the rpc service        |
 | `teranode_rpc_get_blockchain_info`    | Histogram | Histogram of calls to handleGetblockchaininfo in the rpc service    |
 | `teranode_rpc_get_info`               | Histogram | Histogram of calls to handleGetinfo in the rpc service              |
 | `teranode_rpc_get_difficulty`         | Histogram | Histogram of calls to handleGetDifficulty in the rpc service        |
@@ -239,21 +270,24 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka`        | Histogram | Duration of setting tx meta cache from kafka      |
 | `teranode_subtreevalidation_del_tx_meta_cache_kafka`        | Histogram | Duration of deleting tx meta cache from kafka     |
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_errors` | Counter   | Number of errors setting tx meta cache from kafka |
+| `teranode_subtreevalidation_pause_duration`                | Histogram | Duration of subtree processing pauses                      |
 
 ## Validator Service Metrics
 
 | Metric Name                                | Type      | Description                                                             |
 |--------------------------------------------|-----------|-------------------------------------------------------------------------|
 | `teranode_validator_health`                | Counter   | Number of calls to the health endpoint                                  |
-| `teranode_validator_transaction`           | Histogram | Histogram of transaction validation by the validator service            |
-| `teranode_validator_transactions`          | Histogram | Histogram of batch transaction validation by the validator service      |
-| `teranode_validator_transactions_deadline` | Histogram | Histogram of batch transaction validation by deadline                   |
-| `teranode_validator_nblocks`               | Gauge     | Number of blocks processed by the validator service                     |
-| `teranode_validator_transactions_size`     | Histogram | Size of transactions being validated by the validator service           |
-| `teranode_validator_transactions_extended` | Histogram | The number of transactions extended per call to the validator service   |
-| `teranode_validator_transactions_validate_scripts` | Histogram | Time taken to validate scripts in transactions                         |
-| `teranode_validator_transactions_input_block_heights` | Histogram | Distribution of input block heights in transactions                    |
-| `teranode_validator_transactions_2phase_commit` | Histogram | Time taken for two-phase commit of transactions                        |
+| `teranode_validator_invalid_transactions`  | Counter   | Number of transactions found invalid by the validator service           |
+| `teranode_validator_transactions_validate_total` | Histogram | Histogram of total transaction validation                               |
+| `teranode_validator_transactions_validate` | Histogram | Histogram of transaction validation                                     |
+| `teranode_validator_transactions_extend`   | Histogram | Histogram of transaction extension operations                           |
+| `teranode_validator_transactions_validate_scripts` | Histogram | Histogram of transaction script validation                              |
+| `teranode_validator_transactions_validate_batch` | Histogram | Histogram of transaction batch validation                               |
+| `teranode_validator_transactions_spend_utxos` | Histogram | Histogram of transaction spending utxos                                 |
+| `teranode_validator_transactions_input_block_heights` | Histogram | Histogram of transaction input block heights                            |
+| `teranode_validator_transactions_2phase_commit` | Histogram | Histogram of 2-phase commit operations                                  |
+| `teranode_validator_transactions`          | Histogram | Histogram of transaction processing by the validator service            |
+| `teranode_validator_transactions_size`     | Histogram | Size of transactions processed by the validator service                 |
 | `teranode_validator_send_to_block_assembly`        | Histogram | Histogram of sending transactions to block assembly           |
 | `teranode_validator_send_to_blockvalidation_kafka` | Histogram | Histogram of sending transactions to block validation kafka   |
 | `teranode_validator_send_to_p2p_kafka`             | Histogram | Histogram of sending rejected transactions to p2p kafka       |
@@ -275,6 +309,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_tx_meta_cache_hit_old_tx`           | Gauge | Number of hits on old txs in the tx meta cache              |
 
 ## Aerospike Service Metrics
+
+CounterVec metrics use labels: `function` (function name), `error` (error type).
 
 | Metric Name                                       | Type       | Description                                                     |
 |---------------------------------------------------|------------|-----------------------------------------------------------------|
@@ -306,6 +342,8 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_aerospike_operation_retries`             | Counter    | Number of operation retries in aerospike                        |
 
 ## SQL Service Metrics
+
+CounterVec metrics use labels: `function` (function name), `error` (error type).
 
 | Metric Name                | Type       | Description                             |
 |----------------------------|------------|-----------------------------------------|

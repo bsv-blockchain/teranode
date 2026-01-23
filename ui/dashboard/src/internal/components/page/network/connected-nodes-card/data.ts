@@ -154,6 +154,14 @@ export const getColDefs = (t) => {
       },
     },
     {
+      id: 'storage',
+      name: t(`${fieldKey}.storage`),
+      type: 'string',
+      props: {
+        width: '8%',
+      },
+    },
+    {
       id: 'receivedAt',
       name: t(`${fieldKey}.last_update`),
       type: 'number',
@@ -220,7 +228,7 @@ export const renderCells = {
     const state = item[colId] || '-'
     let emoji = ''
     let tooltip = state
-    
+
     // Add colorful emojis based on actual FSM states
     if (state === 'RUNNING') {
       emoji = '✅'
@@ -228,14 +236,14 @@ export const renderCells = {
     } else if (state === 'CATCHINGBLOCKS') {
       emoji = '🟠'
       tooltip = 'CATCHINGBLOCKS'
-    } else if (state === 'LEGACYSYNC') {
+    } else if (state === 'LEGACYSYNCING') {
       emoji = '🟡'
-      tooltip = 'LEGACYSYNC'
+      tooltip = 'LEGACYSYNCING'
     } else if (state === 'IDLE') {
       emoji = '⏸️'
       tooltip = 'IDLE'
     }
-    
+
     return {
       component: RenderSpanWithTooltip,
       props: {
@@ -426,6 +434,29 @@ export const renderCells = {
       className = 'status-success'
     } else if (mode === 'listen_only') {
       displayValue = 'Listen Only'
+      className = 'status-warning'
+    }
+
+    return {
+      component: RenderSpan,
+      props: {
+        value: displayValue,
+        className: className,
+      },
+      value: '',
+    }
+  },
+  storage: (idField, item, colId) => {
+    const mode = item[colId] || '-'
+    let className = ''
+    let displayValue = mode
+
+    // Display: Full (green) or Pruned (warning/orange)
+    if (mode === 'full') {
+      displayValue = 'Full'
+      className = 'status-success'
+    } else if (mode === 'pruned') {
+      displayValue = 'Pruned'
       className = 'status-warning'
     }
 

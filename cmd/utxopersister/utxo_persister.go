@@ -18,11 +18,13 @@ import (
 	"context"
 	"net/http"
 	_ "net/http/pprof" // nolint:gosec
+	"strconv"
 
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	utxopersisterservice "github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -80,10 +82,21 @@ func RunUtxoPersister(logger ulogger.Logger, settings *settings.Settings) {
 		return
 	}
 
-	logger.Infof("Using blockStore at %s", blockStoreURL)
+	var err error
+
+	hashPrefix := -2
+
+	if blockStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	logger.Infof("Using blockStore at %s with hashPrefix %d", blockStoreURL, hashPrefix)
 
 	// Create the block store
-	blockStore, err := blob.NewStore(logger, blockStoreURL)
+	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		logger.Errorf("Failed to create blockStore: %v", err)
 		return

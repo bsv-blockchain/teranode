@@ -81,7 +81,7 @@ type Server struct {
 
 	// blockassemblyClient handles block assembly operations,
 	// allowing the alert system to influence block creation when necessary
-	blockassemblyClient *blockassembly.Client
+	blockassemblyClient blockassembly.ClientI
 
 	// appConfig contains alert system specific configuration loaded from
 	// the alert system configuration file, separate from Teranode settings
@@ -109,7 +109,7 @@ type Server struct {
 // Returns:
 //   - *Server: A new Server instance configured with the provided dependencies,
 //     but not yet initialized or started
-func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient *blockassembly.Client, peerClient peer.ClientI, p2pClient p2pservice.ClientI) *Server {
+func New(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, utxoStore utxo.Store, blockassemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2pservice.ClientI) *Server {
 	initPrometheusMetrics()
 
 	return &Server{

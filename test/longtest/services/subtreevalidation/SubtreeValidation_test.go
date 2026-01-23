@@ -26,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	utxometa "github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka" //nolint:gci
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
@@ -40,18 +41,20 @@ type testUtxoStore struct {
 	txMetaMap map[string]*utxometa.Data
 }
 
-func (t *testUtxoStore) GetMeta(ctx context.Context, hash *chainhash.Hash) (*utxometa.Data, error) {
-	if meta, ok := t.txMetaMap[hash.String()]; ok {
-		return meta, nil
+func (t *testUtxoStore) GetMeta(ctx context.Context, hash *chainhash.Hash, data *utxometa.Data) error {
+	if m, ok := t.txMetaMap[hash.String()]; ok {
+		*data = *m
+		return nil
 	}
 	// Return generic metadata as fallback
-	return &utxometa.Data{
+	*data = utxometa.Data{
 		Fee:         100,
 		SizeInBytes: 200,
 		TxInpoints:  subtreepkg.TxInpoints{},
 		IsCoinbase:  false,
 		Conflicting: false,
-	}, nil
+	}
+	return nil
 }
 
 func (t *testUtxoStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*utxometa.Data, error) {
@@ -123,9 +126,9 @@ func TestBlockValidationValidateBigSubtree(t *testing.T) {
 	require.NoError(t, err)
 
 	// Activate httpmock for HTTP mocking
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 
-	subtreeValidation, err := stv.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, testStore, validatorClient, blockchainClient, nilConsumer, nilConsumer)
+	subtreeValidation, err := stv.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, testStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil)
 	require.NoError(t, err)
 
 	// Use cached UTXO store for better performance

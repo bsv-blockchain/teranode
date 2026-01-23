@@ -22,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
@@ -41,7 +42,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		headers := []*model.BlockHeader{blocks[1].Header}
 
 		// Set up HTTP mock for block fetch
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -102,7 +103,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		}
 
 		// Set up HTTP mocks for batch fetching (current implementation uses large batches)
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock batch request for all 5 blocks in one request
@@ -178,7 +179,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		}
 
 		// Set up HTTP mock to return error for batch request
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET", fmt.Sprintf("http://test-peer/blocks/%s?n=%d", blocks[1].Header.Hash().String(), numBlocks),
@@ -221,7 +222,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		headers := []*model.BlockHeader{blocks[1].Header}
 
 		// Set up HTTP mock with delay
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -282,7 +283,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		}
 
 		// Set up HTTP mock to return empty response for batch request
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET", fmt.Sprintf("http://test-peer/blocks/%s?n=%d", blocks[numBlocks].Header.Hash().String(), numBlocks),
@@ -333,7 +334,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		var requestTimes []time.Time
 		var timeMutex sync.Mutex
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock batch request for all blocks - blocks returned in reverse order
@@ -480,7 +481,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -493,7 +494,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		)
 
 		// Call fetchBlocksBatch
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
 		require.NoError(t, err)
 		require.Len(t, fetchedBlocks, 1)
 		assert.Equal(t, targetHash, fetchedBlocks[0].Header.Hash())
@@ -508,7 +509,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -521,7 +522,7 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 		)
 
 		// Call fetchSingleBlock
-		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "http://test-peer")
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		require.NoError(t, err)
 		require.NotNil(t, fetchedBlock)
 		assert.Equal(t, targetHash, fetchedBlock.Header.Hash())
@@ -544,7 +545,7 @@ func TestFetchBlocksConcurrently_PerformanceCharacteristics(t *testing.T) {
 		}
 
 		// Mock batch request for large batch processing
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock single large batch request - blocks returned in reverse order
@@ -638,7 +639,7 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -651,7 +652,7 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 		)
 
 		// Call fetchBlocksBatch
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
 		require.NoError(t, err)
 		require.Len(t, fetchedBlocks, 1)
 		assert.Equal(t, targetHash, fetchedBlocks[0].Header.Hash())
@@ -666,7 +667,7 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -679,7 +680,7 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 		)
 
 		// Call fetchSingleBlock
-		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "http://test-peer")
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		require.NoError(t, err)
 		require.NotNil(t, fetchedBlock)
 		assert.Equal(t, targetHash, fetchedBlock.Header.Hash())
@@ -697,7 +698,7 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -710,7 +711,7 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		)
 
 		// Call fetchBlocksBatch
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
 		require.NoError(t, err)
 		require.Len(t, fetchedBlocks, 1)
 		assert.Equal(t, targetHash, fetchedBlocks[0].Header.Hash())
@@ -725,7 +726,7 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock to return multiple blocks
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -743,7 +744,7 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		)
 
 		// Call fetchBlocksBatch
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 3, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 3, "test-peer-id", "http://test-peer")
 		require.NoError(t, err)
 		require.Len(t, fetchedBlocks, 3)
 
@@ -767,11 +768,11 @@ func TestFetchBlocksBatch_CurrentBehavior(t *testing.T) {
 		)
 
 		// Set up HTTP mock to return error
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Call fetchBlocksBatch - should return error
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(suite.Ctx, targetHash, 1, "test-peer-id", "http://test-peer")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get blocks from peer")
 		require.Nil(t, fetchedBlocks)
@@ -789,7 +790,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -802,7 +803,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		)
 
 		// Call fetchSingleBlock
-		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "http://test-peer")
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		require.NoError(t, err)
 		require.NotNil(t, fetchedBlock)
 		assert.Equal(t, targetHash, fetchedBlock.Header.Hash())
@@ -816,7 +817,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock to return error
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -826,7 +827,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		)
 
 		// Call fetchSingleBlock - should return error
-		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "http://test-peer")
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get block from peer")
 		require.Nil(t, fetchedBlock)
@@ -840,7 +841,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		targetHash := blocks[1].Header.Hash()
 
 		// Set up HTTP mock to return invalid data
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -850,7 +851,7 @@ func TestFetchSingleBlock_CurrentBehavior(t *testing.T) {
 		)
 
 		// Call fetchSingleBlock - should return error
-		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "http://test-peer")
+		fetchedBlock, err := suite.Server.fetchSingleBlock(suite.Ctx, targetHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to create block from bytes")
 		require.Nil(t, fetchedBlock)
@@ -873,7 +874,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		}
 
 		// Mock HTTP responses - simulate batch fetching
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// The optimized function uses batch size of 5, so it will make 1 request for all 5 blocks
@@ -942,7 +943,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockHeaders = append(blockHeaders, blocks[i].Header)
 		}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock batch responses using regex pattern to match any batch request
@@ -1023,7 +1024,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 		}
 
 		// Mock HTTP responses for large batch requests
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock single large batch request (100 blocks) - blocks returned in reverse order
@@ -1091,7 +1092,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockHeaders = append(blockHeaders, blocks[i].Header)
 		}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock 3 large batch requests (100, 100, 50)
@@ -1171,7 +1172,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockHeaders = append(blockHeaders, blocks[i].Header)
 		}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock batch request with artificial delay to test parallel processing
@@ -1253,7 +1254,7 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockHeaders = append(blockHeaders, blocks[i].Header)
 		}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock HTTP error response
@@ -1305,7 +1306,7 @@ func TestFetchBlocksConcurrently_WorkerPoolArchitecture(t *testing.T) {
 		}
 
 		// Mock HTTP responses for large batch requests
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock single large batch request (100 blocks) - blocks returned in reverse order
@@ -1391,14 +1392,14 @@ func TestSubtreeFunctions(t *testing.T) {
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 		expectedData := []byte("mock subtree data")
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
 			httpmock.NewBytesResponder(200, expectedData))
 
-		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		assert.NoError(t, err)
 		assert.Equal(t, expectedData, result)
 	})
@@ -1409,14 +1410,14 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(500, "Internal Server Error"))
 
-		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "failed to fetch subtree")
@@ -1428,14 +1429,14 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
 			httpmock.NewBytesResponder(200, []byte{}))
 
-		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchSubtreeFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "empty subtree received")
@@ -1448,14 +1449,14 @@ func TestSubtreeFunctions(t *testing.T) {
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 		expectedData := []byte("mock subtree data content")
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewBytesResponder(200, expectedData))
 
-		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
 		defer reader.Close()
@@ -1472,14 +1473,14 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(404, "Not Found"))
 
-		result, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		assert.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
@@ -1491,14 +1492,14 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder("GET",
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewBytesResponder(200, []byte{}))
 
-		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "http://test-peer")
+		reader, err := suite.Server.fetchSubtreeDataFromPeer(suite.Ctx, subtreeHash, "test-peer-id", "http://test-peer")
 		// Empty response is not an error for the fetcher - it just returns an empty reader
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
@@ -1516,7 +1517,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		suite.Server.subtreeStore = memory.New()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create node hashes for the subtree endpoint (raw hashes, not serialized subtree)
@@ -1541,7 +1542,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err = suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "http://test-peer", "test-peer-id")
+		err = suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.NoError(t, err)
 
 		// Verify both were stored in subtreeStore
@@ -1575,7 +1576,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock subtree endpoint to fail
@@ -1592,7 +1593,8 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "http://test-peer", "test-peer-id")
+
+		err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree from")
 	})
@@ -1605,7 +1607,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create node hashes for the subtree endpoint (raw hashes, not serialized subtree)
@@ -1631,7 +1633,7 @@ func TestSubtreeFunctions(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "http://test-peer", "test-peer-id")
+		err := suite.Server.fetchAndStoreSubtreeAndSubtreeData(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
 	})
@@ -1645,7 +1647,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Subtrees: []*chainhash.Hash{}, // Empty subtrees
 		}
 
-		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "http://test-peer", "test-peer-id")
+		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.NoError(t, err) // Should return early with no error
 	})
 
@@ -1662,7 +1664,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Subtrees: []*chainhash.Hash{subtreeHash},
 		}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock subtree endpoint to fail
@@ -1670,7 +1672,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(500, "Internal Server Error"))
 
-		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "http://test-peer", "test-peer-id")
+		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1688,7 +1690,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			Subtrees: []*chainhash.Hash{subtreeHash},
 		}
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Create minimal valid node hashes for the subtree endpoint
@@ -1705,7 +1707,7 @@ func TestSubtreeFunctions(t *testing.T) {
 			fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String()),
 			httpmock.NewStringResponder(404, "Not Found"))
 
-		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "http://test-peer", "test-peer-id")
+		err := suite.Server.fetchSubtreeDataForBlock(suite.Ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1723,7 +1725,7 @@ func TestFetchBlocksConcurrentlyOptimized(t *testing.T) {
 		headers := []*model.BlockHeader{blocks[1].Header, blocks[2].Header}
 
 		// Set up HTTP mock for block fetching
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		// Mock batch request - return blocks in reverse order (newest first)
@@ -1778,7 +1780,7 @@ func TestFetchBlocksConcurrentlyOptimized(t *testing.T) {
 
 // TestFetchSubtreeDataForBlock tests the fetchSubtreeDataForBlock function comprehensively
 func TestFetchSubtreeDataForBlock(t *testing.T) {
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	logger := ulogger.TestLogger{}
@@ -1824,7 +1826,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 			Subtrees: []*chainhash.Hash{}, // Empty subtrees
 		}
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "test-peer-id")
+		err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
 	})
 
@@ -1851,7 +1853,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewBytesResponder(200, subtreeDataBytes))
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "test-peer-id")
+		err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
 	})
 
@@ -1884,7 +1886,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 				httpmock.NewBytesResponder(200, subtreeDataBytes))
 		}
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "test-peer-id")
+		err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
 	})
 
@@ -1899,7 +1901,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeURL,
 			httpmock.NewErrorResponder(errors.NewNetworkError("subtree fetch error")))
 
-		err := server.fetchSubtreeDataForBlock(ctx, block, baseURL, "test-peer-id")
+		err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Failed to fetch subtree data for block")
 	})
@@ -1938,7 +1940,7 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel() // Cancel immediately
 
-		err := server.fetchSubtreeDataForBlock(cancelCtx, block, baseURL, "test-peer-id")
+		err := server.fetchSubtreeDataForBlock(cancelCtx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		// Check for either context canceled or the wrapped error containing context cancellation
 		assert.True(t,
@@ -1989,7 +1991,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 			subtreeStore: mockSubtreeStore,
 			settings:     settings,
 		}
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer func() {
 			httpmock.DeactivateAndReset()
 		}()
@@ -2016,7 +2018,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "test-peer-id")
+		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.NoError(t, err)
 	})
 
@@ -2030,7 +2032,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 			subtreeStore: mockSubtreeStore,
 			settings:     settings,
 		}
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer func() {
 			httpmock.DeactivateAndReset()
 		}()
@@ -2049,7 +2051,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "test-peer-id")
+		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree")
 	})
@@ -2064,7 +2066,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 			subtreeStore: mockSubtreeStore,
 			settings:     settings,
 		}
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer func() {
 			httpmock.DeactivateAndReset()
 		}()
@@ -2091,7 +2093,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "test-peer-id")
+		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
 	})
@@ -2106,7 +2108,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 			subtreeStore: blobStore,
 			settings:     settings,
 		}
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer func() {
 			httpmock.DeactivateAndReset()
 		}()
@@ -2145,7 +2147,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, baseURL, "test-peer-id")
+		err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 	})
 
@@ -2159,7 +2161,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 			subtreeStore: mockSubtreeStore,
 			settings:     settings,
 		}
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer func() {
 			httpmock.DeactivateAndReset()
 		}()
@@ -2196,7 +2198,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 		testBlock := &model.Block{
 			Height: 100,
 		}
-		err := server.fetchAndStoreSubtreeAndSubtreeData(cancelCtx, testBlock, subtreeHash, baseURL, "test-peer-id")
+		err := server.fetchAndStoreSubtreeAndSubtreeData(cancelCtx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
 		assert.Error(t, err)
 		// Check for either context canceled or the wrapped error containing context cancellation
 		assert.True(t,
@@ -2209,7 +2211,7 @@ func TestFetchAndStoreSubtreeData(t *testing.T) {
 
 // TestFetchSubtreeFromPeer tests the fetchSubtreeFromPeer function comprehensively
 func TestFetchSubtreeFromPeer(t *testing.T) {
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	logger := ulogger.TestLogger{}
@@ -2228,7 +2230,7 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeURL,
 			httpmock.NewBytesResponder(200, expectedData))
 
-		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		assert.NoError(t, err)
 		assert.Equal(t, expectedData, data)
 	})
@@ -2240,7 +2242,7 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeURL,
 			httpmock.NewErrorResponder(errors.NewNetworkError("HTTP request failed")))
 
-		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		assert.Contains(t, err.Error(), "failed to fetch subtree")
@@ -2253,7 +2255,7 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeURL,
 			httpmock.NewBytesResponder(200, []byte{})) // Empty response
 
-		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		assert.Contains(t, err.Error(), "empty subtree received")
@@ -2279,7 +2281,7 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel() // Cancel immediately
 
-		data, err := server.fetchSubtreeFromPeer(cancelCtx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeFromPeer(cancelCtx, subtreeHash, "test-peer-id", baseURL)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		// Check for either context canceled or the wrapped error containing context cancellation
@@ -2293,7 +2295,7 @@ func TestFetchSubtreeFromPeer(t *testing.T) {
 
 // TestFetchSubtreeDataFromPeer tests the fetchSubtreeDataFromPeer function comprehensively
 func TestFetchSubtreeDataFromPeer(t *testing.T) {
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	logger := ulogger.TestLogger{}
@@ -2314,7 +2316,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewBytesResponder(200, expectedData))
 
-		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, baseURL)
+		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
 		defer reader.Close()
@@ -2332,7 +2334,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewErrorResponder(errors.NewNetworkError("HTTP request failed")))
 
-		data, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		assert.Contains(t, err.Error(), "failed to fetch subtree data from")
@@ -2345,7 +2347,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		httpmock.RegisterResponder("GET", subtreeDataURL,
 			httpmock.NewBytesResponder(200, []byte{})) // Empty response
 
-		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, baseURL)
+		reader, err := server.fetchSubtreeDataFromPeer(ctx, subtreeHash, "test-peer-id", baseURL)
 		// Empty response is not an error for the fetcher - it just returns an empty reader
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
@@ -2377,7 +2379,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 		cancelCtx, cancel := context.WithCancel(ctx)
 		cancel() // Cancel immediately
 
-		data, err := server.fetchSubtreeDataFromPeer(cancelCtx, subtreeHash, baseURL)
+		data, err := server.fetchSubtreeDataFromPeer(cancelCtx, subtreeHash, "test-peer-id", baseURL)
 		assert.Error(t, err)
 		assert.Nil(t, data)
 		// Check for either context canceled or the wrapped error containing context cancellation
@@ -2391,7 +2393,7 @@ func TestFetchSubtreeDataFromPeer(t *testing.T) {
 
 // TestBlockWorker tests the blockWorker function more comprehensively
 func TestBlockWorker(t *testing.T) {
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	logger := ulogger.TestLogger{}
@@ -2479,7 +2481,7 @@ func TestBlockWorker(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, baseURL, "test-peer-id", blockUpTo)
+			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, blockUpTo)
 		}()
 
 		// Wait for worker to finish
@@ -2526,7 +2528,7 @@ func TestBlockWorker(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, baseURL, "test-peer-id", blockUpTo)
+			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, blockUpTo)
 		}()
 
 		// Wait for worker to finish
@@ -2553,7 +2555,7 @@ func TestBlockWorker(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, baseURL, "test-peer-id", blockUpTo)
+			_ = server.blockWorker(ctx, 1, workQueue, resultQueue, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL, blockUpTo)
 		}()
 
 		// Wait for worker to finish
@@ -2583,7 +2585,7 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		}
 
 		// Set up HTTP mock with delay to allow cancellation
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -2639,7 +2641,7 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		headers := []*model.BlockHeader{blocks[1].Header, blocks[2].Header}
 
 		// Set up HTTP mock that returns wrong block for second request
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -2685,7 +2687,7 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		blocks := testhelpers.CreateTestBlockChain(t, 2)
 
 		// Set up HTTP mock that returns partial block data
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		httpmock.RegisterResponder(
@@ -2699,7 +2701,7 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 		)
 
 		// Call fetchBlocksBatch directly to test EOF handling
-		fetchedBlocks, err := suite.Server.fetchBlocksBatch(context.Background(), blocks[1].Header.Hash(), 2, "http://test-peer")
+		fetchedBlocks, err := suite.Server.fetchBlocksBatch(context.Background(), blocks[1].Header.Hash(), 2, "test-peer-id", "http://test-peer")
 
 		// Should succeed and return only the first block (EOF handled gracefully)
 		assert.NoError(t, err)
@@ -2721,7 +2723,7 @@ func TestOrderedDelivery_StrictOrdering(t *testing.T) {
 	}
 
 	// Set up HTTP mock
-	httpmock.Activate()
+	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
 	httpmock.RegisterResponder(
@@ -2786,7 +2788,7 @@ func TestFetchSingleBlock_ImprovedErrorHandling(t *testing.T) {
 	}
 
 	t.Run("Block Creation Failure with Better Context", func(t *testing.T) {
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		hash := createTestHash("test")
@@ -2798,7 +2800,7 @@ func TestFetchSingleBlock_ImprovedErrorHandling(t *testing.T) {
 			httpmock.NewBytesResponder(200, []byte("invalid_block_data")),
 		)
 
-		block, err := server.fetchSingleBlock(context.Background(), hash, "http://test-peer")
+		block, err := server.fetchSingleBlock(context.Background(), hash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		// Should fail with better error context
 		assert.Error(t, err)
@@ -2851,7 +2853,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		}
 
 		// Fetch the subtree (should load from store, not network)
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -2862,7 +2864,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		defer suite.Cleanup()
 
 		// Set up HTTP mock
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		subtreeHash := createTestHash("subtree1")
@@ -2889,7 +2891,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -2904,7 +2906,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		subtreeHash := createTestHash("subtree-coinbase")
@@ -2931,7 +2933,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -2941,7 +2943,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		subtreeHash := createTestHash("subtree-fail")
@@ -2956,7 +2958,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -2967,7 +2969,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
-		httpmock.Activate()
+		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
 		subtreeHash := createTestHash("empty-subtree")
@@ -2983,7 +2985,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -3005,7 +3007,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "http://test-peer")
+		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -3043,7 +3045,7 @@ func TestFetchAndStoreSubtreeDataEdgeCases(t *testing.T) {
 		}
 
 		// This should skip fetching since data already exists
-		err = suite.Server.fetchAndStoreSubtreeData(suite.Ctx, testBlock, &subtreeHash, subtree, "http://test-peer", "test-peer-id")
+		err = suite.Server.fetchAndStoreSubtreeData(suite.Ctx, testBlock, &subtreeHash, subtree, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.NoError(t, err)
 	})
 }

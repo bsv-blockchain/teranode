@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -26,13 +27,13 @@ func createMockSQL() (*SQL, sqlmock.Sqlmock, error) {
 	udb := &usql.DB{DB: db}
 
 	tSettings := &settings.Settings{}
-	tSettings.Block.StoreCacheSize = 0 // Disable cache for testing
 
 	s := &SQL{
-		db:          udb,
-		logger:      ulogger.TestLogger{},
-		blocksCache: *NewBlockchainCache(tSettings),
-		chainParams: tSettings.ChainCfgParams,
+		db:            udb,
+		logger:        ulogger.TestLogger{},
+		responseCache: NewGenerationalCache(),
+		cacheTTL:      2 * time.Minute,
+		chainParams:   tSettings.ChainCfgParams,
 	}
 
 	return s, mock, nil

@@ -200,6 +200,7 @@
     if (a.subtree_count !== b.subtree_count) return false
     if (a.uptime !== b.uptime) return false
     if (a.listen_mode !== b.listen_mode) return false
+    if (a.storage !== b.storage) return false
     if (a.client_name !== b.client_name) return false
     if (a.miner_name !== b.miner_name) return false
     if (a.start_time !== b.start_time) return false

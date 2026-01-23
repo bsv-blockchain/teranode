@@ -1,0 +1,54 @@
+@startuml
+skinparam backgroundColor #F0F8FF
+skinparam defaultFontColor #333333
+skinparam arrowColor #666666
+
+' Define borders for all elements
+skinparam entity {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam control {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+skinparam participant {
+  BorderColor #666666
+  BackgroundColor #DDDDDD
+}
+
+
+
+participant "HTTP Client" as Client
+participant "HTTP Server\n(asset/httpimpl/http.go)" as HTTPServer
+participant "Repository" as Repository
+participant "BlockchainClient" as Blockchain
+
+' GET request for block locator
+Client -> HTTPServer : GET /block_locator?hash=<optional>
+activate HTTPServer
+
+alt No hash provided
+    HTTPServer -> Repository : GetBestBlockHeader(ctx)
+    activate Repository
+    Repository --> HTTPServer : Best block header and metadata
+    deactivate Repository
+end
+
+HTTPServer -> Repository : GetBlockLocator(ctx, blockHash, blockHeight)
+activate Repository
+Repository -> Blockchain : GetBlockLocator(blockHash, blockHeight)
+activate Blockchain
+Blockchain --> Repository : Block locator hashes array
+deactivate Blockchain
+Repository --> HTTPServer : Block locator hashes
+deactivate Repository
+
+HTTPServer --> Client : JSON response with block_locator array
+deactivate HTTPServer
+
+left footer Last Modified On: %date("dd-MMM-yyyy")
+
+@enduml
