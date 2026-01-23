@@ -1,0 +1,174 @@
+name: Benchmark Comparison
+
+on:
+  pull_request:
+    paths:
+      - 'services/asset/**'
+      - '.github/workflows/benchmark-compare.yaml'
+      - 'scripts/parse-benchmarks.go'
+      - 'scripts/compare-benchmarks.go'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  GO_VERSION: '1.25.2'
+
+jobs:
+  # Run benchmarks on the PR feature branch
+  benchmark-feature:
+    name: Benchmark Feature Branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Display branch info
+        run: |
+          echo "Branch: $(git rev-parse --abbrev-ref HEAD)"
+          echo "Commit: $(git rev-parse HEAD)"
+
+      - name: Run benchmarks
+        run: |
+          echo "=== Running benchmarks on feature branch ==="
+          go test -bench=. -benchmem -benchtime=5s -timeout=30m -run=^$ \
+            ./services/asset/httpimpl \
+            | tee feature-benchmark-output.txt
+
+      - name: Parse results
+        run: |
+          go run ./scripts/parse-benchmarks.go \
+            -input feature-benchmark-output.txt \
+            -output feature-benchmarks.json \
+            -commit "${{ github.sha }}" \
+            -branch "PR-${{ github.event.pull_request.number }}" \
+            -pr "${{ github.event.pull_request.number }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: feature-benchmarks
+          path: feature-benchmarks.json
+          retention-days: 30
+
+  # Run benchmarks on main branch as baseline
+  benchmark-main:
+    name: Benchmark Main Branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Display branch info
+        run: |
+          echo "Branch: $(git rev-parse --abbrev-ref HEAD)"
+          echo "Commit: $(git rev-parse HEAD)"
+
+      - name: Run benchmarks
+        run: |
+          echo "=== Running benchmarks on main branch ==="
+          go test -bench=. -benchmem -benchtime=5s -timeout=30m -run=^$ \
+            ./services/asset/httpimpl \
+            | tee main-benchmark-output.txt
+
+      - name: Parse results
+        run: |
+          go run ./scripts/parse-benchmarks.go \
+            -input main-benchmark-output.txt \
+            -output main-benchmarks.json \
+            -commit "$(git rev-parse HEAD)" \
+            -branch "main"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: main-benchmarks
+          path: main-benchmarks.json
+          retention-days: 30
+
+  # Compare results and post report
+  compare:
+    name: Compare & Report
+    runs-on: ubuntu-latest
+    needs: [benchmark-feature, benchmark-main]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Download feature benchmarks
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: feature-benchmarks
+
+      - name: Download main benchmarks
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: main-benchmarks
+
+      - name: Compare benchmarks
+        id: compare
+        continue-on-error: true
+        run: |
+          echo "=== Comparing Feature vs Main ==="
+          go run ./scripts/compare-benchmarks.go \
+            -current feature-benchmarks.json \
+            -baseline main-benchmarks.json \
+            -output comparison-report.md \
+            -threshold 5.0
+
+      - name: Display report
+        if: always()
+        run: |
+          echo "=== Benchmark Comparison Report ==="
+          cat comparison-report.md
+
+      - name: Post comment on PR
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('comparison-report.md', 'utf8');
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+
+      - name: Fail on regressions
+        if: failure() || steps.compare.outcome == 'failure'
+        run: |
+          if grep -q "REGRESSION DETECTED" comparison-report.md; then
+            echo "❌ Performance regressions detected!"
+            exit 1
+          fi
