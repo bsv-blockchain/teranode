@@ -1,0 +1,6 @@
+package settings
+
+// FaucetSettings configures the test Bitcoin faucet service.
+type FaucetSettings struct {
+	HTTPListenAddress string `key:"faucet_httpListenAddress" desc:"HTTP listen address for Faucet service" default:"" category:"Faucet" usage:"Endpoint for faucet operations" type:"string" longdesc:"### Overview\n\nHTTP listen address for the **test Bitcoin faucet service** that dispenses coins for development and testing purposes.\n\n### Format\n\n- :port - Listen on all interfaces (e.g., :8091)\n- host:port - Specific binding (e.g., localhost:8091)\n\n### Purpose\n\nThe faucet is a minimal HTTP service with a single purpose: providing test Bitcoin to developers for:\n\n- Transaction testing\n- Wallet development\n- Integration testing\n\n### Default Behavior\n\nEmpty value (default) means the faucet service is **disabled**.\n\n### Valid Environments\n\nOnly enable in **non-production environments**:\n\n- Local development (regtest)\n- Testnet deployments\n- Integration test networks\n\n**NEVER enable on mainnet.**\n\n### Security Considerations\n\n- No authentication by design (open access for test networks)\n- No rate limiting built-in (add reverse proxy if needed)\n- Should only be accessible on isolated test networks\n- Consider firewall rules to restrict access\n- Monitor for abuse if publicly accessible on testnet"`
+}
