@@ -1,15 +1,16 @@
 import { browser } from '$app/environment'
-import { goto } from '$app/navigation'
+import { redirect } from '@sveltejs/kit'
 import { checkAuthentication } from '$internal/stores/authStore'
 
 export const prerender = false
+export const ssr = false
 
 /** @type {import('./$types').PageLoad} */
 export async function load() {
   if (browser) {
     const isAuthenticated = await checkAuthentication()
     if (!isAuthenticated) {
-      goto('/login?redirect=/admin')
+      throw redirect(302, '/login?redirect=/admin')
     }
   }
 

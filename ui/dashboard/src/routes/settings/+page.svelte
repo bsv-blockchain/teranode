@@ -4,6 +4,7 @@
   import { getSettings, type SettingMetadata, type SettingsResponse } from '$internal/api'
   import i18n from '$internal/i18n'
   import { Icon, TextInput } from '$lib/components'
+  import Markdown from 'svelte-exmarkdown'
 
   let settings: SettingMetadata[] = []
   let categories: string[] = []
@@ -50,6 +51,20 @@
       commit = data.commit || ''
       total = data.total || 0
       filtered = data.filtered || 0
+
+      // Log warning if duplicates are detected
+      const seen = new Set<string>()
+      const duplicates = new Set<string>()
+      settings.forEach(s => {
+        const key = `${s.category}-${s.key}`
+        if (seen.has(key)) {
+          duplicates.add(key)
+        }
+        seen.add(key)
+      })
+      if (duplicates.size > 0) {
+        console.warn('Duplicate settings detected from backend:', Array.from(duplicates))
+      }
     } catch (err) {
       console.error('Error fetching settings:', err)
       error = err instanceof Error ? err.message : String(err)
@@ -220,14 +235,25 @@
             </tr>
           </thead>
           <tbody>
-            {#each settings as setting (setting.key)}
-              <tr class:modified={isModified(setting)}>
+            {#each settings as setting, index (`${setting.category}-${setting.key}-${index}`)}
+              {@const uniqueKey = `${setting.category}-${setting.key}`}
+              <tr class:modified={isModified(setting)} class:expanded={expandedKeys[uniqueKey]}>
                 <td class="col-key">
                   <div class="key-cell">
                     <span class="setting-key">{setting.key}</span>
                     <span class="setting-name">{setting.name}</span>
                     {#if isModified(setting)}
                       <span class="modified-badge">{t('page.settings.badge-modified', 'Modified')}</span>
+                    {/if}
+                    {#if setting.longDescription}
+                      <button
+                        class="expand-btn"
+                        on:click={() => toggleExpanded(uniqueKey)}
+                        aria-expanded={expandedKeys[uniqueKey] || false}
+                      >
+                        <Icon name={expandedKeys[uniqueKey] ? 'icon-arrow-up-s-line' : 'icon-arrow-down-s-line'} size={16} />
+                        <span>{expandedKeys[uniqueKey] ? t('page.settings.show-less', 'Show less') : t('page.settings.show-more', 'Show more details')}</span>
+                      </button>
                     {/if}
                   </div>
                 </td>
@@ -253,24 +279,18 @@
                         {setting.usageHint}
                       </p>
                     {/if}
-                    {#if setting.longDescription}
-                      <button
-                        class="expand-btn"
-                        on:click={() => toggleExpanded(setting.key)}
-                        aria-expanded={expandedKeys[setting.key] || false}
-                      >
-                        <Icon name={expandedKeys[setting.key] ? 'icon-arrow-up-s-line' : 'icon-arrow-down-s-line'} size={16} />
-                        <span>{expandedKeys[setting.key] ? t('page.settings.show-less', 'Show less') : t('page.settings.show-more', 'Show more details')}</span>
-                      </button>
-                      {#if expandedKeys[setting.key]}
-                        <div class="long-description">
-                          <p>{setting.longDescription}</p>
-                        </div>
-                      {/if}
-                    {/if}
                   </div>
                 </td>
               </tr>
+              {#if expandedKeys[uniqueKey] && setting.longDescription}
+                <tr class="long-description-row">
+                  <td colspan="5" class="long-description-cell">
+                    <div class="long-description">
+                      <Markdown md={setting.longDescription} />
+                    </div>
+                  </td>
+                </tr>
+              {/if}
             {/each}
           </tbody>
         </table>
@@ -647,7 +667,7 @@
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s ease;
-    margin-top: 0.25rem;
+    margin-top: 0.5rem;
   }
 
   .expand-btn:hover {
@@ -656,20 +676,118 @@
     background-color: rgba(59, 130, 246, 0.1);
   }
 
-  .long-description {
-    margin-top: 0.75rem;
-    padding: 1rem;
+  .long-description-row {
     background-color: rgba(30, 30, 30, 0.8);
-    border-left: 3px solid #3b82f6;
-    border-radius: 0 0.375rem 0.375rem 0;
   }
 
-  .long-description p {
-    margin: 0;
+  .long-description-row:hover {
+    background-color: rgba(30, 30, 30, 0.8);
+  }
+
+  .settings-table tr.modified + .long-description-row {
+    background-color: rgba(245, 158, 11, 0.05);
+  }
+
+  .long-description-cell {
+    padding: 0 !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .long-description {
+    padding: 1.5rem 1.25rem;
+    border-left: 3px solid #3b82f6;
+    background-color: rgba(30, 30, 30, 0.6);
+  }
+
+  .long-description :global(p) {
+    margin: 0 0 1rem 0;
     color: #d1d5db;
     font-size: 0.85rem;
     line-height: 1.7;
-    white-space: pre-wrap;
+  }
+
+  .long-description :global(p:last-child) {
+    margin-bottom: 0;
+  }
+
+  .long-description :global(code) {
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: #f59e0b;
+    background-color: rgba(0, 0, 0, 0.3);
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+  }
+
+  .long-description :global(pre) {
+    background-color: rgba(0, 0, 0, 0.3);
+    padding: 1rem;
+    border-radius: 0.375rem;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+  }
+
+  .long-description :global(pre code) {
+    background-color: transparent;
+    padding: 0;
+  }
+
+  .long-description :global(ul),
+  .long-description :global(ol) {
+    margin: 0.5rem 0;
+    padding-left: 1.5rem;
+    color: #d1d5db;
+  }
+
+  .long-description :global(li) {
+    margin: 0.25rem 0;
+    line-height: 1.7;
+  }
+
+  .long-description :global(strong) {
+    color: #e9ecef;
+    font-weight: 600;
+  }
+
+  .long-description :global(em) {
+    font-style: italic;
+  }
+
+  .long-description :global(a) {
+    color: #3b82f6;
+    text-decoration: none;
+  }
+
+  .long-description :global(a:hover) {
+    text-decoration: underline;
+  }
+
+  .long-description :global(h1),
+  .long-description :global(h2),
+  .long-description :global(h3),
+  .long-description :global(h4),
+  .long-description :global(h5),
+  .long-description :global(h6) {
+    color: #f8f9fa;
+    margin: 1rem 0 0.5rem 0;
+    font-weight: 600;
+  }
+
+  .long-description :global(h1:first-child),
+  .long-description :global(h2:first-child),
+  .long-description :global(h3:first-child),
+  .long-description :global(h4:first-child),
+  .long-description :global(h5:first-child),
+  .long-description :global(h6:first-child) {
+    margin-top: 0;
+  }
+
+  .long-description :global(blockquote) {
+    border-left: 3px solid #4b5563;
+    padding-left: 1rem;
+    margin: 0.5rem 0;
+    color: #9ca3af;
+    font-style: italic;
   }
 
   /* Responsive adjustments */
