@@ -458,7 +458,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// get the block heights of all inputs of the transaction and extend the inputs of not extended transaction.
 		// utxoHeights is a slice of block heights for each input
 		// txInpoints is a struct containing the parent tx hashes and the vout indexes of each input
-		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID); err != nil {
+		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
 			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 			span.RecordError(err)
 
@@ -478,7 +478,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// if the transaction was extended, we still need to get the block heights of the inputs
 	// since that processing did not happen before the validateTransaction step
 	if len(utxoHeights) == 0 {
-		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID); err != nil {
+		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
 			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 			span.RecordError(err)
 
@@ -666,14 +666,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 }
 
 // getTransactionInputBlockHeights returns the block heights for each input of the transaction
-func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
+func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, error) {
 	ctx, span, endSpan := tracing.Tracer("validator").Start(ctx, "getTransactionInputBlockHeightsAndExtendTx",
 		tracing.WithHistogram(getTransactionInputBlockHeights),
 	)
 	defer endSpan()
 
 	// get the utxo heights for each input
-	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, txID)
+	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions)
 	if err != nil {
 		span.RecordError(err)
 		return nil, err
@@ -703,7 +703,7 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 }
 
 // getUtxoBlockHeightsAndExtendTx returns the block heights for each input of the transaction
-func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
+func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, error) {
 	// get the block heights of the input transactions of the transaction
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, v.settings.UtxoStore.GetBatcherSize)
@@ -728,7 +728,7 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 		inputIdxs := idxs
 
 		g.Go(func() error {
-			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, extend); err != nil {
+			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, extend, validationOptions); err != nil {
 				if errors.Is(err, errors.ErrTxNotFound) {
 					return errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
 				}
@@ -750,7 +750,29 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 // getUtxoBlockHeightAndExtendForParentTx retrieves the block height for a parent transaction
 // and extends the inputs of the transaction if it is not already extended.
 func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context, parentTxHash chainhash.Hash, idxs []int,
-	utxoHeights []uint32, tx *bt.Tx, extend bool) error {
+	utxoHeights []uint32, tx *bt.Tx, extend bool, validationOptions *Options) error {
+
+	// OPTIMIZATION: Check if parent metadata is provided in options (for in-block parents)
+	// This allows validation without UTXO store lookups for in-block parent transactions
+	// SAFETY: Parent metadata only includes transactions that successfully validated AND created UTXOs
+	// (see check_block_subtrees.go:buildParentMetadata which filters by successful validations)
+	if validationOptions != nil && validationOptions.ParentMetadata != nil {
+		if parentMeta, found := validationOptions.ParentMetadata[parentTxHash]; found {
+			// Use pre-fetched metadata instead of UTXO store lookup
+			// Safe because metadata only includes transactions that completed full validation+storage
+			for _, idx := range idxs {
+				utxoHeights[idx] = parentMeta.BlockHeight
+			}
+
+			// If transaction is already extended, we have all the data we need
+			// The parent metadata optimization works best with pre-extended transactions
+			if !extend {
+				return nil
+			}
+			// Otherwise fall through to UTXO store to get full transaction for extending
+		}
+	}
+
 	f := []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
 
 	if extend {

@@ -165,7 +165,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GenesisKeys:   getMultiString("alert_genesis_keys", "|", []string{}, alternativeContext...),
 			P2PPrivateKey: getString("alert_p2p_private_key", "", alternativeContext...),
 			ProtocolID:    getString("alert_protocol_id", "/bitcoin/alert-system/1.0.0", alternativeContext...),
-			Store:         getString("alert_store", "sqlite:///alert", alternativeContext...),
 			StoreURL:      getURL("alert_store", "sqlite:///alert", alternativeContext...),
 			TopicName:     getString("alert_topic_name", "bitcoin_alert_system", alternativeContext...),
 			P2PPort:       getPort("ALERT_P2P_PORT", 9908, alternativeContext...),
@@ -180,7 +179,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			HTTPPort:                getPort("ASSET_HTTP_PORT", 8090, alternativeContext...),
 			SignHTTPResponses:       getBool("asset_sign_http_responses", false, alternativeContext...),
 			EchoDebug:               getBool("ECHO_DEBUG", false, alternativeContext...),
-			PropagationPublicURL:    getString("asset_propagationPublicURL", "", alternativeContext...),
+			PropagationPublicURL:    getString("asset_propagation_public_url", "", alternativeContext...),
 
 			// Concurrency limits for repository methods (0 = unlimited, -1 = NumCPU(), anything else is the specific limit)
 			ConcurrencyGetTransaction:         getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
@@ -473,17 +472,17 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DistributorTimeout:          getDuration("distributor_timeout", 30*time.Second, alternativeContext...),
 		},
 		Pruner: PrunerSettings{
-			GRPCAddress:                     getString("pruner_grpcAddress", "localhost:8096", alternativeContext...),
-			GRPCListenAddress:               getString("pruner_grpcListenAddress", ":8096", alternativeContext...),
-			BlockAssemblyWaitTimeout:        getDuration("pruner_blockAssemblyWaitTimeout", 10*time.Minute, alternativeContext...), // Wait up to 10 minutes for BA to be ready
-			ConnectionPoolWarningThreshold:  getFloat64("pruner_connectionPoolWarningThreshold", 0.7, alternativeContext...),       // Warn/adjust when exceeding 70% of connection pool
-			ForceIgnoreBlockPersisterHeight: getBool("pruner_force_ignore_block_persister_height", false, alternativeContext...),   // Force ignore block persister (default: false)
-			UTXODefensiveEnabled:            getBool("pruner_utxoDefensiveEnabled", false, alternativeContext...),                  // Defensive mode off by default (production)
-			UTXODefensiveBatchReadSize:      getInt("pruner_utxoDefensiveBatchReadSize", 10000, alternativeContext...),             // Batch size for child verification
-			UTXOChunkSize:                   getInt("pruner_utxoChunkSize", 1000, alternativeContext...),                           // Chunk size for batch operations
-			UTXOChunkGroupLimit:             getInt("pruner_utxoChunkGroupLimit", 10, alternativeContext...),                       // Process 10 chunks in parallel
-			UTXOProgressLogInterval:         getDuration("pruner_utxoProgressLogInterval", 30*time.Second, alternativeContext...),  // Progress every 30s
-			UTXOPartitionQueries:            getInt("pruner_utxoPartitionQueries", 0, alternativeContext...),                       // 0 = auto-detect based on CPU cores
+			GRPCAddress:                    getString("pruner_grpcAddress", "localhost:8096", alternativeContext...),
+			GRPCListenAddress:              getString("pruner_grpcListenAddress", ":8096", alternativeContext...),
+			BlockAssemblyWaitTimeout:       getDuration("pruner_blockAssemblyWaitTimeout", 10*time.Minute, alternativeContext...), // Wait up to 10 minutes for BA to be ready
+			ConnectionPoolWarningThreshold: getFloat64("pruner_connectionPoolWarningThreshold", 0.7, alternativeContext...),       // Warn/adjust when exceeding 70% of connection pool
+			BlockTrigger:                   getString("pruner_block_trigger", PrunerBlockTriggerOnBlockPersisted, alternativeContext...),
+			UTXODefensiveEnabled:           getBool("pruner_utxoDefensiveEnabled", false, alternativeContext...),                 // Defensive mode off by default (production)
+			UTXODefensiveBatchReadSize:     getInt("pruner_utxoDefensiveBatchReadSize", 10000, alternativeContext...),            // Batch size for child verification
+			UTXOChunkSize:                  getInt("pruner_utxoChunkSize", 1000, alternativeContext...),                          // Chunk size for batch operations
+			UTXOChunkGroupLimit:            getInt("pruner_utxoChunkGroupLimit", 10, alternativeContext...),                      // Process 10 chunks in parallel
+			UTXOProgressLogInterval:        getDuration("pruner_utxoProgressLogInterval", 30*time.Second, alternativeContext...), // Progress every 30s
+			UTXOPartitionQueries:           getInt("pruner_utxoPartitionQueries", 0, alternativeContext...),                      // 0 = auto-detect based on CPU cores
 		},
 		SubtreeValidation: SubtreeValidationSettings{
 			QuorumAbsoluteTimeout:                     getDuration("subtree_quorum_absolute_timeout", 30*time.Second, alternativeContext...),

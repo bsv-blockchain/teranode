@@ -20,6 +20,10 @@ type Service interface {
 	// SetPersistedHeightGetter sets the function used to get block persister progress.
 	// This allows pruner to coordinate with block persister to avoid premature deletion.
 	SetPersistedHeightGetter(getter func() uint32)
+
+	// AddObserver adds an observer to be notified when pruning completes.
+	// This method is thread-safe and can be called after service creation.
+	AddObserver(observer Observer)
 }
 
 // PrunerServiceProvider defines an interface for stores that can provide a pruner service.
@@ -27,4 +31,12 @@ type PrunerServiceProvider interface {
 	// GetPrunerService returns a pruner service for the store.
 	// Returns nil if the store doesn't support pruner functionality.
 	GetPrunerService() (Service, error)
+}
+
+// Observer defines an interface for components that want to be notified of pruner events.
+type Observer interface {
+	// OnPruneComplete is called when a pruning cycle completes.
+	// height is the block height that was pruned up to.
+	// recordsProcessed is the number of records that were pruned.
+	OnPruneComplete(height uint32, recordsProcessed int64)
 }

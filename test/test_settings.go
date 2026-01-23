@@ -178,6 +178,12 @@ func MultiNodeSettings(nodeNumber int) func(*settings.Settings) {
 		s.Block.BlockStore = blockStoreURL
 		s.BlockPersister.Store = blockStoreURL // Both stores should use the same per-node path
 
+		subtreeStorePath := filepath.Join(s.DataFolder, fmt.Sprintf("teranode%d", nodeNumber), "subtreestore")
+		subtreeStoreURL := mustParseURL(fmt.Sprintf("file://./%s", subtreeStorePath))
+		s.SubtreeValidation.SubtreeStore = subtreeStoreURL
+
+		s.SubtreeValidation.QuorumPath = filepath.Join(s.DataFolder, fmt.Sprintf("teranode%d", nodeNumber), "subtree_quorum")
+
 		// NOTE: Do NOT override listen addresses here.
 		// TestDaemon pre-allocates listeners on dynamic ports before calling SettingsOverrideFunc.
 		// Overriding the addresses would cause the health check and other services to fail

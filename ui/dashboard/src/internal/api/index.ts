@@ -107,6 +107,11 @@ function callApi<T>(url: string, options: ApiOptions = {}): Promise<ApiResponse<
     options.headers['Origin'] = window.location.origin
   }
 
+  // Always include credentials for authentication
+  if (!options.credentials) {
+    options.credentials = 'include'
+  }
+
   incSpinCount()
 
   return fetch(url, options)
@@ -190,6 +195,16 @@ export function getSubtreeTxs(data: {
   limit: number
 }): Promise<ApiResponse<any>> {
   return get<any>(`${baseUrl}/subtree/${data.hash}/txs/json`, {
+    query: { offset: String(data.offset), limit: String(data.limit) },
+  })
+}
+
+export function getSubtreeNodes(data: {
+  hash: string
+  offset: number
+  limit: number
+}): Promise<ApiResponse<any>> {
+  return get<any>(`${baseUrl}/subtree/${data.hash}/json`, {
     query: { offset: String(data.offset), limit: String(data.limit) },
   })
 }
@@ -590,4 +605,64 @@ export function getMerkleProof(txHash: string): Promise<ApiResponse<MerkleProofD
       return handleApiError<MerkleProofData>(response.error, `/merkle_proof/${txHash}/json`)
     })
     .catch((error) => handleApiError<MerkleProofData>(error, `/merkle_proof/${txHash}/json`))
+}
+
+// Settings API interfaces
+export interface SettingMetadata {
+  key: string
+  name: string
+  type: string
+  defaultValue: string
+  currentValue: string
+  description: string
+  longDescription?: string
+  category: string
+  usageHint?: string
+}
+
+export interface SettingsResponse {
+  settings: SettingMetadata[]
+  categories: string[]
+  total: number
+  filtered: number
+  version: string
+  commit: string
+}
+
+// Get all settings with metadata
+export function getSettings(params?: {
+  category?: string
+  search?: string
+}): Promise<ApiResponse<SettingsResponse>> {
+  const queryParams: Record<string, string> = {}
+  if (params?.category) {
+    queryParams.category = params.category
+  }
+  if (params?.search) {
+    queryParams.search = params.search
+  }
+
+  // Only pass query if there are params
+  const options = Object.keys(queryParams).length > 0 ? { query: queryParams } : {}
+
+  return get<SettingsResponse>(`${baseUrl}/settings`, options)
+    .then((response) => {
+      if (response.ok) {
+        return { ok: true, data: response.data } as ApiResponse<SettingsResponse>
+      }
+      return handleApiError<SettingsResponse>(response.error, '/settings')
+    })
+    .catch((error) => handleApiError<SettingsResponse>(error, '/settings'))
+}
+
+// Get available settings categories
+export function getSettingsCategories(): Promise<ApiResponse<{ categories: string[] }>> {
+  return get<{ categories: string[] }>(`${baseUrl}/settings/categories`)
+    .then((response) => {
+      if (response.ok) {
+        return { ok: true, data: response.data } as ApiResponse<{ categories: string[] }>
+      }
+      return handleApiError<{ categories: string[] }>(response.error, '/settings/categories')
+    })
+    .catch((error) => handleApiError<{ categories: string[] }>(error, '/settings/categories'))
 }

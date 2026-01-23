@@ -769,6 +769,10 @@ func (b *Blockchain) AddBlock(ctx context.Context, request *blockchain_api.AddBl
 		return nil, errors.WrapGRPC(err)
 	}
 
+	// Clear difficulty cache when chain state changes to prevent stale cached values
+	// from causing incorrect difficulty calculations during rapid block processing
+	b.difficulty.ResetCache()
+
 	b.logger.Infof("[AddBlock] stored block %s (ID: %d, height: %d)", block.Hash(), ID, height)
 
 	block.Height = height
