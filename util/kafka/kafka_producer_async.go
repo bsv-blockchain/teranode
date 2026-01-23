@@ -429,11 +429,10 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	}
 
 	c.channelMu.RLock()
-	ch := c.publishChannel
-	c.channelMu.RUnlock()
+	defer c.channelMu.RUnlock()
 
-	if ch != nil {
-		utils.SafeSend(ch, msg)
+	if c.publishChannel != nil {
+		utils.SafeSend(c.publishChannel, msg)
 	}
 }
 

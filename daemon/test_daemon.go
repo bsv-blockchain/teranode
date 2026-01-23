@@ -1674,6 +1674,12 @@ func (td *TestDaemon) GetContainerManager() *containers.ContainerManager {
 	return td.containerManager
 }
 
+// GetBlockStore returns the block store used by this test daemon.
+// This is useful for tests that need to verify block persistence.
+func (td *TestDaemon) GetBlockStore() (blob.Store, error) {
+	return td.d.daemonStores.GetBlockStore(td.Ctx, td.Logger, td.Settings)
+}
+
 // WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
 func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 	timeoutElapsed := time.After(timeout)
