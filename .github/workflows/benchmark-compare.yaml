@@ -171,30 +171,17 @@ jobs:
               -threshold 5.0
           else
             echo "Compare script not yet available, generating placeholder report"
-            cat > comparison-report.md << 'REPORT'
-## 📊 Benchmark Comparison Report (Mock Data)
-
-**Baseline:** `main` (abc1234)
-
-**Current:** `feature` (def5678)
-
-### Summary
-
-- **Regressions (>5.0%):** 0 ❌
-- **Improvements (>5.0%):** 0 ✅
-- **Unchanged:** 3 ✓
-
-### Detailed Results
-
-| Benchmark | Baseline | Current | Change | Allocs | Status |
-|-----------|----------|---------|--------|--------|--------|
-| GetTransactionJSON-4 | 59718 ns/op | 60000 ns/op | +0.5% | +0.0% | ✓ |
-| GetTransactionBinary-4 | 40061 ns/op | 40061 ns/op | +0.0% | +0.0% | ✓ |
-| GetTransactionHex-4 | 40518 ns/op | 40518 ns/op | +0.0% | +0.0% | ✓ |
-
----
-*Threshold: 5.0% | Generated at 2026-01-23T13:10:00Z*
-REPORT
+            {
+              echo "## Benchmark Comparison Report"
+              echo ""
+              echo "**Status:** Mock data (actual scripts not yet deployed)"
+              echo ""
+              echo "- Regressions: 0"
+              echo "- Improvements: 0"
+              echo "- Unchanged: 3"
+              echo ""
+              echo "*First run with real data coming soon*"
+            } > comparison-report.md
           fi
 
       - name: Display report
