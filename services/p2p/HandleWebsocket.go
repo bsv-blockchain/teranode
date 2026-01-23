@@ -28,11 +28,11 @@ type notificationMsg struct {
 	BaseURL        string `json:"base_url,omitempty"`          // Base URL for additional resource access
 	PropagationURL string `json:"propagation_url,omitempty"`   // URL for peers to use for propagating txs (defaults to BaseURL if empty)
 	PeerID         string `json:"peer_id,omitempty"`           // Peer identifier for peer-related notifications
-	PreviousHash string `json:"previousblockhash,omitempty"` // Previous block hash for block chain continuity
-	TxCount      uint64 `json:"tx_count,omitempty"`          // Number of transactions in a block
-	Height       uint32 `json:"height,omitempty"`            // Block height in the blockchain
-	SizeInBytes  uint64 `json:"size_in_bytes,omitempty"`     // Size of the block or data in bytes
-	Miner        string `json:"miner,omitempty"`             // Miner identifier for mining-related notifications
+	PreviousHash   string `json:"previousblockhash,omitempty"` // Previous block hash for block chain continuity
+	TxCount        uint64 `json:"tx_count,omitempty"`          // Number of transactions in a block
+	Height         uint32 `json:"height,omitempty"`            // Block height in the blockchain
+	SizeInBytes    uint64 `json:"size_in_bytes,omitempty"`     // Size of the block or data in bytes
+	Miner          string `json:"miner,omitempty"`             // Miner identifier for mining-related notifications
 	// Node status fields
 	Version       string  `json:"version,omitempty"`         // Node version
 	CommitHash    string  `json:"commit_hash,omitempty"`     // Git commit hash
