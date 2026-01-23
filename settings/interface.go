@@ -352,7 +352,7 @@ type BlockValidationSettings struct {
 	FetchLargeBatchSize     int // Large batches for maximum HTTP efficiency (default: 100, peer limit)
 	FetchNumWorkers         int // Number of worker goroutines for parallel processing (default: 16)
 	FetchBufferSize         int // Buffer size for channels (default: 50)
-	SubtreeFetchConcurrency int // Concurrent subtree fetches per block (default: 8)
+	SubtreeFetchConcurrency int // Concurrent subtree fetches per block (default: 32)
 	SubtreeBatchSize        int // Subtrees to process per batch in quick validation (default: 16)
 	// Transaction extension timeout
 	ExtendTransactionTimeout time.Duration // Timeout for extending transactions (default: 120s)
@@ -365,6 +365,10 @@ type BlockValidationSettings struct {
 	// Pipeline processing settings
 	SubtreeBatchPrefetchDepth    int // Batches to prefetch ahead in pipeline (default: 2, 0=sequential)
 	SubtreeBatchWriteConcurrency int // Concurrent subtree file writes per batch (default: 64)
+	// Dynamic peer switching and parallel fetching
+	CatchupMinThroughputKBps    int  // Minimum throughput in KB/s before switching peers (default: 100)
+	CatchupParallelFetchEnabled bool // Enable parallel fetching from multiple peers (default: true)
+	CatchupParallelFetchWorkers int  // Number of parallel fetch workers (default: 3)
 }
 
 type ValidatorSettings struct {

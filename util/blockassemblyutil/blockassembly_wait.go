@@ -4,6 +4,7 @@ package blockassemblyutil
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -57,7 +58,19 @@ func WaitForBlockAssemblyReady(
 			return 0, errors.NewProcessingError("failed to get block assembly state", err)
 		}
 
-		if blockAssemblyStatus.CurrentHeight+uint32(maxBlocksBehind) < blockHeight {
+		// Check for overflow before performing addition to prevent uint32 wraparound
+		// This could occur if CurrentHeight is near math.MaxUint32
+		maxAllowedHeight := blockAssemblyStatus.CurrentHeight
+		if maxBlocksBehind > 0 {
+			// Calculate max allowed height with overflow check
+			if blockAssemblyStatus.CurrentHeight > math.MaxUint32-uint32(maxBlocksBehind) {
+				// Would overflow - block assembly is too far behind
+				return 0, errors.NewProcessingError("block assembly height %d would overflow when adding maxBlocksBehind %d", blockAssemblyStatus.CurrentHeight, maxBlocksBehind)
+			}
+			maxAllowedHeight = blockAssemblyStatus.CurrentHeight + uint32(maxBlocksBehind)
+		}
+
+		if maxAllowedHeight < blockHeight {
 			return 0, errors.NewProcessingError("block assembly is behind, block height %d, block assembly height %d", blockHeight, blockAssemblyStatus.CurrentHeight)
 		}
 
