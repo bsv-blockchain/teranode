@@ -338,8 +338,16 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
-							// Channel was closed during send, this is expected during shutdown
-							c.Config.Logger.Debugf("[kafka] Recovered from send to closed channel during shutdown")
+							// Check if this is the expected "send on closed channel" panic
+							panicMsg := fmt.Sprint(r)
+							if strings.Contains(panicMsg, "closed channel") {
+								// Expected during shutdown, log at debug level
+								c.Config.Logger.Debugf("[kafka] Recovered from send to closed channel during shutdown")
+							} else {
+								// Unexpected panic - log error and re-throw to expose the bug
+								c.Config.Logger.Errorf("[kafka] Unexpected panic while sending message: %v", r)
+								panic(r)
+							}
 						}
 					}()
 					c.Producer.Input() <- message
@@ -413,7 +421,10 @@ func (c *KafkaAsyncProducer) BrokersURL() []string {
 
 // Publish sends a message to the producer's publish channel.
 func (c *KafkaAsyncProducer) Publish(msg *Message) {
-	if c.closed.Load() {
+	c.channelMu.RLock()
+	defer c.channelMu.RUnlock()
+
+	if c.closed.Load() || c.publishChannel == nil {
 		return
 	}
 
