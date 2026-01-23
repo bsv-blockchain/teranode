@@ -355,6 +355,14 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Register peers endpoint
 	apiGroup.GET("/peers", h.GetPeers)
 
+	// Register settings handler for settings portal (always requires authentication)
+	settingsHandler := NewSettingsHandler(tSettings, logger)
+	authHandler := dashboard.NewAuthHandler(logger, tSettings)
+	apiSettingsGroup := e.Group(apiPrefix + "/settings")
+	apiSettingsGroup.Use(authHandler.RequireAuthMiddleware)
+	apiSettingsGroup.GET("", settingsHandler.GetSettings)
+	apiSettingsGroup.GET("/categories", settingsHandler.GetSettingsCategories)
+
 	// Add OPTIONS handlers for block operations
 	apiGroup.OPTIONS("/block/invalidate", func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
