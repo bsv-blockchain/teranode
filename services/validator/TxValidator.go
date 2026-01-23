@@ -414,21 +414,6 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 	return nil
 }
 
-// isUnspendableOutput checks if an output script is unspendable (starts with OP_FALSE OP_RETURN)
-func isUnspendableOutput(script *bscript.Script) bool {
-	if script == nil {
-		return false
-	}
-	// Convert script to bytes
-	scriptBytes := *script
-	// Check if script starts with OP_FALSE (0x00) followed by OP_RETURN (0x6a)
-	if len(scriptBytes) >= 2 && scriptBytes[0] == 0x00 && scriptBytes[1] == 0x6a {
-		return true
-	}
-
-	return false
-}
-
 // checkOutputs validates transaction outputs according to consensus and policy rules.
 func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOptions *Options) error {
 	total := uint64(0)
@@ -610,12 +595,50 @@ func (tv *TxValidator) isDustReturnTx(tx *bt.Tx) bool {
 		return false
 	}
 
-	// Output script must be unspendable (OP_FALSE OP_RETURN)
-	return isUnspendableOutput(output.LockingScript)
+	// Check if the locking script matches the dust return pattern
+	// OP_FALSE, OP_RETURN, OP_PUSHDATA(4), 'dust'
+	// This implement the equivalent IsDustReturnScript in C++
+	dustReturnScript := []byte{0x00, 0x6a, 0x04, 0x64, 0x75, 0x73, 0x74}
+	if output.LockingScript == nil {
+		return false
+	}
+	scriptBytes := *output.LockingScript
+	if len(scriptBytes) != len(dustReturnScript) {
+		return false
+	}
+	for i := range dustReturnScript {
+		if scriptBytes[i] != dustReturnScript[i] {
+			return false
+		}
+	}
+
+	return true
 }
 
-// isConsolidationTx checks if a transaction qualifies as a consolidation transaction
-// following Bitcoin rules.
+// isStandardOutput checks if a scriptPubKey is a standard output type.
+// Standard outputs include: P2PKH, P2PK, P2MS (multisig), and OP_RETURN (data).
+//
+// Parameters:
+//   - scriptPubKey: The script to check
+//
+// Returns:
+//   - bool: true if the script is a standard output type
+func (tv *TxValidator) isStandardOutput(scriptPubKey *bscript.Script) bool {
+	if scriptPubKey == nil {
+		return false
+	}
+
+	// Check for standard script types
+	return scriptPubKey.IsP2PKH() ||
+		scriptPubKey.IsP2PK() ||
+		scriptPubKey.IsMultiSigOut() ||
+		scriptPubKey.IsData()
+}
+
+// isConsolidationTx checks if a transaction qualifies as a free consolidation transaction
+// following Bitcoin SV rules. This implementation replicates the C++ IsFreeConsolidationTxn logic.
+//
+// A consolidation transaction reduces the UTXO set sufficiently that miners accept it without fees.
 //
 // Parameters:
 //   - tx: The transaction to check
@@ -623,108 +646,127 @@ func (tv *TxValidator) isDustReturnTx(tx *bt.Tx) bool {
 //   - currentHeight: Current block height (ignored if utxoHeights is nil)
 //
 // Returns:
-//   - bool: true if the transaction qualifies as a consolidation transaction
+//   - bool: true if the transaction qualifies as a free consolidation transaction
 func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, currentHeight uint32) bool {
 	if tx == nil {
 		return false
 	}
 
-	// Coinbase transactions cannot be consolidation transactions
-	if tx.IsCoinbase() {
+	// Allow disabling free consolidation txns via configuring the consolidation factor to zero
+	minConsolidationFactor := tv.settings.Policy.GetMinConsolidationFactor()
+	if minConsolidationFactor == 0 {
+		tv.logger.Debugf("Consolidation disabled: minConsolidationFactor is 0")
 		return false
 	}
 
-	// Get policy settings
-	minConsolidationFactor := tv.settings.Policy.GetMinConsolidationFactor()
-	if minConsolidationFactor <= 0 {
+	// Coinbase transactions cannot be consolidation transactions
+	if tx.IsCoinbase() {
+		tv.logger.Debugf("Not a consolidation tx: coinbase transaction")
 		return false
+	}
+
+	// Check if it's a dust donation transaction (special case)
+	isDustDonation := tv.isDustReturnTx(tx)
+
+	// Dynamic factor and minConf based on donation status
+	factor := minConsolidationFactor
+	minConf := tv.settings.Policy.GetMinConfConsolidationInput()
+
+	if isDustDonation {
+		// Dust donations use actual input count as factor and require 0 confirmations
+		factor = len(tx.Inputs)
+		minConf = 0
 	}
 
 	numInputs := len(tx.Inputs)
 	numOutputs := len(tx.Outputs)
 
-	// Check if it's a dust return transaction (special case)
-	isDustReturn := tv.isDustReturnTx(tx)
-
 	// Rule 1: Input/Output Ratio
-	// The number of inputs must be >= minConsolidationFactor × number of outputs
-	if !isDustReturn && numInputs < minConsolidationFactor*numOutputs {
+	// The consolidation transaction needs to reduce the count of UTXOs
+	if numInputs < factor*numOutputs {
+		// Provide hint if close to consolidation factor
+		if numInputs > 2*numOutputs {
+			tv.logger.Debugf("Consolidation tx has too few inputs in relation to outputs. Consolidation factor: %d", factor)
+		}
 		return false
 	}
 
-	// Rule 2: Script Size Comparison (Bitcoin rule)
-	// Sum of input scriptPubKey sizes >= minConsolidationFactor × sum of output scriptPubKey sizes
-	if !isDustReturn {
-		// Check if transaction is extended (has PreviousTxScript for all inputs)
-		for _, input := range tx.Inputs {
-			if input.PreviousTxScript == nil {
-				return false
-			}
-		}
-
-		// Calculate total size of scriptPubKeys from UTXOs being spent
-		totalInputScriptPubKeySize := 0
-		for _, input := range tx.Inputs {
-			totalInputScriptPubKeySize += len(*input.PreviousTxScript)
-		}
-
-		// Calculate total size of output scriptPubKeys
-		totalOutputScriptPubKeySize := 0
-		for _, output := range tx.Outputs {
-			if output.LockingScript != nil {
-				totalOutputScriptPubKeySize += len(*output.LockingScript)
-			}
-		}
-
-		// Check the script size ratio
-		if totalInputScriptPubKeySize < minConsolidationFactor*totalOutputScriptPubKeySize {
+	// Check if transaction is extended (has PreviousTxScript for all inputs)
+	for _, input := range tx.Inputs {
+		if input.PreviousTxScript == nil {
+			tv.logger.Debugf("Not a consolidation tx: missing PreviousTxScript")
 			return false
 		}
 	}
 
-	// If no UTXO heights provided, we're done (fee exemption check)
-	if utxoHeights == nil {
-		return true
-	}
-
-	// FULL VALIDATION - Only performed when UTXO heights are provided
-
-	// Get configuration settings
-	minConf := tv.settings.Policy.GetMinConfConsolidationInput()
-	maxInputScriptSize := tv.settings.Policy.GetMaxConsolidationInputScriptSize()
-
-	// Dust return transactions don't require confirmations
-	if isDustReturn {
-		minConf = 0
-	}
-
-	// Check each input
+	// Rule 2: Script Size Comparison
+	// Check all UTXOs are confirmed and prevent spam via big scriptSig sizes
+	sumScriptPubKeySizeOfTxInputs := uint64(0)
 	for i, input := range tx.Inputs {
-		// Rule 3: Input Maturity
-		// All inputs must have at least minConfConsolidationInput confirmations
-		if minConf > 0 && i < len(utxoHeights) {
-			inputHeight := utxoHeights[i]
-			confirmations := int(currentHeight - inputHeight)
-			if confirmations < minConf {
+		// If we have UTXO heights, perform full validation
+		if utxoHeights != nil {
+			// Rule 3: Input Maturity - accept only with many confirmations
+			if i < len(utxoHeights) {
+				inputHeight := utxoHeights[i]
+
+				// Check for mempool/unconfirmed inputs
+				if minConf > 0 && inputHeight >= currentHeight {
+					tv.logger.Debugf("Consolidation tx has input from unconfirmed transaction")
+					return false
+				}
+
+				// Check minimum confirmations
+				seenConf := int32(currentHeight+1) - int32(inputHeight)
+				if minConf > 0 && inputHeight > 0 && seenConf < int32(minConf) {
+					tv.logger.Debugf("Consolidation tx has input with %d confirmations, minimum required: %d", seenConf, minConf)
+					return false
+				}
+			}
+
+			// Rule 4: Input Script Size Limit - spam detection
+			maxInputScriptSize := tv.settings.Policy.GetMaxConsolidationInputScriptSize()
+			if input.UnlockingScript != nil && len(*input.UnlockingScript) > maxInputScriptSize {
+				tv.logger.Debugf("Consolidation tx has input with scriptSig size %d, maximum: %d", len(*input.UnlockingScript), maxInputScriptSize)
 				return false
+			}
+
+			// Rule 5: Standard Script Rule
+			// If not acceptNonStdConsolidationInput then check if inputs are standard
+			stdInputOnly := !tv.settings.Policy.GetAcceptNonStdConsolidationInput()
+			if stdInputOnly {
+				scriptPubKey := bscript.Script(*input.PreviousTxScript)
+				if !tv.isStandardOutput(&scriptPubKey) {
+					tv.logger.Debugf("Consolidation tx has non-standard input")
+					return false
+				}
 			}
 		}
 
-		// Rule 4: Input Script Size Limit
-		// Each input's scriptSig must be <= maxConsolidationInputScriptSize bytes
-		if maxInputScriptSize > 0 && input.UnlockingScript != nil {
-			scriptSize := len(*input.UnlockingScript)
-			if scriptSize > maxInputScriptSize {
-				return false
-			}
-		}
+		// Sum up scriptPubKey sizes from inputs
+		sumScriptPubKeySizeOfTxInputs += uint64(len(*input.PreviousTxScript))
+	}
 
-		// Rule 5: Standard Script Rule
-		// If acceptNonStdConsolidationInput = 0, all inputs must use standard scripts
-		// This is checked in bdk
+	// Calculate sum of output scriptPubKey sizes
+	sumScriptPubKeySizeOfTxOutputs := uint64(0)
+	for _, output := range tx.Outputs {
+		if output.LockingScript != nil {
+			sumScriptPubKeySizeOfTxOutputs += uint64(len(*output.LockingScript))
+		}
+	}
+
+	// Prevent consolidation transactions that are not advantageous enough for miners
+	if sumScriptPubKeySizeOfTxInputs < uint64(factor)*sumScriptPubKeySizeOfTxOutputs {
+		tv.logger.Debugf("Consolidation tx script size ratio insufficient: input=%d, output=%d, factor=%d",
+			sumScriptPubKeySizeOfTxInputs, sumScriptPubKeySizeOfTxOutputs, factor)
+		return false
 	}
 
 	// Transaction qualifies as a consolidation transaction
+	if isDustDonation {
+		tv.logger.Debugf("Free donation transaction: %s", tx.TxID())
+	} else {
+		tv.logger.Debugf("Free consolidation transaction: %s", tx.TxID())
+	}
 	return true
 }
 
