@@ -3409,7 +3409,8 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 			blocks[13].Header, // height 13
 			blocks[14].Header, // height 14
 		},
-		forkDepth: 0, // no fork
+		forkDepth:   0, // no fork
+		checkpoints: suite.Server.settings.ChainCfgParams.Checkpoints,
 	}
 
 	// Test the checkpoint verification
@@ -3458,7 +3459,8 @@ func TestCheckpointValidationSkipsCheckpointsBelowAncestor(t *testing.T) {
 			blocks[13].Header, // height 13
 			blocks[14].Header, // height 14
 		},
-		forkDepth: 0, // no fork
+		forkDepth:   0, // no fork
+		checkpoints: suite.Server.settings.ChainCfgParams.Checkpoints,
 	}
 
 	// Test the checkpoint verification
