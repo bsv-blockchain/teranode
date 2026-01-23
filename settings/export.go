@@ -62,15 +62,15 @@ func (s *Settings) ExportMetadata() *SettingsRegistry {
 	// Add special "network" setting from ChainCfgParams
 	if s.ChainCfgParams != nil {
 		settings = append(settings, SettingMetadata{
-			Key:          "network",
-			Name:         "Network",
-			Type:         "string",
-			DefaultValue: "mainnet",
-			CurrentValue: s.ChainCfgParams.Name,
-			Description:  "Bitcoin network to connect to (mainnet, testnet, stn, regtest)",
+			Key:             "network",
+			Name:            "Network",
+			Type:            "string",
+			DefaultValue:    "mainnet",
+			CurrentValue:    s.ChainCfgParams.Name,
+			Description:     "Bitcoin network to connect to (mainnet, testnet, stn, regtest)",
 			LongDescription: "Specifies which Bitcoin SV network this node connects to. Each network has different genesis blocks, address prefixes, and peer discovery. 'mainnet' is the production Bitcoin SV network with real economic value - use for mining, exchanges, and production services. 'testnet' is a public test network with worthless coins for development and testing without risking real funds. 'stn' (Scaling Test Network) is BSV's dedicated network for testing high-throughput scenarios and large blocks. 'regtest' (Regression Test) is a local private network for automated testing with instant block generation. Network selection affects: genesis block hash, magic bytes for P2P protocol, default ports, address version bytes (for legacy addresses), and peer discovery seeds. Cannot be changed at runtime - requires node restart with empty data directory to switch networks.",
-			Category:     CategoryGlobal,
-			UsageHint:    "Use 'mainnet' for production, 'testnet' or 'stn' for testing",
+			Category:        CategoryGlobal,
+			UsageHint:       "Use 'mainnet' for production, 'testnet' or 'stn' for testing",
 		})
 	}
 
@@ -210,7 +210,6 @@ func formatValue(val reflect.Value) string {
 		return fmt.Sprintf("%v", val.Interface())
 	}
 }
-
 
 // Helper functions for formatting values
 
