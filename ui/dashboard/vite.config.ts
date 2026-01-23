@@ -54,6 +54,15 @@ export default defineConfig({
     },
   },
   outDir: '../dist',
+  server: {
+    proxy: {
+      '/api/auth': {
+        target: 'http://localhost:8090',
+        changeOrigin: false,
+        secure: false,
+      },
+    },
+  },
   plugins: [
     sveltekit(),
     // visualizer({

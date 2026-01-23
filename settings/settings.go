@@ -165,7 +165,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GenesisKeys:   getMultiString("alert_genesis_keys", "|", []string{}, alternativeContext...),
 			P2PPrivateKey: getString("alert_p2p_private_key", "", alternativeContext...),
 			ProtocolID:    getString("alert_protocol_id", "/bitcoin/alert-system/1.0.0", alternativeContext...),
-			Store:         getString("alert_store", "sqlite:///alert", alternativeContext...),
 			StoreURL:      getURL("alert_store", "sqlite:///alert", alternativeContext...),
 			TopicName:     getString("alert_topic_name", "bitcoin_alert_system", alternativeContext...),
 			P2PPort:       getPort("ALERT_P2P_PORT", 9908, alternativeContext...),

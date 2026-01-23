@@ -107,6 +107,11 @@ function callApi<T>(url: string, options: ApiOptions = {}): Promise<ApiResponse<
     options.headers['Origin'] = window.location.origin
   }
 
+  // Always include credentials for authentication
+  if (!options.credentials) {
+    options.credentials = 'include'
+  }
+
   incSpinCount()
 
   return fetch(url, options)
