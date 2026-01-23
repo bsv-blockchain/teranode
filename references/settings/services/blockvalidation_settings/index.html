@@ -5512,6 +5512,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#quick-validation-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Validation Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#transaction-metadata-processing" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5621,6 +5632,17 @@
     <span class="md-ellipsis">
       
         Catchup Mode Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pipeline-processing-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipeline Processing Configuration
       
     </span>
   </a>
@@ -6378,6 +6400,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#quick-validation-pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick Validation Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#transaction-metadata-processing" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6487,6 +6520,17 @@
     <span class="md-ellipsis">
       
         Catchup Mode Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pipeline-processing-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipeline Processing Configuration
       
     </span>
   </a>
@@ -6901,6 +6945,20 @@
 <td>Concurrent subtree fetches per block</td>
 </tr>
 <tr>
+<td>SubtreeBatchSize</td>
+<td>int</td>
+<td>16</td>
+<td>blockvalidation_subtree_batch_size</td>
+<td>Subtrees processed per batch in quick validation</td>
+</tr>
+<tr>
+<td>SubtreeBatchPrefetchDepth</td>
+<td>int</td>
+<td>2</td>
+<td>blockvalidation_subtree_batch_prefetch_depth</td>
+<td>Batches to prefetch ahead in pipeline (0=sequential)</td>
+</tr>
+<tr>
 <td>GetBlockTransactionsConcurrency</td>
 <td>int</td>
 <td>64</td>
@@ -6929,6 +6987,14 @@
 <li>Can be overridden per-validation via DisableOptimisticMining option</li>
 <li>Disabled during catchup mode for better performance</li>
 </ul>
+<h3 id="quick-validation-pipeline">Quick Validation Pipeline</h3>
+<p>For checkpoint-verified blocks, a fan-in pipeline overlaps I/O with processing:
+- <code>SubtreeBatchPrefetchDepth</code> controls how many batches to prefetch ahead (default: 2)
+- Setting to 0 disables the pipeline and uses sequential processing
+- Three pipeline stages:
+  1. <strong>Reader</strong>: Prefetches subtree batches from disk
+  2. <strong>Extender</strong>: Extends transactions with UTXO data (sequential for map dependency)
+  3. <strong>Processor</strong>: Creates/spends UTXOs and writes files in parallel per batch</p>
 <h3 id="transaction-metadata-processing">Transaction Metadata Processing</h3>
 <ul>
 <li>Cache and store processing work together with threshold-based fallback</li>
@@ -7040,12 +7106,21 @@
 <span class="nv">blockvalidation_processTxMetaUsingStoreBatchSize</span><span class="o">=</span><span class="m">2048</span>
 <span class="nv">blockvalidation_catchupConcurrency</span><span class="o">=</span><span class="m">8</span>
 <span class="nv">blockvalidation_fetch_num_workers</span><span class="o">=</span><span class="m">32</span>
+<span class="nv">blockvalidation_subtree_batch_size</span><span class="o">=</span><span class="m">32</span>
 </code></pre></div>
 <h3 id="catchup-mode-configuration">Catchup Mode Configuration</h3>
 <div class="highlight"><pre><span></span><code><span class="nv">blockvalidation_useCatchupWhenBehind</span><span class="o">=</span><span class="nb">true</span>
 <span class="nv">blockvalidation_catchup_max_retries</span><span class="o">=</span><span class="m">5</span>
 <span class="nv">blockvalidation_catchup_iteration_timeout</span><span class="o">=</span><span class="m">60</span>
 <span class="nv">blockvalidation_max_accumulated_headers</span><span class="o">=</span><span class="m">50000</span>
+</code></pre></div>
+<h3 id="pipeline-processing-configuration">Pipeline Processing Configuration</h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Enable pipeline with larger prefetch depth for high-latency storage</span>
+<span class="nv">blockvalidation_subtree_batch_prefetch_depth</span><span class="o">=</span><span class="m">4</span>
+<span class="nv">blockvalidation_subtree_batch_size</span><span class="o">=</span><span class="m">32</span>
+
+<span class="c1"># Disable pipeline (sequential processing)</span>
+<span class="nv">blockvalidation_subtree_batch_prefetch_depth</span><span class="o">=</span><span class="m">0</span>
 </code></pre></div>
 
 
