@@ -622,6 +622,13 @@ func (u *Server) buildHeaderCache(catchupCtx *CatchupContext) error {
 // Returns:
 //   - error: If checkpoint verification fails
 func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) error {
+	catchupCtx.useQuickValidation = false
+
+	// Quick validation disabled, no need to verify checkpoints
+	if !u.settings.BlockValidation.CatchupAllowQuickValidation {
+		return nil
+	}
+
 	// Get checkpoints from catchup context
 	if len(catchupCtx.checkpoints) == 0 {
 		u.logger.Debugf("[catchup][%s] No checkpoints configured", catchupCtx.blockUpTo.Hash().String())
@@ -634,22 +641,45 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 		return nil // Fork handling takes precedence
 	}
 
-	// Get the highest checkpoint height for reference
-	highestCheckpointHeight := getHighestCheckpointHeight(catchupCtx.checkpoints)
-	catchupCtx.highestCheckpointHeight = highestCheckpointHeight
-
 	// Calculate the height range - much simpler now since headers are sequential with no gaps
 	if len(catchupCtx.blockHeaders) == 0 {
 		u.logger.Debugf("[catchup][%s] No headers to verify", catchupCtx.blockUpTo.Hash().String())
 		return nil
 	}
 
+	// Verify checkpoints and determine if quick validation can be used
+	checkpointsChecked, err := u.verifyCheckpointsAgainstHeaders(catchupCtx)
+	if err != nil {
+		return err
+	}
+
+	if checkpointsChecked > 0 {
+		u.logger.Infof("[catchup][%s] Successfully verified %d checkpoint(s) in header chain", catchupCtx.blockUpTo.Hash().String(), checkpointsChecked)
+		catchupCtx.useQuickValidation = true // enabled: BlockAssembly sync check added in tryQuickValidation
+	}
+
+	return nil
+}
+
+// verifyCheckpointsAgainstHeaders verifies checkpoints against the fetched headers
+// and determines the highest checkpoint height for quick validation eligibility.
+//
+// Parameters:
+//   - catchupCtx: Catchup context with headers and checkpoints to verify
+//
+// Returns:
+//   - int: Number of checkpoints successfully verified
+//   - error: If checkpoint verification fails (hash mismatch)
+func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (int, error) {
+	// Get the highest checkpoint height for reference
+	highestCheckpointHeight := getHighestCheckpointHeight(catchupCtx.checkpoints)
+	catchupCtx.highestCheckpointHeight = highestCheckpointHeight
+
 	firstBlockHeight := catchupCtx.commonAncestorMeta.Height + 1
 	lastBlockHeight := catchupCtx.commonAncestorMeta.Height + uint32(len(catchupCtx.blockHeaders))
 
 	u.logger.Debugf("[catchup][%s] Verifying checkpoints in height range %d-%d (common ancestor at %d)", catchupCtx.blockUpTo.Hash().String(), firstBlockHeight, lastBlockHeight, catchupCtx.commonAncestorMeta.Height)
 
-	// Verify checkpoints within our header range
 	checkpointsChecked := 0
 	for _, checkpoint := range catchupCtx.checkpoints {
 		checkpointHeight := uint32(checkpoint.Height)
@@ -665,13 +695,13 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 			// Calculate the index in blockHeaders (simple sequential calculation)
 			headerIndex := checkpointHeight - firstBlockHeight
 			if int(headerIndex) >= len(catchupCtx.blockHeaders) {
-				return errors.NewProcessingError("[catchup][%s] internal error: checkpoint height %d maps to invalid header index %d", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, headerIndex)
+				return 0, errors.NewProcessingError("[catchup][%s] internal error: checkpoint height %d maps to invalid header index %d", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, headerIndex)
 			}
 
 			headerHash := catchupCtx.blockHeaders[headerIndex].Hash()
 			if !headerHash.IsEqual(checkpoint.Hash) {
 				// CRITICAL: Checkpoint hash mismatch - we're on the wrong chain!
-				return errors.NewProcessingError("[catchup][%s] CHECKPOINT VERIFICATION FAILED: checkpoint at height %d requires hash %s but got %s - stopping catchup", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String(), headerHash.String())
+				return 0, errors.NewProcessingError("[catchup][%s] CHECKPOINT VERIFICATION FAILED: checkpoint at height %d requires hash %s but got %s - stopping catchup", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String(), headerHash.String())
 			}
 
 			u.logger.Infof("[catchup][%s] Verified checkpoint at height %d with hash %s", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String())
@@ -679,14 +709,7 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 		}
 	}
 
-	if checkpointsChecked > 0 {
-		u.logger.Infof("[catchup][%s] Successfully verified %d checkpoint(s) in header chain", catchupCtx.blockUpTo.Hash().String(), checkpointsChecked)
-		catchupCtx.useQuickValidation = true // enabled: BlockAssembly sync check added in tryQuickValidation
-	} else {
-		catchupCtx.useQuickValidation = false // no checkpoints verified, use normal validation
-	}
-
-	return nil
+	return checkpointsChecked, nil
 }
 
 // verifyChainContinuity ensures the first block properly connects to our chain.
