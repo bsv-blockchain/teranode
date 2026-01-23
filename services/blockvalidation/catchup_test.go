@@ -3390,6 +3390,9 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 		},
 	}
 
+	// Enable quick validation for this test
+	suite.Server.settings.BlockValidation.CatchupAllowQuickValidation = true
+
 	// Create catchup context simulating the scenario
 	catchupCtx := &CatchupContext{
 		blockUpTo: &model.Block{
