@@ -8649,7 +8649,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> 
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-v<span class="w"> </span>/mnt/teranode/seed:/mnt/teranode/seed<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--entrypoint<span class="o">=</span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span><span class="m">434394763103</span>.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.8.12<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>ghcr.io/bsv-blockchain/teranode:v0.13.1<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>/app/teranode-cli<span class="w"> </span>bitcointoutxoset<span class="w"> </span>-bitcoinDir<span class="o">=</span>/home/ubuntu/bitcoin-data<span class="w"> </span>-outputDir<span class="o">=</span>/mnt/teranode/seed/export
 </code></pre></div>
 <p>This script assumes your <code>bitcoin-data</code> directory is located in <code>/home/ubuntu/bitcoin-data</code> and contains the <code>blocks</code> and <code>chainstate</code> directories. It will generate <code>${blockhash}.utxo-headers</code> and <code>${blockhash}.utxo-set</code> files.</p>
@@ -8665,7 +8665,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> 
 <span class="w">  </span>-v<span class="w"> </span>/mnt/teranode/seed:/mnt/teranode/seed<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--network<span class="w"> </span>my-teranode-network<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--entrypoint<span class="o">=</span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span><span class="m">434394763103</span>.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.8.12<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>ghcr.io/bsv-blockchain/teranode:v0.13.1<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>/app/teranode-cli<span class="w"> </span>seeder<span class="w"> </span>-inputDir<span class="w"> </span>/mnt/teranode/seed<span class="w"> </span>-hash<span class="w"> </span>0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
 </code></pre></div>
 <h3 id="step-3-complete-seeding-process">Step 3: Complete Seeding Process</h3>
