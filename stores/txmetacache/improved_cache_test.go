@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -13,6 +14,9 @@ import (
 )
 
 func init() {
+	if os.Getenv("TERANODE_TXMETACACHE_PPROF_HTTP") != "1" {
+		return
+	}
 	go func() {
 		log.Println("Starting pprof server on http://localhost:6060")
 		//nolint:gosec // G114: Use of net/http serve function that has no support for setting timeouts (gosec)

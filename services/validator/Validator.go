@@ -9,11 +9,13 @@ package validator
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
@@ -67,7 +69,19 @@ const (
 	// not spendable (OP_FALSE OP_RETURN).  This applies to outputs after the
 	// Genesis upgrade.
 	DustLimit = uint64(1)
+
+	// txmetaActionADD represents the ADD action for txmeta batch messages
+	txmetaActionADD = byte(0)
+	// txmetaActionDELETE represents the DELETE action for txmeta batch messages
+	txmetaActionDELETE = byte(1)
 )
+
+// txmetaBatchItem represents an item to be batched for TxMeta Kafka messages.
+type txmetaBatchItem struct {
+	hash      *chainhash.Hash
+	metaBytes []byte
+	isDelete  bool
+}
 
 // Validator implements comprehensive Bitcoin SV transaction validation and manages the complete lifecycle
 // of transactions from initial validation through block assembly integration. This struct serves as the
@@ -112,9 +126,6 @@ type Validator struct {
 	// This client is used to ensure the validator service remains synchronized with the blockchain.
 	blockchainClient blockchain.ClientI
 
-	// saveInParallel indicates if UTXOs should be saved concurrently
-	saveInParallel bool
-
 	// stats tracks validator performance metrics
 	stats *gocore.Stat
 
@@ -123,6 +134,9 @@ type Validator struct {
 
 	// rejectedTxKafkaProducerClient publishes rejected transaction events
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
+
+	// txmetaKafkaBatcher batches TxMeta Kafka messages for efficient publishing
+	txmetaKafkaBatcher *batcher.Batcher[txmetaBatchItem]
 }
 
 // New creates a new Validator instance with the provided configuration.
@@ -145,7 +159,6 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		txValidator:                   NewTxValidator(logger, tSettings),
 		utxoStore:                     store,
 		blockAssembler:                ba,
-		saveInParallel:                true,
 		stats:                         gocore.NewStat("validator"),
 		txmetaKafkaProducerClient:     txMetaKafkaProducerClient,
 		rejectedTxKafkaProducerClient: rejectedTxKafkaProducerClient,
@@ -163,6 +176,19 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 		v.rejectedTxKafkaProducerClient.Start(ctx, make(chan *kafka.Message, 10_000))
+	}
+
+	// Initialize TxMeta Kafka batcher if batch size is configured
+	txmetaKafkaBatchSize := tSettings.Validator.TxMetaKafkaBatchSize
+	txmetaKafkaBatchTimeout := tSettings.Validator.TxMetaKafkaBatchTimeoutMs
+	if txmetaKafkaBatchSize > 0 && v.txmetaKafkaProducerClient != nil {
+		duration := time.Duration(txmetaKafkaBatchTimeout) * time.Millisecond
+		sendBatch := func(batch []*txmetaBatchItem) {
+			v.sendTxMetaBatch(batch)
+		}
+		b := batcher.New(txmetaKafkaBatchSize, duration, sendBatch, true)
+		v.txmetaKafkaBatcher = b
+		logger.Infof("TxMeta Kafka batching enabled: batchSize=%d, timeout=%dms", txmetaKafkaBatchSize, txmetaKafkaBatchTimeout)
 	}
 
 	return v, nil
@@ -280,10 +306,47 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 //   - *meta.Data: Transaction metadata if validation succeeds, includes fee calculations
 //   - error: Detailed validation error if validation fails, nil on success
 func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
-	if txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
+	v.logger.Debugf("[ValidateWithOptions] Validate tx %s", tx.TxID())
+
+	// Retry logic for TX_LOCKED errors with exponential backoff
+	// TX_LOCKED occurs when multiple transactions try to spend the same UTXO concurrently
+	// This should resolve quickly once the first transaction completes, so we use short backoff times
+	const maxRetries = 3
+	const baseBackoff = 10 * time.Millisecond
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions)
+
+		// If no error or not a TX_LOCKED error, return immediately (don't retry)
+		if err == nil || !errors.Is(err, errors.ErrTxLocked) {
+			break
+		}
+
+		// TX_LOCKED error - retry with exponential backoff if not last attempt
+		if attempt < maxRetries-1 {
+			// Exponential backoff: 10ms, 20ms, 40ms
+			backoff := time.Duration(1<<attempt) * baseBackoff
+			if attempt < 2 {
+				v.logger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
+			} else {
+				v.logger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
+			}
+
+			select {
+			case <-ctx.Done():
+				return txMetaData, ctx.Err()
+			case <-time.After(backoff):
+				// Continue to next attempt
+			}
+		} else {
+			v.logger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d attempts, giving up", tx.TxID(), maxRetries)
+		}
+	}
+
+	if err != nil {
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
-			// TODO which errors should we be sending here?
-			if !errors.Is(err, errors.ErrStorageError) && !errors.Is(err, errors.ErrServiceError) && !errors.Is(err, errors.ErrTxMissingParent) {
+			// TODO should this also announce transactions with missing parents etc.?
+			if errors.Is(err, errors.ErrTxInvalid) {
 				if v.blockchainClient != nil {
 					var (
 						state *blockchain.FSMStateType
@@ -431,7 +494,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// get the block heights of all inputs of the transaction and extend the inputs of not extended transaction.
 		// utxoHeights is a slice of block heights for each input
 		// txInpoints is a struct containing the parent tx hashes and the vout indexes of each input
-		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID); err != nil {
+		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
 			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 			span.RecordError(err)
 
@@ -451,7 +514,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// if the transaction was extended, we still need to get the block heights of the inputs
 	// since that processing did not happen before the validateTransaction step
 	if len(utxoHeights) == 0 {
-		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID); err != nil {
+		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
 			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 			span.RecordError(err)
 
@@ -519,7 +582,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			if saveAsConflicting {
 				if txMetaData, utxoMapErr = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, true, false); utxoMapErr != nil {
 					if errors.Is(utxoMapErr, errors.ErrTxExists) {
-						if txMetaData, err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash()); err != nil {
+						txMetaData = &meta.Data{}
+						if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
 							err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, utxoMapErr)
 							span.RecordError(err)
 
@@ -544,7 +608,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// the parent transaction was not found, this can happen when the parent tx has been DAH'd and removed from
 			// the utxo store. We can check whether the tx already exists, which means it has been validated and
 			// blessed. In this case we can just return early.
-			if txMetaData, err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash()); err == nil {
+			txMetaData = &meta.Data{}
+			if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err == nil {
 				v.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", txID)
 
 				return txMetaData, nil
@@ -568,7 +633,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			if errors.Is(err, errors.ErrTxExists) {
 				v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
 
-				if txMetaData, err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash()); err != nil {
+				txMetaData = &meta.Data{}
+				if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
 					return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data from store", txID, err)
 				}
 
@@ -636,14 +702,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 }
 
 // getTransactionInputBlockHeights returns the block heights for each input of the transaction
-func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
+func (v *Validator) getTransactionInputBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, error) {
 	ctx, span, endSpan := tracing.Tracer("validator").Start(ctx, "getTransactionInputBlockHeightsAndExtendTx",
 		tracing.WithHistogram(getTransactionInputBlockHeights),
 	)
 	defer endSpan()
 
 	// get the utxo heights for each input
-	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, txID)
+	utxoHeights, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions)
 	if err != nil {
 		span.RecordError(err)
 		return nil, err
@@ -673,7 +739,7 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 }
 
 // getUtxoBlockHeightsAndExtendTx returns the block heights for each input of the transaction
-func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string) ([]uint32, error) {
+func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) ([]uint32, error) {
 	// get the block heights of the input transactions of the transaction
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(g, v.settings.UtxoStore.GetBatcherSize)
@@ -698,7 +764,7 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 		inputIdxs := idxs
 
 		g.Go(func() error {
-			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, extend); err != nil {
+			if err := v.getUtxoBlockHeightAndExtendForParentTx(gCtx, parentTxHash, inputIdxs, utxoHeights, tx, extend, validationOptions); err != nil {
 				if errors.Is(err, errors.ErrTxNotFound) {
 					return errors.NewTxMissingParentError("[Validate][%s] error getting parent transaction %s", txID, parentTxHash, err)
 				}
@@ -720,7 +786,29 @@ func (v *Validator) getUtxoBlockHeightsAndExtendTx(ctx context.Context, tx *bt.T
 // getUtxoBlockHeightAndExtendForParentTx retrieves the block height for a parent transaction
 // and extends the inputs of the transaction if it is not already extended.
 func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context, parentTxHash chainhash.Hash, idxs []int,
-	utxoHeights []uint32, tx *bt.Tx, extend bool) error {
+	utxoHeights []uint32, tx *bt.Tx, extend bool, validationOptions *Options) error {
+
+	// OPTIMIZATION: Check if parent metadata is provided in options (for in-block parents)
+	// This allows validation without UTXO store lookups for in-block parent transactions
+	// SAFETY: Parent metadata only includes transactions that successfully validated AND created UTXOs
+	// (see check_block_subtrees.go:buildParentMetadata which filters by successful validations)
+	if validationOptions != nil && validationOptions.ParentMetadata != nil {
+		if parentMeta, found := validationOptions.ParentMetadata[parentTxHash]; found {
+			// Use pre-fetched metadata instead of UTXO store lookup
+			// Safe because metadata only includes transactions that completed full validation+storage
+			for _, idx := range idxs {
+				utxoHeights[idx] = parentMeta.BlockHeight
+			}
+
+			// If transaction is already extended, we have all the data we need
+			// The parent metadata optimization works best with pre-extended transactions
+			if !extend {
+				return nil
+			}
+			// Otherwise fall through to UTXO store to get full transaction for extending
+		}
+	}
+
 	f := []fields.FieldName{fields.BlockIDs, fields.BlockHeights}
 
 	if extend {
@@ -737,7 +825,7 @@ func (v *Validator) getUtxoBlockHeightAndExtendForParentTx(gCtx context.Context,
 		// Get atomic block state to ensure consistency
 		blockState := v.utxoStore.GetBlockState()
 		for _, idx := range idxs {
-			utxoHeights[idx] = blockState.Height
+			utxoHeights[idx] = blockState.Height + 1
 		}
 	} else {
 		for _, idx := range idxs {
@@ -808,23 +896,100 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 		v.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", len(metaBytes), len(data.TxInpoints.ParentTxHashes))
 	}
 
-	value, err := proto.Marshal(&kafkamessage.KafkaTxMetaTopicMessage{
-		TxHash:  txHash.String(),
-		Action:  kafkamessage.KafkaTxMetaActionType_ADD,
-		Content: metaBytes,
-	})
-	if err != nil {
-		return err
-	}
+	// Use batcher if available, otherwise send directly
+	if v.txmetaKafkaBatcher != nil {
+		v.txmetaKafkaBatcher.Put(&txmetaBatchItem{
+			hash:      txHash,
+			metaBytes: metaBytes,
+			isDelete:  false,
+		})
+	} else {
+		// Fallback: send single item as batch format for consistency
+		value := serializeTxMetaBatch([]*txmetaBatchItem{{
+			hash:      txHash,
+			metaBytes: metaBytes,
+			isDelete:  false,
+		}})
 
-	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-		Key:   []byte(txHash.String()),
-		Value: value,
-	})
+		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+			Key:   nil,
+			Value: value,
+		})
+	}
 
 	prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 
 	return nil
+}
+
+// sendTxMetaBatch serializes and publishes a batch of TxMeta items to Kafka.
+func (v *Validator) sendTxMetaBatch(batch []*txmetaBatchItem) {
+	if len(batch) == 0 {
+		return
+	}
+
+	value := serializeTxMetaBatch(batch)
+
+	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+		Key:   nil,
+		Value: value,
+	})
+}
+
+// serializeTxMetaBatch serializes a batch of TxMeta items to raw bytes.
+// Format:
+// [4 bytes]  - entry count (uint32, little-endian)
+// For each entry:
+//
+//	[32 bytes] - tx hash (raw bytes)
+//	[1 byte]   - action (0=ADD, 1=DELETE)
+//	[4 bytes]  - content length (uint32, little-endian) - 0 for DELETE
+//	[N bytes]  - content (metaBytes) - only for ADD
+func serializeTxMetaBatch(batch []*txmetaBatchItem) []byte {
+	// Calculate total size
+	size := 4 // entry count
+	for _, item := range batch {
+		size += 32 + 1 + 4 // hash + action + length
+		if !item.isDelete {
+			size += len(item.metaBytes)
+		}
+	}
+
+	buf := make([]byte, size)
+	offset := 0
+
+	// Write entry count
+	binary.LittleEndian.PutUint32(buf[offset:], uint32(len(batch)))
+	offset += 4
+
+	// Write each entry
+	for _, item := range batch {
+		// Write hash (32 bytes)
+		copy(buf[offset:], item.hash[:])
+		offset += 32
+
+		// Write action (1 byte)
+		if item.isDelete {
+			buf[offset] = txmetaActionDELETE
+		} else {
+			buf[offset] = txmetaActionADD
+		}
+		offset++
+
+		// Write content length (4 bytes)
+		if item.isDelete {
+			binary.LittleEndian.PutUint32(buf[offset:], 0)
+			offset += 4
+		} else {
+			binary.LittleEndian.PutUint32(buf[offset:], uint32(len(item.metaBytes)))
+			offset += 4
+			// Write content
+			copy(buf[offset:], item.metaBytes)
+			offset += len(item.metaBytes)
+		}
+	}
+
+	return buf
 }
 
 // spendUtxos attempts to spend the UTXOs referenced by transaction inputs.
@@ -862,9 +1027,9 @@ func (v *Validator) sendToBlockAssembler(ctx context.Context, bData *blockassemb
 
 	_ = reservedUtxos
 
-	if v.settings.Validator.VerboseDebug {
-		v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
-	}
+	// if v.settings.Validator.VerboseDebug {
+	v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
+	// }
 
 	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints); err != nil {
 		e := errors.NewServiceError("error calling blockAssembler Store()", err)

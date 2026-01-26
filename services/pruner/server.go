@@ -2,8 +2,11 @@
 // parents and delete-at-height (DAH) records in the UTXO store.
 //
 // Trigger mechanism (event-driven):
-// 1. Primary: BlockPersisted notifications (when block persister is running)
-// 2. Fallback: Block notifications with mined_set=true check (when persister not running)
+// The pruning trigger mode is controlled by pruner_block_trigger setting:
+//   - "OnBlockPersisted" (default): Pruning triggers on BlockPersisted notifications from block persister.
+//     If block persister is not running, automatically falls back to Block notifications.
+//   - "OnBlockMined": Pruning triggers on Block notifications after block has mined_set=true,
+//     regardless of block persister status.
 //
 // Pruner operations only execute when safe to do so (i.e., when block assembly is in "running"
 // state and not performing reorgs or resets).
@@ -24,8 +27,8 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/pruner/pruner_api"
 	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/stores/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/health"
@@ -35,7 +38,7 @@ import (
 
 // Server implements the Pruner service which handles periodic pruner operations
 // for the UTXO store. It uses event-driven triggers: BlockPersisted notifications (primary)
-// and Block notifications with mined_set check (fallback when persister not running).
+// and Block notifications with mined_set wait (fallback when persister not running or forced via setting).
 type Server struct {
 	pruner_api.UnsafePrunerAPIServer
 
@@ -104,9 +107,16 @@ func (s *Server) Init(ctx context.Context) error {
 	// Set persisted height getter for block persister coordination
 	s.prunerService.SetPersistedHeightGetter(s.GetLastPersistedHeight)
 
+	// Validate block trigger mode
+	blockTrigger := s.settings.Pruner.BlockTrigger
+	if blockTrigger != settings.PrunerBlockTriggerOnBlockPersisted && blockTrigger != settings.PrunerBlockTriggerOnBlockMined {
+		return errors.NewConfigurationError("pruner_block_trigger must be either '%s' or '%s' (got '%s')",
+			settings.PrunerBlockTriggerOnBlockPersisted, settings.PrunerBlockTriggerOnBlockMined, blockTrigger)
+	}
+
 	// Subscribe to blockchain notifications for event-driven pruning:
 	// - BlockPersisted: Triggers pruning when block persister completes (primary)
-	// - Block: Checks mined_set=true and triggers if persister not running (fallback)
+	// - Block: Waits for mined_set=true and triggers if persister not running (fallback)
 	// Also tracks persisted height for coordination with store-level pruner safety checks
 	subscriptionCh, err := s.blockchainClient.Subscribe(ctx, "Pruner")
 	if err != nil {
@@ -118,21 +128,34 @@ func (s *Server) Init(ctx context.Context) error {
 		for notification := range subscriptionCh {
 			switch notification.Type {
 			case model.NotificationType_BlockPersisted:
+				// Skip BlockPersisted notifications if using OnBlockMined trigger mode
+				if s.settings.Pruner.BlockTrigger == settings.PrunerBlockTriggerOnBlockMined {
+					s.logger.Debugf("Ignoring BlockPersisted notification (pruner_block_trigger=%s)", s.settings.Pruner.BlockTrigger)
+					continue
+				}
+
 				// Track persisted height for coordination with block persister
 				if notification.Metadata != nil && notification.Metadata.Metadata != nil {
 					if heightStr, ok := notification.Metadata.Metadata["height"]; ok {
 						if height, err := strconv.ParseUint(heightStr, 10, 32); err == nil {
 							height32 := uint32(height)
-							s.lastPersistedHeight.Store(height32)
-							s.logger.Debugf("Updated persisted height to %d", height32)
+							oldHeight := s.lastPersistedHeight.Swap(height32)
+
+							// Log at INFO level when Block Persister first becomes active (transition from 0)
+							if oldHeight == 0 && height32 > 0 {
+								s.logger.Infof("Block Persister is now active, pruner will follow BlockPersisted notifications (persisted height: %d)", height32)
+							} else {
+								s.logger.Debugf("Updated persisted height to %d", height32)
+							}
 
 							// Trigger pruning when block persister completes a block
 							if height32 > s.lastProcessedHeight.Load() {
 								// Try to queue pruning (non-blocking - channel has buffer of 1)
 								select {
 								case s.prunerCh <- height32:
-									s.logger.Debugf("Queued pruning for height %d from BlockPersisted notification", height32)
+									s.logger.Infof("Queued pruning for height %d from BlockPersisted notification", height32)
 								default:
+									s.logger.Warnf("Pruner channel full, skipping height %d (pruner already running)", height32)
 								}
 							}
 						}
@@ -140,14 +163,17 @@ func (s *Server) Init(ctx context.Context) error {
 				}
 
 			case model.NotificationType_Block:
-				// Fallback trigger: if block persister is not running, check if block has mined_set=true
+				// Fallback trigger: if block persister is not running, wait for block to have mined_set=true
+				// Check if we should ignore block persister height
 				persistedHeight := s.lastPersistedHeight.Load()
-				if persistedHeight > 0 {
-					// Block persister is running - BlockPersisted notifications will handle pruning
+
+				// Skip Block notifications if using OnBlockPersisted trigger mode AND persister is running
+				if s.settings.Pruner.BlockTrigger == settings.PrunerBlockTriggerOnBlockPersisted {
+					s.logger.Debugf("Block notification received but pruner configured for BlockPersisted trigger (persisted height: %d)", persistedHeight)
 					continue
 				}
 
-				// Block persister not running - check if block has mined_set=true before triggering
+				// Block persister not running - wait for block to have mined_set=true before triggering
 				if notification.Hash == nil {
 					s.logger.Debugf("Block notification missing hash, skipping")
 					continue
@@ -159,15 +185,8 @@ func (s *Server) Init(ctx context.Context) error {
 					continue
 				}
 
-				// Check if block has mined_set=true (block validation completed)
-				isMined, err := s.blockchainClient.GetBlockIsMined(ctx, blockHash)
-				if err != nil {
-					s.logger.Debugf("Failed to check mined_set status for block %s: %v", blockHash, err)
-					continue
-				}
-
-				if !isMined {
-					s.logger.Debugf("Block %s has mined_set=false, skipping pruning trigger", blockHash)
+				// Wait for block to have mined_set=true (block validation completed)
+				if !s.waitForBlockMinedStatus(ctx, blockHash) {
 					continue
 				}
 
@@ -182,8 +201,9 @@ func (s *Server) Init(ctx context.Context) error {
 					// Try to queue pruning (non-blocking - channel has buffer of 1)
 					select {
 					case s.prunerCh <- state.CurrentHeight:
-						s.logger.Debugf("Queued pruning for height %d from Block notification (mined_set=true)", state.CurrentHeight)
+						s.logger.Infof("Queued pruning for height %d from Block notification (mined_set=true)", state.CurrentHeight)
 					default:
+						s.logger.Warnf("Pruner channel full, skipping height %d (pruner already running)", state.CurrentHeight)
 					}
 				}
 			}
@@ -226,7 +246,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Note: Polling worker not needed - pruning is triggered by:
 	// 1. BlockPersisted notifications (when block persister is running)
-	// 2. Block notifications with mined_set check (when persister not running)
+	// 2. Block notifications with mined_set wait (when persister not running)
 
 	// Start gRPC server (BLOCKING - must be last)
 	if err := util.StartGRPCServer(ctx, s.logger, s.settings, "pruner",

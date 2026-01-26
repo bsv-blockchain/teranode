@@ -10,18 +10,24 @@
 | P2PPrivateKey | string | "" | alert_p2p_private_key | PEM-format private key. Auto-generates if empty |
 | ProtocolID | string | "/bitcoin/alert-system/1.0.0" | alert_protocol_id | libp2p protocol identifier |
 | StoreURL | *url.URL | "sqlite:///alert" | alert_store | Database connection URL |
-| TopicName | string | "bitcoin_alert_system" | alert_topic_name | P2P pubsub topic (auto-prefixed for testnet/regtest) |
-| P2PPort | int | 9908 | ALERT_P2P_PORT | P2P listening port (must be >= 10) |
+| TopicName | string | "bitcoin_alert_system" | alert_topic_name | P2P pubsub topic (auto-suffixed for testnet/regtest) |
+| P2PPort | int | 9908 | ALERT_P2P_PORT | P2P listening port (string length >= 2 after PORT_PREFIX applied) |
 
 ## Network-Specific Behavior
 
-**Topic Name Prefixing:**
+**Topic Name Suffixing:**
 
 - Mainnet: Uses configured `TopicName` as-is
-- Testnet: Auto-prefixed as `{TopicName}_testnet`
-- Regtest: Auto-prefixed as `{TopicName}_regtest`
+- Testnet: Auto-suffixed as `{TopicName}_testnet`
+- Regtest: Auto-suffixed as `{TopicName}_regtest`
 
 This behavior cannot be overridden.
+
+**PORT_PREFIX Support:**
+
+The global `PORT_PREFIX` environment variable is prepended to `P2PPort` if set.
+
+Example: `PORT_PREFIX=1` with `ALERT_P2P_PORT=9908` results in port 19908.
 
 ## Auto-Generation Behavior
 
@@ -69,7 +75,7 @@ This behavior cannot be overridden.
 |---------|------------|-------|-------------|
 | GenesisKeys | Must not be empty | `config.ErrNoGenesisKeys` | During `Init()` |
 | P2P.IP | Length >= 5 characters | `config.ErrNoP2PIP` | During `Init()` |
-| P2P.Port | Length >= 2 characters (>= 10) | `config.ErrNoP2PPort` | During `Init()` |
+| P2P.Port | String length >= 2 characters | `config.ErrNoP2PPort` | During `Init()` |
 | StoreURL | Supported scheme (sqlite/sqlitememory/postgres/mysql) | `ErrDatastoreUnsupported` | During `Init()` |
 
 

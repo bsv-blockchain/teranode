@@ -491,6 +491,7 @@ Transactions in standard Bitcoin format are extended in-memory for validation:
     - Searches for parent transactions within same block first
     - Falls back to UTXO store for external parents
     - Waits for parent extension if it's being processed concurrently
+
 3. **Input Population**: Sets `PreviousTxSatoshis` and `PreviousTxScript` for each input
 4. **Concurrency Control**: Uses errgroup with configurable limits (`GetBlockTransactionsConcurrency`)
 

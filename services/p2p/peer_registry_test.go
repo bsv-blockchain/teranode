@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -260,6 +261,39 @@ func TestPeerRegistry_GetPeerReturnsCopy(t *testing.T) {
 	// Original in registry should be unchanged
 	info3, _ := pr.Get(peerID)
 	assert.Equal(t, uint32(100), info3.Height)
+}
+
+func TestPeerRegistry_ClearAllSyncAttempts(t *testing.T) {
+	pr := NewPeerRegistry()
+
+	peer1 := peer.ID("peer-1")
+	peer2 := peer.ID("peer-2")
+	peer3 := peer.ID("peer-3")
+
+	pr.Put(peer1, "", 0, nil, "")
+	pr.Put(peer2, "", 0, nil, "")
+	pr.Put(peer3, "", 0, nil, "")
+
+	// Set LastSyncAttempt for peer1 and peer2
+	pr.RecordSyncAttempt(peer1)
+	pr.RecordSyncAttempt(peer2)
+
+	info1, _ := pr.Get(peer1)
+	info2, _ := pr.Get(peer2)
+	info3, _ := pr.Get(peer3)
+	require.False(t, info1.LastSyncAttempt.IsZero())
+	require.False(t, info2.LastSyncAttempt.IsZero())
+	require.True(t, info3.LastSyncAttempt.IsZero())
+
+	cleared := pr.ClearAllSyncAttempts()
+	assert.Equal(t, 2, cleared, "Should clear sync attempts for peers with non-zero LastSyncAttempt")
+
+	info1, _ = pr.Get(peer1)
+	info2, _ = pr.Get(peer2)
+	info3, _ = pr.Get(peer3)
+	assert.True(t, info1.LastSyncAttempt.IsZero())
+	assert.True(t, info2.LastSyncAttempt.IsZero())
+	assert.True(t, info3.LastSyncAttempt.IsZero())
 }
 
 // Catchup-related tests
@@ -547,4 +581,80 @@ func TestPeerRegistry_CatchupMetrics_ConcurrentAccess(t *testing.T) {
 	assert.Equal(t, int64(50), info.InteractionSuccesses)
 	assert.Equal(t, int64(30), info.InteractionFailures)
 	assert.NotZero(t, info.AvgResponseTime)
+}
+
+func TestSanitizePeerName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "normal name",
+			input:    "Bitcoin-SV-Node-1.0",
+			expected: "Bitcoin-SV-Node-1.0",
+		},
+		{
+			name:     "name with spaces",
+			input:    "My Bitcoin Node",
+			expected: "My Bitcoin Node",
+		},
+		{
+			name:     "XSS attempt with script tags",
+			input:    "<script>alert('xss')</script>",
+			expected: "scriptalert(xss)/script",
+		},
+		{
+			name:     "HTML injection attempt",
+			input:    "<img src=x onerror=alert(1)>",
+			expected: "img src=x onerror=alert(1)",
+		},
+		{
+			name:     "name too long",
+			input:    strings.Repeat("A", 200),
+			expected: strings.Repeat("A", maxPeerNameLength),
+		},
+		{
+			name:     "control characters",
+			input:    "Node\x00\x01\x02\x03Name",
+			expected: "NodeName",
+		},
+		{
+			name:     "special chars removed",
+			input:    "Node<>&'\"\\Name",
+			expected: "NodeName",
+		},
+		{
+			name:     "unicode characters removed",
+			input:    "Node™®©Name",
+			expected: "NodeName",
+		},
+		{
+			name:     "safe punctuation allowed",
+			input:    "teranode-v1.0_test/node.1",
+			expected: "teranode-v1.0_test/node.1",
+		},
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "whitespace only",
+			input:    "   ",
+			expected: "",
+		},
+		{
+			name:     "leading and trailing whitespace",
+			input:    "  Node Name  ",
+			expected: "Node Name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := sanitizePeerName(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }

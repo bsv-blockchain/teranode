@@ -58,7 +58,7 @@ func testLongestChainSimple(t *testing.T, utxoStore string) {
 	// td.VerifyInBlockAssembly(t, tx2)
 
 	_, block4a := td.CreateTestBlock(t, block3, 4001, tx1)
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", nil, false), "Failed to process block")
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", false), "Failed to process block")
 	td.WaitForBlock(t, block4a, blockWait)
 	td.WaitForBlockBeingMined(t, block4a)
 
@@ -68,7 +68,7 @@ func testLongestChainSimple(t *testing.T, utxoStore string) {
 	td.VerifyOnLongestChainInUtxoStore(t, tx1)
 
 	_, block4b := td.CreateTestBlock(t, block3, 4002, tx2)
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4b, "legacy", nil, false), "Failed to process block")
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4b, "legacy", false), "Failed to process block")
 	td.WaitForBlockBeingMined(t, block4b)
 
 	time.Sleep(1 * time.Second) // give some time for the block to be processed
@@ -83,7 +83,7 @@ func testLongestChainSimple(t *testing.T, utxoStore string) {
 	td.VerifyNotOnLongestChainInUtxoStore(t, tx2)
 
 	_, block5b := td.CreateTestBlock(t, block4b, 5002) // empty block
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5b, "legacy", nil, false, false), "Failed to process block")
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5b, "legacy", false, false), "Failed to process block")
 	td.WaitForBlock(t, block5b, blockWait)
 	td.WaitForBlockBeingMined(t, block5b)
 
@@ -98,10 +98,10 @@ func testLongestChainSimple(t *testing.T, utxoStore string) {
 	td.VerifyOnLongestChainInUtxoStore(t, tx2)
 
 	_, block5a := td.CreateTestBlock(t, block4a, 5001) // empty block
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "legacy", nil, false, false), "Failed to process block")
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "legacy", false, false), "Failed to process block")
 
 	_, block6a := td.CreateTestBlock(t, block5a, 6001) // empty block
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block6a, "legacy", nil, false, false), "Failed to process block")
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block6a, "legacy", false, false), "Failed to process block")
 	td.WaitForBlock(t, block6a, blockWait)
 	td.WaitForBlockBeingMined(t, block6a)
 
@@ -132,7 +132,7 @@ func testLongestChainInvalidateBlock(t *testing.T, utxoStore string) {
 
 	_, block4a := td.CreateTestBlock(t, block3, 4001, tx1)
 	// require.NoError(t, td.BlockValidationClient.ProcessBlock(td.Ctx, block4a, block4a.Height, "legacy", ""))
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", nil, false, true), "Failed to process block")
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", false, true), "Failed to process block")
 	td.WaitForBlock(t, block4a, blockWait)
 	td.WaitForBlockBeingMined(t, block4a)
 	t.Logf("block3: %s", block3.Hash().String())
@@ -181,7 +181,7 @@ func testLongestChainInvalidateBlockWithOldTx(t *testing.T, utxoStore string) {
 	td.VerifyInBlockAssembly(t, tx2)
 
 	_, block4a := td.CreateTestBlock(t, block3, 4001, tx2)
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", nil, false, true), "Failed to process block")
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block4a, "legacy", false, true), "Failed to process block")
 	td.WaitForBlock(t, block4a, blockWait)
 	td.WaitForBlockBeingMined(t, block4a)
 
@@ -195,7 +195,7 @@ func testLongestChainInvalidateBlockWithOldTx(t *testing.T, utxoStore string) {
 	// create a block with tx1 and tx2 that will be invalid as tx2 is already on block4a
 	_, block5a := td.CreateTestBlock(t, block4a, 5001, tx1, tx2)
 	// processing the block as "test" will allow us to do optimistic mining
-	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "test", nil, false), "Failed to process block")
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block5a, "test", false), "Failed to process block")
 
 	td.WaitForBlock(t, block5a, blockWait)
 

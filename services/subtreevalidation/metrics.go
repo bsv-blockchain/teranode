@@ -77,12 +77,6 @@ var (
 	// This counter tracks how often errors occur when updating the transaction metadata cache
 	// from Kafka messages, which helps identify issues with the cache or Kafka connection.
 	prometheusSubtreeValidationSetTXMetaCacheKafkaErrors prometheus.Counter
-
-	// prometheusSubtreeValidationPauseDuration tracks the duration of subtree processing pauses.
-	// This histogram measures how long the distributed pause lock is held during block validation,
-	// which is critical for detecting when pauses exceed expected durations and may indicate
-	// issues with block validation or lock release mechanisms.
-	prometheusSubtreeValidationPauseDuration prometheus.Histogram
 )
 
 var (
@@ -189,16 +183,6 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreevalidation",
 			Name:      "set_tx_meta_cache_kafka_errors",
 			Help:      "Number of errors setting tx meta cache from kafka",
-		},
-	)
-
-	prometheusSubtreeValidationPauseDuration = promauto.NewHistogram(
-		prometheus.HistogramOpts{
-			Namespace: "teranode",
-			Subsystem: "subtreevalidation",
-			Name:      "pause_duration",
-			Help:      "Duration of subtree processing pauses (in seconds)",
-			Buckets:   prometheus.ExponentialBuckets(0.1, 2, 12), // 0.1s to ~6.8 minutes
 		},
 	)
 }

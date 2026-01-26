@@ -583,6 +583,21 @@ type ClientI interface {
 	// - Error if the operation fails, nil on success
 	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
 
+	// ClearBlockMinedSet resets the mined_set flag to false for a block.
+	//
+	// This method resets a block's mined_set flag, triggering background job processing
+	// to re-evaluate and update transaction states. Used during fork handling when blocks
+	// move from the main chain to a side chain, ensuring transactions are correctly marked
+	// as unmined and allowing the background job to re-process them based on current chain state.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - blockHash: Hash of the block to reset
+	//
+	// Returns:
+	// - Error if the operation fails, nil on success
+	ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+
 	// GetBlockIsMined retrieves whether a block has been marked as mined
 	//
 	// This method checks if a specific block has been flagged as successfully mined
@@ -641,6 +656,34 @@ type ClientI interface {
 	// - Error if the timestamp update fails, nil on success
 	SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error
 
+	// SetBlockPersistedAt sets the persisted_at timestamp for a block.
+	//
+	// This method updates the timestamp indicating when a block was persisted to blob storage.
+	// This information is used by the block persister to track which blocks have been persisted.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - blockHash: Hash of the block to update the persisted_at timestamp for
+	//
+	// Returns:
+	// - Error if the timestamp update fails, nil on success
+	SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error
+
+	// GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+	//
+	// This method fetches blocks where persisted_at IS NULL and invalid = false, ordered by
+	// height ascending. The limit parameter controls the maximum number of blocks returned
+	// per call, which is useful for batching persistence operations.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - limit: Maximum number of blocks to retrieve
+	//
+	// Returns:
+	// - Array of Block structures containing blocks not yet persisted
+	// - Error if the retrieval fails
+	GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error)
+
 	// GetBlocksSubtreesNotSet retrieves blocks with unset subtrees.
 	//
 	// This method fetches information about blocks for which the subtree hash structure
@@ -684,6 +727,24 @@ type ClientI interface {
 	// - Boolean indicating whether all the blocks are in the main chain (true) or not (false)
 	// - Error if the check operation fails
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
+
+	// CheckBlockIsAncestorOfBlock checks if any of the given block IDs are ancestors of the block with the given hash.
+	//
+	// This is used for double-spend detection on fork blocks where we need to check against
+	// the fork's ancestor chain rather than the main chain. When processing a fork block,
+	// we need to verify that transactions were not already mined in ancestor blocks of that
+	// specific fork, not the main chain. This allows the same transaction to legitimately
+	// exist in blocks on different competing chains.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - blockIDs: Array of block IDs to check for ancestry
+	// - blockHash: Hash of the block to check ancestry against
+	//
+	// Returns:
+	// - Boolean indicating whether any of the block IDs are ancestors of the specified block
+	// - Error if the check operation fails
+	CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error)
 
 	// GetChainTips retrieves information about all known tips in the block tree.
 	//

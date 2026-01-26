@@ -34,6 +34,7 @@ nav:
           - Installation:
               - Docker: howto/miners/docker/minersHowToInstallation.md
               - Kubernetes: howto/miners/kubernetes/minersHowToInstallation.md
+              - AWS POC Setup: staging/TeranodePOC/AWS-POC-Setup.md
               - Deprecated: howto/miners/kubernetes/minersHowToInstallationDeprecated.md
           - Configuration:
               - Docker: howto/miners/docker/minersHowToConfigureTheNode.md
@@ -197,7 +198,7 @@ markdown_extensions:
   - pymdownx.caret
 
 
-copyright: "Copyright © 2025 BSV Blockchain Org."
+copyright: "Copyright © 2026 BSV Blockchain Org."
 
 extra:
   generator: false  # Hides "Made with Material for MkDocs"

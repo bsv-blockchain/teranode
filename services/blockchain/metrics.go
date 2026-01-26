@@ -37,6 +37,7 @@ var (
 	prometheusBlockchainGetBlockExists                       prometheus.Histogram
 	prometheusBlockchainGetBestBlockHeader                   prometheus.Histogram
 	prometheusBlockchainCheckBlockIsInCurrentChain           prometheus.Histogram
+	prometheusBlockchainCheckBlockIsAncestorOfBlock          prometheus.Histogram
 	prometheusBlockchainGetChainTips                         prometheus.Histogram
 	prometheusBlockchainGetBlockHeader                       prometheus.Histogram
 	prometheusBlockchainGetBlockHeaders                      prometheus.Histogram
@@ -53,6 +54,8 @@ var (
 	prometheusBlockchainGetBlockIsMined                      prometheus.Histogram
 	prometheusBlockchainSetBlockMinedSet                     prometheus.Histogram
 	prometheusBlockchainGetBlocksMinedNotSet                 prometheus.Histogram
+	prometheusBlockchainSetBlockPersistedAt                  prometheus.Histogram
+	prometheusBlockchainGetBlocksNotPersisted                prometheus.Histogram
 	prometheusBlockchainSetBlockSubtreesSet                  prometheus.Histogram
 	prometheusBlockchainGetBlocksSubtreesNotSet              prometheus.Histogram
 	prometheusBlockchainFSMCurrentState                      prometheus.Gauge
@@ -206,6 +209,16 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockchain",
 			Name:      "check_block_is_in_current_chain",
 			Help:      "Histogram of CheckBlockIsInCurrentChain calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainCheckBlockIsAncestorOfBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "check_block_is_ancestor_of_block",
+			Help:      "Histogram of CheckBlockIsAncestorOfBlock calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
@@ -366,6 +379,26 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockchain",
 			Name:      "get_blocks_mined_not_set",
 			Help:      "Histogram of GetBlocksMinedNotSet calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainSetBlockPersistedAt = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "set_block_persisted_at",
+			Help:      "Histogram of SetBlockPersistedAt calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainGetBlocksNotPersisted = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "get_blocks_not_persisted",
+			Help:      "Histogram of GetBlocksNotPersisted calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

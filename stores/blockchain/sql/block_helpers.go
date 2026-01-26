@@ -100,10 +100,12 @@ func (s *SQL) scanBlockRow(rows *sql.Rows) (*model.BlockInfo, error) {
 			info.CoinbaseValue += output.Satoshis
 		}
 
-		// Extract miner information
+		// Extract miner information - handle errors gracefully for invalid blocks
 		info.Miner, err = util.ExtractCoinbaseMiner(coinbaseTx)
 		if err != nil {
-			return nil, errors.NewProcessingError("failed to extract miner", err)
+			// For invalid blocks, the coinbase may be malformed, so we just log and continue
+			s.logger.Debugf("failed to extract miner (block may be invalid): %v", err)
+			info.Miner = ""
 		}
 	}
 

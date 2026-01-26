@@ -29,9 +29,7 @@ import (
 )
 
 func TestTracing(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	tSettings := settings.NewSettings()
 	tSettings.TracingEnabled = true
 	tSettings.TracingSampleRate = 1.0
@@ -63,9 +61,7 @@ func TestTracing(t *testing.T) {
 }
 
 func TestSendTxAndCheckState(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
@@ -261,9 +257,6 @@ func TestSendTxAndCheckState(t *testing.T) {
 
 func TestSendTxDeleteParentResendTx(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	var err error
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -348,9 +341,7 @@ func TestSendTxDeleteParentResendTx(t *testing.T) {
 }
 
 func TestSendTxAndCheckStateWithDuplicateTxSentSimultaneously(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	var err error
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -582,9 +573,7 @@ func TestSendTxAndCheckStateWithDuplicateTxSentSimultaneously(t *testing.T) {
 }
 
 func TestDuplicateTransactionAfterMining(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	var err error
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -672,9 +661,7 @@ func TestDuplicateTransactionAfterMining(t *testing.T) {
 }
 
 func TestShouldNotProcessNonFinalTx(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
 		UTXOStoreType: "aerospike",
@@ -763,9 +750,7 @@ func TestShouldNotProcessNonFinalTx(t *testing.T) {
 }
 
 func TestShouldRejectOversizedTx(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
 		UTXOStoreType: "aerospike",
@@ -865,9 +850,6 @@ func TestShouldRejectOversizedTx(t *testing.T) {
 
 func TestShouldRejectOversizedScript(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
 		UTXOStoreType: "aerospike",
@@ -957,9 +939,7 @@ func TestShouldRejectOversizedScript(t *testing.T) {
 }
 
 func TestDoubleInput(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -999,9 +979,7 @@ func TestDoubleInput(t *testing.T) {
 }
 
 func TestGetBestBlockHash(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1036,9 +1014,7 @@ func TestGetBestBlockHash(t *testing.T) {
 }
 
 func TestGetPeerInfo(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1071,9 +1047,7 @@ func TestGetPeerInfo(t *testing.T) {
 }
 
 func TestGetMiningInfo(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1112,9 +1086,7 @@ func TestGetMiningInfo(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1153,9 +1125,7 @@ func TestVersion(t *testing.T) {
 }
 
 func TestGetBlockVerbosity(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1241,9 +1211,7 @@ func TestGetBlockVerbosity(t *testing.T) {
 }
 
 func TestGetBlockHeaderVerbose(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1329,8 +1297,7 @@ func TestGetBlockHeaderVerbose(t *testing.T) {
 }
 
 func TestGetRawTransactionVerbose(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
+	// t.Parallel()
 	// t.Skip("Skipping getrawtransaction verbose test, covered by TestSendTxAndCheckState")
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -1467,9 +1434,7 @@ func TestGetRawTransactionVerbose(t *testing.T) {
 }
 
 func TestCreateAndSendRawTransaction(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	// aerospike
 	// utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
 	// require.NoError(t, err, "Failed to setup Aerospike container")
@@ -1482,6 +1447,7 @@ func TestCreateAndSendRawTransaction(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
+		UTXOStoreType:   "aerospike",
 		SettingsOverrideFunc: test.ComposeSettings(
 			test.SystemTestSettings(),
 			func(settings *settings.Settings) {
@@ -1620,9 +1586,7 @@ func TestCreateAndSendRawTransaction(t *testing.T) {
 }
 
 func TestGetMiningCandidate(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1747,9 +1711,7 @@ func generateRandomAddress(network string) (string, error) {
 }
 
 func TestGenerateToAddress(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1805,9 +1767,7 @@ func TestGenerateToAddress(t *testing.T) {
 }
 
 func TestBlockManagement(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
+	// t.Parallel()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		UTXOStoreType:        "aerospike",
@@ -1869,9 +1829,6 @@ func TestBlockManagement(t *testing.T) {
 
 func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	// aerospike
 	// utxoStoreURL, teardown, err := aerospike.InitAerospikeContainer()
 	// require.NoError(t, err, "Failed to setup Aerospike container")
@@ -1907,8 +1864,8 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 			// s.UtxoStore.UtxoStore = parsedURL
 			s.ChainCfgParams.CoinbaseMaturity = 2
 		},
-		FSMState:          blockchain.FSMStateRUNNING,
-		EnableFullLogging: true,
+		FSMState:           blockchain.FSMStateRUNNING,
+		EnableDebugLogging: true,
 	})
 	defer nodeA.Stop(t)
 
@@ -2048,20 +2005,20 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 	require.NoError(t, err, "Failed to get block 2 from NodeA")
 	_, block3BNodeA := nodeA.CreateTestBlock(t, block2, 3, parentTx, nodeBChildTx)
 	require.NoError(t, err, "Failed to create block 3 on NodeA")
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3BNodeA, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3BNodeA, "legacy")
 	require.NoError(t, err, "Failed to validate block 3 on NodeA")
 	// nodeA.WaitForBlock(t, block3BNodeA, 10*time.Second, true)
 
 	// make this chain longer on NodeA by adding another test block
 	_, block4BNodeA := nodeA.CreateTestBlock(t, block3BNodeA, 4, nodeBGrandchildTx)
 	require.NoError(t, err, "Failed to create block 4 on NodeA")
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4BNodeA, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4BNodeA, "legacy")
 	require.NoError(t, err, "Failed to validate block 4 on NodeA")
 
 	// create one more block on NodeA
 	_, block5BNodeA := nodeA.CreateTestBlock(t, block4BNodeA, 5)
 	require.NoError(t, err, "Failed to create block 5 on NodeA")
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block5BNodeA, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block5BNodeA, "legacy")
 	require.NoError(t, err, "Failed to validate block 5 on NodeA")
 
 	nodeA.WaitForBlock(t, block5BNodeA, 10*time.Second, true) // this fork on NodeA should be winning
@@ -2153,9 +2110,6 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 
 func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 	t.Skip()
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	var err error
 
 	// Start NodeA
@@ -2253,28 +2207,28 @@ func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 	require.NoError(t, err)
 
 	_, block3 := nodeA.CreateTestBlock(t, block2, 1000)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3, "legacy")
 	require.NoError(t, err)
 	nodeA.WaitForBlock(t, block3, 10*time.Second, true)
 
 	// mine upto GlobalBlockHeightRetention
 	_, block4 := nodeA.CreateTestBlock(t, block3, 1001)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4, "legacy")
 	require.NoError(t, err)
 	nodeA.WaitForBlock(t, block4, 10*time.Second, true)
 
 	_, block5 := nodeA.CreateTestBlock(t, block4, 1002)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block5, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block5, "legacy")
 	require.NoError(t, err)
 	nodeA.WaitForBlock(t, block5, 10*time.Second, true)
 
 	_, invalidblock6 := nodeA.CreateTestBlock(t, block5, 1003, childTx)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, invalidblock6, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, invalidblock6, "legacy")
 	require.Error(t, err)
 
 	// create a block with both transactions
 	_, block6 := nodeA.CreateTestBlock(t, block5, 1004, parentTx, childTx)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block6, "legacy", nil)
+	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block6, "legacy")
 	require.NoError(t, err)
 	nodeA.WaitForBlockHeight(t, block6, 10*time.Second, true)
 	nodeA.WaitForBlock(t, block6, 10*time.Second, true)

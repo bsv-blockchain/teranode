@@ -56,12 +56,12 @@
 
 ## Validation Rules
 
-| Setting | Validation | Impact |
-|---------|------------|--------|
-| GRPCListenAddress | Service startup conditional | Service availability |
-| HTTPListenAddress | HTTP server startup conditional | API availability |
-| VerboseDebug | Controls logging verbosity | Performance and diagnostics |
-| HTTPRateLimit | Rate limiting enforcement | Resource protection |
+| Setting | Validation | Impact | When Checked |
+|---------|------------|--------|-------------|
+| GRPCListenAddress | Service startup conditional | Service availability | During daemon startup |
+| HTTPListenAddress | HTTP server startup conditional | API availability | During service initialization |
+| VerboseDebug | Controls logging verbosity | Performance and diagnostics | During validation operations |
+| HTTPRateLimit | Rate limiting enforcement | Resource protection | During HTTP middleware setup |
 
 ## Configuration Examples
 

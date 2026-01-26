@@ -17,7 +17,6 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
-	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -38,7 +37,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
-	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -105,7 +103,7 @@ type revalidateBlockData struct {
 }
 
 // BlockValidation handles the core validation logic for blocks in Teranode.
-// It manages block validation, subtree processing, and bloom filter creation.
+// It manages block validation and subtree processing.
 type BlockValidation struct {
 	// logger provides structured logging capabilities
 	logger ulogger.Logger
@@ -131,12 +129,6 @@ type BlockValidation struct {
 	// validatorClient handles transaction validation operations
 	validatorClient validator.Interface
 
-	// recentBlocksBloomFilters maintains bloom filters for recent blocks
-	recentBlocksBloomFilters *txmap.SyncedMap[chainhash.Hash, *model.BlockBloomFilter]
-
-	// bloomFilterRetentionSize defines the number of blocks to keep bloom filters for
-	bloomFilterRetentionSize uint32
-
 	// subtreeValidationClient manages subtree validation processes
 	subtreeValidationClient subtreevalidation.Interface
 
@@ -160,12 +152,6 @@ type BlockValidation struct {
 
 	// blocksCurrentlyValidating tracks blocks being validated to prevent concurrent validation
 	blocksCurrentlyValidating *txmap.SyncedMap[chainhash.Hash, *validationResult]
-
-	// blockBloomFiltersBeingCreated tracks bloom filters being generated
-	blockBloomFiltersBeingCreated *txmap.SwissMap
-
-	// bloomFilterStats collects statistics about bloom filter operations
-	bloomFilterStats *model.BloomStats
 
 	// setMinedChan receives block hashes that need to be marked as mined
 	setMinedChan chan *chainhash.Hash
@@ -198,7 +184,6 @@ type BlockValidation struct {
 //   - validatorClient: Transaction validation interface
 //   - subtreeValidationClient: Subtree validation interface
 //   - opts: Optional parameters:
-//   - bloomRetentionSize: Length of last X blocks to retain bloom filters
 //
 // Returns a configured BlockValidation instance ready for use.
 func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, subtreeStore blob.Store,
@@ -233,8 +218,6 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		txStore:                       txStore,
 		utxoStore:                     utxoStore,
 		validatorClient:               validatorClient,
-		recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-		bloomFilterRetentionSize:      tSettings.GetSubtreeValidationBlockHeightRetention() + 2, // Needs to be larger than global value but not orders of magnitude larger
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(tSettings.GetSubtreeValidationBlockHeightRetention()),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
@@ -244,8 +227,6 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		subtreeCount:                  atomic.Int32{},
 		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
 		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
-		blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
-		bloomFilterStats:              model.NewBloomStats(),
 		setMinedChan:                  make(chan *chainhash.Hash, 1000),
 		revalidateBlockChan:           make(chan revalidateBlockData, 2),
 		stats:                         gocore.NewStat("blockvalidation"),
@@ -325,10 +306,49 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 								continue
 							}
 
-							if notification.Type == model.NotificationType_Block {
+							// IMPORTANT: We listen for BlockSubtreesSet, NOT NotificationType_Block.
+							//
+							// HOW THIS NOTIFICATION IS TRIGGERED:
+							// Both validation paths call updateSubtreesDAH() after validation completes:
+							//
+							// Normal Validation (ValidateBlock):
+							//   ValidateBlock() → updateSubtreesDAH() → SetBlockSubtreesSet() → notification
+							//
+							// Quick Validation (Catchup):
+							//   quickValidateBlock() → goroutines complete via errgroup.Wait()
+							//   → updateSubtreesDAH() → SetBlockSubtreesSet() → notification
+							//
+							// TIMING GUARANTEES:
+							// BlockSubtreesSet is sent AFTER:
+							// 1. Block validation completes (all consensus rules checked)
+							// 2. All goroutines that write to block.SubtreeSlices have finished (errgroup.Wait)
+							// 3. updateSubtreesDAH() has updated the DAH values for all subtrees
+							// 4. blockchainClient.SetBlockSubtreesSet() is called and sends this notification
+							//
+							// WHY THIS PREVENTS DATA RACES:
+							// Using NotificationType_Block (sent when block is added to chain) would trigger
+							// setTxMined too early, before validation goroutines complete. This caused:
+							// - Thread A (validation): Spawns goroutines writing to block.SubtreeSlices
+							// - Thread A: Caches the block with SubtreeSlices populated
+							// - Thread B (setTxMined): Retrieves the SAME block instance from cache
+							// - Thread B: Reads/modifies block.SubtreeSlices while Thread A's goroutines are still writing
+							// - Result: Data race on block.SubtreeSlices access (detected by race detector)
+							//
+							// By using BlockSubtreesSet (sent after goroutines complete), we ensure sequential
+							// access to block.SubtreeSlices without needing expensive locks everywhere.
+							if notification.Type == model.NotificationType_BlockSubtreesSet {
 								cHash := chainhash.Hash(notification.Hash)
 								bv.logger.Infof("[BlockValidation:setMined] received BlockSubtreesSet notification: %s", cHash.String())
 								// push block hash to the setMinedChan
+								bv.setMinedChan <- &cHash
+							}
+
+							// Listen for BlockMinedUnset notifications (sent by InvalidateBlock RPC)
+							// This triggers immediate processing instead of waiting for periodic job
+							if notification.Type == model.NotificationType_BlockMinedUnset {
+								cHash := chainhash.Hash(notification.Hash)
+								bv.logger.Infof("[BlockValidation:setMined] received BlockMinedUnset notification: %s", cHash.String())
+								// push block hash to the setMinedChan for immediate processing
 								bv.setMinedChan <- &cHash
 							}
 						}
@@ -368,8 +388,6 @@ func initialiseInvalidBlockKafkaProducer(ctx context.Context, logger ulogger.Log
 // It handles the recovery of unprocessed blocks and starts background workers
 // for block validation tasks.
 func (u *BlockValidation) start(ctx context.Context) error {
-	go u.bloomFilterStats.BloomFilterStatsProcessor(ctx)
-
 	g, gCtx := errgroup.WithContext(ctx)
 
 	if u.blockchainClient != nil {
@@ -386,11 +404,15 @@ func (u *BlockValidation) start(ctx context.Context) error {
 		}
 	}
 
-	// start a ticker that checks every minute whether there are subtrees/mined that need to be set
+	// start a ticker that checks periodically whether there are subtrees/mined that need to be set
 	// this is a light routine for periodic cleanup and handling of invalidated blocks
 	go func() {
-		u.logger.Infof("[BlockValidation:start] starting periodic block processing goroutine")
-		ticker := time.NewTicker(1 * time.Minute)
+		interval := u.settings.BlockValidation.PeriodicProcessingInterval
+		if interval == 0 {
+			interval = 1 * time.Minute // default to 1 minute if not set
+		}
+		u.logger.Infof("[BlockValidation:start] starting periodic block processing goroutine (interval: %v)", interval)
+		ticker := time.NewTicker(interval)
 
 		for {
 			select {
@@ -854,9 +876,13 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		}
 	}
 
-	// get all ancestor block ids without depth limit to ensure duplicate transaction detection
-	// use math.MaxInt32 (2.1 billion blocks) which is effectively unlimited for blockchain purposes
-	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, math.MaxInt32); err != nil || len(ids) == 0 {
+	// Get recent ancestor block IDs for fast-path double-spend checking
+	// Use configurable limit instead of math.MaxInt32 to reduce memory usage
+	recentBlockIDsLimit := uint64(50000) // Default fallback
+	if u.settings.BlockValidation.RecentBlockIDsLimit > 0 {
+		recentBlockIDsLimit = u.settings.BlockValidation.RecentBlockIDsLimit
+	}
+	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, recentBlockIDsLimit); err != nil || len(ids) == 0 {
 		if err != nil {
 			return errors.NewServiceError("[setTxMined][%s] failed to get block header ids", blockHash.String(), err)
 		}
@@ -871,17 +897,51 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		u.utxoStore,
 		block,
 		ids[0],
-		ids[0:], // all ancestor block IDs on this chain - used to detect if transactions were already mined on this fork
+		ids[0:], // recent ancestor block IDs - older blocks checked via blockchain client
 		onLongestChain,
+		u.blockchainClient, // blockchain client for slow-path checks of older block IDs
 		unsetMined...,
 	); err != nil {
 		// check whether we got already mined errors and mark the block as invalid
 		if errors.Is(err, errors.ErrBlockInvalid) {
 			// mark the block as invalid in the blockchain
 			return u.markBlockAsInvalid(ctx, block, "contains transactions already on our chain: "+err.Error())
+		} else if errors.Is(err, errors.ErrBlockParentNotMined) {
+			u.logger.Warnf("[setTxMined][%s] skipping, already in progress of setMined for block", block.Hash().String())
+			return nil
 		}
 
 		return errors.NewProcessingError("[setTxMined][%s] error updating tx mined status", block.Hash().String(), err)
+	}
+
+	// Preserve parents of old unmined transactions to protect them from pruning.
+	//
+	// When a transaction sits unmined beyond UnminedTxRetention, its parents may be fully spent
+	// and eligible for DAH pruning. We preserve those parents by setting PreserveUntil so they
+	// remain available if the child is later mined or resubmitted.
+	//
+	// FSM STATE DETERMINES WHEN TO RUN:
+	// - FSMStateRUNNING: Run on every block (normal operation, unmined pool is stable)
+	// - FSMStateCATCHINGBLOCKS: Skip (Block Assembly handles at startup as one-time batch operation)
+	//
+	// WHY DIFFERENT BEHAVIOR FOR CATCHINGBLOCKS:
+	// During catchup, child txs transition from unmined→mined rapidly. By the time we execute this
+	// code, the child's UnminedSince is already cleared (no longer in unmined query results).
+	// Block Assembly startup runs before any txs are mined, catching all unmined txs while they're
+	// still in the pool. This eliminates the timing window and is more efficient (one batch vs per-block).
+	if len(unsetMined) == 0 || !unsetMined[0] {
+		// Only preserve when setting mined (not when unsetting during invalidation)
+		fsmState, fsmErr := u.blockchainClient.GetFSMCurrentState(ctx)
+		if fsmErr != nil {
+			u.logger.Warnf("[setTxMined][%s] Failed to get blockchain FSM state for parent preservation: %v", block.Hash().String(), fsmErr)
+			// Continue - best effort
+		} else if fsmState != nil && *fsmState == blockchain.FSMStateRUNNING {
+			// Only preserve during normal operation (catchup is handled at Block Assembly startup)
+			if _, preserveErr := utxo.PreserveParentsOfOldUnminedTransactions(ctx, u.utxoStore, block.Height, u.settings, u.logger); preserveErr != nil {
+				u.logger.Errorf("[setTxMined][%s] Failed to preserve parents at height %d: %v", block.Hash().String(), block.Height, preserveErr)
+				// Continue - best effort, pruner will still run
+			}
+		}
 	}
 
 	// Clear subtrees to free memory - they're no longer needed after UpdateTxMinedStatus
@@ -982,17 +1042,16 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 //   - ctx: Context for the validation operation
 //   - block: Block to validate
 //   - baseURL: Source URL for additional data retrieval
-//   - bloomStats: Statistics collector for bloom filter operations
 //   - disableOptimisticMining: Optional flag to force standard validation
 //
 // Returns an error if validation fails or nil on success.
-func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, disableOptimisticMining ...bool) error {
+func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block, baseURL string, disableOptimisticMining ...bool) error {
 	// Convert legacy parameters to options
 	opts := &ValidateBlockOptions{}
 	if len(disableOptimisticMining) > 0 {
 		opts.DisableOptimisticMining = disableOptimisticMining[0]
 	}
-	return u.ValidateBlockWithOptions(ctx, block, baseURL, bloomStats, opts)
+	return u.ValidateBlockWithOptions(ctx, block, baseURL, opts)
 }
 
 // ValidateBlockWithOptions performs comprehensive validation of a Bitcoin block with additional options.
@@ -1003,11 +1062,10 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 //   - ctx: Context for the validation operation
 //   - block: Block to validate
 //   - baseURL: Source URL for additional data retrieval
-//   - bloomStats: Statistics collector for bloom filter operations
 //   - opts: Optional parameters for validation optimization
 //
 // Returns an error if validation fails or nil on success.
-func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *model.Block, baseURL string, bloomStats *model.BloomStats, opts *ValidateBlockOptions) error {
+func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *model.Block, baseURL string, opts *ValidateBlockOptions) error {
 	if opts == nil {
 		opts = &ValidateBlockOptions{}
 	}
@@ -1136,7 +1194,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		}
 
 		// Wait for reValidationBlock to do its thing
-		// When waitForPreviousBlocksToBeProcessed is done, all the previous blocks will be processed, and all previous blocks' bloom filters should be created
+		// When waitForPreviousBlocksToBeProcessed is done, all the previous blocks will be processed
 		if err = u.waitForPreviousBlocksToBeProcessed(ctx, block, blockHeaders); err != nil {
 			// Check if parent block actually needs setTxMined before re-triggering
 			blocksMinedNotSet, getErr := u.blockchainClient.GetBlocksMinedNotSet(ctx)
@@ -1264,17 +1322,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 				u.logger.Infof("[ValidateBlock][%s] validating block in background", block.Hash().String())
 
-				// only get the bloom filters for the current chain.
-				bloomFilters, err := u.collectNecessaryBloomFilters(decoupledCtx, block, blockHeaders)
-				if err != nil {
-					u.logger.Errorf("[ValidateBlock][%s] failed to collect necessary bloom filters: %s", block.String(), err)
-
-					u.ReValidateBlock(block, baseURL)
-
-					return
-				}
-
-				if ok, err := block.Valid(decoupledCtx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats, u.settings); !ok {
+				if ok, err := block.Valid(decoupledCtx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings); !ok {
 					u.logger.Errorf("[ValidateBlock][%s] InvalidateBlock block is not valid in background: %v", block.String(), err)
 
 					if errors.Is(err, errors.ErrBlockInvalid) {
@@ -1311,6 +1359,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// Update subtrees DAH now that we know the block is valid
 				if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
 					u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
+					// Trigger revalidation to ensure block is retried
+					// This is consistent with other error handling in this goroutine
+					u.ReValidateBlock(block, baseURL)
+					return
 				}
 
 				// Block validation succeeded - now cache it with subtrees loaded
@@ -1339,16 +1391,15 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// validate the block
 			u.logger.Infof("[ValidateBlock][%s] validating block", block.Hash().String())
 
-			// only get the bloom filters for the current chain
-			bloomFilters, err := u.collectNecessaryBloomFilters(ctx, block, blockHeaders)
-			if err != nil {
-				return errors.NewServiceError("[ValidateBlock][%s] failed to collect necessary bloom filters", block.String(), err)
-			}
-
-			if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, bloomStats, u.settings); !ok {
+			if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings); !ok {
 				reason := "unknown"
 				if err != nil {
 					reason = err.Error()
+				}
+
+				// Check if we had a storage error; if so do not mark the block as invalid
+				if errors.Is(err, errors.ErrStorageError) {
+					return err
 				}
 
 				u.storeInvalidBlock(ctx, block, baseURL, reason)
@@ -1422,13 +1473,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		if !useOptimisticMining {
 			// it's critical that we call updateSubtreesDAH() only when we know the block is valid
 			if err := u.updateSubtreesDAH(decoupledCtx, block); err != nil {
-				u.logger.Errorf("[ValidateBlock][%s] failed to update subtrees DAH [%s]", block.Hash().String(), err)
+				return errors.NewProcessingError("[ValidateBlock][%s] failed to update subtrees DAH", block.Hash().String(), err)
 			}
-		}
-
-		// create bloom filter for the block and wait for it
-		if err = u.createAppendBloomFilter(decoupledCtx, block); err != nil {
-			u.logger.Errorf("[ValidateBlock][%s] failed to create bloom filter: %s", block.Hash().String(), err)
 		}
 
 		// Cache the block only if subtrees are loaded (they should be from Valid() call)
@@ -1522,97 +1568,15 @@ func (u *BlockValidation) kafkaNotifyBlockInvalid(block *model.Block, reason str
 	}
 }
 
-func (u *BlockValidation) collectNecessaryBloomFilters(ctx context.Context, block *model.Block, currentChainBlockHeaders []*model.BlockHeader) ([]*model.BlockBloomFilter, error) {
-	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "collectNecessaryBloomFilters",
-		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[collectNecessaryBloomFilters][%s] collecting bloom filters for %d headers", block.String(), len(currentChainBlockHeaders)),
-	)
-	defer deferFn()
-
-	// Collect only the bloom-filters whose BlockHash is in that set
-	bloomFilters := make([]*model.BlockBloomFilter, 0, len(currentChainBlockHeaders))
-
-	for _, h := range currentChainBlockHeaders {
-		if bf, ok := u.recentBlocksBloomFilters.Get(*h.Hash()); ok {
-			bloomFilters = append(bloomFilters, bf)
-		} else {
-			// We should not be here, because we should have the bloom filter in the recentBlocksBloomFilters map.
-			// Try to get the bloom filter from the subtree store
-			bloomFilterFromSubtreeStore := u.getBloomFilterFromSubtreeStore(ctx, h.Hash())
-
-			// if we found the bloom filter in the subtree store, we can use it
-			if bloomFilterFromSubtreeStore != nil {
-				bloomFilters = append(bloomFilters, bloomFilterFromSubtreeStore)
-			} else {
-				// bloom filter not found in subtree store
-				// we need to create the bloom filter
-				u.logger.Debugf("[collectNecessaryBloomFilters][%s] bloom filter for %s not found in subtree store, creating", block.String(), h.Hash().String())
-
-				// we need to create the bloom filter, get the block
-				blockToCreateBloomFilter, err := u.blockchainClient.GetBlock(ctx, h.Hash())
-				if err != nil {
-					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] failed to get block %s from store", block.String(), h.Hash().String(), err)
-				}
-
-				if err = u.createAppendBloomFilter(ctx, blockToCreateBloomFilter); err != nil {
-					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] failed to create bloom filter %s from store", block.String(), h.Hash().String(), err)
-				}
-
-				// After creating the bloom filter, retrieve it from the map and append to the return slice
-				if createdBf, ok := u.recentBlocksBloomFilters.Get(*h.Hash()); ok {
-					bloomFilters = append(bloomFilters, createdBf)
-				} else {
-					return nil, errors.NewProcessingError("[collectNecessaryBloomFilters][%s] bloom filter was created but not found in recentBlocksBloomFilters map for %s", block.String(), h.Hash().String())
-				}
-			}
-		}
-	}
-
-	return bloomFilters, nil
-}
-
 // waitForPreviousBlocksToBeProcessed ensures:
 // 1. a block's parents are mined before validation.
-// 2. bloom filters for the parent blocks that are part of the current chain are ready.
-// It implements retry logic with configurable backoff for parent and bloom filter verification.
+// It implements retry logic with configurable backoff for parent processing verification.
 // Parameters:
 //   - ctx: Context for the operation
 //   - block: Block whose parent needs verification
 //
 // Returns an error if parent mining verification fails.
-// Returns an error if parent mining verification and collecting bloom filters fails.
 func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context, block *model.Block, currentChainBlockHeaders []*model.BlockHeader) error {
-	// iterate over the bloom filters and check if they are ready
-	missingBlockBloomFilters := make([]*chainhash.Hash, 0)
-
-	for _, header := range currentChainBlockHeaders {
-		// check if recentBlocksBloomFilters contains the block hash
-		if _, exists := u.recentBlocksBloomFilters.Get(*header.Hash()); !exists {
-			missingBlockBloomFilters = append(missingBlockBloomFilters, header.Hash())
-		}
-	}
-
-	for _, hash := range missingBlockBloomFilters {
-		// try to get the bloom filter from the subtree store
-		bloomFilterFromSubtreeStore := u.getBloomFilterFromSubtreeStore(ctx, hash)
-
-		// if we found the bloom filter in the subtree store, we can use it
-		if bloomFilterFromSubtreeStore != nil {
-			u.recentBlocksBloomFilters.Set(*hash, bloomFilterFromSubtreeStore)
-		} else {
-			// bloom filter not found in subtree store
-			// we need to create the bloom filter
-			blockToCreateBloomFilter, err := u.blockchainClient.GetBlock(ctx, hash)
-			if err != nil {
-				return errors.NewProcessingError("[waitForPreviousBlocksToBeProcessed][%s] failed to get block %s from store", block.String(), hash.String(), err)
-			}
-
-			if err = u.createAppendBloomFilter(ctx, blockToCreateBloomFilter); err != nil {
-				return errors.NewProcessingError("[waitForPreviousBlocksToBeProcessed][%s] failed to create bloom filter %s", block.String(), hash.String(), err)
-			}
-		}
-	}
-
 	// Caution, in regtest, when mining initial blocks, this logic wants to retry over and over as fast as possible to ensure it keeps up
 	checkParentBlock := func() (bool, error) {
 		parentBlockMined, err := u.isParentMined(ctx, block.Header)
@@ -1637,27 +1601,6 @@ func (u *BlockValidation) waitForPreviousBlocksToBeProcessed(ctx context.Context
 	)
 
 	return err
-}
-
-func (u *BlockValidation) getBloomFilterFromSubtreeStore(ctx context.Context, hash *chainhash.Hash) *model.BlockBloomFilter {
-	// try to get from the subtree store
-	bloomFilterBytes, err := u.subtreeStore.Get(ctx, hash[:], fileformat.FileTypeBloomFilter)
-	if err != nil || len(bloomFilterBytes) == 0 {
-		return nil
-	}
-
-	// we have the bloom filter bytes in subtree store, so we are forming the bloom filter
-	createdBbf := &model.BlockBloomFilter{
-		CreationTime: time.Now(),
-		BlockHash:    hash,
-	}
-
-	err = createdBbf.Deserialize(bloomFilterBytes)
-	if err != nil {
-		return nil
-	}
-
-	return createdBbf
 }
 
 // ReValidateBlock queues a block for revalidation after a previous validation failure.
@@ -1752,12 +1695,6 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		return errors.NewBlockInvalidError("[reValidateBlock][%s] parent block is invalid", blockData.block.Hash().String())
 	}
 
-	// only get the bloom filters for the current chain
-	bloomFilters, err := u.collectNecessaryBloomFilters(ctx, blockData.block, blockHeaders)
-	if err != nil {
-		return errors.NewServiceError("[reValidateBlock][%s] failed to collect necessary bloom filters", blockData.block.String(), err)
-	}
-
 	// validate all the subtrees in the block
 	u.logger.Infof("[ReValidateBlock][%s] validating %d subtrees", blockData.block.Hash().String(), len(blockData.block.Subtrees))
 
@@ -1769,7 +1706,7 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 
 	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, u.bloomFilterStats, u.settings); !ok {
+	if ok, err := blockData.block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings); !ok {
 		u.logger.Errorf("[ReValidateBlock][%s] InvalidateBlock block is not valid in background: %v", blockData.block.String(), err)
 
 		if errors.Is(err, errors.ErrBlockInvalid) {
@@ -1782,99 +1719,6 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	}
 
 	return u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block)
-}
-
-// createAppendBloomFilter generates and manages bloom filters for blocks.
-// It handles filter creation, pruning, and concurrent access management.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - block: Block to create filter for
-func (u *BlockValidation) createAppendBloomFilter(ctx context.Context, block *model.Block) error {
-	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "createAppendBloomFilter",
-		tracing.WithParentStat(u.stats),
-		tracing.WithLogMessage(u.logger, "[createAppendBloomFilter][%s] creating bloom filter", block.Hash().String()),
-	)
-	defer deferFn()
-
-	if u.blockBloomFiltersBeingCreated.Exists(*block.Hash()) {
-		return nil
-	}
-
-	// check whether the bloom filter for this block already exists
-	if _, exists := u.recentBlocksBloomFilters.Get(*block.Hash()); exists {
-		return nil
-	}
-
-	_ = u.blockBloomFiltersBeingCreated.Put(*block.Hash())
-	defer func() {
-		_ = u.blockBloomFiltersBeingCreated.Delete(*block.Hash())
-	}()
-
-	var err error
-
-	// create a bloom filter for the block
-	bbf := &model.BlockBloomFilter{
-		CreationTime: time.Now(),
-		BlockHash:    block.Hash(),
-		BlockHeight:  block.Height,
-	}
-
-	bbf.Filter, err = block.NewOptimizedBloomFilter(ctx, u.logger, u.subtreeStore, u.settings.Block.GetAndValidateSubtreesConcurrency)
-	if err != nil {
-		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to create bloom filter", block.Hash().String(), err)
-	}
-
-	// Serialize the filter
-	filterBytes, err := bbf.Serialize()
-	if err != nil {
-		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to serialize bloom filter", block.Hash().String(), err)
-	}
-
-	// record the bloom filter in the subtreestore
-	err = u.subtreeStore.Set(ctx, block.Hash()[:], fileformat.FileTypeBloomFilter, filterBytes, options.WithDeleteAt(block.Height+u.bloomFilterRetentionSize))
-	if err != nil {
-		return errors.NewProcessingError("[createAppendBloomFilter][%s] failed to record bloom filter in subtree store", block.Hash().String(), err)
-	}
-
-	u.pruneBloomFilters(ctx, block, bbf)
-
-	return nil
-}
-
-func (u *BlockValidation) pruneBloomFilters(ctx context.Context, block *model.Block, bbf *model.BlockBloomFilter) {
-	// get best block height
-	_, bestBlockHeaderMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil {
-		u.logger.Errorf("[createAppendBloomFilter][%s] failed to get best block height", block.Hash().String(), err)
-		return
-	}
-
-	// calculate lowest height to keep
-	var lowestBlockHeightToKeep uint32
-	if bestBlockHeaderMeta.Height > u.bloomFilterRetentionSize {
-		lowestBlockHeightToKeep = bestBlockHeaderMeta.Height - u.bloomFilterRetentionSize
-	}
-
-	filtersToPrune := make([]chainhash.Hash, 0)
-
-	// Delete old filters directly from map
-	for hash, bf := range u.recentBlocksBloomFilters.Range() {
-		if bf.BlockHeight < lowestBlockHeightToKeep {
-			u.recentBlocksBloomFilters.Delete(hash)
-			filtersToPrune = append(filtersToPrune, hash)
-		}
-	}
-
-	// NOTE: the subtree store will handle pruning of the bloom filter files
-
-	// Add the new bloom filter
-	u.recentBlocksBloomFilters.Set(*block.Hash(), bbf)
-
-	remainingCount := u.recentBlocksBloomFilters.Length()
-
-	u.logger.Debugf("[pruneBloomFilters][%s] pruned %d filters, %d remaining",
-		block.Hash().String(), len(filtersToPrune), remainingCount)
 }
 
 // updateSubtreesDAH manages retention periods for block subtrees.

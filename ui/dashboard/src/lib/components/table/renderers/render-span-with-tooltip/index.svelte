@@ -14,12 +14,10 @@
   }
 </script>
 
-{#if value}
+{#if value || value === 0}
   {#if tooltip && $tippy}
     <span {...props} use:$tippy={{ content: tooltip }}>{value}</span>
   {:else}
     <span {...props}>{value}</span>
   {/if}
-{:else}
-  ''
 {/if}

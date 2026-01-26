@@ -39,18 +39,29 @@ func TestGetSubtree(t *testing.T) {
 		assert.Equal(t, http.StatusOK, echoContext.Response().Status)
 
 		// Check response body
-		var response map[string]interface{}
+		var response map[string]any
 		err = json.Unmarshal(responseRecorder.Body.Bytes(), &response)
 		require.NoError(t, err)
 
-		// Check response fields
+		// Check response structure (now paginated)
 		require.NotNil(t, response)
-		assert.Equal(t, float64(2), response["Height"])
-		assert.Equal(t, float64(6), response["Fees"])
-		assert.Equal(t, float64(6), response["SizeInBytes"])
-		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", response["FeeHash"])
-		assert.Equal(t, 4, len(response["Nodes"].([]interface{})))
-		assert.Nil(t, response["ConflictingNodes"])
+		require.NotNil(t, response["data"], "Expected data field in response")
+		require.NotNil(t, response["pagination"], "Expected pagination field in response")
+
+		// Check data fields
+		data := response["data"].(map[string]any)
+		assert.Equal(t, float64(2), data["Height"])
+		assert.Equal(t, float64(6), data["Fees"])
+		assert.Equal(t, float64(6), data["SizeInBytes"])
+		assert.Equal(t, "0000000000000000000000000000000000000000000000000000000000000000", data["FeeHash"])
+		assert.Equal(t, 4, len(data["Nodes"].([]any)))
+		assert.Nil(t, data["ConflictingNodes"])
+
+		// Check pagination fields
+		pagination := response["pagination"].(map[string]any)
+		assert.Equal(t, float64(0), pagination["offset"])
+		assert.Equal(t, float64(20), pagination["limit"])
+		assert.Equal(t, float64(4), pagination["totalRecords"])
 	})
 
 	t.Run("Valid BINARY response", func(t *testing.T) {

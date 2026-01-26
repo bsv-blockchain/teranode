@@ -213,12 +213,6 @@ curl --user bitcoin:bitcoin \
 Check current mining information:
 
 ```bash
-# Get network hash rate and difficulty
-curl --user bitcoin:bitcoin \
-  --data-binary '{"jsonrpc":"1.0","id":"test","method":"getnetworkhashps","params":[]}' \
-  -H 'content-type: text/plain;' \
-  http://localhost:9292/
-
 # Check latest blocks
 curl --user bitcoin:bitcoin \
   --data-binary '{"jsonrpc":"1.0","id":"test","method":"getbestblockhash","params":[]}' \

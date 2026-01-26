@@ -10,9 +10,6 @@ import (
 )
 
 func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
@@ -93,9 +90,6 @@ func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
 }
 
 func TestBlockValidationWithDoubleSpend(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
@@ -176,9 +170,6 @@ func TestBlockValidationWithDoubleSpend(t *testing.T) {
 }
 
 func TestBlockValidationWithDuplicateTransaction(t *testing.T) {
-	SharedTestLock.Lock()
-	defer SharedTestLock.Unlock()
-
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:       true,
 		EnableValidator: true,
@@ -218,7 +209,7 @@ func TestBlockValidationWithDuplicateTransaction(t *testing.T) {
 	require.NoError(t, err, "failed to submit first child transaction")
 
 	_, block3 := td.CreateTestBlock(t, block2, 101, parentTx, childTx1, childTx1)
-	err = td.BlockValidation.ValidateBlock(td.Ctx, block3, "legacy", nil, true)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block3, "legacy", true)
 	require.Error(t, err)
 
 	t.Log("Block validation correctly handled duplicate transaction scenario")

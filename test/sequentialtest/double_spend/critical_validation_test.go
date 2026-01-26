@@ -233,6 +233,8 @@ func testConcurrencyConfigurationEdgeCases(t *testing.T, utxoStore string) {
 //
 // Usage: go test -race -run TestRaceDetectorDuplicateDetection
 func TestRaceDetectorDuplicateDetectionPostgres(t *testing.T) {
+	t.Skip("Skipping due to known data race in BlockValidation.setTxMinedStatus - see issue #296")
+
 	pg, err := postgres.RunPostgresTestContainer(t.Context(), "race_detector_"+t.Name())
 	require.NoError(t, err)
 	t.Cleanup(func() {

@@ -110,17 +110,35 @@ func (cm *clientChannelMap) broadcast(data []byte, logger ulogger.Logger) {
 		return
 	}
 
-	// Send to all channels without holding the lock
+	// Send to all channels in parallel without holding the lock
+	// This prevents O(N) delay accumulation from blocking clients
+	var wg sync.WaitGroup
 	for _, ch := range channels {
-		select {
-		case ch <- data:
-			// Data sent successfully
-		case <-time.After(time.Second):
-			logger.Errorf("Timeout sending data to client")
-			// Remove timed out client
-			cm.remove(ch)
-		}
+		wg.Add(1)
+		go func(ch chan []byte) {
+			defer wg.Done()
+			timer := time.NewTimer(time.Second)
+			defer func() {
+				// Ensure timer resources are released promptly when the send succeeds.
+				if !timer.Stop() {
+					// If the timer already fired concurrently, drain to avoid keeping the value queued on timer.C.
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			}()
+			select {
+			case ch <- data:
+				// Data sent successfully
+			case <-timer.C:
+				logger.Errorf("Timeout sending data to client")
+				// Remove timed out client
+				cm.remove(ch)
+			}
+		}(ch)
 	}
+	wg.Wait() // Wait for all sends to complete
 }
 
 func (cm *clientChannelMap) contains(ch chan []byte) bool {

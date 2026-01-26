@@ -203,6 +203,14 @@ func (m *mockBlockAssemblyAPIClient) AddTxBatch(ctx context.Context, in *blockas
 	return args.Get(0).(*blockassembly_api.AddTxBatchResponse), args.Error(1)
 }
 
+func (m *mockBlockAssemblyAPIClient) AddTxBatchColumnar(ctx context.Context, in *blockassembly_api.AddTxBatchColumnarRequest, opts ...grpc.CallOption) (*blockassembly_api.AddTxBatchResponse, error) {
+	args := m.Called(ctx, in, opts)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*blockassembly_api.AddTxBatchResponse), args.Error(1)
+}
+
 func (m *mockBlockAssemblyAPIClient) GetMiningCandidate(ctx context.Context, in *blockassembly_api.GetMiningCandidateRequest, opts ...grpc.CallOption) (*model.MiningCandidate, error) {
 	args := m.Called(ctx, in, opts)
 	if args.Get(0) == nil {

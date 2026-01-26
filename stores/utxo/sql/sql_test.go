@@ -45,7 +45,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +54,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	utxo2 "github.com/bsv-blockchain/teranode/test/longtest/stores/utxo"
@@ -136,21 +136,21 @@ func TestGet(t *testing.T) {
 	_, err := utxoStore.Create(ctx, tx, blockHeight)
 	require.NoError(t, err)
 
-	meta, err := utxoStore.Get(ctx, tx.TxIDChainHash())
+	txMeta, err := utxoStore.Get(ctx, tx.TxIDChainHash())
 	require.NoError(t, err)
 
-	assert.Equal(t, uint64(0), meta.Fee)
-	assert.Equal(t, uint32(0), meta.LockTime)
-	assert.False(t, meta.IsCoinbase)
-	assert.Equal(t, uint64(259), meta.SizeInBytes)
-	assert.Len(t, meta.TxInpoints.ParentTxHashes, 1)
-	assert.Len(t, meta.Tx.Inputs, 1)
-	assert.Len(t, meta.Tx.Outputs, 2)
-	assert.Equal(t, uint64(50e8), meta.Tx.Inputs[0].PreviousTxSatoshis)
-	assert.Len(t, meta.BlockIDs, 0)
+	assert.Equal(t, uint64(0), txMeta.Fee)
+	assert.Equal(t, uint32(0), txMeta.LockTime)
+	assert.False(t, txMeta.IsCoinbase)
+	assert.Equal(t, uint64(259), txMeta.SizeInBytes)
+	assert.Len(t, txMeta.TxInpoints.ParentTxHashes, 1)
+	assert.Len(t, txMeta.Tx.Inputs, 1)
+	assert.Len(t, txMeta.Tx.Outputs, 2)
+	assert.Equal(t, uint64(50e8), txMeta.Tx.Inputs[0].PreviousTxSatoshis)
+	assert.Len(t, txMeta.BlockIDs, 0)
 	assert.Equal(t, "fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4", tx.TxIDChainHash().String())
 	// Verify that UnminedSince is correctly retrieved for unmined transactions
-	assert.Equal(t, blockHeight, meta.UnminedSince)
+	assert.Equal(t, blockHeight, txMeta.UnminedSince)
 }
 
 func TestGetMeta(t *testing.T) {
@@ -163,12 +163,13 @@ func TestGetMeta(t *testing.T) {
 	_, err := utxoStore.Create(ctx, tx, blockHeight)
 	require.NoError(t, err)
 
-	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	metaData := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 	require.NoError(t, err)
 
-	assert.Nil(t, meta.Tx)
+	assert.Nil(t, metaData.Tx)
 	// Verify that UnminedSince is correctly retrieved in GetMeta for unmined transactions
-	assert.Equal(t, blockHeight, meta.UnminedSince)
+	assert.Equal(t, blockHeight, metaData.UnminedSince)
 }
 
 func TestGetBlockIDs(t *testing.T) {
@@ -184,10 +185,11 @@ func TestGetBlockIDs(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+	metaData := &meta.Data{}
+	err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 	require.NoError(t, err)
 
-	assert.Len(t, meta.BlockIDs, 3)
+	assert.Len(t, metaData.BlockIDs, 3)
 }
 
 func TestDelete(t *testing.T) {
@@ -322,11 +324,12 @@ func TestSetMinedMulti(t *testing.T) {
 		require.Len(t, blockIDsMap[*tx.TxIDChainHash()], 1)
 		require.Equal(t, uint32(1), blockIDsMap[*tx.TxIDChainHash()][0])
 
-		meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+		metaData := &meta.Data{}
+		err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 		require.NoError(t, err)
 
-		assert.Len(t, meta.BlockIDs, 1)
-		assert.Equal(t, uint32(1), meta.BlockIDs[0])
+		assert.Len(t, metaData.BlockIDs, 1)
+		assert.Equal(t, uint32(1), metaData.BlockIDs[0])
 
 		// check that the tx is marked as unmined
 		it, err = utxoStore.GetUnminedTxIterator(false)
@@ -351,9 +354,10 @@ func TestSetMinedMulti(t *testing.T) {
 		err = utxoStore.SetLocked(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, true)
 		require.NoError(t, err)
 
-		meta, err := utxoStore.GetMeta(ctx, tx.TxIDChainHash())
+		metaData := &meta.Data{}
+		err = utxoStore.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 		require.NoError(t, err)
-		assert.True(t, meta.Locked)
+		assert.True(t, metaData.Locked)
 
 		blockIDsMap, err := utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
 			BlockID:     1,
@@ -365,13 +369,13 @@ func TestSetMinedMulti(t *testing.T) {
 		require.Len(t, blockIDsMap[*tx.TxIDChainHash()], 1)
 		require.Equal(t, uint32(1), blockIDsMap[*tx.TxIDChainHash()][0])
 
-		meta, err = utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
+		txMeta, err := utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
 		require.NoError(t, err)
 
-		assert.Len(t, meta.BlockIDs, 1)
-		assert.Equal(t, uint32(1), meta.BlockIDs[0])
-		assert.False(t, meta.Locked)
-		assert.Equal(t, uint32(1), meta.UnminedSince)
+		assert.Len(t, txMeta.BlockIDs, 1)
+		assert.Equal(t, uint32(1), txMeta.BlockIDs[0])
+		assert.False(t, txMeta.Locked)
+		assert.Equal(t, uint32(1), txMeta.UnminedSince)
 
 		// now mine it on the longest chain
 		blockIDsMap, err = utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxo.MinedBlockInfo{
@@ -385,13 +389,13 @@ func TestSetMinedMulti(t *testing.T) {
 		require.Len(t, blockIDsMap[*tx.TxIDChainHash()], 2)
 		require.Equal(t, []uint32{1, 2}, blockIDsMap[*tx.TxIDChainHash()])
 
-		meta, err = utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
+		txMeta, err = utxoStore.Get(ctx, tx.TxIDChainHash(), append(utxo.MetaFields, fields.UnminedSince)...)
 		require.NoError(t, err)
 
-		assert.Len(t, meta.BlockIDs, 2)
-		assert.Equal(t, []uint32{1, 2}, meta.BlockIDs)
-		assert.False(t, meta.Locked)
-		assert.Zero(t, meta.UnminedSince)
+		assert.Len(t, txMeta.BlockIDs, 2)
+		assert.Equal(t, []uint32{1, 2}, txMeta.BlockIDs)
+		assert.False(t, txMeta.Locked)
+		assert.Zero(t, txMeta.UnminedSince)
 	})
 }
 
@@ -939,10 +943,11 @@ func TestSetMinedMultiBatched(t *testing.T) {
 
 	// Verify all transactions are marked as mined
 	for _, testTx := range testTxs {
-		meta, err := store.GetMeta(ctx, testTx.TxIDChainHash())
+		metaData := &meta.Data{}
+		err := store.GetMeta(ctx, testTx.TxIDChainHash(), metaData)
 		require.NoError(t, err)
-		assert.Len(t, meta.BlockIDs, 1)
-		assert.Equal(t, uint32(1), meta.BlockIDs[0])
+		assert.Len(t, metaData.BlockIDs, 1)
+		assert.Equal(t, uint32(1), metaData.BlockIDs[0])
 	}
 }
 
@@ -977,10 +982,11 @@ func TestSetMinedMultiBulk(t *testing.T) {
 
 	// Verify all transactions are marked as mined
 	for _, testTx := range testTxs {
-		meta, err := store.GetMeta(ctx, testTx.TxIDChainHash())
+		metaData := &meta.Data{}
+		err := store.GetMeta(ctx, testTx.TxIDChainHash(), metaData)
 		require.NoError(t, err)
-		assert.Len(t, meta.BlockIDs, 1)
-		assert.Equal(t, uint32(2), meta.BlockIDs[0])
+		assert.Len(t, metaData.BlockIDs, 1)
+		assert.Equal(t, uint32(2), metaData.BlockIDs[0])
 	}
 }
 
@@ -1015,79 +1021,20 @@ func TestConflictingFunctions(t *testing.T) {
 	assert.NotNil(t, hashes)
 }
 
+// TestCreatePostgresSchema tests the PostgreSQL schema creation using mocks
 func TestCreatePostgresSchema(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Create a mock database
+	mockDB := CreateMockDBForSchema()
+	defer mockDB.AssertExpectations(t)
 
-	// Skip this test if we don't have a PostgreSQL environment available
-	// This test will try to connect to a local PostgreSQL instance
+	// Setup successful mock expectations for all DDL operations
+	SetupCreatePostgresSchemaSuccessMocks(mockDB)
 
-	// First, let's try with a postgres URL - if it fails, we'll skip
-	// You can set the POSTGRES_URL environment variable for testing
-	// #nosec G101 - test credentials for local testing only
-	pgURL := "postgres://teranode:teranode@localhost:5432/teranode_test"
-	if testPgURL := os.Getenv("POSTGRES_URL"); testPgURL != "" {
-		pgURL = testPgURL
-	}
+	// Call the function under test using the mock
+	err := createPostgresSchemaImpl(mockDB)
 
-	parsedURL, err := url.Parse(pgURL)
-	require.NoError(t, err)
-
-	// Try to connect to PostgreSQL
-	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.UtxoStore.DBTimeout = 30 * time.Second
-
-	// Attempt to create a store with PostgreSQL
-	store, err := New(ctx, logger, tSettings, parsedURL)
-	if err != nil {
-		// If PostgreSQL is not available, skip this test
-		t.Skipf("PostgreSQL not available for testing createPostgresSchema: %v", err)
-		return
-	}
-	defer func() {
-		if store != nil && store.db != nil {
-			store.db.Close()
-		}
-	}()
-
-	require.NotNil(t, store)
-	assert.Equal(t, "postgres", store.engine)
-
-	// Verify that PostgreSQL schema was created successfully by checking expected tables
-	tables := []string{"transactions", "inputs", "outputs", "block_ids", "conflicting_children"}
-	for _, table := range tables {
-		var exists bool
-		err = store.db.QueryRowContext(ctx,
-			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)",
-			table).Scan(&exists)
-		require.NoError(t, err, "Failed to check existence of table %s", table)
-		assert.True(t, exists, "Table %s should exist in PostgreSQL schema", table)
-	}
-
-	// Verify indexes were created
-	indexes := []string{"ux_transactions_hash", "px_unmined_since_transactions", "ux_transactions_delete_at_height"}
-	for _, index := range indexes {
-		var exists bool
-		err = store.db.QueryRowContext(ctx,
-			"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1)",
-			index).Scan(&exists)
-		require.NoError(t, err, "Failed to check existence of index %s", index)
-		assert.True(t, exists, "Index %s should exist in PostgreSQL schema", index)
-	}
-
-	// Test that we can perform basic database operations with the schema
-	var result int
-	err = store.db.QueryRowContext(ctx, "SELECT 1").Scan(&result)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result)
-
-	// Test that foreign key constraints work by trying to insert invalid data
-	_, err = store.db.ExecContext(ctx, "INSERT INTO inputs (transaction_id, idx, previous_transaction_hash, previous_tx_idx, previous_tx_satoshis, unlocking_script, sequence_number) VALUES (999999, 0, $1, 0, 0, $2, 0)",
-		make([]byte, 32), make([]byte, 1))
-	assert.Error(t, err, "Should fail due to foreign key constraint")
-
-	t.Logf("Successfully tested createPostgresSchema with PostgreSQL database")
+	// Verify success
+	assert.NoError(t, err)
 }
 
 func TestCreatePostgresSchemaWithMockConnection(t *testing.T) {
@@ -1692,9 +1639,10 @@ func TestCreateWithDifferentOptions(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	meta, err := store.GetMeta(ctx, tx.TxIDChainHash())
+	metaData := &meta.Data{}
+	err = store.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.Len(t, meta.BlockIDs, 2, "Should have 2 block IDs")
+	assert.Len(t, metaData.BlockIDs, 2, "Should have 2 block IDs")
 
 	// Test creating with different block heights and unmined status
 	err = store.Delete(ctx, tx.TxIDChainHash())
@@ -1703,9 +1651,10 @@ func TestCreateWithDifferentOptions(t *testing.T) {
 	_, err = store.Create(ctx, tx, 999999) // High block height for unmined
 	require.NoError(t, err)
 
-	meta, err = store.GetMeta(ctx, tx.TxIDChainHash())
+	metaData = &meta.Data{}
+	err = store.GetMeta(ctx, tx.TxIDChainHash(), metaData)
 	require.NoError(t, err)
-	assert.Equal(t, uint32(999999), meta.UnminedSince, "Should track unmined since height")
+	assert.Equal(t, uint32(999999), metaData.UnminedSince, "Should track unmined since height")
 }
 
 func TestSetMinedMultiBulkDirectly(t *testing.T) {

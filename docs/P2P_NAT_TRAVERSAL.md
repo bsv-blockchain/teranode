@@ -100,21 +100,21 @@ To debug NAT traversal issues:
 
 1. Check the logs for warnings about unreachable nodes:
 
-   ```bash
-   grep "No peers connected\|NAT\|observed\|advertise" teranode.log
-   ```
+    ```bash
+    grep "No peers connected\|NAT\|observed\|advertise" teranode.log
+    ```
 
 2. Verify your configuration:
 
-   ```bash
-   grep "p2p_enable_nat\|p2p_advertise" settings_local.conf
-   ```
+    ```bash
+    grep "p2p_enable_nat\|p2p_advertise" settings_local.conf
+    ```
 
 3. Test connectivity from another node:
 
-   ```bash
-   telnet <your-public-ip> 9905
-   ```
+    ```bash
+    telnet <your-public-ip> 9905
+    ```
 
 ## Best Practices
 

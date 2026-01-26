@@ -140,6 +140,36 @@ When transactions arrive through the Validator component (Propagation Service):
 Double spend detection behaves differently when the transactions are detected as part of the validation of a block with proof of work.
 In this scenario, Teranode understands that the conflicting transaction has been treated as valid by the network and included in a block. A remote node has invested work in creating the block, and it can become part of the longest honest chain. The conflicting transaction can no longer be ignored, and it must be processed - but flagged as "conflicting".
 
+##### Two-Phase Transaction Re-Presentation Detection
+
+When marking transactions as mined, Teranode uses a two-phase approach to efficiently detect if a transaction has already been mined on the current chain:
+
+1. **Phase 1 - Fast Path (In-Memory Check)**:
+
+    - Recent ancestor block IDs are loaded into memory when validating a block
+    - The number of recent block IDs is configurable via `blockvalidation_recentBlockIDsLimit` (default: 50,000 blocks, covering approximately 347 days)
+    - Transactions that were previously mined in blocks within this window are detected immediately
+    - This is the common case and avoids any database queries
+
+2. **Phase 2 - Slow Path (Blockchain Service Query)**:
+
+    - For transactions that were mined in blocks older than the in-memory window, the block IDs are collected
+    - After processing all transactions, a batch query is made to the blockchain service via `CheckBlockIsInCurrentChain`
+    - This query checks if any of the old block IDs are on the current chain
+    - If any are found, the block is marked as invalid (re-presenting an already-mined transaction)
+
+This optimization significantly reduces memory usage while maintaining complete double-spend detection coverage. The fast path handles nearly all cases, while the slow path provides a safety net for extremely old transactions.
+
+**Configuration:**
+
+```bash
+# Increase for nodes with more memory to reduce slow-path queries
+blockvalidation_recentBlockIDsLimit = 50000
+
+# Lower for development/testing to reduce memory usage
+blockvalidation_recentBlockIDsLimit.dev = 1000
+```
+
 1. **Block-Level Processing**:
 
     - Double spends in valid blocks must be processed.

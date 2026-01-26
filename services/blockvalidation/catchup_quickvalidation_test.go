@@ -28,7 +28,8 @@ func TestTryQuickValidation(t *testing.T) {
 			highestCheckpointHeight: 200,
 		}
 
-		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "http://test")
+		// Pass nil channel - not needed when quick validation is disabled
+		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "http://test", nil)
 
 		assert.NoError(t, err)
 		assert.True(t, shouldTryNormal, "should return true to use normal validation when quick validation is disabled")
@@ -46,7 +47,8 @@ func TestTryQuickValidation(t *testing.T) {
 			highestCheckpointHeight: 200,
 		}
 
-		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "http://test")
+		// Pass nil channel - not needed when block is above checkpoint
+		shouldTryNormal, err := suite.Server.tryQuickValidation(context.Background(), block, catchupCtx, "http://test", nil)
 
 		assert.NoError(t, err)
 		assert.True(t, shouldTryNormal, "should return true to use normal validation when block is above checkpoint height")
@@ -78,9 +80,12 @@ func TestTryQuickValidation(t *testing.T) {
 			blockUpTo:               block,
 		}
 
+		// Create a buffered channel for async writes
+		writeJobsChan := make(chan *SubtreeWriteJob, 10)
+
 		// The quick validation will fail because we didn't set up all the necessary mocks
 		// This should trigger the subtree cleanup logic
-		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "http://test")
+		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "http://test", writeJobsChan)
 
 		assert.NoError(t, err, "should not return error even when quick validation fails")
 		assert.True(t, shouldTryNormal, "should return true to fallback to normal validation")
@@ -104,6 +109,7 @@ func TestTryQuickValidation(t *testing.T) {
 		// Mock for successful quick validation
 		suite.MockBlockchain.On("GetNextBlockID", mock.Anything).Return(uint64(1), nil).Once()
 		suite.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+		suite.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Once()
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 		block.Height = 100
@@ -114,8 +120,11 @@ func TestTryQuickValidation(t *testing.T) {
 			blockUpTo:               block,
 		}
 
+		// Create a buffered channel for async writes
+		writeJobsChan := make(chan *SubtreeWriteJob, 10)
+
 		// This should succeed and return false (no need for normal validation)
-		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "http://test")
+		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "http://test", writeJobsChan)
 
 		assert.NoError(t, err)
 		assert.False(t, shouldTryNormal, "should return false when quick validation succeeds")
@@ -140,8 +149,11 @@ func TestTryQuickValidation(t *testing.T) {
 			blockUpTo:               block,
 		}
 
+		// Create a buffered channel for async writes
+		writeJobsChan := make(chan *SubtreeWriteJob, 10)
+
 		// The quick validation will fail and try to delete non-existent subtrees
-		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "http://test")
+		shouldTryNormal, err := suite.Server.tryQuickValidation(ctx, block, catchupCtx, "http://test", writeJobsChan)
 
 		assert.NoError(t, err, "should handle not found error gracefully")
 		assert.True(t, shouldTryNormal, "should return true to fallback to normal validation")

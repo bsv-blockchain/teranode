@@ -198,7 +198,7 @@ func TestAerospike(t *testing.T) {
 		assert.Equal(t, []int{4}, value.SubtreeIdxs)
 	})
 
-	t.Run("aerospike_get", func(t *testing.T) {
+	t.Run("aerospike_get_spend", func(t *testing.T) {
 		cleanDB(t, client)
 
 		txMeta, err := store.Create(ctx, tx, 0)

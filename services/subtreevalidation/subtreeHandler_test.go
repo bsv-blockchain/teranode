@@ -3,11 +3,11 @@ package subtreevalidation
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"os"
 	"sync/atomic"
 	"testing"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -19,14 +19,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/bsv-blockchain/teranode/util/kafka"
-	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
 
 type MockExister struct{}
@@ -82,28 +79,23 @@ func (s *testServer) ValidateSubtreeInternal(ctx context.Context, v ValidateSubt
 
 func TestSubtreesHandler(t *testing.T) {
 	subtreeHash, _ := chainhash.NewHashFromStr("d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcaf")
+	baseURL, _ := url.Parse("http://localhost:8000")
+
 	tests := []struct {
 		name           string
-		msg            *kafka.KafkaMessage
+		hash           *chainhash.Hash
+		baseURL        *url.URL
+		peerID         string
 		setup          func(*testServer)
 		httpResponse   []byte
 		httpStatusCode int
 		wantErr        bool
 	}{
 		{
-			name: "valid message",
-			msg: &kafka.KafkaMessage{
-				ConsumerMessage: sarama.ConsumerMessage{
-					Value: func() []byte {
-						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: subtreeHash.String(),
-							URL:  "http://localhost:8000",
-						}
-						data, _ := proto.Marshal(msg)
-						return data
-					}(),
-				},
-			},
+			name:           "valid message",
+			hash:           subtreeHash,
+			baseURL:        baseURL,
+			peerID:         "peer1",
 			httpStatusCode: http.StatusOK,
 			httpResponse:   hash1.CloneBytes(),
 			setup: func(s *testServer) {
@@ -114,60 +106,10 @@ func TestSubtreesHandler(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "invalid message unmarshal",
-			msg: &kafka.KafkaMessage{
-				ConsumerMessage: sarama.ConsumerMessage{
-					Value: []byte("invalid data"),
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid hash",
-			msg: &kafka.KafkaMessage{
-				ConsumerMessage: sarama.ConsumerMessage{
-					Value: func() []byte {
-						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: "invalid",
-							URL:  "http://localhost:8000",
-						}
-						data, _ := proto.Marshal(msg)
-						return data
-					}(),
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name: "invalid URL",
-			msg: &kafka.KafkaMessage{
-				ConsumerMessage: sarama.ConsumerMessage{
-					Value: func() []byte {
-						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: "d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcaf",
-							URL:  "://invalid",
-						}
-						data, _ := proto.Marshal(msg)
-						return data
-					}(),
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name: "validation error",
-			msg: &kafka.KafkaMessage{
-				ConsumerMessage: sarama.ConsumerMessage{
-					Value: func() []byte {
-						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: "d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcae",
-							URL:  "http://localhost:8000",
-						}
-						data, _ := proto.Marshal(msg)
-						return data
-					}(),
-				},
-			},
+			name:    "validation error",
+			hash:    subtreeHash,
+			baseURL: baseURL,
+			peerID:  "peer1",
 			setup: func(s *testServer) {
 				s.validateSubtreeInternalFn = func(ctx context.Context, v ValidateSubtree, blockHeight uint32, validationOptions ...validator.Option) error {
 					return errors.New(errors.ERR_INVALID_ARGUMENT, "validation failed")
@@ -176,19 +118,10 @@ func TestSubtreesHandler(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "not found error",
-			msg: &kafka.KafkaMessage{
-				ConsumerMessage: sarama.ConsumerMessage{
-					Value: func() []byte {
-						msg := &kafkamessage.KafkaSubtreeTopicMessage{
-							Hash: "d580e67e847f65c73496a9f1adafacc5f73b4ca9d44fbd0749d6d926914bdcafd",
-							URL:  "http://localhost:8000",
-						}
-						data, _ := proto.Marshal(msg)
-						return data
-					}(),
-				},
-			},
+			name:           "not found error",
+			hash:           subtreeHash,
+			baseURL:        baseURL,
+			peerID:         "peer1",
 			httpStatusCode: http.StatusNotFound,
 			httpResponse:   []byte{},
 			setup: func(s *testServer) {
@@ -267,7 +200,7 @@ func TestSubtreesHandler(t *testing.T) {
 				httpmock.NewBytesResponder(tt.httpStatusCode, tx1.ExtendedBytes()),
 			)
 
-			err := server.subtreesHandler(tt.msg)
+			err := server.subtreesHandler(context.Background(), tt.hash, tt.baseURL, tt.peerID)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {

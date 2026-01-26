@@ -212,7 +212,7 @@ func (t *TxMetaCache) SetCache(hash *chainhash.Hash, txMeta *meta.Data) error {
 		return err
 	}
 
-	return t.SetCacheFromBytes(hash[:], txMetaBytes)
+	return t.SetCacheFromBytes(hash.CloneBytes(), txMetaBytes)
 }
 
 // SetCacheFromBytes adds or updates transaction metadata in the cache using raw byte slices.
@@ -262,6 +262,18 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 	return nil
 }
 
+func (t *TxMetaCache) SetCacheMultiValuesRaw(keys [][]byte, values [][]byte) error {
+
+	err := t.cache.SetMulti(keys, values)
+	if err != nil {
+		return err
+	}
+
+	t.metrics.insertions.Add(uint64(len(keys)))
+
+	return nil
+}
+
 // GetMetaCached retrieves transaction metadata from the cache without falling back to the
 // underlying store. This provides a way to check if data is available in the cache only.
 //
@@ -278,37 +290,29 @@ func (t *TxMetaCache) SetCacheMulti(keys [][]byte, values [][]byte) error {
 // 2. Validates that the data is not empty
 // 3. Checks if the data has expired based on block height
 // All these conditions have corresponding metrics incremented for monitoring.
-func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash) (*meta.Data, error) {
-	cachedBytes := make([]byte, 0)
+func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash, txmetaData *meta.Data) (bool, error) {
+	cachedBytes := make([]byte, 0, 64)
 
 	if err := t.cache.Get(&cachedBytes, hash[:]); err != nil {
 		t.metrics.misses.Add(1)
 
-		return nil, err
+		return false, err
 	}
 
 	if len(cachedBytes) == 0 {
 		t.metrics.misses.Add(1)
 		t.logger.Warnf("txMetaCache empty for %s", hash.String())
 
-		return nil, nil
-	}
-
-	if !t.returnValue(cachedBytes) {
-		t.logger.Debugf("txMetaCache has the value %s, but it is too old with height: %d, returning nil", hash.String(), readHeightFromValue(cachedBytes))
-		t.metrics.hitOldTx.Add(1)
-
-		return nil, nil
+		return false, nil
 	}
 
 	t.metrics.hits.Add(1)
 
-	txmetaData := meta.Data{}
-	if err := meta.NewMetaDataFromBytes(cachedBytes, &txmetaData); err != nil {
-		return nil, errors.NewProcessingError("Failed to unmarshal txmetaData", err)
+	if err := meta.NewMetaDataFromBytes(cachedBytes, txmetaData); err != nil {
+		return false, errors.NewProcessingError("Failed to unmarshal txmetaData", err)
 	}
 
-	return &txmetaData, nil
+	return true, nil
 }
 
 // GetMeta retrieves transaction metadata for a given transaction hash, first checking the cache
@@ -317,58 +321,49 @@ func (t *TxMetaCache) GetMetaCached(_ context.Context, hash chainhash.Hash) (*me
 // Parameters:
 // - ctx: Context for the operation
 // - hash: Transaction hash to retrieve metadata for
+// - data: Pre-allocated meta.Data struct to populate with the retrieved metadata
 //
 // Returns:
-// - The transaction metadata if found
 // - Error if retrieval fails
 //
 // This is one of the primary interface methods that proxies calls to the underlying store
 // with a caching layer in between for improved performance.
-func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
+func (t *TxMetaCache) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
 	cachedBytes := make([]byte, 0)
 
 	err := t.cache.Get(&cachedBytes, hash[:])
 	if err != nil && !errors.Is(err, errors.ErrNotFound) {
-		return nil, err
+		return err
 	}
 
 	if len(cachedBytes) > 0 {
-		if !t.returnValue(cachedBytes) {
-			t.logger.Debugf("txMetaCache has the value %s, but it is too old with height: %d, returning nil", hash.String(), readHeightFromValue(cachedBytes))
-			t.metrics.hitOldTx.Add(1)
-
-			return nil, nil
-		}
-
 		t.metrics.hits.Add(1)
 
-		txmetaData := meta.Data{}
-		if err = meta.NewMetaDataFromBytes(cachedBytes, &txmetaData); err != nil {
-			return nil, err
+		if err = meta.NewMetaDataFromBytes(cachedBytes, data); err != nil {
+			return err
 		}
 
-		txmetaData.BlockIDs = make([]uint32, 0) // this is expected behavior, needs to be non-nil
+		data.BlockIDs = make([]uint32, 0) // this is expected behavior, needs to be non-nil
 
-		return &txmetaData, nil
+		return nil
 	}
 
 	t.metrics.misses.Add(1)
 	t.logger.Warnf("txMetaCache GetMeta miss for %s", hash.String())
 
-	txMeta, err := t.utxoStore.GetMeta(ctx, hash)
-	if err != nil {
-		return nil, err
+	if err := t.utxoStore.GetMeta(ctx, hash, data); err != nil {
+		return err
 	}
 
 	prometheusBlockValidationTxMetaCacheGetOrigin.Add(1)
 
 	// add to cache, but only if the blockIDs have not been set
-	if len(txMeta.BlockIDs) == 0 {
+	if len(data.BlockIDs) == 0 {
 		// don't return errors from SetCache, as it is not critical if the cache fails to set
-		_ = t.SetCache(hash, txMeta)
+		_ = t.SetCache(hash, data)
 	}
 
-	return txMeta, nil
+	return nil
 }
 
 // Get retrieves transaction data from the underlying store.
@@ -407,18 +402,42 @@ func (t *TxMetaCache) BatchDecorate(ctx context.Context, hashes []*utxo.Unresolv
 
 	prometheusBlockValidationTxMetaCacheGetOrigin.Add(float64(len(hashes)))
 
-	for _, data := range hashes {
-		if data.Data != nil {
-			if len(data.Data.TxInpoints.ParentTxHashes) > 48 {
-				t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.TxInpoints.ParentTxHashes))
-			}
+	// Batch cache population: build keys/values once and call SetCacheMulti.
+	// Note: values are serialized the same way SetCache() does (MetaBytes + height appended inside SetCacheMulti).
+	keys := make([][]byte, 0, len(hashes))
+	values := make([][]byte, 0, len(hashes))
 
-			if err := t.SetCache(&data.Hash, data.Data); err != nil {
-				if errors.Is(err, errors.ErrProcessing) {
-					t.logger.Debugf("error setting cache for txMeta [%s]: %v", data.Hash.String(), err)
-				} else {
-					t.logger.Errorf("error setting cache for txMeta [%s]: %v", data.Hash.String(), err)
-				}
+	for _, data := range hashes {
+		if data == nil || data.Data == nil {
+			continue
+		}
+
+		if len(data.Data.TxInpoints.ParentTxHashes) > 48 {
+			t.logger.Warnf("stored tx meta maybe too big for txmeta cache, size: %d, parent hash count: %d", data.Data.SizeInBytes, len(data.Data.TxInpoints.ParentTxHashes))
+		}
+
+		// get the metabytes directly here.
+		txMetaBytes, err := data.Data.MetaBytes()
+		if err != nil {
+			if errors.Is(err, errors.ErrProcessing) {
+				t.logger.Debugf("error serializing txMeta for [%s]: %v", data.Hash.String(), err)
+			} else {
+				t.logger.Errorf("error serializing txMeta for [%s]: %v", data.Hash.String(), err)
+			}
+			continue
+		}
+
+		keys = append(keys, data.Hash.CloneBytes())
+		values = append(values, txMetaBytes)
+	}
+
+	if len(keys) > 0 {
+		if err := t.SetCacheMultiValuesRaw(keys, values); err != nil {
+			// Preserve prior behavior: cache population failures are logged but don't fail BatchDecorate.
+			if errors.Is(err, errors.ErrProcessing) {
+				t.logger.Debugf("error setting cache batch for %d txMeta entries: %v", len(keys), err)
+			} else {
+				t.logger.Errorf("error setting cache batch for %d txMeta entries: %v", len(keys), err)
 			}
 		}
 	}
@@ -666,54 +685,6 @@ func (t *TxMetaCache) appendHeightToValue(txMetaBytes []byte) []byte {
 	binary.BigEndian.PutUint32(valueWithHeight[len(txMetaBytes):], height)
 
 	return valueWithHeight
-}
-
-// readHeightFromValue reads the encoded block height from the end of a cached value.
-// This is used to determine if a cached entry is still valid based on the current blockchain height.
-//
-// Parameters:
-// - value: The cached value with height information appended
-//
-// Returns:
-// - The block height (uint32) that was extracted from the last 4 bytes of the value
-//
-// This function is the counterpart to appendHeightToValue and extracts the little-endian uint32
-// that was previously appended.
-func readHeightFromValue(value []byte) uint32 {
-	return binary.BigEndian.Uint32(value[len(value)-4:])
-}
-
-// returnValue determines if a cached value should be returned based on its age in blocks.
-// This implements the expiration logic for cached transaction metadata to ensure fresh data.
-//
-// Parameters:
-// - valueBytes: The cached value containing metadata and the block height
-//
-// Returns:
-// - true if the value is fresh enough to use, false if it's too old and should be ignored
-//
-// The determination is based on the configured noOfBlocksToKeepInTxMetaCache setting,
-// which indicates how many blocks worth of transaction metadata should be kept in the cache.
-// If the metadata is older than this threshold, it is considered stale and not returned.
-func (t *TxMetaCache) returnValue(valueBytes []byte) bool {
-	// if the block height is less than the noOfBlocksToKeepInTxMetaCache, we should return the value
-	if t.utxoStore.GetBlockHeight() <= t.noOfBlocksToKeepInTxMetaCache {
-		return true
-	}
-
-	// calculate the block height to keep in cache
-	blockHeightToKeepInCacheThreshold := t.utxoStore.GetBlockHeight() - t.noOfBlocksToKeepInTxMetaCache
-
-	// check the height of the tx
-	valueHeight := readHeightFromValue(valueBytes)
-
-	// if the tx is too old we are not returning it
-	if valueHeight < blockHeightToKeepInCacheThreshold {
-		return false
-	}
-
-	// if the tx is not too old, we return the value
-	return true
 }
 
 // GetCacheStats retrieves current operational statistics from the underlying cache.

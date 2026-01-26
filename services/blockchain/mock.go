@@ -363,10 +363,32 @@ func (m *Mock) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) 
 	return args.Error(0)
 }
 
+func (m *Mock) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
 // SetBlockProcessedAt mocks the SetBlockProcessedAt method
 func (m *Mock) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
 	args := m.Called(ctx, blockHash, clear)
 	return args.Error(0)
+}
+
+// SetBlockPersistedAt mocks the SetBlockPersistedAt method
+func (m *Mock) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	args := m.Called(ctx, blockHash)
+	return args.Error(0)
+}
+
+// GetBlocksNotPersisted mocks the GetBlocksNotPersisted method
+func (m *Mock) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	args := m.Called(ctx, limit)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*model.Block), args.Error(1)
 }
 
 // GetBlockIsMined mocks the GetBlockIsMined method
@@ -418,6 +440,12 @@ func (m *Mock) GetBestHeightAndTime(ctx context.Context) (uint32, uint32, error)
 // CheckBlockIsInCurrentChain mocks the CheckBlockIsInCurrentChain method
 func (m *Mock) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	args := m.Called(ctx, blockIDs)
+	return args.Bool(0), args.Error(1)
+}
+
+// CheckBlockIsAncestorOfBlock mocks the CheckBlockIsAncestorOfBlock method
+func (m *Mock) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, blockIDs, blockHash)
 	return args.Bool(0), args.Error(1)
 }
 
@@ -642,6 +670,11 @@ type mockStoreCheckBlockChain struct {
 
 func (m *mockStoreCheckBlockChain) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
 	args := m.Called(ctx, blockIDs)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *mockStoreCheckBlockChain) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, blockIDs, blockHash)
 	return args.Bool(0), args.Error(1)
 }
 

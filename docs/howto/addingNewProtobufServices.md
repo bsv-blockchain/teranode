@@ -146,18 +146,18 @@ Teranode already provides shared data models in `model/model.proto` that can be 
 
 1. **Import the model** in your service's `.proto` file:
 
-   ```proto
-   import "model/model.proto";
-   ```
+    ```proto
+    import "model/model.proto";
+    ```
 
 2. **Reference the model types** in your messages:
 
-   ```proto
-   message MyServiceRequest {
-     model.MiningCandidate candidate = 1;
-     string additional_data = 2;
-   }
-   ```
+    ```proto
+    message MyServiceRequest {
+      model.MiningCandidate candidate = 1;
+      string additional_data = 2;
+    }
+    ```
 
 If you need to add new shared models, update `model/model.proto` directly. The Makefile already includes this file in the `gen` target, so running `make gen` will regenerate the code.
 

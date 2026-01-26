@@ -254,6 +254,10 @@ func (c *LocalClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs [
 	return c.store.CheckBlockIsInCurrentChain(ctx, blockIDs)
 }
 
+func (c *LocalClient) CheckBlockIsAncestorOfBlock(ctx context.Context, blockIDs []uint32, blockHash *chainhash.Hash) (bool, error) {
+	return c.store.CheckBlockIsAncestorOfBlock(ctx, blockIDs, blockHash)
+}
+
 func (c *LocalClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeadersFromHeight(ctx, height, limit)
 }
@@ -369,8 +373,20 @@ func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash
 	return c.store.SetBlockMinedSet(ctx, blockHash)
 }
 
+func (c *LocalClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.ClearBlockMinedSet(ctx, blockHash)
+}
+
 func (c *LocalClient) SetBlockProcessedAt(ctx context.Context, blockHash *chainhash.Hash, clear ...bool) error {
 	return c.store.SetBlockProcessedAt(ctx, blockHash, clear...)
+}
+
+func (c *LocalClient) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.store.SetBlockPersistedAt(ctx, blockHash)
+}
+
+func (c *LocalClient) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	return c.store.GetBlocksNotPersisted(ctx, limit)
 }
 
 func (c *LocalClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {

@@ -1,11 +1,18 @@
 package p2p
 
 import (
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/libp2p/go-libp2p/core/peer"
+)
+
+const (
+	// maxPeerNameLength limits peer names to prevent resource exhaustion
+	maxPeerNameLength = 128
 )
 
 // PeerRegistry maintains peer information
@@ -22,6 +29,40 @@ func NewPeerRegistry() *PeerRegistry {
 	}
 }
 
+// sanitizePeerName validates and sanitizes peer client names to prevent injection attacks.
+// It limits length, removes control characters, and filters potentially dangerous characters.
+func sanitizePeerName(name string) string {
+	if name == "" {
+		return ""
+	}
+
+	// Limit length to prevent resource exhaustion
+	if len(name) > maxPeerNameLength {
+		name = name[:maxPeerNameLength]
+	}
+
+	// Remove control characters, null bytes, and other problematic characters
+	// Allow only printable ASCII, spaces, and basic punctuation
+	var cleaned strings.Builder
+	cleaned.Grow(len(name))
+
+	for _, r := range name {
+		// Allow ASCII letters, numbers, spaces, and safe punctuation
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == ' ' || r == '-' || r == '_' || r == '.' || r == '/' {
+			cleaned.WriteRune(r)
+		} else if unicode.IsPrint(r) && r < 128 {
+			// Allow other printable ASCII but exclude potential XSS chars like <, >, &, ', "
+			if r != '<' && r != '>' && r != '&' && r != '\'' && r != '"' && r != '\\' {
+				cleaned.WriteRune(r)
+			}
+		}
+		// All other characters (control chars, high Unicode, etc.) are dropped
+	}
+
+	return strings.TrimSpace(cleaned.String())
+}
+
 // Put adds or updates a peer atomically
 func (pr *PeerRegistry) Put(id peer.ID, clientName string, height uint32, blockHash *chainhash.Hash, dataHubURL string) {
 	pr.mu.Lock()
@@ -29,10 +70,13 @@ func (pr *PeerRegistry) Put(id peer.ID, clientName string, height uint32, blockH
 
 	now := time.Now()
 
+	// Sanitize client name to prevent injection attacks and limit length
+	sanitizedClientName := sanitizePeerName(clientName)
+
 	if _, exists := pr.peers[id]; !exists {
 		pr.peers[id] = &PeerInfo{
 			ID:              id,
-			ClientName:      clientName,
+			ClientName:      sanitizedClientName,
 			Height:          height,
 			BlockHash:       blockHash,
 			DataHubURL:      dataHubURL,
@@ -44,7 +88,7 @@ func (pr *PeerRegistry) Put(id peer.ID, clientName string, height uint32, blockH
 		info := pr.peers[id]
 
 		if clientName != "" {
-			info.ClientName = clientName
+			info.ClientName = sanitizedClientName
 		}
 
 		if height > 0 {
@@ -332,6 +376,7 @@ func (pr *PeerRegistry) UpdateCatchupReputation(id peer.ID, score float64) {
 // - Success rate (0-100): weight 60%
 // - Malicious penalty: -20 per malicious attempt (capped at -50)
 // - Recency bonus: +10 if successful in last hour
+// - Speed factor: multiplier based on average response time (0.6 to 1.2)
 // - Final score is clamped to 0-100 range
 func (pr *PeerRegistry) calculateAndUpdateReputation(info *PeerInfo) {
 	const (
@@ -381,6 +426,11 @@ func (pr *PeerRegistry) calculateAndUpdateReputation(info *PeerInfo) {
 		score += recencyBonus
 	}
 
+	// Apply speed factor based on average response time
+	// Fast peers get a bonus, slow peers get a penalty
+	speedFactor := calculateSpeedFactor(info.AvgResponseTime)
+	score *= speedFactor
+
 	// Clamp to valid range
 	if score < 0 {
 		score = 0
@@ -389,6 +439,34 @@ func (pr *PeerRegistry) calculateAndUpdateReputation(info *PeerInfo) {
 	}
 
 	info.ReputationScore = score
+}
+
+// calculateSpeedFactor returns a multiplier based on average response time
+// Fast peers (< 500ms) get a bonus (up to 1.2x)
+// Slow peers (> 10s) get a penalty (down to 0.6x)
+// Peers with no data (0) get neutral factor (1.0x)
+func calculateSpeedFactor(avgResponseTime time.Duration) float64 {
+	if avgResponseTime == 0 {
+		// No data yet, neutral factor
+		return 1.0
+	}
+
+	switch {
+	case avgResponseTime < 200*time.Millisecond:
+		return 1.2 // Very fast peer - significant bonus
+	case avgResponseTime < 500*time.Millisecond:
+		return 1.1 // Fast peer - small bonus
+	case avgResponseTime < 2*time.Second:
+		return 1.0 // Normal speed - no adjustment
+	case avgResponseTime < 5*time.Second:
+		return 0.9 // Somewhat slow - small penalty
+	case avgResponseTime < 10*time.Second:
+		return 0.8 // Slow peer - moderate penalty
+	case avgResponseTime < 30*time.Second:
+		return 0.7 // Very slow peer - significant penalty
+	default:
+		return 0.6 // Extremely slow peer - maximum penalty
+	}
 }
 
 // RecordBlockReceived records when a block is successfully received from a peer
@@ -498,6 +576,23 @@ func (pr *PeerRegistry) RecordSyncAttempt(id peer.ID) {
 		info.LastSyncAttempt = time.Now()
 		info.SyncAttemptCount++
 	}
+}
+
+// ClearAllSyncAttempts clears the LastSyncAttempt time for all peers,
+// allowing them to be retried immediately. This is used when all peers
+// have been attempted and we want to refresh and try again.
+func (pr *PeerRegistry) ClearAllSyncAttempts() int {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+
+	peersCleared := 0
+	for _, info := range pr.peers {
+		if !info.LastSyncAttempt.IsZero() {
+			info.LastSyncAttempt = time.Time{}
+			peersCleared++
+		}
+	}
+	return peersCleared
 }
 
 // ReconsiderBadPeers resets reputation for peers that have been bad for a while

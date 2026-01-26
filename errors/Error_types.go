@@ -157,6 +157,11 @@ func NewSubtreeError(message string, params ...interface{}) *Error {
 	return New(ERR_SUBTREE_ERROR, message, params...)
 }
 
+// NewSubtreeExistsError creates a new error with the subtree exists error code.
+func NewSubtreeExistsError(message string, params ...interface{}) *Error {
+	return New(ERR_SUBTREE_EXISTS, message, params...)
+}
+
 // NewTxNotFoundError creates a new error with the transaction not found error code.
 func NewTxNotFoundError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_NOT_FOUND, message, params...)

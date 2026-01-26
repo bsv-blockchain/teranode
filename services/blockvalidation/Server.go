@@ -457,6 +457,12 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMes
 //   - error: Any error encountered (always nil for this method)
 func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.CatchupStatusResponse, error) {
 	status := u.getCatchupStatusInternal()
+	if status != nil && !status.IsCatchingUp && u.blockchainClient != nil {
+		_, meta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+		if err == nil && meta != nil {
+			status.CurrentHeight = meta.Height
+		}
+	}
 
 	resp := &blockvalidation_api.CatchupStatusResponse{
 		IsCatchingUp:         status.IsCatchingUp,
@@ -595,7 +601,15 @@ func (u *Server) Init(ctx context.Context) (err error) {
 				{
 					// Check if peer is bad or malicious before attempting catchup
 					if u.isPeerBad(c.peerID) || u.isPeerMalicious(ctx, c.peerID) {
-						u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad or malicious, skipping", c.block.Hash().String(), c.peerID, c.baseURL)
+						u.logger.Warnf("[catchup][%s] peer %s (%s) is marked as bad or malicious, trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL)
+
+						// Try alternative peers from P2P service instead of just skipping
+						if !u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
+							blockHash := c.block.Hash()
+							u.logger.Warnf("[catchup] All alternative peers failed for block %s, clearing processing marker for retry", blockHash.String())
+							u.processBlockNotify.Delete(*blockHash)
+							u.catchupAlternatives.Delete(*blockHash)
+						}
 						continue
 					}
 
@@ -632,42 +646,14 @@ func (u *Server) Init(ctx context.Context) (err error) {
 
 						// Try alternative sources for catchup
 						blockHash := c.block.Hash()
-						// Clean up alternatives after processing (no defer in loop)
 
-						// First, try to get intelligent peer selection from P2P service
-						bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, c.block.Height)
-						if peerErr != nil {
-							u.logger.Warnf("[catchup] Failed to get best peers from P2P service: %v", peerErr)
-						}
-
-						// Try best peers from P2P service first
-						if len(bestPeers) > 0 {
-							u.logger.Infof("[catchup] Trying %d peers from P2P service for block %s after primary peer %s failed", len(bestPeers), blockHash.String(), c.peerID)
-
-							for _, bestPeer := range bestPeers {
-								// Skip the same peer that just failed
-								if bestPeer.ID == c.peerID {
-									continue
-								}
-
-								u.logger.Infof("[catchup] Trying peer %s (score: %.2f) for block %s", bestPeer.ID, bestPeer.CatchupReputationScore, blockHash.String())
-
-								// Try catchup with this peer
-								if altErr := u.catchup(ctx, c.block, bestPeer.ID, bestPeer.DataHubURL); altErr == nil {
-									u.logger.Infof("[catchup] Successfully processed block %s from peer %s (via P2P service)", blockHash.String(), bestPeer.ID)
-									// Clear processing marker and alternatives
-									u.processBlockNotify.Delete(*blockHash)
-									u.catchupAlternatives.Delete(*blockHash)
-									break // Success, exit the peer loop
-								} else {
-									u.logger.Warnf("[catchup] Peer %s also failed for block %s: %v", bestPeer.ID, blockHash.String(), altErr)
-									u.reportCatchupFailure(ctx, bestPeer.ID)
-									// Failure will be reported by the catchup function itself
-								}
-							}
+						// First, try intelligent peer selection from P2P service
+						if u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
+							continue
 						}
 
 						// If P2P service peers didn't work, fall back to cached alternatives
+						catchupSucceeded := false
 						alternatives := u.catchupAlternatives.Get(*blockHash)
 						if alternatives != nil && alternatives.Value() != nil {
 							altList := alternatives.Value()
@@ -680,9 +666,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 									continue
 								}
 
-								// Check if peer is bad or malicious
-								if u.isPeerBad(alt.peerID) || u.isPeerMalicious(ctx, alt.peerID) {
-									u.logger.Warnf("[catchup] Skipping alternative peer %s - marked as bad or malicious", alt.peerID)
+								// Check if peer is truly malicious (serving invalid blocks)
+								// Don't filter by isPeerBad - low reputation peers might still work for catchup
+								if u.isPeerMalicious(ctx, alt.peerID) {
+									u.logger.Warnf("[catchup] Skipping alternative peer %s - marked as malicious", alt.peerID)
 									continue
 								}
 
@@ -694,6 +681,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 									// Clear processing marker and alternatives
 									u.processBlockNotify.Delete(*blockHash)
 									u.catchupAlternatives.Delete(*blockHash)
+									catchupSucceeded = true
 									break
 								} else {
 									u.logger.Warnf("[catchup] Alternative peer %s also failed for block %s: %v", alt.peerID, blockHash.String(), altErr)
@@ -704,9 +692,11 @@ func (u *Server) Init(ctx context.Context) (err error) {
 							u.logger.Infof("[catchup] No cached alternative sources available for block %s", blockHash.String())
 						}
 
-						// Clear processing marker and alternatives to allow retries
-						u.processBlockNotify.Delete(*blockHash)
-						u.catchupAlternatives.Delete(*blockHash)
+						if !catchupSucceeded {
+							// Clear processing marker and alternatives to allow retries
+							u.processBlockNotify.Delete(*blockHash)
+							u.catchupAlternatives.Delete(*blockHash)
+						}
 					} else {
 						// Success - clear alternatives for this block
 						u.catchupAlternatives.Delete(*c.block.Hash())
@@ -1009,36 +999,51 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
-	// Blocks until the FSM transitions from the IDLE state
-	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
-	if err != nil {
-		u.logger.Errorf("[Block Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
+	g, gctx := errgroup.WithContext(ctx)
 
-		return err
-	}
+	// Start Kafka consumer only after the blockchain FSM transitions from IDLE.
+	// This prevents validation processing from starting too early, while still allowing
+	// the gRPC server to accept administrative calls (e.g. RevalidateBlock).
+	g.Go(func() error {
+		// Blocks until the FSM transitions from the IDLE state
+		err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gctx)
+		if err != nil {
+			u.logger.Errorf("[Block Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
+			return err
+		}
 
-	u.logger.Infof("[Start] FSM transitioned from IDLE state, starting Kafka consumer")
+		u.logger.Infof("[Start] FSM transitioned from IDLE state, starting Kafka consumer")
 
-	// start blocks kafka consumer
-	if u.kafkaConsumerClient == nil {
-		u.logger.Errorf("[Start] kafkaConsumerClient is nil!")
-		return errors.NewServiceError("kafkaConsumerClient is nil")
-	}
+		// start blocks kafka consumer
+		if u.kafkaConsumerClient == nil {
+			u.logger.Errorf("[Start] kafkaConsumerClient is nil!")
+			return errors.NewServiceError("kafkaConsumerClient is nil")
+		}
 
-	u.logger.Infof("[Start] Starting Kafka consumer with handler")
-	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithLogErrorAndMoveOn())
+		u.logger.Infof("[Start] Starting Kafka consumer with handler")
+		u.kafkaConsumerClient.Start(gctx, u.consumerMessageHandler(gctx), kafka.WithLogErrorAndMoveOn())
 
-	u.logger.Infof("[Start] Kafka consumer started successfully")
+		u.logger.Infof("[Start] Kafka consumer started successfully")
 
-	// this will block
-	if err := util.StartGRPCServer(ctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
-		blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
-		closeOnce.Do(func() { close(readyCh) })
-	}, nil); err != nil {
-		return err
-	}
+		<-gctx.Done()
 
-	return nil
+		u.logger.Infof("[Start] Kafka consumer context done, closing consumer")
+		if err := u.kafkaConsumerClient.Close(); err != nil {
+			u.logger.Errorf("[Start] failed to close kafka consumer gracefully: %v", err)
+		}
+
+		return nil
+	})
+
+	// Start gRPC server immediately (blocks until shutdown)
+	g.Go(func() error {
+		return util.StartGRPCServer(gctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
+			blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
+			closeOnce.Do(func() { close(readyCh) })
+		}, nil)
+	})
+
+	return g.Wait()
 }
 
 // Stop gracefully shuts down the block validation server by stopping background
@@ -1162,7 +1167,7 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 		IsRevalidation:          true,
 	}
 
-	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, blockHeaderMeta.PeerID, u.blockValidation.bloomFilterStats, opts)
+	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, blockHeaderMeta.PeerID, opts)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed block re-validation", block.String(), err))
 	}
@@ -1278,13 +1283,7 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 
 	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	// only get the bloom filters for the current chain
-	bloomFilters, err := u.blockValidation.collectNecessaryBloomFilters(ctx, block, blockHeaders)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewServiceError("[ValidateBlock][%s] failed to collect necessary bloom filters", block.String(), err))
-	}
-
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, bloomFilters, blockHeaders, blockHeaderIDs, nil, u.settings); !ok {
+	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings); !ok {
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 
@@ -1386,7 +1385,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
 	}
 
-	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, u.blockValidation.bloomFilterStats, opts)
+	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
 	if err != nil {
 		return errors.NewServiceError("failed block validation BlockFound [%s]", block.String(), err)
 	}
@@ -1634,7 +1633,7 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 
 		// Check if we're already processing this block in catchup
 		if u.processBlockNotify.Get(*blockFound.hash) != nil {
-			u.logger.Debugf("[addBlockToPriorityQueue] Block %s already being processed in catchup, adding as alternative source", blockFound.hash.String())
+			u.logger.Infof("[addBlockToPriorityQueue] Block %s already being processed in catchup, adding as alternative source", blockFound.hash.String())
 
 			// Add to alternative sources for potential failover
 			catchupBlock := processBlockCatchup{

@@ -227,33 +227,33 @@ Why it matters: Ensures compliance with Bitcoin consensus rules.
 
 1. **Setup**
 
-```
-Initialize Framework
-├── Create Docker environment
-├── Start services
-├── Initialize clients
-└── Verify health
-```
+    ```
+    Initialize Framework
+    ├── Create Docker environment
+    ├── Start services
+    ├── Initialize clients
+    └── Verify health
+    ```
 
 2. **Execution**
 
-```
-Run Test
-├── Prepare test state
-├── Execute test actions
-├── Verify results
-└── Cleanup
-```
+    ```
+    Run Test
+    ├── Prepare test state
+    ├── Execute test actions
+    ├── Verify results
+    └── Cleanup
+    ```
 
 3. **Teardown**
 
-```
-Cleanup
-├── Stop services
-├── Remove containers
-├── Clean data
-└── Release resources
-```
+    ```
+    Cleanup
+    ├── Stop services
+    ├── Remove containers
+    ├── Clean data
+    └── Release resources
+    ```
 
 ## Running Tests
 

@@ -102,7 +102,7 @@ type Store struct {
 func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, storeURL *url.URL) (*Store, error) {
 	initPrometheusMetrics()
 
-	db, err := util.InitSQLDB(logger, storeURL, tSettings)
+	db, err := util.InitSQLDB(logger, storeURL, tSettings, tSettings.UtxoStore.PostgresPool)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to init sql db", err)
 	}
@@ -490,8 +490,17 @@ func (s *Store) updateParentConflictingChildren(ctx context.Context, transaction
 	return nil
 }
 
-func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error) {
-	return s.get(ctx, hash, utxo.MetaFields)
+func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	result, err := s.get(ctx, hash, utxo.MetaFields)
+	if err != nil {
+		return err
+	}
+
+	if result != nil {
+		*data = *result
+	}
+
+	return nil
 }
 
 // Get retrieves transaction metadata and optionally the full transaction data.

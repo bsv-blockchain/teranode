@@ -777,11 +777,108 @@ func TestSyncCoordinator_IsCaughtUp(t *testing.T) {
 	registry.Put(peer2, "", 90, peerHash2, "")
 	assert.True(t, sc.isCaughtUp(), "Should be caught up when peers are behind")
 
-	// Add peer ahead of us - should NOT be caught up
+	// Add peer significantly ahead of us (more than 10 block tolerance) - should NOT be caught up
 	peer3 := peer.ID("peer3")
 	peerHash3, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
-	registry.Put(peer3, "", 110, peerHash3, "")
-	assert.False(t, sc.isCaughtUp(), "Should NOT be caught up when a peer is ahead")
+	registry.Put(peer3, "", 120, peerHash3, "http://peer3:8080") // 20 blocks ahead, beyond 10 block tolerance
+	assert.False(t, sc.isCaughtUp(), "Should NOT be caught up when a peer is significantly ahead")
+}
+
+func TestSyncCoordinator_IsCaughtUp_IgnoresNonViablePeers(t *testing.T) {
+	logger := ulogger.New("test")
+	settings := CreateTestSettings()
+	registry := NewPeerRegistry()
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
+	blockchainSetup := SetupTestBlockchain(t)
+	defer blockchainSetup.Cleanup()
+
+	sc := NewSyncCoordinator(
+		logger,
+		settings,
+		registry,
+		selector,
+		banManager,
+		blockchainSetup.Client,
+		nil,
+	)
+
+	sc.SetGetLocalHeightCallback(func() uint32 { return 100 })
+
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+
+	// Peer ahead but no DataHub URL -> should be ignored
+	noURL := peer.ID("peer-no-url")
+	registry.Put(noURL, "", 200, peerHash, "")
+
+	// Peer ahead but banned -> should be ignored
+	banned := peer.ID("peer-banned")
+	registry.Put(banned, "", 200, peerHash, "http://banned:8080")
+	registry.UpdateBanStatus(banned, 100, true)
+
+	// Peer ahead but low reputation -> should be ignored
+	lowRep := peer.ID("peer-low-rep")
+	registry.Put(lowRep, "", 200, peerHash, "http://lowrep:8080")
+	registry.UpdateReputation(lowRep, 10)
+
+	assert.True(t, sc.isCaughtUp(), "Should be caught up when only non-viable peers are ahead")
+
+	// Now add a viable peer significantly ahead -> should not be caught up
+	viable := peer.ID("peer-viable")
+	registry.Put(viable, "", 200, peerHash, "http://viable:8080")
+	registry.UpdateReputation(viable, 80)
+	assert.False(t, sc.isCaughtUp(), "Should NOT be caught up when a viable peer is significantly ahead")
+}
+
+func TestSyncCoordinator_BackoffClearsSyncAttemptsAndExpires(t *testing.T) {
+	logger := ulogger.New("test")
+	settings := CreateTestSettings()
+	registry := NewPeerRegistry()
+	selector := NewPeerSelector(logger, nil)
+	banManager := NewPeerBanManager(context.Background(), nil, settings, registry)
+	blockchainSetup := SetupTestBlockchain(t)
+	defer blockchainSetup.Cleanup()
+
+	sc := NewSyncCoordinator(
+		logger,
+		settings,
+		registry,
+		selector,
+		banManager,
+		blockchainSetup.Client,
+		nil,
+	)
+
+	// Add a peer and record a sync attempt so LastSyncAttempt is non-zero
+	peerHash, _ := chainhash.NewHashFromStr("000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f")
+	p := peer.ID("peer1")
+	registry.Put(p, "", 120, peerHash, "http://peer1:8080")
+	registry.RecordSyncAttempt(p)
+
+	infoBefore, ok := registry.Get(p)
+	require.True(t, ok)
+	require.False(t, infoBefore.LastSyncAttempt.IsZero(), "LastSyncAttempt should be set before backoff")
+
+	// Enter backoff and verify sync attempts were cleared
+	sc.enterBackoffMode()
+	infoAfter, ok := registry.Get(p)
+	require.True(t, ok)
+	assert.True(t, infoAfter.LastSyncAttempt.IsZero(), "LastSyncAttempt should be cleared when entering backoff")
+
+	// Immediately after entering backoff, we should still be in backoff
+	assert.True(t, sc.checkAndClearExpiredBackoff(), "Should be in backoff immediately after entering")
+
+	// Force backoff to expire by moving the last attempt time into the past
+	sc.mu.Lock()
+	sc.lastAllPeersAttemptTime = time.Now().Add(-3 * time.Second)
+	sc.mu.Unlock()
+
+	assert.False(t, sc.checkAndClearExpiredBackoff(), "Backoff should be expired")
+
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+	assert.False(t, sc.allPeersAttempted, "Backoff state should be cleared after expiration")
+	assert.Equal(t, 2, sc.backoffMultiplier, "Backoff multiplier should increase after expiration")
 }
 
 func TestSyncCoordinator_SendSyncTriggerToKafka(t *testing.T) {

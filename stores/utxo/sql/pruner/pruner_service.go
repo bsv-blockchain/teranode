@@ -6,7 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
-	"github.com/bsv-blockchain/teranode/stores/pruner"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
@@ -82,6 +82,12 @@ func (s *Service) Start(ctx context.Context) {
 // This allows cleanup to coordinate with block persister to avoid premature deletion.
 func (s *Service) SetPersistedHeightGetter(getter func() uint32) {
 	s.getPersistedHeight = getter
+}
+
+// AddObserver adds an observer to be notified when pruning completes.
+// This is a no-op for the SQL pruner service as it doesn't support observers yet.
+func (s *Service) AddObserver(observer pruner.Observer) {
+	// No-op: SQL pruner doesn't support observers yet
 }
 
 // Prune removes transactions marked for deletion at or before the specified height.

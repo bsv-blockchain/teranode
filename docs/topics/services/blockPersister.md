@@ -56,10 +56,9 @@ The following diagram provides a deeper level of detail into the Block Persister
 The service initializes through the following sequence:
 
 1. Loads configuration settings
-2. Initializes state management
-3. Establishes connection with blockchain client
-4. Waits for FSM transition from IDLE state
-5. Starts block processing loop
+2. Establishes connection with blockchain client
+3. Waits for FSM transition from IDLE state
+4. Starts block processing loop
 
 ### 2.2 Block Discovery and Processing
 
@@ -68,9 +67,9 @@ The service initializes through the following sequence:
 The service processes blocks through a **continuous polling mechanism**:
 
 1. **Block Discovery**
-    - Retrieves last persisted block height from the local state
-    - Polls the Blockchain service to get the current best block header
-    - Determines if new blocks need processing based on `BlockPersisterPersistAge`. Blocks are only processed when `(currentTip - lastPersistedHeight) > BlockPersisterPersistAge`. This means the service intentionally stays at least `BlockPersisterPersistAge` blocks behind the tip to avoid reorgs and ensure block finality.
+    - Queries the database for blocks where `persisted_at IS NULL` and `invalid = false`
+    - Retrieves blocks in ascending height order to ensure sequential processing
+    - Returns immediately if no unpersisted blocks are found
 
 2. **Processing Flow**
     - Retrieves the next block to process from the Blockchain service
@@ -82,7 +81,7 @@ The service processes blocks through a **continuous polling mechanism**:
     - A Subtree file for each subtree in the block (.subtree), including the number of transactions in the subtree, and the decorated transactions (with UTXO meta data).
     - UTXO additions (.utxo-additions), containing the UTXOs created in the block. This represents a list of new transaction outputs, including the Coinbase transaction outputs.
     - UTXO deletions (.utxo-deletions), containing the UTXOs spent in the block. This represents a list of transaction inputs that reference and spend previous outputs.
-    - Updates the local state with the new block height
+    - Updates the block's `persisted_at` timestamp in the database
 
 3. **Sleep Mechanisms**
     - On error: the service sleeps for a 1-minute period before retrying
@@ -92,29 +91,53 @@ The service processes blocks through a **continuous polling mechanism**:
     - **FSM State Dependency**: The service waits for the blockchain FSM (Finite State Machine) to transition from the IDLE state to RUNNING before beginning block processing operations
     - **No gRPC API**: Unlike other Teranode services, the Block Persister does not expose a gRPC API and operates purely as a background processing service
 
-### 2.3 Subtree Processing Details
+### 2.3 Subtree Processing Details (Two-Phase Architecture)
 
 ![block_persister_receive_new_blocks_subtrees.svg](img/plantuml/blockpersister/block_persister_receive_new_blocks_subtrees.svg)
 
-The detailed subtree processing workflow includes:
+The Block Persister uses a **two-phase architecture** for efficient subtree processing:
+
+#### Phase 1: Create Subtree Data Files (Parallel)
+
+Multiple subtrees are processed concurrently with configurable concurrency:
 
 1. **Subtree Retrieval**
-    - Retrieves subtree data from the blockchain service
-    - Deserializes transaction data within the subtree
+    - Retrieves subtree structure from the subtree store
+    - Checks if subtree data already exists (skips if present)
 
 2. **Transaction Metadata Loading**
     - Loads transaction metadata in batches for efficiency
-    - Decorates transactions with UTXO metadata
-    - Processes transactions individually if batch processing fails
+    - Decorates transactions with UTXO metadata from the store
+    - Falls back to individual processing if batch fails
 
-3. **File Creation**
+3. **Streaming File Creation**
+    - Uses `SubtreeDataWriter` for ordered batch writes
+    - Streams data directly to storage without buffering entire file
     - Stores decorated subtree files (.subtree extension)
-    - Calculates and stores UTXO changes (additions and deletions)
-    - Updates the UTXO difference tracking
 
-4. **Concurrency**
-    - Processes multiple subtrees concurrently using configurable concurrency limits
-    - Uses error groups to handle concurrent processing errors
+4. **Error Recovery**
+    - Uses success-flag pattern to ensure incomplete files are never finalized
+    - On error, `Abort()` is called instead of `Close()` to remove temporary files
+    - No incomplete subtree files are left in storage after failures
+
+#### Phase 2: Process UTXO Changes (Sequential)
+
+UTXO processing runs sequentially to maintain correct ordering:
+
+1. **Read Subtree Data Files**
+    - Opens each subtree data file for streaming read
+    - Processes subtrees in order
+
+2. **UTXO Diff Processing**
+    - Processes each transaction through the UTXO diff tracker
+    - Records additions (new outputs) and deletions (spent outputs)
+    - Writes to `.utxo-additions` and `.utxo-deletions` files
+
+This two-phase approach provides:
+
+- **Maximum parallelism** for I/O-bound subtree file creation
+- **Correct ordering** for UTXO state updates
+- **Memory efficiency** through streaming reads/writes
 
 ## 3. Data Model
 
@@ -214,14 +237,15 @@ The Block Persister service is located in the `services/blockpersister` director
 
 ```text
 services/blockpersister/
-├── state/                      # State management
-├── Server.go                   # Main service implementation
-├── Server_test.go              # Service tests
-├── persist_block.go            # Block persistence logic
-├── persist_block_test.go       # Block persistence tests
-├── processSubtree.go           # Subtree processing logic
-├── processTxMetaUsingStore.go  # Transaction metadata processing
-└── metrics.go                  # Prometheus metrics
+├── Server.go                          # Main service implementation
+├── Server_test.go                     # Service tests
+├── persist_block.go                   # Block persistence logic
+├── persist_block_test.go              # Block persistence tests
+├── streaming_process_subtree.go       # Subtree processing with streaming writes
+├── streaming_process_subtree_test.go  # Subtree processing tests
+├── subtree_data_writer.go             # Ordered batch writer for subtree data
+├── processTxMetaUsingStore.go         # Transaction metadata processing
+└── metrics.go                         # Prometheus metrics
 ```
 
 ## 6. How to run

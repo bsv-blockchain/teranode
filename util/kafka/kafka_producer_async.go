@@ -21,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
 	"github.com/bsv-blockchain/teranode/util/retry"
+	"github.com/ordishs/go-utils"
 	"github.com/rcrowley/go-metrics"
 )
 
@@ -337,8 +338,16 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
-							// Channel was closed during send, this is expected during shutdown
-							c.Config.Logger.Debugf("[kafka] Recovered from send to closed channel during shutdown")
+							// Check if this is the expected "send on closed channel" panic
+							panicMsg := fmt.Sprint(r)
+							if strings.Contains(panicMsg, "closed channel") {
+								// Expected during shutdown, log at debug level
+								c.Config.Logger.Debugf("[kafka] Recovered from send to closed channel during shutdown")
+							} else {
+								// Unexpected panic - log error and re-throw to expose the bug
+								c.Config.Logger.Errorf("[kafka] Unexpected panic while sending message: %v", r)
+								panic(r)
+							}
 						}
 					}()
 					c.Producer.Input() <- message
@@ -382,9 +391,10 @@ func (c *KafkaAsyncProducer) Stop() error {
 
 	// Close the publish channel to signal the publish goroutine to exit
 	c.channelMu.Lock()
-	if c.publishChannel != nil {
-		close(c.publishChannel)
-		c.publishChannel = nil
+	ch := c.publishChannel
+	if ch != nil {
+		c.publishChannel = nil // Set to nil BEFORE closing to prevent sends to closed channel
+		close(ch)
 	}
 	c.channelMu.Unlock()
 
@@ -411,16 +421,18 @@ func (c *KafkaAsyncProducer) BrokersURL() []string {
 
 // Publish sends a message to the producer's publish channel.
 func (c *KafkaAsyncProducer) Publish(msg *Message) {
-	if c.closed.Load() {
+	c.channelMu.RLock()
+	defer c.channelMu.RUnlock()
+
+	if c.closed.Load() || c.publishChannel == nil {
 		return
 	}
 
 	c.channelMu.RLock()
-	ch := c.publishChannel
-	c.channelMu.RUnlock()
+	defer c.channelMu.RUnlock()
 
-	if ch != nil {
-		ch <- msg
+	if c.publishChannel != nil {
+		utils.SafeSend(c.publishChannel, msg)
 	}
 }
 

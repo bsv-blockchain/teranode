@@ -32,6 +32,50 @@ Global settings control system-wide behavior across all Teranode services. These
 | PrettyLogs | bool | true | prettyLogs | Human-readable log formatting |
 | JSONLogging | bool | false | jsonLogging | JSON-structured log output |
 
+### Debug Toggles
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| Debug.All | bool | false | debug_all | Enable every subsystem debug log |
+| Debug.File | bool | false | debug_file | Low-level filesystem operation logs |
+| Debug.Blobstore | bool | false | debug_blobstore | High-level blob store API call logs with stack traces |
+| Debug.UTXOStore | bool | false | debug_utxostore | UTXO store file operation logs |
+
+#### Debug Toggle Details
+
+**Prerequisites**: All debug toggles require `logLevel = DEBUG` to emit logs. Setting a debug flag without DEBUG log level has no effect.
+
+**`debug_file`** - Low-level filesystem operations:
+- Detailed logs of file system I/O operations
+- File paths, byte counts, checksums, DAH cleanup operations
+- Use when debugging: disk space issues, file I/O problems, filesystem-level errors
+- Example logs: `"[File] SetFromReader start key=... type=... size=..."`, `"[File] removing expired file: ..."`
+
+**`debug_blobstore`** - High-level blob store API tracing:
+- Logs all blob store API calls (Get, Set, Exists, Del, etc.) with 5-level deep call stacks
+- Shows which code is calling blob store operations and why
+- Use when debugging: application-level blob access patterns, API usage tracking
+- Example logs: `"[BlobStore][logger][Get] key ... fileType ... : called from ..."`
+- Note: Only active when `?logger=true` is set in blob store URL configuration
+
+**`debug_utxostore`** - UTXO store file operations:
+- Similar to `debug_file` but specific to UTXO store file operations
+- Use when debugging UTXO-specific storage issues
+
+**`debug_all`** - Enable all subsystems:
+- Shortcut to enable all debug flags at once
+- Equivalent to setting all individual flags to true
+- Use for comprehensive debugging or when you're unsure which subsystem is involved
+
+#### Hierarchical Relationships
+
+Debug flags have hierarchical dependencies:
+- `debug_file = true` → enables both File logs AND Blobstore logs (when `?logger=true` is set)
+- `debug_blobstore = true` → enables only Blobstore logs
+- `debug_all = true` → enables ALL debug logs across all subsystems
+
+This hierarchy exists because file-level operations are the foundation of blob store operations. When debugging filesystem issues, you typically want to see both layers.
+
 ### HTTP Security Settings
 
 | Setting | Type | Default | Environment Variable | Usage |
@@ -98,6 +142,7 @@ Global settings control system-wide behavior across all Teranode services. These
 - `PrettyLogs = true`: Human-readable colored output (development)
 - `JSONLogging = true`: Structured JSON logs (production)
 - Cannot enable both `PrettyLogs` and `JSONLogging` simultaneously
+- Subsystem debug toggles (`debug_*`) still require `logLevel = DEBUG`
 
 ### HTTPS Configuration
 

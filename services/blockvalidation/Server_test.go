@@ -99,6 +99,24 @@ var (
 	bitsStr          = "1b04864c"
 )
 
+func TestGetCatchupStatusPopulatesCurrentHeightWhenNotCatchingUp(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	suite.Server.isCatchingUp.Store(false)
+
+	suite.MockBlockchain.
+		On("GetBestBlockHeader", mock.Anything).
+		Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 123, ID: 1}, nil).
+		Once()
+
+	resp, err := suite.Server.GetCatchupStatus(suite.Ctx, &blockvalidation_api.EmptyMessage{})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.False(t, resp.IsCatchingUp)
+	assert.Equal(t, uint32(123), resp.CurrentHeight)
+}
+
 func TestOneTransaction(t *testing.T) {
 	var err error
 
@@ -1306,8 +1324,6 @@ func Test_ProcessBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
@@ -1351,8 +1367,6 @@ func Test_ProcessBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
@@ -1454,8 +1468,6 @@ func Test_ValidateBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
@@ -1526,8 +1538,6 @@ func Test_ValidateBlock(t *testing.T) {
 			subtreeStore:                  subtreeStore,
 			txStore:                       txStore,
 			utxoStore:                     utxoStore,
-			recentBlocksBloomFilters:      txmap.NewSyncedMap[chainhash.Hash, *model.BlockBloomFilter](),
-			blockBloomFiltersBeingCreated: txmap.NewSwissMap(0),
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
@@ -1559,7 +1569,7 @@ func Test_ValidateBlock(t *testing.T) {
 		resp, err := server.ValidateBlock(ctx, req)
 		require.Error(t, err) // ValidateBlock now returns error for bloom filter collection failures
 		require.Nil(t, resp)
-		require.Contains(t, err.Error(), "failed to collect necessary bloom filters")
+		require.Contains(t, err.Error(), "block is not valid")
 	})
 }
 

@@ -303,17 +303,17 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash1, Fee: 111}, parents1)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash2, Fee: 222}, parents2)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash3, Fee: 333}, parents3)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
 
 	t.Log("Waiting for transactions to be processed...")
 
@@ -440,15 +440,15 @@ func TestShouldHandleReorg(t *testing.T) {
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash1, Fee: 111}, parents1)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash2, Fee: 222}, parents2)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash3, Fee: 333}, parents3)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
 
 	// Add Chain A block (lower difficulty)
 	t.Log("Adding Chain A block...")
@@ -654,15 +654,15 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	_, err = ba.utxoStore.Create(ctx, testTx1, 0)
 	require.NoError(t, err)
 
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash1, Fee: 111}, parents1)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash1, Fee: 111}}, []*subtree.TxInpoints{&parents1})
 
 	_, err = ba.utxoStore.Create(ctx, testTx2, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash2, Fee: 222}, parents2)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash2, Fee: 222}}, []*subtree.TxInpoints{&parents2})
 
 	_, err = ba.utxoStore.Create(ctx, testTx3, 0)
 	require.NoError(t, err)
-	ba.blockAssembler.AddTx(subtree.Node{Hash: *testHash3, Fee: 333}, parents3)
+	ba.blockAssembler.AddTxBatch([]subtree.Node{{Hash: *testHash3, Fee: 333}}, []*subtree.TxInpoints{&parents3})
 
 	// Add Chain A blocks (lower difficulty)
 	t.Log("Adding Chain A blocks...")

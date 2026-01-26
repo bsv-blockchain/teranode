@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -38,10 +39,10 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/blockpersister"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
@@ -85,7 +86,7 @@ func usage(msg string) {
 //
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
 func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir string, hash string,
-	skipHeaders bool, skipUTXOs bool) {
+	skipHeaders bool, skipUTXOs bool, skipCheck bool) {
 	profilerAddr := appSettings.ProfilerAddr
 	if profilerAddr != "" {
 		go func() {
@@ -159,6 +160,7 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			defer wg.Done()
 
 			logger.Infof("Processing headers...")
+			logger.Infof("Blockchain store: %s", appSettings.BlockChain.StoreURL)
 
 			// Process the headers
 			if err := processHeaders(ctx, logger, appSettings, headerFile); err != nil {
@@ -177,9 +179,10 @@ func Seeder(logger ulogger.Logger, appSettings *settings.Settings, inputDir stri
 			defer wg.Done()
 
 			logger.Infof("Processing UTXOs...")
+			logger.Infof("UTXO store: %s", appSettings.UtxoStore.UtxoStore.String())
 
 			// Process the UTXOs
-			if err := processUTXOs(ctx, logger, appSettings, utxoFile); err != nil {
+			if err := processUTXOs(ctx, logger, appSettings, utxoFile, skipCheck); err != nil {
 				logger.Errorf("Failed to process UTXOs: %v", err)
 				return
 			}
@@ -255,21 +258,26 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 		return errors.NewProcessingError(errMsgFailedToReadUTXO, err)
 	}
 
-	// Write the last block height and hash to the blockpersister_state.txt file
-	_ = blockpersister.New(ctx, nil, appSettings,
-		nil, nil, nil,
-		nil, blockpersister.WithSetInitialState(height, &hash),
-	)
+	// Note: Block persistence state is now tracked in the database via persisted_at column
+	// No need to write to a state file anymore
 
 	var (
 		headersProcessed uint64
 		txCount          uint64
 	)
 
+	// Determine if this is V1 (without coinbase) or V2 (with coinbase)
+	isV1 := header.IsUtxoHeadersV1()
+	if isV1 {
+		logger.Infof("Reading V1 utxo-headers (without coinbase transactions)")
+	} else {
+		logger.Infof("Reading V2 utxo-headers (with coinbase transactions)")
+	}
+
 	var blockIndex *utxopersister.BlockIndex
 
 	for {
-		blockIndex, err = utxopersister.NewUTXOHeaderFromReader(reader)
+		blockIndex, err = utxopersister.NewUTXOHeaderFromReader(reader, isV1)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -285,6 +293,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 
 		block := &model.Block{
 			Header:           blockIndex.BlockHeader,
+			CoinbaseTx:       blockIndex.CoinbaseTx,
 			TransactionCount: blockIndex.TxCount,
 			Height:           blockIndex.Height,
 		}
@@ -295,6 +304,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 			"headers",
 			blockchainoptions.WithMinedSet(true),
 			blockchainoptions.WithSubtreesSet(true),
+			blockchainoptions.WithPersistedAt(), // Mark as persisted now, since we're seeding and the block persister won't be able to do it later
 		)
 		if err != nil {
 			return errors.NewProcessingError("failed to add block", err)
@@ -308,7 +318,7 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 		}
 	}
 
-	logger.Infof("FINISHED  %16s transactions with %16s utxos", formatNumber(headersProcessed), formatNumber(txCount))
+	logger.Infof("FINISHED  %16s headers with %16s transactions", formatNumber(headersProcessed), formatNumber(txCount))
 
 	return nil
 }
@@ -316,29 +326,42 @@ func processHeaders(ctx context.Context, logger ulogger.Logger, appSettings *set
 // processUTXOs reads the UTXO set from a file and stores it in the UTXO store.
 //
 //nolint:gocognit // Requires refactoring to reduce cognitive complexity
-func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, utxoFile string) error {
+func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings, utxoFile string, skipCheck bool) error {
 	blockStoreURL := appSettings.Block.BlockStore
 	if blockStoreURL == nil {
 		return errors.NewConfigurationError("blockstore URL not found in config")
 	}
 
-	logger.Infof("Using blockStore at %s", blockStoreURL)
+	var err error
 
-	blockStore, err := blob.NewStore(logger, blockStoreURL)
+	hashPrefix := -2
+
+	if blockStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	logger.Infof("Using blockStore at %s with hashPrefix %d", blockStoreURL, hashPrefix)
+
+	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return errors.NewStorageError("failed to create blockStore", err)
 	}
 
-	var exists bool
+	if !skipCheck {
+		var exists bool
 
-	exists, err = blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"))
-	if err != nil {
-		return errors.NewStorageError("failed to check if lastProcessed.dat exists", err)
-	}
+		exists, err = blockStore.Exists(ctx, nil, fileformat.FileTypeDat, bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix())
+		if err != nil {
+			return errors.NewStorageError("failed to check if lastProcessed.dat exists", err)
+		}
 
-	if exists {
-		logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
-		return nil
+		if exists {
+			logger.Errorf("lastProcessed.dat exists, skipping UTXOs")
+			return nil
+		}
 	}
 
 	logger.Infof("Using utxostore at %s", appSettings.UtxoStore.UtxoStore)
@@ -470,7 +493,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 
 	heightStr := fmt.Sprintf("%d\n", height)
 
-	if err = blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(heightStr), bloboptions.WithFilename("lastProcessed")); err != nil {
+	if err = blockStore.Set(ctx, nil, fileformat.FileTypeDat, []byte(heightStr), bloboptions.WithFilename("lastProcessed"), bloboptions.WithNoHashPrefix()); err != nil {
 		return errors.NewStorageError("failed to write height of %d to lastProcessed.dat", height, err)
 	}
 

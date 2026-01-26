@@ -96,6 +96,10 @@ service BlockchainAPI {
   // CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
   rpc CheckBlockIsInCurrentChain(CheckBlockIsCurrentChainRequest) returns (CheckBlockIsCurrentChainResponse) {}
 
+  // CheckBlockIsAncestorOfBlock verifies if specified blocks are ancestors of a given block.
+  // Used for double-spend detection on fork blocks where we check against the fork's ancestor chain.
+  rpc CheckBlockIsAncestorOfBlock(CheckBlockIsAncestorOfBlockRequest) returns (CheckBlockIsAncestorOfBlockResponse) {}
+
   // GetChainTips retrieves information about all known tips in the block tree.
   rpc GetChainTips(google.protobuf.Empty) returns (GetChainTipsResponse) {}
 
@@ -126,6 +130,9 @@ service BlockchainAPI {
   // SetBlockMinedSet marks a block as mined.
   rpc SetBlockMinedSet(SetBlockMinedSetRequest) returns (google.protobuf.Empty) {}
 
+  // ClearBlockMinedSet resets the mined_set flag to false for a block.
+  rpc ClearBlockMinedSet(ClearBlockMinedSetRequest) returns (google.protobuf.Empty) {}
+
   // GetBlocksMinedNotSet retrieves blocks not marked as mined.
   rpc GetBlocksMinedNotSet(google.protobuf.Empty) returns (GetBlocksMinedNotSetResponse) {}
 
@@ -137,6 +144,12 @@ service BlockchainAPI {
 
   // SetBlockProcessedAt sets or clears the processed_at timestamp for a block.
   rpc SetBlockProcessedAt (SetBlockProcessedAtRequest) returns (google.protobuf.Empty) {}
+
+  // SetBlockPersistedAt updates the persisted_at timestamp for a block.
+  rpc SetBlockPersistedAt(SetBlockPersistedAtRequest) returns (google.protobuf.Empty) {}
+
+  // GetBlocksNotPersisted retrieves blocks that haven't been persisted to blob storage yet.
+  rpc GetBlocksNotPersisted(GetBlocksNotPersistedRequest) returns (GetBlocksNotPersistedResponse) {}
 
   // FSM-related methods
 
@@ -407,6 +420,17 @@ message CheckBlockIsCurrentChainResponse {
   bool isPartOfCurrentChain = 1;  // True if blocks are in main chain
 }
 
+// CheckBlockIsAncestorOfBlockRequest checks if blocks are ancestors of a specific block.
+message CheckBlockIsAncestorOfBlockRequest {
+  repeated uint32 blockIDs = 1;  // List of block IDs to check
+  bytes blockHash = 2;           // Hash of the block to check ancestry against
+}
+
+// CheckBlockIsAncestorOfBlockResponse indicates if any blocks are ancestors.
+message CheckBlockIsAncestorOfBlockResponse {
+  bool isAncestor = 1;  // True if any block ID is an ancestor
+}
+
 // SubscribeRequest initiates a subscription to blockchain events.
 message SubscribeRequest {
   string source = 1;  // Source identifier for the subscription
@@ -523,6 +547,10 @@ message SetBlockMinedSetRequest {
   bytes blockHash = 1;  // Hash of the mined block
 }
 
+message ClearBlockMinedSetRequest {
+  bytes blockHash = 1;  // Hash of the block to reset
+}
+
 // GetBlocksMinedNotSetResponse contains blocks not marked as mined.
 message GetBlocksMinedNotSetResponse {
   repeated bytes blockBytes = 1;  // List of serialized blocks
@@ -619,4 +647,19 @@ message ReportPeerFailureRequest {
   string peer_id = 2;        // Identifier of the failing peer
   string failure_type = 3;   // Type of failure (e.g., "catchup", "subtree", "block")
   string reason = 4;         // Description of the failure
+}
+
+// SetBlockPersistedAtRequest marks a block as persisted.
+message SetBlockPersistedAtRequest {
+  bytes block_hash = 1;  // Hash of the persisted block
+}
+
+// GetBlocksNotPersistedRequest requests blocks not yet persisted to blob storage.
+message GetBlocksNotPersistedRequest {
+  int32 limit = 1;  // Maximum number of blocks to return
+}
+
+// GetBlocksNotPersistedResponse contains blocks not yet persisted.
+message GetBlocksNotPersistedResponse {
+  repeated bytes block_bytes = 1;  // List of serialized blocks
 }

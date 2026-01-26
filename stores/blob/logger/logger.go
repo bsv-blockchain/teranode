@@ -28,6 +28,8 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/debugflags"
+	"github.com/ordishs/gocore"
 )
 
 // blobStore defines the interface contract for blob storage backends.
@@ -59,6 +61,22 @@ type blobStore interface {
 type Logger struct {
 	logger ulogger.Logger
 	store  blobStore
+}
+
+func (s *Logger) debugEnabled() bool {
+	if !debugflags.BlobstoreEnabled() || s == nil || s.logger == nil {
+		return false
+	}
+
+	return s.logger.LogLevel() <= int(gocore.DEBUG)
+}
+
+func (s *Logger) debugf(format string, args ...interface{}) {
+	if !s.debugEnabled() {
+		return
+	}
+
+	s.logger.Debugf(format, args...)
 }
 
 // New creates a new Logger wrapper that adds debug logging to blob store operations.
@@ -129,14 +147,14 @@ func caller() string {
 }
 
 func (s *Logger) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	s.logger.Debugf("[BlobStore][logger][Health] : %s", caller())
+	s.debugf("[BlobStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx, checkLiveness)
 }
 
 func (s *Logger) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
 	exists, err := s.store.Exists(ctx, key, fileType, opts...)
 	k := bt.ReverseBytes(key)
-	s.logger.Debugf("[BlobStore][logger][Exists] key %x, fileType %s, exists %t, err %v : %s", k, fileType, exists, err, caller())
+	s.debugf("[BlobStore][logger][Exists] key %x, fileType %s, exists %t, err %v : %s", k, fileType, exists, err, caller())
 
 	return exists, err
 }
@@ -144,7 +162,7 @@ func (s *Logger) Exists(ctx context.Context, key []byte, fileType fileformat.Fil
 func (s *Logger) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
 	value, err := s.store.Get(ctx, key, fileType, opts...)
 	k := bt.ReverseBytes(key)
-	s.logger.Debugf("[BlobStore][logger][Get] key %x, fileType %s, err %v : %s", k, fileType, err, caller())
+	s.debugf("[BlobStore][logger][Get] key %x, fileType %s, err %v : %s", k, fileType, err, caller())
 
 	return value, err
 }
@@ -152,7 +170,7 @@ func (s *Logger) Get(ctx context.Context, key []byte, fileType fileformat.FileTy
 func (s *Logger) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	reader, err := s.store.GetIoReader(ctx, key, fileType, opts...)
 	k := bt.ReverseBytes(key)
-	s.logger.Debugf("[BlobStore][logger][GetIoReader] key %x, fileType %s, err %v : %s", k, fileType, err, caller())
+	s.debugf("[BlobStore][logger][GetIoReader] key %x, fileType %s, err %v : %s", k, fileType, err, caller())
 
 	return reader, err
 }
@@ -160,7 +178,7 @@ func (s *Logger) GetIoReader(ctx context.Context, key []byte, fileType fileforma
 func (s *Logger) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	err := s.store.Set(ctx, key, fileType, value, opts...)
 	k := bt.ReverseBytes(key)
-	s.logger.Debugf("[BlobStore][logger][Set] key %x, fileType %s, err %v : %s", k, fileType, err, caller())
+	s.debugf("[BlobStore][logger][Set] key %x, fileType %s, err %v : %s", k, fileType, err, caller())
 
 	return err
 }
@@ -168,7 +186,7 @@ func (s *Logger) Set(ctx context.Context, key []byte, fileType fileformat.FileTy
 func (s *Logger) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
 	err := s.store.SetFromReader(ctx, key, fileType, reader, opts...)
 	k := bt.ReverseBytes(key)
-	s.logger.Debugf("[BlobStore][logger][SetFromReader] key %x, fileType %s, err %v : %s", k, fileType, err, caller())
+	s.debugf("[BlobStore][logger][SetFromReader] key %x, fileType %s, err %v : %s", k, fileType, err, caller())
 
 	return err
 }
@@ -176,7 +194,7 @@ func (s *Logger) SetFromReader(ctx context.Context, key []byte, fileType filefor
 func (s *Logger) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error {
 	err := s.store.SetDAH(ctx, key, fileType, dah, opts...)
 	k := bt.ReverseBytes(key)
-	s.logger.Debugf("[BlobStore][logger][SetDAH] key %x, fileType %s, dah %d, err %v : %s", k, fileType, dah, err, caller())
+	s.debugf("[BlobStore][logger][SetDAH] key %x, fileType %s, dah %d, err %v : %s", k, fileType, dah, err, caller())
 
 	return err
 }
@@ -184,7 +202,7 @@ func (s *Logger) SetDAH(ctx context.Context, key []byte, fileType fileformat.Fil
 func (s *Logger) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
 	dah, err := s.store.GetDAH(ctx, key, fileType, opts...)
 	k := bt.ReverseBytes(key)
-	s.logger.Debugf("[BlobStore][logger][GetDAH] key %x, fileType %s, dah %d, err %v : %s", k, fileType, dah, err, caller())
+	s.debugf("[BlobStore][logger][GetDAH] key %x, fileType %s, dah %d, err %v : %s", k, fileType, dah, err, caller())
 
 	return dah, err
 }
@@ -192,19 +210,19 @@ func (s *Logger) GetDAH(ctx context.Context, key []byte, fileType fileformat.Fil
 func (s *Logger) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
 	err := s.store.Del(ctx, key, fileType, opts...)
 	k := bt.ReverseBytes(key)
-	s.logger.Debugf("[BlobStore][logger][Del] key %x, fileType %s, err %v : %s", k, fileType, err, caller())
+	s.debugf("[BlobStore][logger][Del] key %x, fileType %s, err %v : %s", k, fileType, err, caller())
 
 	return err
 }
 
 func (s *Logger) Close(ctx context.Context) error {
 	err := s.store.Close(ctx)
-	s.logger.Debugf("[BlobStore][logger][Close] err %v : %s", err, caller())
+	s.debugf("[BlobStore][logger][Close] err %v : %s", err, caller())
 
 	return err
 }
 
 func (s *Logger) SetCurrentBlockHeight(height uint32) {
 	s.store.SetCurrentBlockHeight(height)
-	s.logger.Debugf("[BlobStore][logger][SetCurrentBlockHeight] height %d : %s", height, caller())
+	s.debugf("[BlobStore][logger][SetCurrentBlockHeight] height %d : %s", height, caller())
 }

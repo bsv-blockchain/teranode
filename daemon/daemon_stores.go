@@ -339,6 +339,7 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 	var err error
 
 	hashPrefix := -2
+
 	if blockStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -372,7 +373,7 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 		return d.mainBlockPersisterStore, nil
 	}
 
-	blockStoreURL := appSettings.Block.PersisterStore
+	blockStoreURL := appSettings.BlockPersister.Store
 
 	if blockStoreURL == nil {
 		return nil, errors.NewConfigurationError("blockPersisterStore config not found")

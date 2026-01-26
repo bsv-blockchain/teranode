@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/tempstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -149,6 +151,9 @@ type BlockAssembler struct {
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
 
+	// stateStartTime tracks when the current state began
+	stateStartTime atomic.Value
+
 	// unminedCleanupTicker manages periodic cleanup of old unmined transactions
 	unminedCleanupTicker *time.Ticker
 
@@ -160,6 +165,9 @@ type BlockAssembler struct {
 
 	// unminedTransactionsLoading indicates if unmined transactions are currently being loaded
 	unminedTransactionsLoading atomic.Bool
+
+	// wg tracks background goroutines for clean shutdown
+	wg sync.WaitGroup
 }
 
 // BestBlockInfo holds both the block header and height atomically
@@ -294,7 +302,9 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 		return errors.NewProcessingError("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 	}
 
+	b.wg.Add(1)
 	go func() {
+		defer b.wg.Done()
 		// variables are defined here to prevent unnecessary allocations
 		b.setCurrentRunningState(StateRunning)
 
@@ -708,7 +718,27 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 // Parameters:
 //   - state: New state to set
 func (b *BlockAssembler) setCurrentRunningState(state State) {
+	now := time.Now()
+
+	oldStateValue := b.currentRunningState.Load()
+	if oldStateValue != nil {
+		oldState := oldStateValue.(State)
+
+		if oldState != state {
+			startTimeValue := b.stateStartTime.Load()
+			if startTimeValue != nil {
+				startTime := startTimeValue.(time.Time)
+				duration := now.Sub(startTime).Seconds()
+
+				prometheusBlockAssemblerStateDuration.WithLabelValues(StateStrings[oldState]).Observe(duration)
+			}
+
+			prometheusBlockAssemblerStateTransitions.WithLabelValues(StateStrings[oldState], StateStrings[state]).Inc()
+		}
+	}
+
 	b.currentRunningState.Store(state)
+	b.stateStartTime.Store(now)
 	prometheusBlockAssemblerCurrentState.Set(float64(state))
 }
 
@@ -746,6 +776,36 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
 
+	// Preserve parents of unmined transactions during catchup.
+	//
+	// During catchup, unmined txs from the mempool will be marked as mined when processing blocks.
+	// Once marked mined (UnminedSince cleared), they're no longer in the unmined tx pool. If their
+	// parent txs are past retention, the pruner could delete them before block validation completes.
+	//
+	// We preserve parents at startup (while unmined pool is intact) rather than per-block to avoid
+	// overhead during catchup. This is a one-time batch operation that protects all parents before
+	// any blocks are validated.
+	//
+	// FSM STATE DETERMINES WHEN TO RUN:
+	// - FSMStateCATCHINGBLOCKS: Run once at startup (efficient batch operation)
+	// - FSMStateRUNNING: Skip (handled per-block in BlockValidation after UpdateTxMinedStatus)
+	//
+	// TIMING: Executes after loadUnminedTransactions() but before Block Validation processes blocks.
+	fsmState, fsmErr := b.blockchainClient.GetFSMCurrentState(ctx)
+	if fsmErr != nil {
+		b.logger.Warnf("[BlockAssembler] Failed to get blockchain FSM state for parent preservation: %v", fsmErr)
+		// Continue - best effort
+	} else if fsmState != nil && *fsmState == blockchain.FSMStateCATCHINGBLOCKS {
+		b.logger.Infof("[BlockAssembler][Catchup] Block Assembly starting during catchup, preserving parents of unmined transactions")
+		_, height := b.CurrentBlock()
+		if count, preserveErr := utxo.PreserveParentsOfOldUnminedTransactions(ctx, b.utxoStore, height, b.settings, b.logger); preserveErr != nil {
+			b.logger.Errorf("[BlockAssembler][Catchup] CRITICAL: Failed to preserve parents during catchup startup: %v", preserveErr)
+			// Continue - best effort, but log as critical since this could cause validation failures
+		} else {
+			b.logger.Infof("[BlockAssembler][Catchup] Preserved parents for %d unmined transactions before catchup validation begins", count)
+		}
+	}
+
 	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
 	b.subtreeProcessor.Start(ctx)
 
@@ -759,7 +819,15 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	return nil
 }
 
+// Wait blocks until all background goroutines have finished.
+// This should be called after the context is cancelled to ensure clean shutdown.
+func (b *BlockAssembler) Wait() {
+	b.wg.Wait()
+}
+
 func (b *BlockAssembler) initState(ctx context.Context) error {
+	var stateFound bool
+
 	bestBlockHeader, bestBlockHeight, err := b.GetState(ctx)
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), sql.ErrNoRows.Error()) {
@@ -768,23 +836,27 @@ func (b *BlockAssembler) initState(ctx context.Context) error {
 			b.logger.Errorf("[BlockAssembler] error getting state from blockchain db: %v", err)
 		}
 	} else {
+		stateFound = true
+
 		b.logger.Infof("[BlockAssembler] setting best block header from state: %d: %s", bestBlockHeight, bestBlockHeader.Hash())
 		b.setBestBlockHeader(bestBlockHeader, bestBlockHeight)
 		b.subtreeProcessor.InitCurrentBlockHeader(bestBlockHeader)
 	}
 
 	// we did not get any state back from the blockchain db, so we get the current best block header
-	baBestBlockHeader, baBestBlockHeight := b.CurrentBlock()
-	if baBestBlockHeader == nil || baBestBlockHeight == 0 {
-		header, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			// we must return an error here since we cannot continue without a best block header
-			return errors.NewProcessingError("[BlockAssembler] error getting best block header: %v", err)
-		} else {
-			hash, _ := b.CurrentBlock()
-			b.logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", hash.Hash())
-			b.setBestBlockHeader(header, meta.Height)
-			b.subtreeProcessor.InitCurrentBlockHeader(header)
+	if !stateFound {
+		baBestBlockHeader, baBestBlockHeight := b.CurrentBlock()
+		if baBestBlockHeader == nil || baBestBlockHeight == 0 {
+			header, meta, err := b.blockchainClient.GetBestBlockHeader(ctx)
+			if err != nil {
+				// we must return an error here since we cannot continue without a best block header
+				return errors.NewProcessingError("[BlockAssembler] error getting best block header: %v", err)
+			} else {
+				hash, _ := b.CurrentBlock()
+				b.logger.Infof("[BlockAssembler] setting best block header from GetBestBlockHeader: %s", hash.Hash())
+				b.setBestBlockHeader(header, meta.Height)
+				b.subtreeProcessor.InitCurrentBlockHeader(header)
+			}
 		}
 	}
 
@@ -865,12 +937,13 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return info.Header, info.Height
 }
 
-// AddTx adds a transaction to the block assembler.
+// AddTxBatch adds a batch of transactions to the block assembler.
 //
 // Parameters:
-//   - node: Transaction node to add
-func (b *BlockAssembler) AddTx(node subtree.Node, txInpoints subtree.TxInpoints) {
-	b.subtreeProcessor.Add(node, txInpoints)
+//   - nodes: Transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+func (b *BlockAssembler) AddTxBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
+	b.subtreeProcessor.AddBatch(nodes, txInpoints)
 }
 
 // RemoveTx removes a transaction from the block assembler.
@@ -918,13 +991,25 @@ func (b *BlockAssembler) Reset(fullReset bool) {
 //   - []*util.Subtree: Associated subtrees
 //   - error: Any error encountered during retrieval
 func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, []*subtree.Subtree, error) {
-	// make sure we call this on the select, so we don't get a candidate when we found a new block
 	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "GetMiningCandidate",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyGetMiningCandidateDuration),
 		tracing.WithDebugLogMessage(b.logger, "[GetMiningCandidate] called"),
 	)
 	defer deferFn()
+
+	currentState := b.GetCurrentRunningState()
+
+	if currentState == StateBlockchainSubscription || currentState == StateMovingUp {
+		b.logger.Infof("[GetMiningCandidate] Block processing in progress (state: %s), returning empty block template for new height", StateStrings[currentState])
+
+		bestBlockHeader, bestBlockMeta, err := b.blockchainClient.GetBestBlockHeader(ctx)
+		if err != nil {
+			return nil, nil, errors.NewProcessingError("failed to get best block header during block processing", err)
+		}
+
+		return b.generateEmptyBlockCandidate(bestBlockHeader, bestBlockMeta.Height)
+	}
 
 	// Declare currentHeight outside loop so it's available for cache update later
 	var currentHeight uint32
@@ -1047,30 +1132,22 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	select {
 	case <-ctx.Done():
 		close(responseCh)
-		// context cancelled, do not send
 		return nil, nil, ctx.Err()
 	case <-time.After(b.settings.BlockAssembly.GetMiningCandidateSendTimeout):
 		return nil, nil, errors.NewServiceError("timeout sending mining candidate request")
 	case b.miningCandidateCh <- responseCh:
-		// sent successfully
 	}
 
-	// wait for response with timeout
 	var candidate *model.MiningCandidate
-
 	var subtrees []*subtree.Subtree
-
 	var err error
 
 	select {
 	case <-ctx.Done():
-		// context cancelled, do not send
 		close(responseCh)
 		err = ctx.Err()
 	case <-time.After(b.settings.BlockAssembly.GetMiningCandidateResponseTimeout):
-		// make sure to close the channel, otherwise the for select will hang, because no one is reading from it
 		close(responseCh)
-
 		err = errors.NewServiceError("timeout getting mining candidate")
 	case response := <-responseCh:
 		candidate = response.miningCandidate
@@ -1078,9 +1155,7 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 		err = response.err
 	}
 
-	// Update cache on success
 	if err == nil {
-		// Calculate metrics for smart invalidation
 		var totalTxCount uint32
 		var totalSize uint64
 		for _, st := range subtrees {
@@ -1098,11 +1173,51 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 		b.cachedCandidate.lastSubtreeCount = len(subtrees)
 		b.cachedCandidate.mu.Unlock()
 
-		// Record cache miss metrics
 		prometheusBlockAssemblerCacheMisses.Inc()
 	}
 
 	return candidate, subtrees, err
+}
+
+func (b *BlockAssembler) generateEmptyBlockCandidate(prevBlockHeader *model.BlockHeader, prevHeight uint32) (*model.MiningCandidate, []*subtree.Subtree, error) {
+	currentHeight := prevHeight + 1
+	timeNow := time.Now().Unix()
+
+	b.logger.Infof("[generateEmptyBlockCandidate] Generating empty block template for height %d (prev: %s)", currentHeight, prevBlockHeader.Hash())
+
+	timeNowUint32, err := safeconversion.Int64ToUint32(timeNow)
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("error converting time", err)
+	}
+
+	nBits, err := b.getNextNbits(timeNow)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	blockSubsidy := util.GetBlockSubsidyForHeight(currentHeight, b.settings.ChainCfgParams)
+
+	id := &chainhash.Hash{}
+	copy(id[:], prevBlockHeader.Hash()[:])
+	id[0] ^= 0xFF
+
+	miningCandidate := &model.MiningCandidate{
+		Id:                  id[:],
+		PreviousHash:        prevBlockHeader.Hash()[:],
+		CoinbaseValue:       blockSubsidy,
+		Version:             prevBlockHeader.Version,
+		NBits:               nBits[:],
+		Time:                timeNowUint32,
+		Height:              currentHeight,
+		NumTxs:              0,
+		SizeWithoutCoinbase: 80,
+		MerkleProof:         [][]byte{},
+		SubtreeHashes:       [][]byte{},
+	}
+
+	b.logger.Infof("[generateEmptyBlockCandidate] Empty block template: height=%d, subsidy=%d, prev=%s", currentHeight, blockSubsidy, prevBlockHeader.Hash())
+
+	return miningCandidate, []*subtree.Subtree{}, nil
 }
 
 // getMiningCandidate creates a new mining candidate from the current block state.
@@ -1595,15 +1710,14 @@ func (b *BlockAssembler) validateParentChain(
 			referencedParents[parentHash] = true
 		}
 	}
-	b.logger.Debugf("[BlockAssembler][validateParentChain] Found %d unique parent references out of %d transactions",
-		len(referencedParents), len(unminedTxs))
+	b.logger.Debugf("[BlockAssembler][validateParentChain] Found %d unique parent references out of %d transactions", len(referencedParents), len(unminedTxs))
 
 	// Pass 2: Build index ONLY for transactions that are referenced as parents
 	// This dramatically reduces memory usage from O(all_txs) to O(referenced_parents)
 	parentIndexMap := make(map[chainhash.Hash]int, len(referencedParents))
-	for idx, tx := range unminedTxs {
-		if tx.Hash != nil && referencedParents[*tx.Hash] {
-			parentIndexMap[*tx.Hash] = idx
+	for idx, unminedTx := range unminedTxs {
+		if referencedParents[unminedTx.Node.Hash] {
+			parentIndexMap[unminedTx.Node.Hash] = idx
 		}
 	}
 
@@ -1725,25 +1839,19 @@ func (b *BlockAssembler) validateParentChain(
 					break
 				}
 
-				// Parent exists in UTXO store - check if it's on the best chain
-				if len(parentMeta.BlockIDs) > 0 {
-					onBestChain := false
-					for _, blockID := range parentMeta.BlockIDs {
-						if bestBlockHeaderIDsMap[blockID] {
-							onBestChain = true
-							break
-						}
-					}
-					if !onBestChain {
-						allParentsValid = false
-						invalidReason = fmt.Sprintf("parent tx %s is on wrong chain (blocks: %v)",
-							parentTxID.String(), parentMeta.BlockIDs)
-						b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
-						break
-					}
-				} else {
-					// Parent exists but has no BlockIDs - it's unmined
-					// Check if it's in our unmined list by seeing if it has an index
+				// CRITICAL: Check UnminedSince FIRST (authoritative indicator of mined status)
+				// UnminedSince is the authoritative indicator:
+				//   - UnminedSince == 0: Transaction is mined on the longest chain
+				//   - UnminedSince > 0: Transaction is NOT mined on the longest chain (value is block height when unmarked)
+				// BlockIDs is a historical record of ALL blocks containing this tx (can include forks)
+				//
+				// The key insight: After a reorg, a parent tx may have:
+				//   - BlockIDs = [5640] (block on wrong chain)
+				//   - UnminedSince = 5650 (marked unmined because 5640 is not on longest chain)
+				// We must check UnminedSince FIRST to avoid false "wrong chain" warnings
+				if parentMeta.UnminedSince > 0 {
+					// Parent is unmined (confirmed by UnminedSince field)
+					// Check if it's in our unmined list
 					if _, isInUnminedList := parentIndexMap[parentTxID]; isInUnminedList {
 						// It's in our list - track it for ordering validation
 						unminedParents = append(unminedParents, parentTxID)
@@ -1754,6 +1862,35 @@ func (b *BlockAssembler) validateParentChain(
 						b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
 						break
 					}
+				} else if len(parentMeta.BlockIDs) > 0 {
+					// Parent should be mined (UnminedSince == 0)
+					// Verify BlockIDs are on best chain for data consistency
+					onBestChain := false
+					for _, blockID := range parentMeta.BlockIDs {
+						if bestBlockHeaderIDsMap[blockID] {
+							onBestChain = true
+							break
+						}
+					}
+
+					if !onBestChain {
+						// Data inconsistency: unmined_since=0 BUT block_ids not on best chain
+						// This indicates transactions weren't properly marked as unmined during a fork
+						// This is a data integrity issue that must be fixed at the source (catchup.go)
+						allParentsValid = false
+						invalidReason = fmt.Sprintf("parent tx %s is on wrong chain (blocks: %v) and not in unmined list - data integrity issue from fork handling",
+							parentTxID.String(), parentMeta.BlockIDs)
+						b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
+						break
+					}
+					// else: parent is mined on best chain - all good, continue
+				} else {
+					// No BlockIDs and UnminedSince=0 - data inconsistency
+					// This should never happen - a tx with unmined_since=0 should have BlockIDs
+					allParentsValid = false
+					invalidReason = fmt.Sprintf("parent tx %s has data inconsistency (unmined_since=0 but no block_ids)", parentTxID.String())
+					b.logger.Warnf("[BlockAssembler][validateParentChain] Transaction %s has invalid parent: %s", tx.Hash.String(), invalidReason)
+					break
 				}
 			}
 
@@ -1880,6 +2017,14 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 		return errors.NewServiceError("[BlockAssembler] no utxostore")
 	}
 
+	// Use disk-based sorting for large datasets when:
+	// 1. UnminedTxDiskSortEnabled is true
+	// 2. OnRestartValidateParentChain is false (parent validation requires in-memory for small datasets)
+	if b.settings.BlockAssembly.UnminedTxDiskSortEnabled && !b.settings.BlockAssembly.OnRestartValidateParentChain {
+		b.logger.Infof("[loadUnminedTransactions] using disk-based sorting to reduce RAM usage")
+		return b.loadUnminedTransactionsWithDiskSort(ctx, fullScan)
+	}
+
 	scanHeaders := uint64(1000)
 
 	if !fullScan {
@@ -1888,10 +2033,25 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 		if indexWaiter, ok := b.utxoStore.(interface {
 			WaitForIndexReady(ctx context.Context, indexName string) error
 		}); ok {
-			if err := indexWaiter.WaitForIndexReady(ctx, "unminedSinceIndex"); err != nil {
+			indexName := "unminedSinceIndex"
+			prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(0)
+
+			start := time.Now()
+			err := indexWaiter.WaitForIndexReady(ctx, indexName)
+
+			duration := time.Since(start).Seconds()
+			if err != nil {
 				b.logger.Warnf("[BlockAssembler] failed to wait for unmined_since index: %v", err)
+				prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(2)
+				prometheusBlockAssemblerUtxoIndexWaitDuration.WithLabelValues(indexName, "error").Observe(duration)
 				// Continue anyway as this may be a non-Aerospike store
+			} else {
+				prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(1)
+				prometheusBlockAssemblerUtxoIndexWaitDuration.WithLabelValues(indexName, "success").Observe(duration)
 			}
+		} else {
+			b.logger.Warnf("[BlockAssembler] utxo store does not support WaitForIndexReady")
+			prometheusBlockAssemblerUtxoIndexWaitDuration.WithLabelValues("unminedSinceIndex", "skipped").Observe(0)
 		}
 	} else {
 		// get the full header count so we can do a full scan of all unmined transactions
@@ -1921,13 +2081,21 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 	}
 
 	b.logger.Infof("[loadUnminedTransactions] requesting unmined tx iterator from UTXO store (fullScan=%t)", fullScan)
+	fullScanLabel := "false"
+	if fullScan {
+		fullScanLabel = "true"
+	}
+	start := time.Now()
 	it, err := b.utxoStore.GetUnminedTxIterator(fullScan)
+	duration := time.Since(start).Seconds()
 	if err != nil {
+		prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues(fullScanLabel, "error").Observe(duration)
 		return errors.NewProcessingError("error getting unmined tx iterator", err)
 	}
+	prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues(fullScanLabel, "success").Observe(duration)
 	b.logger.Infof("[loadUnminedTransactions] successfully created unmined tx iterator, starting to process transactions")
 
-	unminedTransactions := make([]*utxo.UnminedTransaction, 0, 1024*1024) // preallocate a large slice to avoid reallocations
+	unminedTransactions := make([]*utxo.UnminedTransaction, 0, 16*1024*1024) // preallocate a large slice to avoid reallocations
 	lockedTransactions := make([]chainhash.Hash, 0, 1024)
 
 	// keep track of transactions that we need to mark as mined on the longest chain
@@ -1935,87 +2103,265 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 	// but the transaction itself is still marked as unmined, this can happen if block assembly got dirty
 	markAsMinedOnLongestChain := make([]chainhash.Hash, 0, 1024)
 
+	iteratorStart := time.Now()
+	totalProcessed := atomic.Int64{}
+	skippedCount := atomic.Int64{}
+	alreadyMinedCount := atomic.Int64{}
+	lockedCount := atomic.Int64{}
+
+	// Worker pool configuration
+	numWorkers := runtime.NumCPU() * 4
+	workChan := make(chan []*utxo.UnminedTransaction, numWorkers*2)
+	var wg sync.WaitGroup
+
+	// Per-worker local buffers to eliminate lock contention
+	type workerResult struct {
+		unminedTxs              []*utxo.UnminedTransaction
+		lockedTxs               []chainhash.Hash
+		markAsMinedOnLongestTxs []chainhash.Hash
+	}
+	workerResults := make([]workerResult, numWorkers)
+
+	// Pre-allocate per-worker buffers
+	for i := range workerResults {
+		workerResults[i].unminedTxs = make([]*utxo.UnminedTransaction, 0, 1024*128)
+		workerResults[i].lockedTxs = make([]chainhash.Hash, 0, 128)
+		workerResults[i].markAsMinedOnLongestTxs = make([]chainhash.Hash, 0, 128)
+	}
+
+	// Start worker goroutines
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			localResult := &workerResults[workerID]
+
+			for batch := range workChan {
+				for _, unminedTransaction := range batch {
+					if unminedTransaction.Skip {
+						skippedCount.Add(1)
+						continue
+					}
+
+					if len(unminedTransaction.BlockIDs) > 0 {
+						// If the transaction is already included in a block that is in the best chain, skip it
+						skipAlreadyMined := false
+						for _, blockID := range unminedTransaction.BlockIDs {
+							if bestBlockHeaderIDsMap[blockID] {
+								skipAlreadyMined = true
+								break
+							}
+						}
+
+						if skipAlreadyMined {
+							// b.logger.Debugf("[BlockAssembler] skipping unmined transaction %s already included in best chain", unminedTransaction.Hash)
+							alreadyMinedCount.Add(1)
+
+							if unminedTransaction.UnminedSince > 0 {
+								localResult.markAsMinedOnLongestTxs = append(localResult.markAsMinedOnLongestTxs, unminedTransaction.Hash)
+							}
+
+							continue
+						}
+					}
+
+					if !b.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
+						// clear the TxInpoints to save memory if we are not using subtree meta
+						unminedTransaction.TxInpoints = &subtree.TxInpoints{}
+					}
+
+					localResult.unminedTxs = append(localResult.unminedTxs, unminedTransaction)
+
+					if unminedTransaction.Locked {
+						// if the transaction is locked, we need to add it to the locked transactions list, so we can unlock them
+						localResult.lockedTxs = append(localResult.lockedTxs, unminedTransaction.Hash)
+						lockedCount.Add(1)
+					}
+				}
+			}
+		}(i)
+	}
+
+	b.logger.Infof("[loadUnminedTransactions] feeding unmined transactions to %d workers", numWorkers)
+
+	// Feed batches from the iterator to workers
 	for {
-		unminedTransaction, err := it.Next(ctx)
+		batch, err := it.Next(ctx)
 		if err != nil {
+			close(workChan)
+			wg.Wait()
 			return errors.NewProcessingError("error getting unmined transaction", err)
 		}
 
-		if unminedTransaction == nil {
+		if batch == nil || len(batch) == 0 {
 			break
 		}
 
-		if unminedTransaction.Skip {
-			continue
+		totalProcessed.Add(int64(len(batch)))
+
+		if totalProcessed.Load()%100_000 == 0 {
+			b.logger.Infof("[loadUnminedTransactions] processed %d unmined transactions so far", totalProcessed.Load())
 		}
 
-		if len(unminedTransaction.BlockIDs) > 0 {
-			// If the transaction is already included in a block that is in the best chain, skip it
-			skipAlreadyMined := false
-			for _, blockID := range unminedTransaction.BlockIDs {
-				if bestBlockHeaderIDsMap[blockID] {
-					skipAlreadyMined = true
-					break
-				}
-			}
-
-			if skipAlreadyMined {
-				// b.logger.Debugf("[BlockAssembler] skipping unmined transaction %s already included in best chain", unminedTransaction.Hash)
-
-				if unminedTransaction.UnminedSince > 0 {
-					markAsMinedOnLongestChain = append(markAsMinedOnLongestChain, *unminedTransaction.Hash)
-				}
-
-				continue
-			}
-		}
-
-		unminedTransactions = append(unminedTransactions, unminedTransaction)
-
-		if unminedTransaction.Locked {
-			// if the transaction is locked, we need to add it to the locked transactions list, so we can unlock them
-			lockedTransactions = append(lockedTransactions, *unminedTransaction.Hash)
-		}
+		workChan <- batch
 	}
+
+	// Close channel and wait for all workers to finish
+	close(workChan)
+	wg.Wait()
+
+	b.logger.Infof("[loadUnminedTransactions] completed processing unmined transactions from iterator, merging results")
+
+	// Merge per-worker results into final slices
+	for idx := range workerResults {
+		unminedTransactions = append(unminedTransactions, workerResults[idx].unminedTxs...)
+		workerResults[idx].unminedTxs = nil // Clear slice to release memory
+
+		lockedTransactions = append(lockedTransactions, workerResults[idx].lockedTxs...)
+		workerResults[idx].lockedTxs = nil // Clear slice to release memory
+
+		markAsMinedOnLongestChain = append(markAsMinedOnLongestChain, workerResults[idx].markAsMinedOnLongestTxs...)
+		workerResults[idx].markAsMinedOnLongestTxs = nil // Clear slice to release memory
+	}
+
+	workerResults = nil // release memory
+
+	iteratorDuration := time.Since(iteratorStart).Seconds()
+	prometheusBlockAssemblerIteratorProcessingTime.WithLabelValues(fullScanLabel).Observe(iteratorDuration)
+	prometheusBlockAssemblerIteratorTransactionsTotal.WithLabelValues(fullScanLabel).Add(float64(totalProcessed.Load()))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues(fullScanLabel, "skipped").Add(float64(skippedCount.Load()))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues(fullScanLabel, "already_mined").Add(float64(alreadyMinedCount.Load()))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues(fullScanLabel, "locked").Add(float64(lockedCount.Load()))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues(fullScanLabel, "added").Add(float64(len(unminedTransactions)))
 
 	// Always fix data inconsistencies: transactions with block_ids on main chain but unmined_since set
 	// This ensures data integrity on every load, catching issues from previous bugs, crashes, or edge cases
 	// The performance impact is minimal since the list is usually empty when data is correct
 	if len(markAsMinedOnLongestChain) > 0 {
+		markStart := time.Now()
 		if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, markAsMinedOnLongestChain, true); err != nil {
 			return errors.NewProcessingError("error marking transactions as mined on longest chain", err)
 		}
+		prometheusBlockAssemblerMarkTransactionsTime.Observe(time.Since(markStart).Seconds())
+		prometheusBlockAssemblerMarkTransactionsCount.Add(float64(len(markAsMinedOnLongestChain)))
 
 		b.logger.Infof("[BlockAssembler] fixed %d transactions with inconsistent unmined_since (had block_ids on main but unmined_since set)", len(markAsMinedOnLongestChain))
 	}
 
 	// order the transactions by createdAt
+	sortStart := time.Now()
+
+	b.logger.Infof("[loadUnminedTransactions] sorting %d unmined transactions by createdAt", len(unminedTransactions))
+
 	sort.Slice(unminedTransactions, func(i, j int) bool {
 		// sort by createdAt, oldest first
 		return unminedTransactions[i].CreatedAt < unminedTransactions[j].CreatedAt
 	})
 
+	txCount := len(unminedTransactions)
+
+	var countBucket string
+
+	switch {
+	case txCount < 1000:
+		countBucket = "<1k"
+	case txCount < 10000:
+		countBucket = "1k-10k"
+	case txCount < 100000:
+		countBucket = "10k-100k"
+	case txCount < 1000000:
+		countBucket = "100k-1M"
+	default:
+		countBucket = ">1M"
+	}
+
+	prometheusBlockAssemblerSortTransactionsTime.WithLabelValues(countBucket).Observe(time.Since(sortStart).Seconds())
+
 	// Apply parent chain validation if enabled
 	if b.settings.BlockAssembly.OnRestartValidateParentChain {
 		var err error
+
+		validateStart := time.Now()
+		beforeCount := len(unminedTransactions)
+
 		unminedTransactions, err = b.validateParentChain(ctx, unminedTransactions, bestBlockHeaderIDsMap)
 		if err != nil {
 			// Context was cancelled during parent validation
 			return err
 		}
-	}
 
-	for _, unminedTransaction := range unminedTransactions {
-		subtreeNode := subtree.Node{
-			Hash:        *unminedTransaction.Hash,
-			Fee:         unminedTransaction.Fee,
-			SizeInBytes: unminedTransaction.Size,
-		}
+		prometheusBlockAssemblerValidateParentChainTime.Observe(time.Since(validateStart).Seconds())
 
-		if err = b.subtreeProcessor.AddDirectly(subtreeNode, unminedTransaction.TxInpoints, true); err != nil {
-			return errors.NewProcessingError("error adding unmined transaction to subtree processor", err)
+		filteredCount := beforeCount - len(unminedTransactions)
+		if filteredCount > 0 {
+			prometheusBlockAssemblerValidateParentChainFiltered.Add(float64(filteredCount))
 		}
 	}
+
+	b.logger.Infof("[BlockAssembler] loaded %d unmined transactions into block assembly (total processed: %d, skipped: %d, already mined: %d, locked: %d)",
+		len(unminedTransactions), totalProcessed.Load(), skippedCount.Load(), alreadyMinedCount.Load(), lockedCount.Load())
+
+	b.logger.Infof("[loadUnminedTransactions] adding unmined transactions to subtree processor")
+
+	batchStart := time.Now()
+	addStart := time.Now()
+	addTxs := float64(0)
+
+	// Use batch insertion if UnminedLoadingBatchSize is set (> 0)
+	batchSize := b.settings.BlockAssembly.UnminedLoadingBatchSize // default 10 million
+	if batchSize > 0 {
+		// Batch mode: use AddNodesDirectly for parallel currentTxMap insertion
+		// Process directly from original slice to avoid doubling memory usage
+		totalTxs := len(unminedTransactions)
+		for start := 0; start < totalTxs; start += batchSize {
+			end := start + batchSize
+			if end > totalTxs {
+				end = totalTxs
+			}
+
+			// Pass slice segment directly - no copy needed
+			batch := unminedTransactions[start:end]
+			if err = b.subtreeProcessor.AddNodesDirectly(batch, true); err != nil {
+				return errors.NewProcessingError("error adding unmined transactions batch to subtree processor", err)
+			}
+
+			batchCount := len(batch)
+			addTxs += float64(batchCount)
+
+			// Log progress of batch addition
+			prometheusBlockAssemblerAddDirectlyBatchTime.Observe(time.Since(addStart).Seconds())
+			prometheusBlockAssemblerAddDirectlyTotal.Add(float64(batchCount))
+			addStart = time.Now()
+
+			// Nil out processed elements to allow GC of UnminedTransaction objects
+			for j := start; j < end; j++ {
+				unminedTransactions[j] = nil
+			}
+		}
+	} else {
+		// Sequential mode: use AddDirectly for each transaction
+		for idx, unminedTransaction := range unminedTransactions {
+			if err = b.subtreeProcessor.AddDirectly(unminedTransaction.Node, unminedTransaction.TxInpoints, true); err != nil {
+				return errors.NewProcessingError("error adding unmined transaction to subtree processor", err)
+			}
+
+			// add every 10_000 transactions log the time taken
+			if (idx+1)%10_000 == 0 {
+				prometheusBlockAssemblerAddDirectlyTime.Observe(time.Since(addStart).Seconds())
+				prometheusBlockAssemblerAddDirectlyTotal.Add(addTxs)
+				addStart = time.Now()
+				addTxs = 0
+			}
+
+			unminedTransactions[idx] = nil // release memory
+
+			addTxs++
+		}
+	}
+
+	unminedTransactions = nil // release memory
+
+	prometheusBlockAssemblerAddDirectlyBatchTime.Observe(time.Since(batchStart).Seconds())
 
 	// unlock any locked transactions
 	if len(lockedTransactions) > 0 {
@@ -2024,6 +2370,296 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, fullScan b
 		} else {
 			b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 		}
+	}
+
+	return nil
+}
+
+// sortEntry is a lightweight in-memory structure for sorting.
+// Only 12 bytes per transaction instead of full UnminedTransaction.
+type sortEntry struct {
+	CreatedAt int    // 8 bytes - timestamp with milliseconds for sorting
+	Sequence  uint64 // 8 bytes - key to retrieve from temp store
+}
+
+// loadUnminedTransactionsWithDiskSort loads unmined transactions using disk-based sorting
+// to reduce RAM usage. Instead of loading all transaction data into memory, it:
+// 1. Writes transaction data to BadgerDB temp storage
+// 2. Keeps only minimal sort entries (12 bytes each) in memory
+// 3. Sorts in memory by CreatedAt
+// 4. Reads back from disk in sorted order
+func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context, fullScan bool) error {
+	scanHeaders := uint64(1000)
+
+	if !fullScan {
+		// Wait for the unmined_since index to be ready
+		if indexWaiter, ok := b.utxoStore.(interface {
+			WaitForIndexReady(ctx context.Context, indexName string) error
+		}); ok {
+			indexName := "unminedSinceIndex"
+			prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(0)
+
+			start := time.Now()
+			err := indexWaiter.WaitForIndexReady(ctx, indexName)
+
+			duration := time.Since(start).Seconds()
+			if err != nil {
+				b.logger.Warnf("[BlockAssembler] failed to wait for unmined_since index: %v", err)
+				prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(2)
+				prometheusBlockAssemblerUtxoIndexWaitDuration.WithLabelValues(indexName, "error").Observe(duration)
+			} else {
+				prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(1)
+				prometheusBlockAssemblerUtxoIndexWaitDuration.WithLabelValues(indexName, "success").Observe(duration)
+			}
+		} else {
+			b.logger.Warnf("[BlockAssembler] utxo store does not support WaitForIndexReady")
+			prometheusBlockAssemblerUtxoIndexWaitDuration.WithLabelValues("unminedSinceIndex", "skipped").Observe(0)
+		}
+	} else {
+		_, bestBlockHeaderMeta, err := b.blockchainClient.GetBestBlockHeader(ctx)
+		if err != nil {
+			return errors.NewProcessingError("error getting best block header meta", err)
+		}
+
+		if bestBlockHeaderMeta.Height > 0 {
+			scanHeaders = uint64(bestBlockHeaderMeta.Height)
+		} else {
+			scanHeaders = 1000
+		}
+
+		b.logger.Infof("[BlockAssembler] doing full scan of unmined transactions, scanning last %d headers", scanHeaders)
+	}
+
+	bestBlockHeader, _ := b.CurrentBlock()
+	bestBlockHeaderIDs, err := b.blockchainClient.GetBlockHeaderIDs(ctx, bestBlockHeader.Hash(), scanHeaders)
+	if err != nil {
+		return errors.NewProcessingError("error getting best block headers", err)
+	}
+
+	bestBlockHeaderIDsMap := make(map[uint32]bool, len(bestBlockHeaderIDs))
+	for _, id := range bestBlockHeaderIDs {
+		bestBlockHeaderIDsMap[id] = true
+	}
+
+	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] requesting unmined tx iterator from UTXO store (fullScan=%t)", fullScan)
+	fullScanLabel := "false"
+	if fullScan {
+		fullScanLabel = "true"
+	}
+	start := time.Now()
+	it, err := b.utxoStore.GetUnminedTxIterator(fullScan)
+	duration := time.Since(start).Seconds()
+	if err != nil {
+		prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues(fullScanLabel, "error").Observe(duration)
+		return errors.NewProcessingError("error getting unmined tx iterator", err)
+	}
+	prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues(fullScanLabel, "success").Observe(duration)
+	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] successfully created unmined tx iterator")
+
+	// Create temporary BadgerDB store
+	tempStore, err := tempstore.New(tempstore.Options{
+		BasePath: b.settings.BlockAssembly.UnminedTxDiskSortPath,
+		Prefix:   "unmined-sort",
+	})
+	if err != nil {
+		return errors.NewProcessingError("error creating temp store for disk-based sorting", err)
+	}
+	defer func() {
+		if closeErr := tempStore.Close(); closeErr != nil {
+			b.logger.Warnf("[loadUnminedTransactionsWithDiskSort] error closing temp store: %v", closeErr)
+		}
+	}()
+
+	// Lightweight sort entries - only 12 bytes per tx
+	sortEntries := make([]sortEntry, 0, 1024*1024)
+	lockedTransactions := make([]chainhash.Hash, 0, 1024)
+	markAsMinedOnLongestChain := make([]chainhash.Hash, 0, 1024)
+
+	iteratorStart := time.Now()
+	var sequence uint64
+	totalProcessed := atomic.Int64{}
+	skippedCount := atomic.Int64{}
+	alreadyMinedCount := atomic.Int64{}
+	lockedCount := atomic.Int64{}
+
+	// Write batch for efficient disk writes
+	writeBatch := tempStore.NewWriteBatch()
+
+	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] processing unmined transactions and writing to temp store")
+
+	// Process batches from iterator
+	for {
+		batch, err := it.Next(ctx)
+		if err != nil {
+			writeBatch.Cancel()
+			return errors.NewProcessingError("error getting unmined transaction", err)
+		}
+
+		if batch == nil || len(batch) == 0 {
+			break
+		}
+
+		for _, unminedTx := range batch {
+			totalProcessed.Add(1)
+
+			if unminedTx.Skip {
+				skippedCount.Add(1)
+				continue
+			}
+
+			if len(unminedTx.BlockIDs) > 0 {
+				skipAlreadyMined := false
+				for _, blockID := range unminedTx.BlockIDs {
+					if bestBlockHeaderIDsMap[blockID] {
+						skipAlreadyMined = true
+						break
+					}
+				}
+
+				if skipAlreadyMined {
+					alreadyMinedCount.Add(1)
+					if unminedTx.UnminedSince > 0 {
+						markAsMinedOnLongestChain = append(markAsMinedOnLongestChain, unminedTx.Node.Hash)
+					}
+					continue
+				}
+			}
+
+			// Serialize and write to temp store
+			txData, serErr := utxo.SerializeUnminedTransaction(unminedTx)
+			if serErr != nil {
+				writeBatch.Cancel()
+				return errors.NewProcessingError("error serializing unmined transaction", serErr)
+			}
+
+			// Use sequence number as key (8 bytes, big-endian for lexicographic ordering)
+			key := make([]byte, 8)
+			binary.BigEndian.PutUint64(key, sequence)
+
+			if setErr := writeBatch.Set(key, txData); setErr != nil {
+				writeBatch.Cancel()
+				return errors.NewProcessingError("error writing to temp store", setErr)
+			}
+
+			// Add lightweight sort entry
+			sortEntries = append(sortEntries, sortEntry{
+				CreatedAt: unminedTx.CreatedAt,
+				Sequence:  sequence,
+			})
+
+			if unminedTx.Locked {
+				lockedTransactions = append(lockedTransactions, unminedTx.Node.Hash)
+				lockedCount.Add(1)
+			}
+
+			sequence++
+
+			// Flush batch periodically to prevent memory buildup
+			if writeBatch.Count() >= 10000 {
+				if flushErr := writeBatch.Flush(); flushErr != nil {
+					return errors.NewProcessingError("error flushing temp store batch", flushErr)
+				}
+			}
+		}
+
+		if totalProcessed.Load()%100_000 == 0 {
+			b.logger.Infof("[loadUnminedTransactionsWithDiskSort] processed %d unmined transactions so far", totalProcessed.Load())
+		}
+	}
+
+	// Flush any remaining writes
+	if flushErr := writeBatch.Flush(); flushErr != nil {
+		return errors.NewProcessingError("error flushing final temp store batch", flushErr)
+	}
+
+	iteratorDuration := time.Since(iteratorStart).Seconds()
+	prometheusBlockAssemblerIteratorProcessingTime.WithLabelValues(fullScanLabel).Observe(iteratorDuration)
+	prometheusBlockAssemblerIteratorTransactionsTotal.WithLabelValues(fullScanLabel).Add(float64(totalProcessed.Load()))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues(fullScanLabel, "skipped").Add(float64(skippedCount.Load()))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues(fullScanLabel, "already_mined").Add(float64(alreadyMinedCount.Load()))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues(fullScanLabel, "locked").Add(float64(lockedCount.Load()))
+	prometheusBlockAssemblerIteratorTransactionsStats.WithLabelValues(fullScanLabel, "added").Add(float64(len(sortEntries)))
+
+	// Fix data inconsistencies
+	if len(markAsMinedOnLongestChain) > 0 {
+		markStart := time.Now()
+		if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, markAsMinedOnLongestChain, true); err != nil {
+			return errors.NewProcessingError("error marking transactions as mined on longest chain", err)
+		}
+		prometheusBlockAssemblerMarkTransactionsTime.Observe(time.Since(markStart).Seconds())
+		prometheusBlockAssemblerMarkTransactionsCount.Add(float64(len(markAsMinedOnLongestChain)))
+
+		b.logger.Infof("[BlockAssembler] fixed %d transactions with inconsistent unmined_since", len(markAsMinedOnLongestChain))
+	}
+
+	// Sort the lightweight entries in memory
+	sortStart := time.Now()
+	sort.Slice(sortEntries, func(i, j int) bool {
+		return sortEntries[i].CreatedAt < sortEntries[j].CreatedAt
+	})
+	txCount := len(sortEntries)
+	var countBucket string
+	switch {
+	case txCount < 1000:
+		countBucket = "<1k"
+	case txCount < 10000:
+		countBucket = "1k-10k"
+	case txCount < 100000:
+		countBucket = "10k-100k"
+	case txCount < 1000000:
+		countBucket = "100k-1M"
+	default:
+		countBucket = ">1M"
+	}
+	prometheusBlockAssemblerSortTransactionsTime.WithLabelValues(countBucket).Observe(time.Since(sortStart).Seconds())
+
+	b.logger.Infof("[BlockAssembler] loaded %d unmined transactions into temp store (total processed: %d, skipped: %d, already mined: %d, locked: %d)",
+		len(sortEntries), totalProcessed.Load(), skippedCount.Load(), alreadyMinedCount.Load(), lockedCount.Load())
+
+	b.logger.Infof("[loadUnminedTransactionsWithDiskSort] reading back transactions in sorted order and adding to subtree processor")
+
+	// Read back in sorted order and add to subtree processor
+	batchStart := time.Now()
+	addStart := time.Now()
+	addTxs := float64(0)
+
+	for idx, entry := range sortEntries {
+		// Get transaction data from temp store
+		key := make([]byte, 8)
+		binary.BigEndian.PutUint64(key, entry.Sequence)
+
+		txData, getErr := tempStore.Get(key)
+		if getErr != nil {
+			return errors.NewProcessingError("error reading from temp store", getErr)
+		}
+
+		unminedTx, deserErr := utxo.DeserializeUnminedTransaction(txData)
+		if deserErr != nil {
+			return errors.NewProcessingError("error deserializing unmined transaction", deserErr)
+		}
+
+		if err = b.subtreeProcessor.AddDirectly(unminedTx.Node, unminedTx.TxInpoints, true); err != nil {
+			return errors.NewProcessingError("error adding unmined transaction to subtree processor", err)
+		}
+
+		if (idx+1)%10_000 == 0 {
+			prometheusBlockAssemblerAddDirectlyTime.Observe(time.Since(addStart).Seconds())
+			prometheusBlockAssemblerAddDirectlyTotal.Add(addTxs)
+			addStart = time.Now()
+			addTxs = 0
+		}
+
+		addTxs++
+	}
+
+	prometheusBlockAssemblerAddDirectlyBatchTime.Observe(time.Since(batchStart).Seconds())
+
+	// Unlock any locked transactions
+	if len(lockedTransactions) > 0 {
+		if err = b.utxoStore.SetLocked(ctx, lockedTransactions, false); err != nil {
+			return errors.NewProcessingError("[BlockAssembler] failed to unlock %d unmined transactions: %v", len(lockedTransactions), err)
+		}
+		b.logger.Infof("[BlockAssembler] unlocked %d previously locked unmined transactions", len(lockedTransactions))
 	}
 
 	return nil

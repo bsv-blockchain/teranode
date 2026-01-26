@@ -70,15 +70,20 @@ function checkInitialResponse(response: Response): Promise<ResponseData> {
       response
         .json()
         .then((errorBody) => {
+          const bodyMessage =
+            errorBody?.error || errorBody?.message || errorBody?.Err || errorBody?.details || undefined
           reject({
             code: response.status,
-            message: errorBody?.error || response.statusText || 'Unspecified error.',
+            message: bodyMessage || response.statusText || 'Unspecified error.',
+            status: response.status,
+            body: errorBody,
           })
         })
         .catch((e) => {
           reject({
             code: response.status,
             message: response.statusText || 'Unspecified error.',
+            status: response.status,
           })
         })
     }
@@ -105,6 +110,11 @@ function callApi<T>(url: string, options: ApiOptions = {}): Promise<ApiResponse<
   // Add the origin header for CORS if not already set
   if (!options.headers['Origin']) {
     options.headers['Origin'] = window.location.origin
+  }
+
+  // Always include credentials for authentication
+  if (!options.credentials) {
+    options.credentials = 'include'
   }
 
   incSpinCount()
@@ -194,6 +204,16 @@ export function getSubtreeTxs(data: {
   })
 }
 
+export function getSubtreeNodes(data: {
+  hash: string
+  offset: number
+  limit: number
+}): Promise<ApiResponse<any>> {
+  return get<any>(`${baseUrl}/subtree/${data.hash}/json`, {
+    query: { offset: String(data.offset), limit: String(data.limit) },
+  })
+}
+
 export function searchItem(data: { q: string }): Promise<ApiResponse<any>> {
   return get<any>(`${baseUrl}/search?${new URLSearchParams(data)}`, {})
 }
@@ -207,6 +227,10 @@ export function getBlockStats(): Promise<ApiResponse<any>> {
       return handleApiError<any>(response.error, '/blockstats')
     })
     .catch((error) => handleApiError<any>(error, '/blockstats'))
+}
+
+export function getChainParams(): Promise<ApiResponse<any>> {
+  return get<any>(`${baseUrl}/chainparams`, {})
 }
 
 export function getBlockForks(data: { hash: string; limit: number }): Promise<ApiResponse<any>> {
@@ -266,7 +290,7 @@ function handleApiError<T>(error: any, endpoint: string): ApiResponse<T> {
 
   // Handle HTTP errors
   if (error.status) {
-    let message = `HTTP ${error.status}`
+    let message = error.message || `HTTP ${error.status}`
 
     if (error.status === 404) {
       // Check if this is a block operation
@@ -278,7 +302,7 @@ function handleApiError<T>(error: any, endpoint: string): ApiResponse<T> {
     } else if (error.status === 401 || error.status === 403) {
       message = 'Authentication error: You are not authorized to access this resource.'
     } else if (error.status === 500) {
-      message = 'Server error: The server encountered an internal error.'
+      message = error.message || 'Server error: The server encountered an internal error.'
     } else if (error.status === 503) {
       message = 'Service unavailable: The blockchain service may not be running.'
     }
@@ -463,7 +487,7 @@ export function revalidateBlock(blockHash: string): Promise<ApiResponse<any>> {
 }
 
 // Get last N invalid blocks
-export function getLastInvalidBlocks(count: number = 5): Promise<ApiResponse<any>> {
+export function getLastInvalidBlocks(count: number = 5, offset: number = 0): Promise<ApiResponse<any>> {
   return new Promise<ApiResponse<any>>((resolve) => {
     incSpinCount()
 
@@ -472,7 +496,7 @@ export function getLastInvalidBlocks(count: number = 5): Promise<ApiResponse<any
       baseUrl = value
     })()
 
-    fetch(`${baseUrl}/blocks/invalid?count=${count}`, {
+    fetch(`${baseUrl}/blocks/invalid?count=${count}&offset=${offset}`, {
       method: 'GET',
       credentials: 'include',
     })
@@ -590,4 +614,64 @@ export function getMerkleProof(txHash: string): Promise<ApiResponse<MerkleProofD
       return handleApiError<MerkleProofData>(response.error, `/merkle_proof/${txHash}/json`)
     })
     .catch((error) => handleApiError<MerkleProofData>(error, `/merkle_proof/${txHash}/json`))
+}
+
+// Settings API interfaces
+export interface SettingMetadata {
+  key: string
+  name: string
+  type: string
+  defaultValue: string
+  currentValue: string
+  description: string
+  longDescription?: string
+  category: string
+  usageHint?: string
+}
+
+export interface SettingsResponse {
+  settings: SettingMetadata[]
+  categories: string[]
+  total: number
+  filtered: number
+  version: string
+  commit: string
+}
+
+// Get all settings with metadata
+export function getSettings(params?: {
+  category?: string
+  search?: string
+}): Promise<ApiResponse<SettingsResponse>> {
+  const queryParams: Record<string, string> = {}
+  if (params?.category) {
+    queryParams.category = params.category
+  }
+  if (params?.search) {
+    queryParams.search = params.search
+  }
+
+  // Only pass query if there are params
+  const options = Object.keys(queryParams).length > 0 ? { query: queryParams } : {}
+
+  return get<SettingsResponse>(`${baseUrl}/settings`, options)
+    .then((response) => {
+      if (response.ok) {
+        return { ok: true, data: response.data } as ApiResponse<SettingsResponse>
+      }
+      return handleApiError<SettingsResponse>(response.error, '/settings')
+    })
+    .catch((error) => handleApiError<SettingsResponse>(error, '/settings'))
+}
+
+// Get available settings categories
+export function getSettingsCategories(): Promise<ApiResponse<{ categories: string[] }>> {
+  return get<{ categories: string[] }>(`${baseUrl}/settings/categories`)
+    .then((response) => {
+      if (response.ok) {
+        return { ok: true, data: response.data } as ApiResponse<{ categories: string[] }>
+      }
+      return handleApiError<{ categories: string[] }>(response.error, '/settings/categories')
+    })
+    .catch((error) => handleApiError<{ categories: string[] }>(error, '/settings/categories'))
 }

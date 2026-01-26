@@ -59,6 +59,7 @@ package aerospike
 
 import (
 	"context"
+	"sync"
 
 	"github.com/aerospike/aerospike-client-go/v8"
 	"github.com/aerospike/aerospike-client-go/v8/types"
@@ -69,6 +70,37 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
+
+// batchRecordsPool pools slices of aerospike.BatchRecordIfc to reduce allocations
+// during SetMinedMulti batch processing.
+var batchRecordsPool = sync.Pool{}
+
+// getBatchRecordsSlice returns a slice from the pool or allocates a new one with the given capacity.
+func getBatchRecordsSlice(capacity int) *[]aerospike.BatchRecordIfc {
+	if v := batchRecordsPool.Get(); v != nil {
+		s := v.(*[]aerospike.BatchRecordIfc)
+		if cap(*s) >= capacity {
+			*s = (*s)[:capacity] // set length to capacity, we'll overwrite all elements
+			return s
+		}
+		// Capacity too small, discard and allocate new
+	}
+	s := make([]aerospike.BatchRecordIfc, capacity)
+	return &s
+}
+
+// putBatchRecordsSlice returns a slice to the pool for reuse.
+func putBatchRecordsSlice(s *[]aerospike.BatchRecordIfc) {
+	if s == nil {
+		return
+	}
+	// Clear the slice to allow GC of the BatchRecordIfc objects
+	for i := range *s {
+		(*s)[i] = nil
+	}
+	*s = (*s)[:0]
+	batchRecordsPool.Put(s)
+}
 
 // SetMinedMulti updates the block references for multiple transactions in batch.
 // This operation marks transactions as mined in a specific block using Lua scripts
@@ -129,14 +161,22 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	thisBlockHeight := s.blockHeight.Load() + 1
 
+	if !minedBlockInfo.UnsetMined && s.settings.Aerospike.EnableSetMinedFilterExpressions {
+		return s.SetMinedMultiWithExpressions(ctx, hashes, minedBlockInfo)
+	}
+
+	// Get batch records slice from pool
+	batchRecordsPtr := getBatchRecordsSlice(len(hashes))
+	defer putBatchRecordsSlice(batchRecordsPtr)
+	batchRecords := *batchRecordsPtr
+
 	// Prepare batch records
-	batchRecords, err := s.prepareBatchRecordsForSetMined(hashes, minedBlockInfo, thisBlockHeight)
-	if err != nil {
+	if err := s.prepareBatchRecordsForSetMined(batchRecords, hashes, minedBlockInfo, thisBlockHeight); err != nil {
 		return nil, err
 	}
 
 	// Execute batch operation
-	if err = s.executeBatchOperation(batchRecords); err != nil {
+	if err := s.executeBatchOperation(batchRecords); err != nil {
 		return nil, err
 	}
 
@@ -144,21 +184,27 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 	return s.processBatchResultsForSetMined(ctx, batchRecords, hashes, thisBlockHeight, minedBlockInfo)
 }
 
-// prepareBatchRecordsForSetMined creates batch records for the setMined operation
-func (s *Store) prepareBatchRecordsForSetMined(hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo, thisBlockHeight uint32) ([]aerospike.BatchRecordIfc, error) {
-	batchRecords := make([]aerospike.BatchRecordIfc, len(hashes))
+// prepareBatchRecordsForSetMined populates batch records for the setMined operation.
+// The batchRecords slice must be pre-allocated with len(hashes) capacity.
+func (s *Store) prepareBatchRecordsForSetMined(batchRecords []aerospike.BatchRecordIfc, hashes []*chainhash.Hash,
+	minedBlockInfo utxo.MinedBlockInfo, thisBlockHeight uint32) error {
 	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
+
+	usePackage := LuaPackage
+	if s.settings.Aerospike.UseSeparateUDFMinedModule {
+		usePackage = LuaPackageMined
+	}
 
 	for idx, hash := range hashes {
 		key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 		if err != nil {
-			return nil, errors.NewProcessingError("aerospike NewKey error", err)
+			return errors.NewProcessingError("aerospike NewKey error", err)
 		}
 
 		batchRecords[idx] = aerospike.NewBatchUDF(
 			batchUDFPolicy,
 			key,
-			LuaPackage,
+			usePackage,
 			"setMined",
 			aerospike.NewValue(minedBlockInfo.BlockID),
 			aerospike.NewValue(minedBlockInfo.BlockHeight),
@@ -170,7 +216,7 @@ func (s *Store) prepareBatchRecordsForSetMined(hashes []*chainhash.Hash, minedBl
 		)
 	}
 
-	return batchRecords, nil
+	return nil
 }
 
 // executeBatchOperation performs the batch operation and increments metrics
@@ -206,17 +252,20 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 		ChildCount     int
 		DeleteAtHeight uint32
 	}, 0)
-	externalDAH := make([]struct {
-		TxID *chainhash.Hash
-		DAH  uint32
-	}, 0)
 	// DAH timing assumption:
 	// - thisBatch operates under a fixed block-processing context.
 	// - thisBlockHeight and retention are immutable for the duration of SetMinedMulti() execution.
 	// Therefore, computing DeleteAtHeight (DAH) once is safe and consistent across all signals in this batch.
 	// If this assumption ever changes (e.g., SetBlockHeight or retention can mutate concurrently),
 	// DAH must be computed per-record at signal time to avoid stale values.
-	dahHeight := thisBlockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
+	//
+	// Only calculate DAH if BlockHeightRetention is configured (> 0)
+	// When retention is 0, it means "don't use automatic retention"
+	retention := s.settings.GetUtxoStoreBlockHeightRetention()
+	var dahHeight uint32
+	if retention > 0 {
+		dahHeight = thisBlockHeight + retention
+	}
 
 	for idx, batchRecord := range batchRecords {
 		result, res, err := s.processSingleBatchRecord(ctx, batchRecord, hashes[idx], thisBlockHeight, minedBlockInfo)
@@ -254,25 +303,22 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			case LuaSignalAllSpent:
 				extraRecords = append(extraRecords, hashes[idx])
 			case LuaSignalDAHSet:
-				dahSetItems = append(dahSetItems, struct {
-					TxID           *chainhash.Hash
-					ChildCount     int
-					DeleteAtHeight uint32
-				}{TxID: hashes[idx], ChildCount: res.ChildCount, DeleteAtHeight: dahHeight})
-				externalDAH = append(externalDAH, struct {
-					TxID *chainhash.Hash
-					DAH  uint32
-				}{TxID: hashes[idx], DAH: dahHeight})
+				// Only set DAH if retention is configured
+				if retention > 0 {
+					dahSetItems = append(dahSetItems, struct {
+						TxID           *chainhash.Hash
+						ChildCount     int
+						DeleteAtHeight uint32
+					}{TxID: hashes[idx], ChildCount: res.ChildCount, DeleteAtHeight: dahHeight})
+					// External store DAH is disabled - lifecycle managed by pruner service
+				}
 			case LuaSignalDAHUnset:
 				dahUnsetItems = append(dahUnsetItems, struct {
 					TxID           *chainhash.Hash
 					ChildCount     int
 					DeleteAtHeight uint32
 				}{TxID: hashes[idx], ChildCount: res.ChildCount, DeleteAtHeight: 0})
-				externalDAH = append(externalDAH, struct {
-					TxID *chainhash.Hash
-					DAH  uint32
-				}{TxID: hashes[idx], DAH: 0})
+				// External store DAH is disabled - lifecycle managed by pruner service
 			}
 		}
 	}
@@ -305,11 +351,8 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 		}
 	}
 
-	if len(externalDAH) > 0 {
-		if err := s.setDAHExternalTransactionMulti(ctx, externalDAH); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
+	// External store DAH is disabled - lifecycle managed by pruner service
+	// setDAHExternalTransactionMulti removed as it would no-op
 
 	if postErr != nil {
 		return blockIDs, errors.NewError("aerospike setMined follow-up batch errors", postErr)
@@ -365,7 +408,6 @@ func (s *Store) handleBatchRecordError(err error, hash *chainhash.Hash) error {
 // handleSetMinedSignal handles signals from the setMined operation
 func (s *Store) handleSetMinedSignal(ctx context.Context, signal LuaSignal, hash *chainhash.Hash, childCount int, thisBlockHeight uint32) error {
 	var errs error
-	dahHeight := thisBlockHeight + s.settings.GetUtxoStoreBlockHeightRetention()
 
 	switch signal {
 	case LuaSignalAllSpent:
@@ -374,20 +416,22 @@ func (s *Store) handleSetMinedSignal(ctx context.Context, signal LuaSignal, hash
 		}
 
 	case LuaSignalDAHSet:
-		if err := s.SetDAHForChildRecords(hash, childCount, dahHeight); err != nil {
-			errs = errors.Join(errs, err)
-		}
-		if err := s.setDAHExternalTransaction(ctx, hash, dahHeight); err != nil {
-			errs = errors.Join(errs, err)
+		// Only set DAH if BlockHeightRetention is configured (> 0)
+		// When retention is 0, it means "don't use automatic retention"
+		if retention := s.settings.GetUtxoStoreBlockHeightRetention(); retention > 0 {
+			dahHeight := thisBlockHeight + retention
+
+			if err := s.SetDAHForChildRecords(hash, childCount, dahHeight); err != nil {
+				errs = errors.Join(errs, err)
+			}
+			// External store DAH is disabled - lifecycle managed by pruner service
 		}
 
 	case LuaSignalDAHUnset:
 		if err := s.SetDAHForChildRecords(hash, childCount, 0); err != nil {
 			errs = errors.Join(errs, err)
 		}
-		if err := s.setDAHExternalTransaction(ctx, hash, 0); err != nil {
-			errs = errors.Join(errs, err)
-		}
+		// External store DAH is disabled - lifecycle managed by pruner service
 	}
 
 	return errs
