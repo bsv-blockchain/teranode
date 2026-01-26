@@ -1,6 +1,8 @@
 package settings
 
-import "time"
+import (
+	"time"
+)
 
 // PostgresSettings configures PostgreSQL database connection pooling.
 type PostgresSettings struct {
