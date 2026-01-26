@@ -3,18 +3,18 @@ package usql
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestDefaultRetryConfig(t *testing.T) {
 	config := DefaultRetryConfig()
-	
+
 	assert.Equal(t, 3, config.MaxAttempts, "Default max attempts should be 3")
 	assert.Equal(t, 100*time.Millisecond, config.BaseDelay, "Default base delay should be 100ms")
 	assert.True(t, config.Enabled, "Retry should be enabled by default")
@@ -33,37 +33,37 @@ func TestIsRetriable(t *testing.T) {
 		},
 		{
 			name:     "connection refused",
-			err:      errors.New("connection refused"),
+			err:      errors.New(errors.ERR_NETWORK_CONNECTION_REFUSED, "connection refused"),
 			expected: true,
 		},
 		{
 			name:     "connection reset",
-			err:      errors.New("connection reset by peer"),
+			err:      errors.New(errors.ERR_NETWORK_ERROR, "connection reset by peer"),
 			expected: true,
 		},
 		{
 			name:     "i/o timeout",
-			err:      errors.New("i/o timeout"),
+			err:      errors.New(errors.ERR_NETWORK_TIMEOUT, "i/o timeout"),
 			expected: true,
 		},
 		{
 			name:     "deadline exceeded",
-			err:      errors.New("context deadline exceeded"),
+			err:      errors.New(errors.ERR_CONTEXT_CANCELED, "context deadline exceeded"),
 			expected: true,
 		},
 		{
 			name:     "database locked",
-			err:      errors.New("database is locked"),
+			err:      errors.New(errors.ERR_STORAGE_ERROR, "database is locked"),
 			expected: true,
 		},
 		{
 			name:     "deadlock",
-			err:      errors.New("deadlock detected"),
+			err:      errors.New(errors.ERR_STORAGE_ERROR, "deadlock detected"),
 			expected: true,
 		},
 		{
 			name:     "too many connections",
-			err:      errors.New("too many connections"),
+			err:      errors.New(errors.ERR_STORAGE_ERROR, "too many connections"),
 			expected: true,
 		},
 		{
@@ -110,12 +110,12 @@ func TestIsRetriable(t *testing.T) {
 		// These error types are covered through string-based error checking
 		{
 			name:     "generic application error (non-retriable)",
-			err:      errors.New("invalid input"),
+			err:      errors.New(errors.ERR_INVALID_ARGUMENT, "invalid input"),
 			expected: false,
 		},
 		{
 			name:     "SQL syntax error (non-retriable)",
-			err:      errors.New("syntax error at or near"),
+			err:      errors.New(errors.ERR_ERROR, "syntax error at or near"),
 			expected: false,
 		},
 	}
@@ -132,10 +132,10 @@ func TestCalculateBackoff(t *testing.T) {
 	baseDelay := 100 * time.Millisecond
 
 	tests := []struct {
-		name         string
-		attempt      int
-		expectedMin  time.Duration
-		expectedMax  time.Duration
+		name        string
+		attempt     int
+		expectedMin time.Duration
+		expectedMax time.Duration
 	}{
 		{
 			name:        "first retry (attempt 0)",
@@ -184,7 +184,7 @@ func TestRetryOperation_Success(t *testing.T) {
 	}
 
 	err := retryOperation(ctx, config, operation)
-	
+
 	assert.NoError(t, err)
 	assert.Equal(t, 1, callCount, "Operation should be called once on success")
 }
@@ -201,7 +201,7 @@ func TestRetryOperation_SuccessAfterRetries(t *testing.T) {
 	operation := func() error {
 		callCount++
 		if callCount < 3 {
-			return errors.New("connection refused") // Retriable error
+			return errors.New(errors.ERR_NETWORK_CONNECTION_REFUSED, "connection refused") // Retriable error
 		}
 		return nil
 	}
@@ -209,7 +209,7 @@ func TestRetryOperation_SuccessAfterRetries(t *testing.T) {
 	start := time.Now()
 	err := retryOperation(ctx, config, operation)
 	duration := time.Since(start)
-	
+
 	assert.NoError(t, err)
 	assert.Equal(t, 3, callCount, "Operation should be called 3 times")
 	// Should have at least 2 backoffs with jitter (allowing for -25% jitter on both)
@@ -226,14 +226,14 @@ func TestRetryOperation_NonRetriableError(t *testing.T) {
 	}
 
 	callCount := 0
-	expectedErr := errors.New("syntax error") // Non-retriable
+	expectedErr := errors.New(errors.ERR_ERROR, "syntax error") // Non-retriable
 	operation := func() error {
 		callCount++
 		return expectedErr
 	}
 
 	err := retryOperation(ctx, config, operation)
-	
+
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
 	assert.Equal(t, 1, callCount, "Non-retriable error should not be retried")
@@ -248,14 +248,14 @@ func TestRetryOperation_ExhaustedRetries(t *testing.T) {
 	}
 
 	callCount := 0
-	expectedErr := errors.New("connection refused") // Retriable
+	expectedErr := errors.New(errors.ERR_NETWORK_CONNECTION_REFUSED, "connection refused") // Retriable
 	operation := func() error {
 		callCount++
 		return expectedErr
 	}
 
 	err := retryOperation(ctx, config, operation)
-	
+
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
 	assert.Equal(t, 4, callCount, "Should try initial + 3 retries")
@@ -275,11 +275,11 @@ func TestRetryOperation_ContextCancelled(t *testing.T) {
 		if callCount == 2 {
 			cancel() // Cancel after first retry
 		}
-		return errors.New("connection refused") // Retriable
+		return errors.New(errors.ERR_NETWORK_CONNECTION_REFUSED, "connection refused") // Retriable
 	}
 
 	err := retryOperation(ctx, config, operation)
-	
+
 	assert.Error(t, err)
 	assert.Equal(t, context.Canceled, err)
 	assert.LessOrEqual(t, callCount, 2, "Should stop on context cancellation")
@@ -294,14 +294,14 @@ func TestRetryOperation_Disabled(t *testing.T) {
 	}
 
 	callCount := 0
-	expectedErr := errors.New("connection refused")
+	expectedErr := errors.New(errors.ERR_NETWORK_CONNECTION_REFUSED, "connection refused")
 	operation := func() error {
 		callCount++
 		return expectedErr
 	}
 
 	err := retryOperation(ctx, config, operation)
-	
+
 	assert.Error(t, err)
 	assert.Equal(t, expectedErr, err)
 	assert.Equal(t, 1, callCount, "Should not retry when disabled")
@@ -323,7 +323,7 @@ func TestRetryQueryOperation_Success(t *testing.T) {
 	}
 
 	rows, err := retryQueryOperation(ctx, config, operation)
-	
+
 	assert.NoError(t, err)
 	assert.Equal(t, expectedRows, rows)
 	assert.Equal(t, 1, callCount, "Operation should be called once on success")
@@ -342,13 +342,13 @@ func TestRetryQueryOperation_SuccessAfterRetries(t *testing.T) {
 	operation := func() (*sql.Rows, error) {
 		callCount++
 		if callCount < 2 {
-			return nil, errors.New("connection refused") // Retriable
+			return nil, errors.New(errors.ERR_NETWORK_CONNECTION_REFUSED, "connection refused") // Retriable
 		}
 		return expectedRows, nil
 	}
 
 	rows, err := retryQueryOperation(ctx, config, operation)
-	
+
 	assert.NoError(t, err)
 	assert.Equal(t, expectedRows, rows)
 	assert.Equal(t, 2, callCount, "Operation should succeed on second attempt")
@@ -369,7 +369,7 @@ func TestRetryExecOperation_Success(t *testing.T) {
 	}
 
 	result, err := retryExecOperation(ctx, config, operation)
-	
+
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 1, callCount, "Operation should be called once on success")
@@ -396,18 +396,18 @@ func TestRetryExecOperation_SuccessAfterRetries(t *testing.T) {
 		BaseDelay:   10 * time.Millisecond,
 		Enabled:     true,
 	}
-	
+
 	callCount := 0
 	operation := func() (sql.Result, error) {
 		callCount++
 		if callCount < 3 {
-			return nil, errors.New("deadlock detected") // Retriable
+			return nil, errors.New(errors.ERR_STORAGE_ERROR, "deadlock detected") // Retriable
 		}
 		return &mockResultImpl{lastInsertId: 1, rowsAffected: 1}, nil
 	}
 
 	result, err := retryExecOperation(ctx, config, operation)
-	
+
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 3, callCount, "Operation should succeed on third attempt")
@@ -430,7 +430,7 @@ func TestIsRetriableErrorMessages(t *testing.T) {
 
 	for _, msg := range retriableMessages {
 		t.Run(msg, func(t *testing.T) {
-			err := errors.New(msg)
+			err := errors.New(errors.ERR_ERROR, msg)
 			assert.True(t, isRetriable(err), "Error message '%s' should be retriable", msg)
 		})
 	}
@@ -446,7 +446,7 @@ func TestIsRetriableErrorMessages(t *testing.T) {
 
 	for _, msg := range nonRetriableMessages {
 		t.Run(msg, func(t *testing.T) {
-			err := errors.New(msg)
+			err := errors.New(errors.ERR_ERROR, msg)
 			assert.False(t, isRetriable(err), "Error message '%s' should not be retriable", msg)
 		})
 	}
@@ -455,7 +455,7 @@ func TestIsRetriableErrorMessages(t *testing.T) {
 // BenchmarkCalculateBackoff benchmarks the backoff calculation
 func BenchmarkCalculateBackoff(b *testing.B) {
 	baseDelay := 100 * time.Millisecond
-	
+
 	for i := 0; i < b.N; i++ {
 		calculateBackoff(i%3, baseDelay)
 	}
@@ -463,8 +463,8 @@ func BenchmarkCalculateBackoff(b *testing.B) {
 
 // BenchmarkIsRetriable benchmarks the error detection
 func BenchmarkIsRetriable(b *testing.B) {
-	err := errors.New("connection refused")
-	
+	err := errors.New(errors.ERR_NETWORK_CONNECTION_REFUSED, "connection refused")
+
 	for i := 0; i < b.N; i++ {
 		isRetriable(err)
 	}
@@ -481,8 +481,8 @@ func TestRetryOperation_PostgreSQLErrors(t *testing.T) {
 
 	retriablePGErrors := []string{
 		"08000", "08003", "08006", // Connection errors
-		"40001", "40P01",           // Transaction conflicts
-		"55P03", "57P03",           // Lock/connect errors
+		"40001", "40P01", // Transaction conflicts
+		"55P03", "57P03", // Lock/connect errors
 	}
 
 	for _, code := range retriablePGErrors {
@@ -519,7 +519,7 @@ func TestRetryOperation_ExponentialBackoffTiming(t *testing.T) {
 	callCount := 0
 	operation := func() error {
 		callCount++
-		return errors.New("connection refused")
+		return errors.New(errors.ERR_NETWORK_CONNECTION_REFUSED, "connection refused")
 	}
 
 	start := time.Now()
