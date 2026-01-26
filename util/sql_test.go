@@ -633,7 +633,7 @@ func TestInitSQLDB_WithServicePoolSettings(t *testing.T) {
 			name:                "postgres with nil service settings",
 			url:                 "postgres://user:pass@localhost:5432/testdb",
 			servicePoolSettings: nil,
-			wantErr:             true, // Connection will fail
+			wantErr:             false,
 			description:         "Should use global defaults when service settings are nil",
 		},
 		{
@@ -642,7 +642,7 @@ func TestInitSQLDB_WithServicePoolSettings(t *testing.T) {
 			servicePoolSettings: &settings.PostgresSettings{
 				MaxOpenConns: 80,
 			},
-			wantErr:     true, // Connection will fail
+			wantErr:     false,
 			description: "Should merge service settings with global defaults",
 		},
 		{
