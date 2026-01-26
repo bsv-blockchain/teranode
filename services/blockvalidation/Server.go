@@ -457,6 +457,12 @@ func (u *Server) HealthGRPC(ctx context.Context, _ *blockvalidation_api.EmptyMes
 //   - error: Any error encountered (always nil for this method)
 func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.CatchupStatusResponse, error) {
 	status := u.getCatchupStatusInternal()
+	if status != nil && !status.IsCatchingUp && u.blockchainClient != nil {
+		_, meta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+		if err == nil && meta != nil {
+			status.CurrentHeight = meta.Height
+		}
+	}
 
 	resp := &blockvalidation_api.CatchupStatusResponse{
 		IsCatchingUp:         status.IsCatchingUp,
@@ -993,36 +999,51 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
-	// Blocks until the FSM transitions from the IDLE state
-	err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(ctx)
-	if err != nil {
-		u.logger.Errorf("[Block Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
+	g, gctx := errgroup.WithContext(ctx)
 
-		return err
-	}
+	// Start Kafka consumer only after the blockchain FSM transitions from IDLE.
+	// This prevents validation processing from starting too early, while still allowing
+	// the gRPC server to accept administrative calls (e.g. RevalidateBlock).
+	g.Go(func() error {
+		// Blocks until the FSM transitions from the IDLE state
+		err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gctx)
+		if err != nil {
+			u.logger.Errorf("[Block Validation Service] Failed to wait for FSM transition from IDLE state: %s", err)
+			return err
+		}
 
-	u.logger.Infof("[Start] FSM transitioned from IDLE state, starting Kafka consumer")
+		u.logger.Infof("[Start] FSM transitioned from IDLE state, starting Kafka consumer")
 
-	// start blocks kafka consumer
-	if u.kafkaConsumerClient == nil {
-		u.logger.Errorf("[Start] kafkaConsumerClient is nil!")
-		return errors.NewServiceError("kafkaConsumerClient is nil")
-	}
+		// start blocks kafka consumer
+		if u.kafkaConsumerClient == nil {
+			u.logger.Errorf("[Start] kafkaConsumerClient is nil!")
+			return errors.NewServiceError("kafkaConsumerClient is nil")
+		}
 
-	u.logger.Infof("[Start] Starting Kafka consumer with handler")
-	u.kafkaConsumerClient.Start(ctx, u.consumerMessageHandler(ctx), kafka.WithLogErrorAndMoveOn())
+		u.logger.Infof("[Start] Starting Kafka consumer with handler")
+		u.kafkaConsumerClient.Start(gctx, u.consumerMessageHandler(gctx), kafka.WithLogErrorAndMoveOn())
 
-	u.logger.Infof("[Start] Kafka consumer started successfully")
+		u.logger.Infof("[Start] Kafka consumer started successfully")
 
-	// this will block
-	if err := util.StartGRPCServer(ctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
-		blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
-		closeOnce.Do(func() { close(readyCh) })
-	}, nil); err != nil {
-		return err
-	}
+		<-gctx.Done()
 
-	return nil
+		u.logger.Infof("[Start] Kafka consumer context done, closing consumer")
+		if err := u.kafkaConsumerClient.Close(); err != nil {
+			u.logger.Errorf("[Start] failed to close kafka consumer gracefully: %v", err)
+		}
+
+		return nil
+	})
+
+	// Start gRPC server immediately (blocks until shutdown)
+	g.Go(func() error {
+		return util.StartGRPCServer(gctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
+			blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
+			closeOnce.Do(func() { close(readyCh) })
+		}, nil)
+	})
+
+	return g.Wait()
 }
 
 // Stop gracefully shuts down the block validation server by stopping background

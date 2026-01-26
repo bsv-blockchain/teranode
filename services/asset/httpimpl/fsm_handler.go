@@ -2,7 +2,9 @@ package httpimpl
 
 import (
 	"net/http"
+	"strings"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -63,11 +65,35 @@ func (h *FSMHandler) GetFSMState(c echo.Context) error {
 func (h *FSMHandler) GetFSMEvents(c echo.Context) error {
 	h.logger.Debugf("Getting available blockchain FSM events")
 
-	// Since there's no direct API method to get available events,
-	// we'll return all possible FSM event types from the enum
-	events := make([]string, 0, len(blockchain_api.FSMEventType_name))
-	for _, eventName := range blockchain_api.FSMEventType_name {
-		events = append(events, eventName)
+	state, err := h.getCurrentState(c)
+	if err != nil {
+		return err
+	}
+
+	var events []string
+	// these transitions are stable and documented in stateMachine.md.
+	switch *state {
+	case blockchain_api.FSMStateType_IDLE:
+		events = []string{
+			blockchain_api.FSMEventType_RUN.String(),
+			blockchain_api.FSMEventType_LEGACYSYNC.String(),
+		}
+	case blockchain_api.FSMStateType_RUNNING:
+		events = []string{
+			blockchain_api.FSMEventType_STOP.String(),
+			blockchain_api.FSMEventType_CATCHUPBLOCKS.String(),
+		}
+	case blockchain_api.FSMStateType_LEGACYSYNCING:
+		events = []string{
+			blockchain_api.FSMEventType_RUN.String(),
+			blockchain_api.FSMEventType_STOP.String(),
+		}
+	case blockchain_api.FSMStateType_CATCHINGBLOCKS:
+		events = []string{
+			blockchain_api.FSMEventType_RUN.String(),
+		}
+	default:
+		events = []string{}
 	}
 
 	h.logger.Debugf("Available blockchain FSM events: %v", events)
@@ -76,6 +102,35 @@ func (h *FSMHandler) GetFSMEvents(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"events": events,
 	})
+}
+
+func extractInvalidArgumentMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	msg := err.Error()
+
+	marker := ""
+	markerIdx := -1
+	for _, m := range []string{"INVALID_ARGUMENT", "InvalidArgument"} {
+		if idx := strings.LastIndex(msg, m); idx >= 0 && idx > markerIdx {
+			marker = m
+			markerIdx = idx
+		}
+	}
+	if markerIdx >= 0 {
+		remaining := msg[markerIdx+len(marker):]
+		if colon := strings.Index(remaining, ":"); colon >= 0 {
+			return strings.TrimSpace(remaining[colon+1:])
+		}
+	}
+
+	if idx := strings.LastIndex(msg, "desc ="); idx >= 0 {
+		return strings.TrimSpace(msg[idx+len("desc ="):])
+	}
+
+	return msg
 }
 
 // GetFSMStates returns all possible FSM states
@@ -135,7 +190,10 @@ func (h *FSMHandler) SendFSMEvent(c echo.Context) error {
 	// Send the event to the blockchain service
 	if err := h.blockchainClient.SendFSMEvent(ctx, eventType); err != nil {
 		h.logger.Errorf("Failed to send custom FSM event %s: %v", eventType.String(), err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to send FSM event: "+err.Error())
+		if strings.Contains(err.Error(), "INVALID_ARGUMENT") || strings.Contains(err.Error(), "InvalidArgument") {
+			return sendError(c, http.StatusBadRequest, int32(errors.ERR_INVALID_ARGUMENT), errors.NewInvalidArgumentError(extractInvalidArgumentMessage(err)))
+		}
+		return sendError(c, http.StatusInternalServerError, int32(errors.ERR_SERVICE_ERROR), errors.NewServiceError("failed to send FSM event", err))
 	}
 
 	state, err := h.getCurrentState(c)

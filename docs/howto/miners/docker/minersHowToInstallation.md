@@ -610,8 +610,6 @@ sudo rm -rf ./data/*
 docker compose up -d
 ```
 
-For detailed procedures, troubleshooting, or selective cleanup, consult the [reset guide](minersHowToResetTeranode.md).
-
 ## Teranode Seeding
 
 If you have access to an SV Node, you can speed up the Initial Block Download (IBD) by seeding the Teranode with an export from SV Node. Only run this on a gracefully shut down SV Node instance (e.g., after using the RPC `stop` method).

@@ -174,7 +174,11 @@ func (n *Null) GetIoReader(_ context.Context, key []byte, fileType fileformat.Fi
 		return nil, err
 	}
 
-	return nil, errors.NewStorageError("failed to read data from file: no such file or directory: %s", fileName)
+	if n != nil && n.logger != nil {
+		n.logger.Debugf("[Null][GetIoReader] blob not found filename=%s type=%s", fileName, fileType)
+	}
+
+	return nil, errors.ErrNotFound
 }
 
 // Get simulates retrieving a blob.

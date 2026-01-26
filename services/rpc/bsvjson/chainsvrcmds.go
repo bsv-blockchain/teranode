@@ -922,4 +922,7 @@ func init() {
 	MustRegisterCmd("verifychain", (*VerifyChainCmd)(nil), flags)
 	MustRegisterCmd("verifymessage", (*VerifyMessageCmd)(nil), flags)
 	MustRegisterCmd("verifytxoutproof", (*VerifyTxOutProofCmd)(nil), flags)
+	MustRegisterCmd("freeze", (*FreezeCmd)(nil), flags)
+	MustRegisterCmd("unfreeze", (*UnfreezeCmd)(nil), flags)
+	MustRegisterCmd("reassign", (*ReassignCmd)(nil), flags)
 }

@@ -34,6 +34,9 @@
   let invalidBlocksLoading = false
   let invalidBlocksError: string | null = null
   let lastInvalidBlocksRefresh: Date | null = null
+  let invalidBlocksOffset = 0
+  const INVALID_BLOCKS_PAGE_SIZE = 5
+  let invalidBlocksHasMore = false
 
   // Re-validate block state
   let revalidatingBlock = false
@@ -53,6 +56,45 @@
 
   function getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error)
+  }
+
+  // duplicates the FSM transition logic from the backend (fsm_handler.go 
+  // If the backend state machine changes, the UI will become out of sync. 
+  function isEventAllowedForState(state: string | undefined, eventName: string): boolean {
+    if (!state || !eventName) return false
+
+    switch (state) {
+      case 'IDLE':
+        return eventName === 'RUN' || eventName === 'LEGACYSYNC'
+      case 'RUNNING':
+        return eventName === 'STOP' || eventName === 'CATCHUPBLOCKS'
+      case 'LEGACYSYNCING':
+        return eventName === 'RUN' || eventName === 'STOP'
+      case 'CATCHINGBLOCKS':
+        return eventName === 'RUN'
+      default:
+        return false
+    }
+  }
+
+  function goToPrevInvalidBlocksPage(): void {
+    if (invalidBlocksLoading) return
+    const nextOffset = Math.max(0, invalidBlocksOffset - INVALID_BLOCKS_PAGE_SIZE)
+    fetchInvalidBlocks(nextOffset)
+  }
+
+  function goToNextInvalidBlocksPage(): void {
+    if (invalidBlocksLoading || !invalidBlocksHasMore) return
+    const nextOffset = invalidBlocksOffset + INVALID_BLOCKS_PAGE_SIZE
+    fetchInvalidBlocks(nextOffset)
+  }
+
+  function getEventDisabledReason(state: string | undefined, eventName: string): string {
+    if (!state) return 'FSM state not available'
+    if (state === 'CATCHINGBLOCKS' && eventName !== 'RUN') {
+      return 'Catchup must complete first'
+    }
+    return `Not allowed from ${state}`
   }
 
   function formatTimeAgo(timestamp: number): string {
@@ -463,7 +505,7 @@
     }
   }
 
-  async function fetchInvalidBlocks() {
+  async function fetchInvalidBlocks(offset: number = invalidBlocksOffset) {
     // Save current scroll position before updating
     const scrollPosition = window.scrollY
 
@@ -471,7 +513,7 @@
     invalidBlocksError = null
 
     try {
-      const result = await api.getLastInvalidBlocks(5)
+      const result = await api.getLastInvalidBlocks(INVALID_BLOCKS_PAGE_SIZE, offset)
 
       if (!result.ok) {
         throw new Error(
@@ -479,7 +521,9 @@
         )
       }
 
+      invalidBlocksOffset = typeof result.data.offset === 'number' ? result.data.offset : offset
       invalidBlocks = result.data.blocks || []
+      invalidBlocksHasMore = !!result.data.hasMore
       lastInvalidBlocksRefresh = new Date()
       console.log('Invalid blocks:', invalidBlocks)
     } catch (error: unknown) {
@@ -609,12 +653,14 @@
                   <div class="action-buttons">
                     {#each fsmEvents.sort((a, b) => a.value - b.value) as event}
                       {#if event && event.name}
+                        {@const allowed = isEventAllowedForState(fsmState?.state, event.name)}
                         <button
                           on:click={() => sendFSMEvent(event.name)}
-                          disabled={fsmLoading}
+                          disabled={fsmLoading || !allowed}
                           class="action-button"
                           data-event={event.name.toLowerCase()}
                           data-event-id={event.value}
+                          title={!allowed ? getEventDisabledReason(fsmState?.state, event.name) : ''}
                         >
                           {#if fsmLoading}
                             <div class="spinner"></div>
@@ -709,6 +755,25 @@
       <div class="section-header">
         <h2>Recently Invalidated Blocks</h2>
         <div class="refresh-container">
+          <button
+            class="icon-button with-text"
+            on:click={goToPrevInvalidBlocksPage}
+            disabled={invalidBlocksLoading || invalidBlocksOffset === 0}
+            title="Previous page"
+          >
+            <span>Prev</span>
+          </button>
+          <span class="last-refresh">
+            Showing {invalidBlocksOffset + 1}-{invalidBlocksOffset + invalidBlocks.length}
+          </span>
+          <button
+            class="icon-button with-text"
+            on:click={goToNextInvalidBlocksPage}
+            disabled={invalidBlocksLoading || !invalidBlocksHasMore}
+            title="Next page"
+          >
+            <span>Next</span>
+          </button>
           {#if lastInvalidBlocksRefresh}
             <span class="last-refresh">
               Last refreshed: {lastInvalidBlocksRefresh.toLocaleTimeString()}
