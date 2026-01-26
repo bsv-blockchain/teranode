@@ -70,7 +70,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ConnMaxIdleTime:  getDuration("postgres_connMaxIdleTime", 1*time.Minute, alternativeContext...),
 			RetryMaxAttempts: getInt("postgres_retryMaxAttempts", 3, alternativeContext...),
 			RetryBaseDelay:   getDuration("postgres_retryBaseDelay", 100*time.Millisecond, alternativeContext...),
-			RetryEnabled:     getBool("postgres_retryEnabled", true, alternativeContext...),
+			RetryEnabled:     getBool("postgres_retryEnabled", false, alternativeContext...),
 		},
 		UseCgoVerifier:             getBool("use_cgo_verifier", true, alternativeContext...),
 		GRPCResolver:               getString("grpc_resolver", "", alternativeContext...),
