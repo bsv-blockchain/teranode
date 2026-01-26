@@ -184,6 +184,7 @@ func retryOperation(ctx context.Context, config RetryConfig, operation func() er
 }
 
 // retryQueryOperation is a specialized version for Query operations that return *sql.Rows
+// Use this for context-aware queries (QueryContext)
 func retryQueryOperation(ctx context.Context, config RetryConfig, operation func() (*sql.Rows, error)) (*sql.Rows, error) {
 	ctx = normalizeContext(ctx)
 	if !config.Enabled {
@@ -242,7 +243,60 @@ func retryQueryOperation(ctx context.Context, config RetryConfig, operation func
 	return rows, lastErr
 }
 
+// retryQueryOperationNoContext is for non-context Query operations
+// Uses time.Sleep instead of context-aware select for backoff
+func retryQueryOperationNoContext(config RetryConfig, operation func() (*sql.Rows, error)) (*sql.Rows, error) {
+	if !config.Enabled {
+		return operation()
+	}
+
+	var lastErr error
+	var rows *sql.Rows
+	var err error
+
+	for attempt := 0; attempt <= config.MaxAttempts; attempt++ {
+		// Record retry attempt metric
+		if attempt > 0 {
+			prometheusQueryRetries.WithLabelValues(fmt.Sprintf("%d", attempt)).Inc()
+		}
+
+		// Execute the operation
+		rows, err = operation()
+		if err == nil {
+			// Success - record metric if this was a retry
+			if attempt > 0 {
+				prometheusQueryRetrySuccess.Inc()
+			}
+			return rows, nil
+		}
+
+		lastErr = err
+		if rows != nil {
+			_ = rows.Close()
+			rows = nil
+		}
+
+		// Don't retry non-retriable errors
+		if !isRetriable(err) {
+			return nil, err
+		}
+
+		// Don't retry if we've exhausted attempts
+		if attempt >= config.MaxAttempts {
+			prometheusQueryRetryExhausted.Inc()
+			break
+		}
+
+		// Calculate backoff with jitter and sleep
+		backoff := calculateBackoff(attempt, config.BaseDelay)
+		time.Sleep(backoff)
+	}
+
+	return rows, lastErr
+}
+
 // retryExecOperation is a specialized version for Exec operations that return sql.Result
+// Use this for context-aware exec (ExecContext)
 func retryExecOperation(ctx context.Context, config RetryConfig, operation func() (sql.Result, error)) (sql.Result, error) {
 	ctx = normalizeContext(ctx)
 	if !config.Enabled {
@@ -293,6 +347,55 @@ func retryExecOperation(ctx context.Context, config RetryConfig, operation func(
 		case <-time.After(backoff):
 			// Continue to next attempt
 		}
+	}
+
+	return result, lastErr
+}
+
+// retryExecOperationNoContext is for non-context Exec operations
+// Uses time.Sleep instead of context-aware select for backoff
+func retryExecOperationNoContext(config RetryConfig, operation func() (sql.Result, error)) (sql.Result, error) {
+	if !config.Enabled {
+		return operation()
+	}
+
+	var lastErr error
+	var result sql.Result
+	var err error
+
+	for attempt := 0; attempt <= config.MaxAttempts; attempt++ {
+		// Record retry attempt metric
+		if attempt > 0 {
+			prometheusQueryRetries.WithLabelValues(fmt.Sprintf("%d", attempt)).Inc()
+		}
+
+		// Execute the operation
+		result, err = operation()
+		if err == nil {
+			// Success - record metric if this was a retry
+			if attempt > 0 {
+				prometheusQueryRetrySuccess.Inc()
+			}
+			return result, nil
+		}
+
+		lastErr = err
+		result = nil
+
+		// Don't retry non-retriable errors
+		if !isRetriable(err) {
+			return nil, err
+		}
+
+		// Don't retry if we've exhausted attempts
+		if attempt >= config.MaxAttempts {
+			prometheusQueryRetryExhausted.Inc()
+			break
+		}
+
+		// Calculate backoff with jitter and sleep
+		backoff := calculateBackoff(attempt, config.BaseDelay)
+		time.Sleep(backoff)
 	}
 
 	return result, lastErr
