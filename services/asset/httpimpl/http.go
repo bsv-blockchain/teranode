@@ -117,6 +117,8 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	e.HideBanner = true
 	e.HidePort = true
 
+	e.HTTPErrorHandler = customHTTPErrorHandler(logger)
+
 	e.Use(middleware.Recover())
 
 	// Default CORS config for non-dashboard endpoints
@@ -464,6 +466,44 @@ func (h *HTTP) Sign(resp *echo.Response, hash []byte) error {
 	}
 
 	return nil
+}
+
+// customHTTPErrorHandler creates a custom error handler that logs all errors before returning them to the client
+func customHTTPErrorHandler(logger ulogger.Logger) echo.HTTPErrorHandler {
+	return func(err error, c echo.Context) {
+		var (
+			message = ""
+			code    = http.StatusInternalServerError
+		)
+
+		// Extract error details if it's an Echo HTTP error
+		var he *echo.HTTPError
+		if errors.As(err, &he) {
+			code = he.Code
+			if msg, ok := he.Message.(string); ok {
+				message = msg
+			} else {
+				message = fmt.Sprintf("%v", he.Message)
+			}
+		}
+
+		// Log the error with context
+		logger.Errorf("[Asset HTTP] Error handling request [%s %s]: status=%d, error=%v", c.Request().Method, c.Request().RequestURI, code, err)
+
+		// Send JSON response if not already sent
+		if !c.Response().Committed {
+			if c.Request().Method == http.MethodHead {
+				err = c.NoContent(code)
+			} else {
+				err = c.JSON(code, map[string]interface{}{
+					"message": message,
+				})
+			}
+			if err != nil {
+				logger.Errorf("[Asset HTTP] Failed to send error response: %v", err)
+			}
+		}
+	}
 }
 
 // Middleware to log HTTP requests using the custom logger

@@ -241,20 +241,6 @@ func (m *Memory) SetDAH(_ context.Context, key []byte, fileType fileformat.FileT
 	return nil
 }
 
-func (m *Memory) GetDAH(_ context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	merged := options.MergeOptions(m.options, opts)
-	storeKey := hashKey(key, fileType, merged)
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if bd, ok := m.blobs[storeKey]; ok {
-		return bd.dah, nil
-	}
-
-	return 0, nil
-}
-
 func (m *Memory) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	b, err := m.Get(ctx, key, fileType, opts...)
 	if err != nil {

@@ -313,7 +313,7 @@ func (c *Client) GetBlocks(ctx context.Context, blockHash *chainhash.Hash, numbe
 	return blocks, nil
 }
 
-// GetBlockByHeight retrieves a block at a specific height in the blockchain.
+// GetBlockByHeight retrieves a block at a specific height.
 func (c *Client) GetBlockByHeight(ctx context.Context, height uint32) (*model.Block, error) {
 	resp, err := c.client.GetBlockByHeight(ctx, &blockchain_api.GetBlockByHeightRequest{
 		Height: height,
@@ -2140,4 +2140,100 @@ func (c *Client) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model
 	}
 
 	return blocks, nil
+}
+
+// ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+func (c *Client) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType blockchain_api.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	resp, err := c.client.ScheduleBlobDeletion(ctx, &blockchain_api.ScheduleBlobDeletionRequest{
+		BlobKey:        blobKey,
+		FileType:       fileType,
+		StoreType:      storeType,
+		DeleteAtHeight: deleteAtHeight,
+	})
+	if err != nil {
+		return 0, false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.DeletionId, resp.Scheduled, nil
+}
+
+// GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+func (c *Client) GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_api.ScheduledDeletion, error) {
+	resp, err := c.client.GetPendingBlobDeletions(ctx, &blockchain_api.GetPendingBlobDeletionsRequest{
+		Height: height,
+		Limit:  int32(limit),
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Deletions, nil
+}
+
+// RemoveBlobDeletion removes a blob deletion from the schedule.
+func (c *Client) RemoveBlobDeletion(ctx context.Context, deletionID int64) error {
+	_, err := c.client.RemoveBlobDeletion(ctx, &blockchain_api.RemoveBlobDeletionRequest{
+		DeletionId: deletionID,
+	})
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
+// IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+func (c *Client) IncrementBlobDeletionRetry(ctx context.Context, deletionID int64, maxRetries int) (bool, int, error) {
+	resp, err := c.client.IncrementBlobDeletionRetry(ctx, &blockchain_api.IncrementBlobDeletionRetryRequest{
+		DeletionId: deletionID,
+		MaxRetries: int32(maxRetries),
+	})
+	if err != nil {
+		return false, 0, errors.UnwrapGRPC(err)
+	}
+
+	return resp.ShouldRemove, int(resp.NewRetryCount), nil
+}
+
+// CompleteBlobDeletions completes multiple blob deletions in a single batch call.
+func (c *Client) CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error) {
+	resp, err := c.client.CompleteBlobDeletions(ctx, &blockchain_api.CompleteBlobDeletionsRequest{
+		CompletedIds: completedIDs,
+		FailedIds:    failedIDs,
+		MaxRetries:   int32(maxRetries),
+	})
+	if err != nil {
+		return 0, 0, errors.UnwrapGRPC(err)
+	}
+
+	return int(resp.RemovedCount), int(resp.RetryIncrementedCount), nil
+}
+
+// AcquireBlobDeletionBatch acquires a batch of deletions with locking.
+func (c *Client) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+	resp, err := c.client.AcquireBlobDeletionBatch(ctx, &blockchain_api.AcquireBlobDeletionBatchRequest{
+		Height:             height,
+		Limit:              int32(limit),
+		LockTimeoutSeconds: int32(lockTimeoutSeconds),
+	})
+	if err != nil {
+		return "", nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.BatchToken, resp.Deletions, nil
+}
+
+// CompleteBlobDeletionBatch completes a previously acquired batch.
+func (c *Client) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
+	_, err := c.client.CompleteBlobDeletionBatch(ctx, &blockchain_api.CompleteBlobDeletionBatchRequest{
+		BatchToken:   batchToken,
+		CompletedIds: completedIDs,
+		FailedIds:    failedIDs,
+		MaxRetries:   int32(maxRetries),
+	})
+	if err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
 }

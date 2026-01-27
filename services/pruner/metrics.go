@@ -13,6 +13,14 @@ var (
 	prunerProcessed prometheus.Counter
 	prunerErrors    *prometheus.CounterVec
 
+	// Blob deletion metrics
+	blobDeletionScheduledTotal  *prometheus.CounterVec
+	blobDeletionCancelledTotal  *prometheus.CounterVec
+	blobDeletionProcessedTotal  prometheus.Counter
+	blobDeletionErrorsTotal     *prometheus.CounterVec
+	blobDeletionDurationSeconds *prometheus.HistogramVec
+	blobDeletionPendingGauge    prometheus.Gauge
+
 	prometheusMetricsInitOnce sync.Once
 )
 
@@ -60,5 +68,53 @@ func _initPrometheusMetrics() {
 			Help: "Total number of pruner errors",
 		},
 		[]string{"operation"}, // "preserve_parents", "dah_pruner", "poll"
+	)
+
+	// Blob deletion metrics
+	blobDeletionScheduledTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pruner_blob_deletion_scheduled_total",
+			Help: "Total blob deletions scheduled",
+		},
+		[]string{"store_id"},
+	)
+
+	blobDeletionCancelledTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pruner_blob_deletion_cancelled_total",
+			Help: "Total blob deletions cancelled",
+		},
+		[]string{"store_id"},
+	)
+
+	blobDeletionProcessedTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pruner_blob_deletion_processed_total",
+			Help: "Total blobs successfully deleted",
+		},
+	)
+
+	blobDeletionErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "pruner_blob_deletion_errors_total",
+			Help: "Total blob deletion errors",
+		},
+		[]string{"store_id"},
+	)
+
+	blobDeletionDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "pruner_blob_deletion_duration_seconds",
+			Help:    "Blob deletion duration",
+			Buckets: prometheus.ExponentialBuckets(0.001, 2, 15),
+		},
+		[]string{"store_id"},
+	)
+
+	blobDeletionPendingGauge = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "pruner_blob_deletion_pending",
+			Help: "Number of pending deletions in queue",
+		},
 	)
 }

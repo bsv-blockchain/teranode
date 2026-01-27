@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/asset"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockpersister"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/legacy"
@@ -364,7 +365,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 	// Get the transaction store for the Asset service
 	var txStore blob.Store
 
-	txStore, err = d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	txStore, err = d.daemonStores.GetTxStore(ctx, createLogger(loggerTransactions), appSettings)
 	if err != nil {
 		return err
 	}
@@ -477,7 +478,7 @@ func (d *Daemon) startRPCService(ctx context.Context, appSettings *settings.Sett
 	// Create blob store for the RPC service
 	var txStore blob.Store
 
-	txStore, err = d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	txStore, err = d.daemonStores.GetTxStore(ctx, createLogger(loggerTransactions), appSettings)
 	if err != nil {
 		return err
 	}
@@ -644,7 +645,7 @@ func (d *Daemon) startBlockAssemblyService(ctx context.Context, appSettings *set
 	}
 
 	// Create the transaction store for the BlockAssembly service
-	txStore, err := d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	txStore, err := d.daemonStores.GetTxStore(ctx, createLogger(loggerTransactions), appSettings)
 	if err != nil {
 		return err
 	}
@@ -720,7 +721,7 @@ func (d *Daemon) startValidationService(
 	// Get the tx store for the validation service
 	var txStore blob.Store
 
-	txStore, err = d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	txStore, err = d.daemonStores.GetTxStore(ctx, createLogger(loggerTransactions), appSettings)
 	if err != nil {
 		return err
 	}
@@ -967,7 +968,7 @@ func (d *Daemon) startPropagationService(
 	// Get the transaction store for the Propagation service
 	var txStore blob.Store
 
-	txStore, err = d.daemonStores.GetTxStore(createLogger(loggerTransactions), appSettings)
+	txStore, err = d.daemonStores.GetTxStore(ctx, createLogger(loggerTransactions), appSettings)
 	if err != nil {
 		return err
 	}
@@ -1105,6 +1106,8 @@ func (d *Daemon) startLegacyService(
 // startPrunerService initializes and adds the Pruner service to the ServiceManager.
 func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.Settings,
 	createLogger func(string) ulogger.Logger) error {
+	logger := createLogger(loggerPruner)
+
 	// Create the UTXO store for the Pruner service
 	utxoStore, err := d.daemonStores.GetUtxoStore(ctx, createLogger(loggerUtxos), appSettings)
 	if err != nil {
@@ -1125,13 +1128,38 @@ func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.S
 		return err
 	}
 
+	// Create blob stores map for pruner - uses enum keys
+	// Stores are created lazily when first deletion is encountered
+	// This allows pruner to run on a separate server with different mount points to same shared storage
+	blobStores := make(map[blockchain_api.BlobStoreType]blob.Store)
+
+	logger.Infof("Pruner will create blob stores on-demand from settings when deletions are processed")
+
+	// Get blockchain store for database connection
+	blockchainStoreURL := appSettings.BlockChain.StoreURL
+	if blockchainStoreURL == nil {
+		return errors.NewStorageError("blockchain store url not found")
+	}
+
+	blockchainStore, err := blockchainstore.NewStore(
+		createLogger(loggerBlockchainSQL), blockchainStoreURL, appSettings,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Get postgres database connection
+	db := blockchainStore.GetDB().DB
+
 	// Add the Pruner service to the ServiceManager
 	return d.ServiceManager.AddService(servicePrunerFormal, pruner.New(
 		ctx,
-		createLogger(loggerPruner),
+		logger,
 		appSettings,
 		utxoStore,
 		blockchainClient,
 		blockAssemblyClient,
+		blobStores,
+		db,
 	))
 }

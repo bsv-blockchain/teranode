@@ -16,7 +16,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -33,9 +32,9 @@ import (
 // validation of block relationships.
 //
 // The implementation uses a recursive SQL query with a depth counter to efficiently navigate
-// the blockchain structure by following the parent-child relationships between blocks. It
-// includes a timeout mechanism to prevent long-running queries and a safety check to avoid
-// infinite recursion in case of database inconsistencies.
+// the blockchain structure by following the parent-child relationships between blocks. The
+// depth counter bounds the recursion to prevent infinite loops, and the query naturally
+// terminates when the chain ends (parent_id becomes NULL).
 //
 // Parameters:
 //   - ctx: Context for the database operation, allowing for cancellation and timeouts
@@ -63,8 +62,10 @@ func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, 
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
-	defer cancel()
+	// Note: Removed the 1-second timeout that was here. The timeout was causing
+	// context.DeadlineExceeded errors on busy databases, which led to incorrect
+	// difficulty calculations in the caller (Difficulty.CalcNextWorkRequired).
+	// The caller's context should control the timeout if needed.
 
 	var pastHash []byte
 
@@ -91,7 +92,8 @@ func (s *SQL) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, 
 		INNER JOIN
 			ChainBlocks cb ON b.id = cb.parent_id
 		WHERE
-			cb.depth < $2 AND cb.depth < (SELECT COUNT(*) FROM blocks)
+			cb.depth < $2
+			AND b.id != cb.id  -- Prevent infinite loop on self-referential parent_id (genesis)
 	)
 	SELECT
 	hash

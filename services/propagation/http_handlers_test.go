@@ -103,11 +103,6 @@ func (s *MockTxStore) GetIoReader(ctx context.Context, key []byte, fileType file
 	return io.NopCloser(bytes.NewReader([]byte{})), nil
 }
 
-// GetDAH implements a mock method for blob.Store interface
-func (s *MockTxStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	return 0, nil
-}
-
 // Health implements a mock method for blob.Store interface
 func (s *MockTxStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return http.StatusOK, "OK", nil

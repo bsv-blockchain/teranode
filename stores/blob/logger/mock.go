@@ -11,14 +11,14 @@ import (
 
 // MockBlobStore is a mock implementation of blobStore interface for testing
 type MockBlobStore struct {
-	HealthFunc                func(ctx context.Context, checkLiveness bool) (int, string, error)
-	ExistsFunc                func(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error)
-	GetFunc                   func(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error)
-	GetIoReaderFunc           func(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error)
-	SetFunc                   func(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error
-	SetFromReaderFunc         func(ctx context.Context, key []byte, fileType fileformat.FileType, value io.ReadCloser, opts ...options.FileOption) error
-	SetDAHFunc                func(ctx context.Context, key []byte, fileType fileformat.FileType, newDAH uint32, opts ...options.FileOption) error
-	GetDAHFunc                func(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error)
+	HealthFunc        func(ctx context.Context, checkLiveness bool) (int, string, error)
+	ExistsFunc        func(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error)
+	GetFunc           func(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error)
+	GetIoReaderFunc   func(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error)
+	SetFunc           func(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error
+	SetFromReaderFunc func(ctx context.Context, key []byte, fileType fileformat.FileType, value io.ReadCloser, opts ...options.FileOption) error
+	SetDAHFunc        func(ctx context.Context, key []byte, fileType fileformat.FileType, newDAH uint32, opts ...options.FileOption) error
+
 	DelFunc                   func(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error
 	CloseFunc                 func(ctx context.Context) error
 	SetCurrentBlockHeightFunc func(height uint32)
@@ -71,13 +71,6 @@ func (m *MockBlobStore) SetDAH(ctx context.Context, key []byte, fileType filefor
 		return m.SetDAHFunc(ctx, key, fileType, newDAH, opts...)
 	}
 	return nil
-}
-
-func (m *MockBlobStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	if m.GetDAHFunc != nil {
-		return m.GetDAHFunc(ctx, key, fileType, opts...)
-	}
-	return 123456, nil
 }
 
 func (m *MockBlobStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {

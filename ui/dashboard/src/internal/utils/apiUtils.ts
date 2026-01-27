@@ -15,12 +15,17 @@ export function getBaseUrl(pathPrefix: string = '/api/v1') {
 
   const url = new URL(window.location.href)
 
-  // Development mode handling - force port 8090 for API calls
+  // Development mode handling
   if (
     url.port === '5173' ||
     url.host.includes('localhost:517') ||
     url.host.includes('localhost:417')
   ) {
+    // For auth endpoints, use the Vite proxy (same origin) to preserve cookies
+    if (pathPrefix === '/api/auth') {
+      return pathPrefix
+    }
+    // For other API calls, go directly to port 8090
     return `http://${url.hostname}:8090${pathPrefix}`
   }
 

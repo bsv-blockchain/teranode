@@ -307,7 +307,43 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 //   - error: Detailed validation error if validation fails, nil on success
 func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
 	v.logger.Debugf("[ValidateWithOptions] Validate tx %s", tx.TxID())
-	if txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions); err != nil {
+
+	// Retry logic for TX_LOCKED errors with exponential backoff
+	// TX_LOCKED occurs when multiple transactions try to spend the same UTXO concurrently
+	// This should resolve quickly once the first transaction completes, so we use short backoff times
+	const maxRetries = 3
+	const baseBackoff = 10 * time.Millisecond
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		txMetaData, err = v.validateInternal(ctx, tx, blockHeight, validationOptions)
+
+		// If no error or not a TX_LOCKED error, return immediately (don't retry)
+		if err == nil || !errors.Is(err, errors.ErrTxLocked) {
+			break
+		}
+
+		// TX_LOCKED error - retry with exponential backoff if not last attempt
+		if attempt < maxRetries-1 {
+			// Exponential backoff: 10ms, 20ms, 40ms
+			backoff := time.Duration(1<<attempt) * baseBackoff
+			if attempt < 2 {
+				v.logger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
+			} else {
+				v.logger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
+			}
+
+			select {
+			case <-ctx.Done():
+				return txMetaData, ctx.Err()
+			case <-time.After(backoff):
+				// Continue to next attempt
+			}
+		} else {
+			v.logger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d attempts, giving up", tx.TxID(), maxRetries)
+		}
+	}
+
+	if err != nil {
 		if v.rejectedTxKafkaProducerClient != nil { // tests may not set this
 			// TODO should this also announce transactions with missing parents etc.?
 			if errors.Is(err, errors.ErrTxInvalid) {

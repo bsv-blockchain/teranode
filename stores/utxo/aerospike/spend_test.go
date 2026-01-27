@@ -129,10 +129,8 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, exists)
 
-		// check that the DAH is not set on the external store
-		dah, err := store.GetExternalStore().GetDAH(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
-		require.NoError(t, err)
-		require.Equal(t, uint32(0), dah)
+		// DAH is now managed centrally by pruner service, not by blob stores
+		// External store DAH checks removed
 
 		keySource := uaerospike.CalculateKeySource(tx.TxIDChainHash(), uint32(0), 1)
 		mainRecordKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
@@ -166,11 +164,8 @@ func TestStore_SpendMultiRecord(t *testing.T) {
 		assert.Equal(t, 4, resp.Bins[fields.TotalExtraRecs.String()])
 		assert.Equal(t, 4, resp.Bins[fields.SpentExtraRecs.String()])
 
-		// Verify external file DAH is NOT set (external store has DisableDAH=true)
-		// External file lifecycle is managed by the Aerospike pruner service
-		dah, err = store.GetExternalStore().GetDAH(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx)
-		require.NoError(t, err)
-		assert.Equal(t, uint32(0), dah) // External DAH disabled
+		// DAH is now managed centrally by pruner service, not by blob stores
+		// External file lifecycle is managed by the pruner service
 	})
 }
 
