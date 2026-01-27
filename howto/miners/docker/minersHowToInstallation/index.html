@@ -8643,13 +8643,14 @@ sudo<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span
 <span class="c1"># Restart services</span>
 docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
+<p>For detailed procedures, troubleshooting, or selective cleanup, consult the <a href="../minersHowToResetTeranode/">reset guide</a>.</p>
 <h2 id="teranode-seeding">Teranode Seeding</h2>
 <p>If you have access to an SV Node, you can speed up the Initial Block Download (IBD) by seeding the Teranode with an export from SV Node. Only run this on a gracefully shut down SV Node instance (e.g., after using the RPC <code>stop</code> method).</p>
 <h3 id="step-1-export-from-sv-node">Step 1: Export from SV Node</h3>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-v<span class="w"> </span>/mnt/teranode/seed:/mnt/teranode/seed<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--entrypoint<span class="o">=</span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>ghcr.io/bsv-blockchain/teranode:v0.13.1<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="m">434394763103</span>.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.8.12<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>/app/teranode-cli<span class="w"> </span>bitcointoutxoset<span class="w"> </span>-bitcoinDir<span class="o">=</span>/home/ubuntu/bitcoin-data<span class="w"> </span>-outputDir<span class="o">=</span>/mnt/teranode/seed/export
 </code></pre></div>
 <p>This script assumes your <code>bitcoin-data</code> directory is located in <code>/home/ubuntu/bitcoin-data</code> and contains the <code>blocks</code> and <code>chainstate</code> directories. It will generate <code>${blockhash}.utxo-headers</code> and <code>${blockhash}.utxo-set</code> files.</p>
@@ -8665,7 +8666,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> 
 <span class="w">  </span>-v<span class="w"> </span>/mnt/teranode/seed:/mnt/teranode/seed<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--network<span class="w"> </span>my-teranode-network<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--entrypoint<span class="o">=</span><span class="s2">&quot;&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>ghcr.io/bsv-blockchain/teranode:v0.13.1<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="m">434394763103</span>.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.8.12<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>/app/teranode-cli<span class="w"> </span>seeder<span class="w"> </span>-inputDir<span class="w"> </span>/mnt/teranode/seed<span class="w"> </span>-hash<span class="w"> </span>0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
 </code></pre></div>
 <h3 id="step-3-complete-seeding-process">Step 3: Complete Seeding Process</h3>
