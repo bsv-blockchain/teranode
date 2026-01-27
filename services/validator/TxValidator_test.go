@@ -433,28 +433,106 @@ func TestMaxScriptNumLengthPolicy(t *testing.T) {
 }
 
 func TestMaxTxSigopsCountsPolicy(t *testing.T) {
-	t.Skip("Skipping this test as we've disabled the method sigOpsCheck")
-
-	// TxID := 9f569c12dfe382504748015791d1994725a7d81d92ab61a6221eadab9f122ece
-	testTxHex := "010000000000000000ef011c044c4db32b3da68aa54e3f30c71300db250e0b48ea740bd3897a8ea1a2cc9a020000006b483045022100c6177fa406ecb95817d3cdd3e951696439b23f8e888ef993295aa73046504029022052e75e7bfd060541be406ec64f4fc55e708e55c3871963e95bf9bd34df747ee041210245c6e32afad67f6177b02cfc2878fce2a28e77ad9ecbc6356960c020c592d867ffffffffd4c7a70c000000001976a914296b03a4dd56b3b0fe5706c845f2edff22e84d7388ac0301000000000000001976a914a4429da7462800dedc7b03a4fc77c363b8de40f588ac000000000000000024006a4c2042535620466175636574207c20707573682d7468652d627574746f6e2e617070d2c7a70c000000001976a914296b03a4dd56b3b0fe5706c845f2edff22e84d7388ac00000000"
+	// Test transaction structure:
+	// - 1 input: Spends P2SH output with redeem script containing 2-of-3 multisig (OP_3 OP_CHECKMULTISIG)
+	//   * P2SH redeem script contributes 3 sigops (when counted pre-Genesis)
+	// - 3 outputs: All P2PKH (OP_DUP OP_HASH160 <hash> OP_EQUALVERIFY OP_CHECKSIG)
+	//   * Each P2PKH output contributes 1 sigop = 3 sigops total
+	//
+	// Total sigop counts:
+	// - Post-Genesis: 3 sigops (P2SH redeem script ignored, only outputs counted)
+	// - Pre-Genesis: 6 sigops (3 from outputs + 3 from P2SH redeem script)
+	testTxHex := "010000000000000000ef01074024ca185c3dea94748dc93bb369e82816bed423ad9ebcd41e112dc984f30700000000fd5d01004730440220320f4c56a764c80d7cddb930026b8af9cf00e88aa934710c969aa23883ec45bb0220701d81304f88258e116d3c9e988d6879839c805e7bdd96a17d56bdae115ff56541483045022100a3147b9488006b6952b39d9c432dacb8984f4fd59187a41f041f089355e1217502206f643471e74005f039323533b8a80b82c12bb3706a4b63f4bfba90df4bc39e97414cc95241040b4c866585dd868a9d62348a9cd008d6a312937048fff31670e7e920cfc7a7447b5f0bba9e01e6fe4735c8383e6e7a3347a0fd72381b8f797a19f694054e5a694104183905ae25e815634ce7f5d9bedbaa2c39032ab98c75b5e88fe43f8dd8246f3c5473ccd4ab475e6a9e6620b52f5ce2fd15a2de32cbe905154b3a05844af707854104f028892bad7ed57d2fb57bf33081d5cfcf6f9ed3d3d7f159c2e2fff579dc341a07cf33da18bd734c600b96a72bbc4749d5141c90ec8ac328ae52ddfe2e505bdb53aeffffffff60e316000000000017a914c51a96cac717c6b1bc2d6c65a6b5cc889d6a5b43870320a10700000000001976a914ff197b14e502ab41f3bc8ccb48c4abac9eab35bc88ac20a10700000000001976a9149a823b698f778ece90b094dc3f12a81f5e3c334588ac20a10700000000001976a914211b74ca4686f81efda5641767fc84ef16dafe0b88ac00000000"
 	testTx, errTx := bt.NewTxFromString(testTxHex)
-	assert.NoError(t, errTx)
-
-	testBlockHeight := uint32(886413)
-	testUtxoHeights := []uint32{886412}
+	require.NoError(t, errTx)
 
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.Policy.MaxTxSigopsCountsPolicy = 1 // low
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings.ChainCfgParams.GenesisActivationHeight = 1000
 
-	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{})
-	assert.NoError(t, err)
+	// Scenario 0: Validate transaction structure
+	// Confirms the transaction is structured as expected for the test
+	t.Run("ConfirmTransactionStructure", func(t *testing.T) {
+		// Verify exactly 1 input
+		require.Equal(t, 1, len(testTx.Inputs), "Transaction should have exactly 1 input")
 
-	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{})
+		// Verify the input spends a P2SH output
+		prevTxScript := testTx.Inputs[0].PreviousTxScript
+		require.NotNil(t, prevTxScript, "Input should have PreviousTxScript")
+		require.True(t, prevTxScript.IsP2SH(), "Input should be spending a P2SH output")
 
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, errors.ErrTxPolicy)
+		// Verify exactly 3 outputs
+		require.Equal(t, 3, len(testTx.Outputs), "Transaction should have exactly 3 outputs")
+
+		// Verify all 3 outputs are P2PKH (each contributes 1 sigop)
+		for i, output := range testTx.Outputs {
+			require.True(t, output.LockingScript.IsP2PKH(), "Output %d should be P2PKH", i)
+		}
+	})
+
+	// Scenario 1: Policy limit enforcement with post-Genesis UTXO
+	// With post-Genesis UTXO, only output sigops are counted = 3 sigops
+	t.Run("PolicyLimit_PostGenesisUTXO", func(t *testing.T) {
+		blockHeight := uint32(1001)   // Post-Genesis block
+		utxoHeights := []uint32{1000} // UTXO created at Genesis (post-Genesis)
+
+		// Test with policy = 2 (should FAIL because 3 > 2)
+		t.Run("Policy2_Fails", func(t *testing.T) {
+			tSettings.Policy.MaxTxSigopsCountsPolicy = 2
+			txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+			err := txValidator.ValidateTransaction(testTx, blockHeight, utxoHeights, &Options{})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "too many sigops")
+		})
+
+		// Test with policy = 3 (should PASS because 3 <= 3)
+		t.Run("Policy3_Passes", func(t *testing.T) {
+			tSettings.Policy.MaxTxSigopsCountsPolicy = 3
+			txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+			err := txValidator.ValidateTransaction(testTx, blockHeight, utxoHeights, &Options{})
+			require.NoError(t, err)
+		})
+	})
+
+	// Scenario 2: P2SH sigop counting pre/post-Genesis with fixed policy
+	// Tests that P2SH redeem script sigops are counted pre-Genesis but not post-Genesis
+	t.Run("P2SH_PrePostGenesis_Policy3", func(t *testing.T) {
+
+		// Test with pre-Genesis UTXO (should FAIL because 6 > 5)
+		// Counts: 3 output sigops + 3 P2SH redeem script sigops = 6 total
+		t.Run("PreGenesisUTXO_Fails", func(t *testing.T) {
+			tSettings.Policy.MaxTxSigopsCountsPolicy = 5
+			blockHeight := uint32(1001) // Post-Genesis block (doesn't affect P2SH counting)
+
+			utxoHeights := []uint32{999} // UTXO created pre-Genesis
+			txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+			err := txValidator.ValidateTransaction(testTx, blockHeight, utxoHeights, &Options{})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "too many sigops")
+		})
+
+		// Test with pre-Genesis UTXO (should PASS because 6 <= 6)
+		// Counts: 3 output sigops + 3 P2SH redeem script sigops = 6 total
+		t.Run("PreGenesisUTXO_Passes", func(t *testing.T) {
+			tSettings.Policy.MaxTxSigopsCountsPolicy = 6
+			blockHeight := uint32(1001) // Post-Genesis block (doesn't affect P2SH counting)
+
+			utxoHeights := []uint32{999} // UTXO created pre-Genesis
+			txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+			err := txValidator.ValidateTransaction(testTx, blockHeight, utxoHeights, &Options{})
+			require.NoError(t, err)
+		})
+
+		// Test with post-Genesis UTXO (should PASS because 3 <= 3)
+		// Counts: 3 output sigops only (P2SH redeem script ignored) = 3 total
+		t.Run("PostGenesisUTXO_Passes", func(t *testing.T) {
+			tSettings.Policy.MaxTxSigopsCountsPolicy = 6
+			blockHeight := uint32(1001)   // Post-Genesis block (doesn't affect P2SH counting)
+			utxoHeights := []uint32{1000} // UTXO created at Genesis (post-Genesis)
+			txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
+			err := txValidator.ValidateTransaction(testTx, blockHeight, utxoHeights, &Options{})
+			require.NoError(t, err)
+		})
+	})
 }
 
 func TestMaxOpsPerScriptPolicyWithConcensus(t *testing.T) {

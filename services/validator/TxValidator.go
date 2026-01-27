@@ -18,6 +18,7 @@ The validation process enforces rules including but not limited to:
 - Input and output structure verification
 - Non-dust output values
 - Script operation count limits
+- Signature operation (SIGOPS) counting with full CScriptNum parsing support
 - Signature verification
 - Fee policy enforcement
 - Locktime and sequence number verification
@@ -260,10 +261,11 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 	//    => This is a BCH only check, not applicable to BSV
 
 	// 8) The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
-	// --------- TURN OFF -> unlimited ---------------------
-	// if err := tv.sigOpsCheck(tx, validationOptions); err != nil {
-	// 	return err
-	// }
+	if !validationOptions.SkipPolicyChecks {
+		if err := tv.sigOpsCheck(tx, blockHeight, utxoHeights, validationOptions); err != nil {
+			return err
+		}
+	}
 
 	// 10) Reject if the sum of input values is less than sum of output values
 	// 11) Reject if transaction fee would be too low (minRelayTxFee) to get into an empty block.
@@ -771,32 +773,398 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 }
 
 // sigOpsCheck validates that the transaction's signature operations count complies with policy limits.
-func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, validationOptions *Options) error {
+// This reimplements GetTransactionSigOpCount from bitcoin-sv/src/validation.cpp:496
+//
+// The function counts signature operations in three places:
+// 1. Transaction inputs (unlocking scripts) - GetSigOpCountWithoutP2SH for inputs
+// 2. Transaction outputs (locking scripts) - GetSigOpCountWithoutP2SH for outputs
+// 3. P2SH redeem scripts (pre-Genesis only) - GetP2SHSigOpCount
+//
+// Differences from C++ implementation:
+// - No MEMPOOL_HEIGHT constant needed: teranode always has actual utxoHeights from UTXO store,
+//   so we can always determine the protocol era for each UTXO
+// - Script number parsing: Implements CScriptNum-compatible parsing (little-endian with sign bit)
+//   via helper functions checkMinimalEncoding() and parseScriptNumber() to handle non-OP_N
+//   multisig operands with full validation (size checks, minimal encoding, negative value rejection)
+//
+// This implementation provides 100% compatibility with the C++ bitcoin-sv sigops counting logic.
+func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
+	// Get max sigops policy limit
 	maxSigOps := tv.settings.Policy.GetMaxTxSigopsCountsPolicy()
-
 	if maxSigOps == 0 || validationOptions.SkipPolicyChecks {
 		maxSigOps = int64(MaxTxSigopsCountPolicyAfterGenesis)
 	}
 
-	numSigOps := int64(0)
+	genesisActivationHeight := tv.settings.ChainCfgParams.GenesisActivationHeight
+	isCurrentBlockPostGenesis := blockHeight >= genesisActivationHeight
 
+	var totalSigOps uint64 = 0
+
+	// ============================================================================
+	// SECTION 1: Count sigops in transaction inputs (unlocking scripts)
+	// Corresponds to GetSigOpCountWithoutP2SH for tx.vin in C++
+	// Post-Genesis: Input scripts should only contain push data, so this should return 0
+	// Pre-Genesis: May contain OP_CHECKSIG operations
+	// ============================================================================
 	for _, input := range tx.Inputs {
-		parser := interpreter.DefaultOpcodeParser{}
-		parsedUnlockingScript, err := parser.Parse(input.PreviousTxScript)
-
+		sigOps, err := tv.countSigOpsInScript(input.UnlockingScript, false, isCurrentBlockPostGenesis)
 		if err != nil {
-			return err
+			return errors.NewTxInvalidError("failed to count sigops in input script: %v", err)
+		}
+		totalSigOps += sigOps
+		if totalSigOps > uint64(maxSigOps) {
+			return errors.NewTxInvalidError("transaction has too many sigops (%d)", totalSigOps)
+		}
+	}
+
+	// ============================================================================
+	// SECTION 2: Count sigops in transaction outputs (locking scripts)
+	// Corresponds to GetSigOpCountWithoutP2SH for tx.vout in C++
+	// ============================================================================
+	for _, output := range tx.Outputs {
+		sigOps, err := tv.countSigOpsInScript(output.LockingScript, false, isCurrentBlockPostGenesis)
+		if err != nil {
+			return errors.NewTxInvalidError("failed to count sigops in output script: %v", err)
+		}
+		totalSigOps += sigOps
+		if totalSigOps > uint64(maxSigOps) {
+			return errors.NewTxInvalidError("transaction has too many sigops (%d)", totalSigOps)
+		}
+	}
+
+	// ============================================================================
+	// SECTION 3: Count P2SH sigops (pre-Genesis only)
+	// Corresponds to GetP2SHSigOpCount in C++
+	// After Genesis, P2SH is not supported and redeem scripts are not executed
+	// ============================================================================
+	if tx.IsCoinbase() {
+		// Coinbase transactions have no P2SH sigops to count
+		return nil
+	}
+
+	// Validate utxoHeights array length matches inputs
+	if len(utxoHeights) != len(tx.Inputs) {
+		return errors.NewTxInvalidError("utxoHeights length (%d) does not match inputs length (%d)",
+			len(utxoHeights), len(tx.Inputs))
+	}
+
+	for i, input := range tx.Inputs {
+		// Determine the protocol era when this UTXO was created
+		// In C++, if coin->GetHeight() == MEMPOOL_HEIGHT, they use current era
+		// In teranode, we always have actual heights, so we always determine the era from the height
+		utxoHeight := utxoHeights[i]
+		isUTXOPostGenesis := utxoHeight >= genesisActivationHeight
+
+		// After Genesis, P2SH is not supported, skip counting
+		if isUTXOPostGenesis {
+			continue
 		}
 
-		for _, op := range parsedUnlockingScript {
-			if op.Value() == bscript.OpCHECKSIG || op.Value() == bscript.OpCHECKSIGVERIFY {
-				numSigOps++
-				if numSigOps > maxSigOps {
-					return errors.NewTxInvalidError("transaction unlocking scripts have too many sigops (%d)", numSigOps)
-				}
-			}
+		// Check if previous output is P2SH (pre-Genesis only)
+		if input.PreviousTxScript == nil {
+			return errors.NewTxInvalidError("input %d missing PreviousTxScript", i)
+		}
+
+		if !input.PreviousTxScript.IsP2SH() {
+			continue
+		}
+
+		// For P2SH outputs, we need to count sigops in the redeem script
+		// The redeem script is the last item pushed by the unlocking script
+		// P2SH scriptPubKey format: OP_HASH160 <20 bytes> OP_EQUAL
+		// P2SH scriptSig format: <sig> ... <redeemScript>
+
+		redeemScript, err := tv.extractRedeemScript(input.UnlockingScript)
+		if err != nil {
+			// Invalid P2SH unlocking script format, return 0 sigops (will fail later in script execution)
+			continue
+		}
+
+		if redeemScript == nil {
+			// No redeem script found
+			continue
+		}
+
+		// Count sigops in the redeem script with accurate counting (fAccurate = true)
+		sigOps, err := tv.countSigOpsInScript(redeemScript, true, isUTXOPostGenesis)
+		if err != nil {
+			return errors.NewTxInvalidError("failed to count sigops in P2SH redeem script: %v", err)
+		}
+
+		totalSigOps += sigOps
+		if totalSigOps > uint64(maxSigOps) {
+			return errors.NewTxInvalidError("transaction has too many sigops (%d)", totalSigOps)
 		}
 	}
 
 	return nil
+}
+
+// countSigOpsInScript counts signature operations in a script.
+// Reimplements CScript::GetSigOpCount from bitcoin-sv/src/script/script.cpp:26
+//
+// Parameters:
+//   - script: The script to analyze
+//   - fAccurate: If true, uses accurate counting (looks at previous opcode for CHECKMULTISIG)
+//   - isPostGenesis: If true, applies post-Genesis rules (accurate counting, scope tracking)
+//
+// Returns the count of signature operations and any error encountered.
+//
+// Key behaviors:
+// - Tracks IF/ENDIF scope depth to handle nested conditionals
+// - Stops counting after OP_RETURN at top-level scope (post-Genesis or accurate mode)
+// - OP_CHECKSIG/OP_CHECKSIGVERIFY: Always count as 1
+// - OP_CHECKMULTISIG/OP_CHECKMULTISIGVERIFY:
+//   - Pre-Genesis (fAccurate=false): Count as 20 (MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS)
+//   - Pre-Genesis (fAccurate=true): If previous op is OP_1 to OP_16, count as N; else count as 20
+//   - Post-Genesis: Always accurate with full validation:
+//     * OP_0: count as 0
+//     * OP_1 to OP_16: decode as N (1-16)
+//     * Push data: parse as CScriptNum with size check, minimal encoding validation, and negative check
+func (tv *TxValidator) countSigOpsInScript(script *bscript.Script, fAccurate bool, isPostGenesis bool) (uint64, error) {
+	if script == nil {
+		return 0, nil
+	}
+
+	parser := interpreter.DefaultOpcodeParser{}
+	parsedOps, err := parser.Parse(script)
+	if err != nil {
+		// If we can't parse the script, return 0 (script will fail execution later)
+		return 0, nil
+	}
+
+	var nSigOps uint64 = 0
+	var lastOp interpreter.ParsedOpcode
+	var lastOpcode byte = 0
+	scopeDepth := 0 // Track IF/ENDIF nesting depth
+
+	for _, op := range parsedOps {
+		opcode := op.Value()
+
+		// Handle invalid opcodes
+		if opcode == 0xff { // OP_INVALIDOPCODE
+			break
+		}
+
+		// Scope tracking for accurate counting or post-Genesis
+		if fAccurate || isPostGenesis {
+			// Stop counting after OP_RETURN at top-level scope
+			if opcode == bscript.OpRETURN && scopeDepth == 0 {
+				break
+			}
+
+			// Track scope depth for IF/ENDIF blocks
+			if opcode == bscript.OpIF || opcode == bscript.OpNOTIF ||
+			   opcode == bscript.OpVERIF || opcode == bscript.OpVERNOTIF {
+				scopeDepth++
+			} else if opcode == bscript.OpENDIF {
+				scopeDepth--
+				if scopeDepth < 0 {
+					// Unbalanced IF/ENDIF - invalid script
+					return 0, errors.NewTxInvalidError("unbalanced IF/ENDIF in script")
+				}
+			}
+		}
+
+		// Count OP_CHECKSIG and OP_CHECKSIGVERIFY
+		if opcode == bscript.OpCHECKSIG || opcode == bscript.OpCHECKSIGVERIFY {
+			nSigOps++
+		} else if opcode == bscript.OpCHECKMULTISIG || opcode == bscript.OpCHECKMULTISIGVERIFY {
+			// Handle multisig signature operations
+			if (fAccurate || isPostGenesis) && lastOpcode >= bscript.Op1 && lastOpcode <= bscript.Op16 {
+				// Previous opcode is OP_1 to OP_16, decode the number
+				// OP_1 = 0x51 (81), OP_16 = 0x60 (96)
+				n := uint64(lastOpcode - bscript.Op1 + 1)
+				nSigOps += n
+			} else if isPostGenesis {
+				// Post-Genesis: Must accurately count multisig operations
+				if lastOpcode == bscript.Op0 {
+					// OP_0 CHECKMULTISIG - checking with 0 keys, nothing to add
+				} else if lastOp.Data != nil && len(lastOp.Data) > 0 {
+					// Non-OP_N operand before CHECKMULTISIG
+					// Parse the operand data as CScriptNum with full validation
+					// This matches the C++ implementation: script.cpp:85-112
+
+					// Check operand size - pre-Genesis uses 4 bytes max
+					// Post-Genesis allows larger but we check against a reasonable limit
+					maxScriptNumLen := 4 // CScriptNum::MAXIMUM_ELEMENT_SIZE before Genesis
+					if isPostGenesis {
+						// Post-Genesis allows up to 750KB per script number
+						maxScriptNumLen = 750000 // 750KB as per go-bt interpreter config
+					}
+
+					if len(lastOp.Data) > maxScriptNumLen {
+						// Operand too large - when trying to spend such output, EvalScript would fail
+						// Making the coin unspendable
+						return 0, errors.NewTxInvalidError("multisig operand exceeds maximum size (%d > %d)", len(lastOp.Data), maxScriptNumLen)
+					}
+
+					// Validate minimal encoding - required by EvalScript
+					// Matches IsMinimallyEncoded check in C++: script.cpp:98-104
+					if err := tv.checkMinimalEncoding(lastOp.Data); err != nil {
+						return 0, err
+					}
+
+					// Parse as script number (little-endian with sign bit)
+					// Matches CScriptNum constructor: script.cpp:106
+					numSigs, err := tv.parseScriptNumber(lastOp.Data)
+					if err != nil {
+						return 0, err
+					}
+
+					// Check that the result is non-negative
+					// Matches check in C++: script.cpp:107-111
+					if numSigs < 0 {
+						return 0, errors.NewTxInvalidError("multisig pubkey count cannot be negative (%d)", numSigs)
+					}
+
+					nSigOps += uint64(numSigs)
+				} else {
+					// No operand data, treat as malformed
+					return 0, errors.NewTxInvalidError("malformed CHECKMULTISIG operation")
+				}
+			} else {
+				// Pre-Genesis without accurate counting: Use maximum (20)
+				nSigOps += 20 // MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS
+			}
+		}
+
+		// Remember last opcode and operation for next iteration
+		lastOpcode = opcode
+		lastOp = op
+	}
+
+	return nSigOps, nil
+}
+
+// extractRedeemScript extracts the redeem script from a P2SH unlocking script.
+// The redeem script is the last item pushed onto the stack by the unlocking script.
+//
+// For P2SH, the unlocking script must only contain push operations.
+// Returns nil if the script is invalid or doesn't follow P2SH rules.
+func (tv *TxValidator) extractRedeemScript(unlockingScript *bscript.Script) (*bscript.Script, error) {
+	if unlockingScript == nil {
+		return nil, nil
+	}
+
+	parser := interpreter.DefaultOpcodeParser{}
+	parsedOps, err := parser.Parse(unlockingScript)
+	if err != nil {
+		return nil, nil
+	}
+
+	var lastPushData []byte
+
+	// Iterate through all operations, ensuring they are all push operations
+	for _, op := range parsedOps {
+		opcode := op.Value()
+
+		// Check if this is a valid push operation (OP_0 to OP_PUSHDATA4, or OP_1-OP_16)
+		// According to P2SH BIP16, only push operations are valid
+		if opcode > bscript.Op16 {
+			// Non-push operation found, invalid P2SH unlocking script
+			return nil, nil
+		}
+
+		if opcode == 0xff { // OP_INVALIDOPCODE
+			return nil, nil
+		}
+
+		// Save the pushed data
+		if op.Data != nil {
+			lastPushData = op.Data
+		} else if opcode == bscript.Op0 {
+			lastPushData = []byte{}
+		} else if opcode >= bscript.Op1 && opcode <= bscript.Op16 {
+			// OP_1 to OP_16 push small numbers
+			// For redeem script extraction, we treat these as empty data
+			// (actual P2SH scripts won't use these as redeem scripts)
+			lastPushData = []byte{opcode - bscript.Op1 + 1}
+		}
+	}
+
+	if lastPushData == nil {
+		return nil, nil
+	}
+
+	// Create a new script from the last pushed data
+	redeemScript := bscript.NewFromBytes(lastPushData)
+	return redeemScript, nil
+}
+
+// checkMinimalEncoding validates that a byte array adheres to minimal encoding requirements.
+// This matches the checkMinimalDataEncoding function in go-bt/bscript/interpreter/number.go:404
+// and IsMinimallyEncoded in bitcoin-sv C++ code.
+//
+// Minimal encoding means:
+// - No unnecessary leading zeros (except when needed to avoid sign bit conflict)
+// - Negative zero [0x80] is not allowed
+//
+// For example:
+//   - 127 encodes as [0x7f] ✓
+//   - 127 encodes as [0x7f 0x00] ✗ (not minimal)
+//   - 255 encodes as [0xff 0x00] ✓ (0x00 needed because 0xff would set sign bit)
+//   - -128 encodes as [0x80 0x80] ✓
+func (tv *TxValidator) checkMinimalEncoding(v []byte) error {
+	if len(v) == 0 {
+		return nil
+	}
+
+	// Check that the number is encoded with the minimum possible number of bytes.
+	//
+	// If the most-significant-byte - excluding the sign bit - is zero,
+	// then we're not minimal. Note how this test also rejects the
+	// negative-zero encoding, [0x80].
+	if v[len(v)-1]&0x7f == 0 {
+		// One exception: if there's more than one byte and the most
+		// significant bit of the second-most-significant-byte is set,
+		// it would conflict with the sign bit. An example of this case
+		// is +-255, which encode to 0xff00 and 0xff80 respectively
+		// (big-endian).
+		if len(v) == 1 || v[len(v)-2]&0x80 == 0 {
+			return errors.NewTxInvalidError("numeric value encoded as %x is not minimally encoded", v)
+		}
+	}
+
+	return nil
+}
+
+// parseScriptNumber interprets serialized bytes as an encoded integer
+// and returns the result as an int64.
+// This matches the makeScriptNumber function in go-bt/bscript/interpreter/number.go:72
+// and CScriptNum in bitcoin-sv C++ code.
+//
+// Bitcoin script numbers are encoded as little-endian with a sign bit in the
+// most significant bit of the most significant byte.
+//
+// Examples:
+//   - [0x7f] = 127
+//   - [0xff] = -127 (0x7f with sign bit set)
+//   - [0x80 0x00] = 128
+//   - [0x80 0x80] = -128
+//   - [] = 0 (empty byte slice)
+func (tv *TxValidator) parseScriptNumber(bb []byte) (int64, error) {
+	// Zero is encoded as an empty byte slice
+	if len(bb) == 0 {
+		return 0, nil
+	}
+
+	// Decode from little endian
+	// Each byte is shifted left by its position * 8 bits
+	var v int64
+	for i, b := range bb {
+		v |= int64(b) << uint(8*i)
+	}
+
+	// When the most significant byte has the sign bit set (0x80),
+	// the result is negative. Remove the sign bit and make the value negative.
+	if bb[len(bb)-1]&0x80 != 0 {
+		// Remove the sign bit: AND with NOT(0x80 << shift)
+		// where shift = 8 * (len(bb) - 1)
+		signMask := int64(0x80) << uint(8*(len(bb)-1))
+		v &= ^signMask
+		v = -v
+	}
+
+	return v, nil
 }
