@@ -620,7 +620,7 @@ If you have access to an SV Node, you can speed up the Initial Block Download (I
 docker run -it \
   -v /mnt/teranode/seed:/mnt/teranode/seed \
   --entrypoint="" \
-  434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.8.12 \
+  ghcr.io/bsv-blockchain/teranode:v0.13.1 \
   /app/teranode-cli bitcointoutxoset -bitcoinDir=/home/ubuntu/bitcoin-data -outputDir=/mnt/teranode/seed/export
 ```
 
@@ -640,7 +640,7 @@ docker run -it \
   -v /mnt/teranode/seed:/mnt/teranode/seed \
   --network my-teranode-network \
   --entrypoint="" \
-  434394763103.dkr.ecr.eu-north-1.amazonaws.com/teranode-public:v0.8.12 \
+  ghcr.io/bsv-blockchain/teranode:v0.13.1 \
   /app/teranode-cli seeder -inputDir /mnt/teranode/seed -hash 0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
 ```
 

@@ -13,7 +13,6 @@ package errors
 import (
 	"errors"
 	"fmt"
-	"reflect"
 	"runtime"
 	"strings"
 	"unicode/utf8"
@@ -191,25 +190,36 @@ func (e *Error) As(target interface{}) bool {
 		return true
 	}
 
-	// 1. Try the data payload.
-	if err, ok := e.data.(error); ok {
-		var as interface{ As(interface{}) bool }
-		if as, ok = err.(interface{ As(interface{}) bool }); ok && as.As(target) {
+	// 1. Try the data payload using the stdlib traversal.
+	if err, ok := e.data.(error); ok && err != nil {
+		if errors.As(err, target) {
 			return true
 		}
 	}
 
-	// 2. Try an explicitly wrapped error.
-	if err := e.wrappedErr; err != nil && !reflect.ValueOf(err).IsNil() {
-		if as, ok := err.(interface{ As(interface{}) bool }); ok && as.As(target) {
-			return true
-		}
-	}
+	// 2. Walk the chain manually to avoid recursive re-entry through errors.As
+	current := e.wrappedErr
+	for current != nil {
+		// Handle *Error types manually to avoid re-entering As
+		if errPtr, ok := current.(*Error); ok {
+			// First check if the *Error itself matches the target type
+			if te, ok := target.(**Error); ok {
+				*te = errPtr
+				return true
+			}
 
-	// 3. Finally, get whatever "errors.Unwrap" gives us.
-	if err := errors.Unwrap(e); err != nil {
-		if as, ok := err.(interface{ As(interface{}) bool }); ok && as.As(target) {
-			return true
+			// Then check if this error's data satisfies target
+			if err, ok := errPtr.data.(error); ok && err != nil {
+				if errors.As(err, target) {
+					return true
+				}
+			}
+			// Continue to next in chain
+			current = errPtr.wrappedErr
+		} else {
+			// Not an *Error, safe to use stdlib errors.As
+			// This handles all other error types including those with custom As methods
+			return errors.As(current, target)
 		}
 	}
 
