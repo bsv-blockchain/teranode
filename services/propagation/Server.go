@@ -536,12 +536,12 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			}
 		}()
 
-		errStr := ""
+		// Collect errors in a slice - single goroutine writes, WaitGroup provides synchronization
+		var errMsgs []string
 
 		go func() {
 			for err := range processErrors {
-				errStr += errors.UserMessage(err) + "\n"
-
+				errMsgs = append(errMsgs, errors.UserMessage(err))
 				processingErrorWg.Done()
 			}
 		}()
@@ -604,8 +604,8 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		close(processTxs)
 		close(processErrors)
 
-		if errStr != "" {
-			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+errStr)
+		if len(errMsgs) > 0 {
+			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+strings.Join(errMsgs, "\n")+"\n")
 		}
 
 		return c.String(http.StatusOK, "OK")
