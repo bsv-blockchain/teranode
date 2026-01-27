@@ -198,7 +198,7 @@ markdown_extensions:
   - pymdownx.caret
 
 
-copyright: "Copyright © 2025 BSV Blockchain Org."
+copyright: "Copyright © 2026 BSV Blockchain Org."
 
 extra:
   generator: false  # Hides "Made with Material for MkDocs"

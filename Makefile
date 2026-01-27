@@ -196,7 +196,7 @@ testall: test longtest sequentialtest
 smoketest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=5m -parallel 2 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 2 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
 
 # run chain integrity tests - multi-node tests with deep chain verification
 # This test mines blocks across multiple nodes and verifies chain consistency

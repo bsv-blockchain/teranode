@@ -9,12 +9,14 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -28,6 +30,45 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 )
+
+// NodeConfig holds the configuration for connecting to a teranode instance from the host
+type NodeConfig struct {
+	Name          string
+	BlockchainURL string // PostgreSQL URL for blockchain store
+	UtxoStoreURL  string // Aerospike URL for UTXO store
+	SubtreeStore  string // File path for subtree store
+	TxStore       string // File path for tx store
+	ExternalStore string // File path for external store (used by UTXO)
+}
+
+// nodeConfigs contains hardcoded configurations for the 3 teranode instances
+// These match the docker-compose-3blasters.yml port mappings
+var nodeConfigs = []NodeConfig{
+	{
+		Name:          "teranode1",
+		BlockchainURL: "postgres://miner1:miner1@localhost:15432/teranode1",
+		UtxoStoreURL:  "aerospike://localhost:3100/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8",
+		SubtreeStore:  "file://./data/teranode1/subtreestore",
+		TxStore:       "file://./data/teranode1/txstore",
+		ExternalStore: "file://./data/teranode1/external",
+	},
+	{
+		Name:          "teranode2",
+		BlockchainURL: "postgres://miner2:miner2@localhost:15432/teranode2",
+		UtxoStoreURL:  "aerospike://localhost:3200/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8",
+		SubtreeStore:  "file://./data/teranode2/subtreestore",
+		TxStore:       "file://./data/teranode2/txstore",
+		ExternalStore: "file://./data/teranode2/external",
+	},
+	{
+		Name:          "teranode3",
+		BlockchainURL: "postgres://miner3:miner3@localhost:15432/teranode3",
+		UtxoStoreURL:  "aerospike://localhost:3300/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8",
+		SubtreeStore:  "file://./data/teranode3/subtreestore",
+		TxStore:       "file://./data/teranode3/txstore",
+		ExternalStore: "file://./data/teranode3/external",
+	},
+}
 
 var (
 	genesisScript = "04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e" +
@@ -55,11 +96,9 @@ type BlockSubtree struct {
 func CheckChainIntegrityBaseline(checkInterval int, alertThreshold int, debug bool, logfile string) {
 	const errorString = "ERROR"
 
-	nodeContexts := []string{"docker.host.teranode1", "docker.host.teranode2", "docker.host.teranode3"}
-
 	fmt.Println("[Baseline] Fetching block headers from Node1...")
 
-	blockHeaders, err := fetchBlockHeaders(nodeContexts[0], debug, logfile)
+	blockHeaders, err := fetchBlockHeaders(nodeConfigs[0], debug, logfile)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to fetch block headers from Node1: %v", err))
 	}
@@ -73,9 +112,9 @@ func CheckChainIntegrityBaseline(checkInterval int, alertThreshold int, debug bo
 	baselineHeaders := blockHeaders[:]
 	fmt.Printf("[Baseline] Using %d block headers from Node1\n", len(baselineHeaders))
 
-	for _, nodeContext := range nodeContexts {
-		fmt.Printf("\n--- Running Baseline ChainIntegrity for %s ---\n", nodeContext)
-		checkNodeIntegrity(nodeContext, checkInterval, alertThreshold, debug, logfile, baselineHeaders)
+	for _, nodeConfig := range nodeConfigs {
+		fmt.Printf("\n--- Running Baseline ChainIntegrity for %s ---\n", nodeConfig.Name)
+		checkNodeIntegrity(nodeConfig, checkInterval, alertThreshold, debug, logfile, baselineHeaders)
 	}
 
 	// Hash and compare filtered log files
@@ -83,11 +122,8 @@ func CheckChainIntegrityBaseline(checkInterval int, alertThreshold int, debug bo
 
 	hashes := make(map[string]string)
 
-	for _, nodeContext := range nodeContexts {
-		detail := nodeContext
-		if idx := strings.LastIndex(nodeContext, "."); idx != -1 {
-			detail = nodeContext[idx+1:]
-		}
+	for _, nodeConfig := range nodeConfigs {
+		detail := nodeConfig.Name
 
 		logFileName := fmt.Sprintf("%s-%s.log", logfile, detail)
 
@@ -199,31 +235,30 @@ func CheckChainIntegrityBaseline(checkInterval int, alertThreshold int, debug bo
 // - debug: Enables debug mode for detailed logging.
 // - logfile: Name of the log file to store results.
 func CheckChainIntegrity(checkInterval int, alertThreshold int, debug bool, logfile string) {
-	nodeContexts := []string{"docker.host.teranode1", "docker.host.teranode2", "docker.host.teranode3"}
-	for _, nodeContext := range nodeContexts {
-		fmt.Printf("\n--- Running ChainIntegrity for %s ---\n", nodeContext)
+	for _, nodeConfig := range nodeConfigs {
+		fmt.Printf("\n--- Running ChainIntegrity for %s ---\n", nodeConfig.Name)
 
-		blockHeaders, err := fetchBlockHeaders(nodeContext, debug, logfile)
+		blockHeaders, err := fetchBlockHeaders(nodeConfig, debug, logfile)
 		if err != nil {
-			panic(fmt.Sprintf("Failed to fetch block headers from %s: %v", nodeContext, err))
+			panic(fmt.Sprintf("Failed to fetch block headers from %s: %v", nodeConfig.Name, err))
 		}
 
-		checkNodeIntegrity(nodeContext, checkInterval, alertThreshold, debug, logfile, blockHeaders)
+		checkNodeIntegrity(nodeConfig, checkInterval, alertThreshold, debug, logfile, blockHeaders)
 	}
 }
 
-// fetchBlockHeaders retrieves block headers from the specified node context.
+// fetchBlockHeaders retrieves block headers from the specified node.
 // It uses the blockchain database to fetch the best block header and later headers.
 //
 // Parameters:
-// - nodeContext: Context of the node to fetch headers from.
+// - nodeConfig: Configuration of the node to fetch headers from.
 // - debug: Enables debug mode for detailed logging.
 // - logfile: Name of the log file to store results.
 //
 // Returns:
 // - A slice of block headers.
 // - An error if the operation fails.
-func fetchBlockHeaders(nodeContext string, debug bool, logfile string) ([]*model.BlockHeader, error) {
+func fetchBlockHeaders(nodeConfig NodeConfig, debug bool, logfile string) ([]*model.BlockHeader, error) {
 	path, err := os.Getwd()
 	if err != nil {
 		return nil, err
@@ -235,15 +270,8 @@ func fetchBlockHeaders(nodeContext string, debug bool, logfile string) ([]*model
 		}
 	}
 
-	detail := nodeContext
-
-	if idx := strings.LastIndex(nodeContext, "."); idx != -1 {
-		detail = nodeContext[idx+1:]
-	}
-
-	detailLoggerName := fmt.Sprintf("chainintegrity-fetch-%s", detail)
-
-	detailLogfile := fmt.Sprintf("%s-fetch-%s.log", logfile, detail)
+	detailLoggerName := fmt.Sprintf("chainintegrity-fetch-%s", nodeConfig.Name)
+	detailLogfile := fmt.Sprintf("%s-fetch-%s.log", logfile, nodeConfig.Name)
 
 	dbgLevel := "INFO"
 	if debug {
@@ -257,11 +285,18 @@ func fetchBlockHeaders(nodeContext string, debug bool, logfile string) ([]*model
 		ulogger.WithFilePath(detailLogfile),
 	)
 
-	appSettings := settings.NewSettings(nodeContext)
+	// Parse the blockchain URL directly from config
+	blockchainURL, err := url.Parse(nodeConfig.BlockchainURL)
+	if err != nil {
+		return nil, errors.NewInvalidArgumentError("failed to parse blockchain URL: %v", err)
+	}
+
+	// Create minimal settings for the blockchain store
+	appSettings := settings.NewSettings()
 
 	var blockchainDB blockchainstore.Store
 
-	blockchainDB, err = blockchainstore.NewStore(logger, appSettings.BlockChain.StoreURL, appSettings)
+	blockchainDB, err = blockchainstore.NewStore(logger, blockchainURL, appSettings)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +320,7 @@ func fetchBlockHeaders(nodeContext string, debug bool, logfile string) ([]*model
 // It checks block headers, transactions, subtrees, and UTXO data for consistency and correctness.
 //
 // Parameters:
-// - nodeContext: Context of the node to check.
+// - nodeConfig: Configuration of the node to check.
 // - checkInterval: Interval for checking the chain integrity.
 // - alertThreshold: Threshold for raising alerts.
 // - debug: Enables debug mode for detailed logging.
@@ -293,12 +328,8 @@ func fetchBlockHeaders(nodeContext string, debug bool, logfile string) ([]*model
 // - blockHeaders: Slice of block headers to verify.
 //
 //nolint:gocognit // cognitive complexity too high
-func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile string,
+func checkNodeIntegrity(nodeConfig NodeConfig, _ int, _ int, debug bool, logfile string,
 	blockHeaders []*model.BlockHeader) {
-	// turn off all batching in aerospike; in this case, it will only slow us down, since we are reading in 1 thread
-	appSettings := settings.NewSettings(nodeContext)
-	appSettings.UtxoStore.GetBatcherSize = 1
-
 	path, err := os.Getwd()
 	if err != nil {
 		panic(err)
@@ -311,13 +342,8 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 		}
 	}
 
-	detail := nodeContext
-	if idx := strings.LastIndex(nodeContext, "."); idx != -1 {
-		detail = nodeContext[idx+1:]
-	}
-
-	detailLoggerName := fmt.Sprintf("chainintegrity-%s", detail)
-	detailLogfile := fmt.Sprintf("%s-%s.log", logfile, detail)
+	detailLoggerName := fmt.Sprintf("chainintegrity-%s", nodeConfig.Name)
+	detailLogfile := fmt.Sprintf("%s-%s.log", logfile, nodeConfig.Name)
 
 	dbgLevel := "INFO"
 	if debug {
@@ -333,9 +359,36 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 
 	loggerContext := fmt.Sprintf("[%s]", "chainintegrity")
 
+	// Create minimal settings and override the UTXO store URL
+	appSettings := settings.NewSettings()
+	appSettings.UtxoStore.GetBatcherSize = 1
+	appSettings.UtxoStore.UtxoBatchSize = 50 // Must match docker setting (utxostore_utxoBatchSize.docker = 50)
+
+	// Parse URLs from config
+	blockchainURL, err := url.Parse(nodeConfig.BlockchainURL)
+	if err != nil {
+		panic(fmt.Sprintf("failed to parse blockchain URL: %v", err))
+	}
+
+	utxoStoreURL, err := url.Parse(nodeConfig.UtxoStoreURL + "&externalStore=" + nodeConfig.ExternalStore)
+	if err != nil {
+		panic(fmt.Sprintf("failed to parse utxo store URL: %v", err))
+	}
+	appSettings.UtxoStore.UtxoStore = utxoStoreURL
+
+	subtreeStoreURL, err := url.Parse(nodeConfig.SubtreeStore)
+	if err != nil {
+		panic(fmt.Sprintf("failed to parse subtree store URL: %v", err))
+	}
+
+	txStoreURL, err := url.Parse(nodeConfig.TxStore)
+	if err != nil {
+		panic(fmt.Sprintf("failed to parse tx store URL: %v", err))
+	}
+
 	var blockchainDB blockchainstore.Store
 
-	blockchainDB, err = blockchainstore.NewStore(logger, appSettings.BlockChain.StoreURL, appSettings)
+	blockchainDB, err = blockchainstore.NewStore(logger, blockchainURL, appSettings)
 	if err != nil {
 		panic(err)
 	}
@@ -344,14 +397,14 @@ func checkNodeIntegrity(nodeContext string, _ int, _ int, debug bool, logfile st
 
 	var subtreeStore blob.Store
 
-	subtreeStore, err = blob.NewStore(logger, appSettings.SubtreeValidation.SubtreeStore, options.WithHashPrefix(hashPrefix))
+	subtreeStore, err = blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		panic(err)
 	}
 
 	var txStore blob.Store
 
-	txStore, err = blob.NewStore(logger, appSettings.Block.TxStore)
+	txStore, err = blob.NewStore(logger, txStoreURL)
 	if err != nil {
 		panic(err)
 	}

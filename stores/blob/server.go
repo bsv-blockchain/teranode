@@ -155,27 +155,7 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// setCurrentBlockHeight updates the current block height in the underlying store if it supports this operation.
-// This is used for DAH (Delete-At-Height) functionality to determine when blobs should be deleted.
-//
-// Parameters:
-//   - height: The current blockchain height to set
-//
-// Returns:
-//   - error: Error if the underlying store doesn't support the SetCurrentBlockHeight operation
-func (s *HTTPBlobServer) setCurrentBlockHeight(height uint32) error {
-	store, ok := s.store.(interface {
-		SetCurrentBlockHeight(height uint32)
-	})
-
-	if !ok {
-		return errors.NewStorageError("[HTTPBlobServer] store does not support SetCurrentBlockHeight", nil)
-	}
-
-	store.SetCurrentBlockHeight(height)
-
-	return nil
-}
+// setCurrentBlockHeight removed - DAH cleanup now handled by pruner service
 
 // handleHealth processes health check requests to verify the blob store's operational status.
 // It queries the underlying store's health status and returns the appropriate HTTP response.

@@ -933,8 +933,8 @@ func (s *Store) storeExternallyWithLock(
 		// failed during Phase 2 (creating flag cleanup).
 		//
 		// This is a key part of the self-healing architecture:
-		// - First attempt: Creates records → Notifies block assembly → Tries to clear flags → Fails
-		// - Retry attempt: Finds all records exist → Skips block assembly → Completes flag cleanup → Success
+		// - First attempt: Creates records → Tries to clear flags → Fails → Returns success → Validator notifies BlockAssembly
+		// - Retry attempt: Finds all records exist → Returns ErrTxExists → Skips BlockAssembly → Completes flag cleanup
 		//
 		// Without this cleanup attempt, creating flags would remain set indefinitely, requiring
 		// manual intervention. This ensures eventual consistency through automatic recovery.

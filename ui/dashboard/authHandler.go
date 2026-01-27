@@ -385,3 +385,17 @@ func (h *AuthHandler) PostAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 		return next(c)
 	}
 }
+
+// RequireAuthMiddleware is a middleware that requires authentication for all requests
+func (h *AuthHandler) RequireAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		if !h.CheckAuth(c.Request()) {
+			return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+				"success": false,
+				"error":   "Authentication required",
+			})
+		}
+
+		return next(c)
+	}
+}

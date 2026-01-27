@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -220,12 +221,24 @@ func (h *BlockHandler) GetLastNInvalidBlocks(c echo.Context) error {
 		countStr = "10" // Default to 10 if not specified
 	}
 
+	// Parse the offset parameter from the query string
+	offsetStr := c.QueryParam("offset")
+	if offsetStr == "" {
+		offsetStr = "0" // Default to 0 if not specified
+	}
+
 	// Convert count to int64
 	var count int64
+	var offset int64
 
 	_, err := fmt.Sscanf(countStr, "%d", &count)
 	if err != nil {
 		return errors.NewInvalidArgumentError("Invalid count parameter: " + err.Error())
+	}
+
+	_, err = fmt.Sscanf(offsetStr, "%d", &offset)
+	if err != nil {
+		return errors.NewInvalidArgumentError("Invalid offset parameter: " + err.Error())
 	}
 
 	// Validate count is positive
@@ -233,18 +246,46 @@ func (h *BlockHandler) GetLastNInvalidBlocks(c echo.Context) error {
 		return errors.NewInvalidArgumentError("Count must be a positive number")
 	}
 
+	// Validate offset is non-negative
+	if offset < 0 {
+		return errors.NewInvalidArgumentError("Offset must be a non-negative number")
+	}
+
 	ctx := c.Request().Context()
 
+	// Fetch enough blocks to serve the requested page plus one extra to determine if there is a next page.
+	fetchN := offset + count + 1
+	if fetchN < 0 {
+		return errors.NewInvalidArgumentError("Invalid pagination parameters")
+	}
+
 	// Call the blockchain service to get the invalid blocks
-	blocks, err := h.blockchainClient.GetLastNInvalidBlocks(ctx, count)
+	blocks, err := h.blockchainClient.GetLastNInvalidBlocks(ctx, fetchN)
 	if err != nil {
 		return errors.NewProcessingError("Failed to retrieve invalid blocks: " + err.Error())
 	}
 
+	// Slice to requested page
+	var pageBlocks []*model.BlockInfo
+	if offset < int64(len(blocks)) {
+		end := offset + count
+		if end > int64(len(blocks)) {
+			end = int64(len(blocks))
+		}
+		pageBlocks = blocks[offset:end]
+	} else {
+		pageBlocks = []*model.BlockInfo{}
+	}
+
+	hasMore := int64(len(blocks)) > (offset + count)
+
 	// Return the blocks
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"success": true,
-		"count":   len(blocks),
-		"blocks":  blocks,
+		"count":   len(pageBlocks),
+		"offset":  offset,
+		"limit":   count,
+		"hasMore": hasMore,
+		"blocks":  pageBlocks,
 	})
 }

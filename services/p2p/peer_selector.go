@@ -1,11 +1,14 @@
 package p2p
 
 import (
+	"context"
+	"net/http"
 	"sort"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -116,7 +119,7 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*PeerInfo, criteria Se
 		return ""
 	}
 
-	// Sort candidates by: 1) ReputationScore (descending), 2) BanScore (ascending), 3) Height (descending), 4) PeerID (for stability)
+	// Sort candidates by: 1) ReputationScore (descending), 2) AvgResponseTime (ascending), 3) BanScore (ascending), 4) Height (descending), 5) PeerID (for stability)
 	//
 	// Reputation score is prioritized because:
 	// - It's a comprehensive measure of peer reliability (0-100 scale)
@@ -126,18 +129,34 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*PeerInfo, criteria Se
 	//   * Peer A at height 1000 with reputation 30 (low reliability, many failures)
 	//   * Peer B at height 800 with reputation 85 (high reliability, few failures)
 	//   We prefer Peer B despite its lower height, as it's more reliable
-	// - Ban score is still considered as a secondary factor for additional safety
+	//
+	// Response time is second priority because:
+	// - Among equally trustworthy peers, faster peers provide better sync performance
+	// - Peers with no response time data (0) are sorted last to prefer measured peers
+	// - This prevents slow peers from blocking the sync pipeline
+	//
+	// - Ban score is still considered as a tertiary factor for additional safety
 	// - This strategy minimizes the risk of syncing invalid data and reduces wasted effort
 	sort.Slice(candidates, func(i, j int) bool {
 		// First priority: Higher reputation score is better (more trustworthy peer)
 		if candidates[i].ReputationScore != candidates[j].ReputationScore {
 			return candidates[i].ReputationScore > candidates[j].ReputationScore
 		}
-		// Second priority: Lower ban score is better (additional safety check)
+		// Second priority: Lower response time is better (faster peer)
+		// Peers with 0 response time (no data) are sorted after peers with measurements
+		iHasTime := candidates[i].AvgResponseTime > 0
+		jHasTime := candidates[j].AvgResponseTime > 0
+		if iHasTime != jHasTime {
+			return iHasTime // Prefer peer with measured response time
+		}
+		if iHasTime && jHasTime && candidates[i].AvgResponseTime != candidates[j].AvgResponseTime {
+			return candidates[i].AvgResponseTime < candidates[j].AvgResponseTime
+		}
+		// Third priority: Lower ban score is better (additional safety check)
 		if candidates[i].BanScore != candidates[j].BanScore {
 			return candidates[i].BanScore < candidates[j].BanScore
 		}
-		// Third priority: Higher block height is better (more data available)
+		// Fourth priority: Higher block height is better (more data available)
 		if candidates[i].Height != candidates[j].Height {
 			if isFullNode {
 				// Full nodes: prefer higher height (more data)
@@ -146,7 +165,7 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*PeerInfo, criteria Se
 			// Pruned nodes: prefer LOWER height (youngest, less UTXO pruning)
 			return candidates[i].Height < candidates[j].Height
 		}
-		// Fourth priority: Sort by peer ID for deterministic ordering
+		// Fifth priority: Sort by peer ID for deterministic ordering
 		// This ensures consistent selection when peers have identical scores and heights
 		return candidates[i].ID < candidates[j].ID
 	})
@@ -165,13 +184,13 @@ func (ps *PeerSelector) selectFromCandidates(candidates []*PeerInfo, criteria Se
 	if !isFullNode {
 		nodeType = "PRUNED"
 	}
-	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (height=%d, banScore=%d) from %d candidates (index=%d)",
-		nodeType, selected.ID, selected.Height, selected.BanScore, len(candidates), selectedIndex)
+	ps.logger.Infof("[PeerSelector] Selected %s node peer %s (height=%d, banScore=%d, avgResponseTime=%v) from %d candidates (index=%d)",
+		nodeType, selected.ID, selected.Height, selected.BanScore, selected.AvgResponseTime, len(candidates), selectedIndex)
 
 	// Log top 3 candidates for debugging
 	for i := 0; i < len(candidates) && i < 3; i++ {
-		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (height=%d, banScore=%d, mode=%s, url=%s)",
-			i+1, candidates[i].ID, candidates[i].Height, candidates[i].BanScore, candidates[i].Storage, candidates[i].DataHubURL)
+		ps.logger.Debugf("[PeerSelector] Candidate %d: %s (height=%d, banScore=%d, avgResponseTime=%v, mode=%s, url=%s)",
+			i+1, candidates[i].ID, candidates[i].Height, candidates[i].BanScore, candidates[i].AvgResponseTime, candidates[i].Storage, candidates[i].DataHubURL)
 	}
 
 	return selected.ID
@@ -203,12 +222,26 @@ func (ps *PeerSelector) isEligible(p *PeerInfo, criteria SelectionCriteria) bool
 		return false
 	}
 
-	// Check sync attempt cooldown if specified
+	// Check sync attempt cooldown BEFORE health check (avoids re-checking failed peers)
 	if criteria.SyncAttemptCooldown > 0 && !p.LastSyncAttempt.IsZero() {
 		timeSinceLastAttempt := time.Since(p.LastSyncAttempt)
 		if timeSinceLastAttempt < criteria.SyncAttemptCooldown {
 			ps.logger.Debugf("[PeerSelector] Peer %s attempted recently (%v ago, cooldown: %v)",
 				p.ID, timeSinceLastAttempt.Round(time.Second), criteria.SyncAttemptCooldown)
+			return false
+		}
+	}
+
+	// Check HTTP availability if enabled
+	// Note: Health check failures are NOT recorded as sync attempts - they're filtered out early.
+	// The caller (SyncCoordinator) will record sync attempt after selecting the peer.
+	if ps.settings != nil && ps.settings.P2P.HealthCheckEnabled {
+		ps.logger.Debugf("[PeerSelector] Checking availability for peer %s", p.ID)
+
+		isHealthy, err := checkPeerAvailability(context.Background(), p.DataHubURL)
+
+		if !isHealthy {
+			ps.logger.Debugf("[PeerSelector] Peer %s is unhealthy: %v", p.ID, err)
 			return false
 		}
 	}
@@ -230,4 +263,22 @@ func (ps *PeerSelector) isEligibleFullNode(p *PeerInfo, criteria SelectionCriter
 	}
 
 	return true
+}
+
+// checkPeerAvailability tests if a peer's DataHub URL is reachable via HTTP.
+// DataHubURL already includes /api/v1 prefix, so we just append the endpoint path.
+// Uses existing util/health infrastructure with built-in 2s timeout.
+func checkPeerAvailability(ctx context.Context, dataHubURL string) (bool, error) {
+	if dataHubURL == "" {
+		return false, nil
+	}
+
+	// DataHubURL format: "https://host/api/v1"
+	// Append /bestblockheader to get full endpoint path
+	checker := health.CheckHTTPServer(dataHubURL, "/bestblockheader")
+
+	statusCode, _, err := checker(ctx, false)
+
+	// Only accept 200 OK - API endpoints should return exactly 200
+	return statusCode == http.StatusOK, err
 }

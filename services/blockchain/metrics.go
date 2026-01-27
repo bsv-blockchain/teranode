@@ -37,6 +37,7 @@ var (
 	prometheusBlockchainGetBlockExists                       prometheus.Histogram
 	prometheusBlockchainGetBestBlockHeader                   prometheus.Histogram
 	prometheusBlockchainCheckBlockIsInCurrentChain           prometheus.Histogram
+	prometheusBlockchainCheckBlockIsAncestorOfBlock          prometheus.Histogram
 	prometheusBlockchainGetChainTips                         prometheus.Histogram
 	prometheusBlockchainGetBlockHeader                       prometheus.Histogram
 	prometheusBlockchainGetBlockHeaders                      prometheus.Histogram
@@ -208,6 +209,16 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockchain",
 			Name:      "check_block_is_in_current_chain",
 			Help:      "Histogram of CheckBlockIsInCurrentChain calls to the blockchain service",
+			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusBlockchainCheckBlockIsAncestorOfBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "check_block_is_ancestor_of_block",
+			Help:      "Histogram of CheckBlockIsAncestorOfBlock calls to the blockchain service",
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)

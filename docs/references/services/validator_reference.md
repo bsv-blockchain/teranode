@@ -136,7 +136,6 @@ type Validator struct {
     utxoStore                     utxo.Store
     blockAssembler                blockassembly.Store
     blockchainClient              blockchain.ClientI
-    saveInParallel                bool
     stats                         *gocore.Stat
     txmetaKafkaProducerClient     kafka.KafkaAsyncProducerI
     rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI

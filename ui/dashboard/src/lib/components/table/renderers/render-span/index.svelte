@@ -11,8 +11,6 @@
   }
 </script>
 
-{#if value}
+{#if value || value === 0}
   <span {...props}>{value}</span>
-{:else}
-  ''
 {/if}

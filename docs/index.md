@@ -220,7 +220,7 @@ We encourage you to explore the various sections of this documentation based on 
 
 -----
 
-**Copyright 2025 BSV Association.**
+**Copyright 2026 BSV Association.**
 
 Licensed under the Open BSV License Version 6;
 you may not use this software except in compliance with the License.

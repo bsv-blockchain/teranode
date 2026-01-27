@@ -51,6 +51,7 @@ const (
 	BlockchainAPI_GetBlockHeaderIDs_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
 	BlockchainAPI_GetBestBlockHeader_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
 	BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName           = "/blockchain_api.BlockchainAPI/CheckBlockIsInCurrentChain"
+	BlockchainAPI_CheckBlockIsAncestorOfBlock_FullMethodName          = "/blockchain_api.BlockchainAPI/CheckBlockIsAncestorOfBlock"
 	BlockchainAPI_GetChainTips_FullMethodName                         = "/blockchain_api.BlockchainAPI/GetChainTips"
 	BlockchainAPI_GetBlockHeader_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetBlockHeader"
 	BlockchainAPI_InvalidateBlock_FullMethodName                      = "/blockchain_api.BlockchainAPI/InvalidateBlock"
@@ -145,6 +146,9 @@ type BlockchainAPIClient interface {
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	// CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
 	CheckBlockIsInCurrentChain(ctx context.Context, in *CheckBlockIsCurrentChainRequest, opts ...grpc.CallOption) (*CheckBlockIsCurrentChainResponse, error)
+	// CheckBlockIsAncestorOfBlock verifies if specified blocks are ancestors of a given block.
+	// Used for double-spend detection on fork blocks where we check against the fork's ancestor chain.
+	CheckBlockIsAncestorOfBlock(ctx context.Context, in *CheckBlockIsAncestorOfBlockRequest, opts ...grpc.CallOption) (*CheckBlockIsAncestorOfBlockResponse, error)
 	// GetChainTips retrieves information about all known tips in the block tree.
 	GetChainTips(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetChainTipsResponse, error)
 	// GetBlockHeader retrieves the header of a specific block.
@@ -487,6 +491,16 @@ func (c *blockchainAPIClient) CheckBlockIsInCurrentChain(ctx context.Context, in
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CheckBlockIsCurrentChainResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) CheckBlockIsAncestorOfBlock(ctx context.Context, in *CheckBlockIsAncestorOfBlockRequest, opts ...grpc.CallOption) (*CheckBlockIsAncestorOfBlockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckBlockIsAncestorOfBlockResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_CheckBlockIsAncestorOfBlock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -855,6 +869,9 @@ type BlockchainAPIServer interface {
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error)
 	// CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
 	CheckBlockIsInCurrentChain(context.Context, *CheckBlockIsCurrentChainRequest) (*CheckBlockIsCurrentChainResponse, error)
+	// CheckBlockIsAncestorOfBlock verifies if specified blocks are ancestors of a given block.
+	// Used for double-spend detection on fork blocks where we check against the fork's ancestor chain.
+	CheckBlockIsAncestorOfBlock(context.Context, *CheckBlockIsAncestorOfBlockRequest) (*CheckBlockIsAncestorOfBlockResponse, error)
 	// GetChainTips retrieves information about all known tips in the block tree.
 	GetChainTips(context.Context, *emptypb.Empty) (*GetChainTipsResponse, error)
 	// GetBlockHeader retrieves the header of a specific block.
@@ -1006,6 +1023,9 @@ func (UnimplementedBlockchainAPIServer) GetBestBlockHeader(context.Context, *emp
 }
 func (UnimplementedBlockchainAPIServer) CheckBlockIsInCurrentChain(context.Context, *CheckBlockIsCurrentChainRequest) (*CheckBlockIsCurrentChainResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CheckBlockIsInCurrentChain not implemented")
+}
+func (UnimplementedBlockchainAPIServer) CheckBlockIsAncestorOfBlock(context.Context, *CheckBlockIsAncestorOfBlockRequest) (*CheckBlockIsAncestorOfBlockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckBlockIsAncestorOfBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetChainTips(context.Context, *emptypb.Empty) (*GetChainTipsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetChainTips not implemented")
@@ -1615,6 +1635,24 @@ func _BlockchainAPI_CheckBlockIsInCurrentChain_Handler(srv interface{}, ctx cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).CheckBlockIsInCurrentChain(ctx, req.(*CheckBlockIsCurrentChainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_CheckBlockIsAncestorOfBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckBlockIsAncestorOfBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).CheckBlockIsAncestorOfBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_CheckBlockIsAncestorOfBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).CheckBlockIsAncestorOfBlock(ctx, req.(*CheckBlockIsAncestorOfBlockRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2252,6 +2290,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CheckBlockIsInCurrentChain",
 			Handler:    _BlockchainAPI_CheckBlockIsInCurrentChain_Handler,
+		},
+		{
+			MethodName: "CheckBlockIsAncestorOfBlock",
+			Handler:    _BlockchainAPI_CheckBlockIsAncestorOfBlock_Handler,
 		},
 		{
 			MethodName: "GetChainTips",

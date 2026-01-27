@@ -821,7 +821,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			BlockHeights: make([]uint32, 0),
 		}, nil)
 
-		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID())
+		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), NewDefaultOptions())
 		require.NoError(t, err)
 
 		expected := []uint32{1001, 1001, 1001}
@@ -859,7 +859,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			BlockHeights: []uint32{768, 769},
 		}, nil).Once()
 
-		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID())
+		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, tx, tx.TxID(), NewDefaultOptions())
 		require.NoError(t, err)
 
 		expected := []uint32{125, 1001, 768}
@@ -926,7 +926,7 @@ func Test_getUtxoBlockHeights(t *testing.T) {
 			},
 		}, nil).Once()
 
-		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, txNonExtended, txNonExtended.TxID())
+		utxoHashes, err := v.getUtxoBlockHeightsAndExtendTx(ctx, txNonExtended, txNonExtended.TxID(), NewDefaultOptions())
 		require.NoError(t, err)
 
 		expected := []uint32{125, 1001, 768}
@@ -1412,4 +1412,76 @@ func Test_serializeTxMetaBatch_RoundTrip(t *testing.T) {
 			assert.Equal(t, batch[i].metaBytes, content, "content mismatch at entry %d", i)
 		}
 	}
+}
+
+func TestGetUtxoBlockHeightAndExtendForParentTx_NilValidationOptions(t *testing.T) {
+	ctx := context.Background()
+
+	// Create test transaction
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
+
+	parentTxHash := *tx.Inputs[0].PreviousTxIDChainHash()
+
+	// Create mock UTXO store
+	mockUtxoStore := utxostore.MockUtxostore{}
+	mockUtxoStore.On("GetBlockState").Return(utxostore.BlockState{Height: 1000, MedianTime: 1000000000})
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{
+		BlockHeights: []uint32{999},
+	}, nil)
+
+	v := &Validator{
+		utxoStore: &mockUtxoStore,
+	}
+
+	utxoHeights := make([]uint32, 1)
+
+	// Test with nil validationOptions - should not panic
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, nil)
+
+	// Should complete successfully without panic
+	require.NoError(t, err)
+	assert.Equal(t, uint32(999), utxoHeights[0])
+}
+
+func TestGetUtxoBlockHeightAndExtendForParentTx_WithParentMetadata(t *testing.T) {
+	ctx := context.Background()
+
+	// Create test transaction
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000000", 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 900))
+
+	parentTxHash := *tx.Inputs[0].PreviousTxIDChainHash()
+
+	// Create mock UTXO store (should NOT be called when metadata is provided)
+	mockUtxoStore := utxostore.MockUtxostore{}
+
+	v := &Validator{
+		utxoStore: &mockUtxoStore,
+	}
+
+	utxoHeights := make([]uint32, 1)
+
+	// Create parent metadata
+	parentMetadata := map[chainhash.Hash]*ParentTxMetadata{
+		parentTxHash: {
+			BlockHeight: 12345,
+		},
+	}
+
+	validationOptions := &Options{
+		ParentMetadata: parentMetadata,
+	}
+
+	// Test with parent metadata - should use metadata instead of UTXO store
+	err := v.getUtxoBlockHeightAndExtendForParentTx(ctx, parentTxHash, []int{0}, utxoHeights, tx, false, validationOptions)
+
+	// Should complete successfully and use metadata block height
+	require.NoError(t, err)
+	assert.Equal(t, uint32(12345), utxoHeights[0])
+
+	// Verify UTXO store was not called
+	mockUtxoStore.AssertNotCalled(t, "Get")
 }

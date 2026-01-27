@@ -1244,9 +1244,14 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		retentionWindow = s.settings.GlobalBlockHeightRetention
 	}
 
-	storage := util.DetermineStorageMode(blockPersisterHeight, height, retentionWindow)
-	s.logger.Debugf("[getNodeStatusMessage] Determined storage=%q for this node (persisterHeight=%d, bestHeight=%d, retention=%d)",
-		storage, blockPersisterHeight, height, retentionWindow)
+	prunerBlockTrigger := ""
+	if s.settings != nil {
+		prunerBlockTrigger = s.settings.Pruner.BlockTrigger
+	}
+
+	storage := util.DetermineStorageMode(blockPersisterHeight, height, retentionWindow, prunerBlockTrigger)
+	s.logger.Debugf("[getNodeStatusMessage] Determined storage=%q for this node (persisterHeight=%d, bestHeight=%d, retention=%d, prunerTrigger=%s)",
+		storage, blockPersisterHeight, height, retentionWindow, prunerBlockTrigger)
 
 	// Return the notification message
 	return &notificationMsg{

@@ -2746,7 +2746,12 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		retentionWindow = tSettings.GlobalBlockHeightRetention
 	}
 
-	storage := util.DetermineStorageMode(blockPersisterHeight, bestHeight, retentionWindow)
+	prunerBlockTrigger := ""
+	if tSettings != nil {
+		prunerBlockTrigger = tSettings.Pruner.BlockTrigger
+	}
+
+	storage := util.DetermineStorageMode(blockPersisterHeight, bestHeight, retentionWindow, prunerBlockTrigger)
 	logger.Infof("Legacy service determined storage mode: %s (persisterHeight=%d, bestHeight=%d, retention=%d)",
 		storage, blockPersisterHeight, bestHeight, retentionWindow)
 

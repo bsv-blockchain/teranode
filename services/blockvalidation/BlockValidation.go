@@ -17,7 +17,6 @@ package blockvalidation
 import (
 	"context"
 	"fmt"
-	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -877,9 +876,13 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		}
 	}
 
-	// get all ancestor block ids without depth limit to ensure duplicate transaction detection
-	// use math.MaxInt32 (2.1 billion blocks) which is effectively unlimited for blockchain purposes
-	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, math.MaxInt32); err != nil || len(ids) == 0 {
+	// Get recent ancestor block IDs for fast-path double-spend checking
+	// Use configurable limit instead of math.MaxInt32 to reduce memory usage
+	recentBlockIDsLimit := uint64(50000) // Default fallback
+	if u.settings.BlockValidation.RecentBlockIDsLimit > 0 {
+		recentBlockIDsLimit = u.settings.BlockValidation.RecentBlockIDsLimit
+	}
+	if ids, err = u.blockchainClient.GetBlockHeaderIDs(ctx, blockHash, recentBlockIDsLimit); err != nil || len(ids) == 0 {
 		if err != nil {
 			return errors.NewServiceError("[setTxMined][%s] failed to get block header ids", blockHash.String(), err)
 		}
@@ -894,8 +897,9 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		u.utxoStore,
 		block,
 		ids[0],
-		ids[0:], // all ancestor block IDs on this chain - used to detect if transactions were already mined on this fork
+		ids[0:], // recent ancestor block IDs - older blocks checked via blockchain client
 		onLongestChain,
+		u.blockchainClient, // blockchain client for slow-path checks of older block IDs
 		unsetMined...,
 	); err != nil {
 		// check whether we got already mined errors and mark the block as invalid
