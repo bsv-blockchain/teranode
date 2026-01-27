@@ -5,6 +5,7 @@
   import i18n from '$internal/i18n'
   import { Icon, TextInput } from '$lib/components'
   import Markdown from 'svelte-exmarkdown'
+  import { gfmPlugin } from 'svelte-exmarkdown/gfm'
 
   let settings: SettingMetadata[] = []
   let categories: string[] = []
@@ -21,6 +22,45 @@
   let searchTimeout: ReturnType<typeof setTimeout> | null = null
   // Use an object for reactivity instead of Set
   let expandedKeys: Record<string, boolean> = {}
+
+  // Column resizing state
+  const COLUMN_WIDTHS_STORAGE_KEY = 'settings-table-column-widths'
+  const defaultColumnWidths = {
+    key: 18,
+    type: 8,
+    default: 14,
+    current: 14,
+    description: 46
+  }
+
+  let columnWidths = { ...defaultColumnWidths }
+  let resizingColumn: string | null = null
+  let resizeStartX = 0
+  let resizeStartWidth = 0
+
+  function loadColumnWidths() {
+    if (typeof window === 'undefined') return
+
+    try {
+      const stored = localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        columnWidths = { ...defaultColumnWidths, ...parsed }
+      }
+    } catch (err) {
+      console.error('Failed to load column widths from localStorage:', err)
+    }
+  }
+
+  function saveColumnWidths() {
+    if (typeof window === 'undefined') return
+
+    try {
+      localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(columnWidths))
+    } catch (err) {
+      console.error('Failed to save column widths to localStorage:', err)
+    }
+  }
 
   // Get translation function
   const t = $i18n.t
@@ -136,8 +176,54 @@
     }
   }
 
+  function startResize(column: string, e: MouseEvent) {
+    resizingColumn = column
+    resizeStartX = e.clientX
+    resizeStartWidth = columnWidths[column as keyof typeof columnWidths]
+    e.preventDefault()
+
+    document.addEventListener('mousemove', handleResize)
+    document.addEventListener('mouseup', stopResize)
+  }
+
+  function handleResize(e: MouseEvent) {
+    if (!resizingColumn) return
+
+    const diff = e.clientX - resizeStartX
+    const table = document.querySelector('.settings-table') as HTMLElement
+    if (!table) return
+
+    const tableWidth = table.offsetWidth
+    const pixelToPercent = 100 / tableWidth
+    const percentDiff = diff * pixelToPercent
+
+    const newWidth = Math.max(5, resizeStartWidth + percentDiff)
+    columnWidths = {
+      ...columnWidths,
+      [resizingColumn]: newWidth
+    }
+  }
+
+  function stopResize() {
+    resizingColumn = null
+    document.removeEventListener('mousemove', handleResize)
+    document.removeEventListener('mouseup', stopResize)
+    saveColumnWidths()
+  }
+
+  function resetColumnWidths() {
+    columnWidths = { ...defaultColumnWidths }
+    saveColumnWidths()
+  }
+
   onMount(() => {
+    loadColumnWidths()
     fetchSettings()
+
+    return () => {
+      document.removeEventListener('mousemove', handleResize)
+      document.removeEventListener('mouseup', stopResize)
+    }
   })
 </script>
 
@@ -164,20 +250,27 @@
     </header>
 
     <div class="settings-controls">
-      <div class="search-box">
-        <Icon name="icon-search-line" size={18} />
-        <input
-          type="text"
-          placeholder={t('page.settings.search-placeholder', 'Search settings...')}
-          on:input={handleSearchInput}
-          bind:value={searchQuery}
-          class="search-input"
-        />
-        {#if searchQuery}
-          <button class="clear-search" on:click={() => { searchQuery = ''; fetchSettings(); }}>
-            <Icon name="icon-close-line" size={16} />
-          </button>
-        {/if}
+      <div class="controls-row">
+        <div class="search-box">
+          <Icon name="icon-search-line" size={18} />
+          <input
+            type="text"
+            placeholder={t('page.settings.search-placeholder', 'Search settings...')}
+            on:input={handleSearchInput}
+            bind:value={searchQuery}
+            class="search-input"
+          />
+          {#if searchQuery}
+            <button class="clear-search" on:click={() => { searchQuery = ''; fetchSettings(); }}>
+              <Icon name="icon-close-line" size={16} />
+            </button>
+          {/if}
+        </div>
+
+        <button class="reset-columns-btn" on:click={resetColumnWidths} title="Reset column widths to default">
+          <Icon name="icon-layout-column-line" size={16} />
+          <span>Reset Columns</span>
+        </button>
       </div>
 
       <div class="category-filter">
@@ -227,11 +320,33 @@
         <table class="settings-table">
           <thead>
             <tr>
-              <th class="col-key">{t('page.settings.col-key', 'Config Key')}</th>
-              <th class="col-type">Type</th>
-              <th class="col-default">{t('page.settings.col-default', 'Default')}</th>
-              <th class="col-current">{t('page.settings.col-current', 'Current')}</th>
-              <th class="col-description">{t('page.settings.col-description', 'Description')}</th>
+              <th class="col-key" style="width: {columnWidths.key}%">
+                <div class="th-content">
+                  {t('page.settings.col-key', 'Config Key')}
+                  <div class="resize-handle" on:mousedown={(e) => startResize('key', e)}></div>
+                </div>
+              </th>
+              <th class="col-type" style="width: {columnWidths.type}%">
+                <div class="th-content">
+                  Type
+                  <div class="resize-handle" on:mousedown={(e) => startResize('type', e)}></div>
+                </div>
+              </th>
+              <th class="col-default" style="width: {columnWidths.default}%">
+                <div class="th-content">
+                  {t('page.settings.col-default', 'Default')}
+                  <div class="resize-handle" on:mousedown={(e) => startResize('default', e)}></div>
+                </div>
+              </th>
+              <th class="col-current" style="width: {columnWidths.current}%">
+                <div class="th-content">
+                  {t('page.settings.col-current', 'Current')}
+                  <div class="resize-handle" on:mousedown={(e) => startResize('current', e)}></div>
+                </div>
+              </th>
+              <th class="col-description" style="width: {columnWidths.description}%">
+                {t('page.settings.col-description', 'Description')}
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -286,7 +401,7 @@
                 <tr class="long-description-row">
                   <td colspan="5" class="long-description-cell">
                     <div class="long-description">
-                      <Markdown md={setting.longDescription} />
+                      <Markdown md={setting.longDescription} plugins={[gfmPlugin()]} />
                     </div>
                   </td>
                 </tr>
@@ -365,6 +480,13 @@
     gap: 1rem;
   }
 
+  .controls-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
   .search-box {
     display: flex;
     align-items: center;
@@ -373,6 +495,7 @@
     border: 1px solid #4b5563;
     border-radius: 0.5rem;
     padding: 0.75rem 1rem;
+    flex: 1;
     max-width: 400px;
     transition: all 0.2s ease;
   }
@@ -411,6 +534,32 @@
   .clear-search:hover {
     color: #e9ecef;
     background-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .reset-columns-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    background-color: rgba(30, 30, 30, 0.6);
+    border: 1px solid #4b5563;
+    border-radius: 0.5rem;
+    color: #9ca3af;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+  }
+
+  .reset-columns-btn:hover {
+    border-color: #6b7280;
+    color: #e9ecef;
+    background-color: rgba(30, 30, 30, 0.8);
+  }
+
+  .reset-columns-btn:active {
+    transform: scale(0.98);
   }
 
   .category-filter {
@@ -505,8 +654,10 @@
     background-color: rgba(33, 37, 41, 0.6);
     border-radius: 0.75rem;
     overflow-x: auto;
-    overflow-y: visible;
+    overflow-y: auto;
+    max-height: calc(100vh - 300px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    position: relative;
   }
 
   .settings-table {
@@ -514,13 +665,16 @@
     min-width: 900px;
     border-collapse: collapse;
     font-size: 0.9rem;
+    table-layout: fixed;
   }
 
   .settings-table thead {
-    background-color: rgba(33, 37, 41, 0.8);
+    background-color: rgba(33, 37, 41, 0.95);
+    backdrop-filter: blur(8px);
     position: sticky;
     top: 0;
     z-index: 10;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   }
 
   .settings-table th {
@@ -528,10 +682,53 @@
     padding: 1rem 1.25rem;
     font-weight: 600;
     color: #9ca3af;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 2px solid rgba(59, 130, 246, 0.3);
     font-size: 0.8rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    position: relative;
+    user-select: none;
+  }
+
+  .th-content {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+    padding-right: 12px;
+  }
+
+  .resize-handle {
+    position: absolute;
+    right: -2px;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    background-color: transparent;
+    cursor: col-resize;
+    transition: background-color 0.2s ease;
+    z-index: 20;
+  }
+
+  .resize-handle::after {
+    content: '';
+    position: absolute;
+    right: 3px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 2px;
+    height: 60%;
+    background-color: transparent;
+    transition: background-color 0.2s ease;
+    border-radius: 2px;
+  }
+
+  .resize-handle:hover::after {
+    background-color: #3b82f6;
+  }
+
+  .resize-handle:active::after {
+    background-color: #2563eb;
   }
 
   .settings-table td {
@@ -552,24 +749,9 @@
     background-color: rgba(245, 158, 11, 0.1);
   }
 
-  .col-key {
-    width: 25%;
-    min-width: 200px;
-  }
-
-  .col-type {
-    width: 8%;
-    min-width: 80px;
-  }
-
-  .col-default,
-  .col-current {
-    width: 15%;
-    min-width: 120px;
-  }
-
-  .col-description {
-    width: 37%;
+  .settings-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .key-cell {
@@ -788,6 +970,42 @@
     margin: 0.5rem 0;
     color: #9ca3af;
     font-style: italic;
+  }
+
+  .long-description :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    font-size: 0.85rem;
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 0.375rem;
+    overflow: hidden;
+  }
+
+  .long-description :global(thead) {
+    background-color: rgba(59, 130, 246, 0.15);
+  }
+
+  .long-description :global(th) {
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    color: #f8f9fa;
+    border-bottom: 2px solid rgba(59, 130, 246, 0.3);
+  }
+
+  .long-description :global(td) {
+    padding: 0.5rem 0.75rem;
+    color: #d1d5db;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .long-description :global(tbody tr:last-child td) {
+    border-bottom: none;
+  }
+
+  .long-description :global(tbody tr:hover) {
+    background-color: rgba(59, 130, 246, 0.05);
   }
 
   /* Responsive adjustments */
