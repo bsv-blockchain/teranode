@@ -11,7 +11,7 @@
 // reduces the number of actual storage operations performed on the underlying store.
 //
 // Note that the batcher only supports write operations (Set). Read operations (Get, Exists)
-// and metadata operations (GetDAH, SetDAH) are passed through to the underlying store.
+// and metadata operations (SetDAH) are passed through to the underlying store.
 package batcher
 
 import (
@@ -391,23 +391,6 @@ func (b *Batcher) Set(_ context.Context, hash []byte, fileType fileformat.FileTy
 //   - error: Always returns go-errors.NewStorageError with an unsupported operation message
 func (b *Batcher) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint32, _ ...options.FileOption) error {
 	return errors.NewStorageError("SetDAH not supported by batcher")
-}
-
-// GetDAH is not supported by the batcher implementation.
-// The batcher is designed primarily for efficient write operations and does not
-// support metadata operations like retrieving Delete-At-Height values.
-//
-// Parameters:
-//   - ctx: Context for the operation (unused)
-//   - key: The key identifying the blob (unused)
-//   - fileType: The type of the file (unused)
-//   - opts: Optional file options (unused)
-//
-// Returns:
-//   - uint32: Always returns 0
-//   - error: Always returns go-errors.NewStorageError with an unsupported operation message
-func (b *Batcher) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ ...options.FileOption) (uint32, error) {
-	return 0, errors.NewStorageError("GetDAH not supported by batcher")
 }
 
 // GetIoReader is not supported by the batcher implementation.

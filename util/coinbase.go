@@ -32,6 +32,11 @@ func ExtractCoinbaseHeight(coinbaseTx *bt.Tx) (uint32, error) {
 // ExtractCoinbaseMiner extracts the miner identification string from a coinbase transaction.
 // This parses the arbitrary text portion of the coinbase script, cleaning and formatting it.
 func ExtractCoinbaseMiner(coinbaseTx *bt.Tx) (string, error) {
+	if len(coinbaseTx.Inputs) == 0 {
+		return "", errors.NewBlockCoinbaseMissingHeightError("coinbase transaction has no inputs")
+	}
+
+	// Extract both height and miner text from the first input of the coinbase transaction
 	_, miner, err := extractCoinbaseHeightAndText(*coinbaseTx.Inputs[0].UnlockingScript)
 	if err != nil && errors.Is(err, errors.ErrBlockCoinbaseMissingHeight) {
 		err = nil
@@ -110,42 +115,3 @@ func extractMiner(data string) string {
 
 	return cleaned
 }
-
-// func extractCoinbaseHeightAndText(coinbaseTx *bt.Tx) (uint32, string, error) {
-// 	sigScript := *coinbaseTx.Inputs[0].UnlockingScript
-// 	if len(sigScript) < 1 {
-// 		str := "the coinbase signature script for blocks of " +
-// 			"version %d or greater must start with the " +
-// 			"length of the serialized block height"
-// 		str = fmt.Sprintf(str, serializedHeightVersion)
-// 		//return 0, ruleError(ErrMissingCoinbaseHeight, str)
-// 		return 0, "", fmt.Errorf("ErrMissingCoinbaseHeight: %s", str)
-// 	}
-
-// 	// Detect the case when the block height is a small integer encoded with
-// 	// as single byte.
-// 	opcode := int(sigScript[0])
-// 	if opcode == txscript.OP_0 {
-// 		return 0, "", nil
-// 	}
-// 	if opcode >= txscript.OP_1 && opcode <= txscript.OP_16 {
-// 		return uint32(opcode - (txscript.OP_1 - 1)), "", nil
-// 	}
-
-// 	// Otherwise, the opcode is the length of the following bytes which
-// 	// encode in the block height.
-// 	serializedLen := int(sigScript[0])
-// 	if len(sigScript[1:]) < serializedLen {
-// 		str := "the coinbase signature script for blocks of " +
-// 			"version %d or greater must start with the " +
-// 			"serialized block height"
-// 		str = fmt.Sprintf(str, serializedLen)
-// 		return 0, "", fmt.Errorf("ErrMissingCoinbaseHeight: %s", str)
-// 	}
-
-// 	serializedHeightBytes := make([]byte, 8)
-// 	copy(serializedHeightBytes, sigScript[1:serializedLen+1])
-// 	serializedHeight := binary.LittleEndian.Uint64(serializedHeightBytes)
-
-// 	return uint32(serializedHeight), "", nil
-// }

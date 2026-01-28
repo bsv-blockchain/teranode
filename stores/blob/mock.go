@@ -57,12 +57,6 @@ func (m *MockStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.
 	return args.Error(0)
 }
 
-// GetDAH retrieves the remaining time-to-live for a blob.
-func (m *MockStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	args := m.Called(ctx, key, fileType, opts)
-	return args.Get(0).(uint32), args.Error(1)
-}
-
 // Del deletes a blob from the store.
 func (m *MockStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
 	args := m.Called(ctx, key, fileType, opts)

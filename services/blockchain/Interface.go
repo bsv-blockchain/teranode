@@ -965,6 +965,117 @@ type ClientI interface {
 	// - Array of BlockHeader objects from divergence point to hashStop or chain tip
 	// - Error if the header location or retrieval fails
 	LocateBlockHeaders(ctx context.Context, locator []*chainhash.Hash, hashStop *chainhash.Hash, maxHashes uint32) ([]*model.BlockHeader, error)
+
+	//
+	// Blob deletion scheduling methods
+	//
+
+	// ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+	//
+	// This method registers a blob to be deleted when the blockchain reaches the specified
+	// height. The pruner service will query for pending deletions and execute them.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - blobKey: The key identifying the blob to delete
+	// - fileType: The file type (e.g., "tx", "subtree", "block")
+	// - storeType: The blob store type (TXSTORE, SUBTREESTORE, etc.)
+	// - deleteAtHeight: The blockchain height at which to delete the blob
+	//
+	// Returns:
+	// - Deletion ID and success status
+	// - Error if scheduling fails
+	ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType blockchain_api.BlobStoreType, deleteAtHeight uint32) (int64, bool, error)
+
+	// GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+	//
+	// This method is used by the pruner service to query for blobs that are ready to be deleted.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - height: The current blockchain height
+	// - limit: Maximum number of deletions to retrieve
+	//
+	// Returns:
+	// - Array of scheduled deletions ready for processing
+	// - Error if query fails
+	GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_api.ScheduledDeletion, error)
+
+	// RemoveBlobDeletion removes a blob deletion from the schedule.
+	//
+	// This method is called after a blob has been successfully deleted.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - deletionID: The ID of the deletion to remove
+	//
+	// Returns:
+	// - Error if removal fails
+	RemoveBlobDeletion(ctx context.Context, deletionID int64) error
+
+	// IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+	//
+	// This method is called when a blob deletion fails, to track retry attempts.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - deletionID: The ID of the deletion that failed
+	// - maxRetries: Maximum number of retries allowed
+	//
+	// Returns:
+	// - shouldRemove: True if max retries exceeded and deletion should be abandoned
+	// - newRetryCount: The updated retry count
+	// - Error if update fails
+	IncrementBlobDeletionRetry(ctx context.Context, deletionID int64, maxRetries int) (bool, int, error)
+
+	// CompleteBlobDeletions completes multiple blob deletions in a single batch call.
+	//
+	// This is more efficient than calling RemoveBlobDeletion multiple times,
+	// reducing network overhead when processing many deletions.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - completedIDs: IDs of successfully deleted blobs
+	// - failedIDs: IDs of deletions that failed (will increment retry count)
+	// - maxRetries: Maximum retries for failed deletions
+	//
+	// Returns:
+	// - removedCount: Number of deletions removed from queue
+	// - retryIncrementedCount: Number of deletions with incremented retry count
+	// - Error if operation fails
+	CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error)
+
+	// AcquireBlobDeletionBatch acquires a batch of deletions with locking.
+	//
+	// This method uses SELECT...FOR UPDATE SKIP LOCKED to ensure only one
+	// pruner processes each batch, preventing duplicate deletion attempts.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - height: Current blockchain height
+	// - limit: Maximum number of deletions to acquire
+	// - lockTimeoutSeconds: How long to hold the lock (0 = default 300s)
+	//
+	// Returns:
+	// - batchToken: Token to use when completing the batch
+	// - deletions: Array of scheduled deletions to process
+	// - Error if acquisition fails
+	AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error)
+
+	// CompleteBlobDeletionBatch completes a previously acquired batch.
+	//
+	// This reports all results for a batch acquired via AcquireBlobDeletionBatch.
+	//
+	// Parameters:
+	// - ctx: Context for the operation with timeout and cancellation support
+	// - batchToken: Token from AcquireBlobDeletionBatch
+	// - completedIDs: IDs of successfully deleted blobs
+	// - failedIDs: IDs of deletions that failed
+	// - maxRetries: Maximum retries for failed deletions
+	//
+	// Returns:
+	// - Error if completion fails or token is invalid
+	CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error
 }
 
 const notImplemented = "not implemented"

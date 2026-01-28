@@ -348,14 +348,6 @@ func (g *S3) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileTyp
 	return nil
 }
 
-func (g *S3) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	_, _, endSpan := tracing.Tracer("s3").Start(ctx, "s3:GetDAH")
-	defer endSpan()
-
-	// TODO implement
-	return 0, nil
-}
-
 func (g *S3) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	ctx, _, endSpan := tracing.Tracer("s3").Start(ctx, "s3:GetIoReader")
 	defer endSpan()

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -107,67 +106,7 @@ func TestFileLongtermStorage(t *testing.T) {
 
 // TestFileGetDAH tests the GetDAH functionality in the File store with longterm storage
 func TestFileGetDAH(t *testing.T) {
-	// Create temp directories for testing
-	mainDir := t.TempDir()
-
-	// Create the persistent directory explicitly
-	persistPath := filepath.Join(mainDir, persistSubDir)
-	err := os.MkdirAll(persistPath, 0755)
-	require.NoError(t, err)
-
-	logger := ulogger.TestLogger{}
-	defaultDAH := uint32(100)
-
-	// Create a URL from the tempDir
-	u, err := url.Parse("file://" + mainDir)
-	require.NoError(t, err)
-
-	// Create a new File store with longterm storage option and default DAH
-	store, err := New(
-		logger,
-		u,
-		options.WithLongtermStorage(persistSubDir, nil),
-		options.WithDefaultBlockHeightRetention(defaultDAH),
-	)
-	require.NoError(t, err)
-
-	testKey := []byte("testkey123")
-	testData := []byte("test data")
-
-	t.Run("non-existent file should return error", func(t *testing.T) {
-		nonExistentKey := []byte("nonexistent")
-
-		_, err := store.GetDAH(context.Background(), nonExistentKey, fileformat.FileTypeTesting)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrNotFound))
-	})
-
-	t.Run("file with DAH should return correct value", func(t *testing.T) {
-		// Clean up any existing file
-		_ = store.Del(context.Background(), testKey, fileformat.FileTypeTesting)
-
-		// Set file with default DAH
-		err = store.Set(context.Background(), testKey, fileformat.FileTypeTesting, testData)
-		require.NoError(t, err)
-
-		// Verify DAH value
-		dah, err := store.GetDAH(context.Background(), testKey, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Equal(t, defaultDAH, dah)
-
-		// Set custom DAH
-		customDAH := uint32(200)
-		err = store.SetDAH(context.Background(), testKey, fileformat.FileTypeTesting, customDAH)
-		require.NoError(t, err)
-
-		// Verify updated DAH
-		dah, err = store.GetDAH(context.Background(), testKey, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Equal(t, customDAH, dah)
-
-		// Clean up
-		_ = store.Del(context.Background(), testKey, "test")
-	})
+	t.Skip("DAH functionality now requires pruner service - covered by e2e tests")
 }
 
 // TestFileWithLongtermStorageOption tests creating a File store with the WithLongtermStorage option

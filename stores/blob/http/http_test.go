@@ -204,20 +204,9 @@ func TestSetTTL(t *testing.T) {
 }
 
 func TestGetTTL(t *testing.T) {
-	server, store, err := setupTestServer()
-	if err != nil {
-		t.Fatalf("failed to setup test server: %v", err)
-	}
-	defer server.Close()
-
-	dah, err := store.GetDAH(context.Background(), []byte("test-key"), fileformat.FileTypeTesting)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	if dah != 300 {
-		t.Errorf("expected DAH of 300, got %v", dah)
-	}
+	// GetDAH has been removed from the blob.Store interface
+	// DAH functionality is now centralized in the pruner service
+	t.Skip("GetDAH removed from interface - see e2e pruner tests")
 }
 
 func TestDel(t *testing.T) {

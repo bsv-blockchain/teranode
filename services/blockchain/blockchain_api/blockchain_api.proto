@@ -190,6 +190,38 @@ service BlockchainAPI {
 
   // GetBestHeightAndTime retrieves the current best height and median time.
   rpc GetBestHeightAndTime(google.protobuf.Empty) returns (GetBestHeightAndTimeResponse) {}
+
+  // Blob deletion scheduling methods
+
+  // ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+  rpc ScheduleBlobDeletion(ScheduleBlobDeletionRequest) returns (ScheduleBlobDeletionResponse) {}
+
+  // CancelBlobDeletion cancels a previously scheduled blob deletion.
+  rpc CancelBlobDeletion(CancelBlobDeletionRequest) returns (CancelBlobDeletionResponse) {}
+
+  // ListScheduledDeletions lists all scheduled blob deletions with optional filtering.
+  rpc ListScheduledDeletions(ListScheduledDeletionsRequest) returns (ListScheduledDeletionsResponse) {}
+
+  // GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+  rpc GetPendingBlobDeletions(GetPendingBlobDeletionsRequest) returns (GetPendingBlobDeletionsResponse) {}
+
+  // RemoveBlobDeletion removes a blob deletion from the schedule (after successful deletion).
+  rpc RemoveBlobDeletion(RemoveBlobDeletionRequest) returns (google.protobuf.Empty) {}
+
+  // IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+  rpc IncrementBlobDeletionRetry(IncrementBlobDeletionRetryRequest) returns (IncrementBlobDeletionRetryResponse) {}
+
+  // CompleteBlobDeletions completes multiple blob deletions in a single call (batch API).
+  // This is more efficient than calling RemoveBlobDeletion multiple times.
+  rpc CompleteBlobDeletions(CompleteBlobDeletionsRequest) returns (CompleteBlobDeletionsResponse) {}
+
+  // AcquireBlobDeletionBatch acquires a batch of deletions with locking for processing.
+  // This uses SELECT...FOR UPDATE SKIP LOCKED to ensure only one pruner processes each batch.
+  rpc AcquireBlobDeletionBatch(AcquireBlobDeletionBatchRequest) returns (AcquireBlobDeletionBatchResponse) {}
+
+  // CompleteBlobDeletionBatch completes a previously acquired batch in a single call.
+  // This reports all results (successes and failures) for the batch.
+  rpc CompleteBlobDeletionBatch(CompleteBlobDeletionBatchRequest) returns (google.protobuf.Empty) {}
 }
 
 // HealthResponse represents the health status of the blockchain service.
@@ -662,4 +694,125 @@ message GetBlocksNotPersistedRequest {
 // GetBlocksNotPersistedResponse contains blocks not yet persisted.
 message GetBlocksNotPersistedResponse {
   repeated bytes block_bytes = 1;  // List of serialized blocks
+}
+
+// Blob deletion scheduling messages
+
+enum BlobStoreType {
+  TXSTORE = 0;
+  SUBTREESTORE = 1;
+  BLOCKSTORE = 2;
+  TEMPSTORE = 3;
+  BLOCKPERSISTERSTORE = 4;
+}
+
+message ScheduleBlobDeletionRequest {
+  bytes blob_key = 1;
+  string file_type = 2;
+  BlobStoreType store_type = 3;
+  uint32 delete_at_height = 4;
+}
+
+message ScheduleBlobDeletionResponse {
+  int64 deletion_id = 1;
+  bool scheduled = 2;
+  string message = 3;
+}
+
+message CancelBlobDeletionRequest {
+  bytes blob_key = 1;
+  string file_type = 2;
+  BlobStoreType store_type = 3;
+  string cancel_reason = 4;
+}
+
+message CancelBlobDeletionResponse {
+  bool cancelled = 1;
+  string message = 2;
+}
+
+message ListScheduledDeletionsRequest {
+  uint32 min_height = 1;
+  uint32 max_height = 2;
+  BlobStoreType store_type = 3;
+  int32 limit = 4;
+  int32 offset = 5;
+  bool filter_by_store = 6;
+}
+
+message ScheduledDeletion {
+  int64 id = 1;
+  bytes blob_key = 2;
+  string file_type = 3;
+  BlobStoreType store_type = 4;
+  uint32 delete_at_height = 5;
+  uint32 retry_count = 6;
+}
+
+message ListScheduledDeletionsResponse {
+  repeated ScheduledDeletion deletions = 1;
+  int32 total_count = 2;
+}
+
+message GetPendingBlobDeletionsRequest {
+  uint32 height = 1;
+  int32 limit = 2;
+}
+
+message GetPendingBlobDeletionsResponse {
+  repeated ScheduledDeletion deletions = 1;
+}
+
+message RemoveBlobDeletionRequest {
+  int64 deletion_id = 1;
+}
+
+message IncrementBlobDeletionRetryRequest {
+  int64 deletion_id = 1;
+  int32 max_retries = 2;
+}
+
+message IncrementBlobDeletionRetryResponse {
+  bool should_remove = 1;
+  int32 new_retry_count = 2;
+}
+
+// Batch completion API messages
+
+message CompleteBlobDeletionsRequest {
+  repeated int64 completed_ids = 1;  // IDs of successfully deleted blobs
+  repeated int64 failed_ids = 2;     // IDs of deletions that failed (will increment retry count)
+  int32 max_retries = 3;             // Maximum retries for failed deletions
+}
+
+message CompleteBlobDeletionsResponse {
+  int32 removed_count = 1;           // Number of deletions removed (completed or max retries)
+  int32 retry_incremented_count = 2; // Number of deletions with incremented retry count
+}
+
+// Batch acquisition API messages (with locking)
+
+message AcquireBlobDeletionBatchRequest {
+  uint32 height = 1;
+  int32 limit = 2;
+  int32 lock_timeout_seconds = 3;  // Optional: how long to hold the lock (default: 300s)
+}
+
+message AcquireBlobDeletionBatchResponse {
+  string batch_token = 1;
+  repeated ScheduledDeletion deletions = 2;
+}
+
+message CompleteBlobDeletionBatchRequest {
+  string batch_token = 1;
+  repeated int64 completed_ids = 2;
+  repeated int64 failed_ids = 3;
+  int32 max_retries = 4;
+}
+
+message BatchTokenInfo {
+  string token = 1;
+  int64 acquired_at = 2;  // Unix timestamp
+  int32 deletion_count = 3;
+  repeated int64 deletion_ids = 4;
 }

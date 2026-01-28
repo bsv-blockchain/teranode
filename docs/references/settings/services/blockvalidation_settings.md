@@ -59,6 +59,8 @@
 | FetchNumWorkers | int | 16 | blockvalidation_fetch_num_workers | Block fetch worker goroutines |
 | FetchBufferSize | int | 50 | blockvalidation_fetch_buffer_size | Block fetch channel buffer |
 | SubtreeFetchConcurrency | int | 8 | blockvalidation_subtree_fetch_concurrency | Concurrent subtree fetches per block |
+| SubtreeBatchSize | int | 16 | blockvalidation_subtree_batch_size | Subtrees processed per batch in quick validation |
+| SubtreeBatchPrefetchDepth | int | 2 | blockvalidation_subtree_batch_prefetch_depth | Batches to prefetch ahead in pipeline (0=sequential) |
 | GetBlockTransactionsConcurrency | int | 64 | blockvalidation_get_block_transactions_concurrency | Block transaction fetch concurrency |
 
 ## Configuration Dependencies
@@ -81,6 +83,16 @@
 - Block validation proceeds while subtree validation runs in background
 - Can be overridden per-validation via DisableOptimisticMining option
 - Disabled during catchup mode for better performance
+
+### Quick Validation Pipeline
+
+For checkpoint-verified blocks, a fan-in pipeline overlaps I/O with processing:
+- `SubtreeBatchPrefetchDepth` controls how many batches to prefetch ahead (default: 2)
+- Setting to 0 disables the pipeline and uses sequential processing
+- Three pipeline stages:
+  1. **Reader**: Prefetches subtree batches from disk
+  2. **Extender**: Extends transactions with UTXO data (sequential for map dependency)
+  3. **Processor**: Creates/spends UTXOs and writes files in parallel per batch
 
 ### Transaction Metadata Processing
 - Cache and store processing work together with threshold-based fallback
@@ -136,6 +148,7 @@ blockvalidation_validateBlockSubtreesConcurrency=16
 blockvalidation_processTxMetaUsingStoreBatchSize=2048
 blockvalidation_catchupConcurrency=8
 blockvalidation_fetch_num_workers=32
+blockvalidation_subtree_batch_size=32
 ```
 
 ### Catchup Mode Configuration
@@ -145,4 +158,15 @@ blockvalidation_useCatchupWhenBehind=true
 blockvalidation_catchup_max_retries=5
 blockvalidation_catchup_iteration_timeout=60
 blockvalidation_max_accumulated_headers=50000
+```
+
+### Pipeline Processing Configuration
+
+```bash
+# Enable pipeline with larger prefetch depth for high-latency storage
+blockvalidation_subtree_batch_prefetch_depth=4
+blockvalidation_subtree_batch_size=32
+
+# Disable pipeline (sequential processing)
+blockvalidation_subtree_batch_prefetch_depth=0
 ```

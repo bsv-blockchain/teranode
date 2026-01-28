@@ -83,10 +83,13 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 	if servicePoolSettings != nil {
 		// Merge service-specific settings with global defaults (zero values use global)
 		poolSettings = &settings.PostgresSettings{
-			MaxOpenConns:    servicePoolSettings.MaxOpenConns,
-			MaxIdleConns:    servicePoolSettings.MaxIdleConns,
-			ConnMaxLifetime: servicePoolSettings.ConnMaxLifetime,
-			ConnMaxIdleTime: servicePoolSettings.ConnMaxIdleTime,
+			MaxOpenConns:     servicePoolSettings.MaxOpenConns,
+			MaxIdleConns:     servicePoolSettings.MaxIdleConns,
+			ConnMaxLifetime:  servicePoolSettings.ConnMaxLifetime,
+			ConnMaxIdleTime:  servicePoolSettings.ConnMaxIdleTime,
+			RetryMaxAttempts: servicePoolSettings.RetryMaxAttempts,
+			RetryBaseDelay:   servicePoolSettings.RetryBaseDelay,
+			RetryEnabled:     servicePoolSettings.RetryEnabled,
 		}
 		// Use global defaults for zero values
 		if poolSettings.MaxOpenConns == 0 {
@@ -101,6 +104,12 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 		if poolSettings.ConnMaxIdleTime == 0 {
 			poolSettings.ConnMaxIdleTime = tSettings.Postgres.ConnMaxIdleTime
 		}
+		if poolSettings.RetryMaxAttempts == 0 {
+			poolSettings.RetryMaxAttempts = tSettings.Postgres.RetryMaxAttempts
+		}
+		if poolSettings.RetryBaseDelay == 0 {
+			poolSettings.RetryBaseDelay = tSettings.Postgres.RetryBaseDelay
+		}
 	}
 
 	// Configure connection pool settings
@@ -109,11 +118,23 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 	db.SetConnMaxLifetime(poolSettings.ConnMaxLifetime)
 	db.SetConnMaxIdleTime(poolSettings.ConnMaxIdleTime)
 
+	// Configure retry settings
+	db.SetRetryConfig(usql.RetryConfig{
+		MaxAttempts: poolSettings.RetryMaxAttempts,
+		BaseDelay:   poolSettings.RetryBaseDelay,
+		Enabled:     poolSettings.RetryEnabled,
+	})
+
 	logger.Infof("PostgreSQL connection pool configured: MaxOpenConns=%d, MaxIdleConns=%d, ConnMaxLifetime=%v, ConnMaxIdleTime=%v",
 		poolSettings.MaxOpenConns,
 		poolSettings.MaxIdleConns,
 		poolSettings.ConnMaxLifetime,
 		poolSettings.ConnMaxIdleTime)
+
+	logger.Infof("PostgreSQL retry configured: MaxAttempts=%d, BaseDelay=%v, Enabled=%v",
+		poolSettings.RetryMaxAttempts,
+		poolSettings.RetryBaseDelay,
+		poolSettings.RetryEnabled)
 
 	// Log initial pool metrics
 	logPostgresPoolMetrics(logger, db)

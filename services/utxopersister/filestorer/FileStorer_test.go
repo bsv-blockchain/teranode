@@ -60,11 +60,6 @@ func (m *MockBlobStore) SetDAH(ctx context.Context, key []byte, fileType filefor
 	return args.Error(0)
 }
 
-func (m *MockBlobStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, fileOptions ...options.FileOption) (uint32, error) {
-	args := m.Called(ctx, key, fileType, fileOptions)
-	return args.Get(0).(uint32), args.Error(1)
-}
-
 func (m *MockBlobStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, fileOptions ...options.FileOption) error {
 	args := m.Called(ctx, key, fileType, fileOptions)
 	return args.Error(0)

@@ -52,6 +52,11 @@ type Options struct {
 	// When true, the store will never create .dah files or participate in DAH-based cleanup
 	// This is useful for external stores where lifecycle management is handled by other systems
 	DisableDAH bool
+	// Pruner is used to schedule blob deletions with the pruner service (StoreOption)
+	Pruner PrunerClient
+	// StoreType is the blob store type enum value (0=TXSTORE, 1=SUBTREESTORE, etc.) (StoreOption)
+	// Used by pruner to identify which store this is in the deletion queue
+	StoreType int32
 }
 
 // StoreOption is a function type for configuring store-level options.
@@ -134,6 +139,22 @@ func WithHashPrefix(length int) StoreOption {
 func WithDisableDAH(disable bool) StoreOption {
 	return func(s *Options) {
 		s.DisableDAH = disable
+	}
+}
+
+// WithPrunerClient sets the pruner client for scheduling blob deletions.
+func WithPrunerClient(client PrunerClient) StoreOption {
+	return func(s *Options) {
+		s.Pruner = client
+	}
+}
+
+// WithStoreType sets the blob store type enum value for pruner scheduling.
+// The store type (0=TXSTORE, 1=SUBTREESTORE, etc.) allows the pruner to look up
+// the blob store URL from settings, enabling distributed deployments.
+func WithStoreType(storeType int32) StoreOption {
+	return func(s *Options) {
+		s.StoreType = storeType
 	}
 }
 

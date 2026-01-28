@@ -341,37 +341,10 @@ func Test_LoggerSetDAH(t *testing.T) {
 }
 
 func Test_LoggerGetDAH(t *testing.T) {
-	testKey := []byte{21, 22, 23, 24}
-	testDAH := uint32(200000)
-	fileType := fileformat.FileTypeTx
-
-	t.Run("SuccessfulGetDAH", func(t *testing.T) {
-		var loggedFormat string
-		var loggedArgs []interface{}
-		mockLogger := &MockLogger{
-			DebugfFunc: func(format string, args ...interface{}) {
-				loggedFormat = format
-				loggedArgs = args
-			},
-		}
-		mockStore := &MockBlobStore{
-			GetDAHFunc: func(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-				assert.Equal(t, testKey, key)
-				return testDAH, nil
-			},
-		}
-
-		logger := New(mockLogger, mockStore).(*Logger)
-		dah, err := logger.GetDAH(context.Background(), testKey, fileType)
-
-		assert.NoError(t, err)
-		assert.Equal(t, testDAH, dah)
-		assert.Contains(t, loggedFormat, "[BlobStore][logger][GetDAH]")
-		assert.Contains(t, loggedFormat, "dah %d")
-		assert.Equal(t, []byte{24, 23, 22, 21}, loggedArgs[0]) // Reversed key
-		assert.Equal(t, fileType, loggedArgs[1])
-		assert.Equal(t, testDAH, loggedArgs[2])
-		assert.Nil(t, loggedArgs[3]) // err should be nil
+	t.Run("GetDAH removed", func(t *testing.T) {
+		// GetDAH has been removed from the blob.Store interface
+		// DAH functionality is now centralized in the pruner service
+		t.Skip("GetDAH removed from interface - see e2e pruner tests")
 	})
 }
 

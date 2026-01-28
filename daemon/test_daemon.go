@@ -40,6 +40,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
+	"github.com/bsv-blockchain/teranode/services/pruner"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -88,6 +89,7 @@ type TestDaemon struct {
 	rpcURL                *url.URL
 	skipContainerCleanup  bool
 	prunerObserver        *testPrunerObserver
+	blobDeletionObserver  *testBlobDeletionObserver
 	t                     *testing.T // Reference to testing.T for unified logging
 }
 
@@ -540,7 +542,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	p2pClient, err = p2p.NewClient(ctx, logger, appSettings)
 	require.NoError(t, err)
 
-	txStore, err := d.daemonStores.GetTxStore(logger, appSettings)
+	txStore, err := d.daemonStores.GetTxStore(ctx, logger, appSettings)
 	require.NoError(t, err)
 
 	if opts.FSMState.String() != "" {
@@ -634,6 +636,19 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 			t.Logf("Warning: Pruner service is nil")
 		}
 
+		// Register blob deletion observer with pruner Server
+		blobDeletionObserver := newTestBlobDeletionObserver(t)
+		td.blobDeletionObserver = blobDeletionObserver
+
+		prunerServerInterface, err := d.ServiceManager.GetService("Pruner")
+		if err != nil {
+			t.Logf("Warning: Failed to get Pruner Server: %v", err)
+		} else if prunerServer, ok := prunerServerInterface.(*pruner.Server); ok {
+			prunerServer.SetBlobDeletionObserver(blobDeletionObserver)
+			t.Logf("✓ Blob deletion observer registered with Pruner Server")
+		} else {
+			t.Logf("Warning: Pruner service is not a *pruner.Server")
+		}
 	}
 
 	return td
@@ -1082,6 +1097,16 @@ func (td *TestDaemon) WaitForPruner(t *testing.T, timeout time.Duration) {
 	prunedHeight, recordsProcessed, err := td.prunerObserver.waitForPrune(timeout)
 	require.NoError(t, err, "Timeout waiting for pruner to complete")
 	t.Logf("✓ Pruner completed pruning up to height %d, processed %d records", prunedHeight, recordsProcessed)
+}
+
+// WaitForBlobDeletion waits for the blob deletion worker to complete processing.
+// Returns the height processed and counts of successful/failed deletions.
+func (td *TestDaemon) WaitForBlobDeletion(timeout time.Duration) (height uint32, successCount, failCount int64, err error) {
+	if td.blobDeletionObserver == nil {
+		return 0, 0, 0, errors.NewProcessingError("blob deletion observer not registered")
+	}
+
+	return td.blobDeletionObserver.waitForBlobDeletion(timeout)
 }
 
 // CreateTransaction creates a new transaction with a single input from the parent transaction.
@@ -2176,5 +2201,41 @@ func (o *testPrunerObserver) waitForPrune(timeout time.Duration) (uint32, int64,
 		return event.height, event.recordsProcessed, nil
 	case <-time.After(timeout):
 		return 0, 0, errors.NewProcessingError("timeout waiting for prune completion")
+	}
+}
+
+type blobDeletionEvent struct {
+	height       uint32
+	successCount int64
+	failCount    int64
+}
+
+type testBlobDeletionObserver struct {
+	t                     *testing.T
+	blobDeletionCompleted chan blobDeletionEvent
+}
+
+func newTestBlobDeletionObserver(t *testing.T) *testBlobDeletionObserver {
+	return &testBlobDeletionObserver{
+		t:                     t,
+		blobDeletionCompleted: make(chan blobDeletionEvent, 10),
+	}
+}
+
+func (o *testBlobDeletionObserver) OnBlobDeletionComplete(height uint32, successCount, failCount int64) {
+	o.t.Logf("✓ Blob deletion callback invoked for height %d: %d succeeded, %d failed", height, successCount, failCount)
+	select {
+	case o.blobDeletionCompleted <- blobDeletionEvent{height: height, successCount: successCount, failCount: failCount}:
+	default:
+		o.t.Logf("Warning: blobDeletionCompleted channel is full, dropping event for height %d", height)
+	}
+}
+
+func (o *testBlobDeletionObserver) waitForBlobDeletion(timeout time.Duration) (uint32, int64, int64, error) {
+	select {
+	case event := <-o.blobDeletionCompleted:
+		return event.height, event.successCount, event.failCount, nil
+	case <-time.After(timeout):
+		return 0, 0, 0, errors.NewProcessingError("timeout waiting for blob deletion completion")
 	}
 }

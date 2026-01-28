@@ -121,10 +121,16 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 
 	ancestorHash, err := d.store.GetHashOfAncestorBlock(ctx, blockHeader.Hash(), DifficultyAdjustmentWindow)
 	if err != nil {
-		// could be that we don't have a long enough chain to get the ancestor
-		d.logger.Debugf("[Difficulty] error getting ancestor block: %v", err)
-
-		ancestorHash = blockHeader.Hash()
+		// Only use fallback if chain is too short (ErrNotFound).
+		// For other errors (timeouts, DB errors), we must return an error
+		// to avoid calculating incorrect difficulty.
+		if errors.Is(err, errors.ErrNotFound) {
+			d.logger.Debugf("[Difficulty] chain too short to get ancestor %d blocks back, using current block hash", DifficultyAdjustmentWindow)
+			ancestorHash = blockHeader.Hash()
+		} else {
+			// Don't silently fall back for timeouts or other errors - this causes wrong difficulty!
+			return nil, errors.NewStorageError("[Difficulty] error getting ancestor block (not using fallback to prevent incorrect difficulty)", err)
+		}
 	}
 
 	d.logger.Debugf("[Difficulty] ancestorHash: %s", ancestorHash.String())
