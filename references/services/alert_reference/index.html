@@ -7443,7 +7443,7 @@
 </ul>
 <h2 id="alert-datastore">Alert Datastore</h2>
 <h3 id="overview">Overview</h3>
-<p>The Alert Service uses a persistent datastore to manage alert-related data, consensus state, and operational history. The datastore integrates with the <code>github.com/bitcoin-sv/alert-system</code> library to provide alert message processing, validation, and P2P network communication.</p>
+<p>The Alert Service uses a persistent datastore to manage alert-related data, consensus state, and operational history. The datastore integrates with the <code>github.com/bsv-blockchain/go-alert-system</code> library to provide alert message processing, validation, and P2P network communication.</p>
 <h3 id="supported-database-backends">Supported Database Backends</h3>
 <p>The alert datastore supports multiple database backends:</p>
 <ul>
@@ -7549,7 +7549,7 @@ StoreURL: mysql://user:password@host:port/database
 <p>The Alert service supports automatic database schema migration:</p>
 <ul>
 <li><strong>Enabled</strong>: When <code>Datastore.AutoMigrate</code> is true</li>
-<li><strong>Models</strong>: Uses models from the <code>github.com/bitcoin-sv/alert-system</code> library</li>
+<li><strong>Models</strong>: Uses models from the <code>github.com/bsv-blockchain/go-alert-system</code> library</li>
 <li><strong>Safety</strong>: Migrations are applied during service startup</li>
 </ul>
 <h4 id="ssl-configuration">SSL Configuration</h4>

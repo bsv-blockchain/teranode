@@ -6633,7 +6633,7 @@
 <blockquote>
 <p><strong>Note</strong>: For information about how the Alert service is initialized during daemon startup and how it interacts with other services, see the <a href="../../../references/teranodeDaemonReference/#service-initialization-flow">Teranode Daemon Reference</a>.</p>
 </blockquote>
-<p>The Alert Service uses the third party <code>github.com/bitcoin-sv/alert-system</code> library. This library provides the ability to subscribe to a private P2P network where other BSV nodes participate, and subscribes to topics where Alert related messages are received.
+<p>The Alert Service uses the third party <code>github.com/bsv-blockchain/go-alert-system</code> library. This library provides the ability to subscribe to a private P2P network where other BSV nodes participate, and subscribes to topics where Alert related messages are received.
 Based on the received messages, the Alert Service handles the UTXO freezing, unfreezing, reassignment, block invalidation and peer management operations.</p>
 <p><img alt="Alert_Service_Container_Diagram.png" src="../img/Alert_Service_Container_Diagram.png" /></p>
 <p>The Alert Service interacts with several core components of Teranode:</p>
@@ -6856,7 +6856,7 @@ Based on the received messages, the Alert Service handles the UTXO freezing, unf
 <p><strong>Bitcoin-specific Libraries:</strong></p>
 <ul>
 <li>Uses <code>github.com/bsv-blockchain/go-bt/v2</code> for Bitcoin transaction handling.</li>
-<li>Integrates with <code>github.com/bitcoin-sv/alert-system</code> for core alert functionality.</li>
+<li>Integrates with <code>github.com/bsv-blockchain/go-alert-system</code> for core alert functionality.</li>
 </ul>
 </li>
 </ol>
