@@ -328,6 +328,31 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 		return errors.NewStorageError("could not create block_transactions_map table", err)
 	}
 
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS scheduled_blob_deletions (
+			id                BIGSERIAL PRIMARY KEY,
+			blob_key          BYTEA NOT NULL,
+			file_type         VARCHAR(32) NOT NULL,
+			store_type        SMALLINT NOT NULL,
+			delete_at_height  BIGINT NOT NULL,
+			retry_count       INT DEFAULT 0,
+			last_retry_at     TIMESTAMPTZ
+		);
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create scheduled_blob_deletions table", err)
+	}
+
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_scheduled_blob_deletions_blob ON scheduled_blob_deletions(blob_key, file_type, store_type);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create ux_scheduled_blob_deletions_blob index", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_scheduled_blob_deletions_height ON scheduled_blob_deletions(delete_at_height ASC, id ASC);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_scheduled_blob_deletions_height index", err)
+	}
+
 	return nil
 }
 
@@ -436,6 +461,31 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_persisted_at ON blocks (persisted_at) WHERE persisted_at IS NULL;`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_persisted_at index", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS scheduled_blob_deletions (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			blob_key          BLOB NOT NULL,
+			file_type         VARCHAR(32) NOT NULL,
+			store_type        INTEGER NOT NULL,
+			delete_at_height  BIGINT NOT NULL,
+			retry_count       INT DEFAULT 0,
+			last_retry_at     DATETIME
+		);
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create scheduled_blob_deletions table", err)
+	}
+
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_scheduled_blob_deletions_blob ON scheduled_blob_deletions(blob_key, file_type, store_type);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create ux_scheduled_blob_deletions_blob index", err)
+	}
+
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_scheduled_blob_deletions_height ON scheduled_blob_deletions(delete_at_height ASC, id ASC);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_scheduled_blob_deletions_height index", err)
 	}
 
 	return nil

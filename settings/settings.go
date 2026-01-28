@@ -1,6 +1,9 @@
 package settings
 
 import (
+	"errors" //nolint:depguard // refactor needed to use the internal errors package
+	"fmt"
+	"net/url"
 	"runtime"
 	"time"
 
@@ -64,10 +67,13 @@ func NewSettings(alternativeContext ...string) *Settings {
 		LocalTestStartFromState:      getString("local_test_start_from_state", "", alternativeContext...),
 		PostgresCheckAddress:         getString("postgres_check_address", "localhost:5432", alternativeContext...),
 		Postgres: PostgresSettings{
-			MaxOpenConns:    getInt("postgres_maxOpenConns", 50, alternativeContext...),
-			MaxIdleConns:    getInt("postgres_maxIdleConns", 10, alternativeContext...),
-			ConnMaxLifetime: getDuration("postgres_connMaxLifetime", 5*time.Minute, alternativeContext...),
-			ConnMaxIdleTime: getDuration("postgres_connMaxIdleTime", 1*time.Minute, alternativeContext...),
+			MaxOpenConns:     getInt("postgres_maxOpenConns", 50, alternativeContext...),
+			MaxIdleConns:     getInt("postgres_maxIdleConns", 10, alternativeContext...),
+			ConnMaxLifetime:  getDuration("postgres_connMaxLifetime", 5*time.Minute, alternativeContext...),
+			ConnMaxIdleTime:  getDuration("postgres_connMaxIdleTime", 1*time.Minute, alternativeContext...),
+			RetryMaxAttempts: getInt("postgres_retryMaxAttempts", 3, alternativeContext...),
+			RetryBaseDelay:   getDuration("postgres_retryBaseDelay", 100*time.Millisecond, alternativeContext...),
+			RetryEnabled:     getBool("postgres_retryEnabled", false, alternativeContext...),
 		},
 		UseCgoVerifier:             getBool("use_cgo_verifier", true, alternativeContext...),
 		GRPCResolver:               getString("grpc_resolver", "", alternativeContext...),
@@ -493,6 +499,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UTXOChunkGroupLimit:            getInt("pruner_utxoChunkGroupLimit", 10, alternativeContext...),                      // Process 10 chunks in parallel
 			UTXOProgressLogInterval:        getDuration("pruner_utxoProgressLogInterval", 30*time.Second, alternativeContext...), // Progress every 30s
 			UTXOPartitionQueries:           getInt("pruner_utxoPartitionQueries", 0, alternativeContext...),                      // 0 = auto-detect based on CPU cores
+			BlobDeletionEnabled:            getBool("pruner_blobDeletionEnabled", true, alternativeContext...),                   // Enable blob deletion by default
+			BlobDeletionSafetyWindow:       getUint32("pruner_blobDeletionSafetyWindow", 10, alternativeContext...),              // Wait 10 blocks after persister
+			BlobDeletionBatchSize:          getInt("pruner_blobDeletionBatchSize", 1000, alternativeContext...),                  // Process 1000 deletions per batch
+			BlobDeletionMaxRetries:         getInt("pruner_blobDeletionMaxRetries", 3, alternativeContext...),                    // Retry failed deletions up to 3 times
 		},
 		SubtreeValidation: SubtreeValidationSettings{
 			QuorumAbsoluteTimeout:                     getDuration("subtree_quorum_absolute_timeout", 30*time.Second, alternativeContext...),
@@ -576,6 +586,35 @@ func NewSettings(alternativeContext ...string) *Settings {
 			WebSocketPort:  getString("dashboard_websocketPort", "8090", alternativeContext...),
 			WebSocketPath:  getString("dashboard_websocketPath", "/connection/websocket", alternativeContext...),
 		},
+	}
+}
+
+// GetBlobStoreURL returns the blob store URL for the given store type enum value.
+// This allows the pruner to look up blob stores dynamically by their type,
+// enabling distributed deployments where each server may have different local paths
+// to the same shared storage (e.g., different NFS mount points, different S3 endpoints).
+//
+// BlobStoreType enum values (defined in services/pruner/pruner_api/pruner_api.proto):
+//
+//	0 = TXSTORE
+//	1 = SUBTREESTORE
+//	2 = BLOCKSTORE
+//	3 = TEMPSTORE
+//	4 = BLOCKPERSISTERSTORE
+func (s *Settings) GetBlobStoreURL(storeType int32) (*url.URL, error) {
+	switch storeType {
+	case 0: // TXSTORE
+		return s.Block.TxStore, nil
+	case 1: // SUBTREESTORE
+		return s.SubtreeValidation.SubtreeStore, nil
+	case 2: // BLOCKSTORE
+		return s.Block.BlockStore, nil
+	case 3: // TEMPSTORE
+		return s.Legacy.TempStore, nil
+	case 4: // BLOCKPERSISTERSTORE
+		return s.BlockPersister.Store, nil
+	default:
+		return nil, errors.New("unknown blob store type: " + fmt.Sprintf("%d", storeType))
 	}
 }
 

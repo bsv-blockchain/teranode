@@ -333,6 +333,14 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
+	services/pruner/pruner_api/pruner_api.proto
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
 	util/kafka/kafka_message/kafka_messages.proto
 
 
@@ -349,6 +357,7 @@ clean_gen:
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
 	rm -f ./services/legacy/peer_api/*.pb.go
 	rm -f ./services/p2p/p2p_api/*.pb.go
+	rm -f ./services/pruner/pruner_api/*.pb.go
 	rm -f ./model/*.pb.go
 	rm -f ./errors/*.pb.go
 	rm -f ./stores/utxo/*.pb.go

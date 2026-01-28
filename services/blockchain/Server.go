@@ -35,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	blockchain_sql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/health"
@@ -103,6 +104,19 @@ type Blockchain struct {
 	AppCtx                        context.Context                      // Application context
 	localTestStartState           string                               // Initial state for testing
 	subscriptionManagerReady      atomic.Bool                          // Flag indicating subscription manager is ready
+
+	// Blob deletion batch token management
+	batchTokens   map[string]*blobDeletionBatchToken // Active batch tokens
+	batchTokensMu sync.RWMutex                       // Mutex for batch tokens map
+}
+
+// blobDeletionBatchToken represents an acquired batch of deletions with a lock.
+type blobDeletionBatchToken struct {
+	token         string
+	acquiredAt    time.Time
+	expiresAt     time.Time
+	deletionIDs   []int64
+	deletionCount int
 }
 
 // New creates a new Blockchain instance with the provided dependencies.
@@ -149,6 +163,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		stats:                         gocore.NewStat("blockchain"),
 		AppCtx:                        ctx,
 		blocksFinalKafkaAsyncProducer: blocksFinalKafkaAsyncProducer,
+		batchTokens:                   make(map[string]*blobDeletionBatchToken),
 	}
 
 	// Initialize subscription manager as not ready
@@ -393,6 +408,9 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	b.startKafka()
 
 	go b.startSubscriptions()
+
+	// Start batch token cleanup
+	go b.cleanupExpiredBatchTokens()
 
 	if err := b.startHTTP(ctx); err != nil {
 		return errors.WrapGRPC(err)
@@ -2889,4 +2907,363 @@ func (b *Blockchain) SetBlockProcessedAt(ctx context.Context, req *blockchain_ap
 // This method should only be used in tests to simulate subscription manager readiness.
 func (b *Blockchain) SetSubscriptionManagerReadyForTesting(ready bool) {
 	b.subscriptionManagerReady.Store(ready)
+}
+
+// ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
+func (b *Blockchain) ScheduleBlobDeletion(ctx context.Context, req *blockchain_api.ScheduleBlobDeletionRequest) (*blockchain_api.ScheduleBlobDeletionResponse, error) {
+	if len(req.BlobKey) == 0 {
+		return &blockchain_api.ScheduleBlobDeletionResponse{
+			Scheduled: false,
+			Message:   "blob_key is required",
+		}, nil
+	}
+
+	if req.FileType == "" {
+		return &blockchain_api.ScheduleBlobDeletionResponse{
+			Scheduled: false,
+			Message:   "file_type is required",
+		}, nil
+	}
+
+	storeWithBlobDeletion, ok := b.store.(interface {
+		ScheduleBlobDeletion(ctx context.Context, req *blockchain_sql.ScheduleRequest) (int64, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	schedReq := &blockchain_sql.ScheduleRequest{
+		BlobKey:        req.BlobKey,
+		FileType:       req.FileType,
+		StoreType:      int32(req.StoreType),
+		DeleteAtHeight: req.DeleteAtHeight,
+	}
+
+	id, err := storeWithBlobDeletion.ScheduleBlobDeletion(ctx, schedReq)
+	if err != nil {
+		b.logger.Errorf("Failed to schedule blob deletion: %v", err)
+		return nil, errors.NewStorageError("failed to schedule deletion", err)
+	}
+
+	b.logger.Infof("Scheduled blob deletion: id=%d, key=%x, store=%s, height=%d",
+		id, req.BlobKey, req.StoreType.String(), req.DeleteAtHeight)
+
+	return &blockchain_api.ScheduleBlobDeletionResponse{
+		DeletionId: id,
+		Scheduled:  true,
+		Message:    "Deletion scheduled successfully",
+	}, nil
+}
+
+// CancelBlobDeletion cancels a previously scheduled blob deletion.
+func (b *Blockchain) CancelBlobDeletion(ctx context.Context, req *blockchain_api.CancelBlobDeletionRequest) (*blockchain_api.CancelBlobDeletionResponse, error) {
+	if len(req.BlobKey) == 0 {
+		return &blockchain_api.CancelBlobDeletionResponse{
+			Cancelled: false,
+			Message:   "blob_key is required",
+		}, nil
+	}
+
+	storeWithBlobDeletion, ok := b.store.(interface {
+		CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType int32) error
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	err := storeWithBlobDeletion.CancelBlobDeletion(ctx, req.BlobKey, req.FileType, int32(req.StoreType))
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			return &blockchain_api.CancelBlobDeletionResponse{
+				Cancelled: false,
+				Message:   "No pending deletion found",
+			}, nil
+		}
+		return nil, err
+	}
+
+	b.logger.Infof("Cancelled blob deletion: key=%x, store=%s, reason=%s",
+		req.BlobKey, req.StoreType.String(), req.CancelReason)
+
+	return &blockchain_api.CancelBlobDeletionResponse{
+		Cancelled: true,
+		Message:   "Deletion cancelled",
+	}, nil
+}
+
+// ListScheduledDeletions lists all scheduled blob deletions with optional filtering.
+func (b *Blockchain) ListScheduledDeletions(ctx context.Context, req *blockchain_api.ListScheduledDeletionsRequest) (*blockchain_api.ListScheduledDeletionsResponse, error) {
+	limit := int(req.Limit)
+	if limit == 0 {
+		limit = 100
+	}
+
+	storeWithBlobDeletion, ok := b.store.(interface {
+		ListScheduledBlobDeletions(ctx context.Context, filters *blockchain_sql.ListFilters) ([]*blockchain_sql.ScheduledDeletion, int, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	filters := &blockchain_sql.ListFilters{
+		MinHeight:     req.MinHeight,
+		MaxHeight:     req.MaxHeight,
+		StoreType:     int32(req.StoreType),
+		FilterByStore: req.FilterByStore,
+		Limit:         limit,
+		Offset:        int(req.Offset),
+	}
+
+	deletions, total, err := storeWithBlobDeletion.ListScheduledBlobDeletions(ctx, filters)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to list deletions", err)
+	}
+
+	protoDeletions := make([]*blockchain_api.ScheduledDeletion, len(deletions))
+	for i, d := range deletions {
+		protoDeletions[i] = &blockchain_api.ScheduledDeletion{
+			Id:             d.ID,
+			BlobKey:        d.BlobKey,
+			FileType:       d.FileType,
+			StoreType:      blockchain_api.BlobStoreType(d.StoreType),
+			DeleteAtHeight: d.DeleteAtHeight,
+			RetryCount:     uint32(d.RetryCount),
+		}
+	}
+
+	return &blockchain_api.ListScheduledDeletionsResponse{
+		Deletions:  protoDeletions,
+		TotalCount: int32(total),
+	}, nil
+}
+
+// GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.
+func (b *Blockchain) GetPendingBlobDeletions(ctx context.Context, req *blockchain_api.GetPendingBlobDeletionsRequest) (*blockchain_api.GetPendingBlobDeletionsResponse, error) {
+	limit := int(req.Limit)
+	if limit == 0 {
+		limit = 100
+	}
+
+	storeWithBlobDeletion, ok := b.store.(interface {
+		GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_sql.ScheduledDeletion, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	deletions, err := storeWithBlobDeletion.GetPendingBlobDeletions(ctx, req.Height, limit)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to get pending deletions", err)
+	}
+
+	protoDeletions := make([]*blockchain_api.ScheduledDeletion, len(deletions))
+	for i, d := range deletions {
+		protoDeletions[i] = &blockchain_api.ScheduledDeletion{
+			Id:             d.ID,
+			BlobKey:        d.BlobKey,
+			FileType:       d.FileType,
+			StoreType:      blockchain_api.BlobStoreType(d.StoreType),
+			DeleteAtHeight: d.DeleteAtHeight,
+			RetryCount:     uint32(d.RetryCount),
+		}
+	}
+
+	return &blockchain_api.GetPendingBlobDeletionsResponse{
+		Deletions: protoDeletions,
+	}, nil
+}
+
+// RemoveBlobDeletion removes a blob deletion from the schedule (after successful deletion).
+func (b *Blockchain) RemoveBlobDeletion(ctx context.Context, req *blockchain_api.RemoveBlobDeletionRequest) (*emptypb.Empty, error) {
+	storeWithBlobDeletion, ok := b.store.(interface {
+		RemoveBlobDeletion(ctx context.Context, id int64) error
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	err := storeWithBlobDeletion.RemoveBlobDeletion(ctx, req.DeletionId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
+// IncrementBlobDeletionRetry increments the retry counter for a failed blob deletion.
+func (b *Blockchain) IncrementBlobDeletionRetry(ctx context.Context, req *blockchain_api.IncrementBlobDeletionRetryRequest) (*blockchain_api.IncrementBlobDeletionRetryResponse, error) {
+	storeWithBlobDeletion, ok := b.store.(interface {
+		IncrementBlobDeletionRetry(ctx context.Context, id int64, maxRetries int) (shouldRemove bool, newRetryCount int, err error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support blob deletion")
+	}
+
+	shouldRemove, newRetryCount, err := storeWithBlobDeletion.IncrementBlobDeletionRetry(ctx, req.DeletionId, int(req.MaxRetries))
+	if err != nil {
+		return nil, err
+	}
+
+	return &blockchain_api.IncrementBlobDeletionRetryResponse{
+		ShouldRemove:  shouldRemove,
+		NewRetryCount: int32(newRetryCount),
+	}, nil
+}
+
+// CompleteBlobDeletions handles batch completion of multiple deletions.
+func (b *Blockchain) CompleteBlobDeletions(ctx context.Context, req *blockchain_api.CompleteBlobDeletionsRequest) (*blockchain_api.CompleteBlobDeletionsResponse, error) {
+	storeWithBatchCompletion, ok := b.store.(interface {
+		CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support batch blob deletion")
+	}
+
+	removedCount, retryIncrementedCount, err := storeWithBatchCompletion.CompleteBlobDeletions(ctx, req.CompletedIds, req.FailedIds, int(req.MaxRetries))
+	if err != nil {
+		return nil, err
+	}
+
+	b.logger.Infof("Batch completed: %d removed, %d retry incremented", removedCount, retryIncrementedCount)
+
+	return &blockchain_api.CompleteBlobDeletionsResponse{
+		RemovedCount:          int32(removedCount),
+		RetryIncrementedCount: int32(retryIncrementedCount),
+	}, nil
+}
+
+// AcquireBlobDeletionBatch acquires a batch of deletions with locking.
+func (b *Blockchain) AcquireBlobDeletionBatch(ctx context.Context, req *blockchain_api.AcquireBlobDeletionBatchRequest) (*blockchain_api.AcquireBlobDeletionBatchResponse, error) {
+	storeWithBatchAcquisition, ok := b.store.(interface {
+		AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) ([]*blockchain_sql.ScheduledDeletion, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support batch acquisition")
+	}
+
+	lockTimeout := int(req.LockTimeoutSeconds)
+	if lockTimeout == 0 {
+		lockTimeout = 300 // Default: 5 minutes
+	}
+
+	deletions, err := storeWithBatchAcquisition.AcquireBlobDeletionBatch(ctx, req.Height, int(req.Limit), lockTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(deletions) == 0 {
+		return &blockchain_api.AcquireBlobDeletionBatchResponse{
+			BatchToken: "",
+			Deletions:  nil,
+		}, nil
+	}
+
+	// Generate batch token
+	token := b.generateBatchToken()
+
+	// Store batch token info
+	deletionIDs := make([]int64, len(deletions))
+	for i, d := range deletions {
+		deletionIDs[i] = d.ID
+	}
+
+	b.batchTokensMu.Lock()
+	b.batchTokens[token] = &blobDeletionBatchToken{
+		token:         token,
+		acquiredAt:    time.Now(),
+		expiresAt:     time.Now().Add(time.Duration(lockTimeout) * time.Second),
+		deletionIDs:   deletionIDs,
+		deletionCount: len(deletions),
+	}
+	b.batchTokensMu.Unlock()
+
+	// Convert to protobuf format
+	protoDeletions := make([]*blockchain_api.ScheduledDeletion, len(deletions))
+	for i, d := range deletions {
+		protoDeletions[i] = &blockchain_api.ScheduledDeletion{
+			Id:             d.ID,
+			BlobKey:        d.BlobKey,
+			FileType:       d.FileType,
+			StoreType:      blockchain_api.BlobStoreType(d.StoreType),
+			DeleteAtHeight: d.DeleteAtHeight,
+			RetryCount:     uint32(d.RetryCount),
+		}
+	}
+
+	b.logger.Infof("Acquired blob deletion batch: token=%s, count=%d, height=%d", token, len(deletions), req.Height)
+
+	return &blockchain_api.AcquireBlobDeletionBatchResponse{
+		BatchToken: token,
+		Deletions:  protoDeletions,
+	}, nil
+}
+
+// CompleteBlobDeletionBatch completes a previously acquired batch.
+func (b *Blockchain) CompleteBlobDeletionBatch(ctx context.Context, req *blockchain_api.CompleteBlobDeletionBatchRequest) (*emptypb.Empty, error) {
+	// Validate batch token
+	b.batchTokensMu.Lock()
+	tokenInfo, exists := b.batchTokens[req.BatchToken]
+	if !exists {
+		b.batchTokensMu.Unlock()
+		return nil, errors.NewInvalidArgumentError("invalid or expired batch token")
+	}
+
+	// Check if expired
+	if time.Now().After(tokenInfo.expiresAt) {
+		delete(b.batchTokens, req.BatchToken)
+		b.batchTokensMu.Unlock()
+		return nil, errors.NewInvalidArgumentError("batch token expired")
+	}
+
+	// Remove token (it's single-use)
+	delete(b.batchTokens, req.BatchToken)
+	b.batchTokensMu.Unlock()
+
+	// Complete the batch
+	storeWithBatchCompletion, ok := b.store.(interface {
+		CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error)
+	})
+	if !ok {
+		return nil, errors.NewStorageError("blockchain store does not support batch completion")
+	}
+
+	removedCount, retryIncrementedCount, err := storeWithBatchCompletion.CompleteBlobDeletions(ctx, req.CompletedIds, req.FailedIds, int(req.MaxRetries))
+	if err != nil {
+		return nil, err
+	}
+
+	b.logger.Infof("Batch %s completed: %d removed, %d retry incremented", req.BatchToken, removedCount, retryIncrementedCount)
+
+	return &emptypb.Empty{}, nil
+}
+
+// generateBatchToken generates a unique batch token.
+func (b *Blockchain) generateBatchToken() string {
+	// Use timestamp + counter for uniqueness (no crypto needed for batch tokens)
+	return fmt.Sprintf("batch_%d_%p", time.Now().UnixNano(), b)
+}
+
+// cleanupExpiredBatchTokens removes expired batch tokens periodically.
+// This should be called as a goroutine during service startup.
+func (b *Blockchain) cleanupExpiredBatchTokens() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-b.AppCtx.Done():
+			return
+		case <-ticker.C:
+			b.batchTokensMu.Lock()
+			now := time.Now()
+			for token, info := range b.batchTokens {
+				if now.After(info.expiresAt) {
+					b.logger.Warnf("Cleaning up expired batch token: %s (acquired: %s, expired: %s)",
+						token, info.acquiredAt, info.expiresAt)
+					delete(b.batchTokens, token)
+				}
+			}
+			b.batchTokensMu.Unlock()
+		}
+	}
 }

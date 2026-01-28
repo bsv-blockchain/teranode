@@ -759,10 +759,6 @@ func (m *mockErrorStore) GetIoReader(ctx context.Context, key []byte, fileType f
 	return nil, errors.NewStorageError("mock error")
 }
 
-func (m *mockErrorStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	return 0, errors.NewStorageError("mock error")
-}
-
 func (m *mockErrorStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
 	return errors.NewStorageError("mock error")
 }

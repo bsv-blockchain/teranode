@@ -127,16 +127,23 @@ func getPostgresPoolSettings(servicePrefix string, alternativeContext ...string)
 	maxIdleConns := getInt(servicePrefix+"_postgres_maxIdleConns", 0, alternativeContext...)
 	connMaxLifetime := getDuration(servicePrefix+"_postgres_connMaxLifetime", 0, alternativeContext...)
 	connMaxIdleTime := getDuration(servicePrefix+"_postgres_connMaxIdleTime", 0, alternativeContext...)
+	retryMaxAttempts := getInt(servicePrefix+"_postgres_retryMaxAttempts", 0, alternativeContext...)
+	retryBaseDelay := getDuration(servicePrefix+"_postgres_retryBaseDelay", 0, alternativeContext...)
+	retryEnabled := getBool(servicePrefix+"_postgres_retryEnabled", false, alternativeContext...)
 
 	// Only return settings if at least one is configured (non-zero)
-	if maxOpenConns == 0 && maxIdleConns == 0 && connMaxLifetime == 0 && connMaxIdleTime == 0 {
+	if maxOpenConns == 0 && maxIdleConns == 0 && connMaxLifetime == 0 && connMaxIdleTime == 0 &&
+		retryMaxAttempts == 0 && retryBaseDelay == 0 {
 		return nil
 	}
 
 	return &PostgresSettings{
-		MaxOpenConns:    maxOpenConns,
-		MaxIdleConns:    maxIdleConns,
-		ConnMaxLifetime: connMaxLifetime,
-		ConnMaxIdleTime: connMaxIdleTime,
+		MaxOpenConns:     maxOpenConns,
+		MaxIdleConns:     maxIdleConns,
+		ConnMaxLifetime:  connMaxLifetime,
+		ConnMaxIdleTime:  connMaxIdleTime,
+		RetryMaxAttempts: retryMaxAttempts,
+		RetryBaseDelay:   retryBaseDelay,
+		RetryEnabled:     retryEnabled,
 	}
 }

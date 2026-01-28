@@ -15,6 +15,11 @@ import (
 // This function will retry checking the block assembly state until the configured
 // timeout is reached, allowing for temporary state transitions (e.g., brief reorgs).
 func (s *Server) checkBlockAssemblySafeForPruner(ctx context.Context, phase string, height uint32) bool {
+	// If no block assembly client (e.g., in tests), skip safety check
+	if s.blockAssemblyClient == nil {
+		return true
+	}
+
 	// Create a context with timeout based on settings
 	timeoutCtx, cancel := context.WithTimeout(ctx, s.settings.Pruner.BlockAssemblyWaitTimeout)
 	defer cancel()

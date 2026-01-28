@@ -137,22 +137,6 @@ func (n *Null) SetDAH(_ context.Context, _ []byte, _ fileformat.FileType, _ uint
 	return nil
 }
 
-// GetDAH simulates retrieving the Delete-At-Height (DAH) value for a blob.
-// In the null store implementation, this always returns 0 as no blobs are stored.
-//
-// Parameters:
-//   - ctx: Context for the operation (unused in this implementation)
-//   - key: The key identifying the blob (unused in this implementation)
-//   - fileType: The type of the file (unused in this implementation)
-//   - opts: Optional file options (unused in this implementation)
-//
-// Returns:
-//   - uint32: Always returns 0
-//   - error: Always returns nil
-func (n *Null) GetDAH(_ context.Context, _ []byte, _ fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	return 0, nil
-}
-
 // GetIoReader simulates retrieving a blob as a streaming reader.
 // In the null store implementation, this always returns a "not found" error
 // as no blobs are actually stored.

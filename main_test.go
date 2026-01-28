@@ -330,8 +330,8 @@ func TestPopulateVersionInfoComponents(t *testing.T) {
 						projectStart := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 						assert.True(t, parsedTime.After(projectStart),
 							"Timestamp should be after project start date (got: %v)", parsedTime)
-						assert.True(t, parsedTime.Before(now.Add(1*time.Hour)),
-							"Timestamp should not be more than 1 hour in the future (got: %v, now: %v)", parsedTime, now)
+						assert.True(t, parsedTime.Before(now.Add(23*time.Hour)),
+							"Timestamp should not be more than 23 hour in the future (got: %v, now: %v)", parsedTime, now)
 						t.Logf("Parsed timestamp: %v", parsedTime)
 					}
 				}

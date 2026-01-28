@@ -829,6 +829,35 @@ func (m *MockBlockchainClient) SetBlockPersistedAt(ctx context.Context, blockHas
 	return nil
 }
 
+// Blob deletion methods (no-op implementations for interface compliance)
+func (m *MockBlockchainClient) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType blockchain_api.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	return 0, false, nil
+}
+
+func (m *MockBlockchainClient) GetPendingBlobDeletions(ctx context.Context, height uint32, limit int) ([]*blockchain_api.ScheduledDeletion, error) {
+	return nil, nil
+}
+
+func (m *MockBlockchainClient) RemoveBlobDeletion(ctx context.Context, deletionID int64) error {
+	return nil
+}
+
+func (m *MockBlockchainClient) IncrementBlobDeletionRetry(ctx context.Context, deletionID int64, maxRetries int) (bool, int, error) {
+	return false, 0, nil
+}
+
+func (m *MockBlockchainClient) CompleteBlobDeletions(ctx context.Context, completedIDs []int64, failedIDs []int64, maxRetries int) (int, int, error) {
+	return 0, 0, nil
+}
+
+func (m *MockBlockchainClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error) {
+	return "", nil, nil
+}
+
+func (m *MockBlockchainClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
+	return nil
+}
+
 // MockStore implements basic store interfaces for testing
 type MockBlobStore struct {
 	data      map[string][]byte
@@ -880,9 +909,7 @@ func (m *MockBlobStore) SetFromReader(ctx context.Context, key []byte, fileType 
 func (m *MockBlobStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...bloboptions.FileOption) error {
 	return nil
 }
-func (m *MockBlobStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (uint32, error) {
-	return 0, nil
-}
+
 func (m *MockBlobStore) GetPartial(ctx context.Context, key []byte, fileType fileformat.FileType, offset, length int64, opts ...bloboptions.FileOption) ([]byte, error) {
 	return nil, nil
 }

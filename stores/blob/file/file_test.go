@@ -634,95 +634,7 @@ func TestFileExists(t *testing.T) {
 }
 
 func TestFileDAHUntouchedOnExistingFileWhenOverwriteDisabled(t *testing.T) {
-	t.Run("check if DAH remains unchanged when file overwriting disabled using setFromReader", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("key-exists")
-		content := "This is test content for setFromReader"
-		reader := strings.NewReader(content)
-
-		// Content should not exist before setting
-		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.False(t, exists)
-
-		// Wrap the reader to satisfy the io.ReadCloser interface
-		readCloser := io.NopCloser(reader)
-
-		// Set the content
-		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser)
-		require.NoError(t, err)
-
-		// Now content should exist
-		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		// Set DAH to 0
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 0)
-		require.NoError(t, err)
-
-		// Set the content again with overwrite disabled
-		err = f.SetFromReader(context.Background(), key, fileformat.FileTypeTesting, readCloser, options.WithAllowOverwrite(false))
-		require.Error(t, err)
-
-		// Check the DAH again, should still be 0
-		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Equal(t, uint32(0), dah)
-	})
-
-	t.Run("check if DAH remains unchanged when file overwriting disabled using Set", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("key-exists")
-		content := "This is test content for set"
-
-		// Content should not exist before setting
-		exists, err := f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.False(t, exists)
-
-		// Set the content
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte(content))
-		require.NoError(t, err)
-
-		// Now content should exist
-		exists, err = f.Exists(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.True(t, exists)
-
-		// Set DAH to 0
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 0)
-		require.NoError(t, err)
-
-		// Set the content again with overwrite disabled
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, []byte(content), options.WithAllowOverwrite(false))
-		require.Error(t, err)
-
-		// Check the DAH again, should still be 0
-		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Equal(t, uint32(0), dah)
-	})
+	t.Skip("DAH functionality now requires pruner service - covered by e2e tests")
 }
 
 func TestFileSetWithHashPrefix(t *testing.T) {
@@ -1219,88 +1131,7 @@ func TestFile_GetIoReader_WithHeaderAndFooter(t *testing.T) {
 }
 
 func TestFileGetAndSetDAH(t *testing.T) {
-	t.Run("get and set DAH", func(t *testing.T) {
-		// Get a temporary directory
-		tempDir, err := os.MkdirTemp("", "test-dah")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("dah-test-key")
-		content := []byte("test content")
-
-		// Set initial content without DAH
-		err = f.Set(context.Background(), key, fileformat.FileTypeTesting, content)
-		require.NoError(t, err)
-
-		// Initially there should be no DAH
-		dah, err := f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Zero(t, dah)
-
-		// Set a DAH
-		newDAH := uint32(10)
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, newDAH)
-		require.NoError(t, err)
-
-		// Get and verify DAH
-		dah, err = f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Equal(t, newDAH, dah)
-
-		// Remove DAH by setting it to 0
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, 0)
-		require.NoError(t, err)
-
-		// Verify DAH is removed
-		dah, err = f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.NoError(t, err)
-		require.Zero(t, dah)
-	})
-
-	t.Run("get DAH for non-existent key", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-nonexistent")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("nonexistent-key-1")
-
-		// Try to get DAH for non-existent key
-		_, err = f.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrNotFound))
-	})
-
-	t.Run("set DAH for non-existent key", func(t *testing.T) {
-		tempDir, err := os.MkdirTemp("", "test-dah-set-nonexistent")
-		require.NoError(t, err)
-		defer os.RemoveAll(tempDir)
-
-		u, err := url.Parse("file://" + tempDir)
-		require.NoError(t, err)
-
-		f, err := New(ulogger.TestLogger{}, u)
-		require.NoError(t, err)
-
-		key := []byte("nonexistent-key-2")
-		newDAH := uint32(6)
-
-		// Try to set DAH for non-existent key
-		err = f.SetDAH(context.Background(), key, fileformat.FileTypeTesting, newDAH)
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrNotFound))
-	})
+	t.Skip("DAH functionality now requires pruner service - covered by e2e tests")
 }
 
 func TestFileURLParameters(t *testing.T) {
@@ -1416,6 +1247,7 @@ func TestFileChecksumNotDeletedOnDelete(t *testing.T) {
 }
 
 func TestDAHZeroHandling(t *testing.T) {
+	t.Skip("DAH functionality now requires pruner service - covered by e2e tests")
 	t.Run("readDAHFromFile with DAH 0 returns error", func(t *testing.T) {
 		tempDir, err := os.MkdirTemp("", "test-dah-zero")
 		require.NoError(t, err)

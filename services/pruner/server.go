@@ -14,6 +14,7 @@ package pruner
 
 import (
 	"context"
+	"database/sql"
 	"encoding/binary"
 	"net/http"
 	"strconv"
@@ -25,8 +26,10 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/pruner/pruner_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -35,6 +38,12 @@ import (
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 )
+
+// BlobDeletionObserver is an optional callback interface for testing.
+// It allows tests to be notified when blob deletion processing completes.
+type BlobDeletionObserver interface {
+	OnBlobDeletionComplete(height uint32, successCount, failCount int64)
+}
 
 // Server implements the Pruner service which handles periodic pruner operations
 // for the UTXO store. It uses event-driven triggers: BlockPersisted notifications (primary)
@@ -56,6 +65,12 @@ type Server struct {
 	lastPersistedHeight atomic.Uint32
 	prunerCh            chan uint32
 	stats               *gocore.Stat
+
+	// Blob deletion
+	db                   *sql.DB
+	blobStores           map[blockchain_api.BlobStoreType]blob.Store
+	blobDeletionCh       chan uint32
+	blobDeletionObserver BlobDeletionObserver
 }
 
 // New creates a new Pruner server instance with the provided dependencies.
@@ -68,6 +83,8 @@ func New(
 	utxoStore utxo.Store,
 	blockchainClient blockchain.ClientI,
 	blockAssemblyClient blockassembly.ClientI,
+	blobStores map[blockchain_api.BlobStoreType]blob.Store,
+	db *sql.DB,
 ) *Server {
 	return &Server{
 		ctx:                 ctx,
@@ -76,6 +93,9 @@ func New(
 		utxoStore:           utxoStore,
 		blockchainClient:    blockchainClient,
 		blockAssemblyClient: blockAssemblyClient,
+		db:                  db,
+		blobStores:          blobStores,
+		blobDeletionCh:      make(chan uint32, 1),
 		stats:               gocore.NewStat("pruner"),
 	}
 }
@@ -113,6 +133,8 @@ func (s *Server) Init(ctx context.Context) error {
 		return errors.NewConfigurationError("pruner_block_trigger must be either '%s' or '%s' (got '%s')",
 			settings.PrunerBlockTriggerOnBlockPersisted, settings.PrunerBlockTriggerOnBlockMined, blockTrigger)
 	}
+
+	// Blob deletion is now managed by blockchain service - no local DB needed
 
 	// Subscribe to blockchain notifications for event-driven pruning:
 	// - BlockPersisted: Triggers pruning when block persister completes (primary)
@@ -156,6 +178,12 @@ func (s *Server) Init(ctx context.Context) error {
 									s.logger.Infof("Queued pruning for height %d from BlockPersisted notification", height32)
 								default:
 									s.logger.Warnf("Pruner channel full, skipping height %d (pruner already running)", height32)
+								}
+
+								// Trigger blob deletion
+								select {
+								case s.blobDeletionCh <- height32:
+								default:
 								}
 							}
 						}
@@ -205,6 +233,12 @@ func (s *Server) Init(ctx context.Context) error {
 					default:
 						s.logger.Warnf("Pruner channel full, skipping height %d (pruner already running)", state.CurrentHeight)
 					}
+
+					// Trigger blob deletion
+					select {
+					case s.blobDeletionCh <- state.CurrentHeight:
+					default:
+					}
 				}
 			}
 		}
@@ -243,6 +277,12 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start pruner processor goroutine
 	go s.prunerProcessor(ctx)
+
+	// Start blob deletion worker
+	go s.blobDeletionWorker()
+
+	// Start blob deletion metrics updater
+	go s.updateBlobDeletionMetrics()
 
 	// Note: Polling worker not needed - pruning is triggered by:
 	// 1. BlockPersisted notifications (when block persister is running)
@@ -355,4 +395,10 @@ func (s *Server) HealthGRPC(ctx context.Context, _ *pruner_api.EmptyMessage) (*p
 // avoid deleting data that the block persister still needs.
 func (s *Server) GetLastPersistedHeight() uint32 {
 	return s.lastPersistedHeight.Load()
+}
+
+// SetBlobDeletionObserver sets an optional observer for blob deletion completion events.
+// This is primarily used for testing to synchronize test execution with deletion processing.
+func (s *Server) SetBlobDeletionObserver(observer BlobDeletionObserver) {
+	s.blobDeletionObserver = observer
 }
