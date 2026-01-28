@@ -8643,7 +8643,6 @@ sudo<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span
 <span class="c1"># Restart services</span>
 docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
-<p>For detailed procedures, troubleshooting, or selective cleanup, consult the <a href="../minersHowToResetTeranode/">reset guide</a>.</p>
 <h2 id="teranode-seeding">Teranode Seeding</h2>
 <p>If you have access to an SV Node, you can speed up the Initial Block Download (IBD) by seeding the Teranode with an export from SV Node. Only run this on a gracefully shut down SV Node instance (e.g., after using the RPC <code>stop</code> method).</p>
 <h3 id="step-1-export-from-sv-node">Step 1: Export from SV Node</h3>
@@ -8670,36 +8669,10 @@ docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> 
 <span class="w">  </span>/app/teranode-cli<span class="w"> </span>seeder<span class="w"> </span>-inputDir<span class="w"> </span>/mnt/teranode/seed<span class="w"> </span>-hash<span class="w"> </span>0000000000013b8ab2cd513b0261a14096412195a72a0c4827d229dcc7e0f7af
 </code></pre></div>
 <h3 id="step-3-complete-seeding-process">Step 3: Complete Seeding Process</h3>
-<p>For Docker Compose setup, use the following instructions:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Stop all services</span>
-docker<span class="w"> </span>compose<span class="w"> </span>down
-
-<span class="c1"># Clear out the postgres, aerospike and external data</span>
-sudo<span class="w"> </span>rm<span class="w"> </span>-rf<span class="w"> </span>~/teranode-public/docker/testnet/data/*
-
-<span class="c1"># Bring up the dependent services</span>
-<span class="c1"># Blockchain service will insert the correct genesis block for your selected network</span>
-docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>aerospike<span class="w"> </span>postgres<span class="w"> </span>kafka-shared
-
-<span class="c1"># Wait to make sure genesis block gets inserted</span>
-<span class="c1"># You will see it in the blockchain logs as `genesis block inserted`</span>
-docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"> </span>-f<span class="w"> </span>-n<span class="w"> </span><span class="m">100</span><span class="w"> </span>blockchain
-
-<span class="c1"># Run the seeder (see command above)</span>
-docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>...
-
-<span class="c1"># Bring down blockchain to reset the internal caches</span>
-docker<span class="w"> </span>compose<span class="w"> </span>down<span class="w"> </span>blockchain
-
-<span class="c1"># Bring all other services back online</span>
-docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d
-
-<span class="c1"># Transition Teranode to LEGACYSYNCING</span>
-<span class="c1"># Option 1: Via teranode-cli</span>
-docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>LEGACYSYNCING
-
-<span class="c1"># Option 2: Via Admin Dashboard at http://localhost:8090/admin</span>
-</code></pre></div>
+<p>For complete seeding instructions including Docker Compose setup, database preparation, and FSM state transitions, refer to the dedicated sync guide:</p>
+<ul>
+<li><strong><a href="../minersHowToSyncTheNode/">Syncing the Blockchain Guide</a></strong> - Comprehensive instructions for all synchronization methods</li>
+</ul>
 <h2 id="cpu-mining">CPU Mining</h2>
 <p>For CPU mining setup with Teranode, please refer to the dedicated guide:</p>
 <ul>

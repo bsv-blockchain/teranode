@@ -5482,10 +5482,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#rate-limiting" class="md-nav__link">
+  <a href="#connection-limiting" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rate Limiting
+        Connection Limiting
       
     </span>
   </a>
@@ -7426,10 +7426,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#rate-limiting" class="md-nav__link">
+  <a href="#connection-limiting" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rate Limiting
+        Connection Limiting
       
     </span>
   </a>
@@ -7581,7 +7581,7 @@
 </li>
 <li><a href="#unimplemented-rpc-commands">Unimplemented RPC Commands</a></li>
 <li><a href="#error-handling">Error Handling</a></li>
-<li><a href="#rate-limiting">Rate Limiting</a></li>
+<li><a href="#connection-limiting">Connection Limiting</a></li>
 <li><a href="#version-compatibility">Version Compatibility</a></li>
 <li><a href="#concurrency">Concurrency</a></li>
 <li><a href="#extensibility">Extensibility</a></li>
@@ -9102,11 +9102,10 @@
 </tr>
 </tbody>
 </table>
-<h2 id="rate-limiting">Rate Limiting</h2>
-<p>The RPC interface implements rate limiting to prevent abuse. Default limits:</p>
+<h2 id="connection-limiting">Connection Limiting</h2>
+<p>The RPC interface implements connection limiting to prevent resource exhaustion. Default limits:</p>
 <ul>
-<li>Maximum concurrent connections: 16</li>
-<li>Maximum requests per minute: 60</li>
+<li>Maximum concurrent connections: 16 (configurable via <code>rpc_maxClients</code>)</li>
 </ul>
 <h2 id="version-compatibility">Version Compatibility</h2>
 <p>These RPC commands are compatible with Bitcoin SV Teranode version 1.0.0 and later.</p>

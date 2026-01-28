@@ -6946,6 +6946,33 @@
 </ul>
 </li>
 </ul>
+<p><strong>Cross-Compilation Configuration:</strong></p>
+<ul>
+<li>
+<p><code>CGO_ENABLED</code>: Enable or disable CGO (default: <code>1</code>). Set to <code>0</code> for pure Go builds without C dependencies.</p>
+<ul>
+<li>Example: <code>CGO_ENABLED=0 make build-teranode</code></li>
+</ul>
+</li>
+<li>
+<p><code>GOOS</code>: Target operating system (default: current OS). Common values: <code>linux</code>, <code>darwin</code>, <code>windows</code></p>
+<ul>
+<li>Example: <code>GOOS=linux make build-teranode</code></li>
+</ul>
+</li>
+<li>
+<p><code>GOARCH</code>: Target architecture (default: current architecture). Common values: <code>amd64</code>, <code>arm64</code></p>
+<ul>
+<li>Example: <code>GOARCH=arm64 make build-teranode</code></li>
+</ul>
+</li>
+<li>
+<p><strong>Combined example</strong> (build for Linux ARM64, e.g., AWS Graviton):</p>
+<ul>
+<li><code>CGO_ENABLED=0 GOOS=linux GOARCH=arm64 make build-teranode</code></li>
+</ul>
+</li>
+</ul>
 <p><strong>Version Information (auto-detected from git):</strong></p>
 <ul>
 <li><code>GIT_VERSION</code>: Git version string (auto-detected by <code>scripts/determine-git-version.sh</code>)</li>

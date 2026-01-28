@@ -6642,6 +6642,11 @@
 <li class="task-list-item"><input type="checkbox" disabled/> Volume mount paths match application expectations</li>
 <li class="task-list-item"><input type="checkbox" disabled/> PostgreSQL includes subPath configuration</li>
 <li class="task-list-item"><input type="checkbox" disabled/> ConfigMap paths use absolute paths (e.g., <code>file:///data</code> not <code>file://./data</code>)</li>
+<li class="task-list-item"><input type="checkbox" disabled/> Binaries are cross-compiled for target architecture (ARM64 for Graviton, AMD64 for Intel instances)<ul>
+<li>Example: <code>CGO_ENABLED=0 GOOS=linux GOARCH=arm64 make build-teranode</code></li>
+<li>See <a href="../../../howto/makefile/#environment-variables">Makefile Documentation</a> for cross-compilation options</li>
+</ul>
+</li>
 </ul>
 <p>For detailed Kubernetes deployment instructions, see the <a href="../../../howto/miners/kubernetes/minersHowToInstallation/">Kubernetes Installation Guide</a>.</p>
 

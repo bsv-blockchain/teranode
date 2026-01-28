@@ -7391,8 +7391,8 @@ utxostore_unminedTxRetention = 7200  # 50 days
 <p><strong>Typical Value</strong>: ~14400 blocks (≈100 days, assuming 144 blocks/day)</p>
 <p><strong>Description</strong>: Number of blocks to preserve parent transactions of old unmined transactions</p>
 <p><strong>Calculation:</strong></p>
-<div class="highlight"><pre><span></span><code>blocksInADayOnAverage = 1440  # Typical Bitcoin block time
-utxostore_parentPreservationBlocks = 14400  # 10 days
+<div class="highlight"><pre><span></span><code>blocksInADayOnAverage = 144  # Typical Bitcoin block time
+utxostore_parentPreservationBlocks = 1440  # 10 days
 </code></pre></div>
 <p><strong>Purpose:</strong></p>
 <p>When Phase 1 preservation runs, parent transactions get their <code>PreserveUntil</code> flag set to:</p>
