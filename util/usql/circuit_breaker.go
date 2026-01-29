@@ -31,9 +31,10 @@
 package usql
 
 import (
-	"errors"
 	"sync"
 	"time"
+
+	"github.com/bsv-blockchain/teranode/errors"
 )
 
 // CircuitState represents the current state of the circuit breaker.
@@ -63,7 +64,7 @@ func (s CircuitState) String() string {
 }
 
 // ErrCircuitOpen is returned when the circuit breaker is open and rejecting requests.
-var ErrCircuitOpen = errors.New("circuit breaker is open")
+var ErrCircuitOpen = errors.NewError("circuit breaker is open")
 
 // CircuitBreakerConfig holds configuration for circuit breaker behavior.
 type CircuitBreakerConfig struct {
@@ -89,7 +90,6 @@ type CircuitBreakerConfig struct {
 	// The callback receives the old state, new state, and a reason for the change.
 	OnStateChange func(from, to CircuitState, reason string)
 }
-
 
 // CircuitBreaker implements the circuit breaker pattern for database operations.
 type CircuitBreaker struct {

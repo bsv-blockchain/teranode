@@ -1,12 +1,12 @@
 package usql
 
 import (
-	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -262,7 +262,7 @@ func TestCircuitBreaker_Execute(t *testing.T) {
 	require.Equal(t, 1, callCount)
 
 	// Failing execution (retriable error)
-	connectionError := errors.New("connection refused")
+	connectionError := errors.NewError("connection refused")
 	for i := 0; i < 3; i++ {
 		err = cb.Execute(func() error {
 			return connectionError
@@ -411,7 +411,7 @@ func TestCircuitBreaker_NonRetriableErrorsIgnored(t *testing.T) {
 	})
 
 	// Non-retriable errors should not open the circuit
-	businessError := errors.New("record not found")
+	businessError := errors.NewError("record not found")
 	for i := 0; i < 10; i++ {
 		// Execute with non-retriable error
 		_ = cb.Execute(func() error {
@@ -435,7 +435,7 @@ func TestCircuitBreaker_RetriableErrorsOpen(t *testing.T) {
 	// Retriable errors should open the circuit
 	for i := 0; i < 3; i++ {
 		_ = cb.Execute(func() error {
-			return errors.New("connection refused") // Matches retriable pattern
+			return errors.NewError("connection refused") // Matches retriable pattern
 		})
 	}
 
