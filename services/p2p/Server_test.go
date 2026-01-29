@@ -1938,6 +1938,52 @@ func TestServerInitHTTPPublicAddressEmpty(t *testing.T) {
 	require.Equal(t, "http://fallback.example.com", server.AssetHTTPAddressURL)
 }
 
+func TestServerInitPropagationURLSet(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	settings := createBaseTestSettings()
+	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	settings.Asset.HTTPPublicAddress = "http://public.example.com"
+	settings.Asset.HTTPAddress = "http://fallback.example.com"
+	settings.Asset.PropagationPublicURL = "http://propagation.example.com"
+	settings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "http://public.example.com", server.AssetHTTPAddressURL)
+	require.Equal(t, "http://propagation.example.com", server.PropagationURL)
+}
+
+func TestServerInitPropagationURLEmpty(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.New("test-server")
+	mockClient := &blockchain.Mock{}
+
+	settings := createBaseTestSettings()
+	settings.P2P.PrivateKey = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdefabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+	settings.Asset.HTTPPublicAddress = "http://public.example.com"
+	settings.Asset.HTTPAddress = "http://fallback.example.com"
+	settings.Asset.PropagationPublicURL = "" // Empty - should fall back to AssetHTTPAddressURL
+	settings.BlockChain.StoreURL = &url.URL{
+		Scheme: "sqlitememory",
+	}
+
+	server, err := NewServer(ctx, logger, settings, mockClient, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	err = server.Init(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "http://public.example.com", server.AssetHTTPAddressURL)
+	require.Equal(t, "http://public.example.com", server.PropagationURL) // Falls back to AssetHTTPAddressURL
+}
+
 func TestServerSetupHTTPServer(t *testing.T) {
 
 	ctx := context.Background()

@@ -48,6 +48,13 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockGraphData")
 	defer deferFn()
 
+	// Query to get block graph data from the main chain.
+	// Uses idx_chain_work_valid to quickly find the best block, then traverses
+	// back through the chain using idx_parent_id.
+	//
+	// The query starts from both genesis (id=0) and the best block, walking back
+	// through parent links. The final WHERE clause filters to only blocks within
+	// the requested time period.
 	q := `
 		WITH RECURSIVE ChainBlocks AS (
 			SELECT
@@ -71,7 +78,7 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 			INNER JOIN ChainBlocks cb ON b.id = cb.parent_id
 			WHERE b.parent_id != 0
 		)
-		SELECT block_time, tx_count from ChainBlocks
+		SELECT block_time, tx_count FROM ChainBlocks
 		WHERE block_time >= $1
 	`
 

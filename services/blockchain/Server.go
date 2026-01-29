@@ -2945,9 +2945,6 @@ func (b *Blockchain) ScheduleBlobDeletion(ctx context.Context, req *blockchain_a
 		return nil, errors.NewStorageError("failed to schedule deletion", err)
 	}
 
-	b.logger.Infof("Scheduled blob deletion: id=%d, key=%x, store=%s, height=%d",
-		id, req.BlobKey, req.StoreType.String(), req.DeleteAtHeight)
-
 	return &blockchain_api.ScheduleBlobDeletionResponse{
 		DeletionId: id,
 		Scheduled:  true,
@@ -2981,9 +2978,6 @@ func (b *Blockchain) CancelBlobDeletion(ctx context.Context, req *blockchain_api
 		}
 		return nil, err
 	}
-
-	b.logger.Infof("Cancelled blob deletion: key=%x, store=%s, reason=%s",
-		req.BlobKey, req.StoreType.String(), req.CancelReason)
 
 	return &blockchain_api.CancelBlobDeletionResponse{
 		Cancelled: true,
@@ -3025,7 +3019,7 @@ func (b *Blockchain) ListScheduledDeletions(ctx context.Context, req *blockchain
 			Id:             d.ID,
 			BlobKey:        d.BlobKey,
 			FileType:       d.FileType,
-			StoreType:      blockchain_api.BlobStoreType(d.StoreType),
+			StoreType:      d.StoreType,
 			DeleteAtHeight: d.DeleteAtHeight,
 			RetryCount:     uint32(d.RetryCount),
 		}
@@ -3062,7 +3056,7 @@ func (b *Blockchain) GetPendingBlobDeletions(ctx context.Context, req *blockchai
 			Id:             d.ID,
 			BlobKey:        d.BlobKey,
 			FileType:       d.FileType,
-			StoreType:      blockchain_api.BlobStoreType(d.StoreType),
+			StoreType:      d.StoreType,
 			DeleteAtHeight: d.DeleteAtHeight,
 			RetryCount:     uint32(d.RetryCount),
 		}
@@ -3184,7 +3178,7 @@ func (b *Blockchain) AcquireBlobDeletionBatch(ctx context.Context, req *blockcha
 			Id:             d.ID,
 			BlobKey:        d.BlobKey,
 			FileType:       d.FileType,
-			StoreType:      blockchain_api.BlobStoreType(d.StoreType),
+			StoreType:      d.StoreType,
 			DeleteAtHeight: d.DeleteAtHeight,
 			RetryCount:     uint32(d.RetryCount),
 		}

@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -2143,11 +2144,11 @@ func (c *Client) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model
 }
 
 // ScheduleBlobDeletion schedules a blob for deletion at a specific block height.
-func (c *Client) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType blockchain_api.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+func (c *Client) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
 	resp, err := c.client.ScheduleBlobDeletion(ctx, &blockchain_api.ScheduleBlobDeletionRequest{
 		BlobKey:        blobKey,
 		FileType:       fileType,
-		StoreType:      storeType,
+		StoreType:      int32(storeType),
 		DeleteAtHeight: deleteAtHeight,
 	})
 	if err != nil {
@@ -2155,6 +2156,37 @@ func (c *Client) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileT
 	}
 
 	return resp.DeletionId, resp.Scheduled, nil
+}
+
+// CancelBlobDeletion cancels a previously scheduled blob deletion.
+func (c *Client) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
+	resp, err := c.client.CancelBlobDeletion(ctx, &blockchain_api.CancelBlobDeletionRequest{
+		BlobKey:   blobKey,
+		FileType:  fileType,
+		StoreType: int32(storeType),
+	})
+	if err != nil {
+		return false, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Cancelled, nil
+}
+
+// ListScheduledDeletions lists scheduled blob deletions with optional filtering.
+func (c *Client) ListScheduledDeletions(ctx context.Context, minHeight, maxHeight uint32, storeType storetypes.BlobStoreType, filterByStore bool, limit, offset int) ([]*blockchain_api.ScheduledDeletion, int, error) {
+	resp, err := c.client.ListScheduledDeletions(ctx, &blockchain_api.ListScheduledDeletionsRequest{
+		MinHeight:     minHeight,
+		MaxHeight:     maxHeight,
+		StoreType:     int32(storeType),
+		FilterByStore: filterByStore,
+		Limit:         int32(limit),
+		Offset:        int32(offset),
+	})
+	if err != nil {
+		return nil, 0, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Deletions, int(resp.TotalCount), nil
 }
 
 // GetPendingBlobDeletions retrieves blob deletions ready for processing at a specific height.

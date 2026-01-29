@@ -14,7 +14,6 @@ package pruner
 
 import (
 	"context"
-	"database/sql"
 	"encoding/binary"
 	"net/http"
 	"strconv"
@@ -26,10 +25,10 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/pruner/pruner_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -67,8 +66,7 @@ type Server struct {
 	stats               *gocore.Stat
 
 	// Blob deletion
-	db                   *sql.DB
-	blobStores           map[blockchain_api.BlobStoreType]blob.Store
+	blobStores           map[storetypes.BlobStoreType]blob.Store
 	blobDeletionCh       chan uint32
 	blobDeletionObserver BlobDeletionObserver
 }
@@ -83,8 +81,6 @@ func New(
 	utxoStore utxo.Store,
 	blockchainClient blockchain.ClientI,
 	blockAssemblyClient blockassembly.ClientI,
-	blobStores map[blockchain_api.BlobStoreType]blob.Store,
-	db *sql.DB,
 ) *Server {
 	return &Server{
 		ctx:                 ctx,
@@ -93,8 +89,7 @@ func New(
 		utxoStore:           utxoStore,
 		blockchainClient:    blockchainClient,
 		blockAssemblyClient: blockAssemblyClient,
-		db:                  db,
-		blobStores:          blobStores,
+		blobStores:          make(map[storetypes.BlobStoreType]blob.Store),
 		blobDeletionCh:      make(chan uint32, 1),
 		stats:               gocore.NewStat("pruner"),
 	}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -264,8 +265,7 @@ func TestGet(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.Nil(t, data)
-		// Null store returns a storage error, not ErrNotFound
-		assert.Contains(t, err.Error(), "no such file or directory")
+		assert.True(t, errors.Is(err, errors.ErrNotFound))
 	})
 
 	t.Run("get returns not found even after set", func(t *testing.T) {
@@ -300,7 +300,7 @@ func TestGet(t *testing.T) {
 	t.Run("get error message contains filename", func(t *testing.T) {
 		_, err := store.Get(context.Background(), []byte("test-key"), fileformat.FileTypeTesting)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no such file or directory")
+		assert.True(t, errors.Is(err, errors.ErrNotFound))
 	})
 }
 
@@ -315,8 +315,7 @@ func TestGetIoReader(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.Nil(t, reader)
-		// Null store returns a storage error, not ErrNotFound
-		assert.Contains(t, err.Error(), "no such file or directory")
+		assert.True(t, errors.Is(err, errors.ErrNotFound))
 	})
 
 	t.Run("get io reader returns not found even after set", func(t *testing.T) {
@@ -339,7 +338,7 @@ func TestGetIoReader(t *testing.T) {
 	t.Run("get io reader error message contains filename", func(t *testing.T) {
 		_, err := store.GetIoReader(context.Background(), []byte("test-key"), fileformat.FileTypeTesting)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no such file or directory")
+		assert.True(t, errors.Is(err, errors.ErrNotFound))
 	})
 
 	t.Run("get io reader with invalid options returns error", func(t *testing.T) {

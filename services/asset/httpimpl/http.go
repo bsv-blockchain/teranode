@@ -246,6 +246,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/search", h.Search)
 	apiGroup.GET("/blockstats", h.GetBlockStats)
 	apiGroup.GET("/blockgraphdata/:period", h.GetBlockGraphData)
+	apiGroup.GET("/chainparams", h.GetChainParams)
 
 	apiGroup.GET("/lastblocks", h.GetLastNBlocks)
 

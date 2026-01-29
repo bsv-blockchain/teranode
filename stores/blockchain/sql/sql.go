@@ -259,44 +259,96 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 	}
 
 	if withIndexes {
+		// Drop legacy indexes that have been superseded or consolidated
 		if _, err := db.Exec(`DROP INDEX IF EXISTS pux_blocks_height;`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not drop pux_blocks_height index", err)
 		}
-
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
+		// idx_chain_work_id is superseded by idx_chain_work_peer_id (same prefix)
+		if _, err := db.Exec(`DROP INDEX IF EXISTS idx_chain_work_id;`); err != nil {
 			_ = db.Close()
-			return errors.NewStorageError("could not create idx_chain_work_id index", err)
+			return errors.NewStorageError("could not drop idx_chain_work_id index", err)
+		}
+		// idx_mined_set is superseded by idx_subtrees_mined_height
+		if _, err := db.Exec(`DROP INDEX IF EXISTS idx_mined_set;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not drop idx_mined_set index", err)
+		}
+		// idx_subtrees_set is superseded by idx_subtrees_set_height
+		if _, err := db.Exec(`DROP INDEX IF EXISTS idx_subtrees_set;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not drop idx_subtrees_set index", err)
+		}
+		// idx_persisted_at is superseded by idx_not_persisted_height
+		if _, err := db.Exec(`DROP INDEX IF EXISTS idx_persisted_at;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not drop idx_persisted_at index", err)
 		}
 
+		// === CHAIN WORK INDEXES ===
+		// Primary index for best block queries without invalid filter
+		// Used by: GetBlockStats, recursive CTEs that don't filter by invalid
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
 		}
 
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_mined_set ON blocks (mined_set) WHERE mined_set = false;`); err != nil {
+		// Partial index for valid blocks - most common query pattern (GetBestBlockHeader, etc.)
+		// This is the primary index for finding the best valid block
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_valid ON blocks (chain_work DESC, peer_id ASC, id ASC) WHERE invalid = false;`); err != nil {
 			_ = db.Close()
-			return errors.NewStorageError("could not create idx_mined_set index", err)
+			return errors.NewStorageError("could not create idx_chain_work_valid index", err)
 		}
 
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_set ON blocks (subtrees_set) WHERE subtrees_set = false;`); err != nil {
+		// === BLOCK STATUS INDEXES ===
+		// Composite partial index for GetBlocksMinedNotSet query:
+		// WHERE subtrees_set = true AND mined_set = false ORDER BY height ASC
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_mined_height ON blocks (height ASC) WHERE subtrees_set = true AND mined_set = false;`); err != nil {
 			_ = db.Close()
-			return errors.NewStorageError("could not create idx_subtrees_set index", err)
+			return errors.NewStorageError("could not create idx_subtrees_mined_height index", err)
 		}
 
+		// Composite partial index for GetBlocksSubtreesNotSet query:
+		// WHERE subtrees_set = false ORDER BY height ASC
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_set_height ON blocks (height ASC) WHERE subtrees_set = false;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_subtrees_set_height index", err)
+		}
+
+		// Partial index for GetBlocksNotPersisted query:
+		// WHERE persisted_at IS NULL AND invalid = false ORDER BY height ASC
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_not_persisted_height ON blocks (height ASC) WHERE persisted_at IS NULL AND invalid = false;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_not_persisted_height index", err)
+		}
+
+		// === NAVIGATION INDEXES ===
+		// Index for height-based lookups and range queries
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_height ON blocks (height);`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_height index", err)
 		}
 
+		// Index for parent lookups (GetChainTips LEFT JOIN, recursive CTEs)
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not create idx_parent_id index", err)
 		}
 
-		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_persisted_at ON blocks (persisted_at) WHERE persisted_at IS NULL;`); err != nil {
+		// === TIME-BASED INDEXES ===
+		// Index for GetBlocksByTime query: WHERE inserted_at >= x AND inserted_at <= y
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_inserted_at ON blocks (inserted_at);`); err != nil {
 			_ = db.Close()
-			return errors.NewStorageError("could not create idx_persisted_at index", err)
+			return errors.NewStorageError("could not create idx_inserted_at index", err)
+		}
+
+		// === INVALID BLOCKS INDEX ===
+		// Partial index for GetLastNInvalidBlocks query:
+		// WHERE invalid = true ORDER BY height DESC
+		// Invalid blocks are rare, so a partial index is very efficient
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_invalid_height ON blocks (height DESC) WHERE invalid = true;`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not create idx_invalid_height index", err)
 		}
 	}
 
@@ -433,34 +485,96 @@ func createSqliteSchema(db *usql.DB) error {
 		return errors.NewStorageError("could not create ux_blocks_hash index", err)
 	}
 
+	// Drop legacy indexes that have been superseded or consolidated
 	if _, err := db.Exec(`DROP INDEX IF EXISTS pux_blocks_height;`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not drop pux_blocks_height index", err)
 	}
-
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_id ON blocks (chain_work DESC, id ASC);`); err != nil {
+	// idx_chain_work_id is superseded by idx_chain_work_peer_id (same prefix)
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_chain_work_id;`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create idx_chain_work_id index", err)
+		return errors.NewStorageError("could not drop idx_chain_work_id index", err)
+	}
+	// idx_mined_set is superseded by idx_subtrees_mined_height
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_mined_set;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not drop idx_mined_set index", err)
+	}
+	// idx_subtrees_set is superseded by idx_subtrees_set_height
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_subtrees_set;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not drop idx_subtrees_set index", err)
+	}
+	// idx_persisted_at is superseded by idx_not_persisted_height
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_persisted_at;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not drop idx_persisted_at index", err)
 	}
 
+	// === CHAIN WORK INDEXES ===
+	// Primary index for best block queries without invalid filter
+	// Used by: GetBlockStats, recursive CTEs that don't filter by invalid
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_peer_id ON blocks (chain_work DESC, peer_id ASC, id ASC);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_chain_work_peer_id index", err)
 	}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_mined_set ON blocks (mined_set) WHERE mined_set = false;`); err != nil {
+	// Partial index for valid blocks - most common query pattern (GetBestBlockHeader, etc.)
+	// This is the primary index for finding the best valid block
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_chain_work_valid ON blocks (chain_work DESC, peer_id ASC, id ASC) WHERE invalid = false;`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create idx_mined_set index", err)
+		return errors.NewStorageError("could not create idx_chain_work_valid index", err)
 	}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_set ON blocks (subtrees_set) WHERE subtrees_set = false;`); err != nil {
+	// === BLOCK STATUS INDEXES ===
+	// Composite partial index for GetBlocksMinedNotSet query:
+	// WHERE subtrees_set = true AND mined_set = false ORDER BY height ASC
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_mined_height ON blocks (height ASC) WHERE subtrees_set = true AND mined_set = false;`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create idx_subtrees_set index", err)
+		return errors.NewStorageError("could not create idx_subtrees_mined_height index", err)
 	}
 
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_persisted_at ON blocks (persisted_at) WHERE persisted_at IS NULL;`); err != nil {
+	// Composite partial index for GetBlocksSubtreesNotSet query:
+	// WHERE subtrees_set = false ORDER BY height ASC
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_subtrees_set_height ON blocks (height ASC) WHERE subtrees_set = false;`); err != nil {
 		_ = db.Close()
-		return errors.NewStorageError("could not create idx_persisted_at index", err)
+		return errors.NewStorageError("could not create idx_subtrees_set_height index", err)
+	}
+
+	// Partial index for GetBlocksNotPersisted query:
+	// WHERE persisted_at IS NULL AND invalid = false ORDER BY height ASC
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_not_persisted_height ON blocks (height ASC) WHERE persisted_at IS NULL AND invalid = false;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_not_persisted_height index", err)
+	}
+
+	// === NAVIGATION INDEXES ===
+	// Index for height-based lookups and range queries
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_height ON blocks (height);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_height index", err)
+	}
+
+	// Index for parent lookups (GetChainTips LEFT JOIN, recursive CTEs)
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_parent_id ON blocks (parent_id);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_parent_id index", err)
+	}
+
+	// === TIME-BASED INDEXES ===
+	// Index for GetBlocksByTime query: WHERE inserted_at >= x AND inserted_at <= y
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_inserted_at ON blocks (inserted_at);`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_inserted_at index", err)
+	}
+
+	// === INVALID BLOCKS INDEX ===
+	// Partial index for GetLastNInvalidBlocks query:
+	// WHERE invalid = true ORDER BY height DESC
+	// Invalid blocks are rare, so a partial index is very efficient
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_invalid_height ON blocks (height DESC) WHERE invalid = true;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create idx_invalid_height index", err)
 	}
 
 	if _, err := db.Exec(`

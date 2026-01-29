@@ -44,6 +44,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -79,6 +80,7 @@ type TestDaemon struct {
 	PropagationClient     *propagation.Client
 	Settings              *settings.Settings
 	SubtreeStore          blob.Store
+	BlockchainStore       blockchainstore.Store
 	UtxoStore             utxo.Store
 	P2PClient             p2p.ClientI
 	composeDependencies   tc.ComposeStack
@@ -532,6 +534,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	subtreeStore, err := d.daemonStores.GetSubtreeStore(ctx, logger, appSettings)
 	require.NoError(t, err)
 
+	blockchainStore, err := d.daemonStores.GetBlockchainStore(ctx, logger, appSettings)
+	require.NoError(t, err)
+
 	var utxoStore utxo.Store
 
 	utxoStore, err = d.daemonStores.GetUtxoStore(ctx, logger, appSettings)
@@ -603,6 +608,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		PropagationClient:     propagationClient,
 		Settings:              appSettings,
 		SubtreeStore:          subtreeStore,
+		BlockchainStore:       blockchainStore,
 		UtxoStore:             utxoStore,
 		P2PClient:             p2pClient,
 		composeDependencies:   composeDependencies,
@@ -1703,6 +1709,12 @@ func (td *TestDaemon) GetContainerManager() *containers.ContainerManager {
 // This is useful for tests that need to verify block persistence.
 func (td *TestDaemon) GetBlockStore() (blob.Store, error) {
 	return td.d.daemonStores.GetBlockStore(td.Ctx, td.Logger, td.Settings)
+}
+
+// GetTxStore returns the transaction store used by this test daemon.
+// This is useful for tests that need to verify transaction storage and deletion scheduling.
+func (td *TestDaemon) GetTxStore() (blob.Store, error) {
+	return td.d.daemonStores.GetTxStore(td.Ctx, td.Logger, td.Settings)
 }
 
 // WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.

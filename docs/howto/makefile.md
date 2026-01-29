@@ -271,6 +271,20 @@ The Makefile supports several environment variables to customize builds and test
 - `LOCAL_TEST_START_FROM_STATE`: Configures the starting state for local tests
     - Example: `make build LOCAL_TEST_START_FROM_STATE=genesis`
 
+**Cross-Compilation Configuration:**
+
+- `CGO_ENABLED`: Enable or disable CGO (default: `1`). Set to `0` for pure Go builds without C dependencies.
+    - Example: `CGO_ENABLED=0 make build-teranode`
+
+- `GOOS`: Target operating system (default: current OS). Common values: `linux`, `darwin`, `windows`
+    - Example: `GOOS=linux make build-teranode`
+
+- `GOARCH`: Target architecture (default: current architecture). Common values: `amd64`, `arm64`
+    - Example: `GOARCH=arm64 make build-teranode`
+
+- **Combined example** (build for Linux ARM64, e.g., AWS Graviton):
+    - `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 make build-teranode`
+
 **Version Information (auto-detected from git):**
 
 - `GIT_VERSION`: Git version string (auto-detected by `scripts/determine-git-version.sh`)

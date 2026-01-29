@@ -697,19 +697,13 @@ message GetBlocksNotPersistedResponse {
 }
 
 // Blob deletion scheduling messages
-
-enum BlobStoreType {
-  TXSTORE = 0;
-  SUBTREESTORE = 1;
-  BLOCKSTORE = 2;
-  TEMPSTORE = 3;
-  BLOCKPERSISTERSTORE = 4;
-}
+// Note: store_type values map to storetypes.BlobStoreType:
+// 0=TXSTORE, 1=SUBTREESTORE, 2=BLOCKSTORE, 3=TEMPSTORE, 4=BLOCKPERSISTERSTORE
 
 message ScheduleBlobDeletionRequest {
   bytes blob_key = 1;
   string file_type = 2;
-  BlobStoreType store_type = 3;
+  int32 store_type = 3;
   uint32 delete_at_height = 4;
 }
 
@@ -722,7 +716,7 @@ message ScheduleBlobDeletionResponse {
 message CancelBlobDeletionRequest {
   bytes blob_key = 1;
   string file_type = 2;
-  BlobStoreType store_type = 3;
+  int32 store_type = 3;
   string cancel_reason = 4;
 }
 
@@ -734,7 +728,7 @@ message CancelBlobDeletionResponse {
 message ListScheduledDeletionsRequest {
   uint32 min_height = 1;
   uint32 max_height = 2;
-  BlobStoreType store_type = 3;
+  int32 store_type = 3;
   int32 limit = 4;
   int32 offset = 5;
   bool filter_by_store = 6;
@@ -744,7 +738,7 @@ message ScheduledDeletion {
   int64 id = 1;
   bytes blob_key = 2;
   string file_type = 3;
-  BlobStoreType store_type = 4;
+  int32 store_type = 4;
   uint32 delete_at_height = 5;
   uint32 retry_count = 6;
 }

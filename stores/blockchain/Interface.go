@@ -311,6 +311,7 @@ type Store interface {
 	ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
 
 	// GetBlocksMinedNotSet retrieves blocks that haven't been marked as mined.
+	// Only returns blocks with subtrees_set=true to ensure blocks are processable.
 	// Parameters:
 	//   - ctx: Context for the operation
 	// Returns: Slice of unmined blocks and any error encountered

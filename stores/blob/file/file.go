@@ -41,6 +41,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/debugflags"
 	"github.com/ordishs/go-utils"
@@ -80,10 +81,10 @@ type File struct {
 	persistSubDir string
 	// longtermClient is an optional secondary storage backend for hybrid storage models
 	longtermClient longtermStore
-	// prunerClient is used to schedule blob deletions with the pruner service
-	prunerClient options.PrunerClient
-	// storeType is the blob store type enum value for this store
-	storeType int32
+	// blobDeletionScheduler is used to schedule blob deletions via blockchain service
+	blobDeletionScheduler options.BlobDeletionScheduler
+	// storeType identifies which blob store this is
+	storeType storetypes.BlobStoreType
 }
 
 func (s *File) debugEnabled() bool {
@@ -125,18 +126,16 @@ type longtermStore interface {
 // the write permit is held for the entire streaming write operation.
 type semaphoreReadCloser struct {
 	io.ReadCloser
+	once sync.Once
 }
 
 func (r *semaphoreReadCloser) Close() error {
-	err := r.ReadCloser.Close()
-	// Only release the semaphore permit if the underlying close was successful.
-	// This provides natural idempotency: subsequent calls will fail at the OS level
-	// (file already closed) and won't release the permit again, avoiding the
-	// possible overhead of using a sync.Once to ensure the permit is released exactly once.
-	if err == nil {
-		releaseReadPermit()
-	}
-	return err
+	defer r.once.Do(releaseReadPermit)
+	// Always release the semaphore permit exactly once, even if close fails.
+	// The permit represents the right to have an open file, and once we attempt
+	// to close (regardless of success), we're done with that file operation.
+	// Using sync.Once ensures idempotent Close() calls don't double-release.
+	return r.ReadCloser.Close()
 }
 
 // Semaphore configuration constants
@@ -429,17 +428,12 @@ func newStore(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOpt
 	}
 
 	fileStore := &File{
-		path:          path,
-		logger:        logger,
-		options:       storeOpts,
-		persistSubDir: storeOpts.PersistSubDir,
-		prunerClient:  storeOpts.Pruner,
-		storeType:     storeOpts.StoreType,
-	}
-
-	// If no pruner client is set, use a null client
-	if fileStore.prunerClient == nil {
-		fileStore.prunerClient = &options.NullPrunerClient{}
+		path:                  path,
+		logger:                logger,
+		options:               storeOpts,
+		persistSubDir:         storeOpts.PersistSubDir,
+		blobDeletionScheduler: storeOpts.BlobDeletionScheduler,
+		storeType:             storeOpts.StoreType,
 	}
 
 	// Check if longterm storage options are provided
@@ -856,17 +850,16 @@ func (s *File) constructFilename(key []byte, fileType fileformat.FileType, opts 
 	}
 
 	if dah > 0 {
-		// Schedule deletion with pruner service - this is now mandatory
-		// All pruning is centralized through the pruner service
-		if s.prunerClient == nil {
-			return "", errors.NewConfigurationError("cannot schedule blob deletion: pruner client not configured")
+		// Schedule deletion via blockchain service
+		if s.blobDeletionScheduler == nil {
+			return "", errors.NewConfigurationError("cannot schedule blob deletion: blob deletion scheduler not configured")
 		}
 
 		// Use background context since SetFromReader might be cancelled
 		// but we still want the deletion to be scheduled
 		bgCtx := context.Background()
-		if err := s.prunerClient.ScheduleBlobDeletion(bgCtx, key, fileType, s.storeType, dah); err != nil {
-			return "", errors.NewStorageError("failed to schedule blob deletion with pruner", err)
+		if _, _, err := s.blobDeletionScheduler.ScheduleBlobDeletion(bgCtx, key, string(fileType), s.storeType, dah); err != nil {
+			return "", errors.NewStorageError("failed to schedule blob deletion", err)
 		}
 	}
 
@@ -912,17 +905,17 @@ func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 		return errors.NewStorageError("[File] failed to get file name", err)
 	}
 
-	// Pruner client is now mandatory for DAH operations
-	if s.prunerClient == nil {
-		return errors.NewConfigurationError("cannot modify DAH: pruner client not configured")
+	// Blob deletion scheduler is required for DAH operations
+	if s.blobDeletionScheduler == nil {
+		return errors.NewConfigurationError("cannot modify DAH: blob deletion scheduler not configured")
 	}
 
 	if newDAH == 0 {
-		// Cancel scheduled deletion with pruner
+		// Cancel scheduled deletion
 		// CRITICAL: This must succeed to prevent data loss - if cancellation fails,
 		// the blob could still be deleted even though we want to persist it forever
-		if err := s.prunerClient.CancelBlobDeletion(ctx, key, fileType, s.storeType); err != nil {
-			return errors.NewStorageError("failed to cancel blob deletion with pruner (critical for DAH=0)", err)
+		if _, err := s.blobDeletionScheduler.CancelBlobDeletion(ctx, key, string(fileType), s.storeType); err != nil {
+			return errors.NewStorageError("failed to cancel blob deletion (critical for DAH=0)", err)
 		}
 
 		return nil
@@ -937,9 +930,9 @@ func (s *File) SetDAH(ctx context.Context, key []byte, fileType fileformat.FileT
 		return errors.NewStorageError("[File][%s] failed to get file info", fileName, err)
 	}
 
-	// Schedule deletion with pruner service - this is mandatory
-	if err := s.prunerClient.ScheduleBlobDeletion(ctx, key, fileType, s.storeType, newDAH); err != nil {
-		return errors.NewStorageError("failed to schedule blob deletion with pruner", err)
+	// Schedule deletion via blockchain service
+	if _, _, err := s.blobDeletionScheduler.ScheduleBlobDeletion(ctx, key, string(fileType), s.storeType, newDAH); err != nil {
+		return errors.NewStorageError("failed to schedule blob deletion", err)
 	}
 
 	return nil

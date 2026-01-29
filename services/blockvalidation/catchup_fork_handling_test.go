@@ -712,6 +712,8 @@ func TestCatchup_CompetingEqualWorkChains(t *testing.T) {
 			Return([]*model.Block{}, nil).Maybe()
 		mockBlockchainClient.On("GetBlocksSubtreesNotSet", mock.Anything).
 			Return([]*model.Block{}, nil).Maybe()
+		mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).
+			Return(true, nil).Maybe()
 
 		// Mock GetBlockExists - genesis and best block exist, others don't
 		mockBlockchainClient.On("GetBlockExists", mock.Anything, bestBlockHeader.Hash()).

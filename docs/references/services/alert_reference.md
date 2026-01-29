@@ -276,7 +276,7 @@ The health checks return appropriate HTTP status codes:
 
 ### Overview
 
-The Alert Service uses a persistent datastore to manage alert-related data, consensus state, and operational history. The datastore integrates with the `github.com/bitcoin-sv/alert-system` library to provide alert message processing, validation, and P2P network communication.
+The Alert Service uses a persistent datastore to manage alert-related data, consensus state, and operational history. The datastore integrates with the `github.com/bsv-blockchain/go-alert-system` library to provide alert message processing, validation, and P2P network communication.
 
 ### Supported Database Backends
 
@@ -395,7 +395,7 @@ StoreURL: mysql://user:password@host:port/database
 The Alert service supports automatic database schema migration:
 
 - **Enabled**: When `Datastore.AutoMigrate` is true
-- **Models**: Uses models from the `github.com/bitcoin-sv/alert-system` library
+- **Models**: Uses models from the `github.com/bsv-blockchain/go-alert-system` library
 - **Safety**: Migrations are applied during service startup
 
 #### SSL Configuration
