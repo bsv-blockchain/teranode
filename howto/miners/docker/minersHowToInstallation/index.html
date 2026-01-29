@@ -8091,13 +8091,40 @@
 <li>Root or sudo access</li>
 </ul>
 <h2 id="hardware-requirements">Hardware Requirements</h2>
-<p>The Teranode team will provide you with current hardware recommendations. These recommendations will be:</p>
-<ol>
-<li>Tailored to your specific configuration settings</li>
-<li>Designed to handle the expected production transaction volume</li>
-<li>Updated regularly to reflect the latest performance requirements</li>
-</ol>
-<p>This ensures your system is appropriately equipped to manage the projected workload efficiently.</p>
+<p>For detailed hardware specifications including CPU, RAM, and storage requirements, see the <a href="../../systemRequirements/">System Requirements</a> document.</p>
+<p><strong>Quick reference for Docker Compose mainnet:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Minimum</th>
+<th>Recommended</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CPU</td>
+<td>8 cores</td>
+<td>16 cores</td>
+</tr>
+<tr>
+<td>RAM</td>
+<td>128 GB</td>
+<td>256 GB</td>
+</tr>
+<tr>
+<td>Storage</td>
+<td>1 TB</td>
+<td>2 TB</td>
+</tr>
+<tr>
+<td>Storage Type</td>
+<td>NVMe SSD</td>
+<td>NVMe SSD</td>
+</tr>
+</tbody>
+</table>
+<p>These specifications assume a seeded, pruned node with default retention settings.</p>
 <h2 id="software-requirements">Software Requirements</h2>
 <p>Teranode relies on a number of third-party software dependencies, some of which can be sourced from different vendors.</p>
 <p>BSV provides both a Docker Compose that initialises all dependencies within a single server node, and a <code>Kubernetes operator</code> that provides a production-live multi-node setup. This document covers the Docker Compose approach.</p>

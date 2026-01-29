@@ -1068,6 +1068,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#hardware-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware Requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#prerequisites" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6435,6 +6446,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#hardware-requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hardware Requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#prerequisites" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6733,6 +6755,14 @@
 <h2 id="introduction">Introduction</h2>
 <p>This guide provides instructions for deploying Teranode in a Kubernetes environment. While this guide shows the steps to deploy on a single server cluster using Minikube, these configurations can be adapted for production use with appropriate modifications.</p>
 <p><img alt="kubernetesOperatorComponents.svg" src="../img/mermaid/kubernetesOperatorComponents.svg" /></p>
+<h2 id="hardware-requirements">Hardware Requirements</h2>
+<p>For detailed hardware specifications including per-service resource requirements, see the <a href="../../systemRequirements/">System Requirements</a> document.</p>
+<p>Kubernetes deployments require:</p>
+<ul>
+<li>Sufficient cluster resources for Teranode pods</li>
+<li>External dependencies (Aerospike, PostgreSQL, Kafka) deployed separately or as managed services</li>
+<li>ReadWriteMany (RWX) storage for shared blob storage</li>
+</ul>
 <h2 id="prerequisites">Prerequisites</h2>
 <p>Before you begin, ensure you have the following tools installed and configured:</p>
 <ul>
