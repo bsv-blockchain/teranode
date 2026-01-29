@@ -1109,6 +1109,39 @@ func (td *TestDaemon) WaitForBlobDeletion(timeout time.Duration) (height uint32,
 	return td.blobDeletionObserver.waitForBlobDeletion(timeout)
 }
 
+// WaitForBlockPersisted waits for a block to be marked as persisted in the blockchain database.
+// It polls GetBlocksNotPersisted until the specified block is no longer in the unpersisted list.
+func (td *TestDaemon) WaitForBlockPersisted(blockHash *chainhash.Hash, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	checkInterval := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		// Check if this block is still in the unpersisted list
+		unpersistedBlocks, err := td.BlockchainClient.GetBlocksNotPersisted(td.Ctx, 100)
+		if err != nil {
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// If the block is not in the unpersisted list, it has been persisted
+		found := false
+		for _, b := range unpersistedBlocks {
+			if b.Hash().String() == blockHash.String() {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return nil // Block is no longer in unpersisted list, so it's persisted
+		}
+
+		time.Sleep(checkInterval)
+	}
+
+	return context.DeadlineExceeded
+}
+
 // CreateTransaction creates a new transaction with a single input from the parent transaction.
 func (td *TestDaemon) CreateTransaction(t *testing.T, parentTx *bt.Tx, useInput ...uint64) *bt.Tx {
 	tx := bt.NewTx()

@@ -17,7 +17,7 @@ x-teranode-coinbase-base: &teranode-coinbase-base
     - kafka-shared
 
 x-aerospike-base: &aerospike-base
-  image: aerospike:ce-7.2.0.3_1
+  image: aerospike/aerospike-server:8.0
   networks:
     - teranode-network
   command: --config-file /etc/aerospike.conf

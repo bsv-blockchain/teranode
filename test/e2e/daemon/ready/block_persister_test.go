@@ -103,7 +103,7 @@ func TestBlockPersister(t *testing.T) {
 		t.Logf("Checking persistence for block %d (height %d): %s", i+1, expectedHeight, blockHash.String())
 
 		// Wait for the block to be persisted
-		err := waitForBlockPersisted(t, node, blockHash, 30*time.Second)
+		err := node.WaitForBlockPersisted(blockHash, 30*time.Second)
 		require.NoError(t, err, "Block %d was not persisted within timeout", i+1)
 
 		// Verify block file exists in block store
@@ -230,7 +230,7 @@ func TestBlockPersisterWithMultipleTransactionsPerBlock(t *testing.T) {
 	// Verify persistence
 	t.Log("Phase 3: Verifying persistence of block with multiple transactions...")
 
-	err = waitForBlockPersisted(t, node, block2.Hash(), 30*time.Second)
+	err = node.WaitForBlockPersisted(block2.Hash(), 30*time.Second)
 	require.NoError(t, err, "Block with multiple transactions was not persisted within timeout")
 
 	// Verify block file exists
@@ -284,41 +284,6 @@ func newBlockPersisterTestNode(t *testing.T) *daemon.TestDaemon {
 	return node
 }
 
-// waitForBlockPersisted waits for a block to be marked as persisted in the blockchain database.
-func waitForBlockPersisted(t *testing.T, node *daemon.TestDaemon, blockHash *chainhash.Hash, timeout time.Duration) error {
-	t.Helper()
-
-	deadline := time.Now().Add(timeout)
-	checkInterval := 500 * time.Millisecond
-
-	for time.Now().Before(deadline) {
-		// Check if this block is still in the unpersisted list
-		unpersistedBlocks, err := node.BlockchainClient.GetBlocksNotPersisted(node.Ctx, 100)
-		if err != nil {
-			t.Logf("Error checking unpersisted blocks: %v", err)
-			time.Sleep(checkInterval)
-			continue
-		}
-
-		// If the block is not in the unpersisted list, it has been persisted
-		found := false
-		for _, b := range unpersistedBlocks {
-			if b.Hash().String() == blockHash.String() {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			return nil // Block is no longer in unpersisted list, so it's persisted
-		}
-
-		time.Sleep(checkInterval)
-	}
-
-	return context.DeadlineExceeded
-}
-
 // waitForBlockPersistedWithStore waits for a block file to exist in the blob store.
 func waitForBlockPersistedWithStore(ctx context.Context, blockStore blob.Store, blockHash *chainhash.Hash, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
@@ -358,7 +323,7 @@ func verifyBlockPersistence(t *testing.T, node *daemon.TestDaemon, blockStore bl
 	blockHash := block.Hash()
 
 	// 1. Wait for block to be marked as persisted in database
-	err := waitForBlockPersisted(t, node, blockHash, timeout)
+	err := node.WaitForBlockPersisted(blockHash, timeout)
 	require.NoError(t, err, "Block was not marked as persisted in database within timeout")
 
 	// 2. Verify block file exists in store
@@ -771,7 +736,7 @@ func TestBlockPersisterUTXOAdditionsAndDeletions(t *testing.T) {
 		t.Logf("Checking UTXO files for block %d (height %d): %s", i+1, info.blockHeight, blockHash.String())
 
 		// Wait for block to be fully persisted
-		err := waitForBlockPersisted(t, node, blockHash, 30*time.Second)
+		err := node.WaitForBlockPersisted(blockHash, 30*time.Second)
 		require.NoError(t, err, "Block %d was not persisted within timeout", i+1)
 
 		// Wait for UTXO additions file to exist
