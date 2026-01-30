@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	sqliteURLStr             = "sqlite:///blockchain"
+	sqliteURLStr              = "sqlite:///blockchain"
 	msgPeerNotInitiallyBanned = "Peer should not be initially banned"
 )
 
@@ -26,7 +26,7 @@ const (
 // operate on the banList. This test verifies IP ban operations using ListBanned.
 func TestBanListGRPCE2E(t *testing.T) {
 	RunSequentialTest(t, func(t *testing.T) {
-		const testAPIKey = "test-ban-list-api-key"
+		const testAPIKey = "test-ban-list-api-key" //nolint:gosec // test API key, not a real credential
 
 		// Use file-based SQLite to avoid requiring PostgreSQL and support persistence testing
 		sqliteURL, err := url.Parse(sqliteURLStr)
@@ -160,7 +160,7 @@ func TestBanListGRPCE2E(t *testing.T) {
 // ban score exceeds the threshold (default 100).
 func TestPeerIDBanE2E(t *testing.T) {
 	RunSequentialTest(t, func(t *testing.T) {
-		const testAPIKey = "test-peerid-ban-api-key"
+		const testAPIKey = "test-peerid-ban-api-key" //nolint:gosec // test API key, not a real credential
 
 		// Use file-based SQLite to avoid requiring PostgreSQL
 		sqliteURL, err := url.Parse(sqliteURLStr)
@@ -263,7 +263,7 @@ func TestPeerIDBanE2E(t *testing.T) {
 // after the configured BanDuration.
 func TestPeerIDBanExpirationE2E(t *testing.T) {
 	RunSequentialTest(t, func(t *testing.T) {
-		const testAPIKey = "test-ban-expiration-api-key"
+		const testAPIKey = "test-ban-expiration-api-key" //nolint:gosec // test API key, not a real credential
 		const banDuration = 5 * time.Second
 
 		// Use file-based SQLite to avoid requiring PostgreSQL
@@ -337,7 +337,7 @@ func TestPeerIDBanExpirationE2E(t *testing.T) {
 // 'listbanned' to verify IP bans correctly.
 func TestBanListRPCE2E(t *testing.T) {
 	RunSequentialTest(t, func(t *testing.T) {
-		const testAPIKey = "test-ban-list-rpc-api-key"
+		const testAPIKey = "test-ban-list-rpc-api-key" //nolint:gosec // test API key, not a real credential
 
 		// Use file-based SQLite to avoid requiring PostgreSQL
 		sqliteURL, err := url.Parse(sqliteURLStr)
@@ -405,7 +405,7 @@ func TestBanListRPCE2E(t *testing.T) {
 		require.Contains(t, result, ipv6, "IPv6 should appear in banned list")
 
 		// Unban the IPv6 address
-		result, err = daemonNode.CallRPC(ctx, "setban", []interface{}{ipv6, "remove"})
+		_, err = daemonNode.CallRPC(ctx, "setban", []interface{}{ipv6, "remove"})
 		require.NoError(t, err)
 
 		// Verify IPv6 is no longer in listbanned
@@ -492,7 +492,7 @@ func TestBanListRPCIPv6SubnetBug(t *testing.T) {
 	t.Skip("KNOWN BUG: isIPOrSubnet in handlers.go:2681-2684 incorrectly parses IPv6 CIDR notation")
 
 	RunSequentialTest(t, func(t *testing.T) {
-		const testAPIKey = "test-ipv6-subnet-bug-api-key"
+		const testAPIKey = "test-ipv6-subnet-bug-api-key" //nolint:gosec // test API key, not a real credential
 
 		// Use file-based SQLite to avoid requiring PostgreSQL
 		sqliteURL, err := url.Parse(sqliteURLStr)
@@ -516,11 +516,11 @@ func TestBanListRPCIPv6SubnetBug(t *testing.T) {
 
 		// This should work but fails due to bug in isIPOrSubnet
 		ipv6Subnet := "2406:da18:1f7:353b::/64"
-		result, err := daemonNode.CallRPC(ctx, "setban", []interface{}{ipv6Subnet, "add", banTimeSeconds, false})
+		_, err = daemonNode.CallRPC(ctx, "setban", []interface{}{ipv6Subnet, "add", banTimeSeconds, false})
 		require.NoError(t, err, "Should be able to ban IPv6 subnet via RPC")
 
 		// Verify IPv6 subnet is in banned list
-		result, err = daemonNode.CallRPC(ctx, "listbanned", []interface{}{})
+		result, err := daemonNode.CallRPC(ctx, "listbanned", []interface{}{})
 		require.NoError(t, err)
 		require.Contains(t, result, ipv6Subnet, "IPv6 subnet should appear in banned list")
 	})

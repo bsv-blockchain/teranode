@@ -137,7 +137,7 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 		EnableP2P:       true,
 		EnableValidator: true,
 		// PreserveDataDir:   true,
-		EnableBlockPersister:    true,
+		EnableBlockPersister: true,
 		// EnableDebugLogging: true,
 		SettingsOverrideFunc: test.ComposeSettings(
 			test.SystemTestSettings(),
@@ -184,9 +184,9 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 		EnableP2P:       true,
 		EnableValidator: true,
 		// PreserveDataDir:   true,
-		EnableBlockPersister:    true,
+		EnableBlockPersister: true,
 		// EnableDebugLogging: true,
-		EnableLegacy: true,
+		EnableLegacy:      true,
 		SkipRemoveDataDir: true,
 		SettingsOverrideFunc: test.ComposeSettings(
 			test.SystemTestSettings(),
@@ -213,7 +213,7 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 	// Verify the response structure
 	require.Nil(t, getPeerInfoResp.Error, "Should not have an error")
 	require.NotNil(t, getPeerInfoResp.Result, "Result should not be nil")
-	
+
 	_, err = sv.Generate(1)
 	require.NoError(t, err, "Failed to generate initial block on svnode")
 
@@ -289,7 +289,8 @@ func TestBidirectionalSync(t *testing.T) {
 		block, err := td.BlockchainClient.GetBlockByHeight(ctx, uint32(i))
 		require.NoError(t, err, "Failed to get block at height %d", i)
 		require.NotNil(t, block, "Block at height %d should not be nil", i)
-		td.WaitForBlockPersisted(block.Hash(), 30*time.Second)
+		err = td.WaitForBlockPersisted(block.Hash(), 30*time.Second)
+		require.NoError(t, err, "Block %d was not persisted within timeout", i)
 	}
 
 	// // Stop teranode to restart without legacy for block generation

@@ -134,7 +134,7 @@ func findConfigPath() (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("bitcoin.conf not found in any of: %v", candidates)
+	return "", errors.NewProcessingError("bitcoin.conf not found in any of: %v", candidates)
 }
 
 // Stop stops the svnode Docker container
