@@ -18,9 +18,9 @@ import (
 	"fmt"
 	"math/big"
 
-	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	base58 "github.com/bsv-blockchain/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvec"
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 )

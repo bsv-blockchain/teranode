@@ -53,7 +53,7 @@
     - [getchaintips](#getchaintips) - Returns information about all known chain tips
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
 - [Error Handling](#error-handling)
-- [Rate Limiting](#rate-limiting)
+- [Connection Limiting](#connection-limiting)
 - [Version Compatibility](#version-compatibility)
 - [Concurrency](#concurrency)
 - [Extensibility](#extensibility)
@@ -1855,12 +1855,11 @@ Common error codes that may be returned:
 | -32603  | RPC_INTERNAL_ERROR      | Internal RPC error                              |
 | -32700  | RPC_PARSE_ERROR         | Error parsing JSON request                       |
 
-## Rate Limiting
+## Connection Limiting
 
-The RPC interface implements rate limiting to prevent abuse. Default limits:
+The RPC interface implements connection limiting to prevent resource exhaustion. Default limits:
 
-- Maximum concurrent connections: 16
-- Maximum requests per minute: 60
+- Maximum concurrent connections: 16 (configurable via `rpc_maxClients`)
 
 ## Version Compatibility
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/ordishs/go-utils"
 )
 
@@ -52,11 +53,11 @@ type Options struct {
 	// When true, the store will never create .dah files or participate in DAH-based cleanup
 	// This is useful for external stores where lifecycle management is handled by other systems
 	DisableDAH bool
-	// Pruner is used to schedule blob deletions with the pruner service (StoreOption)
-	Pruner PrunerClient
-	// StoreType is the blob store type enum value (0=TXSTORE, 1=SUBTREESTORE, etc.) (StoreOption)
-	// Used by pruner to identify which store this is in the deletion queue
-	StoreType int32
+	// BlobDeletionScheduler is used to schedule blob deletions via blockchain service (StoreOption)
+	BlobDeletionScheduler BlobDeletionScheduler
+	// StoreType identifies which blob store this is (StoreOption)
+	// Used by blockchain service to identify which store this is in the deletion queue
+	StoreType storetypes.BlobStoreType
 }
 
 // StoreOption is a function type for configuring store-level options.
@@ -142,17 +143,17 @@ func WithDisableDAH(disable bool) StoreOption {
 	}
 }
 
-// WithPrunerClient sets the pruner client for scheduling blob deletions.
-func WithPrunerClient(client PrunerClient) StoreOption {
+// WithBlobDeletionScheduler sets the blob deletion scheduler (typically a blockchain client).
+func WithBlobDeletionScheduler(scheduler BlobDeletionScheduler) StoreOption {
 	return func(s *Options) {
-		s.Pruner = client
+		s.BlobDeletionScheduler = scheduler
 	}
 }
 
 // WithStoreType sets the blob store type enum value for pruner scheduling.
 // The store type (0=TXSTORE, 1=SUBTREESTORE, etc.) allows the pruner to look up
 // the blob store URL from settings, enabling distributed deployments.
-func WithStoreType(storeType int32) StoreOption {
+func WithStoreType(storeType storetypes.BlobStoreType) StoreOption {
 	return func(s *Options) {
 		s.StoreType = storeType
 	}

@@ -444,6 +444,23 @@ func TestGetLastNInvalidBlocksWithInvalidCount(t *testing.T) {
 	assert.Contains(t, err.Error(), "Invalid count parameter")
 }
 
+// TestGetLastNInvalidBlocksWithInvalidOffset tests the GetLastNInvalidBlocks method with an invalid offset parameter
+func TestGetLastNInvalidBlocksWithInvalidOffset(t *testing.T) {
+	// Setup test
+	handler, _, c, _ := setupBlockHandlerTest(t, "")
+
+	// Create a request with an invalid offset query parameter
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/blocks/invalid?count=5&offset=invalid", nil)
+	c.SetRequest(req)
+
+	// Call the function to be tested
+	err := handler.GetLastNInvalidBlocks(c)
+
+	// Assert results
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Invalid offset parameter")
+}
+
 // TestGetLastNInvalidBlocksWithNegativeCount tests the GetLastNInvalidBlocks method with a negative count parameter
 func TestGetLastNInvalidBlocksWithNegativeCount(t *testing.T) {
 	// Setup test
@@ -545,7 +562,7 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		}
 
 		// Mock the blockchain client response
-		mockClient.On("GetLastNInvalidBlocks", mock.Anything, int64(10)).Return(mockBlocks, nil)
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, int64(11)).Return(mockBlocks, nil)
 
 		// Call the function to be tested
 		err := handler.GetLastNInvalidBlocks(c)
@@ -563,7 +580,7 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		assert.Len(t, response["blocks"], 2)
 
 		// Verify that the mock was called with the correct arguments
-		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(10))
+		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(11))
 	})
 
 	t.Run("Success case with custom count", func(t *testing.T) {
@@ -624,7 +641,7 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		}
 
 		// Mock the blockchain client response
-		mockClient.On("GetLastNInvalidBlocks", mock.Anything, int64(5)).Return(mockBlocks, nil)
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, int64(6)).Return(mockBlocks, nil)
 
 		// Call the function to be tested
 		err := handler.GetLastNInvalidBlocks(c)
@@ -642,7 +659,73 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		assert.Len(t, response["blocks"], 1)
 
 		// Verify that the mock was called with the correct arguments
-		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(5))
+		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(6))
+	})
+
+	t.Run("Success case with offset pagination", func(t *testing.T) {
+		// Setup test
+		handler, mockClient, c, rec := setupBlockHandlerTest(t, "")
+
+		// Request page 2 (offset=5, count=5)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/blocks/invalid?count=5&offset=5", nil)
+		c.SetRequest(req)
+		q := req.URL.Query()
+		q.Add("count", "5")
+		q.Add("offset", "5")
+		req.URL.RawQuery = q.Encode()
+
+		// Create test data for the mock response
+		blockHash1, _ := chainhash.NewHashFromStr(validBlockHash1)
+		blockHeader1 := make([]byte, 80)
+		version := uint32(1)
+		blockHeader1[0] = byte(version)
+		blockHeader1[1] = byte(version >> 8)
+		blockHeader1[2] = byte(version >> 16)
+		blockHeader1[3] = byte(version >> 24)
+		copy(blockHeader1[36:68], blockHash1.CloneBytes())
+		timestamp1Unix := uint32(1231006505)
+		blockHeader1[68] = byte(timestamp1Unix)
+		blockHeader1[69] = byte(timestamp1Unix >> 8)
+		blockHeader1[70] = byte(timestamp1Unix >> 16)
+		blockHeader1[71] = byte(timestamp1Unix >> 24)
+		bits := uint32(0x1d00ffff)
+		blockHeader1[72] = byte(bits)
+		blockHeader1[73] = byte(bits >> 8)
+		blockHeader1[74] = byte(bits >> 16)
+		blockHeader1[75] = byte(bits >> 24)
+		nonce1 := uint32(2083236893)
+		blockHeader1[76] = byte(nonce1)
+		blockHeader1[77] = byte(nonce1 >> 8)
+		blockHeader1[78] = byte(nonce1 >> 16)
+		blockHeader1[79] = byte(nonce1 >> 24)
+
+		timestamp1 := timestamppb.New(time.Unix(1231006505, 0))
+		mockBlocks := make([]*model.BlockInfo, 0, 11)
+		for i := 0; i < 11; i++ {
+			mockBlocks = append(mockBlocks, &model.BlockInfo{BlockHeader: blockHeader1, Height: uint32(i), SeenAt: timestamp1, TransactionCount: 1})
+		}
+
+		// Handler will fetch offset+count+1 = 11
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, int64(11)).Return(mockBlocks, nil)
+
+		// Call the function to be tested
+		err := handler.GetLastNInvalidBlocks(c)
+
+		// Assert results
+		assert.NoError(t, err)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(rec.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.True(t, response["success"].(bool))
+		assert.Equal(t, float64(5), response["count"])
+		assert.Equal(t, float64(5), response["offset"])
+		assert.Equal(t, float64(5), response["limit"])
+		assert.Equal(t, true, response["hasMore"].(bool))
+		assert.Len(t, response["blocks"], 5)
+
+		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(11))
 	})
 
 	t.Run("Invalid count parameter", func(t *testing.T) {
@@ -694,7 +777,7 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		c.SetRequest(req)
 
 		// Mock the blockchain client response with error
-		mockClient.On("GetLastNInvalidBlocks", mock.Anything, int64(10)).Return(nil, errors.ErrServiceError)
+		mockClient.On("GetLastNInvalidBlocks", mock.Anything, int64(11)).Return(nil, errors.ErrServiceError)
 
 		// Call the function to be tested
 		err := handler.GetLastNInvalidBlocks(c)
@@ -704,6 +787,6 @@ func TestGetLastNInvalidBlocks(t *testing.T) {
 		assert.Contains(t, err.Error(), "Failed to retrieve invalid blocks")
 
 		// Verify that the mock was called with the correct arguments
-		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(10))
+		mockClient.AssertCalled(t, "GetLastNInvalidBlocks", mock.Anything, int64(11))
 	})
 }

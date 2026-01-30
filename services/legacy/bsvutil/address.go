@@ -10,8 +10,8 @@ import (
 	"encoding/hex"
 	"errors"
 
-	base58 "github.com/bitcoin-sv/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bsv-blockchain/go-chaincfg"
+	base58 "github.com/bsv-blockchain/go-sdk/compat/base58" //nolint:depguard
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvec"
 	"golang.org/x/crypto/ripemd160" //nolint:gosec // this is a known safe use of ripemd160
 )

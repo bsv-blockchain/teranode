@@ -19,6 +19,8 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -49,6 +51,17 @@ func setupMockUTXOStore(txs []*bt.Tx) *utxo.MockUtxostore {
 	mockStore.On("Health", mock.Anything, mock.Anything).Return(0, "", nil)
 
 	return mockStore
+}
+
+// mockBlobDeletionScheduler is a simple mock that does nothing for tests
+type mockBlobDeletionScheduler struct{}
+
+func (m *mockBlobDeletionScheduler) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+	return 0, true, nil
+}
+
+func (m *mockBlobDeletionScheduler) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
+	return true, nil
 }
 
 // TestBlock validates the block persistence functionality by:
@@ -109,7 +122,12 @@ func TestFileStorer(t *testing.T) {
 	url, err := url.Parse("file://./data/blockstore")
 	require.NoError(t, err)
 
-	blockStore, err := blob.NewStore(logger, url)
+	// Create mock blob deletion scheduler for testing
+	mockScheduler := &mockBlobDeletionScheduler{}
+
+	blockStore, err := blob.NewStore(logger, url,
+		options.WithBlobDeletionScheduler(mockScheduler),
+		options.WithStoreType(storetypes.BLOCKSTORE))
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -222,7 +240,13 @@ func setup(t *testing.T) (*model.Block, []byte, []*bt.Tx, *utxo.MockUtxostore, *
 	err = subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, subtreeDataBytes)
 	require.NoError(t, err)
 
-	blockStore := memory.New()
+	// Create mock blob deletion scheduler for testing
+	mockScheduler := &mockBlobDeletionScheduler{}
+
+	blockStore := memory.New(
+		options.WithBlobDeletionScheduler(mockScheduler),
+		options.WithStoreType(storetypes.BLOCKSTORE),
+	)
 
 	blockchainClient := &blockchain.LocalClient{}
 

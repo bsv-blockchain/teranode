@@ -89,6 +89,7 @@ type Server struct {
 	blockchainClient                  blockchain.ClientI        // Client for blockchain interactions
 	blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
 	AssetHTTPAddressURL               string                    // HTTP address URL for assets
+	PropagationURL                    string                    // URL for peers to use for propagating txs (defaults to AssetHTTPAddressURL)
 	e                                 *echo.Echo                // Echo server instance
 	notificationCh                    chan *notificationMsg     // Channel for notifications
 	rejectedTxKafkaConsumerClient     kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
@@ -462,6 +463,13 @@ func (s *Server) Init(ctx context.Context) (err error) {
 	}
 
 	s.AssetHTTPAddressURL = AssetHTTPAddressURLString
+
+	// Set propagation URL - defaults to AssetHTTPAddressURL if not configured
+	propagationURL := s.settings.Asset.PropagationPublicURL
+	if propagationURL == "" {
+		propagationURL = s.AssetHTTPAddressURL
+	}
+	s.PropagationURL = propagationURL
 
 	return nil
 }
@@ -1196,6 +1204,12 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		baseURL = ""
 	}
 
+	// Set propagation URL - empty if in listen only mode
+	propagationURL := s.PropagationURL
+	if s.settings.P2P.ListenMode == settings.ListenModeListenOnly {
+		propagationURL = ""
+	}
+
 	// Get minimum mining transaction fee from settings
 	// Use a pointer to distinguish between nil (unknown) and 0 (no fee)
 	var minMiningTxFee *float64
@@ -1258,6 +1272,7 @@ func (s *Server) getNodeStatusMessage(ctx context.Context) *notificationMsg {
 		Timestamp:           time.Now().UTC().Format(isoFormat),
 		Type:                "node_status",
 		BaseURL:             baseURL,
+		PropagationURL:      propagationURL,
 		PeerID:              peerID,
 		Version:             version,
 		CommitHash:          commit,
@@ -1293,6 +1308,7 @@ func (s *Server) handleNodeStatusNotification(ctx context.Context) error {
 	nodeStatusMessage := NodeStatusMessage{
 		Type:                "node_status",
 		BaseURL:             msg.BaseURL,
+		PropagationURL:      msg.PropagationURL,
 		PeerID:              msg.PeerID,
 		Version:             msg.Version,
 		CommitHash:          msg.CommitHash,

@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/stretchr/testify/mock"
@@ -408,7 +409,6 @@ func (m *Mock) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error)
 	return args.Get(0).([]*model.Block), args.Error(1)
 }
 
-// SetBlockSubtreesSet mocks the SetBlockSubtreesSet method
 func (m *Mock) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
 	args := m.Called(ctx, blockHash)
 	return args.Error(0)
@@ -1291,24 +1291,24 @@ func (m *mockBlockClient) GetBestHeightAndTime(ctx context.Context, req *emptypb
 }
 
 // ScheduleBlobDeletion mocks the ScheduleBlobDeletion method
-func (m *Mock) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType blockchain_api.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
+func (m *Mock) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
 	args := m.Called(ctx, blobKey, fileType, storeType, deleteAtHeight)
 	return args.Get(0).(int64), args.Bool(1), args.Error(2)
 }
 
 // CancelBlobDeletion mocks the CancelBlobDeletion method
-func (m *Mock) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType blockchain_api.BlobStoreType) error {
+func (m *Mock) CancelBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType) (bool, error) {
 	args := m.Called(ctx, blobKey, fileType, storeType)
-	return args.Error(0)
+	return args.Bool(0), args.Error(1)
 }
 
 // ListScheduledDeletions mocks the ListScheduledDeletions method
-func (m *Mock) ListScheduledDeletions(ctx context.Context, storeType *blockchain_api.BlobStoreType, minHeight, maxHeight uint32, limit, offset int32) ([]*blockchain_api.ScheduledDeletion, int32, error) {
-	args := m.Called(ctx, storeType, minHeight, maxHeight, limit, offset)
+func (m *Mock) ListScheduledDeletions(ctx context.Context, minHeight, maxHeight uint32, storeType storetypes.BlobStoreType, filterByStore bool, limit, offset int) ([]*blockchain_api.ScheduledDeletion, int, error) {
+	args := m.Called(ctx, minHeight, maxHeight, storeType, filterByStore, limit, offset)
 	if args.Error(2) != nil {
 		return nil, 0, args.Error(2)
 	}
-	return args.Get(0).([]*blockchain_api.ScheduledDeletion), args.Get(1).(int32), args.Error(2)
+	return args.Get(0).([]*blockchain_api.ScheduledDeletion), args.Int(1), args.Error(2)
 }
 
 // GetPendingBlobDeletions mocks the GetPendingBlobDeletions method

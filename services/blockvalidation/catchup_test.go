@@ -3061,6 +3061,8 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 	// Use mainnet difficulty since most tests use mainnet headers from testdata
 	defaultNBitsCatchup, _ := model.NewNBitFromString("1d00ffff")
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
+	// Mock GetBlockIsMined for parent block verification during validation
+	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
 	bv := &BlockValidation{
@@ -3152,6 +3154,8 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 	// Use mainnet difficulty since most tests use mainnet headers from testdata
 	defaultNBitsCatchup, _ := model.NewNBitFromString("1d00ffff")
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
+	// Mock GetBlockIsMined for parent block verification during validation
+	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
 	bv := &BlockValidation{

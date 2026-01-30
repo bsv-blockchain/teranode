@@ -3218,10 +3218,10 @@ func (stp *SubtreeProcessor) waitForBlockBeingMined(ctx context.Context, blockHa
 
 // WaitForPendingBlocks waits for any pending blocks to be processed before loading unmined transactions.
 // This method continuously polls the blockchain client to check if there are any blocks that have not been
-// marked as mined yet. It will wait until the list of blocks returned by GetBlocksMinedNotSet is empty,
-// indicating that all blocks have been processed and marked as mined.
+// marked as mined yet. It will wait until GetBlocksMinedNotSet returns an empty list, indicating that all
+// blocks have been processed and marked as mined.
 //
-// The method implements a polling loop with a 1-second interval and includes logging to provide visibility
+// The method implements a polling loop with exponential backoff and includes logging to provide visibility
 // into the waiting process. This ensures that the BlockAssembly service doesn't start loading unmined
 // transactions until all pending blocks have been fully processed.
 //

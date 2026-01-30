@@ -130,5 +130,8 @@ Before deploying to AWS, verify:
 - [ ] Volume mount paths match application expectations
 - [ ] PostgreSQL includes subPath configuration
 - [ ] ConfigMap paths use absolute paths (e.g., `file:///data` not `file://./data`)
+- [ ] Binaries are cross-compiled for target architecture (ARM64 for Graviton, AMD64 for Intel instances)
+    - Example: `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 make build-teranode`
+    - See [Makefile Documentation](../../howto/makefile.md#environment-variables) for cross-compilation options
 
 For detailed Kubernetes deployment instructions, see the [Kubernetes Installation Guide](../../howto/miners/kubernetes/minersHowToInstallation.md).

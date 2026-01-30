@@ -601,16 +601,14 @@ func handleGetRawTransaction(ctx context.Context, s *RPCServer, cmd interface{},
 	outputs := make([]bsvjson.Vout, len(tx.Outputs))
 
 	for i, txOut := range tx.Outputs {
-		addresses, err := txOut.LockingScript.Addresses()
+		_, addrs, _, err := txscript.ExtractPkScriptAddrs(txOut.LockingScript.Bytes(), s.settings.ChainCfgParams)
 		if err != nil {
 			return nil, errors.NewServiceError("Error extracting script addresses", err)
 		}
 
-		// Convert addresses to []string
-		// Can't use copy() here because we're converting between different types
-		addressStrings := make([]string, len(addresses))
-		for j, addr := range addresses { //nolint:gosimple
-			addressStrings[j] = addr // Type conversion happens here
+		addressStrings := make([]string, 0, len(addrs))
+		for _, addr := range addrs {
+			addressStrings = append(addressStrings, addr.EncodeAddress())
 		}
 
 		asm, err := txscript.DisasmString(txOut.LockingScript.Bytes())
@@ -2270,15 +2268,19 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 
 		var expirationTime time.Time
 
-		if c.Absolute != nil && *c.Absolute {
-			expirationTime = time.Unix(*c.BanTime, 0)
-		} else {
-			expirationTime = time.Now().Add(time.Duration(*c.BanTime) * time.Second)
-		}
+		// If BanTime is nil or 0, use a default ban time (e.g., 24 hours)
+		expirationTime = time.Now().Add(24 * time.Hour)
 
-		// If BanTime is 0, use a default ban time (e.g., 24 hours)
-		if *c.BanTime == 0 {
-			expirationTime = time.Now().Add(24 * time.Hour)
+		if c.Absolute != nil && *c.Absolute {
+			if c.BanTime == nil {
+				return nil, &bsvjson.RPCError{
+					Code:    bsvjson.ErrRPCInvalidParameter,
+					Message: "BanTime is required when absolute is true",
+				}
+			}
+			expirationTime = time.Unix(*c.BanTime, 0)
+		} else if c.BanTime != nil && *c.BanTime != 0 {
+			expirationTime = time.Now().Add(time.Duration(*c.BanTime) * time.Second)
 		}
 
 		expirationTimeInt64 := expirationTime.Unix()
@@ -2290,7 +2292,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 				success = true
 				s.logger.Debugf("Added ban for %s until %v", c.IPOrSubnet, expirationTime)
 			} else {
-				s.logger.Errorf("Error while trying to ban teranode peer: %v", err)
+				s.logger.Warnf("Error while trying to ban teranode peer: %v", err)
 			}
 		}
 
@@ -2304,7 +2306,7 @@ func handleSetBan(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 			})
 
 			if err != nil {
-				s.logger.Errorf("Error while trying to ban legacy peer: %v", err)
+				s.logger.Warnf("Error while trying to ban legacy peer: %v", err)
 
 				if !success {
 					return nil, &bsvjson.RPCError{

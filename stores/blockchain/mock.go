@@ -41,6 +41,8 @@ type MockStore struct {
 	BestBlock *model.Block
 	// BlockChainWork maps block hashes to their cumulative chain work (for difficulty calculations)
 	BlockChainWork map[chainhash.Hash][]byte
+	// BlockIsMined maps block hashes to their mined status for mined status checks
+	BlockIsMined map[chainhash.Hash]bool
 	// state tracks the current state of the mock store (e.g., IDLE)
 	state string
 	// mu provides thread-safe access to all MockStore fields
@@ -58,6 +60,7 @@ func NewMockStore() *MockStore {
 		BlockExists:    map[chainhash.Hash]bool{},
 		BlockByHeight:  map[uint32]*model.Block{},
 		BlockChainWork: map[chainhash.Hash][]byte{},
+		BlockIsMined:   map[chainhash.Hash]bool{},
 		state:          "IDLE",
 	}
 }
@@ -565,8 +568,21 @@ func (m *MockStore) SetState(ctx context.Context, key string, data []byte) error
 	panic(implementMe)
 }
 
-func (m *MockStore) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
-	panic("implement me")
+func (m *MockStore) GetBlockIsMined(_ context.Context, blockHash *chainhash.Hash) (bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if blockHash == nil {
+		return false, nil
+	}
+	isMined, exists := m.BlockIsMined[*blockHash]
+	if !exists {
+		// Default to true for blocks that exist, false otherwise
+		if m.BlockExists[*blockHash] {
+			return true, nil
+		}
+		return false, nil
+	}
+	return isMined, nil
 }
 
 func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {

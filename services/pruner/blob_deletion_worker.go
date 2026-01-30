@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 )
 
 func (s *Server) blobDeletionWorker() {
@@ -95,7 +96,7 @@ func (s *Server) processBlobDeletionsAtHeight(height uint32) {
 
 	// Process all deletions in the batch
 	for _, deletion := range deletions {
-		storeType := deletion.StoreType
+		storeType := storetypes.BlobStoreType(deletion.StoreType)
 
 		if err := s.processOneDeletion(ctx, deletion); err != nil {
 			s.logger.Warnf("Failed to delete blob %x from %s (attempt %d/%d): %v",
@@ -111,7 +112,7 @@ func (s *Server) processBlobDeletionsAtHeight(height uint32) {
 			}
 		} else {
 			s.logger.Debugf("[BLOB_DELETION] Successfully deleted blob: key=%x store=%s height=%d",
-				deletion.BlobKey, deletion.StoreType.String(), deletion.DeleteAtHeight)
+				deletion.BlobKey, storeType.String(), deletion.DeleteAtHeight)
 
 			completedIDs = append(completedIDs, deletion.Id)
 			successCount++
@@ -139,7 +140,7 @@ func (s *Server) processBlobDeletionsAtHeight(height uint32) {
 }
 
 func (s *Server) processOneDeletion(ctx context.Context, deletion *blockchain_api.ScheduledDeletion) error {
-	storeType := deletion.StoreType
+	storeType := storetypes.BlobStoreType(deletion.StoreType)
 
 	s.logger.Debugf("[BLOB_DELETION] Starting deletion: store=%s blob_key=%x file_type=%s height=%d",
 		storeType.String(), deletion.BlobKey, deletion.FileType, deletion.DeleteAtHeight)
@@ -170,23 +171,23 @@ func (s *Server) processOneDeletion(ctx context.Context, deletion *blockchain_ap
 		if errors.Is(err, errors.ErrNotFound) {
 			// Already deleted - success (idempotent)
 			s.logger.Debugf("[BLOB_DELETION] Blob already deleted (not found): key=%x store=%s - SUCCESS",
-				deletion.BlobKey, deletion.StoreType)
+				deletion.BlobKey, storeType)
 			return nil
 		}
 		s.logger.Debugf("[BLOB_DELETION] Deletion FAILED: key=%x store=%s error=%v",
-			deletion.BlobKey, deletion.StoreType, err)
+			deletion.BlobKey, storeType, err)
 		return err
 	}
 
 	s.logger.Debugf("[BLOB_DELETION] Deletion SUCCESS: key=%x store=%s duration=%v height=%d",
-		deletion.BlobKey, deletion.StoreType, duration, deletion.DeleteAtHeight)
+		deletion.BlobKey, storeType, duration, deletion.DeleteAtHeight)
 
 	return nil
 }
 
 // getBlobStore gets or creates a blob store for the given store type enum.
 // Stores are lazily created on first use and cached in s.blobStores.
-func (s *Server) getBlobStore(storeType blockchain_api.BlobStoreType) (blob.Store, error) {
+func (s *Server) getBlobStore(storeType storetypes.BlobStoreType) (blob.Store, error) {
 	// Check cache first
 	if store, ok := s.blobStores[storeType]; ok {
 		s.logger.Debugf("[BLOB_STORE] Using cached blob store for %s", storeType.String())

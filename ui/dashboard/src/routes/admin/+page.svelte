@@ -34,6 +34,12 @@
   let invalidBlocksLoading = false
   let invalidBlocksError: string | null = null
   let lastInvalidBlocksRefresh: Date | null = null
+  let invalidBlocksOffset = 0
+  const INVALID_BLOCKS_PAGE_SIZE = 5
+  let invalidBlocksHasMore = false
+
+  $: invalidBlocksShowingFrom = invalidBlocks.length > 0 ? invalidBlocksOffset + 1 : 0
+  $: invalidBlocksShowingTo = invalidBlocksOffset + invalidBlocks.length
 
   // Re-validate block state
   let revalidatingBlock = false
@@ -53,6 +59,61 @@
 
   function getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error)
+  }
+
+  // duplicates the FSM transition logic from the backend (fsm_handler.go 
+  // If the backend state machine changes, the UI will become out of sync. 
+  function isEventAllowedForState(state: string | undefined, eventName: string): boolean {
+    if (!state || !eventName) return false
+
+    switch (state) {
+      case 'IDLE':
+        return eventName === 'RUN' || eventName === 'LEGACYSYNC'
+      case 'RUNNING':
+        return eventName === 'STOP' || eventName === 'CATCHUPBLOCKS'
+      case 'LEGACYSYNCING':
+        return eventName === 'RUN' || eventName === 'STOP'
+      case 'CATCHINGBLOCKS':
+        return eventName === 'RUN'
+      default:
+        return false
+    }
+  }
+
+  async function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  async function refreshFSMStateAfterEvent(previousStateValue: number | undefined) {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await fetchFSMState(true)
+
+      if (previousStateValue === undefined || fsmState?.state_value !== previousStateValue) {
+        return
+      }
+
+      await delay(250 * (attempt + 1))
+    }
+  }
+
+  function goToPrevInvalidBlocksPage(): void {
+    if (invalidBlocksLoading) return
+    const nextOffset = Math.max(0, invalidBlocksOffset - INVALID_BLOCKS_PAGE_SIZE)
+    fetchInvalidBlocks(nextOffset)
+  }
+
+  function goToNextInvalidBlocksPage(): void {
+    if (invalidBlocksLoading || !invalidBlocksHasMore) return
+    const nextOffset = invalidBlocksOffset + INVALID_BLOCKS_PAGE_SIZE
+    fetchInvalidBlocks(nextOffset)
+  }
+
+  function getEventDisabledReason(state: string | undefined, eventName: string): string {
+    if (!state) return 'FSM state not available'
+    if (state === 'CATCHINGBLOCKS' && eventName !== 'RUN') {
+      return 'Catchup must complete first'
+    }
+    return `Not allowed from ${state}`
   }
 
   function formatTimeAgo(timestamp: number): string {
@@ -79,6 +140,8 @@
       fsmLoading = true
     }
 
+    const previousStateValue = fsmState?.state_value
+
     try {
       // Log the baseUrl for debugging
       console.log('FSM API baseUrl:', apiBaseUrl)
@@ -91,6 +154,10 @@
       }
 
       fsmState = result.data
+
+      if (previousStateValue !== undefined && previousStateValue !== fsmState.state_value) {
+        await fetchFSMEvents()
+      }
     } catch (error: unknown) {
       console.error('Error fetching FSM state:', error)
       fsmError = getErrorMessage(error)
@@ -123,7 +190,7 @@
     }
 
     fsmLoading = true
-    const previousState = fsmState
+    const previousStateValue = fsmState?.state_value
 
     try {
       console.log(`Sending FSM event: ${eventName}`)
@@ -135,30 +202,14 @@
         throw new Error(result.error?.message || `Failed to send ${eventName} event`)
       }
 
-      // Store the new state
-      fsmState = result.data
+      await refreshFSMStateAfterEvent(previousStateValue)
 
-      // Check if state actually changed
-      if (previousState && previousState.state_value === fsmState.state_value) {
-        console.warn(
-          `FSM state did not change after ${eventName} event. Still in ${fsmState.state} state.`,
-        )
-      }
-
-      success(`Successfully sent ${eventName} event. State: ${fsmState.state}`)
-
-      // Refresh the state after a short delay to ensure we get the latest state
-      setTimeout(() => {
-        fetchFSMState()
-      }, 1000)
+      success(`Successfully sent ${eventName} event. State: ${fsmState?.state}`)
     } catch (error) {
       console.error(`Error sending ${eventName} event:`, error)
       failure(`Failed to send ${eventName} event: ${getErrorMessage(error)}`)
 
-      // Refresh the state to ensure we're showing the correct information
-      setTimeout(() => {
-        fetchFSMState()
-      }, 1000)
+      await fetchFSMState(true)
     } finally {
       fsmLoading = false
     }
@@ -300,7 +351,7 @@
       blockActionResult = { success: true, message: 'Block invalidated successfully' }
 
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks()
+      await refreshInvalidBlocksWithPageFallback()
     } catch (error: unknown) {
       blockActionResult = {
         success: false,
@@ -355,7 +406,7 @@
       }
 
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks()
+      await refreshInvalidBlocksWithPageFallback()
     } catch (error: unknown) {
       failure(`${getErrorMessage(error)}`)
     } finally {
@@ -400,7 +451,7 @@
       )
 
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks()
+      await refreshInvalidBlocksWithPageFallback()
     } catch (error: unknown) {
       failure(`${getErrorMessage(error)}`)
     } finally {
@@ -455,7 +506,12 @@
       blockHash = ''
 
       // Refresh the invalid blocks list after a successful action
-      await fetchInvalidBlocks()
+      if (actionName === 'invalidate') {
+        invalidBlocksOffset = 0
+        await refreshInvalidBlocksWithPageFallback(0)
+      } else {
+        await refreshInvalidBlocksWithPageFallback()
+      }
     } catch (error: unknown) {
       failure(`${getErrorMessage(error)}`)
     } finally {
@@ -463,7 +519,7 @@
     }
   }
 
-  async function fetchInvalidBlocks() {
+  async function fetchInvalidBlocks(offset: number = invalidBlocksOffset) {
     // Save current scroll position before updating
     const scrollPosition = window.scrollY
 
@@ -471,7 +527,7 @@
     invalidBlocksError = null
 
     try {
-      const result = await api.getLastInvalidBlocks(5)
+      const result = await api.getLastInvalidBlocks(INVALID_BLOCKS_PAGE_SIZE, offset)
 
       if (!result.ok) {
         throw new Error(
@@ -479,7 +535,9 @@
         )
       }
 
+      invalidBlocksOffset = typeof result.data.offset === 'number' ? result.data.offset : offset
       invalidBlocks = result.data.blocks || []
+      invalidBlocksHasMore = !!result.data.hasMore
       lastInvalidBlocksRefresh = new Date()
       console.log('Invalid blocks:', invalidBlocks)
     } catch (error: unknown) {
@@ -495,6 +553,17 @@
           behavior: 'instant',
         })
       }, 0)
+    }
+  }
+
+  async function refreshInvalidBlocksWithPageFallback(startOffset: number = invalidBlocksOffset) {
+    await fetchInvalidBlocks(startOffset)
+
+    if (invalidBlocks.length === 0 && invalidBlocksOffset > 0) {
+      const prevOffset = Math.max(0, invalidBlocksOffset - INVALID_BLOCKS_PAGE_SIZE)
+      if (prevOffset !== invalidBlocksOffset) {
+        await fetchInvalidBlocks(prevOffset)
+      }
     }
   }
 
@@ -609,12 +678,14 @@
                   <div class="action-buttons">
                     {#each fsmEvents.sort((a, b) => a.value - b.value) as event}
                       {#if event && event.name}
+                        {@const allowed = isEventAllowedForState(fsmState?.state, event.name)}
                         <button
                           on:click={() => sendFSMEvent(event.name)}
-                          disabled={fsmLoading}
+                          disabled={fsmLoading || !allowed}
                           class="action-button"
                           data-event={event.name.toLowerCase()}
                           data-event-id={event.value}
+                          title={!allowed ? getEventDisabledReason(fsmState?.state, event.name) : ''}
                         >
                           {#if fsmLoading}
                             <div class="spinner"></div>
@@ -709,6 +780,25 @@
       <div class="section-header">
         <h2>Recently Invalidated Blocks</h2>
         <div class="refresh-container">
+          <button
+            class="icon-button with-text"
+            on:click={goToPrevInvalidBlocksPage}
+            disabled={invalidBlocksLoading || invalidBlocksOffset === 0}
+            title="Previous page"
+          >
+            <span>Prev</span>
+          </button>
+          <span class="last-refresh">
+            Showing {invalidBlocksShowingFrom}-{invalidBlocksShowingTo}
+          </span>
+          <button
+            class="icon-button with-text"
+            on:click={goToNextInvalidBlocksPage}
+            disabled={invalidBlocksLoading || !invalidBlocksHasMore}
+            title="Next page"
+          >
+            <span>Next</span>
+          </button>
           {#if lastInvalidBlocksRefresh}
             <span class="last-refresh">
               Last refreshed: {lastInvalidBlocksRefresh.toLocaleTimeString()}
@@ -716,7 +806,7 @@
           {/if}
           <button
             class="icon-button"
-            on:click={fetchInvalidBlocks}
+            on:click={() => fetchInvalidBlocks()}
             disabled={invalidBlocksLoading}
             title="Refresh invalidated blocks list"
           >
@@ -742,7 +832,7 @@
               <i class="fas fa-exclamation-circle"></i>
               <p>Error loading invalidated blocks</p>
               <p class="error-message">{invalidBlocksError}</p>
-              <button class="icon-button with-text" on:click={fetchInvalidBlocks}>
+              <button class="icon-button with-text" on:click={() => fetchInvalidBlocks()}>
                 <Icon name="icon-refresh-line" size={16} />
                 <span>Try again</span>
               </button>
