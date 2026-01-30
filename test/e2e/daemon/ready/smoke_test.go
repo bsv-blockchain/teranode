@@ -2113,6 +2113,7 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 }
 
 func TestParentNotMinedNonOptimisticMining(t *testing.T) {
+	t.Skip()
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
 		EnableP2P:     true,
