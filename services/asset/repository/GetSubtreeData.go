@@ -76,7 +76,7 @@ func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *c
 		}
 
 		// close the writer after all subtrees have been streamed
-		_ = w.CloseWithError(io.ErrClosedPipe)
+		_ = w.Close()
 
 		return nil
 	})
