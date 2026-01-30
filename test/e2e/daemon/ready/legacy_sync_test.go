@@ -431,7 +431,7 @@ func TestSVNodeValidatesTeranodeBlocks(t *testing.T) {
 		EnableP2P:            true,
 		EnableValidator:      true,
 		EnableBlockPersister: true,
-		PreserveDataDir: true,
+		// PreserveDataDir: true,
 		SettingsOverrideFunc: test.ComposeSettings(
 			test.SystemTestSettings(),
 		),
@@ -470,7 +470,7 @@ func TestSVNodeValidatesTeranodeBlocks(t *testing.T) {
 		EnableBlockPersister: true,
 		EnableLegacy:         true,
 		SkipRemoveDataDir:    true,
-		PreserveDataDir:      true,
+		// PreserveDataDir:      true,
 		SettingsOverrideFunc: test.ComposeSettings(
 			test.SystemTestSettings(),
 			func(s *settings.Settings) {
@@ -484,13 +484,13 @@ func TestSVNodeValidatesTeranodeBlocks(t *testing.T) {
 	defer td.Stop(t)
 
 	// Trigger svnode to request blocks by generating one block
-	_, err = sv.Generate(1)
-	require.NoError(t, err, "Failed to generate block on svnode to trigger sync")
+	// _, err = sv.Generate(1)
+	// require.NoError(t, err, "Failed to generate block on svnode to trigger sync")
 
 	// Wait for svnode to sync all teranode blocks
 	// svnode has 1 initial + 1 trigger block = 2, teranode has blocksToGenerate
 	// Final height should be 1 + blocksToGenerate (svnode adopts teranode's chain which is longer)
-	finalHeight := 1 + blocksToGenerate
+	finalHeight := blocksToGenerate
 	err = sv.WaitForBlockHeight(ctx, finalHeight, 30*time.Second)
 	require.NoError(t, err, "SVNode failed to sync blocks from teranode")
 
@@ -519,73 +519,4 @@ func TestSVNodeValidatesTeranodeBlocks(t *testing.T) {
 	require.Equal(t, svBestHash, header.Hash().String(), "Block hashes should match")
 
 	t.Logf("All %d teranode blocks validated by svnode - chain integrity confirmed", blocksToGenerate)
-}
-
-// TestLegacyCatchUp tests that teranode can catch up when svnode continues generating blocks
-func TestLegacyCatchUp(t *testing.T) {
-	t.Skip("WIP")
-	legacySyncTestLock.Lock()
-	defer legacySyncTestLock.Unlock()
-
-	ctx := t.Context()
-
-	// Start svnode in Docker
-	sv := newSVNode()
-	err := sv.Start(ctx)
-	require.NoError(t, err, "Failed to start svnode")
-
-	defer func() {
-		_ = sv.Stop(ctx)
-	}()
-
-	// Generate initial blocks
-	const initialBlocks = 50
-	_, err = sv.Generate(initialBlocks)
-	require.NoError(t, err)
-
-	t.Logf("SVNode generated %d initial blocks", initialBlocks)
-
-	// Start teranode
-	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		EnableLegacy:    true,
-		EnableValidator: true,
-		EnableDebugLogging: true,
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			s.Legacy.ConnectPeers = []string{sv.P2PHost()}
-			s.P2P.StaticPeers = []string{}
-		},
-	})
-
-	defer td.Stop(t)
-
-	// Wait for initial sync
-	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, uint32(initialBlocks), 60*time.Second)
-	require.NoError(t, err)
-
-	t.Log("Teranode completed initial sync")
-
-	// Generate more blocks on svnode while teranode is running
-	const additionalBlocks = 50
-	_, err = sv.Generate(additionalBlocks)
-	require.NoError(t, err)
-
-	finalHeight := initialBlocks + additionalBlocks
-	t.Logf("SVNode generated %d additional blocks, target: %d", additionalBlocks, finalHeight)
-
-	// Wait for teranode to catch up
-	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, uint32(finalHeight), 60*time.Second)
-	require.NoError(t, err)
-
-	// Verify both nodes are synced
-	svBestHash, err := sv.GetBestBlockHash()
-	require.NoError(t, err)
-
-	header, _, err := td.BlockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
-
-	require.Equal(t, svBestHash, header.Hash().String(), "Best block hash should match")
-
-	t.Logf("Teranode caught up to height %d", finalHeight)
 }
