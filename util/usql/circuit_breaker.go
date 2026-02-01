@@ -88,6 +88,8 @@ type CircuitBreakerConfig struct {
 
 	// OnStateChange is an optional callback invoked when the circuit state changes.
 	// The callback receives the old state, new state, and a reason for the change.
+	// The callback runs asynchronously in a separate goroutine and receives all
+	// necessary state information as parameters.
 	OnStateChange func(from, to CircuitState, reason string)
 }
 
