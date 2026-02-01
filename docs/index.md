@@ -54,6 +54,8 @@
 
 ### Miners
 
+- [System Requirements](./howto/miners/systemRequirements.md)
+
 #### Docker Compose Setup
 
 1. [Installation Guide](./howto/miners/docker/minersHowToInstallation.md)

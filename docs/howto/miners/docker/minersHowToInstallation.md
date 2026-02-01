@@ -54,13 +54,18 @@ This guide does not cover:
 
 ## Hardware Requirements
 
-The Teranode team will provide you with current hardware recommendations. These recommendations will be:
+For detailed hardware specifications including CPU, RAM, and storage requirements, see the [System Requirements](../systemRequirements.md) document.
 
-1. Tailored to your specific configuration settings
-2. Designed to handle the expected production transaction volume
-3. Updated regularly to reflect the latest performance requirements
+**Quick reference for Docker Compose mainnet:**
 
-This ensures your system is appropriately equipped to manage the projected workload efficiently.
+| Resource | Minimum | Recommended |
+|----------|---------|-------------|
+| CPU | 8 cores | 16 cores |
+| RAM | 128 GB | 256 GB |
+| Storage | 1 TB | 2 TB |
+| Storage Type | NVMe SSD | NVMe SSD |
+
+These specifications assume a seeded, pruned node with default retention settings.
 
 ## Software Requirements
 

@@ -761,19 +761,7 @@ func (u *BlockValidation) hasValidSubtrees(block *model.Block) bool {
 		return false
 	}
 
-	// Check if subtrees are loaded and match expected count
-	if len(block.SubtreeSlices) != len(block.Subtrees) || len(block.SubtreeSlices) == 0 {
-		return false
-	}
-
-	// Verify all subtrees are non-nil
-	for _, subtree := range block.SubtreeSlices {
-		if subtree == nil {
-			return false
-		}
-	}
-
-	return true
+	return block.SubtreesLoaded()
 }
 
 // setTxMinedStatus marks all transactions within a block as mined in the blockchain system.
@@ -1466,11 +1454,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		// Cache the block only if subtrees are loaded (they should be from Valid() call)
 		if u.hasValidSubtrees(block) {
-			u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), len(block.SubtreeSlices))
+			u.logger.Debugf("[ValidateBlock][%s] caching block with %d subtrees loaded", block.Hash().String(), block.GetSubtreeSlicesCount())
 			u.lastValidatedBlocks.Set(*block.Hash(), block)
 		} else {
-			if len(block.SubtreeSlices) != len(block.Subtrees) || len(block.SubtreeSlices) == 0 {
-				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), len(block.SubtreeSlices), len(block.Subtrees))
+			if !block.SubtreesLoaded() {
+				u.logger.Warnf("[ValidateBlock][%s] not caching block - subtrees not loaded (%d slices, %d hashes)", block.Hash().String(), block.GetSubtreeSlicesCount(), len(block.Subtrees))
 			} else {
 				u.logger.Warnf("[ValidateBlock][%s] not caching block - some subtrees are nil", block.Hash().String())
 			}

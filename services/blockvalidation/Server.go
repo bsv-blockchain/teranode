@@ -1612,6 +1612,14 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 	block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to fetch block %s: %v", blockFound.hash.String(), err)
+
+		// Report peer failure to P2P service for reputation tracking
+		// This ensures peers with misconfigured asset servers (e.g., 401 errors) have their reputation degraded
+		if blockFound.peerID != "" {
+			u.reportCatchupFailure(ctx, blockFound.peerID)
+			u.reportCatchupError(ctx, blockFound.peerID, err.Error())
+		}
+
 		if blockFound.errCh != nil {
 			blockFound.errCh <- err
 		}
