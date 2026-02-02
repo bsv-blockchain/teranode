@@ -60,7 +60,7 @@ type SVNodeI interface {
 
 // Options configures SVNode creation
 type Options struct {
-	// DockerImage is the Docker image to use (default: bitcoinsv/bitcoin-sv:1.1.0)
+	// DockerImage is the Docker image to use (default: bitcoinsv/bitcoin-sv:1.2.0)
 	DockerImage string
 	// ContainerName is a custom container name (optional)
 	ContainerName string

@@ -88,7 +88,7 @@ services:
   # Legacy Bitcoin SV node for testing teranode <-> legacy sync
   svnode1:
     container_name: svnode1
-    image: bitcoinsv/bitcoin-sv:1.1.0
+    image: bitcoinsv/bitcoin-sv:1.2.0
     platform: linux/amd64
     network_mode: "host"
     profiles:
