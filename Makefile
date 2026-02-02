@@ -462,9 +462,6 @@ chain-integrity-test:
 
 	# Step 3: Build teranode image locally
 	@echo "Step 3: Building teranode image locally..."
-	@echo "  - Logging into AWS ECR..."
-	@aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com || (echo "  ✗ ECR login failed - skipping build"; exit 1)
-	@echo "  ✓ ECR login successful"
 	@echo "  - Building Docker image (this may take several minutes)..."
 	@docker build -t teranode:latest .
 	@echo "  ✓ Teranode Docker image built successfully"
@@ -735,17 +732,6 @@ clean-chain-integrity:
 	@echo "  ✓ Chain integrity test artifacts cleaned up."
 	@echo "  ✓ All containers stopped"
 	@echo "  ✓ All log files removed"
-
-# AWS ECR login for pulling required images
-.PHONY: ecr-login
-ecr-login:
-	@echo "🔐 AWS ECR Login"
-	@echo "=================="
-	@echo "  - Logging into AWS ECR (eu-north-1)..."
-	@aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
-	@echo "  ✓ ECR login completed successfully"
-	@echo "  - You can now pull ECR images"
-	@echo ""
 
 # Display hash analysis results from chainintegrity test
 .PHONY: show-hashes
