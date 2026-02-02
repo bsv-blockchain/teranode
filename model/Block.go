@@ -1168,6 +1168,33 @@ func (b *Block) GetAndValidateSubtrees(ctx context.Context, logger ulogger.Logge
 	return nil
 }
 
+// SubtreesLoaded checks if subtrees are loaded and valid.
+// This method is safe for concurrent use.
+func (b *Block) SubtreesLoaded() bool {
+	b.subtreeSlicesMu.RLock()
+	defer b.subtreeSlicesMu.RUnlock()
+
+	if len(b.SubtreeSlices) != len(b.Subtrees) || len(b.SubtreeSlices) == 0 {
+		return false
+	}
+
+	for _, subtree := range b.SubtreeSlices {
+		if subtree == nil {
+			return false
+		}
+	}
+
+	return true
+}
+
+// GetSubtreeSlicesCount returns the number of loaded subtree slices.
+// This method is safe for concurrent use.
+func (b *Block) GetSubtreeSlicesCount() int {
+	b.subtreeSlicesMu.RLock()
+	defer b.subtreeSlicesMu.RUnlock()
+	return len(b.SubtreeSlices)
+}
+
 func (b *Block) getSubtreeMetaSlice(ctx context.Context, subtreeStore SubtreeStore, subtreeHash chainhash.Hash, subtree *subtreepkg.Subtree) (*subtreepkg.Meta, error) {
 	// get subtree meta
 	subtreeMetaReader, err := subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)

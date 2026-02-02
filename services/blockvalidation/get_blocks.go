@@ -101,7 +101,20 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 	// Start batch fetching and work distribution
 	g.Go(func() error {
 		defer close(workQueue)
-		return u.batchFetchAndDistribute(gCtx, blockHeaders, workQueue, peerID, baseURL, blockUpTo, largeBatchSize)
+
+		// In production, commonAncestorMeta is always set during catchup initialization
+		if catchupCtx == nil {
+			return errors.NewProcessingError("[catchup:fetchBlocksConcurrently][%s] catchupCtx must not be nil", blockUpTo.Hash().String())
+		}
+
+		if catchupCtx.commonAncestorMeta == nil {
+			return errors.NewProcessingError("[catchup:fetchBlocksConcurrently][%s] commonAncestorMeta must not be nil", blockUpTo.Hash().String())
+		}
+
+		// Calculate starting height from common ancestor
+		startingHeight := catchupCtx.commonAncestorMeta.Height + 1
+
+		return u.batchFetchAndDistribute(gCtx, blockHeaders, workQueue, peerID, baseURL, blockUpTo, largeBatchSize, startingHeight)
 	})
 
 	// Wait for all goroutines to complete
@@ -114,7 +127,7 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 }
 
 // batchFetchAndDistribute fetches blocks in large batches and immediately distributes them to workers
-func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*model.BlockHeader, workQueue chan<- workItem, peerID string, baseURL string, blockUpTo *model.Block, batchSize int) error {
+func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*model.BlockHeader, workQueue chan<- workItem, peerID string, baseURL string, blockUpTo *model.Block, batchSize int, startingHeight uint32) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "batchFetchAndDistribute",
 		tracing.WithParentStat(u.stats),
 	)
@@ -157,6 +170,9 @@ func (u *Server) batchFetchAndDistribute(ctx context.Context, blockHeaders []*mo
 
 		// Immediately distribute blocks to workers
 		for _, block := range blocks {
+			// Set block height based on its position in the chain
+			block.Height = startingHeight + uint32(currentIndex)
+
 			select {
 			case workQueue <- workItem{
 				block: block,
