@@ -46,6 +46,7 @@ const (
 	BlockchainAPI_GetBlockHeadersFromTill_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromTill"
 	BlockchainAPI_GetBlockHeadersFromHeight_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromHeight"
 	BlockchainAPI_GetBlockHeadersByHeight_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBlockHeadersByHeight"
+	BlockchainAPI_GetMedianTimePastByHeights_FullMethodName           = "/blockchain_api.BlockchainAPI/GetMedianTimePastByHeights"
 	BlockchainAPI_GetBlocksByHeight_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlocksByHeight"
 	BlockchainAPI_FindBlocksContainingSubtree_FullMethodName          = "/blockchain_api.BlockchainAPI/FindBlocksContainingSubtree"
 	BlockchainAPI_GetBlockHeaderIDs_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
@@ -145,6 +146,9 @@ type BlockchainAPIClient interface {
 	GetBlockHeadersFromHeight(ctx context.Context, in *GetBlockHeadersFromHeightRequest, opts ...grpc.CallOption) (*GetBlockHeadersFromHeightResponse, error)
 	// GetBlockHeadersByHeight retrieves block headers between two specified heights.
 	GetBlockHeadersByHeight(ctx context.Context, in *GetBlockHeadersByHeightRequest, opts ...grpc.CallOption) (*GetBlockHeadersByHeightResponse, error)
+	// GetMedianTimePastByHeights retrieves Median Time Past (MTP) values for specified block heights.
+	// This is used for BIP68 relative locktime verification.
+	GetMedianTimePastByHeights(ctx context.Context, in *GetMedianTimePastByHeightsRequest, opts ...grpc.CallOption) (*GetMedianTimePastByHeightsResponse, error)
 	// GetBlocksByHeight retrieves full blocks between two specified heights.
 	GetBlocksByHeight(ctx context.Context, in *GetBlocksByHeightRequest, opts ...grpc.CallOption) (*GetBlocksByHeightResponse, error)
 	// FindBlocksContainingSubtree finds all blocks that contain the specified subtree hash.
@@ -471,6 +475,16 @@ func (c *blockchainAPIClient) GetBlockHeadersByHeight(ctx context.Context, in *G
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockHeadersByHeightResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeadersByHeight_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetMedianTimePastByHeights(ctx context.Context, in *GetMedianTimePastByHeightsRequest, opts ...grpc.CallOption) (*GetMedianTimePastByHeightsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMedianTimePastByHeightsResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetMedianTimePastByHeights_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -979,6 +993,9 @@ type BlockchainAPIServer interface {
 	GetBlockHeadersFromHeight(context.Context, *GetBlockHeadersFromHeightRequest) (*GetBlockHeadersFromHeightResponse, error)
 	// GetBlockHeadersByHeight retrieves block headers between two specified heights.
 	GetBlockHeadersByHeight(context.Context, *GetBlockHeadersByHeightRequest) (*GetBlockHeadersByHeightResponse, error)
+	// GetMedianTimePastByHeights retrieves Median Time Past (MTP) values for specified block heights.
+	// This is used for BIP68 relative locktime verification.
+	GetMedianTimePastByHeights(context.Context, *GetMedianTimePastByHeightsRequest) (*GetMedianTimePastByHeightsResponse, error)
 	// GetBlocksByHeight retrieves full blocks between two specified heights.
 	GetBlocksByHeight(context.Context, *GetBlocksByHeightRequest) (*GetBlocksByHeightResponse, error)
 	// FindBlocksContainingSubtree finds all blocks that contain the specified subtree hash.
@@ -1082,205 +1099,208 @@ type BlockchainAPIServer interface {
 type UnimplementedBlockchainAPIServer struct{}
 
 func (UnimplementedBlockchainAPIServer) HealthGRPC(context.Context, *emptypb.Empty) (*HealthResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method HealthGRPC not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method HealthGRPC not implemented")
 }
 func (UnimplementedBlockchainAPIServer) AddBlock(context.Context, *AddBlockRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method AddBlock not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method AddBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlock(context.Context, *GetBlockRequest) (*GetBlockResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlock not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlocks(context.Context, *GetBlocksRequest) (*GetBlocksResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlocks not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlocks not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockByHeight(context.Context, *GetBlockByHeightRequest) (*GetBlockResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockByHeight not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockByHeight not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockByID(context.Context, *GetBlockByIDRequest) (*GetBlockResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockByID not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockByID not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetNextBlockID(context.Context, *emptypb.Empty) (*GetNextBlockIDResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetNextBlockID not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetNextBlockID not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockStats(context.Context, *emptypb.Empty) (*model.BlockStats, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockStats not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockStats not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockGraphData(context.Context, *GetBlockGraphDataRequest) (*model.BlockDataPoints, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockGraphData not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockGraphData not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetLastNBlocks(context.Context, *GetLastNBlocksRequest) (*GetLastNBlocksResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetLastNBlocks not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetLastNBlocks not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetLastNInvalidBlocks(context.Context, *GetLastNInvalidBlocksRequest) (*GetLastNInvalidBlocksResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetLastNInvalidBlocks not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetLastNInvalidBlocks not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetSuitableBlock(context.Context, *GetSuitableBlockRequest) (*GetSuitableBlockResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetSuitableBlock not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetSuitableBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetHashOfAncestorBlock(context.Context, *GetHashOfAncestorBlockRequest) (*GetHashOfAncestorBlockResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetHashOfAncestorBlock not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetHashOfAncestorBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetLatestBlockHeaderFromBlockLocator(context.Context, *GetLatestBlockHeaderFromBlockLocatorRequest) (*GetBlockHeaderResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetLatestBlockHeaderFromBlockLocator not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetLatestBlockHeaderFromBlockLocator not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeadersFromOldest(context.Context, *GetBlockHeadersFromOldestRequest) (*GetBlockHeadersResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockHeadersFromOldest not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersFromOldest not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetNextWorkRequired(context.Context, *GetNextWorkRequiredRequest) (*GetNextWorkRequiredResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetNextWorkRequired not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetNextWorkRequired not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockExists(context.Context, *GetBlockRequest) (*GetBlockExistsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockExists not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockExists not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeaders(context.Context, *GetBlockHeadersRequest) (*GetBlockHeadersResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockHeaders not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeaders not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeadersToCommonAncestor(context.Context, *GetBlockHeadersToCommonAncestorRequest) (*GetBlockHeadersResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockHeadersToCommonAncestor not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersToCommonAncestor not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeadersFromCommonAncestor(context.Context, *GetBlockHeadersFromCommonAncestorRequest) (*GetBlockHeadersResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockHeadersFromCommonAncestor not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersFromCommonAncestor not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeadersFromTill(context.Context, *GetBlockHeadersFromTillRequest) (*GetBlockHeadersResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockHeadersFromTill not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersFromTill not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeadersFromHeight(context.Context, *GetBlockHeadersFromHeightRequest) (*GetBlockHeadersFromHeightResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockHeadersFromHeight not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersFromHeight not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeadersByHeight(context.Context, *GetBlockHeadersByHeightRequest) (*GetBlockHeadersByHeightResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockHeadersByHeight not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeadersByHeight not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetMedianTimePastByHeights(context.Context, *GetMedianTimePastByHeightsRequest) (*GetMedianTimePastByHeightsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetMedianTimePastByHeights not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlocksByHeight(context.Context, *GetBlocksByHeightRequest) (*GetBlocksByHeightResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlocksByHeight not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlocksByHeight not implemented")
 }
 func (UnimplementedBlockchainAPIServer) FindBlocksContainingSubtree(context.Context, *FindBlocksContainingSubtreeRequest) (*FindBlocksContainingSubtreeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method FindBlocksContainingSubtree not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method FindBlocksContainingSubtree not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockHeaderIDs not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeaderIDs not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBestBlockHeader not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBestBlockHeader not implemented")
 }
 func (UnimplementedBlockchainAPIServer) CheckBlockIsInCurrentChain(context.Context, *CheckBlockIsCurrentChainRequest) (*CheckBlockIsCurrentChainResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CheckBlockIsInCurrentChain not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method CheckBlockIsInCurrentChain not implemented")
 }
 func (UnimplementedBlockchainAPIServer) CheckBlockIsAncestorOfBlock(context.Context, *CheckBlockIsAncestorOfBlockRequest) (*CheckBlockIsAncestorOfBlockResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CheckBlockIsAncestorOfBlock not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method CheckBlockIsAncestorOfBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetChainTips(context.Context, *emptypb.Empty) (*GetChainTipsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetChainTips not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetChainTips not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeader(context.Context, *GetBlockHeaderRequest) (*GetBlockHeaderResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockHeader not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockHeader not implemented")
 }
 func (UnimplementedBlockchainAPIServer) InvalidateBlock(context.Context, *InvalidateBlockRequest) (*InvalidateBlockResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method InvalidateBlock not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method InvalidateBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) RevalidateBlock(context.Context, *RevalidateBlockRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method RevalidateBlock not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method RevalidateBlock not implemented")
 }
 func (UnimplementedBlockchainAPIServer) Subscribe(*SubscribeRequest, grpc.ServerStreamingServer[Notification]) error {
-	return status.Error(codes.Unimplemented, "method Subscribe not implemented")
+	return status.Errorf(codes.Unimplemented, "method Subscribe not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SendNotification(context.Context, *Notification) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method SendNotification not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method SendNotification not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetState(context.Context, *GetStateRequest) (*StateResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetState not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetState not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SetState(context.Context, *SetStateRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetState not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method SetState not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockIsMined(context.Context, *GetBlockIsMinedRequest) (*GetBlockIsMinedResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockIsMined not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockIsMined not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SetBlockMinedSet(context.Context, *SetBlockMinedSetRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetBlockMinedSet not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method SetBlockMinedSet not implemented")
 }
 func (UnimplementedBlockchainAPIServer) ClearBlockMinedSet(context.Context, *ClearBlockMinedSetRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method ClearBlockMinedSet not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method ClearBlockMinedSet not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlocksMinedNotSet(context.Context, *emptypb.Empty) (*GetBlocksMinedNotSetResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlocksMinedNotSet not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlocksMinedNotSet not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SetBlockSubtreesSet(context.Context, *SetBlockSubtreesSetRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetBlockSubtreesSet not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method SetBlockSubtreesSet not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlocksSubtreesNotSet(context.Context, *emptypb.Empty) (*GetBlocksSubtreesNotSetResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlocksSubtreesNotSet not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlocksSubtreesNotSet not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SetBlockProcessedAt(context.Context, *SetBlockProcessedAtRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetBlockProcessedAt not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method SetBlockProcessedAt not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SetBlockPersistedAt(context.Context, *SetBlockPersistedAtRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method SetBlockPersistedAt not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method SetBlockPersistedAt not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlocksNotPersisted(context.Context, *GetBlocksNotPersistedRequest) (*GetBlocksNotPersistedResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlocksNotPersisted not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlocksNotPersisted not implemented")
 }
 func (UnimplementedBlockchainAPIServer) SendFSMEvent(context.Context, *SendFSMEventRequest) (*GetFSMStateResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SendFSMEvent not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method SendFSMEvent not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetFSMCurrentState(context.Context, *emptypb.Empty) (*GetFSMStateResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetFSMCurrentState not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetFSMCurrentState not implemented")
 }
 func (UnimplementedBlockchainAPIServer) WaitFSMToTransitionToGivenState(context.Context, *WaitFSMToTransitionRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method WaitFSMToTransitionToGivenState not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method WaitFSMToTransitionToGivenState not implemented")
 }
 func (UnimplementedBlockchainAPIServer) WaitUntilFSMTransitionFromIdleState(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method WaitUntilFSMTransitionFromIdleState not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method WaitUntilFSMTransitionFromIdleState not implemented")
 }
 func (UnimplementedBlockchainAPIServer) Run(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method Run not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method Run not implemented")
 }
 func (UnimplementedBlockchainAPIServer) CatchUpBlocks(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method CatchUpBlocks not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method CatchUpBlocks not implemented")
 }
 func (UnimplementedBlockchainAPIServer) LegacySync(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method LegacySync not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method LegacySync not implemented")
 }
 func (UnimplementedBlockchainAPIServer) Idle(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method Idle not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method Idle not implemented")
 }
 func (UnimplementedBlockchainAPIServer) ReportPeerFailure(context.Context, *ReportPeerFailureRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method ReportPeerFailure not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method ReportPeerFailure not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlockLocator(context.Context, *GetBlockLocatorRequest) (*GetBlockLocatorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBlockLocator not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBlockLocator not implemented")
 }
 func (UnimplementedBlockchainAPIServer) LocateBlockHeaders(context.Context, *LocateBlockHeadersRequest) (*LocateBlockHeadersResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method LocateBlockHeaders not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method LocateBlockHeaders not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBestHeightAndTime(context.Context, *emptypb.Empty) (*GetBestHeightAndTimeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetBestHeightAndTime not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetBestHeightAndTime not implemented")
 }
 func (UnimplementedBlockchainAPIServer) ScheduleBlobDeletion(context.Context, *ScheduleBlobDeletionRequest) (*ScheduleBlobDeletionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ScheduleBlobDeletion not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method ScheduleBlobDeletion not implemented")
 }
 func (UnimplementedBlockchainAPIServer) CancelBlobDeletion(context.Context, *CancelBlobDeletionRequest) (*CancelBlobDeletionResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CancelBlobDeletion not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method CancelBlobDeletion not implemented")
 }
 func (UnimplementedBlockchainAPIServer) ListScheduledDeletions(context.Context, *ListScheduledDeletionsRequest) (*ListScheduledDeletionsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListScheduledDeletions not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method ListScheduledDeletions not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetPendingBlobDeletions(context.Context, *GetPendingBlobDeletionsRequest) (*GetPendingBlobDeletionsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetPendingBlobDeletions not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method GetPendingBlobDeletions not implemented")
 }
 func (UnimplementedBlockchainAPIServer) RemoveBlobDeletion(context.Context, *RemoveBlobDeletionRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method RemoveBlobDeletion not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveBlobDeletion not implemented")
 }
 func (UnimplementedBlockchainAPIServer) IncrementBlobDeletionRetry(context.Context, *IncrementBlobDeletionRetryRequest) (*IncrementBlobDeletionRetryResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method IncrementBlobDeletionRetry not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method IncrementBlobDeletionRetry not implemented")
 }
 func (UnimplementedBlockchainAPIServer) CompleteBlobDeletions(context.Context, *CompleteBlobDeletionsRequest) (*CompleteBlobDeletionsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method CompleteBlobDeletions not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method CompleteBlobDeletions not implemented")
 }
 func (UnimplementedBlockchainAPIServer) AcquireBlobDeletionBatch(context.Context, *AcquireBlobDeletionBatchRequest) (*AcquireBlobDeletionBatchResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method AcquireBlobDeletionBatch not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method AcquireBlobDeletionBatch not implemented")
 }
 func (UnimplementedBlockchainAPIServer) CompleteBlobDeletionBatch(context.Context, *CompleteBlobDeletionBatchRequest) (*emptypb.Empty, error) {
-	return nil, status.Error(codes.Unimplemented, "method CompleteBlobDeletionBatch not implemented")
+	return nil, status.Errorf(codes.Unimplemented, "method CompleteBlobDeletionBatch not implemented")
 }
 func (UnimplementedBlockchainAPIServer) mustEmbedUnimplementedBlockchainAPIServer() {}
 func (UnimplementedBlockchainAPIServer) testEmbeddedByValue()                       {}
@@ -1293,7 +1313,7 @@ type UnsafeBlockchainAPIServer interface {
 }
 
 func RegisterBlockchainAPIServer(s grpc.ServiceRegistrar, srv BlockchainAPIServer) {
-	// If the following call panics, it indicates UnimplementedBlockchainAPIServer was
+	// If the following call pancis, it indicates UnimplementedBlockchainAPIServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
@@ -1713,6 +1733,24 @@ func _BlockchainAPI_GetBlockHeadersByHeight_Handler(srv interface{}, ctx context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetBlockHeadersByHeight(ctx, req.(*GetBlockHeadersByHeightRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetMedianTimePastByHeights_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMedianTimePastByHeightsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetMedianTimePastByHeights(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetMedianTimePastByHeights_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetMedianTimePastByHeights(ctx, req.(*GetMedianTimePastByHeightsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2600,6 +2638,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockHeadersByHeight",
 			Handler:    _BlockchainAPI_GetBlockHeadersByHeight_Handler,
+		},
+		{
+			MethodName: "GetMedianTimePastByHeights",
+			Handler:    _BlockchainAPI_GetMedianTimePastByHeights_Handler,
 		},
 		{
 			MethodName: "GetBlocksByHeight",

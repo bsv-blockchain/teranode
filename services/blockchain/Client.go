@@ -604,13 +604,14 @@ func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *m
 	}
 
 	meta := &model.BlockHeaderMeta{
-		Height:      resp.Height,
-		TxCount:     resp.TxCount,
-		SizeInBytes: resp.SizeInBytes,
-		Miner:       resp.Miner,
-		BlockTime:   resp.BlockTime,
-		Timestamp:   resp.Timestamp,
-		ChainWork:   resp.ChainWork,
+		Height:         resp.Height,
+		TxCount:        resp.TxCount,
+		SizeInBytes:    resp.SizeInBytes,
+		Miner:          resp.Miner,
+		BlockTime:      resp.BlockTime,
+		Timestamp:      resp.Timestamp,
+		ChainWork:      resp.ChainWork,
+		MedianTimePast: resp.MedianTimePast,
 	}
 
 	return header, meta, nil
@@ -688,18 +689,19 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 	}
 
 	meta := &model.BlockHeaderMeta{
-		ID:          resp.Id,
-		Height:      resp.Height,
-		TxCount:     resp.TxCount,
-		SizeInBytes: resp.SizeInBytes,
-		Miner:       resp.Miner,
-		PeerID:      resp.PeerId,
-		BlockTime:   resp.BlockTime,
-		Timestamp:   resp.Timestamp,
-		ChainWork:   resp.ChainWork,
-		MinedSet:    resp.MinedSet,
-		SubtreesSet: resp.SubtreesSet,
-		Invalid:     resp.Invalid,
+		ID:             resp.Id,
+		Height:         resp.Height,
+		TxCount:        resp.TxCount,
+		SizeInBytes:    resp.SizeInBytes,
+		Miner:          resp.Miner,
+		PeerID:         resp.PeerId,
+		BlockTime:      resp.BlockTime,
+		Timestamp:      resp.Timestamp,
+		ChainWork:      resp.ChainWork,
+		MinedSet:       resp.MinedSet,
+		SubtreesSet:    resp.SubtreesSet,
+		Invalid:        resp.Invalid,
+		MedianTimePast: resp.MedianTimePast,
 	}
 
 	if resp.ProcessedAt != nil {
