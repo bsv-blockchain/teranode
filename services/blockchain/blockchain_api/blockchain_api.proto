@@ -81,6 +81,10 @@ service BlockchainAPI {
   // GetBlockHeadersByHeight retrieves block headers between two specified heights.
   rpc GetBlockHeadersByHeight(GetBlockHeadersByHeightRequest) returns (GetBlockHeadersByHeightResponse) {}
 
+  // GetMedianTimePastByHeights retrieves Median Time Past (MTP) values for specified block heights.
+  // This is used for BIP68 relative locktime verification.
+  rpc GetMedianTimePastByHeights(GetMedianTimePastByHeightsRequest) returns (GetMedianTimePastByHeightsResponse) {}
+
   // GetBlocksByHeight retrieves full blocks between two specified heights.
   rpc GetBlocksByHeight(GetBlocksByHeightRequest) returns (GetBlocksByHeightResponse) {}
 
@@ -375,6 +379,16 @@ message GetBlockHeadersByHeightResponse {
   repeated bytes metas = 2;         // List of serialized metadata
 }
 
+// GetMedianTimePastByHeightsRequest requests MTP values for specified block heights.
+message GetMedianTimePastByHeightsRequest {
+  repeated uint32 heights = 1;  // List of block heights to get MTP for
+}
+
+// GetMedianTimePastByHeightsResponse contains MTP values for the requested heights.
+message GetMedianTimePastByHeightsResponse {
+  repeated uint32 median_time_past = 1;  // MTP values corresponding to requested heights (0 if height < 11)
+}
+
 // GetBlocksByHeightRequest requests full blocks between two heights.
 message GetBlocksByHeightRequest {
   uint32 startHeight = 1;  // Starting height
@@ -448,6 +462,7 @@ message GetBlockHeaderResponse {
   bool subtrees_set = 12;     // Subtrees status
   bool invalid = 13;          // Validity status
   google.protobuf.Timestamp processed_at = 14; // Timestamp when block was processed
+  uint32 median_time_past = 15; // Median Time Past (MTP) - median of last 11 block timestamps (BIP113)
 }
 
 // CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.
