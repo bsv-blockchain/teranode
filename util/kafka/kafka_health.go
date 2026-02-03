@@ -9,27 +9,34 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-// HealthChecker creates a function that checks the health of a Kafka cluster using franz-go.
-// It returns a health check function that can be used to verify the Kafka cluster's status.
+// HealthChecker returns a function that checks basic connectivity to the Kafka cluster.
+// It does not verify individual consumer or producer functionality.
+//
+// Kafka brokers do not expose a dedicated health endpoint; the usual approach is to verify
+// connectivity with a metadata (or equivalent) request. This check creates a short-lived
+// client, pings the cluster, and returns 200 if connectable, 503 otherwise. In production,
+// producers and consumers reconnect on their own; we assume that if we can connect to the
+// brokers, the cluster is healthy.
 //
 // Parameters:
-//   - ctx: Context for the health check operation
-//   - brokersURL: List of Kafka broker URLs to check
+//   - ctx: Context for the health check operation (unused at construction time).
+//   - brokersURL: List of Kafka broker URLs to check.
 //
-// Returns:
-//   - A function that performs the actual health check with the following signature:
-//     func(ctx context.Context, checkLiveness bool) (int, string, error)
-//     where:
-//   - int: HTTP status code (200 for healthy, 503 for unhealthy)
-//   - string: Health check message
-//   - error: Any error encountered during the health check
+// Returns a function with signature:
+//
+//	func(ctx context.Context, checkLiveness bool) (int, string, error)
+//
+// where int is HTTP status (200 healthy, 503 unhealthy), string is a message, and error is non-nil on failure.
 func HealthChecker(_ context.Context, brokersURL []string) func(ctx context.Context, checkLiveness bool) (int, string, error) {
 	return func(ctx context.Context, checkLiveness bool) (int, string, error) {
-		if brokersURL == nil {
+		if brokersURL == nil || len(brokersURL) == 0 {
 			return http.StatusOK, "Kafka is not configured - skipping health check", nil
 		}
 
-		// Create a minimal franz-go client for health checking
+		if checkLiveness {
+			return http.StatusOK, "Kafka liveness (skipped)", nil
+		}
+
 		opts := []kgo.Opt{
 			kgo.SeedBrokers(brokersURL...),
 			kgo.ConnIdleTimeout(100 * time.Millisecond),
@@ -43,8 +50,7 @@ func HealthChecker(_ context.Context, brokersURL []string) func(ctx context.Cont
 		}
 		defer client.Close()
 
-		// Ping the cluster by fetching metadata
-		pingCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		pingCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 		defer cancel()
 
 		if err := client.Ping(pingCtx); err != nil {
