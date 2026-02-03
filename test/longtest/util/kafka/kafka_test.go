@@ -270,7 +270,7 @@ func TestKafkaProducerAndConsumer(t *testing.T) {
 			}
 		}
 
-		err = client.ConsumerGroup.Close()
+		err = client.Close()
 		require.NoError(t, err)
 
 		// In total we should have 4 messages (1 + 3 retries) for each of the 2 original messages
@@ -608,7 +608,7 @@ func consumeMessages(t *testing.T, ctx context.Context, logger ulogger.Logger, k
 	require.NoError(t, err)
 
 	defer func() {
-		_ = consumer.ConsumerGroup.Close()
+		_ = consumer.Close()
 	}()
 
 	consumer.Start(ctx, func(msg *ukafka.KafkaMessage) error {

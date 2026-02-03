@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	p2pMessageBus "github.com/bsv-blockchain/go-p2p-message-bus"
@@ -2194,10 +2193,8 @@ func TestInvalidSubtreeHandlerHappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	msg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-subtrees",
-			Value: payload,
-		},
+		Topic: "invalid-subtrees",
+		Value: payload,
 	}
 
 	h := s.invalidSubtreeHandler(context.Background())
@@ -2233,10 +2230,8 @@ func TestInvalidBlockHandler(t *testing.T) {
 
 	mkKafkaMsg := func(payload []byte) *kafka.KafkaMessage {
 		return &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Topic: "invalid-subtrees",
-				Value: payload,
-			},
+			Topic: "invalid-subtrees",
+			Value: payload,
 		}
 	}
 
@@ -2356,10 +2351,8 @@ func TestServerRejectedHandler(t *testing.T) {
 	// helper: incapsulate in kafka.KafkaMessage
 	mkKafkaMsg := func(b []byte) *kafka.KafkaMessage {
 		return &kafka.KafkaMessage{
-			ConsumerMessage: sarama.ConsumerMessage{
-				Topic: "rejected-tx",
-				Value: b,
-			},
+			Topic: "rejected-tx",
+			Value: b,
 		}
 	}
 
@@ -2476,10 +2469,8 @@ func TestServerRejectedHandler(t *testing.T) {
 
 		mkKafkaMsg := func(b []byte) *kafka.KafkaMessage {
 			return &kafka.KafkaMessage{
-				ConsumerMessage: sarama.ConsumerMessage{
-					Topic: "rejected-tx",
-					Value: b,
-				},
+				Topic: "rejected-tx",
+				Value: b,
 			}
 		}
 
@@ -2830,10 +2821,8 @@ func TestProcessInvalidBlockMessageSuccess(t *testing.T) {
 	require.NoError(t, err)
 
 	kafkaMsg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-blocks",
-			Value: msgBytes,
-		},
+		Topic: "invalid-blocks",
+		Value: msgBytes,
 	}
 
 	// Create a real ban manager for testing
@@ -2871,10 +2860,8 @@ func TestProcessInvalidBlockMessageUnmarshalError(t *testing.T) {
 	logger := ulogger.New("test")
 
 	kafkaMsg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-blocks",
-			Value: invalidBytes,
-		},
+		Topic: "invalid-blocks",
+		Value: invalidBytes,
 	}
 	server := &Server{
 		logger: logger,
@@ -2894,10 +2881,8 @@ func TestProcessInvalidBlockMessageNoPeerInMap(t *testing.T) {
 	logger := ulogger.New("test")
 
 	kafkaMsg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-blocks",
-			Value: msgBytes,
-		},
+		Topic: "invalid-blocks",
+		Value: msgBytes,
 	}
 
 	server := &Server{
@@ -2919,10 +2904,8 @@ func TestProcessInvalidBlockMessageWrongTypeInMap(t *testing.T) {
 	logger := ulogger.New("test")
 
 	kafkaMsg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-blocks",
-			Value: msgBytes,
-		},
+		Topic: "invalid-blocks",
+		Value: msgBytes,
 	}
 
 	server := &Server{
@@ -2947,10 +2930,8 @@ func TestProcessInvalidBlockMessageAddBanScoreFails(t *testing.T) {
 	mockPeerID := peer.ID("peer-fail")
 
 	kafkaMsg := &kafka.KafkaMessage{
-		ConsumerMessage: sarama.ConsumerMessage{
-			Topic: "invalid-blocks",
-			Value: msgBytes,
-		},
+		Topic: "invalid-blocks",
+		Value: msgBytes,
 	}
 
 	// Create a real ban manager for testing
