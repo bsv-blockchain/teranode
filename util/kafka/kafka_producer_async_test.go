@@ -6,8 +6,11 @@ import (
 	"testing"
 	"time"
 
+<<<<<<< HEAD
 	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/teranode/pkg/urlutil"
+=======
+>>>>>>> de1a92074 (feat: franz first iteration)
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,39 +59,6 @@ func TestKafkaAsyncProducerBrokersURLNilProducer(t *testing.T) {
 
 	result := producer.BrokersURL()
 	assert.Nil(t, result)
-}
-
-func TestKafkaAsyncProducerDecodeKeyOrValue(t *testing.T) {
-	producer := &KafkaAsyncProducer{}
-
-	tests := []struct {
-		name     string
-		encoder  sarama.Encoder
-		expected string
-	}{
-		{
-			name:     "Nil encoder",
-			encoder:  nil,
-			expected: "",
-		},
-		{
-			name:     "Short data",
-			encoder:  sarama.ByteEncoder("hello"),
-			expected: "68656c6c6f",
-		},
-		{
-			name:     "Long data gets truncated",
-			encoder:  sarama.ByteEncoder(make([]byte, 100)),
-			expected: "0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000... (truncated)",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := producer.decodeKeyOrValue(tt.encoder)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
 }
 
 func TestKafkaAsyncProducerStopNilProducer(t *testing.T) {
@@ -193,32 +163,35 @@ func TestNewKafkaAsyncProducerFromURLInvalidConversion(t *testing.T) {
 
 func TestNewKafkaAsyncProducerMemoryScheme(t *testing.T) {
 	logger := &mockAsyncLogger{}
+	ctx := context.Background()
 	cfg := KafkaProducerConfig{
 		Logger: logger,
-		URL:    &url.URL{Scheme: memoryScheme},
+		URL:    &url.URL{Scheme: memoryScheme, Path: "/memory-topic", Host: "localhost"},
 		Topic:  "memory-topic",
+		BrokersURL: []string{"localhost"},
 	}
 
-	producer, err := NewKafkaAsyncProducer(logger, cfg)
+	producer, err := NewKafkaAsyncProducer(ctx, logger, cfg)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, producer)
-	assert.NotNil(t, producer.Producer)
-	assert.Equal(t, cfg, producer.Config)
+	assert.Equal(t, cfg.Topic, producer.Config.Topic)
 }
 
 func TestNewKafkaAsyncProducerWithKafkaSettings(t *testing.T) {
 	logger := &mockAsyncLogger{}
+	ctx := context.Background()
 	cfg := KafkaProducerConfig{
 		Logger:             logger,
-		URL:                &url.URL{Scheme: memoryScheme},
+		URL:                &url.URL{Scheme: memoryScheme, Path: "/test-topic", Host: "localhost"},
 		Topic:              "test-topic",
+		BrokersURL:         []string{"localhost"},
 		EnableTLS:          false,
 		TLSSkipVerify:      false,
 		EnableDebugLogging: false,
 	}
 
-	producer, err := NewKafkaAsyncProducer(logger, cfg)
+	producer, err := NewKafkaAsyncProducer(ctx, logger, cfg)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, producer)

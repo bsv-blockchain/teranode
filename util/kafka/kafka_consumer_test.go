@@ -1,12 +1,10 @@
 package kafka
 
 import (
-	"context"
 	"net/url"
 	"testing"
 	"time"
 
-	"github.com/IBM/sarama"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -67,89 +65,6 @@ func TestWithRetryAndStop(t *testing.T) {
 	assert.True(t, stopFnCalled)
 }
 
-func TestNewKafkaConsumer(t *testing.T) {
-	logger := &mockLogger{}
-	cfg := KafkaConsumerConfig{
-		Logger:            logger,
-		Topic:             "test-topic",
-		ConsumerGroupID:   "test-group",
-		AutoCommitEnabled: true,
-	}
-
-	consumerFn := func(message *KafkaMessage) error {
-		return nil
-	}
-
-	watchdog := &consumeWatchdog{}
-	consumer := NewKafkaConsumer(cfg, consumerFn, watchdog)
-
-	assert.NotNil(t, consumer)
-	assert.Equal(t, cfg, consumer.cfg)
-	assert.NotNil(t, consumer.consumerClosure)
-	assert.NotNil(t, consumer.watchdog)
-}
-
-func TestNewKafkaConsumerNilConsumerFunction(t *testing.T) {
-	logger := &mockLogger{}
-	cfg := KafkaConsumerConfig{
-		Logger:            logger,
-		Topic:             "test-topic",
-		ConsumerGroupID:   "test-group",
-		AutoCommitEnabled: false,
-	}
-
-	watchdog := &consumeWatchdog{}
-	consumer := NewKafkaConsumer(cfg, nil, watchdog)
-
-	assert.NotNil(t, consumer)
-	assert.Equal(t, cfg, consumer.cfg)
-	assert.Nil(t, consumer.consumerClosure)
-}
-
-func TestKafkaConsumerSetup(t *testing.T) {
-	consumer := &KafkaConsumer{
-		cfg: KafkaConsumerConfig{
-			Topic: "test-topic",
-		},
-	}
-
-	err := consumer.Setup(&mockConsumerGroupSession{})
-
-	assert.NoError(t, err)
-}
-
-func TestKafkaConsumerCleanupAutoCommitEnabled(t *testing.T) {
-	consumer := &KafkaConsumer{
-		cfg: KafkaConsumerConfig{
-			Logger:            &mockLogger{},
-			Topic:             "test-topic",
-			AutoCommitEnabled: true,
-		},
-	}
-
-	session := &mockConsumerGroupSession{}
-	err := consumer.Cleanup(session)
-
-	assert.NoError(t, err)
-	assert.False(t, session.commitCalled) // Should not call commit when auto-commit is enabled
-}
-
-func TestKafkaConsumerCleanupManualCommit(t *testing.T) {
-	consumer := &KafkaConsumer{
-		cfg: KafkaConsumerConfig{
-			Logger:            &mockLogger{},
-			Topic:             "test-topic",
-			AutoCommitEnabled: false,
-		},
-	}
-
-	session := &mockConsumerGroupSession{}
-	err := consumer.Cleanup(session)
-
-	assert.NoError(t, err)
-	assert.True(t, session.commitCalled) // Should call commit when auto-commit is disabled
-}
-
 func TestNewKafkaConsumerGroupFromURLInvalidURL(t *testing.T) {
 	logger := &mockLogger{}
 
@@ -192,21 +107,15 @@ func TestNewKafkaConsumerGroupFromURLDefaultValues(t *testing.T) {
 
 func TestKafkaConsumerGroupClose(t *testing.T) {
 	logger := &mockLogger{}
-	mockConsumerGroup := &mockSaramaConsumerGroup{}
+	kafkaURL, err := url.Parse("memory://localhost/test-topic")
+	require.NoError(t, err)
 
-	consumer := &KafkaConsumerGroup{
-		Config: KafkaConsumerConfig{
-			Logger:          logger,
-			Topic:           "test-topic",
-			ConsumerGroupID: "test-group",
-		},
-		ConsumerGroup: mockConsumerGroup,
-	}
+	consumer, err := NewKafkaConsumerGroupFromURL(logger, kafkaURL, "test-group", true, nil)
+	require.NoError(t, err)
+	require.NotNil(t, consumer)
 
-	err := consumer.Close()
-
+	err = consumer.Close()
 	assert.NoError(t, err)
-	assert.True(t, mockConsumerGroup.closed)
 }
 
 func TestKafkaConsumerGroupBrokersURL(t *testing.T) {
@@ -288,55 +197,6 @@ func (m *mockLogger) SetLogLevel(string)                              {}
 func (m *mockLogger) New(string, ...ulogger.Option) ulogger.Logger    { return m }
 func (m *mockLogger) Duplicate(...ulogger.Option) ulogger.Logger      { return m }
 func (m *mockLogger) WithTraceContext(context.Context) ulogger.Logger { return m }
-
-type mockConsumerGroupSession struct {
-	commitCalled bool
-}
-
-func (m *mockConsumerGroupSession) Claims() map[string][]int32 { return nil }
-func (m *mockConsumerGroupSession) MemberID() string           { return "test-member" }
-func (m *mockConsumerGroupSession) GenerationID() int32        { return 1 }
-func (m *mockConsumerGroupSession) MarkOffset(string, int32, int64, string) {
-}
-func (m *mockConsumerGroupSession) ResetOffset(string, int32, int64, string) {
-}
-func (m *mockConsumerGroupSession) MarkMessage(*sarama.ConsumerMessage, string) {}
-func (m *mockConsumerGroupSession) Context() context.Context                    { return context.Background() }
-func (m *mockConsumerGroupSession) Commit() {
-	m.commitCalled = true
-}
-
-type mockSaramaConsumerGroup struct {
-	closed bool
-}
-
-// Consume implements sarama.ConsumerGroup interface
-func (m *mockSaramaConsumerGroup) Consume(context.Context, []string, sarama.ConsumerGroupHandler) error {
-	return nil
-}
-
-// Errors implements sarama.ConsumerGroup interface
-func (m *mockSaramaConsumerGroup) Errors() <-chan error {
-	return make(chan error)
-}
-
-// Close implements sarama.ConsumerGroup interface
-func (m *mockSaramaConsumerGroup) Close() error {
-	m.closed = true
-	return nil
-}
-
-// Pause and Resume methods are no-ops for the mock
-func (m *mockSaramaConsumerGroup) Pause(map[string][]int32) {}
-
-// Resume implements sarama.ConsumerGroup interface
-func (m *mockSaramaConsumerGroup) Resume(map[string][]int32) {}
-
-// PauseAll and ResumeAll methods are no-ops for the mock
-func (m *mockSaramaConsumerGroup) PauseAll() {}
-
-// ResumeAll implements sarama.ConsumerGroup interface
-func (m *mockSaramaConsumerGroup) ResumeAll() {}
 
 // Watchdog tests
 
@@ -484,33 +344,6 @@ func TestConsumeWatchdogSequence_NormalFlow(t *testing.T) {
 	assert.False(t, stuck)
 }
 
-func TestForceRecovery_ClosesOldConsumer(t *testing.T) {
-	logger := &mockLogger{}
-	mockConsumerGroup := &mockSaramaConsumerGroup{}
-
-	cfg := sarama.NewConfig()
-	cfg.Consumer.Return.Errors = true
-
-	consumer := &KafkaConsumerGroup{
-		Config: KafkaConsumerConfig{
-			Logger:          logger,
-			Topic:           "test-topic",
-			ConsumerGroupID: "test-group",
-			BrokersURL:      []string{"localhost:9092"},
-		},
-		ConsumerGroup: mockConsumerGroup,
-		saramaConfig:  cfg,
-		watchdog:      &consumeWatchdog{},
-	}
-
-	// Force recovery should close the old consumer
-	_ = consumer.forceRecovery()
-
-	// The important thing is that Close() was called on the mock consumer
-	// (New consumer creation will fail with invalid brokers, but that's expected and logged)
-	assert.True(t, mockConsumerGroup.closed, "forceRecovery should close the old consumer group")
-}
-
 func TestForceRecovery_WatchdogIntegration(t *testing.T) {
 	// Create a watchdog that appears stuck
 	watchdog := &consumeWatchdog{}
@@ -531,11 +364,6 @@ func TestForceRecovery_WatchdogIntegration(t *testing.T) {
 
 func TestForceRecovery_MutexProtectsConcurrentCalls(t *testing.T) {
 	logger := &mockLogger{}
-	mockConsumerGroup := &mockSaramaConsumerGroup{}
-
-	cfg := sarama.NewConfig()
-	cfg.Consumer.Return.Errors = true
-
 	consumer := &KafkaConsumerGroup{
 		Config: KafkaConsumerConfig{
 			Logger:          logger,
@@ -543,28 +371,19 @@ func TestForceRecovery_MutexProtectsConcurrentCalls(t *testing.T) {
 			ConsumerGroupID: "test-group",
 			BrokersURL:      []string{"localhost:9092"},
 		},
-		ConsumerGroup: mockConsumerGroup,
-		saramaConfig:  cfg,
-		watchdog:      &consumeWatchdog{},
+		watchdog: &consumeWatchdog{},
 	}
 
-	// Launch multiple concurrent force recovery calls
-	// The mutex should ensure they don't interfere with each other
+	// Launch multiple concurrent force recovery calls; mutex should prevent panics
 	const numConcurrent = 5
 	done := make(chan bool, numConcurrent)
-
 	for i := 0; i < numConcurrent; i++ {
 		go func() {
 			_ = consumer.forceRecovery()
 			done <- true
 		}()
 	}
-
-	// Wait for all goroutines to complete
 	for i := 0; i < numConcurrent; i++ {
 		<-done
 	}
-
-	// Should have closed the consumer (at least once)
-	assert.True(t, mockConsumerGroup.closed)
 }
