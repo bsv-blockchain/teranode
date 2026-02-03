@@ -1,6 +1,7 @@
 package smoke
 
 import (
+	"os"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/daemon"
@@ -24,6 +25,10 @@ import (
 //
 //	go test -v -run TestUnifiedLoggingExample ./test/e2e/daemon/ready/
 func TestUnifiedLoggingExample(t *testing.T) {
+	// Skip in CI - this is a demonstration test meant for local development
+	if os.Getenv("GITHUB_ACTIONS") == "true" {
+		t.Skip("Skipping example test in CI - run locally with -v to see unified logging output")
+	}
 
 	// Create daemon with unified logging enabled
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
