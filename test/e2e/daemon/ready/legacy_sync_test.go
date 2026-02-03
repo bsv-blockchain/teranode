@@ -115,14 +115,14 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 
 	ctx := t.Context()
 
-	// Start svnode in Docker
-	sv := newSVNode()
-	err := sv.Start(ctx)
-	require.NoError(t, err, "Failed to start svnode")
+	// // Start svnode in Docker
+	// sv := newSVNode()
+	// err := sv.Start(ctx)
+	// require.NoError(t, err, "Failed to start svnode")
 
-	defer func() {
-		_ = sv.Stop(ctx)
-	}()
+	// defer func() {
+	// 	_ = sv.Stop(ctx)
+	// }()
 
 	// Important: svnode won't accept blocks from a pruned node (teranode)
 	// until it has at least 1 block on top of genesis
@@ -149,7 +149,7 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 		),
 	})
 
-	err = td.BlockchainClient.Run(td.Ctx, "test")
+	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err, "failed to initialize blockchain")
 	defer td.Stop(t)
 
@@ -157,7 +157,7 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 
 	// Generate blocks on teranode
 	const teranodeBlocks = 5
-	const targetHeight = 1 + teranodeBlocks
+	const targetHeight = teranodeBlocks
 
 	// Generate blocks with slight delay - svnode complains about timestamps otherwise
 	var minedBlocks []*model.Block
@@ -199,6 +199,15 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 	})
 
 	defer td.Stop(t)
+
+	// Start svnode in Docker
+	sv := newSVNode()
+	err = sv.Start(td.Ctx)
+	require.NoError(t, err, "Failed to start svnode")
+
+	defer func() {
+		_ = sv.Stop(td.Ctx)
+	}()
 
 	// Test getpeerinfo
 	resp, err := td.CallRPC(td.Ctx, "getpeerinfo", []any{})
