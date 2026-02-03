@@ -150,6 +150,9 @@ type BlockValidation struct {
 	// blockHashesCurrentlyValidated tracks blocks in validation process (for setTxMined)
 	blockHashesCurrentlyValidated *txmap.SwissMap
 
+	// setMinedMu protects the check-and-claim operation for blockHashesCurrentlyValidated
+	setMinedMu sync.Mutex
+
 	// blocksCurrentlyValidating tracks blocks being validated to prevent concurrent validation
 	blocksCurrentlyValidating *txmap.SyncedMap[chainhash.Hash, *validationResult]
 
@@ -463,7 +466,11 @@ func (u *BlockValidation) start(ctx context.Context) error {
 					continue
 				}
 
-				_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
+				// Atomically check and claim the block to prevent duplicate processing
+				if !u.tryClaimBlockForSetMined(blockHash) {
+					u.logger.Debugf("[BlockValidation:start][%s] block already being processed, skipping", blockHash.String())
+					continue
+				}
 
 				if err = u.setTxMinedStatus(ctx, blockHash, blockHeaderMeta.Invalid); err != nil {
 					// Check if context is done before logging
@@ -561,7 +568,11 @@ func (u *BlockValidation) processBlockMinedNotSet(ctx context.Context, g *errgro
 		for _, block := range blocksMinedNotSet {
 			blockHash := block.Hash()
 
-			_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
+			// Atomically check and claim the block to prevent duplicate processing
+			if !u.tryClaimBlockForSetMined(blockHash) {
+				u.logger.Debugf("[BlockValidation:start] block %s already being processed, skipping", blockHash.String())
+				continue
+			}
 
 			g.Go(func() error {
 				u.logger.Debugf("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
@@ -762,6 +773,21 @@ func (u *BlockValidation) hasValidSubtrees(block *model.Block) bool {
 	}
 
 	return block.SubtreesLoaded()
+}
+
+// tryClaimBlockForSetMined atomically checks if a block is already being processed for setTxMined
+// and claims it if not. Returns true if the block was successfully claimed, false if already in progress.
+// This prevents duplicate processing when multiple sources (Kafka notifications, periodic jobs, retries)
+// attempt to process the same block concurrently.
+func (u *BlockValidation) tryClaimBlockForSetMined(blockHash *chainhash.Hash) bool {
+	u.setMinedMu.Lock()
+	defer u.setMinedMu.Unlock()
+
+	if u.blockHashesCurrentlyValidated.Exists(*blockHash) {
+		return false
+	}
+	_ = u.blockHashesCurrentlyValidated.Put(*blockHash)
+	return true
 }
 
 // setTxMinedStatus marks all transactions within a block as mined in the blockchain system.
