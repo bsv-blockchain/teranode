@@ -472,29 +472,32 @@ func (u *BlockValidation) start(ctx context.Context) error {
 					continue
 				}
 
-				if err = u.setTxMinedStatus(ctx, blockHash, blockHeaderMeta.Invalid); err != nil {
-					// Check if context is done before logging
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
+				// Process in anonymous function to ensure cleanup via defer
+				func() {
+					// Ensure cleanup happens regardless of success, error, panic, or context cancellation
+					defer func() {
+						if deleteErr := u.blockHashesCurrentlyValidated.Delete(*blockHash); deleteErr != nil {
+							u.logger.Errorf("[BlockValidation:start][%s] failed to delete blockHash from blockHashesCurrentlyValidated: %s", blockHash.String(), deleteErr)
+						}
+					}()
 
-					u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
+					if err = u.setTxMinedStatus(ctx, blockHash, blockHeaderMeta.Invalid); err != nil {
+						// Check if context is done before logging
+						select {
+						case <-ctx.Done():
+							return
+						default:
+						}
 
-					// Always remove from map on failure to prevent blocking child blocks
-					if deleteErr := u.blockHashesCurrentlyValidated.Delete(*blockHash); deleteErr != nil {
-						u.logger.Errorf("[BlockValidation:start][%s] failed to delete blockHash from blockHashesCurrentlyValidated: %s", blockHash.String(), deleteErr)
-					}
+						u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
 
-					if !errors.Is(err, errors.ErrBlockNotFound) {
-						time.Sleep(1 * time.Second)
-						// put the block back in the setMinedChan for retry
-						u.setMinedChan <- blockHash
+						if !errors.Is(err, errors.ErrBlockNotFound) {
+							time.Sleep(1 * time.Second)
+							// put the block back in the setMinedChan for retry
+							u.setMinedChan <- blockHash
+						}
 					}
-				} else {
-					_ = u.blockHashesCurrentlyValidated.Delete(*blockHash)
-				}
+				}()
 
 				u.logger.Debugf("[BlockValidation:start][%s] block setTxMined DONE in %s", blockHash.String(), time.Since(startTime))
 			}
@@ -575,6 +578,13 @@ func (u *BlockValidation) processBlockMinedNotSet(ctx context.Context, g *errgro
 			}
 
 			g.Go(func() error {
+				// Ensure cleanup happens regardless of success, error, panic, or context cancellation
+				defer func() {
+					if deleteErr := u.blockHashesCurrentlyValidated.Delete(*blockHash); deleteErr != nil {
+						u.logger.Errorf("[BlockValidation:start][%s] failed to delete blockHash from blockHashesCurrentlyValidated: %s", blockHash.String(), deleteErr)
+					}
+				}()
+
 				u.logger.Debugf("[BlockValidation:start] processing block mined not set: %s", blockHash.String())
 
 				select {
@@ -598,10 +608,6 @@ func (u *BlockValidation) processBlockMinedNotSet(ctx context.Context, g *errgro
 							u.logger.Errorf("[BlockValidation:start] failed to set block mined: %s", err)
 						}
 						u.setMinedChan <- blockHash
-					}
-
-					if err = u.blockHashesCurrentlyValidated.Delete(*blockHash); err != nil {
-						u.logger.Errorf("[BlockValidation:start] failed to delete block from currently validated: %s", err)
 					}
 
 					u.logger.Infof("[BlockValidation:start] processed block mined and set mined_set: %s", blockHash.String())
