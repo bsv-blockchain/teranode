@@ -63,7 +63,7 @@ func setupMemoryKafkaProducer(t *testing.T, topic string) kafka.KafkaAsyncProduc
 		Logger:         ulogger.TestLogger{},
 	}
 
-	producer, err := kafka.NewKafkaAsyncProducer(context.Background(), ulogger.TestLogger{}, cfg)
+	producer, err := kafka.NewKafkaAsyncProducer(ulogger.TestLogger{}, cfg)
 	require.NoError(t, err)
 
 	return producer

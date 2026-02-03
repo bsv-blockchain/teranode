@@ -158,15 +158,14 @@ func TestNewKafkaAsyncProducerFromURLInvalidConversion(t *testing.T) {
 
 func TestNewKafkaAsyncProducerMemoryScheme(t *testing.T) {
 	logger := &mockAsyncLogger{}
-	ctx := context.Background()
 	cfg := KafkaProducerConfig{
-		Logger: logger,
-		URL:    &url.URL{Scheme: memoryScheme, Path: "/memory-topic", Host: "localhost"},
-		Topic:  "memory-topic",
+		Logger:     logger,
+		URL:        &url.URL{Scheme: memoryScheme, Path: "/memory-topic", Host: "localhost"},
+		Topic:      "memory-topic",
 		BrokersURL: []string{"localhost"},
 	}
 
-	producer, err := NewKafkaAsyncProducer(ctx, logger, cfg)
+	producer, err := NewKafkaAsyncProducer(logger, cfg)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, producer)
@@ -175,7 +174,6 @@ func TestNewKafkaAsyncProducerMemoryScheme(t *testing.T) {
 
 func TestNewKafkaAsyncProducerWithKafkaSettings(t *testing.T) {
 	logger := &mockAsyncLogger{}
-	ctx := context.Background()
 	cfg := KafkaProducerConfig{
 		Logger:             logger,
 		URL:                &url.URL{Scheme: memoryScheme, Path: "/test-topic", Host: "localhost"},
@@ -186,7 +184,7 @@ func TestNewKafkaAsyncProducerWithKafkaSettings(t *testing.T) {
 		EnableDebugLogging: false,
 	}
 
-	producer, err := NewKafkaAsyncProducer(ctx, logger, cfg)
+	producer, err := NewKafkaAsyncProducer(logger, cfg)
 
 	assert.NoError(t, err)
 	assert.NotNil(t, producer)

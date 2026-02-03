@@ -1,6 +1,7 @@
 package kafka
 
 import (
+	"context"
 	"net/url"
 	"testing"
 	"time"
@@ -63,6 +64,51 @@ func TestWithRetryAndStop(t *testing.T) {
 	// Test that stopFn works
 	opts.stopFn()
 	assert.True(t, stopFnCalled)
+}
+
+func TestNewKafkaConsumerGroup(t *testing.T) {
+	logger := &mockLogger{}
+	kafkaURL, err := url.Parse("memory://localhost/test-topic")
+	require.NoError(t, err)
+	cfg := KafkaConsumerConfig{
+		Logger:            logger,
+		URL:               kafkaURL,
+		Topic:             "test-topic",
+		ConsumerGroupID:   "test-group",
+		AutoCommitEnabled: true,
+	}
+
+	consumer, err := NewKafkaConsumerGroup(cfg)
+
+	require.NoError(t, err)
+	assert.NotNil(t, consumer)
+	assert.Equal(t, cfg.Topic, consumer.Config.Topic)
+	assert.Equal(t, cfg.ConsumerGroupID, consumer.Config.ConsumerGroupID)
+	assert.Equal(t, cfg.AutoCommitEnabled, consumer.Config.AutoCommitEnabled)
+}
+
+func TestNewKafkaConsumerGroupNilConsumerFunction(t *testing.T) {
+	logger := &mockLogger{}
+	kafkaURL, err := url.Parse("memory://localhost/test-topic")
+	require.NoError(t, err)
+	cfg := KafkaConsumerConfig{
+		Logger:            logger,
+		URL:               kafkaURL,
+		Topic:             "test-topic",
+		ConsumerGroupID:   "test-group",
+		AutoCommitEnabled: false,
+	}
+
+	consumer, err := NewKafkaConsumerGroup(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, consumer)
+
+	// Start with nil consumerFn is invalid; Start should return without panicking (consumerFn is only used when messages arrive).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	consumer.Start(ctx, nil)
+	cancel()
+	_ = consumer.Close()
 }
 
 func TestNewKafkaConsumerGroupFromURLInvalidURL(t *testing.T) {

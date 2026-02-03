@@ -24,7 +24,6 @@ import (
 const memoryScheme = "memory"
 
 // KafkaMessage represents a Kafka message with all necessary fields.
-// This replaces the previous sarama.ConsumerMessage embedding.
 type KafkaMessage struct {
 	Key       []byte
 	Value     []byte
@@ -133,32 +132,40 @@ func (w *consumeWatchdog) isStuckInRefreshMetadata(threshold time.Duration) (boo
 	return duration > threshold, duration
 }
 
-// isStuckAfterError detects when Consume() returned with an error, the retry loop is attempting
-// to call Consume() again, but it's been stuck for longer than the threshold without Setup() being called.
+// This catches the case where offset errors cause Consume() to hang in RefreshMetadata on retry.
 func (w *consumeWatchdog) isStuckAfterError(threshold time.Duration) (bool, time.Duration) {
+	// Check if Consume() has ended (returned with error or success)
 	endTime, ok := w.consumeEndTime.Load().(time.Time)
 	if !ok || endTime.IsZero() {
+		// Consume() never ended, use the regular stuck detection
 		return false, 0
 	}
 
+	// Check if we're currently attempting to consume again
 	if !w.isAttemptingConsume.Load() {
+		// Not attempting, so can't be stuck
 		return false, 0
 	}
 
+	// Check when the retry attempt started
 	startTime, ok := w.consumeStartTime.Load().(time.Time)
 	if !ok || startTime.IsZero() {
 		return false, 0
 	}
 
+	// If startTime is before endTime, something is wrong with our tracking
 	if startTime.Before(endTime) {
 		return false, 0
 	}
 
+	// Check if Setup() was called after the retry
 	setupTime, _ := w.setupCalledTime.Load().(time.Time)
 	if !setupTime.IsZero() && setupTime.After(endTime) {
+		// Setup was called after the error, so we're not stuck
 		return false, 0
 	}
 
+	// We've been attempting to consume since the retry started, without Setup() being called
 	duration := time.Since(startTime)
 	return duration > threshold, duration
 }
@@ -204,6 +211,16 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 
 	partitions := util.GetQueryParamInt(url, "partitions", 1)
 
+	// AutoCommitEnabled: whether the consumer commits offsets automatically after processing.
+	// Per-topic semantics matter for correctness and at-least-once vs best-effort delivery:
+	//   - txMetaCache: true, we CAN miss (best-effort populating cache).
+	//   - rejected txs: true, we CAN miss.
+	//   - subtree validation: false (at-least-once).
+	//   - block persister: false.
+	//   - block validation: false.
+
+	// Extract timeout configuration from URL query parameters (in milliseconds).
+	// Defaults match common Kafka client defaults; can be overridden per-topic for slow processing (e.g. subtree validation).
 	maxProcessingTimeMs := util.GetQueryParamInt(url, "maxProcessingTime", 100)
 	sessionTimeoutMs := util.GetQueryParamInt(url, "sessionTimeout", 10000)
 	heartbeatIntervalMs := util.GetQueryParamInt(url, "heartbeatInterval", 3000)
@@ -211,6 +228,7 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 	channelBufferSize := util.GetQueryParamInt(url, "channelBufferSize", 256)
 	consumerTimeoutMs := util.GetQueryParamInt(url, "consumerTimeout", 90000)
 
+	// Offset reset strategy: how to handle offset-out-of-range (e.g. "latest", "earliest", or "" for default/Replay).
 	offsetReset := url.Query().Get("offsetReset")
 
 	var enableTLS, tlsSkipVerify, enableDebugLogging bool
@@ -225,26 +243,26 @@ func NewKafkaConsumerGroupFromURL(logger ulogger.Logger, url *url.URL, consumerG
 	}
 
 	consumerConfig := KafkaConsumerConfig{
-		Logger:            logger,
-		URL:               url,
-		BrokersURL:        strings.Split(url.Host, ","),
-		Topic:             strings.TrimPrefix(url.Path, "/"),
-		Partitions:        partitions,
-		ConsumerGroupID:   consumerGroupID,
-		AutoCommitEnabled: autoCommit,
-		Replay:            util.GetQueryParamInt(url, "replay", 1) == 1,
-		MaxProcessingTime: time.Duration(maxProcessingTimeMs) * time.Millisecond,
-		SessionTimeout:    time.Duration(sessionTimeoutMs) * time.Millisecond,
-		HeartbeatInterval: time.Duration(heartbeatIntervalMs) * time.Millisecond,
-		RebalanceTimeout:  time.Duration(rebalanceTimeoutMs) * time.Millisecond,
-		ChannelBufferSize: channelBufferSize,
-		ConsumerTimeout:   time.Duration(consumerTimeoutMs) * time.Millisecond,
-		OffsetReset:       offsetReset,
-		EnableTLS:         enableTLS,
-		TLSSkipVerify:     tlsSkipVerify,
-		TLSCAFile:         tlsCAFile,
-		TLSCertFile:       tlsCertFile,
-		TLSKeyFile:        tlsKeyFile,
+		Logger:             logger,
+		URL:                url,
+		BrokersURL:         strings.Split(url.Host, ","),
+		Topic:              strings.TrimPrefix(url.Path, "/"),
+		Partitions:         partitions,
+		ConsumerGroupID:    consumerGroupID,
+		AutoCommitEnabled:  autoCommit,
+		Replay:             util.GetQueryParamInt(url, "replay", 1) == 1,
+		MaxProcessingTime:  time.Duration(maxProcessingTimeMs) * time.Millisecond,
+		SessionTimeout:     time.Duration(sessionTimeoutMs) * time.Millisecond,
+		HeartbeatInterval:  time.Duration(heartbeatIntervalMs) * time.Millisecond,
+		RebalanceTimeout:   time.Duration(rebalanceTimeoutMs) * time.Millisecond,
+		ChannelBufferSize:  channelBufferSize,
+		ConsumerTimeout:    time.Duration(consumerTimeoutMs) * time.Millisecond,
+		OffsetReset:        offsetReset,
+		EnableTLS:          enableTLS,
+		TLSSkipVerify:      tlsSkipVerify,
+		TLSCAFile:          tlsCAFile,
+		TLSCertFile:        tlsCertFile,
+		TLSKeyFile:         tlsKeyFile,
 		EnableDebugLogging: enableDebugLogging,
 	}
 
@@ -350,7 +368,7 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 		kgo.RebalanceTimeout(cfg.RebalanceTimeout),
 	}
 
-	// Configure offset behavior
+	// Configure offset reset behavior
 	if cfg.OffsetReset != "" {
 		switch strings.ToLower(cfg.OffsetReset) {
 		case "latest", "newest":
@@ -368,6 +386,7 @@ func NewKafkaConsumerGroup(cfg KafkaConsumerConfig) (*KafkaConsumerGroup, error)
 		}
 	} else if cfg.Replay {
 		opts = append(opts, kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()))
+		cfg.Logger.Infof("[Kafka] %s: replay enabled, configured to consume from earliest offset", cfg.Topic)
 	}
 
 	// Configure auto-commit
