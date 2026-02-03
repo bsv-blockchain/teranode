@@ -139,7 +139,7 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 	}
 
 	producer, err := retry.Retry(ctx, logger, func() (*KafkaAsyncProducer, error) {
-		return NewKafkaAsyncProducer(ctx, logger, producerConfig)
+		return NewKafkaAsyncProducer(logger, producerConfig)
 	}, retry.WithMessage(fmt.Sprintf("[P2P] error starting kafka async producer for topic %s", producerConfig.Topic)))
 	if err != nil {
 		logger.Fatalf("[P2P] failed to start kafka async producer for topic %s: %v", producerConfig.Topic, err)
@@ -150,10 +150,10 @@ func NewKafkaAsyncProducerFromURL(ctx context.Context, logger ulogger.Logger, ur
 }
 
 // NewKafkaAsyncProducer creates a new async producer with the given configuration using franz-go.
-func NewKafkaAsyncProducer(ctx context.Context, logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
+func NewKafkaAsyncProducer(logger ulogger.Logger, cfg KafkaProducerConfig) (*KafkaAsyncProducer, error) {
 	logger.Debugf("Starting async kafka producer for %v", cfg.URL)
 
-	if cfg.URL.Scheme == memoryScheme {
+	if cfg.URL != nil && cfg.URL.Scheme == memoryScheme {
 		broker := inmemorykafka.GetSharedBroker()
 		bufferSize := 256
 		producer := inmemorykafka.NewInMemoryAsyncProducer(broker, bufferSize)
@@ -199,8 +199,8 @@ func NewKafkaAsyncProducer(ctx context.Context, logger ulogger.Logger, cfg Kafka
 		return nil, errors.NewServiceError("Failed to create Kafka async producer for %s", cfg.Topic, err)
 	}
 
-	// Create topic if it doesn't exist
-	if err := createTopicWithFranz(ctx, client, cfg); err != nil {
+	// Create topic if it doesn't exist (uses Background; constructor is not cancelable)
+	if err := createTopicWithFranz(context.Background(), client, cfg); err != nil {
 		client.Close()
 		return nil, err
 	}
