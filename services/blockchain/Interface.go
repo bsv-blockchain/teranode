@@ -1125,6 +1125,36 @@ type ClientI interface {
 	// Returns:
 	// - Error if completion fails or token is invalid
 	CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error
+
+	// CalculateMedianTimePastForHeight calculates the Median Time Past (MTP) for a given block height.
+	// MTP is defined as the median of the timestamps of the previous 11 blocks (BIP113).
+	//
+	// BIP113 (Median Time Past) was activated as part of the CSV softfork at a specific block height
+	// on each network (mainnet: 419328, testnet3: 770112, etc.). Before this activation height,
+	// MTP was not used and this function returns 0.
+	//
+	// Parameters:
+	// - ctx: Context for the operation
+	// - height: The block height to calculate MTP for
+	//
+	// Returns:
+	// - uint32: The MTP value as Unix timestamp, or 0 if height < CSVHeight or height < 11
+	// - error: Error if block headers cannot be retrieved or MTP cannot be calculated
+	//
+	// Note: MTP of block N is the median of timestamps from blocks [N-11, N-1] (previous 11 blocks).
+	CalculateMedianTimePastForHeight(ctx context.Context, height uint32) (uint32, error)
+
+	// CalculateMedianTimePastForHeights calculates MTP for multiple block heights in batch.
+	// This is more efficient than calling CalculateMedianTimePastForHeight multiple times.
+	//
+	// Parameters:
+	// - ctx: Context for the operation
+	// - heights: Array of block heights to calculate MTP for
+	//
+	// Returns:
+	// - []uint32: Array of MTP values corresponding to input heights (0 for height < 11 or height < CSVHeight)
+	// - error: Error if any MTP calculation fails
+	CalculateMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error)
 }
 
 const notImplemented = "not implemented"

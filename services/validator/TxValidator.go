@@ -52,6 +52,27 @@ const (
 	TxInterpreterGoBDK TxInterpreter = "GoBDK"
 )
 
+// BIP68 sequence lock constants
+// These constants are used for relative lock-time enforcement via input sequence numbers
+const (
+	// SequenceLockTimeDisableFlag is the flag bit that disables the relative locktime feature
+	// If this bit is set, the sequence number is not interpreted as a relative lock-time
+	SequenceLockTimeDisableFlag uint32 = 1 << 31
+
+	// SequenceLockTimeTypeFlag is the flag bit that determines the lock-time type
+	// If set, the sequence number specifies a relative time lock in 512-second units
+	// If not set, the sequence number specifies a relative block height lock
+	SequenceLockTimeTypeFlag uint32 = 1 << 22
+
+	// SequenceLockTimeMask is the bitmask to extract the lock-time value from sequence number
+	// Only the lower 16 bits are used for the actual lock-time value
+	SequenceLockTimeMask uint32 = 0x0000ffff
+
+	// SequenceLockTimeGranularity is the granularity for time-based sequence locks
+	// Time-based locks use 512-second (2^9 seconds) granularity
+	SequenceLockTimeGranularity = 9
+)
+
 // TxValidatorI defines the interface for transaction validation operations.
 // This interface serves as the contract for all transaction validators, abstracting
 // the implementation details from the rest of the system. This enables different
@@ -72,10 +93,12 @@ type TxValidatorI interface {
 	//   - tx: The transaction to validate, must be properly initialized
 	//   - blockHeight: The current block height for validation context
 	//   - utxoHeights: Block heights where each input UTXO was created (nil if not available)
+	//   - utxoMTPs: Median Time Past values for (inputHeight-1) for each UTXO (nil if not validating block)
+	//   - blockMTP: Median Time Past value for (blockHeight-1) (0 if not validating block)
 	//   - validationOptions: Optional validation options to customize validation behavior
 	// Returns:
 	//   - error: Specific validation error with reason if validation fails, nil on success
-	ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
+	ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32, validationOptions *Options) error
 
 	// ValidateTransactionScripts performs script validation for a transaction.
 	// This method specifically handles the script execution and signature verification
@@ -174,14 +197,19 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 //  6. Script operation limits
 //  7. Script validation
 //  8. Fee requirements
+//  9. BIP68 sequence locks (for block validation only)
 //
 // Parameters:
 //   - tx: The transaction to validate
 //   - blockHeight: Current block height for validation context
+//   - utxoHeights: Block heights where each input UTXO was created
+//   - utxoMTPs: Median Time Past values for (inputHeight-1) for each UTXO (nil if not validating block)
+//   - blockMTP: Median Time Past value for (blockHeight-1) (0 if not validating block)
+//   - validationOptions: Optional validation options
 //
 // Returns:
 //   - error: Any validation errors encountered
-func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
+func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32, validationOptions *Options) error {
 	//
 	// Each node will verify every transaction against a long checklist of criteria:
 	//
@@ -242,6 +270,15 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		}
 	}
 
+	// 12) BIP68 sequence locks validation (for block validation only)
+	// When SkipPolicyChecks is true, we're validating a transaction from a block
+	// In this case, we need to verify BIP68 relative lock-time constraints
+	if validationOptions.SkipPolicyChecks {
+		if err := tv.sequenceLocks(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -268,6 +305,98 @@ func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32,
 	}
 
 	// everything checks out
+	return nil
+}
+
+// sequenceLocks verifies that relative lock-time constraints (BIP68) are satisfied for block validation.
+// This function implements the SequenceLocks check from Bitcoin SV validation.cpp.
+//
+// BIP68 allows transaction inputs to specify minimum block heights or times before they can be spent
+// using the sequence number field. This enables relative lock-times for smart contracts and
+// payment channels.
+//
+// Parameters:
+//   - tx: The transaction to validate
+//   - blockHeight: Height of the block being validated
+//   - utxoHeights: Heights where each input UTXO was created
+//   - utxoMTPs: Median Time Past values for (inputHeight-1) for each UTXO
+//   - blockMTP: Median Time Past value for (blockHeight-1)
+//
+// Returns:
+//   - error: Validation error if sequence locks are not satisfied, nil on success
+func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error {
+	// BIP68 is only active from CSVHeight onwards
+	if blockHeight < tv.settings.ChainCfgParams.CSVHeight {
+		return nil
+	}
+
+	// Version 2 transactions are required for BIP68
+	// Transactions with version < 2 bypass relative lock-time enforcement
+	if tx.Version < 2 {
+		return nil
+	}
+
+	// Calculate sequence locks - find the minimum block height and time
+	minHeight := int32(0)
+	minTime := int64(0)
+
+	// Process each input to determine lock requirements
+	for i, input := range tx.Inputs {
+		// If sequence has the disable flag set, skip this input
+		if input.SequenceNumber&SequenceLockTimeDisableFlag != 0 {
+			continue
+		}
+
+		// Extract the lock value from the sequence number (lower 16 bits)
+		sequenceMasked := input.SequenceNumber & SequenceLockTimeMask
+
+		// Check if this is a time-based or height-based lock
+		if input.SequenceNumber&SequenceLockTimeTypeFlag != 0 {
+			// Time-based relative lock-time
+			// Calculate the minimum time required using the UTXO's MTP
+			if i >= len(utxoMTPs) {
+				return errors.NewTxInvalidError("missing MTP value for input %d", i)
+			}
+
+			// Time is in 512-second units (2^9 seconds)
+			// Add the relative time offset to the UTXO's MTP
+			utxoMTP := int64(utxoMTPs[i])
+			nTxTime := utxoMTP + (int64(sequenceMasked) << SequenceLockTimeGranularity)
+
+			// Update minimum time if this input requires a later time
+			if nTxTime > minTime {
+				minTime = nTxTime
+			}
+		} else {
+			// Height-based relative lock-time
+			// Calculate the minimum height required
+			if i >= len(utxoHeights) {
+				return errors.NewTxInvalidError("missing height value for input %d", i)
+			}
+
+			// Add the relative height offset to the UTXO's height
+			nTxHeight := int32(utxoHeights[i]) + int32(sequenceMasked)
+
+			// Update minimum height if this input requires a later height
+			if nTxHeight > minHeight {
+				minHeight = nTxHeight
+			}
+		}
+	}
+
+	// Evaluate the calculated locks against the block being validated
+	// The transaction can only be included if both height and time requirements are met
+
+	// Check height requirement: minimum required height must be less than current block height
+	if minHeight >= int32(blockHeight) {
+		return errors.NewTxInvalidError("transaction sequence lock height not satisfied: required %d, current %d", minHeight, blockHeight)
+	}
+
+	// Check time requirement: minimum required time must be less than block's MTP
+	if minTime >= int64(blockMTP) {
+		return errors.NewTxInvalidError("transaction sequence lock time not satisfied: required %d, current %d", minTime, blockMTP)
+	}
+
 	return nil
 }
 
