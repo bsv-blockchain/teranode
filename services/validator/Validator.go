@@ -1118,8 +1118,50 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
+	// For block validation (SkipPolicyChecks == true), fetch MTPs for BIP68 sequence lock validation
+	var utxoMTPs []uint32
+	var blockMTP uint32
+	if validationOptions.SkipPolicyChecks && v.blockchainClient != nil {
+		// Build list of heights we need MTPs for:
+		// - MTP(inputHeight-1) for each input
+		// - MTP(blockHeight-1) for the block being validated
+		heightsNeeded := make([]uint32, 0, len(utxoHeights)+1)
+
+		// Add MTP heights for each UTXO (inputHeight-1)
+		for _, utxoHeight := range utxoHeights {
+			if utxoHeight > 0 {
+				heightsNeeded = append(heightsNeeded, utxoHeight-1)
+			} else {
+				// For height 0 (genesis), MTP is 0
+				heightsNeeded = append(heightsNeeded, 0)
+			}
+		}
+
+		// Add MTP height for the block (blockHeight-1)
+		blockMTPHeight := blockHeight
+		if blockHeight > 0 {
+			blockMTPHeight = blockHeight - 1
+		}
+		heightsNeeded = append(heightsNeeded, blockMTPHeight)
+
+		// Batch fetch all MTPs
+		mtps, err := v.blockchainClient.CalculateMedianTimePastForHeights(ctx, heightsNeeded)
+		if err != nil {
+			span.RecordError(err)
+			return errors.NewProcessingError("[Validator][validateTransaction] failed to fetch MTPs for BIP68 validation", err)
+		}
+
+		// Split the results: last one is blockMTP, rest are utxoMTPs
+		if len(mtps) == len(heightsNeeded) {
+			utxoMTPs = mtps[:len(utxoHeights)]
+			blockMTP = mtps[len(mtps)-1]
+		} else {
+			return errors.NewProcessingError("[Validator][validateTransaction] MTP count mismatch: expected %d, got %d", len(heightsNeeded), len(mtps))
+		}
+	}
+
 	// run the internal tx validation, checking policies, scripts, signatures etc.
-	return v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions)
+	return v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, validationOptions)
 }
 
 // validateTransactionScripts performs script validation for a transaction

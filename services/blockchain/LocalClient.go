@@ -580,3 +580,72 @@ func (c *LocalClient) AcquireBlobDeletionBatch(ctx context.Context, height uint3
 func (c *LocalClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
 	return errors.NewProcessingError("not implemented")
 }
+
+// CalculateMedianTimePastForHeight calculates the Median Time Past (MTP) for a given block height.
+func (c *LocalClient) CalculateMedianTimePastForHeight(ctx context.Context, height uint32) (uint32, error) {
+	// BIP113 is only active from CSVHeight onwards
+	if height < c.settings.ChainCfgParams.CSVHeight {
+		return 0, nil
+	}
+
+	// MTP requires at least 11 previous blocks
+	const medianTimeBlocks = 11
+	if height < medianTimeBlocks {
+		return 0, nil
+	}
+
+	// Calculate the range: [height-11, height-1] (previous 11 blocks)
+	startHeight := height - medianTimeBlocks
+	endHeight := height - 1
+
+	// Fetch block headers for the range
+	headers, _, err := c.store.GetBlockHeadersByHeight(ctx, startHeight, endHeight)
+	if err != nil {
+		return 0, errors.NewProcessingError("[LocalClient][CalculateMedianTimePastForHeight] failed to get block headers from %d to %d", startHeight, endHeight, err)
+	}
+
+	// Verify we got exactly 11 headers
+	if len(headers) != medianTimeBlocks {
+		return 0, errors.NewProcessingError("[LocalClient][CalculateMedianTimePastForHeight] expected %d headers, got %d", medianTimeBlocks, len(headers))
+	}
+
+	// Extract timestamps from headers
+	timestamps := make([]time.Time, medianTimeBlocks)
+	for i, header := range headers {
+		timestamps[i] = time.Unix(int64(header.Timestamp), 0)
+	}
+
+	// Calculate median timestamp
+	medianTime, err := model.CalculateMedianTimestamp(timestamps)
+	if err != nil {
+		return 0, errors.NewProcessingError("[LocalClient][CalculateMedianTimePastForHeight] failed to calculate median timestamp", err)
+	}
+
+	// Convert to uint32 (Unix timestamp)
+	mtpUint32, err := safeconversion.TimeToUint32(*medianTime)
+	if err != nil {
+		return 0, errors.NewProcessingError("[LocalClient][CalculateMedianTimePastForHeight] failed to convert median time to uint32", err)
+	}
+
+	return mtpUint32, nil
+}
+
+// CalculateMedianTimePastForHeights calculates MTP for multiple block heights in batch.
+func (c *LocalClient) CalculateMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	if len(heights) == 0 {
+		return []uint32{}, nil
+	}
+
+	mtps := make([]uint32, len(heights))
+
+	// Calculate MTP for each height
+	for i, height := range heights {
+		mtp, err := c.CalculateMedianTimePastForHeight(ctx, height)
+		if err != nil {
+			return nil, err
+		}
+		mtps[i] = mtp
+	}
+
+	return mtps, nil
+}
