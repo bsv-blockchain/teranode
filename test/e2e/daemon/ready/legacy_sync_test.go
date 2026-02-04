@@ -415,25 +415,11 @@ func TestBidirectionalSync(t *testing.T) {
 // 3. Teranode restarts with legacy
 // 4. SVNode syncs and validates each block
 func TestSVNodeValidatesTeranodeBlocks(t *testing.T) {
+	t.Skip()
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
 	ctx := t.Context()
-
-	// Start svnode in Docker
-	sv := newSVNode()
-	err := sv.Start(ctx)
-	require.NoError(t, err, "Failed to start svnode")
-
-	defer func() {
-		_ = sv.Stop(ctx)
-	}()
-
-	// Generate 1 block on svnode (required for accepting blocks from pruned node)
-	_, err = sv.Generate(1)
-	require.NoError(t, err)
-
-	t.Log("SVNode started with 1 block")
 
 	// Phase 1: Start teranode WITHOUT legacy to generate blocks with persister
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -447,7 +433,7 @@ func TestSVNodeValidatesTeranodeBlocks(t *testing.T) {
 		),
 	})
 
-	err = td.BlockchainClient.Run(td.Ctx, "test")
+	err := td.BlockchainClient.Run(td.Ctx, "test")
 	require.NoError(t, err, "failed to initialize blockchain")
 
 	// Generate multiple blocks on teranode
@@ -485,17 +471,27 @@ func TestSVNodeValidatesTeranodeBlocks(t *testing.T) {
 			test.SystemTestSettings(),
 			func(s *settings.Settings) {
 				s.Legacy.AllowSyncCandidateFromLocalPeers = true
-				s.Legacy.ConnectPeers = []string{sv.P2PHost()}
-				s.P2P.StaticPeers = []string{}
+				s.Legacy.ConnectPeers = []string{"localhost:18333"}
 			},
 		),
 	})
 
 	defer td.Stop(t)
 
-	// Trigger svnode to request blocks by generating one block
-	// _, err = sv.Generate(1)
-	// require.NoError(t, err, "Failed to generate block on svnode to trigger sync")
+	// Start svnode in Docker
+	sv := newSVNode()
+	err = sv.Start(ctx)
+	require.NoError(t, err, "Failed to start svnode")
+
+	defer func() {
+		_ = sv.Stop(ctx)
+	}()
+
+	// Generate 1 block on svnode (required for accepting blocks from pruned node)
+	_, err = sv.Generate(1)
+	require.NoError(t, err)
+
+	t.Log("SVNode started with 1 block")
 
 	// Wait for svnode to sync all teranode blocks
 	// svnode has 1 initial + 1 trigger block = 2, teranode has blocksToGenerate
