@@ -1170,7 +1170,7 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(prevBlockHeader *model.Bloc
 		return nil, nil, errors.NewProcessingError("error converting time", err)
 	}
 
-	nBits, err := b.getNextNbits(timeNow)
+	nBits, err := b.getNextNbits(prevBlockHeader, timeNow)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1325,7 +1325,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 	timeBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
 
-	nBits, err := b.getNextNbits(timeNow)
+	nBits, err := b.getNextNbits(baBestBlockHeader, timeNow)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1646,9 +1646,7 @@ FoundAncestor:
 // Returns:
 //   - *model.NBit: Next difficulty target
 //   - error: Any error encountered during retrieval
-func (b *BlockAssembler) getNextNbits(nextBlockTime int64) (*model.NBit, error) {
-	baBestBlockHeader, _ := b.CurrentBlock()
-
+func (b *BlockAssembler) getNextNbits(baBestBlockHeader *model.BlockHeader, nextBlockTime int64) (*model.NBit, error) {
 	nbit, err := b.blockchainClient.GetNextWorkRequired(context.Background(), baBestBlockHeader.Hash(), nextBlockTime)
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting next work required", err)
