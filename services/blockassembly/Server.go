@@ -1745,7 +1745,7 @@ func (ba *BlockAssembly) GetCurrentDifficulty(_ context.Context, _ *blockassembl
 
 	return &blockassembly_api.GetCurrentDifficultyResponse{
 		Difficulty: f,
-		BlockHash:  blockHeader.HashPrevBlock.CloneBytes(),
+		BlockHash:  blockHeader.Hash().CloneBytes(),
 	}, nil
 }
 

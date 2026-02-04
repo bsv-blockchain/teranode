@@ -1159,43 +1159,43 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	return candidate, subtrees, err
 }
 
-func (b *BlockAssembler) generateEmptyBlockCandidate(prevBlockHeader *model.BlockHeader, prevHeight uint32) (*model.MiningCandidate, []*subtree.Subtree, error) {
-	currentHeight := prevHeight + 1
+func (b *BlockAssembler) generateEmptyBlockCandidate(bestBlockHeader *model.BlockHeader, bestBlockHeight uint32) (*model.MiningCandidate, []*subtree.Subtree, error) {
+	nextBlockHeight := bestBlockHeight + 1
 	timeNow := time.Now().Unix()
 
-	b.logger.Infof("[generateEmptyBlockCandidate] Generating empty block template for height %d (prev: %s)", currentHeight, prevBlockHeader.Hash())
+	b.logger.Infof("[generateEmptyBlockCandidate] Generating empty block template for height %d (prev: %s)", nextBlockHeight, bestBlockHeader.Hash())
 
 	timeNowUint32, err := safeconversion.Int64ToUint32(timeNow)
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("error converting time", err)
 	}
 
-	nBits, err := b.getNextNbits(prevBlockHeader, timeNow)
+	nBits, err := b.getNextNbits(bestBlockHeader, timeNow)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	blockSubsidy := util.GetBlockSubsidyForHeight(currentHeight, b.settings.ChainCfgParams)
+	blockSubsidy := util.GetBlockSubsidyForHeight(nextBlockHeight, b.settings.ChainCfgParams)
 
 	id := &chainhash.Hash{}
-	copy(id[:], prevBlockHeader.Hash()[:])
+	copy(id[:], bestBlockHeader.Hash()[:])
 	id[0] ^= 0xFF
 
 	miningCandidate := &model.MiningCandidate{
 		Id:                  id[:],
-		PreviousHash:        prevBlockHeader.Hash()[:],
+		PreviousHash:        bestBlockHeader.Hash()[:],
 		CoinbaseValue:       blockSubsidy,
-		Version:             prevBlockHeader.Version,
+		Version:             bestBlockHeader.Version,
 		NBits:               nBits[:],
 		Time:                timeNowUint32,
-		Height:              currentHeight,
+		Height:              nextBlockHeight,
 		NumTxs:              0,
 		SizeWithoutCoinbase: 80,
 		MerkleProof:         [][]byte{},
 		SubtreeHashes:       [][]byte{},
 	}
 
-	b.logger.Infof("[generateEmptyBlockCandidate] Empty block template: height=%d, subsidy=%d, prev=%s", currentHeight, blockSubsidy, prevBlockHeader.Hash())
+	b.logger.Infof("[generateEmptyBlockCandidate] Empty block template: height=%d, subsidy=%d, prev=%s", nextBlockHeight, blockSubsidy, bestBlockHeader.Hash())
 
 	return miningCandidate, []*subtree.Subtree{}, nil
 }
@@ -1380,7 +1380,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 		CoinbaseValue:       coinbaseValue,
 		Version:             0x20000000,
 		NBits:               nBits.CloneBytes(),
-		Height:              baBestBlockHeight + 1,
+		Height:              baBestBlockHeight + 1, // next block height
 		Time:                timeNowUint32,
 		MerkleProof:         coinbaseMerkleProofBytes,
 		NumTxs:              txCount,
