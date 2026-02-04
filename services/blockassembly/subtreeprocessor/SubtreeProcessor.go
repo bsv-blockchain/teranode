@@ -206,6 +206,10 @@ type SubtreeProcessor struct {
 	// chainedSubtreeCount tracks the number of chained subtrees atomically
 	chainedSubtreeCount atomic.Int32
 
+	// chainedSubtreesTotalSize tracks the total size in bytes of chained subtrees atomically
+	// This allows safe concurrent access without channel-based synchronization
+	chainedSubtreesTotalSize atomic.Uint64
+
 	// currentSubtree represents the subtree currently being built
 	// Uses atomic.Pointer for safe concurrent access from external callers (e.g., gRPC handlers)
 	currentSubtree atomic.Pointer[subtreepkg.Subtree]
@@ -254,6 +258,9 @@ type SubtreeProcessor struct {
 
 	// startOnce ensures the processing goroutine is only started once
 	startOnce sync.Once
+
+	// stopped indicates the worker goroutine has exited (set on context cancellation)
+	stopped atomic.Bool
 }
 
 type State uint32
@@ -443,6 +450,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 				case <-processorCtx.Done():
 					logger.Infof("[SubtreeProcessor] context cancelled, stopping processor")
 					stp.announcementTicker.Stop()
+					stp.stopped.Store(true)
 					return
 
 				case getSubtreesChan := <-stp.getSubtreesChan:
@@ -671,8 +679,10 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					}
 
 					if len(dequeueBatches) == 0 {
-						runtime.Gosched()
 						stp.setCurrentRunningState(StateRunning)
+						// Sleep briefly to avoid busy-wait when queue is empty.
+						// This prevents excessive CPU usage from goroutine scheduling overhead.
+						time.Sleep(stp.settings.BlockAssembly.IdleSleepDuration)
 						continue
 					}
 
@@ -909,6 +919,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
+	stp.chainedSubtreesTotalSize.Store(0)
 
 	itemsPerFile := int(stp.currentItemsPerFile.Load())
 
@@ -1174,7 +1185,14 @@ func (stp *SubtreeProcessor) GetRemoveMapLength() int {
 // Returns:
 //   - []*util.Subtree: Array of chained subtrees
 func (stp *SubtreeProcessor) GetChainedSubtrees() []*subtreepkg.Subtree {
-	return stp.chainedSubtrees
+	// When processor is not running or has stopped, direct access is safe (no concurrent writers)
+	if stp.GetCurrentRunningState() == StateStarting || stp.stopped.Load() {
+		return stp.chainedSubtrees
+	}
+	// Processor running - use channel-based sync to avoid race
+	response := make(chan []*subtreepkg.Subtree)
+	stp.getSubtreesChan <- response
+	return <-response
 }
 
 func (stp *SubtreeProcessor) GetSubtreeHashes() []chainhash.Hash {
@@ -1263,7 +1281,17 @@ func (stp *SubtreeProcessor) SubtreeCount() int {
 	// not using len(chainSubtrees) to avoid Race condition
 	// should we be using locks around all chainSubtree operations instead?
 	// the subtree count isn't mission-critical - it's just for statistics
-	return int(stp.chainedSubtreeCount.Load()) + 01
+	return int(stp.chainedSubtreeCount.Load()) + 1
+}
+
+// GetChainedSubtreesTotalSize returns the total size in bytes of all chained subtrees.
+// This uses atomic access and is safe to call from any context without channel-based
+// synchronization, avoiding potential deadlocks in scenarios where the worker is blocked.
+//
+// Returns:
+//   - uint64: Total size in bytes of all chained subtrees
+func (stp *SubtreeProcessor) GetChainedSubtreesTotalSize() uint64 {
+	return stp.chainedSubtreesTotalSize.Load()
 }
 
 // adjustSubtreeSize calculates and sets a new subtree size based on recent block statistics
@@ -1580,6 +1608,7 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 	// Add the subtree to the chain
 	stp.chainedSubtrees = append(stp.chainedSubtrees, currentSubtree)
 	stp.chainedSubtreeCount.Add(1)
+	stp.chainedSubtreesTotalSize.Add(currentSubtree.SizeInBytes)
 
 	stp.subtreesInBlock++ // Track number of subtrees in current block
 
@@ -1915,6 +1944,13 @@ func (stp *SubtreeProcessor) reChainSubtrees(fromIndex int) error {
 	}
 
 	stp.chainedSubtreeCount.Store(fromIndexInt32)
+
+	// Recompute total size from remaining chained subtrees
+	var totalSize uint64
+	for _, st := range stp.chainedSubtrees {
+		totalSize += st.SizeInBytes
+	}
+	stp.chainedSubtreesTotalSize.Store(totalSize)
 
 	itemsPerFile := int(stp.currentItemsPerFile.Load())
 
@@ -2629,6 +2665,7 @@ func (stp *SubtreeProcessor) moveBackBlockCreateNewSubtrees(ctx context.Context,
 
 	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
+	stp.chainedSubtreesTotalSize.Store(0)
 
 	// add first coinbase placeholder transaction
 	_ = stp.currentSubtree.Load().AddCoinbaseNode()
@@ -2913,6 +2950,7 @@ func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool)
 
 	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
+	stp.chainedSubtreesTotalSize.Store(0)
 
 	// Add first coinbase placeholder transaction
 	_ = stp.currentSubtree.Load().AddCoinbaseNode()

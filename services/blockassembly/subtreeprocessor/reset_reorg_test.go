@@ -235,6 +235,15 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		require.NoError(t, err)
 		stp.Start(ctx)
 
+		// Handle subtree requests - must be started before any GetChainedSubtrees() call
+		go func() {
+			for req := range newSubtreeChan {
+				if req.ErrChan != nil {
+					req.ErrChan <- nil
+				}
+			}
+		}()
+
 		// Create transactions that will conflict during reset
 		conflictTx1Hash, err := chainhash.NewHashFromStr("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 		require.NoError(t, err)
@@ -287,15 +296,6 @@ func TestSubtreeProcessor_Reset(t *testing.T) {
 		t.Logf("  Transaction count: %d", initialTxCount)
 		t.Logf("  Current subtree nodes: %d", len(initialCurrentSubtree.Nodes))
 		t.Logf("  Chained subtrees: %d", len(initialChainedSubtrees))
-
-		// Handle subtree requests
-		go func() {
-			for req := range newSubtreeChan {
-				if req.ErrChan != nil {
-					req.ErrChan <- nil
-				}
-			}
-		}()
 
 		// Perform reset with moveBackBlocks containing conflicting transactions
 		// This should:

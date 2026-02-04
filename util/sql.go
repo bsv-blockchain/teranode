@@ -83,13 +83,18 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 	if servicePoolSettings != nil {
 		// Merge service-specific settings with global defaults (zero values use global)
 		poolSettings = &settings.PostgresSettings{
-			MaxOpenConns:     servicePoolSettings.MaxOpenConns,
-			MaxIdleConns:     servicePoolSettings.MaxIdleConns,
-			ConnMaxLifetime:  servicePoolSettings.ConnMaxLifetime,
-			ConnMaxIdleTime:  servicePoolSettings.ConnMaxIdleTime,
-			RetryMaxAttempts: servicePoolSettings.RetryMaxAttempts,
-			RetryBaseDelay:   servicePoolSettings.RetryBaseDelay,
-			RetryEnabled:     servicePoolSettings.RetryEnabled,
+			MaxOpenConns:                   servicePoolSettings.MaxOpenConns,
+			MaxIdleConns:                   servicePoolSettings.MaxIdleConns,
+			ConnMaxLifetime:                servicePoolSettings.ConnMaxLifetime,
+			ConnMaxIdleTime:                servicePoolSettings.ConnMaxIdleTime,
+			RetryMaxAttempts:               servicePoolSettings.RetryMaxAttempts,
+			RetryBaseDelay:                 servicePoolSettings.RetryBaseDelay,
+			RetryEnabled:                   servicePoolSettings.RetryEnabled,
+			CircuitBreakerEnabled:          servicePoolSettings.CircuitBreakerEnabled,
+			CircuitBreakerFailureThreshold: servicePoolSettings.CircuitBreakerFailureThreshold,
+			CircuitBreakerHalfOpenMax:      servicePoolSettings.CircuitBreakerHalfOpenMax,
+			CircuitBreakerCooldown:         servicePoolSettings.CircuitBreakerCooldown,
+			CircuitBreakerFailureWindow:    servicePoolSettings.CircuitBreakerFailureWindow,
 		}
 		// Use global defaults for zero values
 		if poolSettings.MaxOpenConns == 0 {
@@ -110,6 +115,23 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 		if poolSettings.RetryBaseDelay == 0 {
 			poolSettings.RetryBaseDelay = tSettings.Postgres.RetryBaseDelay
 		}
+		// Circuit breaker settings: use global defaults for zero values
+		// Note: CircuitBreakerEnabled is explicit - if service sets false, it stays false
+		if !poolSettings.CircuitBreakerEnabled && tSettings.Postgres.CircuitBreakerEnabled {
+			poolSettings.CircuitBreakerEnabled = true
+		}
+		if poolSettings.CircuitBreakerFailureThreshold == 0 {
+			poolSettings.CircuitBreakerFailureThreshold = tSettings.Postgres.CircuitBreakerFailureThreshold
+		}
+		if poolSettings.CircuitBreakerHalfOpenMax == 0 {
+			poolSettings.CircuitBreakerHalfOpenMax = tSettings.Postgres.CircuitBreakerHalfOpenMax
+		}
+		if poolSettings.CircuitBreakerCooldown == 0 {
+			poolSettings.CircuitBreakerCooldown = tSettings.Postgres.CircuitBreakerCooldown
+		}
+		if poolSettings.CircuitBreakerFailureWindow == 0 {
+			poolSettings.CircuitBreakerFailureWindow = tSettings.Postgres.CircuitBreakerFailureWindow
+		}
 	}
 
 	// Configure connection pool settings
@@ -124,6 +146,31 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 		BaseDelay:   poolSettings.RetryBaseDelay,
 		Enabled:     poolSettings.RetryEnabled,
 	})
+
+	// Configure circuit breaker if enabled (requires all settings to be explicitly set)
+	if poolSettings.CircuitBreakerEnabled {
+		cbConfig := usql.CircuitBreakerConfig{
+			FailureThreshold: poolSettings.CircuitBreakerFailureThreshold,
+			HalfOpenMax:      poolSettings.CircuitBreakerHalfOpenMax,
+			Cooldown:         poolSettings.CircuitBreakerCooldown,
+			FailureWindow:    poolSettings.CircuitBreakerFailureWindow,
+			Enabled:          poolSettings.CircuitBreakerEnabled,
+			OnStateChange: func(from, to usql.CircuitState, reason string) {
+				logger.Warnf("PostgreSQL circuit breaker state changed: %s -> %s (%s)", from.String(), to.String(), reason)
+			},
+		}
+		cb := usql.NewCircuitBreaker(cbConfig)
+		if cb != nil {
+			db.SetCircuitBreaker(cb)
+			logger.Infof("PostgreSQL circuit breaker configured: FailureThreshold=%d, HalfOpenMax=%d, Cooldown=%v, FailureWindow=%v",
+				poolSettings.CircuitBreakerFailureThreshold,
+				poolSettings.CircuitBreakerHalfOpenMax,
+				poolSettings.CircuitBreakerCooldown,
+				poolSettings.CircuitBreakerFailureWindow)
+		} else {
+			logger.Warnf("PostgreSQL circuit breaker enabled but not configured correctly (all threshold/timing values must be > 0)")
+		}
+	}
 
 	logger.Infof("PostgreSQL connection pool configured: MaxOpenConns=%d, MaxIdleConns=%d, ConnMaxLifetime=%v, ConnMaxIdleTime=%v",
 		poolSettings.MaxOpenConns,

@@ -7,6 +7,8 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/retry"
 )
 
@@ -96,15 +98,22 @@ func (s *Server) waitForBlockMinedStatus(ctx context.Context, blockHash *chainha
 
 // prunerProcessor processes pruner requests from the pruner channel.
 // It drains the channel to get the latest height (deduplication), then performs
-// Delete-at-height (DAH) pruning to remove old transaction records from storage.
+// a two-phase pruning operation:
 //
-// PARENT PRESERVATION:
-// Parent preservation of unmined transactions is handled in Block Assembly/Validation, not here:
-// - During FSMStateRUNNING: Preserved per-block in BlockValidation after UpdateTxMinedStatus
-// - During FSMStateCATCHINGBLOCKS: Preserved once at Block Assembly startup
+// PHASE 1 - PARENT PRESERVATION:
+// Preserves parents of old unmined transactions by setting PreserveUntil flags.
+// This ensures parent transactions remain available if unmined children are later
+// mined or resubmitted. Only runs when UTXO store is available.
 //
-// This separation keeps the pruner focused on deletion while Block Assembly manages the
-// unmined transaction lifecycle (where parent preservation logically belongs).
+// PHASE 2 - DAH DELETION:
+// Delete-at-height pruning removes old transaction records from storage.
+// Records are only deleted if they've passed the retention window and are not preserved.
+//
+// CATCHUP SKIP MODE:
+// When SkipDuringCatchup is enabled (default: false), the pruner skips all operations
+// during FSMStateCATCHINGBLOCKS state. This prevents race conditions where block
+// validation marks transactions as mined faster than the pruner can preserve their parents.
+// Once the node transitions to FSMStateRUNNING, the pruner resumes normal operation.
 //
 // SAFETY CHECKS:
 // Block assembly state is checked before pruning to ensure it's safe to proceed. This prevents
@@ -142,24 +151,53 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				s.logger.Debugf("Deduplicating pruner operations, skipping to height %d", latestHeight)
 			}
 
-			// Safety check before DAH pruning
-			if !s.checkBlockAssemblySafeForPruner(ctx, "DAH pruner", latestHeight) {
+			// Check FSM state - skip during CATCHINGBLOCKS if configured
+			if s.settings.Pruner.SkipDuringCatchup {
+				fsmState, err := s.blockchainClient.GetFSMCurrentState(ctx)
+				if err != nil {
+					s.logger.Warnf("Failed to get FSM state, skipping pruner: %v", err)
+					prunerSkipped.WithLabelValues("fsm_error").Inc()
+					continue
+				}
+				if fsmState != nil && *fsmState == blockchain.FSMStateCATCHINGBLOCKS {
+					s.logger.Debugf("Skipping pruner during catchup (height %d)", latestHeight)
+					prunerSkipped.WithLabelValues("catchup_mode").Inc()
+					continue
+				}
+			}
+
+			// Safety check before pruning
+			if !s.checkBlockAssemblySafeForPruner(ctx, "pruner", latestHeight) {
 				continue
 			}
 
-			// Call DAH pruner directly (synchronous)
-			// DAH pruner deletes transactions marked for deletion at or before the current height
-			// Parent preservation now happens in Block Assembly, not here
+			// Phase 1: Preserve parents of old unmined transactions
+			// This must run before Phase 2 to protect parents from deletion
+			if s.utxoStore != nil {
+				s.logger.Debugf("Phase 1: Preserving parents at height %d", latestHeight)
+				if count, err := utxo.PreserveParentsOfOldUnminedTransactions(
+					ctx, s.utxoStore, latestHeight, s.settings, s.logger,
+				); err != nil {
+					s.logger.Warnf("Phase 1: Failed to preserve parents at height %d: %v", latestHeight, err)
+					prunerErrors.WithLabelValues("parent_preservation").Inc()
+					// Continue to Phase 2 - best effort, don't block pruning
+				} else if count > 0 {
+					s.logger.Infof("Phase 1: Preserved parents for %d unmined transactions at height %d", count, latestHeight)
+				}
+			}
+
+			// Phase 2: DAH pruning (deletion)
+			// Deletes transactions marked for deletion at or before the current height
 			if s.prunerService != nil {
-				s.logger.Infof("Starting pruner for height %d: DAH pruner", latestHeight)
+				s.logger.Infof("Phase 2: Starting DAH pruner for height %d", latestHeight)
 				startTime := time.Now()
 
 				recordsProcessed, err := s.prunerService.Prune(ctx, latestHeight)
 				if err != nil {
-					s.logger.Errorf("Pruner failed for height %d: %v", latestHeight, err)
+					s.logger.Errorf("Phase 2: DAH pruner failed for height %d: %v", latestHeight, err)
 					prunerErrors.WithLabelValues("dah_pruner").Inc()
 				} else {
-					s.logger.Infof("Pruner for height %d completed successfully, pruned %d records", latestHeight, recordsProcessed)
+					s.logger.Infof("Phase 2: Pruned %d records at height %d", recordsProcessed, latestHeight)
 					prunerDuration.WithLabelValues("dah_pruner").Observe(time.Since(startTime).Seconds())
 					prunerProcessed.Inc()
 				}

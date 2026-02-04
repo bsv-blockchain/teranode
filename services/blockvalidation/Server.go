@@ -639,7 +639,12 @@ func (u *Server) Init(ctx context.Context) (err error) {
 							errors.Is(err, errors.ErrTxNotFound) ||
 							errors.Is(err, errors.ErrTxInvalid) {
 							u.logger.Warnf("[catchup] Block %s is invalid, not trying alternative sources", c.block.Hash().String())
-							// Clean up the processing notification for this block so it can be retried later if needed
+
+							// Mark peer as malicious for providing unvalidatable block
+							// All these errors indicate the peer is sending blocks we can't validate
+							u.reportCatchupMalicious(ctx, c.peerID, "invalid_block")
+
+							// Clean up the processing notification for this block
 							u.processBlockNotify.Delete(*c.block.Hash())
 							continue
 						}

@@ -51,6 +51,7 @@ func testLongestChainSimple(t *testing.T, utxoStore string) {
 
 	tx1 := td.CreateTransaction(t, block1.CoinbaseTx, 0)
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, tx1))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(tx1, blockWait))
 
 	tx2 := td.CreateTransaction(t, block2.CoinbaseTx, 0)
 
@@ -127,6 +128,7 @@ func testLongestChainInvalidateBlock(t *testing.T, utxoStore string) {
 
 	tx1 := td.CreateTransaction(t, block1.CoinbaseTx, 0)
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, tx1))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(tx1, blockWait))
 
 	td.VerifyInBlockAssembly(t, tx1)
 
@@ -173,9 +175,11 @@ func testLongestChainInvalidateBlockWithOldTx(t *testing.T, utxoStore string) {
 
 	tx1 := td.CreateTransaction(t, block1.CoinbaseTx, 0)
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, tx1))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(tx1, blockWait))
 
 	tx2 := td.CreateTransaction(t, block2.CoinbaseTx, 0)
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, tx2))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(tx2, blockWait))
 
 	td.VerifyInBlockAssembly(t, tx1)
 	td.VerifyInBlockAssembly(t, tx2)

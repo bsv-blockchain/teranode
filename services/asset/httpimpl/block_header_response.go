@@ -76,6 +76,17 @@ func (r *blockHeaderResponse) MarshalJSON() ([]byte, error) {
 		ProcessedAt       *time.Time `json:"processed_at"`
 	}
 
+	// Validate ProcessedAt timestamp before marshaling
+	var processedAt *time.Time
+	if r.ProcessedAt != nil {
+		year := r.ProcessedAt.Year()
+		// Check if the year is within the valid JSON marshaling range [0, 9999]
+		if year >= 0 && year <= 9999 {
+			processedAt = r.ProcessedAt
+		}
+		// If invalid, processedAt remains nil and will be omitted from JSON
+	}
+
 	a := aliasResponse{
 		Hash:              r.Hash,
 		Version:           r.Version,
@@ -89,7 +100,7 @@ func (r *blockHeaderResponse) MarshalJSON() ([]byte, error) {
 		SizeInBytes:       r.SizeInBytes,
 		Miner:             r.Miner,
 		Invalid:           r.Invalid,
-		ProcessedAt:       r.ProcessedAt,
+		ProcessedAt:       processedAt,
 	}
 	return json.Marshal(a)
 }

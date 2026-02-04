@@ -289,6 +289,16 @@ func (b *BlockAssembler) GetChainedSubtrees() []*subtree.Subtree {
 	return b.subtreeProcessor.GetChainedSubtrees()
 }
 
+// GetChainedSubtreesTotalSize returns the total size in bytes of all chained subtrees.
+// This uses atomic access and is safe to call from any context without channel-based
+// synchronization, avoiding potential deadlocks.
+//
+// Returns:
+//   - uint64: Total size in bytes of all chained subtrees
+func (b *BlockAssembler) GetChainedSubtreesTotalSize() uint64 {
+	return b.subtreeProcessor.GetChainedSubtreesTotalSize()
+}
+
 // startChannelListeners initializes and starts all channel listeners for block assembly operations.
 // It handles blockchain notifications, mining candidate requests, and reset operations.
 //
@@ -774,36 +784,6 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	if err = b.loadUnminedTransactions(ctx, false); err != nil {
 		// we cannot start block assembly if we have not loaded unmined transactions successfully
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
-	}
-
-	// Preserve parents of unmined transactions during catchup.
-	//
-	// During catchup, unmined txs from the mempool will be marked as mined when processing blocks.
-	// Once marked mined (UnminedSince cleared), they're no longer in the unmined tx pool. If their
-	// parent txs are past retention, the pruner could delete them before block validation completes.
-	//
-	// We preserve parents at startup (while unmined pool is intact) rather than per-block to avoid
-	// overhead during catchup. This is a one-time batch operation that protects all parents before
-	// any blocks are validated.
-	//
-	// FSM STATE DETERMINES WHEN TO RUN:
-	// - FSMStateCATCHINGBLOCKS: Run once at startup (efficient batch operation)
-	// - FSMStateRUNNING: Skip (handled per-block in BlockValidation after UpdateTxMinedStatus)
-	//
-	// TIMING: Executes after loadUnminedTransactions() but before Block Validation processes blocks.
-	fsmState, fsmErr := b.blockchainClient.GetFSMCurrentState(ctx)
-	if fsmErr != nil {
-		b.logger.Warnf("[BlockAssembler] Failed to get blockchain FSM state for parent preservation: %v", fsmErr)
-		// Continue - best effort
-	} else if fsmState != nil && *fsmState == blockchain.FSMStateCATCHINGBLOCKS {
-		b.logger.Infof("[BlockAssembler][Catchup] Block Assembly starting during catchup, preserving parents of unmined transactions")
-		_, height := b.CurrentBlock()
-		if count, preserveErr := utxo.PreserveParentsOfOldUnminedTransactions(ctx, b.utxoStore, height, b.settings, b.logger); preserveErr != nil {
-			b.logger.Errorf("[BlockAssembler][Catchup] CRITICAL: Failed to preserve parents during catchup startup: %v", preserveErr)
-			// Continue - best effort, but log as critical since this could cause validation failures
-		} else {
-			b.logger.Infof("[BlockAssembler][Catchup] Preserved parents for %d unmined transactions before catchup validation begins", count)
-		}
 	}
 
 	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
