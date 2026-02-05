@@ -153,11 +153,13 @@ func testLongestChainTransactionChainDependency(t *testing.T, utxoStore string) 
 	// Create child transaction (tx2) spending output from tx1
 	tx2 := td.CreateTransaction(t, tx1, 0)
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, tx2))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(tx2, 10*time.Second), "Timeout waiting for tx2 to be processed by block assembly")
 	td.VerifyInBlockAssembly(t, tx2)
 
 	// Create grandchild transaction (tx3) spending output from tx2
 	tx3 := td.CreateTransaction(t, tx2, 0)
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, tx3))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(tx3, 10*time.Second), "Timeout waiting for tx3 to be processed by block assembly")
 	td.VerifyInBlockAssembly(t, tx3)
 
 	// Create competing Fork B without tx1
