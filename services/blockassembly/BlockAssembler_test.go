@@ -811,10 +811,14 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, miningCandidate)
 		assert.NotNil(t, subtree)
-		assert.Equal(t, uint64(10000001555), miningCandidate.CoinbaseValue)
+		// CoinbaseValue = block_subsidy (5B) + subtree_fees (5B + 222 + 334 = 5000000556)
+		// Note: tx4 and tx5 are in an incomplete subtree which is not included when there are complete subtrees
+		// The first complete subtree contains: auto-added coinbase placeholder (fee 0) + test coinbase (5B) + tx2 (222) + tx3 (334)
+		assert.Equal(t, uint64(10000000556), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
-		assert.Len(t, subtree, 2)
+		// Only 1 complete subtree is returned; incomplete subtrees are not included when there are complete subtrees
+		assert.Len(t, subtree, 1)
 		assert.Len(t, subtree[0].Nodes, 4)
 
 		// mine block
@@ -2467,19 +2471,22 @@ func TestHandleReorgCoverage(t *testing.T) {
 		require.NotNil(t, testItems)
 		ba := testItems.blockAssembler
 
+		// Set up blockchain client properly so we get past the "best block header is nil" check
+		_, _, genesisBlock := setupBlockchainClient(t, testItems)
+
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
 
-		header := &model.BlockHeader{Version: 1}
+		// Use the genesis block header so the reorg logic can proceed to context-checked operations
+		header := genesisBlock.Header
 
 		// Test handleReorg with cancelled context
-		err := ba.handleReorg(ctx, header, 101)
+		err := ba.handleReorg(ctx, header, 1)
 
-		// Should handle cancelled context
-		if err != nil {
-			assert.Contains(t, err.Error(), "context", "error should reference context cancellation")
-		}
-		assert.True(t, true, "handleReorg should handle cancelled context")
+		// Should handle cancelled context - the error should reference context cancellation
+		// since the blockchain client operations will fail with cancelled context
+		require.Error(t, err, "handleReorg should return an error with cancelled context")
+		assert.Contains(t, err.Error(), "context", "error should reference context cancellation")
 	})
 }
 
