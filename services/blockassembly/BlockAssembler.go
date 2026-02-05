@@ -1402,10 +1402,6 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 // Returns:
 //   - error: Any error encountered during reorganization
 func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHeader, height uint32) error {
-	if err := ctx.Err(); err != nil {
-		return errors.NewProcessingError("context", err)
-	}
-
 	startTime := time.Now()
 
 	prometheusBlockAssemblerReorg.Inc()

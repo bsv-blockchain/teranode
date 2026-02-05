@@ -463,7 +463,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					completeSubtrees = append(completeSubtrees, stp.chainedSubtrees...)
 
 					// incomplete subtrees ?
-					if stp.currentSubtree.Load().Length() > 1 {
+					if chainedCount == 0 && stp.currentSubtree.Load().Length() > 1 {
 						incompleteSubtree, err := stp.createIncompleteSubtreeCopy()
 						if err != nil {
 							logger.Errorf("[SubtreeProcessor] error creating incomplete subtree: %s", err.Error())
@@ -2712,18 +2712,12 @@ func (stp *SubtreeProcessor) moveBackBlockCreateNewSubtrees(ctx context.Context,
 			if idx == 0 {
 				// skip the first transaction of the first subtree (coinbase)
 				for i := 1; i < len(subtreeNodes); i++ {
-					// Ensure reorg move-back does not silently skip nodes as "duplicates".
-					// A tx can have an entry in currentTxMap even if it was removed from the subtrees,
-					// and addNode() uses SetIfNotExists which would otherwise ignore it.
-					stp.currentTxMap.Delete(subtreeNodes[i].Hash)
 					if err = stp.addNode(subtreeNodes[i], &subtreeMetaTxInpoints[idx][i], true); err != nil {
 						return nil, nil, errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
 					}
 				}
 			} else {
 				for i, node := range subtreeNodes {
-					// Ensure reorg move-back does not silently skip nodes as "duplicates".
-					stp.currentTxMap.Delete(node.Hash)
 					if err = stp.addNode(node, &subtreeMetaTxInpoints[idx][i], true); err != nil {
 						return nil, nil, errors.NewProcessingError("[moveBackBlock:CreateNewSubtrees][%s][%s] error adding node to subtree", block.String(), subtreeHash.String(), err)
 					}

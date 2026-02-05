@@ -68,10 +68,10 @@ type baTestItems struct {
 //
 // Returns:
 //   - error: Any error encountered during addition
-func (items baTestItems) addBlock(blockHeader *model.BlockHeader) error {
+func (items baTestItems) addBlock(ctx context.Context, blockHeader *model.BlockHeader) error {
 	coinbaseTx, _ := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 
-	return items.blockchainClient.AddBlock(context.Background(), &model.Block{
+	return items.blockchainClient.AddBlock(ctx, &model.Block{
 		Header:           blockHeader,
 		CoinbaseTx:       coinbaseTx,
 		TransactionCount: 1,
@@ -116,7 +116,7 @@ func setupBlockchainClient(t *testing.T, testItems *baTestItems) (*blockchain.Mo
 	require.NoError(t, err)
 
 	// Get the genesis block that was automatically inserted
-	ctx := context.Background()
+	ctx := t.Context()
 	genesisBlock, err := blockchainStore.GetBlockByID(ctx, 0)
 	require.NoError(t, err)
 
@@ -184,7 +184,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		}
 		blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
 
-		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
+		blockAssembler, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
 		require.NotNil(t, blockAssembler)
 
@@ -225,7 +225,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		runningState := blockchain.FSMStateRUNNING
 		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
-		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
+		blockAssembler, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
 		require.NotNil(t, blockAssembler)
 
@@ -286,7 +286,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		runningState := blockchain.FSMStateRUNNING
 		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
-		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
+		blockAssembler, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
 		require.NotNil(t, blockAssembler)
 
@@ -332,7 +332,7 @@ func TestBlockAssembly_Start(t *testing.T) {
 		runningState := blockchain.FSMStateRUNNING
 		blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
-		blockAssembler, err := NewBlockAssembler(context.Background(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
+		blockAssembler, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, stats, utxoStore, nil, blockchainClient, nil)
 		require.NoError(t, err)
 		require.NotNil(t, blockAssembler)
 
@@ -530,7 +530,7 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		require.NotNil(t, items)
 
 		items.blockAssembler.setBestBlockHeader(blockHeader1, 1)
-		_, _, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), nil, 0)
+		_, _, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), nil, 0)
 		require.Error(t, err)
 	})
 
@@ -541,22 +541,22 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		// set the cached BlockAssembler items to the correct values
 		items.blockAssembler.setBestBlockHeader(blockHeader4, 4)
 
-		err := items.addBlock(blockHeader1)
+		err := items.addBlock(t.Context(), blockHeader1)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader2)
+		err = items.addBlock(t.Context(), blockHeader2)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader3)
+		err = items.addBlock(t.Context(), blockHeader3)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader4)
+		err = items.addBlock(t.Context(), blockHeader4)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader2Alt)
+		err = items.addBlock(t.Context(), blockHeader2Alt)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader3Alt)
+		err = items.addBlock(t.Context(), blockHeader3Alt)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader4Alt)
+		err = items.addBlock(t.Context(), blockHeader4Alt)
 		require.NoError(t, err)
 
-		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4Alt, 4)
+		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), blockHeader4Alt, 4)
 		require.NoError(t, err)
 
 		assert.Len(t, moveBackBlockHeaders, 3)
@@ -575,11 +575,11 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		require.NotNil(t, items)
 
-		err := items.addBlock(blockHeader1)
+		err := items.addBlock(t.Context(), blockHeader1)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader2)
+		err = items.addBlock(t.Context(), blockHeader2)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader3)
+		err = items.addBlock(t.Context(), blockHeader3)
 		require.NoError(t, err)
 
 		// set the cached BlockAssembler items to block 2
@@ -601,16 +601,16 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		// set the cached BlockAssembler items to the correct values
 		items.blockAssembler.setBestBlockHeader(blockHeader2, 2)
 
-		err := items.addBlock(blockHeader1)
+		err := items.addBlock(t.Context(), blockHeader1)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader2)
+		err = items.addBlock(t.Context(), blockHeader2)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader3)
+		err = items.addBlock(t.Context(), blockHeader3)
 		require.NoError(t, err)
-		err = items.addBlock(blockHeader4)
+		err = items.addBlock(t.Context(), blockHeader4)
 		require.NoError(t, err)
 
-		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(context.Background(), blockHeader4, 4)
+		moveBackBlockHeaders, moveForwardBlockHeaders, err := items.blockAssembler.getReorgBlockHeaders(t.Context(), blockHeader4, 4)
 		require.NoError(t, err)
 
 		assert.Len(t, moveBackBlockHeaders, 0)
@@ -632,15 +632,15 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 		h2b := &model.BlockHeader{Version: 1, HashPrevBlock: blockHeader1.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 32, Bits: *bits}
 		h3b := &model.BlockHeader{Version: 1, HashPrevBlock: h2b.Hash(), HashMerkleRoot: &chainhash.Hash{}, Nonce: 33, Bits: *bits}
 
-		err := items.addBlock(blockHeader1)
+		err := items.addBlock(t.Context(), blockHeader1)
 		require.NoError(t, err)
-		err = items.addBlock(h2a)
+		err = items.addBlock(t.Context(), h2a)
 		require.NoError(t, err)
-		err = items.addBlock(h3a)
+		err = items.addBlock(t.Context(), h3a)
 		require.NoError(t, err)
-		err = items.addBlock(h2b)
+		err = items.addBlock(t.Context(), h2b)
 		require.NoError(t, err)
-		err = items.addBlock(h3b)
+		err = items.addBlock(t.Context(), h3b)
 		require.NoError(t, err)
 
 		// Simulate BlockAssembler currently being on the fork tip (3B @ height 3)
@@ -678,7 +678,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 
 	items.newSubtreeChan = make(chan subtreeprocessor.NewSubtreeRequest, 100)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	logger := ulogger.NewErrorTestLogger(t)
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
@@ -703,7 +703,7 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	stats := gocore.NewStat("test")
 
 	ba, _ := NewBlockAssembler(
-		context.Background(),
+		t.Context(),
 		ulogger.TestLogger{},
 		tSettings,
 		stats,
@@ -1067,7 +1067,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 	t.Run("GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx := t.Context()
 		testItems := setupBlockAssemblyTest(t)
 		require.NotNil(t, testItems)
 		testItems.blockAssembler.settings.Policy.BlockMaxSize = 430000
@@ -1162,7 +1162,7 @@ func TestBlockAssembly_CoinbaseSubsidyBugReproduction(t *testing.T) {
 	t.Run("FeesOnlyScenario", func(t *testing.T) {
 		initPrometheusMetrics()
 
-		ctx := context.Background()
+		ctx := t.Context()
 		testItems := setupBlockAssemblyTest(t)
 
 		// Set up mock blockchain client
@@ -2022,7 +2022,7 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		stats := gocore.NewStat("test")
 
 		blockAssembler, err := NewBlockAssembler(
-			context.Background(),
+			t.Context(),
 			ulogger.TestLogger{},
 			tSettings,
 			stats,
@@ -2077,7 +2077,7 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 		stats := gocore.NewStat("test")
 
 		blockAssembler, err := NewBlockAssembler(
-			context.Background(),
+			t.Context(),
 			ulogger.TestLogger{},
 			tSettings,
 			stats,
@@ -2119,7 +2119,7 @@ func TestBlockAssembly_processNewBlockAnnouncement_ErrorHandling(t *testing.T) {
 		initialHeader, initialHeight := testItems.blockAssembler.CurrentBlock()
 
 		// Call processNewBlockAnnouncement directly
-		testItems.blockAssembler.processNewBlockAnnouncement(context.Background())
+		testItems.blockAssembler.processNewBlockAnnouncement(t.Context())
 
 		// Verify state remains unchanged after error
 		currentHeader, currentHeight := testItems.blockAssembler.CurrentBlock()
@@ -2208,7 +2208,7 @@ func containsHash(list []chainhash.Hash, target chainhash.Hash) bool {
 func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNotCleared(t *testing.T) {
 	initPrometheusMetrics()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
 
@@ -2254,7 +2254,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNo
 func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStatus(t *testing.T) {
 	initPrometheusMetrics()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
 
@@ -2303,7 +2303,7 @@ func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStat
 func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t *testing.T) {
 	initPrometheusMetrics()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	items := setupBlockAssemblyTest(t)
 	require.NotNil(t, items)
 
@@ -2331,7 +2331,7 @@ func TestBlockAssembly_LoadUnminedTransactions_SkipsTransactionsOnCurrentChain(t
 		Nonce:          1,
 		Bits:           *bits,
 	}
-	err = items.addBlock(blockHeader1)
+	err = items.addBlock(t.Context(), blockHeader1)
 	require.NoError(t, err)
 
 	// Get the block ID for our test block
@@ -2398,7 +2398,7 @@ func TestResetCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test reset with force flag
-		_ = ba.reset(context.Background(), true)
+		_ = ba.reset(t.Context(), true)
 
 		// Should handle forced reset
 		assert.True(t, true, "reset should handle forced reset")
@@ -2409,7 +2409,7 @@ func TestResetCoverage(t *testing.T) {
 		require.NotNil(t, testItems)
 		ba := testItems.blockAssembler
 
-		ctx := context.Background()
+		ctx := t.Context()
 
 		// Reset multiple times
 		_ = ba.reset(ctx, false)
@@ -2431,7 +2431,7 @@ func TestHandleReorgCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test handleReorg with nil header
-		err := ba.handleReorg(context.Background(), nil, 100)
+		err := ba.handleReorg(t.Context(), nil, 100)
 
 		// Should handle nil header gracefully
 		if err != nil {
@@ -2453,7 +2453,7 @@ func TestHandleReorgCoverage(t *testing.T) {
 		}
 
 		// Test handleReorg
-		err := ba.handleReorg(context.Background(), header, 101)
+		err := ba.handleReorg(t.Context(), header, 101)
 
 		// Should handle reorg gracefully
 		if err != nil {
@@ -2493,7 +2493,7 @@ func TestLoadUnminedTransactionsCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test loadUnminedTransactions
-		_ = ba.loadUnminedTransactions(context.Background(), false)
+		_ = ba.loadUnminedTransactions(t.Context(), false)
 
 		// Should complete loading
 		assert.True(t, true, "loadUnminedTransactions should complete successfully")
@@ -2505,7 +2505,7 @@ func TestLoadUnminedTransactionsCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test loadUnminedTransactions with reseed
-		_ = ba.loadUnminedTransactions(context.Background(), true)
+		_ = ba.loadUnminedTransactions(t.Context(), true)
 
 		// Should complete loading with reseed
 		assert.True(t, true, "loadUnminedTransactions should handle reseed flag")
@@ -2578,7 +2578,7 @@ func TestWaitForPendingBlocksCoverage(t *testing.T) {
 		ba.SetSkipWaitForPendingBlocks(true)
 
 		// Test waitForPendingBlocks - should return immediately
-		_ = ba.subtreeProcessor.WaitForPendingBlocks(context.Background())
+		_ = ba.subtreeProcessor.WaitForPendingBlocks(t.Context())
 
 		// Should return immediately when skip is enabled
 		assert.True(t, true, "waitForPendingBlocks should skip when enabled")
@@ -2629,7 +2629,7 @@ func TestProcessNewBlockAnnouncementCoverage(t *testing.T) {
 		ba := testItems.blockAssembler
 
 		// Test processNewBlockAnnouncement with normal context
-		ba.processNewBlockAnnouncement(context.Background())
+		ba.processNewBlockAnnouncement(t.Context())
 
 		// Should process announcement successfully
 		assert.True(t, true, "processNewBlockAnnouncement should complete successfully")
@@ -2652,7 +2652,7 @@ func TestGetMiningCandidate_SendTimeoutResetsGenerationFlag(t *testing.T) {
 
 	// Don't start the listeners, so the channel send will timeout
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First call - should timeout after 1 second on send
 	start := time.Now()
