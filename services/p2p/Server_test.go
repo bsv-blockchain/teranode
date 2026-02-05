@@ -2154,19 +2154,20 @@ func TestServerStartFull(t *testing.T) {
 }
 
 func TestInvalidSubtreeHandlerHappyPath(t *testing.T) {
-	t.Skip("skip until we fix subtree handler")
-	banHandler := &testBanHandler{}
-	banManager := &PeerBanManager{
-		peerBanScores: make(map[string]*BanScore),
-		reasonPoints: map[BanReason]int{
-			ReasonInvalidSubtree: 10,
-		},
-		banThreshold:  100,
-		banDuration:   time.Hour,
-		decayInterval: time.Minute,
-		decayAmount:   1,
-		handler:       banHandler,
-	}
+	// Create a valid peer ID for testing
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	testPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	// Create peer registry and add the test peer
+	registry := NewPeerRegistry()
+	registry.Put(testPeerID, "test-client", 100, nil, "")
+
+	// Get initial failure count
+	peerInfo, exists := registry.Get(testPeerID)
+	require.True(t, exists)
+	initialFailures := peerInfo.InteractionFailures
 
 	mockBC := new(blockchain.Mock)
 	st := blockchain_api.FSMStateType_RUNNING
@@ -2174,21 +2175,21 @@ func TestInvalidSubtreeHandlerHappyPath(t *testing.T) {
 
 	s := &Server{
 		logger:           ulogger.New("test"),
-		banManager:       banManager,
+		peerRegistry:     registry,
 		blockchainClient: mockBC,
 	}
 
 	hash := "subtree-hash-456"
-	peerID := "peer-xyz"
 	entry := peerMapEntry{
-		peerID:    peerID,
+		peerID:    testPeerID.String(),
 		timestamp: time.Now(),
 	}
 	s.subtreePeerMap.Store(hash, entry)
 
 	m := &kafkamessage.KafkaInvalidSubtreeTopicMessage{
 		SubtreeHash: hash,
-		Reason:      "invalid_subtree",
+		PeerUrl:     "",
+		Reason:      "peer_cannot_provide_transactions",
 	}
 	payload, err := proto.Marshal(m)
 	require.NoError(t, err)
@@ -2204,17 +2205,15 @@ func TestInvalidSubtreeHandlerHappyPath(t *testing.T) {
 	err = h(msg)
 	require.NoError(t, err)
 
+	// Verify subtree was removed from map after processing
 	_, ok := s.subtreePeerMap.Load(hash)
-	require.True(t, ok, "entry should exist")
+	require.False(t, ok, "entry should be removed after processing")
 
-	// TODO: Fix this test to use the interface properly
-	// s.banManager.mu.RLock()
-	// score := s.banManager.peerBanScores[peerID]
-	// s.banManager.mu.RUnlock()
-	// if assert.NotNil(t, score, "peer should have a score entry") {
-	// 	assert.Equal(t, int(10), score.Score)
-	// }
-
+	// Verify interaction failure was recorded
+	peerInfo, exists = registry.Get(testPeerID)
+	require.True(t, exists)
+	assert.Equal(t, initialFailures+1, peerInfo.InteractionFailures,
+		"interaction failure should be incremented for invalid subtree")
 }
 
 func TestInvalidBlockHandler(t *testing.T) {
@@ -3410,20 +3409,122 @@ func TestReportInvalidSubtreeCoverage(t *testing.T) {
 	ctx := context.Background()
 	server := createTestServer(t)
 
-	// Test with empty hash and required parameters
-	err := server.ReportInvalidSubtree(ctx, "", "http://test-peer:8080", "test reason")
-	if err != nil {
-		t.Logf("ReportInvalidSubtree with empty hash failed as expected: %v", err)
-	}
+	// Create a valid peer ID for testing
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	testPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
 
-	// Test with valid hash format and all required parameters
+	// Register the peer in the registry
+	server.peerRegistry.Put(testPeerID, "test-client", 100, nil, "")
+
+	// Get initial failure count
+	peerInfo, exists := server.peerRegistry.Get(testPeerID)
+	require.True(t, exists)
+	initialFailures := peerInfo.InteractionFailures
+
+	// Store the subtree-peer mapping
 	testHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	err = server.ReportInvalidSubtree(ctx, testHash, "http://peer:8080", "invalid subtree")
-	if err != nil {
-		t.Logf("ReportInvalidSubtree may fail in test environment: %v", err)
+	server.subtreePeerMap.Store(testHash, peerMapEntry{
+		peerID:    testPeerID.String(),
+		timestamp: time.Now(),
+	})
+
+	// Call ReportInvalidSubtree
+	err = server.ReportInvalidSubtree(ctx, testHash, "", "peer_cannot_provide_transactions")
+	require.NoError(t, err)
+
+	// Verify interaction failure was recorded
+	peerInfo, exists = server.peerRegistry.Get(testPeerID)
+	require.True(t, exists)
+	assert.Equal(t, initialFailures+1, peerInfo.InteractionFailures,
+		"interaction failure should be incremented")
+
+	// Verify subtree was removed from the map
+	_, ok := server.subtreePeerMap.Load(testHash)
+	assert.False(t, ok, "subtree should be removed from map after processing")
+}
+
+func TestReportInvalidSubtree_AllReasons(t *testing.T) {
+	ctx := context.Background()
+	server := createTestServer(t)
+
+	// Create a valid peer ID for testing
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	testPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	// Register the peer in the registry
+	server.peerRegistry.Put(testPeerID, "test-client", 100, nil, "")
+
+	// Test each reason type - these are typically transient network failures
+	reasons := []string{
+		"peer_cannot_provide_transactions",
+		"malformed_transaction_data",
+		"transaction_count_mismatch",
+		"peer_cannot_provide_subtree",
+		"contains_invalid_transaction",
+		"peer_cannot_provide_subtree_data",
 	}
 
-	// The function should execute the main logic path regardless of result
+	for i, reason := range reasons {
+		// Re-add to map (gets deleted after each call)
+		testHash := fmt.Sprintf("hash%d", i)
+		server.subtreePeerMap.Store(testHash, peerMapEntry{
+			peerID:    testPeerID.String(),
+			timestamp: time.Now(),
+		})
+
+		err := server.ReportInvalidSubtree(ctx, testHash, "", reason)
+		require.NoError(t, err, "should not error for reason: %s", reason)
+
+		peerInfo, exists := server.peerRegistry.Get(testPeerID)
+		require.True(t, exists)
+		assert.Equal(t, int64(i+1), peerInfo.InteractionFailures,
+			"failure count should increment for reason: %s", reason)
+	}
+}
+
+func TestReportInvalidSubtree_RepeatedFailuresReduceReputation(t *testing.T) {
+	ctx := context.Background()
+	server := createTestServer(t)
+
+	// Create a valid peer ID for testing
+	_, pub, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+	require.NoError(t, err)
+	testPeerID, err := peer.IDFromPublicKey(pub)
+	require.NoError(t, err)
+
+	// Register the peer in the registry with initial reputation
+	server.peerRegistry.Put(testPeerID, "test-client", 100, nil, "")
+
+	// Record a success first to establish LastInteractionSuccess time
+	server.peerRegistry.RecordInteractionSuccess(testPeerID, time.Millisecond*100)
+
+	peerInfo, _ := server.peerRegistry.Get(testPeerID)
+	initialReputation := peerInfo.ReputationScore
+
+	// Report multiple invalid subtrees in quick succession (within 5 minute window)
+	// After 3+ failures since last success, reputation should drop to 15.0
+	for i := 0; i < 4; i++ {
+		testHash := fmt.Sprintf("hash%d", i)
+		server.subtreePeerMap.Store(testHash, peerMapEntry{
+			peerID:    testPeerID.String(),
+			timestamp: time.Now(),
+		})
+
+		err := server.ReportInvalidSubtree(ctx, testHash, "", "peer_cannot_provide_transactions")
+		require.NoError(t, err)
+	}
+
+	// Verify reputation has decreased significantly
+	peerInfo, exists := server.peerRegistry.Get(testPeerID)
+	require.True(t, exists)
+	assert.Less(t, peerInfo.ReputationScore, initialReputation,
+		"reputation should decrease after multiple failures")
+	assert.Equal(t, int64(4), peerInfo.InteractionFailures,
+		"should have 4 interaction failures")
 }
 
 // createEnhancedTestServer creates a test server with properly initialized mocks
