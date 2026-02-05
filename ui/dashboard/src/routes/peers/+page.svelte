@@ -884,13 +884,32 @@
 </PageWithMenu>
 
 {#if showCatchupModal && selectedPeer}
-  <div class="modal-overlay" on:click={() => {
-    showCatchupModal = false
-    selectedPeer = null
-  }}>
-    <div class="modal-content" on:click|stopPropagation>
+  <!-- svelte-ignore a11y-no-static-element-interactions -->
+  <div
+    class="modal-overlay"
+    role="presentation"
+    on:click={() => {
+      showCatchupModal = false
+      selectedPeer = null
+    }}
+    on:keydown={(e) => {
+      if (e.key === 'Escape') {
+        showCatchupModal = false
+        selectedPeer = null
+      }
+    }}
+  >
+    <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+    <div
+      class="modal-content"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-title"
+      on:click|stopPropagation
+      on:keydown|stopPropagation
+    >
       <div class="modal-header">
-        <h2 class="modal-title">Catchup Details - {selectedPeer.client_name || selectedPeer.id}</h2>
+        <h2 id="modal-title" class="modal-title">Catchup Details - {selectedPeer.client_name || selectedPeer.id}</h2>
         <button class="modal-close" on:click={() => {
           showCatchupModal = false
           selectedPeer = null

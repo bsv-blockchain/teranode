@@ -63,6 +63,9 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently
@@ -127,6 +130,9 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently
@@ -194,6 +200,9 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently - it now handles its own error group internally
@@ -251,6 +260,9 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently
@@ -298,6 +310,9 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently - it now handles its own error group internally
@@ -367,6 +382,9 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently
@@ -420,6 +438,9 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently
@@ -461,6 +482,9 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently
@@ -568,6 +592,9 @@ func TestFetchBlocksConcurrently_PerformanceCharacteristics(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently
@@ -619,6 +646,9 @@ func TestFetchBlocksConcurrently_EdgeCases(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently
@@ -896,6 +926,9 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockUpTo:    blocks[5],
 			baseURL:      "http://peer",
 			blockHeaders: blockHeaders,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
@@ -977,6 +1010,9 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockUpTo:    blocks[15],
 			baseURL:      "http://peer",
 			blockHeaders: blockHeaders,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
@@ -1045,6 +1081,9 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockUpTo:    blocks[100],
 			baseURL:      "http://peer",
 			blockHeaders: blockHeaders,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
@@ -1125,6 +1164,9 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockUpTo:    blocks[250],
 			baseURL:      "http://peer",
 			blockHeaders: blockHeaders,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
@@ -1203,6 +1245,9 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockUpTo:    blocks[50],
 			baseURL:      "http://peer",
 			blockHeaders: blockHeaders,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
@@ -1271,6 +1316,9 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 			blockUpTo:    blocks[5],
 			baseURL:      "http://peer",
 			blockHeaders: blockHeaders,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
@@ -1327,6 +1375,9 @@ func TestFetchBlocksConcurrently_WorkerPoolArchitecture(t *testing.T) {
 			blockUpTo:    blocks[100],
 			baseURL:      "http://peer",
 			blockHeaders: blockHeaders,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		err := suite.Server.fetchBlocksConcurrently(ctx, catchupCtx, validateBlocksChan, size)
@@ -1750,6 +1801,9 @@ func TestFetchBlocksConcurrentlyOptimized(t *testing.T) {
 			blockUpTo:    targetBlock,
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call the deprecated alias function
@@ -2609,6 +2663,9 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 			blockUpTo:    blocks[4],
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Start the function in a goroutine
@@ -2669,6 +2726,9 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 			blockUpTo:    blocks[2],
 			baseURL:      "http://test-peer",
 			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: 0,
+			},
 		}
 
 		// Call fetchBlocksConcurrently
@@ -2753,6 +2813,9 @@ func TestOrderedDelivery_StrictOrdering(t *testing.T) {
 		blockUpTo:    blocks[5],
 		baseURL:      "http://test-peer",
 		blockHeaders: headers,
+		commonAncestorMeta: &model.BlockHeaderMeta{
+			Height: 0,
+		},
 	}
 
 	// Call fetchBlocksConcurrently
@@ -3047,5 +3110,72 @@ func TestFetchAndStoreSubtreeDataEdgeCases(t *testing.T) {
 		// This should skip fetching since data already exists
 		err = suite.Server.fetchAndStoreSubtreeData(suite.Ctx, testBlock, &subtreeHash, subtree, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 		assert.NoError(t, err)
+	})
+}
+
+// TestFetchBlocksConcurrently_BlockHeightIsSet verifies that block.Height is set correctly
+// during catchup block fetching (Issue #4464)
+func TestFetchBlocksConcurrently_BlockHeightIsSet(t *testing.T) {
+	t.Run("Block_Height_Should_Be_Set_During_Catchup", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		// Create test blocks at specific heights
+		numBlocks := 5
+		startingHeight := uint32(100) // Common ancestor at height 99
+		blocks := testhelpers.CreateTestBlockChain(t, numBlocks+1)
+		targetBlock := blocks[numBlocks]
+
+		// Set up HTTP mocks for batch fetching
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		// Mock batch request
+		batchData := bytes.Buffer{}
+		for i := numBlocks; i >= 1; i-- {
+			blockBytes, err := blocks[i].Bytes()
+			require.NoError(t, err)
+			batchData.Write(blockBytes)
+		}
+
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("http://test-peer/blocks/%s?n=%d",
+				blocks[numBlocks].Header.Hash().String(), numBlocks),
+			httpmock.NewBytesResponder(200, batchData.Bytes()))
+
+		var headers []*model.BlockHeader
+		for i := 1; i <= numBlocks; i++ {
+			headers = append(headers, blocks[i].Header)
+		}
+
+		var size atomic.Int64
+		size.Store(int64(numBlocks))
+		validateBlocksChan := make(chan *model.Block, numBlocks)
+
+		catchupCtx := &CatchupContext{
+			blockUpTo:    targetBlock,
+			baseURL:      "http://test-peer",
+			blockHeaders: headers,
+			commonAncestorMeta: &model.BlockHeaderMeta{
+				Height: startingHeight - 1, // Height 99
+			},
+		}
+
+		err := suite.Server.fetchBlocksConcurrently(suite.Ctx, catchupCtx,
+			validateBlocksChan, &size)
+		require.NoError(t, err)
+
+		// Collect blocks and verify heights
+		for i := 0; i < numBlocks; i++ {
+			select {
+			case block := <-validateBlocksChan:
+				expectedHeight := startingHeight + uint32(i)
+				assert.Equal(t, expectedHeight, block.Height,
+					"Block %d should have height %d, got %d",
+					i, expectedHeight, block.Height)
+			case <-time.After(time.Second):
+				t.Fatalf("Timeout waiting for block %d/%d", i+1, numBlocks)
+			}
+		}
 	})
 }

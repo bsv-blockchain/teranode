@@ -271,6 +271,14 @@ type Interface interface {
 	//   - int: Total number of subtrees
 	SubtreeCount() int
 
+	// GetChainedSubtreesTotalSize returns the total size in bytes of all chained subtrees.
+	// This uses atomic access and is safe to call from any context without channel-based
+	// synchronization, avoiding potential deadlocks in scenarios where the worker is blocked.
+	//
+	// Returns:
+	//   - uint64: Total size in bytes of all chained subtrees
+	GetChainedSubtreesTotalSize() uint64
+
 	// WaitForPendingBlocks waits for any pending block operations to complete.
 	// This ensures that all block-related processing is finalized before proceeding.
 	//

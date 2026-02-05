@@ -4127,6 +4127,1078 @@ func (x *GetBlocksNotPersistedResponse) GetBlockBytes() [][]byte {
 	return nil
 }
 
+type ScheduleBlobDeletionRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	BlobKey        []byte                 `protobuf:"bytes,1,opt,name=blob_key,json=blobKey,proto3" json:"blob_key,omitempty"`
+	FileType       string                 `protobuf:"bytes,2,opt,name=file_type,json=fileType,proto3" json:"file_type,omitempty"`
+	StoreType      int32                  `protobuf:"varint,3,opt,name=store_type,json=storeType,proto3" json:"store_type,omitempty"`
+	DeleteAtHeight uint32                 `protobuf:"varint,4,opt,name=delete_at_height,json=deleteAtHeight,proto3" json:"delete_at_height,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ScheduleBlobDeletionRequest) Reset() {
+	*x = ScheduleBlobDeletionRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[77]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScheduleBlobDeletionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScheduleBlobDeletionRequest) ProtoMessage() {}
+
+func (x *ScheduleBlobDeletionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[77]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScheduleBlobDeletionRequest.ProtoReflect.Descriptor instead.
+func (*ScheduleBlobDeletionRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{77}
+}
+
+func (x *ScheduleBlobDeletionRequest) GetBlobKey() []byte {
+	if x != nil {
+		return x.BlobKey
+	}
+	return nil
+}
+
+func (x *ScheduleBlobDeletionRequest) GetFileType() string {
+	if x != nil {
+		return x.FileType
+	}
+	return ""
+}
+
+func (x *ScheduleBlobDeletionRequest) GetStoreType() int32 {
+	if x != nil {
+		return x.StoreType
+	}
+	return 0
+}
+
+func (x *ScheduleBlobDeletionRequest) GetDeleteAtHeight() uint32 {
+	if x != nil {
+		return x.DeleteAtHeight
+	}
+	return 0
+}
+
+type ScheduleBlobDeletionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeletionId    int64                  `protobuf:"varint,1,opt,name=deletion_id,json=deletionId,proto3" json:"deletion_id,omitempty"`
+	Scheduled     bool                   `protobuf:"varint,2,opt,name=scheduled,proto3" json:"scheduled,omitempty"`
+	Message       string                 `protobuf:"bytes,3,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ScheduleBlobDeletionResponse) Reset() {
+	*x = ScheduleBlobDeletionResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[78]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScheduleBlobDeletionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScheduleBlobDeletionResponse) ProtoMessage() {}
+
+func (x *ScheduleBlobDeletionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[78]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScheduleBlobDeletionResponse.ProtoReflect.Descriptor instead.
+func (*ScheduleBlobDeletionResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{78}
+}
+
+func (x *ScheduleBlobDeletionResponse) GetDeletionId() int64 {
+	if x != nil {
+		return x.DeletionId
+	}
+	return 0
+}
+
+func (x *ScheduleBlobDeletionResponse) GetScheduled() bool {
+	if x != nil {
+		return x.Scheduled
+	}
+	return false
+}
+
+func (x *ScheduleBlobDeletionResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+type CancelBlobDeletionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BlobKey       []byte                 `protobuf:"bytes,1,opt,name=blob_key,json=blobKey,proto3" json:"blob_key,omitempty"`
+	FileType      string                 `protobuf:"bytes,2,opt,name=file_type,json=fileType,proto3" json:"file_type,omitempty"`
+	StoreType     int32                  `protobuf:"varint,3,opt,name=store_type,json=storeType,proto3" json:"store_type,omitempty"`
+	CancelReason  string                 `protobuf:"bytes,4,opt,name=cancel_reason,json=cancelReason,proto3" json:"cancel_reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelBlobDeletionRequest) Reset() {
+	*x = CancelBlobDeletionRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[79]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelBlobDeletionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelBlobDeletionRequest) ProtoMessage() {}
+
+func (x *CancelBlobDeletionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[79]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelBlobDeletionRequest.ProtoReflect.Descriptor instead.
+func (*CancelBlobDeletionRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{79}
+}
+
+func (x *CancelBlobDeletionRequest) GetBlobKey() []byte {
+	if x != nil {
+		return x.BlobKey
+	}
+	return nil
+}
+
+func (x *CancelBlobDeletionRequest) GetFileType() string {
+	if x != nil {
+		return x.FileType
+	}
+	return ""
+}
+
+func (x *CancelBlobDeletionRequest) GetStoreType() int32 {
+	if x != nil {
+		return x.StoreType
+	}
+	return 0
+}
+
+func (x *CancelBlobDeletionRequest) GetCancelReason() string {
+	if x != nil {
+		return x.CancelReason
+	}
+	return ""
+}
+
+type CancelBlobDeletionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cancelled     bool                   `protobuf:"varint,1,opt,name=cancelled,proto3" json:"cancelled,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelBlobDeletionResponse) Reset() {
+	*x = CancelBlobDeletionResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[80]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelBlobDeletionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelBlobDeletionResponse) ProtoMessage() {}
+
+func (x *CancelBlobDeletionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[80]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelBlobDeletionResponse.ProtoReflect.Descriptor instead.
+func (*CancelBlobDeletionResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{80}
+}
+
+func (x *CancelBlobDeletionResponse) GetCancelled() bool {
+	if x != nil {
+		return x.Cancelled
+	}
+	return false
+}
+
+func (x *CancelBlobDeletionResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+type ListScheduledDeletionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	MinHeight     uint32                 `protobuf:"varint,1,opt,name=min_height,json=minHeight,proto3" json:"min_height,omitempty"`
+	MaxHeight     uint32                 `protobuf:"varint,2,opt,name=max_height,json=maxHeight,proto3" json:"max_height,omitempty"`
+	StoreType     int32                  `protobuf:"varint,3,opt,name=store_type,json=storeType,proto3" json:"store_type,omitempty"`
+	Limit         int32                  `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
+	Offset        int32                  `protobuf:"varint,5,opt,name=offset,proto3" json:"offset,omitempty"`
+	FilterByStore bool                   `protobuf:"varint,6,opt,name=filter_by_store,json=filterByStore,proto3" json:"filter_by_store,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListScheduledDeletionsRequest) Reset() {
+	*x = ListScheduledDeletionsRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[81]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListScheduledDeletionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListScheduledDeletionsRequest) ProtoMessage() {}
+
+func (x *ListScheduledDeletionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[81]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListScheduledDeletionsRequest.ProtoReflect.Descriptor instead.
+func (*ListScheduledDeletionsRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{81}
+}
+
+func (x *ListScheduledDeletionsRequest) GetMinHeight() uint32 {
+	if x != nil {
+		return x.MinHeight
+	}
+	return 0
+}
+
+func (x *ListScheduledDeletionsRequest) GetMaxHeight() uint32 {
+	if x != nil {
+		return x.MaxHeight
+	}
+	return 0
+}
+
+func (x *ListScheduledDeletionsRequest) GetStoreType() int32 {
+	if x != nil {
+		return x.StoreType
+	}
+	return 0
+}
+
+func (x *ListScheduledDeletionsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *ListScheduledDeletionsRequest) GetOffset() int32 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *ListScheduledDeletionsRequest) GetFilterByStore() bool {
+	if x != nil {
+		return x.FilterByStore
+	}
+	return false
+}
+
+type ScheduledDeletion struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Id             int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	BlobKey        []byte                 `protobuf:"bytes,2,opt,name=blob_key,json=blobKey,proto3" json:"blob_key,omitempty"`
+	FileType       string                 `protobuf:"bytes,3,opt,name=file_type,json=fileType,proto3" json:"file_type,omitempty"`
+	StoreType      int32                  `protobuf:"varint,4,opt,name=store_type,json=storeType,proto3" json:"store_type,omitempty"`
+	DeleteAtHeight uint32                 `protobuf:"varint,5,opt,name=delete_at_height,json=deleteAtHeight,proto3" json:"delete_at_height,omitempty"`
+	RetryCount     uint32                 `protobuf:"varint,6,opt,name=retry_count,json=retryCount,proto3" json:"retry_count,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ScheduledDeletion) Reset() {
+	*x = ScheduledDeletion{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[82]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScheduledDeletion) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScheduledDeletion) ProtoMessage() {}
+
+func (x *ScheduledDeletion) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[82]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScheduledDeletion.ProtoReflect.Descriptor instead.
+func (*ScheduledDeletion) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{82}
+}
+
+func (x *ScheduledDeletion) GetId() int64 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *ScheduledDeletion) GetBlobKey() []byte {
+	if x != nil {
+		return x.BlobKey
+	}
+	return nil
+}
+
+func (x *ScheduledDeletion) GetFileType() string {
+	if x != nil {
+		return x.FileType
+	}
+	return ""
+}
+
+func (x *ScheduledDeletion) GetStoreType() int32 {
+	if x != nil {
+		return x.StoreType
+	}
+	return 0
+}
+
+func (x *ScheduledDeletion) GetDeleteAtHeight() uint32 {
+	if x != nil {
+		return x.DeleteAtHeight
+	}
+	return 0
+}
+
+func (x *ScheduledDeletion) GetRetryCount() uint32 {
+	if x != nil {
+		return x.RetryCount
+	}
+	return 0
+}
+
+type ListScheduledDeletionsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Deletions     []*ScheduledDeletion   `protobuf:"bytes,1,rep,name=deletions,proto3" json:"deletions,omitempty"`
+	TotalCount    int32                  `protobuf:"varint,2,opt,name=total_count,json=totalCount,proto3" json:"total_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListScheduledDeletionsResponse) Reset() {
+	*x = ListScheduledDeletionsResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[83]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListScheduledDeletionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListScheduledDeletionsResponse) ProtoMessage() {}
+
+func (x *ListScheduledDeletionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[83]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListScheduledDeletionsResponse.ProtoReflect.Descriptor instead.
+func (*ListScheduledDeletionsResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{83}
+}
+
+func (x *ListScheduledDeletionsResponse) GetDeletions() []*ScheduledDeletion {
+	if x != nil {
+		return x.Deletions
+	}
+	return nil
+}
+
+func (x *ListScheduledDeletionsResponse) GetTotalCount() int32 {
+	if x != nil {
+		return x.TotalCount
+	}
+	return 0
+}
+
+type GetPendingBlobDeletionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Height        uint32                 `protobuf:"varint,1,opt,name=height,proto3" json:"height,omitempty"`
+	Limit         int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPendingBlobDeletionsRequest) Reset() {
+	*x = GetPendingBlobDeletionsRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[84]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPendingBlobDeletionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPendingBlobDeletionsRequest) ProtoMessage() {}
+
+func (x *GetPendingBlobDeletionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[84]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPendingBlobDeletionsRequest.ProtoReflect.Descriptor instead.
+func (*GetPendingBlobDeletionsRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{84}
+}
+
+func (x *GetPendingBlobDeletionsRequest) GetHeight() uint32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *GetPendingBlobDeletionsRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type GetPendingBlobDeletionsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Deletions     []*ScheduledDeletion   `protobuf:"bytes,1,rep,name=deletions,proto3" json:"deletions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPendingBlobDeletionsResponse) Reset() {
+	*x = GetPendingBlobDeletionsResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[85]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPendingBlobDeletionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPendingBlobDeletionsResponse) ProtoMessage() {}
+
+func (x *GetPendingBlobDeletionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[85]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPendingBlobDeletionsResponse.ProtoReflect.Descriptor instead.
+func (*GetPendingBlobDeletionsResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{85}
+}
+
+func (x *GetPendingBlobDeletionsResponse) GetDeletions() []*ScheduledDeletion {
+	if x != nil {
+		return x.Deletions
+	}
+	return nil
+}
+
+type RemoveBlobDeletionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeletionId    int64                  `protobuf:"varint,1,opt,name=deletion_id,json=deletionId,proto3" json:"deletion_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveBlobDeletionRequest) Reset() {
+	*x = RemoveBlobDeletionRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[86]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveBlobDeletionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveBlobDeletionRequest) ProtoMessage() {}
+
+func (x *RemoveBlobDeletionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[86]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveBlobDeletionRequest.ProtoReflect.Descriptor instead.
+func (*RemoveBlobDeletionRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{86}
+}
+
+func (x *RemoveBlobDeletionRequest) GetDeletionId() int64 {
+	if x != nil {
+		return x.DeletionId
+	}
+	return 0
+}
+
+type IncrementBlobDeletionRetryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeletionId    int64                  `protobuf:"varint,1,opt,name=deletion_id,json=deletionId,proto3" json:"deletion_id,omitempty"`
+	MaxRetries    int32                  `protobuf:"varint,2,opt,name=max_retries,json=maxRetries,proto3" json:"max_retries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IncrementBlobDeletionRetryRequest) Reset() {
+	*x = IncrementBlobDeletionRetryRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[87]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IncrementBlobDeletionRetryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IncrementBlobDeletionRetryRequest) ProtoMessage() {}
+
+func (x *IncrementBlobDeletionRetryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[87]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IncrementBlobDeletionRetryRequest.ProtoReflect.Descriptor instead.
+func (*IncrementBlobDeletionRetryRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{87}
+}
+
+func (x *IncrementBlobDeletionRetryRequest) GetDeletionId() int64 {
+	if x != nil {
+		return x.DeletionId
+	}
+	return 0
+}
+
+func (x *IncrementBlobDeletionRetryRequest) GetMaxRetries() int32 {
+	if x != nil {
+		return x.MaxRetries
+	}
+	return 0
+}
+
+type IncrementBlobDeletionRetryResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ShouldRemove  bool                   `protobuf:"varint,1,opt,name=should_remove,json=shouldRemove,proto3" json:"should_remove,omitempty"`
+	NewRetryCount int32                  `protobuf:"varint,2,opt,name=new_retry_count,json=newRetryCount,proto3" json:"new_retry_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IncrementBlobDeletionRetryResponse) Reset() {
+	*x = IncrementBlobDeletionRetryResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[88]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IncrementBlobDeletionRetryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IncrementBlobDeletionRetryResponse) ProtoMessage() {}
+
+func (x *IncrementBlobDeletionRetryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[88]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IncrementBlobDeletionRetryResponse.ProtoReflect.Descriptor instead.
+func (*IncrementBlobDeletionRetryResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{88}
+}
+
+func (x *IncrementBlobDeletionRetryResponse) GetShouldRemove() bool {
+	if x != nil {
+		return x.ShouldRemove
+	}
+	return false
+}
+
+func (x *IncrementBlobDeletionRetryResponse) GetNewRetryCount() int32 {
+	if x != nil {
+		return x.NewRetryCount
+	}
+	return 0
+}
+
+type CompleteBlobDeletionsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CompletedIds  []int64                `protobuf:"varint,1,rep,packed,name=completed_ids,json=completedIds,proto3" json:"completed_ids,omitempty"` // IDs of successfully deleted blobs
+	FailedIds     []int64                `protobuf:"varint,2,rep,packed,name=failed_ids,json=failedIds,proto3" json:"failed_ids,omitempty"`          // IDs of deletions that failed (will increment retry count)
+	MaxRetries    int32                  `protobuf:"varint,3,opt,name=max_retries,json=maxRetries,proto3" json:"max_retries,omitempty"`              // Maximum retries for failed deletions
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompleteBlobDeletionsRequest) Reset() {
+	*x = CompleteBlobDeletionsRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[89]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompleteBlobDeletionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompleteBlobDeletionsRequest) ProtoMessage() {}
+
+func (x *CompleteBlobDeletionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[89]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompleteBlobDeletionsRequest.ProtoReflect.Descriptor instead.
+func (*CompleteBlobDeletionsRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{89}
+}
+
+func (x *CompleteBlobDeletionsRequest) GetCompletedIds() []int64 {
+	if x != nil {
+		return x.CompletedIds
+	}
+	return nil
+}
+
+func (x *CompleteBlobDeletionsRequest) GetFailedIds() []int64 {
+	if x != nil {
+		return x.FailedIds
+	}
+	return nil
+}
+
+func (x *CompleteBlobDeletionsRequest) GetMaxRetries() int32 {
+	if x != nil {
+		return x.MaxRetries
+	}
+	return 0
+}
+
+type CompleteBlobDeletionsResponse struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	RemovedCount          int32                  `protobuf:"varint,1,opt,name=removed_count,json=removedCount,proto3" json:"removed_count,omitempty"`                              // Number of deletions removed (completed or max retries)
+	RetryIncrementedCount int32                  `protobuf:"varint,2,opt,name=retry_incremented_count,json=retryIncrementedCount,proto3" json:"retry_incremented_count,omitempty"` // Number of deletions with incremented retry count
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *CompleteBlobDeletionsResponse) Reset() {
+	*x = CompleteBlobDeletionsResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[90]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompleteBlobDeletionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompleteBlobDeletionsResponse) ProtoMessage() {}
+
+func (x *CompleteBlobDeletionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[90]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompleteBlobDeletionsResponse.ProtoReflect.Descriptor instead.
+func (*CompleteBlobDeletionsResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{90}
+}
+
+func (x *CompleteBlobDeletionsResponse) GetRemovedCount() int32 {
+	if x != nil {
+		return x.RemovedCount
+	}
+	return 0
+}
+
+func (x *CompleteBlobDeletionsResponse) GetRetryIncrementedCount() int32 {
+	if x != nil {
+		return x.RetryIncrementedCount
+	}
+	return 0
+}
+
+type AcquireBlobDeletionBatchRequest struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Height             uint32                 `protobuf:"varint,1,opt,name=height,proto3" json:"height,omitempty"`
+	Limit              int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	LockTimeoutSeconds int32                  `protobuf:"varint,3,opt,name=lock_timeout_seconds,json=lockTimeoutSeconds,proto3" json:"lock_timeout_seconds,omitempty"` // Optional: how long to hold the lock (default: 300s)
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *AcquireBlobDeletionBatchRequest) Reset() {
+	*x = AcquireBlobDeletionBatchRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[91]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcquireBlobDeletionBatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcquireBlobDeletionBatchRequest) ProtoMessage() {}
+
+func (x *AcquireBlobDeletionBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[91]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcquireBlobDeletionBatchRequest.ProtoReflect.Descriptor instead.
+func (*AcquireBlobDeletionBatchRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{91}
+}
+
+func (x *AcquireBlobDeletionBatchRequest) GetHeight() uint32 {
+	if x != nil {
+		return x.Height
+	}
+	return 0
+}
+
+func (x *AcquireBlobDeletionBatchRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+func (x *AcquireBlobDeletionBatchRequest) GetLockTimeoutSeconds() int32 {
+	if x != nil {
+		return x.LockTimeoutSeconds
+	}
+	return 0
+}
+
+type AcquireBlobDeletionBatchResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BatchToken    string                 `protobuf:"bytes,1,opt,name=batch_token,json=batchToken,proto3" json:"batch_token,omitempty"`
+	Deletions     []*ScheduledDeletion   `protobuf:"bytes,2,rep,name=deletions,proto3" json:"deletions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AcquireBlobDeletionBatchResponse) Reset() {
+	*x = AcquireBlobDeletionBatchResponse{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[92]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcquireBlobDeletionBatchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcquireBlobDeletionBatchResponse) ProtoMessage() {}
+
+func (x *AcquireBlobDeletionBatchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[92]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcquireBlobDeletionBatchResponse.ProtoReflect.Descriptor instead.
+func (*AcquireBlobDeletionBatchResponse) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{92}
+}
+
+func (x *AcquireBlobDeletionBatchResponse) GetBatchToken() string {
+	if x != nil {
+		return x.BatchToken
+	}
+	return ""
+}
+
+func (x *AcquireBlobDeletionBatchResponse) GetDeletions() []*ScheduledDeletion {
+	if x != nil {
+		return x.Deletions
+	}
+	return nil
+}
+
+type CompleteBlobDeletionBatchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BatchToken    string                 `protobuf:"bytes,1,opt,name=batch_token,json=batchToken,proto3" json:"batch_token,omitempty"`
+	CompletedIds  []int64                `protobuf:"varint,2,rep,packed,name=completed_ids,json=completedIds,proto3" json:"completed_ids,omitempty"`
+	FailedIds     []int64                `protobuf:"varint,3,rep,packed,name=failed_ids,json=failedIds,proto3" json:"failed_ids,omitempty"`
+	MaxRetries    int32                  `protobuf:"varint,4,opt,name=max_retries,json=maxRetries,proto3" json:"max_retries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CompleteBlobDeletionBatchRequest) Reset() {
+	*x = CompleteBlobDeletionBatchRequest{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[93]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CompleteBlobDeletionBatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CompleteBlobDeletionBatchRequest) ProtoMessage() {}
+
+func (x *CompleteBlobDeletionBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[93]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CompleteBlobDeletionBatchRequest.ProtoReflect.Descriptor instead.
+func (*CompleteBlobDeletionBatchRequest) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{93}
+}
+
+func (x *CompleteBlobDeletionBatchRequest) GetBatchToken() string {
+	if x != nil {
+		return x.BatchToken
+	}
+	return ""
+}
+
+func (x *CompleteBlobDeletionBatchRequest) GetCompletedIds() []int64 {
+	if x != nil {
+		return x.CompletedIds
+	}
+	return nil
+}
+
+func (x *CompleteBlobDeletionBatchRequest) GetFailedIds() []int64 {
+	if x != nil {
+		return x.FailedIds
+	}
+	return nil
+}
+
+func (x *CompleteBlobDeletionBatchRequest) GetMaxRetries() int32 {
+	if x != nil {
+		return x.MaxRetries
+	}
+	return 0
+}
+
+type BatchTokenInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	AcquiredAt    int64                  `protobuf:"varint,2,opt,name=acquired_at,json=acquiredAt,proto3" json:"acquired_at,omitempty"` // Unix timestamp
+	DeletionCount int32                  `protobuf:"varint,3,opt,name=deletion_count,json=deletionCount,proto3" json:"deletion_count,omitempty"`
+	DeletionIds   []int64                `protobuf:"varint,4,rep,packed,name=deletion_ids,json=deletionIds,proto3" json:"deletion_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BatchTokenInfo) Reset() {
+	*x = BatchTokenInfo{}
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[94]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BatchTokenInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BatchTokenInfo) ProtoMessage() {}
+
+func (x *BatchTokenInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes[94]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BatchTokenInfo.ProtoReflect.Descriptor instead.
+func (*BatchTokenInfo) Descriptor() ([]byte, []int) {
+	return file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP(), []int{94}
+}
+
+func (x *BatchTokenInfo) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+func (x *BatchTokenInfo) GetAcquiredAt() int64 {
+	if x != nil {
+		return x.AcquiredAt
+	}
+	return 0
+}
+
+func (x *BatchTokenInfo) GetDeletionCount() int32 {
+	if x != nil {
+		return x.DeletionCount
+	}
+	return 0
+}
+
+func (x *BatchTokenInfo) GetDeletionIds() []int64 {
+	if x != nil {
+		return x.DeletionIds
+	}
+	return nil
+}
+
 var File_services_blockchain_blockchain_api_blockchain_api_proto protoreflect.FileDescriptor
 
 const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" +
@@ -4384,7 +5456,97 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x05limit\x18\x01 \x01(\x05R\x05limit\"@\n" +
 	"\x1dGetBlocksNotPersistedResponse\x12\x1f\n" +
 	"\vblock_bytes\x18\x01 \x03(\fR\n" +
-	"blockBytes*D\n" +
+	"blockBytes\"\x9e\x01\n" +
+	"\x1bScheduleBlobDeletionRequest\x12\x19\n" +
+	"\bblob_key\x18\x01 \x01(\fR\ablobKey\x12\x1b\n" +
+	"\tfile_type\x18\x02 \x01(\tR\bfileType\x12\x1d\n" +
+	"\n" +
+	"store_type\x18\x03 \x01(\x05R\tstoreType\x12(\n" +
+	"\x10delete_at_height\x18\x04 \x01(\rR\x0edeleteAtHeight\"w\n" +
+	"\x1cScheduleBlobDeletionResponse\x12\x1f\n" +
+	"\vdeletion_id\x18\x01 \x01(\x03R\n" +
+	"deletionId\x12\x1c\n" +
+	"\tscheduled\x18\x02 \x01(\bR\tscheduled\x12\x18\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"\x97\x01\n" +
+	"\x19CancelBlobDeletionRequest\x12\x19\n" +
+	"\bblob_key\x18\x01 \x01(\fR\ablobKey\x12\x1b\n" +
+	"\tfile_type\x18\x02 \x01(\tR\bfileType\x12\x1d\n" +
+	"\n" +
+	"store_type\x18\x03 \x01(\x05R\tstoreType\x12#\n" +
+	"\rcancel_reason\x18\x04 \x01(\tR\fcancelReason\"T\n" +
+	"\x1aCancelBlobDeletionResponse\x12\x1c\n" +
+	"\tcancelled\x18\x01 \x01(\bR\tcancelled\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xd2\x01\n" +
+	"\x1dListScheduledDeletionsRequest\x12\x1d\n" +
+	"\n" +
+	"min_height\x18\x01 \x01(\rR\tminHeight\x12\x1d\n" +
+	"\n" +
+	"max_height\x18\x02 \x01(\rR\tmaxHeight\x12\x1d\n" +
+	"\n" +
+	"store_type\x18\x03 \x01(\x05R\tstoreType\x12\x14\n" +
+	"\x05limit\x18\x04 \x01(\x05R\x05limit\x12\x16\n" +
+	"\x06offset\x18\x05 \x01(\x05R\x06offset\x12&\n" +
+	"\x0ffilter_by_store\x18\x06 \x01(\bR\rfilterByStore\"\xc5\x01\n" +
+	"\x11ScheduledDeletion\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x19\n" +
+	"\bblob_key\x18\x02 \x01(\fR\ablobKey\x12\x1b\n" +
+	"\tfile_type\x18\x03 \x01(\tR\bfileType\x12\x1d\n" +
+	"\n" +
+	"store_type\x18\x04 \x01(\x05R\tstoreType\x12(\n" +
+	"\x10delete_at_height\x18\x05 \x01(\rR\x0edeleteAtHeight\x12\x1f\n" +
+	"\vretry_count\x18\x06 \x01(\rR\n" +
+	"retryCount\"\x82\x01\n" +
+	"\x1eListScheduledDeletionsResponse\x12?\n" +
+	"\tdeletions\x18\x01 \x03(\v2!.blockchain_api.ScheduledDeletionR\tdeletions\x12\x1f\n" +
+	"\vtotal_count\x18\x02 \x01(\x05R\n" +
+	"totalCount\"N\n" +
+	"\x1eGetPendingBlobDeletionsRequest\x12\x16\n" +
+	"\x06height\x18\x01 \x01(\rR\x06height\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\"b\n" +
+	"\x1fGetPendingBlobDeletionsResponse\x12?\n" +
+	"\tdeletions\x18\x01 \x03(\v2!.blockchain_api.ScheduledDeletionR\tdeletions\"<\n" +
+	"\x19RemoveBlobDeletionRequest\x12\x1f\n" +
+	"\vdeletion_id\x18\x01 \x01(\x03R\n" +
+	"deletionId\"e\n" +
+	"!IncrementBlobDeletionRetryRequest\x12\x1f\n" +
+	"\vdeletion_id\x18\x01 \x01(\x03R\n" +
+	"deletionId\x12\x1f\n" +
+	"\vmax_retries\x18\x02 \x01(\x05R\n" +
+	"maxRetries\"q\n" +
+	"\"IncrementBlobDeletionRetryResponse\x12#\n" +
+	"\rshould_remove\x18\x01 \x01(\bR\fshouldRemove\x12&\n" +
+	"\x0fnew_retry_count\x18\x02 \x01(\x05R\rnewRetryCount\"\x83\x01\n" +
+	"\x1cCompleteBlobDeletionsRequest\x12#\n" +
+	"\rcompleted_ids\x18\x01 \x03(\x03R\fcompletedIds\x12\x1d\n" +
+	"\n" +
+	"failed_ids\x18\x02 \x03(\x03R\tfailedIds\x12\x1f\n" +
+	"\vmax_retries\x18\x03 \x01(\x05R\n" +
+	"maxRetries\"|\n" +
+	"\x1dCompleteBlobDeletionsResponse\x12#\n" +
+	"\rremoved_count\x18\x01 \x01(\x05R\fremovedCount\x126\n" +
+	"\x17retry_incremented_count\x18\x02 \x01(\x05R\x15retryIncrementedCount\"\x81\x01\n" +
+	"\x1fAcquireBlobDeletionBatchRequest\x12\x16\n" +
+	"\x06height\x18\x01 \x01(\rR\x06height\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\x120\n" +
+	"\x14lock_timeout_seconds\x18\x03 \x01(\x05R\x12lockTimeoutSeconds\"\x84\x01\n" +
+	" AcquireBlobDeletionBatchResponse\x12\x1f\n" +
+	"\vbatch_token\x18\x01 \x01(\tR\n" +
+	"batchToken\x12?\n" +
+	"\tdeletions\x18\x02 \x03(\v2!.blockchain_api.ScheduledDeletionR\tdeletions\"\xa8\x01\n" +
+	" CompleteBlobDeletionBatchRequest\x12\x1f\n" +
+	"\vbatch_token\x18\x01 \x01(\tR\n" +
+	"batchToken\x12#\n" +
+	"\rcompleted_ids\x18\x02 \x03(\x03R\fcompletedIds\x12\x1d\n" +
+	"\n" +
+	"failed_ids\x18\x03 \x03(\x03R\tfailedIds\x12\x1f\n" +
+	"\vmax_retries\x18\x04 \x01(\x05R\n" +
+	"maxRetries\"\x91\x01\n" +
+	"\x0eBatchTokenInfo\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1f\n" +
+	"\vacquired_at\x18\x02 \x01(\x03R\n" +
+	"acquiredAt\x12%\n" +
+	"\x0edeletion_count\x18\x03 \x01(\x05R\rdeletionCount\x12!\n" +
+	"\fdeletion_ids\x18\x04 \x03(\x03R\vdeletionIds*D\n" +
 	"\fFSMEventType\x12\b\n" +
 	"\x04STOP\x10\x00\x12\a\n" +
 	"\x03RUN\x10\x01\x12\x11\n" +
@@ -4395,7 +5557,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x04IDLE\x10\x00\x12\v\n" +
 	"\aRUNNING\x10\x01\x12\x12\n" +
 	"\x0eCATCHINGBLOCKS\x10\x02\x12\x11\n" +
-	"\rLEGACYSYNCING\x10\x032\xbd,\n" +
+	"\rLEGACYSYNCING\x10\x032\xdf4\n" +
 	"\rBlockchainAPI\x12F\n" +
 	"\n" +
 	"HealthGRPC\x12\x16.google.protobuf.Empty\x1a\x1e.blockchain_api.HealthResponse\"\x00\x12E\n" +
@@ -4456,7 +5618,16 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x11ReportPeerFailure\x12(.blockchain_api.ReportPeerFailureRequest\x1a\x16.google.protobuf.Empty\"\x00\x12d\n" +
 	"\x0fGetBlockLocator\x12&.blockchain_api.GetBlockLocatorRequest\x1a'.blockchain_api.GetBlockLocatorResponse\"\x00\x12m\n" +
 	"\x12LocateBlockHeaders\x12).blockchain_api.LocateBlockHeadersRequest\x1a*.blockchain_api.LocateBlockHeadersResponse\"\x00\x12^\n" +
-	"\x14GetBestHeightAndTime\x12\x16.google.protobuf.Empty\x1a,.blockchain_api.GetBestHeightAndTimeResponse\"\x00B\x13Z\x11./;blockchain_apib\x06proto3"
+	"\x14GetBestHeightAndTime\x12\x16.google.protobuf.Empty\x1a,.blockchain_api.GetBestHeightAndTimeResponse\"\x00\x12s\n" +
+	"\x14ScheduleBlobDeletion\x12+.blockchain_api.ScheduleBlobDeletionRequest\x1a,.blockchain_api.ScheduleBlobDeletionResponse\"\x00\x12m\n" +
+	"\x12CancelBlobDeletion\x12).blockchain_api.CancelBlobDeletionRequest\x1a*.blockchain_api.CancelBlobDeletionResponse\"\x00\x12y\n" +
+	"\x16ListScheduledDeletions\x12-.blockchain_api.ListScheduledDeletionsRequest\x1a..blockchain_api.ListScheduledDeletionsResponse\"\x00\x12|\n" +
+	"\x17GetPendingBlobDeletions\x12..blockchain_api.GetPendingBlobDeletionsRequest\x1a/.blockchain_api.GetPendingBlobDeletionsResponse\"\x00\x12Y\n" +
+	"\x12RemoveBlobDeletion\x12).blockchain_api.RemoveBlobDeletionRequest\x1a\x16.google.protobuf.Empty\"\x00\x12\x85\x01\n" +
+	"\x1aIncrementBlobDeletionRetry\x121.blockchain_api.IncrementBlobDeletionRetryRequest\x1a2.blockchain_api.IncrementBlobDeletionRetryResponse\"\x00\x12v\n" +
+	"\x15CompleteBlobDeletions\x12,.blockchain_api.CompleteBlobDeletionsRequest\x1a-.blockchain_api.CompleteBlobDeletionsResponse\"\x00\x12\x7f\n" +
+	"\x18AcquireBlobDeletionBatch\x12/.blockchain_api.AcquireBlobDeletionBatchRequest\x1a0.blockchain_api.AcquireBlobDeletionBatchResponse\"\x00\x12g\n" +
+	"\x19CompleteBlobDeletionBatch\x120.blockchain_api.CompleteBlobDeletionBatchRequest\x1a\x16.google.protobuf.Empty\"\x00B\x13Z\x11./;blockchain_apib\x06proto3"
 
 var (
 	file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescOnce sync.Once
@@ -4471,7 +5642,7 @@ func file_services_blockchain_blockchain_api_blockchain_api_proto_rawDescGZIP() 
 }
 
 var file_services_blockchain_blockchain_api_blockchain_api_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes = make([]protoimpl.MessageInfo, 78)
+var file_services_blockchain_blockchain_api_blockchain_api_proto_msgTypes = make([]protoimpl.MessageInfo, 96)
 var file_services_blockchain_blockchain_api_blockchain_api_proto_goTypes = []any{
 	(FSMEventType)(0),                                   // 0: blockchain_api.FSMEventType
 	(FSMStateType)(0),                                   // 1: blockchain_api.FSMStateType
@@ -4552,150 +5723,189 @@ var file_services_blockchain_blockchain_api_blockchain_api_proto_goTypes = []any
 	(*SetBlockPersistedAtRequest)(nil),                  // 76: blockchain_api.SetBlockPersistedAtRequest
 	(*GetBlocksNotPersistedRequest)(nil),                // 77: blockchain_api.GetBlocksNotPersistedRequest
 	(*GetBlocksNotPersistedResponse)(nil),               // 78: blockchain_api.GetBlocksNotPersistedResponse
-	nil,                                                 // 79: blockchain_api.NotificationMetadata.MetadataEntry
-	(*timestamppb.Timestamp)(nil),                       // 80: google.protobuf.Timestamp
-	(model.NotificationType)(0),                         // 81: model.NotificationType
-	(*model.BlockInfo)(nil),                             // 82: model.BlockInfo
-	(*model.SuitableBlock)(nil),                         // 83: model.SuitableBlock
-	(*model.ChainTip)(nil),                              // 84: model.ChainTip
-	(*emptypb.Empty)(nil),                               // 85: google.protobuf.Empty
-	(*model.BlockStats)(nil),                            // 86: model.BlockStats
-	(*model.BlockDataPoints)(nil),                       // 87: model.BlockDataPoints
+	(*ScheduleBlobDeletionRequest)(nil),                 // 79: blockchain_api.ScheduleBlobDeletionRequest
+	(*ScheduleBlobDeletionResponse)(nil),                // 80: blockchain_api.ScheduleBlobDeletionResponse
+	(*CancelBlobDeletionRequest)(nil),                   // 81: blockchain_api.CancelBlobDeletionRequest
+	(*CancelBlobDeletionResponse)(nil),                  // 82: blockchain_api.CancelBlobDeletionResponse
+	(*ListScheduledDeletionsRequest)(nil),               // 83: blockchain_api.ListScheduledDeletionsRequest
+	(*ScheduledDeletion)(nil),                           // 84: blockchain_api.ScheduledDeletion
+	(*ListScheduledDeletionsResponse)(nil),              // 85: blockchain_api.ListScheduledDeletionsResponse
+	(*GetPendingBlobDeletionsRequest)(nil),              // 86: blockchain_api.GetPendingBlobDeletionsRequest
+	(*GetPendingBlobDeletionsResponse)(nil),             // 87: blockchain_api.GetPendingBlobDeletionsResponse
+	(*RemoveBlobDeletionRequest)(nil),                   // 88: blockchain_api.RemoveBlobDeletionRequest
+	(*IncrementBlobDeletionRetryRequest)(nil),           // 89: blockchain_api.IncrementBlobDeletionRetryRequest
+	(*IncrementBlobDeletionRetryResponse)(nil),          // 90: blockchain_api.IncrementBlobDeletionRetryResponse
+	(*CompleteBlobDeletionsRequest)(nil),                // 91: blockchain_api.CompleteBlobDeletionsRequest
+	(*CompleteBlobDeletionsResponse)(nil),               // 92: blockchain_api.CompleteBlobDeletionsResponse
+	(*AcquireBlobDeletionBatchRequest)(nil),             // 93: blockchain_api.AcquireBlobDeletionBatchRequest
+	(*AcquireBlobDeletionBatchResponse)(nil),            // 94: blockchain_api.AcquireBlobDeletionBatchResponse
+	(*CompleteBlobDeletionBatchRequest)(nil),            // 95: blockchain_api.CompleteBlobDeletionBatchRequest
+	(*BatchTokenInfo)(nil),                              // 96: blockchain_api.BatchTokenInfo
+	nil,                                                 // 97: blockchain_api.NotificationMetadata.MetadataEntry
+	(*timestamppb.Timestamp)(nil),                       // 98: google.protobuf.Timestamp
+	(model.NotificationType)(0),                         // 99: model.NotificationType
+	(*model.BlockInfo)(nil),                             // 100: model.BlockInfo
+	(*model.SuitableBlock)(nil),                         // 101: model.SuitableBlock
+	(*model.ChainTip)(nil),                              // 102: model.ChainTip
+	(*emptypb.Empty)(nil),                               // 103: google.protobuf.Empty
+	(*model.BlockStats)(nil),                            // 104: model.BlockStats
+	(*model.BlockDataPoints)(nil),                       // 105: model.BlockDataPoints
 }
 var file_services_blockchain_blockchain_api_blockchain_api_proto_depIdxs = []int32{
-	80, // 0: blockchain_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
-	80, // 1: blockchain_api.GetBlockHeaderResponse.processed_at:type_name -> google.protobuf.Timestamp
-	81, // 2: blockchain_api.Notification.type:type_name -> model.NotificationType
-	42, // 3: blockchain_api.Notification.metadata:type_name -> blockchain_api.NotificationMetadata
-	79, // 4: blockchain_api.NotificationMetadata.metadata:type_name -> blockchain_api.NotificationMetadata.MetadataEntry
-	82, // 5: blockchain_api.GetLastNBlocksResponse.blocks:type_name -> model.BlockInfo
-	82, // 6: blockchain_api.GetLastNInvalidBlocksResponse.blocks:type_name -> model.BlockInfo
-	83, // 7: blockchain_api.GetSuitableBlockResponse.block:type_name -> model.SuitableBlock
-	1,  // 8: blockchain_api.GetFSMStateResponse.state:type_name -> blockchain_api.FSMStateType
-	1,  // 9: blockchain_api.WaitFSMToTransitionRequest.state:type_name -> blockchain_api.FSMStateType
-	0,  // 10: blockchain_api.SendFSMEventRequest.event:type_name -> blockchain_api.FSMEventType
-	84, // 11: blockchain_api.GetChainTipsResponse.tips:type_name -> model.ChainTip
-	85, // 12: blockchain_api.BlockchainAPI.HealthGRPC:input_type -> google.protobuf.Empty
-	3,  // 13: blockchain_api.BlockchainAPI.AddBlock:input_type -> blockchain_api.AddBlockRequest
-	4,  // 14: blockchain_api.BlockchainAPI.GetBlock:input_type -> blockchain_api.GetBlockRequest
-	5,  // 15: blockchain_api.BlockchainAPI.GetBlocks:input_type -> blockchain_api.GetBlocksRequest
-	7,  // 16: blockchain_api.BlockchainAPI.GetBlockByHeight:input_type -> blockchain_api.GetBlockByHeightRequest
-	8,  // 17: blockchain_api.BlockchainAPI.GetBlockByID:input_type -> blockchain_api.GetBlockByIDRequest
-	85, // 18: blockchain_api.BlockchainAPI.GetNextBlockID:input_type -> google.protobuf.Empty
-	85, // 19: blockchain_api.BlockchainAPI.GetBlockStats:input_type -> google.protobuf.Empty
-	13, // 20: blockchain_api.BlockchainAPI.GetBlockGraphData:input_type -> blockchain_api.GetBlockGraphDataRequest
-	48, // 21: blockchain_api.BlockchainAPI.GetLastNBlocks:input_type -> blockchain_api.GetLastNBlocksRequest
-	50, // 22: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:input_type -> blockchain_api.GetLastNInvalidBlocksRequest
-	52, // 23: blockchain_api.BlockchainAPI.GetSuitableBlock:input_type -> blockchain_api.GetSuitableBlockRequest
-	54, // 24: blockchain_api.BlockchainAPI.GetHashOfAncestorBlock:input_type -> blockchain_api.GetHashOfAncestorBlockRequest
-	55, // 25: blockchain_api.BlockchainAPI.GetLatestBlockHeaderFromBlockLocator:input_type -> blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest
-	56, // 26: blockchain_api.BlockchainAPI.GetBlockHeadersFromOldest:input_type -> blockchain_api.GetBlockHeadersFromOldestRequest
-	58, // 27: blockchain_api.BlockchainAPI.GetNextWorkRequired:input_type -> blockchain_api.GetNextWorkRequiredRequest
-	4,  // 28: blockchain_api.BlockchainAPI.GetBlockExists:input_type -> blockchain_api.GetBlockRequest
-	16, // 29: blockchain_api.BlockchainAPI.GetBlockHeaders:input_type -> blockchain_api.GetBlockHeadersRequest
-	17, // 30: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:input_type -> blockchain_api.GetBlockHeadersToCommonAncestorRequest
-	18, // 31: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:input_type -> blockchain_api.GetBlockHeadersFromCommonAncestorRequest
-	20, // 32: blockchain_api.BlockchainAPI.GetBlockHeadersFromTill:input_type -> blockchain_api.GetBlockHeadersFromTillRequest
-	21, // 33: blockchain_api.BlockchainAPI.GetBlockHeadersFromHeight:input_type -> blockchain_api.GetBlockHeadersFromHeightRequest
-	23, // 34: blockchain_api.BlockchainAPI.GetBlockHeadersByHeight:input_type -> blockchain_api.GetBlockHeadersByHeightRequest
-	25, // 35: blockchain_api.BlockchainAPI.GetBlocksByHeight:input_type -> blockchain_api.GetBlocksByHeightRequest
-	27, // 36: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:input_type -> blockchain_api.FindBlocksContainingSubtreeRequest
-	16, // 37: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:input_type -> blockchain_api.GetBlockHeadersRequest
-	85, // 38: blockchain_api.BlockchainAPI.GetBestBlockHeader:input_type -> google.protobuf.Empty
-	32, // 39: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:input_type -> blockchain_api.CheckBlockIsCurrentChainRequest
-	38, // 40: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:input_type -> blockchain_api.CheckBlockIsAncestorOfBlockRequest
-	85, // 41: blockchain_api.BlockchainAPI.GetChainTips:input_type -> google.protobuf.Empty
-	31, // 42: blockchain_api.BlockchainAPI.GetBlockHeader:input_type -> blockchain_api.GetBlockHeaderRequest
-	33, // 43: blockchain_api.BlockchainAPI.InvalidateBlock:input_type -> blockchain_api.InvalidateBlockRequest
-	35, // 44: blockchain_api.BlockchainAPI.RevalidateBlock:input_type -> blockchain_api.RevalidateBlockRequest
-	40, // 45: blockchain_api.BlockchainAPI.Subscribe:input_type -> blockchain_api.SubscribeRequest
-	41, // 46: blockchain_api.BlockchainAPI.SendNotification:input_type -> blockchain_api.Notification
-	43, // 47: blockchain_api.BlockchainAPI.GetState:input_type -> blockchain_api.GetStateRequest
-	45, // 48: blockchain_api.BlockchainAPI.SetState:input_type -> blockchain_api.SetStateRequest
-	46, // 49: blockchain_api.BlockchainAPI.GetBlockIsMined:input_type -> blockchain_api.GetBlockIsMinedRequest
-	60, // 50: blockchain_api.BlockchainAPI.SetBlockMinedSet:input_type -> blockchain_api.SetBlockMinedSetRequest
-	61, // 51: blockchain_api.BlockchainAPI.ClearBlockMinedSet:input_type -> blockchain_api.ClearBlockMinedSetRequest
-	85, // 52: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:input_type -> google.protobuf.Empty
-	63, // 53: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:input_type -> blockchain_api.SetBlockSubtreesSetRequest
-	85, // 54: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:input_type -> google.protobuf.Empty
-	65, // 55: blockchain_api.BlockchainAPI.SetBlockProcessedAt:input_type -> blockchain_api.SetBlockProcessedAtRequest
-	76, // 56: blockchain_api.BlockchainAPI.SetBlockPersistedAt:input_type -> blockchain_api.SetBlockPersistedAtRequest
-	77, // 57: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:input_type -> blockchain_api.GetBlocksNotPersistedRequest
-	68, // 58: blockchain_api.BlockchainAPI.SendFSMEvent:input_type -> blockchain_api.SendFSMEventRequest
-	85, // 59: blockchain_api.BlockchainAPI.GetFSMCurrentState:input_type -> google.protobuf.Empty
-	67, // 60: blockchain_api.BlockchainAPI.WaitFSMToTransitionToGivenState:input_type -> blockchain_api.WaitFSMToTransitionRequest
-	85, // 61: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:input_type -> google.protobuf.Empty
-	85, // 62: blockchain_api.BlockchainAPI.Run:input_type -> google.protobuf.Empty
-	85, // 63: blockchain_api.BlockchainAPI.CatchUpBlocks:input_type -> google.protobuf.Empty
-	85, // 64: blockchain_api.BlockchainAPI.LegacySync:input_type -> google.protobuf.Empty
-	85, // 65: blockchain_api.BlockchainAPI.Idle:input_type -> google.protobuf.Empty
-	75, // 66: blockchain_api.BlockchainAPI.ReportPeerFailure:input_type -> blockchain_api.ReportPeerFailureRequest
-	69, // 67: blockchain_api.BlockchainAPI.GetBlockLocator:input_type -> blockchain_api.GetBlockLocatorRequest
-	71, // 68: blockchain_api.BlockchainAPI.LocateBlockHeaders:input_type -> blockchain_api.LocateBlockHeadersRequest
-	85, // 69: blockchain_api.BlockchainAPI.GetBestHeightAndTime:input_type -> google.protobuf.Empty
-	2,  // 70: blockchain_api.BlockchainAPI.HealthGRPC:output_type -> blockchain_api.HealthResponse
-	85, // 71: blockchain_api.BlockchainAPI.AddBlock:output_type -> google.protobuf.Empty
-	11, // 72: blockchain_api.BlockchainAPI.GetBlock:output_type -> blockchain_api.GetBlockResponse
-	6,  // 73: blockchain_api.BlockchainAPI.GetBlocks:output_type -> blockchain_api.GetBlocksResponse
-	11, // 74: blockchain_api.BlockchainAPI.GetBlockByHeight:output_type -> blockchain_api.GetBlockResponse
-	11, // 75: blockchain_api.BlockchainAPI.GetBlockByID:output_type -> blockchain_api.GetBlockResponse
-	9,  // 76: blockchain_api.BlockchainAPI.GetNextBlockID:output_type -> blockchain_api.GetNextBlockIDResponse
-	86, // 77: blockchain_api.BlockchainAPI.GetBlockStats:output_type -> model.BlockStats
-	87, // 78: blockchain_api.BlockchainAPI.GetBlockGraphData:output_type -> model.BlockDataPoints
-	49, // 79: blockchain_api.BlockchainAPI.GetLastNBlocks:output_type -> blockchain_api.GetLastNBlocksResponse
-	51, // 80: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:output_type -> blockchain_api.GetLastNInvalidBlocksResponse
-	53, // 81: blockchain_api.BlockchainAPI.GetSuitableBlock:output_type -> blockchain_api.GetSuitableBlockResponse
-	57, // 82: blockchain_api.BlockchainAPI.GetHashOfAncestorBlock:output_type -> blockchain_api.GetHashOfAncestorBlockResponse
-	36, // 83: blockchain_api.BlockchainAPI.GetLatestBlockHeaderFromBlockLocator:output_type -> blockchain_api.GetBlockHeaderResponse
-	19, // 84: blockchain_api.BlockchainAPI.GetBlockHeadersFromOldest:output_type -> blockchain_api.GetBlockHeadersResponse
-	59, // 85: blockchain_api.BlockchainAPI.GetNextWorkRequired:output_type -> blockchain_api.GetNextWorkRequiredResponse
-	14, // 86: blockchain_api.BlockchainAPI.GetBlockExists:output_type -> blockchain_api.GetBlockExistsResponse
-	19, // 87: blockchain_api.BlockchainAPI.GetBlockHeaders:output_type -> blockchain_api.GetBlockHeadersResponse
-	19, // 88: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
-	19, // 89: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
-	19, // 90: blockchain_api.BlockchainAPI.GetBlockHeadersFromTill:output_type -> blockchain_api.GetBlockHeadersResponse
-	22, // 91: blockchain_api.BlockchainAPI.GetBlockHeadersFromHeight:output_type -> blockchain_api.GetBlockHeadersFromHeightResponse
-	24, // 92: blockchain_api.BlockchainAPI.GetBlockHeadersByHeight:output_type -> blockchain_api.GetBlockHeadersByHeightResponse
-	26, // 93: blockchain_api.BlockchainAPI.GetBlocksByHeight:output_type -> blockchain_api.GetBlocksByHeightResponse
-	28, // 94: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:output_type -> blockchain_api.FindBlocksContainingSubtreeResponse
-	29, // 95: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:output_type -> blockchain_api.GetBlockHeaderIDsResponse
-	36, // 96: blockchain_api.BlockchainAPI.GetBestBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
-	37, // 97: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:output_type -> blockchain_api.CheckBlockIsCurrentChainResponse
-	39, // 98: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:output_type -> blockchain_api.CheckBlockIsAncestorOfBlockResponse
-	74, // 99: blockchain_api.BlockchainAPI.GetChainTips:output_type -> blockchain_api.GetChainTipsResponse
-	36, // 100: blockchain_api.BlockchainAPI.GetBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
-	34, // 101: blockchain_api.BlockchainAPI.InvalidateBlock:output_type -> blockchain_api.InvalidateBlockResponse
-	85, // 102: blockchain_api.BlockchainAPI.RevalidateBlock:output_type -> google.protobuf.Empty
-	41, // 103: blockchain_api.BlockchainAPI.Subscribe:output_type -> blockchain_api.Notification
-	85, // 104: blockchain_api.BlockchainAPI.SendNotification:output_type -> google.protobuf.Empty
-	44, // 105: blockchain_api.BlockchainAPI.GetState:output_type -> blockchain_api.StateResponse
-	85, // 106: blockchain_api.BlockchainAPI.SetState:output_type -> google.protobuf.Empty
-	47, // 107: blockchain_api.BlockchainAPI.GetBlockIsMined:output_type -> blockchain_api.GetBlockIsMinedResponse
-	85, // 108: blockchain_api.BlockchainAPI.SetBlockMinedSet:output_type -> google.protobuf.Empty
-	85, // 109: blockchain_api.BlockchainAPI.ClearBlockMinedSet:output_type -> google.protobuf.Empty
-	62, // 110: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:output_type -> blockchain_api.GetBlocksMinedNotSetResponse
-	85, // 111: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:output_type -> google.protobuf.Empty
-	64, // 112: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:output_type -> blockchain_api.GetBlocksSubtreesNotSetResponse
-	85, // 113: blockchain_api.BlockchainAPI.SetBlockProcessedAt:output_type -> google.protobuf.Empty
-	85, // 114: blockchain_api.BlockchainAPI.SetBlockPersistedAt:output_type -> google.protobuf.Empty
-	78, // 115: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:output_type -> blockchain_api.GetBlocksNotPersistedResponse
-	66, // 116: blockchain_api.BlockchainAPI.SendFSMEvent:output_type -> blockchain_api.GetFSMStateResponse
-	66, // 117: blockchain_api.BlockchainAPI.GetFSMCurrentState:output_type -> blockchain_api.GetFSMStateResponse
-	85, // 118: blockchain_api.BlockchainAPI.WaitFSMToTransitionToGivenState:output_type -> google.protobuf.Empty
-	85, // 119: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:output_type -> google.protobuf.Empty
-	85, // 120: blockchain_api.BlockchainAPI.Run:output_type -> google.protobuf.Empty
-	85, // 121: blockchain_api.BlockchainAPI.CatchUpBlocks:output_type -> google.protobuf.Empty
-	85, // 122: blockchain_api.BlockchainAPI.LegacySync:output_type -> google.protobuf.Empty
-	85, // 123: blockchain_api.BlockchainAPI.Idle:output_type -> google.protobuf.Empty
-	85, // 124: blockchain_api.BlockchainAPI.ReportPeerFailure:output_type -> google.protobuf.Empty
-	70, // 125: blockchain_api.BlockchainAPI.GetBlockLocator:output_type -> blockchain_api.GetBlockLocatorResponse
-	72, // 126: blockchain_api.BlockchainAPI.LocateBlockHeaders:output_type -> blockchain_api.LocateBlockHeadersResponse
-	73, // 127: blockchain_api.BlockchainAPI.GetBestHeightAndTime:output_type -> blockchain_api.GetBestHeightAndTimeResponse
-	70, // [70:128] is the sub-list for method output_type
-	12, // [12:70] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	98,  // 0: blockchain_api.HealthResponse.timestamp:type_name -> google.protobuf.Timestamp
+	98,  // 1: blockchain_api.GetBlockHeaderResponse.processed_at:type_name -> google.protobuf.Timestamp
+	99,  // 2: blockchain_api.Notification.type:type_name -> model.NotificationType
+	42,  // 3: blockchain_api.Notification.metadata:type_name -> blockchain_api.NotificationMetadata
+	97,  // 4: blockchain_api.NotificationMetadata.metadata:type_name -> blockchain_api.NotificationMetadata.MetadataEntry
+	100, // 5: blockchain_api.GetLastNBlocksResponse.blocks:type_name -> model.BlockInfo
+	100, // 6: blockchain_api.GetLastNInvalidBlocksResponse.blocks:type_name -> model.BlockInfo
+	101, // 7: blockchain_api.GetSuitableBlockResponse.block:type_name -> model.SuitableBlock
+	1,   // 8: blockchain_api.GetFSMStateResponse.state:type_name -> blockchain_api.FSMStateType
+	1,   // 9: blockchain_api.WaitFSMToTransitionRequest.state:type_name -> blockchain_api.FSMStateType
+	0,   // 10: blockchain_api.SendFSMEventRequest.event:type_name -> blockchain_api.FSMEventType
+	102, // 11: blockchain_api.GetChainTipsResponse.tips:type_name -> model.ChainTip
+	84,  // 12: blockchain_api.ListScheduledDeletionsResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
+	84,  // 13: blockchain_api.GetPendingBlobDeletionsResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
+	84,  // 14: blockchain_api.AcquireBlobDeletionBatchResponse.deletions:type_name -> blockchain_api.ScheduledDeletion
+	103, // 15: blockchain_api.BlockchainAPI.HealthGRPC:input_type -> google.protobuf.Empty
+	3,   // 16: blockchain_api.BlockchainAPI.AddBlock:input_type -> blockchain_api.AddBlockRequest
+	4,   // 17: blockchain_api.BlockchainAPI.GetBlock:input_type -> blockchain_api.GetBlockRequest
+	5,   // 18: blockchain_api.BlockchainAPI.GetBlocks:input_type -> blockchain_api.GetBlocksRequest
+	7,   // 19: blockchain_api.BlockchainAPI.GetBlockByHeight:input_type -> blockchain_api.GetBlockByHeightRequest
+	8,   // 20: blockchain_api.BlockchainAPI.GetBlockByID:input_type -> blockchain_api.GetBlockByIDRequest
+	103, // 21: blockchain_api.BlockchainAPI.GetNextBlockID:input_type -> google.protobuf.Empty
+	103, // 22: blockchain_api.BlockchainAPI.GetBlockStats:input_type -> google.protobuf.Empty
+	13,  // 23: blockchain_api.BlockchainAPI.GetBlockGraphData:input_type -> blockchain_api.GetBlockGraphDataRequest
+	48,  // 24: blockchain_api.BlockchainAPI.GetLastNBlocks:input_type -> blockchain_api.GetLastNBlocksRequest
+	50,  // 25: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:input_type -> blockchain_api.GetLastNInvalidBlocksRequest
+	52,  // 26: blockchain_api.BlockchainAPI.GetSuitableBlock:input_type -> blockchain_api.GetSuitableBlockRequest
+	54,  // 27: blockchain_api.BlockchainAPI.GetHashOfAncestorBlock:input_type -> blockchain_api.GetHashOfAncestorBlockRequest
+	55,  // 28: blockchain_api.BlockchainAPI.GetLatestBlockHeaderFromBlockLocator:input_type -> blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest
+	56,  // 29: blockchain_api.BlockchainAPI.GetBlockHeadersFromOldest:input_type -> blockchain_api.GetBlockHeadersFromOldestRequest
+	58,  // 30: blockchain_api.BlockchainAPI.GetNextWorkRequired:input_type -> blockchain_api.GetNextWorkRequiredRequest
+	4,   // 31: blockchain_api.BlockchainAPI.GetBlockExists:input_type -> blockchain_api.GetBlockRequest
+	16,  // 32: blockchain_api.BlockchainAPI.GetBlockHeaders:input_type -> blockchain_api.GetBlockHeadersRequest
+	17,  // 33: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:input_type -> blockchain_api.GetBlockHeadersToCommonAncestorRequest
+	18,  // 34: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:input_type -> blockchain_api.GetBlockHeadersFromCommonAncestorRequest
+	20,  // 35: blockchain_api.BlockchainAPI.GetBlockHeadersFromTill:input_type -> blockchain_api.GetBlockHeadersFromTillRequest
+	21,  // 36: blockchain_api.BlockchainAPI.GetBlockHeadersFromHeight:input_type -> blockchain_api.GetBlockHeadersFromHeightRequest
+	23,  // 37: blockchain_api.BlockchainAPI.GetBlockHeadersByHeight:input_type -> blockchain_api.GetBlockHeadersByHeightRequest
+	25,  // 38: blockchain_api.BlockchainAPI.GetBlocksByHeight:input_type -> blockchain_api.GetBlocksByHeightRequest
+	27,  // 39: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:input_type -> blockchain_api.FindBlocksContainingSubtreeRequest
+	16,  // 40: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:input_type -> blockchain_api.GetBlockHeadersRequest
+	103, // 41: blockchain_api.BlockchainAPI.GetBestBlockHeader:input_type -> google.protobuf.Empty
+	32,  // 42: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:input_type -> blockchain_api.CheckBlockIsCurrentChainRequest
+	38,  // 43: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:input_type -> blockchain_api.CheckBlockIsAncestorOfBlockRequest
+	103, // 44: blockchain_api.BlockchainAPI.GetChainTips:input_type -> google.protobuf.Empty
+	31,  // 45: blockchain_api.BlockchainAPI.GetBlockHeader:input_type -> blockchain_api.GetBlockHeaderRequest
+	33,  // 46: blockchain_api.BlockchainAPI.InvalidateBlock:input_type -> blockchain_api.InvalidateBlockRequest
+	35,  // 47: blockchain_api.BlockchainAPI.RevalidateBlock:input_type -> blockchain_api.RevalidateBlockRequest
+	40,  // 48: blockchain_api.BlockchainAPI.Subscribe:input_type -> blockchain_api.SubscribeRequest
+	41,  // 49: blockchain_api.BlockchainAPI.SendNotification:input_type -> blockchain_api.Notification
+	43,  // 50: blockchain_api.BlockchainAPI.GetState:input_type -> blockchain_api.GetStateRequest
+	45,  // 51: blockchain_api.BlockchainAPI.SetState:input_type -> blockchain_api.SetStateRequest
+	46,  // 52: blockchain_api.BlockchainAPI.GetBlockIsMined:input_type -> blockchain_api.GetBlockIsMinedRequest
+	60,  // 53: blockchain_api.BlockchainAPI.SetBlockMinedSet:input_type -> blockchain_api.SetBlockMinedSetRequest
+	61,  // 54: blockchain_api.BlockchainAPI.ClearBlockMinedSet:input_type -> blockchain_api.ClearBlockMinedSetRequest
+	103, // 55: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:input_type -> google.protobuf.Empty
+	63,  // 56: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:input_type -> blockchain_api.SetBlockSubtreesSetRequest
+	103, // 57: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:input_type -> google.protobuf.Empty
+	65,  // 58: blockchain_api.BlockchainAPI.SetBlockProcessedAt:input_type -> blockchain_api.SetBlockProcessedAtRequest
+	76,  // 59: blockchain_api.BlockchainAPI.SetBlockPersistedAt:input_type -> blockchain_api.SetBlockPersistedAtRequest
+	77,  // 60: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:input_type -> blockchain_api.GetBlocksNotPersistedRequest
+	68,  // 61: blockchain_api.BlockchainAPI.SendFSMEvent:input_type -> blockchain_api.SendFSMEventRequest
+	103, // 62: blockchain_api.BlockchainAPI.GetFSMCurrentState:input_type -> google.protobuf.Empty
+	67,  // 63: blockchain_api.BlockchainAPI.WaitFSMToTransitionToGivenState:input_type -> blockchain_api.WaitFSMToTransitionRequest
+	103, // 64: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:input_type -> google.protobuf.Empty
+	103, // 65: blockchain_api.BlockchainAPI.Run:input_type -> google.protobuf.Empty
+	103, // 66: blockchain_api.BlockchainAPI.CatchUpBlocks:input_type -> google.protobuf.Empty
+	103, // 67: blockchain_api.BlockchainAPI.LegacySync:input_type -> google.protobuf.Empty
+	103, // 68: blockchain_api.BlockchainAPI.Idle:input_type -> google.protobuf.Empty
+	75,  // 69: blockchain_api.BlockchainAPI.ReportPeerFailure:input_type -> blockchain_api.ReportPeerFailureRequest
+	69,  // 70: blockchain_api.BlockchainAPI.GetBlockLocator:input_type -> blockchain_api.GetBlockLocatorRequest
+	71,  // 71: blockchain_api.BlockchainAPI.LocateBlockHeaders:input_type -> blockchain_api.LocateBlockHeadersRequest
+	103, // 72: blockchain_api.BlockchainAPI.GetBestHeightAndTime:input_type -> google.protobuf.Empty
+	79,  // 73: blockchain_api.BlockchainAPI.ScheduleBlobDeletion:input_type -> blockchain_api.ScheduleBlobDeletionRequest
+	81,  // 74: blockchain_api.BlockchainAPI.CancelBlobDeletion:input_type -> blockchain_api.CancelBlobDeletionRequest
+	83,  // 75: blockchain_api.BlockchainAPI.ListScheduledDeletions:input_type -> blockchain_api.ListScheduledDeletionsRequest
+	86,  // 76: blockchain_api.BlockchainAPI.GetPendingBlobDeletions:input_type -> blockchain_api.GetPendingBlobDeletionsRequest
+	88,  // 77: blockchain_api.BlockchainAPI.RemoveBlobDeletion:input_type -> blockchain_api.RemoveBlobDeletionRequest
+	89,  // 78: blockchain_api.BlockchainAPI.IncrementBlobDeletionRetry:input_type -> blockchain_api.IncrementBlobDeletionRetryRequest
+	91,  // 79: blockchain_api.BlockchainAPI.CompleteBlobDeletions:input_type -> blockchain_api.CompleteBlobDeletionsRequest
+	93,  // 80: blockchain_api.BlockchainAPI.AcquireBlobDeletionBatch:input_type -> blockchain_api.AcquireBlobDeletionBatchRequest
+	95,  // 81: blockchain_api.BlockchainAPI.CompleteBlobDeletionBatch:input_type -> blockchain_api.CompleteBlobDeletionBatchRequest
+	2,   // 82: blockchain_api.BlockchainAPI.HealthGRPC:output_type -> blockchain_api.HealthResponse
+	103, // 83: blockchain_api.BlockchainAPI.AddBlock:output_type -> google.protobuf.Empty
+	11,  // 84: blockchain_api.BlockchainAPI.GetBlock:output_type -> blockchain_api.GetBlockResponse
+	6,   // 85: blockchain_api.BlockchainAPI.GetBlocks:output_type -> blockchain_api.GetBlocksResponse
+	11,  // 86: blockchain_api.BlockchainAPI.GetBlockByHeight:output_type -> blockchain_api.GetBlockResponse
+	11,  // 87: blockchain_api.BlockchainAPI.GetBlockByID:output_type -> blockchain_api.GetBlockResponse
+	9,   // 88: blockchain_api.BlockchainAPI.GetNextBlockID:output_type -> blockchain_api.GetNextBlockIDResponse
+	104, // 89: blockchain_api.BlockchainAPI.GetBlockStats:output_type -> model.BlockStats
+	105, // 90: blockchain_api.BlockchainAPI.GetBlockGraphData:output_type -> model.BlockDataPoints
+	49,  // 91: blockchain_api.BlockchainAPI.GetLastNBlocks:output_type -> blockchain_api.GetLastNBlocksResponse
+	51,  // 92: blockchain_api.BlockchainAPI.GetLastNInvalidBlocks:output_type -> blockchain_api.GetLastNInvalidBlocksResponse
+	53,  // 93: blockchain_api.BlockchainAPI.GetSuitableBlock:output_type -> blockchain_api.GetSuitableBlockResponse
+	57,  // 94: blockchain_api.BlockchainAPI.GetHashOfAncestorBlock:output_type -> blockchain_api.GetHashOfAncestorBlockResponse
+	36,  // 95: blockchain_api.BlockchainAPI.GetLatestBlockHeaderFromBlockLocator:output_type -> blockchain_api.GetBlockHeaderResponse
+	19,  // 96: blockchain_api.BlockchainAPI.GetBlockHeadersFromOldest:output_type -> blockchain_api.GetBlockHeadersResponse
+	59,  // 97: blockchain_api.BlockchainAPI.GetNextWorkRequired:output_type -> blockchain_api.GetNextWorkRequiredResponse
+	14,  // 98: blockchain_api.BlockchainAPI.GetBlockExists:output_type -> blockchain_api.GetBlockExistsResponse
+	19,  // 99: blockchain_api.BlockchainAPI.GetBlockHeaders:output_type -> blockchain_api.GetBlockHeadersResponse
+	19,  // 100: blockchain_api.BlockchainAPI.GetBlockHeadersToCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
+	19,  // 101: blockchain_api.BlockchainAPI.GetBlockHeadersFromCommonAncestor:output_type -> blockchain_api.GetBlockHeadersResponse
+	19,  // 102: blockchain_api.BlockchainAPI.GetBlockHeadersFromTill:output_type -> blockchain_api.GetBlockHeadersResponse
+	22,  // 103: blockchain_api.BlockchainAPI.GetBlockHeadersFromHeight:output_type -> blockchain_api.GetBlockHeadersFromHeightResponse
+	24,  // 104: blockchain_api.BlockchainAPI.GetBlockHeadersByHeight:output_type -> blockchain_api.GetBlockHeadersByHeightResponse
+	26,  // 105: blockchain_api.BlockchainAPI.GetBlocksByHeight:output_type -> blockchain_api.GetBlocksByHeightResponse
+	28,  // 106: blockchain_api.BlockchainAPI.FindBlocksContainingSubtree:output_type -> blockchain_api.FindBlocksContainingSubtreeResponse
+	29,  // 107: blockchain_api.BlockchainAPI.GetBlockHeaderIDs:output_type -> blockchain_api.GetBlockHeaderIDsResponse
+	36,  // 108: blockchain_api.BlockchainAPI.GetBestBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
+	37,  // 109: blockchain_api.BlockchainAPI.CheckBlockIsInCurrentChain:output_type -> blockchain_api.CheckBlockIsCurrentChainResponse
+	39,  // 110: blockchain_api.BlockchainAPI.CheckBlockIsAncestorOfBlock:output_type -> blockchain_api.CheckBlockIsAncestorOfBlockResponse
+	74,  // 111: blockchain_api.BlockchainAPI.GetChainTips:output_type -> blockchain_api.GetChainTipsResponse
+	36,  // 112: blockchain_api.BlockchainAPI.GetBlockHeader:output_type -> blockchain_api.GetBlockHeaderResponse
+	34,  // 113: blockchain_api.BlockchainAPI.InvalidateBlock:output_type -> blockchain_api.InvalidateBlockResponse
+	103, // 114: blockchain_api.BlockchainAPI.RevalidateBlock:output_type -> google.protobuf.Empty
+	41,  // 115: blockchain_api.BlockchainAPI.Subscribe:output_type -> blockchain_api.Notification
+	103, // 116: blockchain_api.BlockchainAPI.SendNotification:output_type -> google.protobuf.Empty
+	44,  // 117: blockchain_api.BlockchainAPI.GetState:output_type -> blockchain_api.StateResponse
+	103, // 118: blockchain_api.BlockchainAPI.SetState:output_type -> google.protobuf.Empty
+	47,  // 119: blockchain_api.BlockchainAPI.GetBlockIsMined:output_type -> blockchain_api.GetBlockIsMinedResponse
+	103, // 120: blockchain_api.BlockchainAPI.SetBlockMinedSet:output_type -> google.protobuf.Empty
+	103, // 121: blockchain_api.BlockchainAPI.ClearBlockMinedSet:output_type -> google.protobuf.Empty
+	62,  // 122: blockchain_api.BlockchainAPI.GetBlocksMinedNotSet:output_type -> blockchain_api.GetBlocksMinedNotSetResponse
+	103, // 123: blockchain_api.BlockchainAPI.SetBlockSubtreesSet:output_type -> google.protobuf.Empty
+	64,  // 124: blockchain_api.BlockchainAPI.GetBlocksSubtreesNotSet:output_type -> blockchain_api.GetBlocksSubtreesNotSetResponse
+	103, // 125: blockchain_api.BlockchainAPI.SetBlockProcessedAt:output_type -> google.protobuf.Empty
+	103, // 126: blockchain_api.BlockchainAPI.SetBlockPersistedAt:output_type -> google.protobuf.Empty
+	78,  // 127: blockchain_api.BlockchainAPI.GetBlocksNotPersisted:output_type -> blockchain_api.GetBlocksNotPersistedResponse
+	66,  // 128: blockchain_api.BlockchainAPI.SendFSMEvent:output_type -> blockchain_api.GetFSMStateResponse
+	66,  // 129: blockchain_api.BlockchainAPI.GetFSMCurrentState:output_type -> blockchain_api.GetFSMStateResponse
+	103, // 130: blockchain_api.BlockchainAPI.WaitFSMToTransitionToGivenState:output_type -> google.protobuf.Empty
+	103, // 131: blockchain_api.BlockchainAPI.WaitUntilFSMTransitionFromIdleState:output_type -> google.protobuf.Empty
+	103, // 132: blockchain_api.BlockchainAPI.Run:output_type -> google.protobuf.Empty
+	103, // 133: blockchain_api.BlockchainAPI.CatchUpBlocks:output_type -> google.protobuf.Empty
+	103, // 134: blockchain_api.BlockchainAPI.LegacySync:output_type -> google.protobuf.Empty
+	103, // 135: blockchain_api.BlockchainAPI.Idle:output_type -> google.protobuf.Empty
+	103, // 136: blockchain_api.BlockchainAPI.ReportPeerFailure:output_type -> google.protobuf.Empty
+	70,  // 137: blockchain_api.BlockchainAPI.GetBlockLocator:output_type -> blockchain_api.GetBlockLocatorResponse
+	72,  // 138: blockchain_api.BlockchainAPI.LocateBlockHeaders:output_type -> blockchain_api.LocateBlockHeadersResponse
+	73,  // 139: blockchain_api.BlockchainAPI.GetBestHeightAndTime:output_type -> blockchain_api.GetBestHeightAndTimeResponse
+	80,  // 140: blockchain_api.BlockchainAPI.ScheduleBlobDeletion:output_type -> blockchain_api.ScheduleBlobDeletionResponse
+	82,  // 141: blockchain_api.BlockchainAPI.CancelBlobDeletion:output_type -> blockchain_api.CancelBlobDeletionResponse
+	85,  // 142: blockchain_api.BlockchainAPI.ListScheduledDeletions:output_type -> blockchain_api.ListScheduledDeletionsResponse
+	87,  // 143: blockchain_api.BlockchainAPI.GetPendingBlobDeletions:output_type -> blockchain_api.GetPendingBlobDeletionsResponse
+	103, // 144: blockchain_api.BlockchainAPI.RemoveBlobDeletion:output_type -> google.protobuf.Empty
+	90,  // 145: blockchain_api.BlockchainAPI.IncrementBlobDeletionRetry:output_type -> blockchain_api.IncrementBlobDeletionRetryResponse
+	92,  // 146: blockchain_api.BlockchainAPI.CompleteBlobDeletions:output_type -> blockchain_api.CompleteBlobDeletionsResponse
+	94,  // 147: blockchain_api.BlockchainAPI.AcquireBlobDeletionBatch:output_type -> blockchain_api.AcquireBlobDeletionBatchResponse
+	103, // 148: blockchain_api.BlockchainAPI.CompleteBlobDeletionBatch:output_type -> google.protobuf.Empty
+	82,  // [82:149] is the sub-list for method output_type
+	15,  // [15:82] is the sub-list for method input_type
+	15,  // [15:15] is the sub-list for extension type_name
+	15,  // [15:15] is the sub-list for extension extendee
+	0,   // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_services_blockchain_blockchain_api_blockchain_api_proto_init() }
@@ -4709,7 +5919,7 @@ func file_services_blockchain_blockchain_api_blockchain_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc), len(file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   78,
+			NumMessages:   96,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

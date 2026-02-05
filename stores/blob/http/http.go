@@ -24,7 +24,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -36,7 +35,6 @@ import (
 const (
 	blobURLFormat        = "%s/blob/%s?%s"
 	blobURLFormatWithDAH = blobURLFormat + "&dah=%d"
-	blobURLFormatGetDAH  = blobURLFormat + "&getDAH=1"
 )
 
 // HTTPStore implements the blob.Store interface by making HTTP requests to a remote
@@ -292,69 +290,17 @@ func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.
 	return nil
 }
 
-// GetDAH retrieves the Delete-At-Height (DAH) value for a blob in the remote blob store.
-// It makes an HTTP GET request to the blob endpoint with the specified key, file type, and a getDAH query parameter.
-// The DAH value indicates at which blockchain height the blob will be automatically deleted.
-//
-// Parameters:
-//   - ctx: Context for the operation
-//   - key: The key identifying the blob
-//   - fileType: The type of the file
-//   - opts: Optional file options
-//
-// Returns:
-//   - uint32: The delete at height value (0 if not set)
-//   - error: Any error that occurred during the operation
-func (s *HTTPStore) GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error) {
-	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
-
-	query := options.FileOptionsToQuery(fileType, opts...)
-	url := fmt.Sprintf(blobURLFormatGetDAH, s.baseURL, encodedKey, query.Encode())
-
-	req, err := http.NewRequestWithContext(ctx, "PATCH", url, nil)
-	if err != nil {
-		return 0, errors.NewStorageError("[HTTPStore] GetTTL failed to create request", err)
-	}
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return 0, errors.NewStorageError("[HTTPStore] GetTTL failed", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return 0, errors.ErrNotFound
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return 0, errors.NewStorageError(fmt.Sprintf("[HTTPStore] GetDAH failed with status code %d", resp.StatusCode), nil)
-	}
-
-	dah, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, errors.NewStorageError("[HTTPStore] GetDAH failed to read response body", err)
-	}
-
-	// Parse the DAH from the response body, the dah will be a string representation of an int
-	dahInt, err := strconv.ParseUint(string(dah), 10, 32)
-	if err != nil {
-		return 0, errors.NewStorageError("[HTTPStore] GetDAH failed to parse response body", err)
-	}
-
-	return uint32(dahInt), nil
-}
-
 // Del deletes a blob from the remote blob store.
-// It makes an HTTP DELETE request to the blob endpoint with the specified key and file type.
+// This operation is idempotent - deleting a non-existent blob (404) is treated as success.
 //
 // Parameters:
 //   - ctx: Context for the operation
-//   - key: The key identifying the blob
+//   - key: The key identifying the blob to delete
 //   - fileType: The type of the file
 //   - opts: Optional file options
 //
 // Returns:
-//   - error: Any error that occurred during the operation
+//   - error: Any error that occurred during deletion
 func (s *HTTPStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
 	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
@@ -371,6 +317,11 @@ func (s *HTTPStore) Del(ctx context.Context, key []byte, fileType fileformat.Fil
 		return errors.NewStorageError("[HTTPStore] Del failed", err)
 	}
 	defer resp.Body.Close()
+
+	// Treat 404 Not Found as success (idempotent deletion)
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return errors.NewStorageError(fmt.Sprintf("[HTTPStore] Del failed with status code %d", resp.StatusCode), nil)

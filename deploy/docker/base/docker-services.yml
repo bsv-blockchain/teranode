@@ -162,6 +162,31 @@ services:
     privileged: true  # Allow the container to access raw devices
     hostname: aerospike
 
+  # Aerospike TN, single node in evaluation mode
+  aerospike-tn:
+    container_name: aerospike
+    image: ghcr.io/bsv-blockchain/aerospike-server:8.0.0-3
+    networks:
+      - teranode-network
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: unless-stopped
+    environment:
+      # JEMalloc tuning: release memory back to OS more aggressively
+      # dirty_decay_ms: time before dirty pages are purged (default 10000ms)
+      # muzzy_decay_ms: time before muzzy pages are released to OS (default 10000ms)
+      # background_thread: enables background thread for decay operations
+      MALLOC_CONF: "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000"
+    stop_grace_period: 600s # to allow ASMT to backup the indexes for warm restarts
+    volumes:
+      - ./aerospike-tn.conf:/etc/aerospike.conf
+      - ${DATA_PATH}/aerospike/data:/opt/aerospike/data
+      - ${DATA_PATH}/aerospike/smd:/opt/aerospike/smd
+      - ${DATA_PATH}/aerospike/asmt:/backup/indexes
+    entrypoint: ["asd", "--foreground", "--config-file", "/etc/aerospike.conf"]
+    privileged: true  # Allow the container to access raw devices
+    hostname: aerospike
+
   aerospike-exporter:
     image: aerospike/aerospike-prometheus-exporter:latest
     container_name: aerospike-exporter

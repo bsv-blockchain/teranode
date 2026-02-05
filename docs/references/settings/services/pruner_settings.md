@@ -209,8 +209,8 @@ Unmined transactions older than this are considered "old" and their parent trans
 **Calculation:**
 
 ```conf
-blocksInADayOnAverage = 1440  # Typical Bitcoin block time
-utxostore_parentPreservationBlocks = 14400  # 10 days
+blocksInADayOnAverage = 144  # Typical Bitcoin block time
+utxostore_parentPreservationBlocks = 1440  # 10 days
 ```
 
 **Purpose:**

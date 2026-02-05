@@ -83,6 +83,7 @@ func testGrandparentMultiOutputConflict(t *testing.T, utxoStore string) {
 
 	// Submit and mine grandparent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, grandparent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(grandparent, blockWait))
 	td.MineAndWait(t, 1)
 
 	block3a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
@@ -102,6 +103,7 @@ func testGrandparentMultiOutputConflict(t *testing.T, utxoStore string) {
 
 	// Submit and mine parent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(parent, blockWait))
 	td.MineAndWait(t, 1)
 
 	block4a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 4)
@@ -256,6 +258,7 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	// Submit and mine grandparent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, grandparent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(grandparent, blockWait))
 	td.MineAndWait(t, 1)
 	block3a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
 	require.NoError(t, err)
@@ -270,6 +273,7 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	// Submit and mine parent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(parent, blockWait))
 	td.MineAndWait(t, 1)
 
 	// Create child A that spends parent:0 (normal child in main chain)
@@ -282,6 +286,7 @@ func testGrandparentChildWithParentDependency(t *testing.T, utxoStore string) {
 
 	// Submit and mine childA
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, childA))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(childA, blockWait))
 	td.MineAndWait(t, 1)
 
 	block4a, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 4)

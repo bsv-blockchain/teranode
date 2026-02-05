@@ -974,6 +974,13 @@ func (sp *serverPeer) OnGetHeaders(_ *peer.Peer, msg *wire.MsgGetHeaders) {
 		// 	// skip genesis block
 		// 	continue
 		// }
+		// continue for regtest only
+		if sp.server.settings.ChainCfgParams.Net == chaincfg.RegressionNetParams.Net {
+			if blockHeader.HashPrevBlock.IsEqual(&chainhash.Hash{}) {
+				// skip genesis block
+				continue
+			}
+		}
 
 		wireBlockHeaders = append(wireBlockHeaders, blockHeader.ToWireBlockHeader())
 
@@ -2712,7 +2719,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		return nil, err
 	}
 
-	if config.GetBool("legacy_config_Upnp", false) {
+	if tSettings.Legacy.Upnp {
 		cfg.Upnp = true
 	}
 

@@ -141,6 +141,11 @@ func (m *MockSubtreeProcessor) SubtreeCount() int {
 	return args.Int(0)
 }
 
+func (m *MockSubtreeProcessor) GetChainedSubtreesTotalSize() uint64 {
+	args := m.Called()
+	return args.Get(0).(uint64)
+}
+
 // AddBatch implements Interface.AddBatch
 func (m *MockSubtreeProcessor) AddBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
 	m.Called(nodes, txInpoints)

@@ -45,9 +45,18 @@ type SubtreeProcessorState struct {
 
 // captureSubtreeProcessorState captures the current state for comparison
 func captureSubtreeProcessorState(stp *SubtreeProcessor) SubtreeProcessorState {
+	// Use production-safe methods which handle running state internally
+	var currentSubtreeLength int
+	if stp.GetCurrentRunningState() == StateStarting {
+		// Processor not running - safe to access directly
+		currentSubtreeLength = stp.currentSubtree.Load().Length()
+	} else {
+		// Processor running - use channel-based sync to avoid race
+		currentSubtreeLength = stp.GetCurrentLength()
+	}
 	return SubtreeProcessorState{
-		ChainedSubtreesCount: len(stp.chainedSubtrees),
-		CurrentSubtreeLength: stp.currentSubtree.Load().Length(),
+		ChainedSubtreesCount: len(stp.GetChainedSubtrees()), // GetChainedSubtrees handles sync internally
+		CurrentSubtreeLength: currentSubtreeLength,
 		TxCount:              stp.TxCount(),
 		CurrentTxMapLength:   stp.currentTxMap.Length(),
 	}
@@ -260,57 +269,62 @@ func Test_RemoveTxFromSubtrees(t *testing.T) {
 		}
 		stp.AddBatch(nodes, txInpoints)
 
-		// Wait for transactions to be processed
-		time.Sleep(100 * time.Millisecond)
+		// Wait for transactions to be processed (includes CheckSubtreeProcessor for sync)
+		waitForSubtreeProcessorQueueToEmpty(t, stp)
+
+		// Get a snapshot of chained subtrees after synchronization
+		chainedSubtrees := stp.GetChainedSubtrees()
 
 		// check the length of the subtrees
 		// With 42 unique transactions and 4 items per subtree (including coinbase):
 		// First subtree: coinbase + 3 txs = 4 items
 		// Subtrees 2-10: 4 txs each = 36 txs
 		// Remaining in current: 42 - 39 = 3 txs
-		t.Logf("Number of chained subtrees: %d", len(stp.chainedSubtrees))
+		t.Logf("Number of chained subtrees: %d", len(chainedSubtrees))
 		t.Logf("Current subtree nodes: %d", len(stp.currentSubtree.Load().Nodes))
-		if len(stp.chainedSubtrees) > 5 {
-			t.Logf("Subtree 5 has %d nodes", len(stp.chainedSubtrees[5].Nodes))
+		if len(chainedSubtrees) > 5 {
+			t.Logf("Subtree 5 has %d nodes", len(chainedSubtrees[5].Nodes))
 		}
-		assert.Len(t, stp.chainedSubtrees, 10)
+		assert.Len(t, chainedSubtrees, 10)
 		assert.Len(t, stp.currentSubtree.Load().Nodes, 3)
 
 		// get the middle transaction from the middle subtree
-		txHash := stp.chainedSubtrees[5].Nodes[2].Hash
+		txHash := chainedSubtrees[5].Nodes[2].Hash
 
 		// check that is in the currentTxMap
 		_, ok := stp.currentTxMap.Get(txHash)
 		assert.True(t, ok)
-
-		require.NoError(t, stp.CheckSubtreeProcessor())
 
 		// Remove a transaction from the subtree using the proper public API
 		err = stp.Remove(context.Background(), txHash)
 		require.NoError(t, err)
 
 		// Wait for removal to be processed
-		time.Sleep(100 * time.Millisecond)
+		// This waits for the remove channel to be drained and processing to complete
+		waitForRemoveToComplete(t, stp)
+
+		// Get updated snapshot after removal
+		chainedSubtrees = stp.GetChainedSubtrees()
 
 		// Check the state after removal
-		t.Logf("After removal - Number of chained subtrees: %d", len(stp.chainedSubtrees))
-		if len(stp.chainedSubtrees) > 5 {
-			t.Logf("After removal - Subtree 5 has %d nodes", len(stp.chainedSubtrees[5].Nodes))
-			if len(stp.chainedSubtrees[5].Nodes) > 2 {
+		t.Logf("After removal - Number of chained subtrees: %d", len(chainedSubtrees))
+		if len(chainedSubtrees) > 5 {
+			t.Logf("After removal - Subtree 5 has %d nodes", len(chainedSubtrees[5].Nodes))
+			if len(chainedSubtrees[5].Nodes) > 2 {
 				// check that the txHash node has been replaced
-				assert.NotEqual(t, stp.chainedSubtrees[5].Nodes[2].Hash, txHash)
+				assert.NotEqual(t, chainedSubtrees[5].Nodes[2].Hash, txHash)
 			}
 		} else {
-			t.Errorf("chainedSubtrees has only %d elements, expected at least 6", len(stp.chainedSubtrees))
+			t.Errorf("chainedSubtrees has only %d elements, expected at least 6", len(chainedSubtrees))
 		}
 
 		// check the length of the subtrees again
 		// After removing and rechaining, we may have fewer subtrees due to proper duplicate handling
 		// The rechaining process rebuilds from the removal point, properly detecting duplicates
-		t.Logf("After rechaining - Number of chained subtrees: %d", len(stp.chainedSubtrees))
+		t.Logf("After rechaining - Number of chained subtrees: %d", len(chainedSubtrees))
 		t.Logf("After rechaining - Current subtree nodes: %d", len(stp.currentSubtree.Load().Nodes))
 		// We should have at least the subtrees before the removal point
-		assert.GreaterOrEqual(t, len(stp.chainedSubtrees), 5)
+		assert.GreaterOrEqual(t, len(chainedSubtrees), 5)
 		// Current subtree should have some nodes but may vary due to rechaining
 		assert.GreaterOrEqual(t, len(stp.currentSubtree.Load().Nodes), 0)
 
@@ -1620,6 +1634,13 @@ func TestSubtreeProcessor_moveBackBlock(t *testing.T) {
 		newSubtreeChan := make(chan NewSubtreeRequest)
 		defer close(newSubtreeChan)
 
+		// Consume subtree announcements to prevent blocking when GetChainedSubtrees() is called
+		go func() {
+			for req := range newSubtreeChan {
+				req.ErrChan <- nil
+			}
+		}()
+
 		ctx := context.Background()
 		logger := ulogger.NewErrorTestLogger(t)
 		tSettings := test.CreateBaseTestSettings(t)
@@ -2502,7 +2523,47 @@ func waitForSubtreeProcessorQueueToEmpty(t *testing.T, stp *SubtreeProcessor) {
 		t.Fatalf("Expected queue length to be 0, but got %d", stp.QueueLength())
 	}
 
-	time.Sleep(100 * time.Millisecond) // Give some time for the queue to process
+	// Synchronize with event loop to ensure processing is complete
+	// CheckSubtreeProcessor uses a channel that synchronizes with the event loop
+	require.NoError(t, stp.CheckSubtreeProcessor())
+}
+
+// waitForRemoveToComplete waits for a pending remove operation to complete.
+// Remove() spawns a goroutine that sends to removeTxCh, so we need to:
+// 1. Give the goroutine time to send to the channel
+// 2. Wait for the channel to be drained (message dequeued by event loop)
+// 3. Call CheckSubtreeProcessor to ensure the remove processing has finished
+func waitForRemoveToComplete(t *testing.T, stp *SubtreeProcessor) {
+	t.Helper()
+
+	// Give the goroutine spawned by Remove() time to send to the channel.
+	// We wait until we see the message in the channel OR it has been dequeued.
+	// Loop with a timeout to avoid infinite wait if something goes wrong.
+	deadline := time.Now().Add(5 * time.Second)
+	sawMessage := false
+	for time.Now().Before(deadline) {
+		if len(stp.removeTxCh) > 0 {
+			sawMessage = true
+			break
+		}
+		// Give goroutines a chance to run
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// If we never saw the message in the channel, it might have been processed already
+	// (fast path) or the goroutine hasn't run yet. Either way, proceed.
+	_ = sawMessage
+
+	// Wait for the remove channel to be empty (message has been dequeued)
+	for len(stp.removeTxCh) > 0 {
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// Synchronize with event loop to ensure remove processing is complete.
+	// CheckSubtreeProcessor sends to the event loop's select and blocks until
+	// the event loop processes it. Since remove and check are in the same select,
+	// this guarantees the remove has completed.
+	require.NoError(t, stp.CheckSubtreeProcessor())
 }
 
 // createSubtree creates a test subtree with specified parameters.

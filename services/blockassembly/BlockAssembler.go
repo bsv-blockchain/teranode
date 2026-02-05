@@ -289,6 +289,16 @@ func (b *BlockAssembler) GetChainedSubtrees() []*subtree.Subtree {
 	return b.subtreeProcessor.GetChainedSubtrees()
 }
 
+// GetChainedSubtreesTotalSize returns the total size in bytes of all chained subtrees.
+// This uses atomic access and is safe to call from any context without channel-based
+// synchronization, avoiding potential deadlocks.
+//
+// Returns:
+//   - uint64: Total size in bytes of all chained subtrees
+func (b *BlockAssembler) GetChainedSubtreesTotalSize() uint64 {
+	return b.subtreeProcessor.GetChainedSubtreesTotalSize()
+}
+
 // startChannelListeners initializes and starts all channel listeners for block assembly operations.
 // It handles blockchain notifications, mining candidate requests, and reset operations.
 //
@@ -776,36 +786,6 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
 
-	// Preserve parents of unmined transactions during catchup.
-	//
-	// During catchup, unmined txs from the mempool will be marked as mined when processing blocks.
-	// Once marked mined (UnminedSince cleared), they're no longer in the unmined tx pool. If their
-	// parent txs are past retention, the pruner could delete them before block validation completes.
-	//
-	// We preserve parents at startup (while unmined pool is intact) rather than per-block to avoid
-	// overhead during catchup. This is a one-time batch operation that protects all parents before
-	// any blocks are validated.
-	//
-	// FSM STATE DETERMINES WHEN TO RUN:
-	// - FSMStateCATCHINGBLOCKS: Run once at startup (efficient batch operation)
-	// - FSMStateRUNNING: Skip (handled per-block in BlockValidation after UpdateTxMinedStatus)
-	//
-	// TIMING: Executes after loadUnminedTransactions() but before Block Validation processes blocks.
-	fsmState, fsmErr := b.blockchainClient.GetFSMCurrentState(ctx)
-	if fsmErr != nil {
-		b.logger.Warnf("[BlockAssembler] Failed to get blockchain FSM state for parent preservation: %v", fsmErr)
-		// Continue - best effort
-	} else if fsmState != nil && *fsmState == blockchain.FSMStateCATCHINGBLOCKS {
-		b.logger.Infof("[BlockAssembler][Catchup] Block Assembly starting during catchup, preserving parents of unmined transactions")
-		_, height := b.CurrentBlock()
-		if count, preserveErr := utxo.PreserveParentsOfOldUnminedTransactions(ctx, b.utxoStore, height, b.settings, b.logger); preserveErr != nil {
-			b.logger.Errorf("[BlockAssembler][Catchup] CRITICAL: Failed to preserve parents during catchup startup: %v", preserveErr)
-			// Continue - best effort, but log as critical since this could cause validation failures
-		} else {
-			b.logger.Infof("[BlockAssembler][Catchup] Preserved parents for %d unmined transactions before catchup validation begins", count)
-		}
-	}
-
 	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
 	b.subtreeProcessor.Start(ctx)
 
@@ -1179,43 +1159,43 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	return candidate, subtrees, err
 }
 
-func (b *BlockAssembler) generateEmptyBlockCandidate(prevBlockHeader *model.BlockHeader, prevHeight uint32) (*model.MiningCandidate, []*subtree.Subtree, error) {
-	currentHeight := prevHeight + 1
+func (b *BlockAssembler) generateEmptyBlockCandidate(bestBlockHeader *model.BlockHeader, bestBlockHeight uint32) (*model.MiningCandidate, []*subtree.Subtree, error) {
+	nextBlockHeight := bestBlockHeight + 1
 	timeNow := time.Now().Unix()
 
-	b.logger.Infof("[generateEmptyBlockCandidate] Generating empty block template for height %d (prev: %s)", currentHeight, prevBlockHeader.Hash())
+	b.logger.Infof("[generateEmptyBlockCandidate] Generating empty block template for height %d (prev: %s)", nextBlockHeight, bestBlockHeader.Hash())
 
 	timeNowUint32, err := safeconversion.Int64ToUint32(timeNow)
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("error converting time", err)
 	}
 
-	nBits, err := b.getNextNbits(timeNow)
+	nBits, err := b.getNextNbits(bestBlockHeader, timeNow)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	blockSubsidy := util.GetBlockSubsidyForHeight(currentHeight, b.settings.ChainCfgParams)
+	blockSubsidy := util.GetBlockSubsidyForHeight(nextBlockHeight, b.settings.ChainCfgParams)
 
 	id := &chainhash.Hash{}
-	copy(id[:], prevBlockHeader.Hash()[:])
+	copy(id[:], bestBlockHeader.Hash()[:])
 	id[0] ^= 0xFF
 
 	miningCandidate := &model.MiningCandidate{
 		Id:                  id[:],
-		PreviousHash:        prevBlockHeader.Hash()[:],
+		PreviousHash:        bestBlockHeader.Hash()[:],
 		CoinbaseValue:       blockSubsidy,
-		Version:             prevBlockHeader.Version,
+		Version:             bestBlockHeader.Version,
 		NBits:               nBits[:],
 		Time:                timeNowUint32,
-		Height:              currentHeight,
+		Height:              nextBlockHeight,
 		NumTxs:              0,
 		SizeWithoutCoinbase: 80,
 		MerkleProof:         [][]byte{},
 		SubtreeHashes:       [][]byte{},
 	}
 
-	b.logger.Infof("[generateEmptyBlockCandidate] Empty block template: height=%d, subsidy=%d, prev=%s", currentHeight, blockSubsidy, prevBlockHeader.Hash())
+	b.logger.Infof("[generateEmptyBlockCandidate] Empty block template: height=%d, subsidy=%d, prev=%s", nextBlockHeight, blockSubsidy, bestBlockHeader.Hash())
 
 	return miningCandidate, []*subtree.Subtree{}, nil
 }
@@ -1345,7 +1325,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 	timeBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
 
-	nBits, err := b.getNextNbits(timeNow)
+	nBits, err := b.getNextNbits(baBestBlockHeader, timeNow)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1400,7 +1380,7 @@ func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtre
 		CoinbaseValue:       coinbaseValue,
 		Version:             0x20000000,
 		NBits:               nBits.CloneBytes(),
-		Height:              baBestBlockHeight + 1,
+		Height:              baBestBlockHeight + 1, // next block height
 		Time:                timeNowUint32,
 		MerkleProof:         coinbaseMerkleProofBytes,
 		NumTxs:              txCount,
@@ -1673,9 +1653,7 @@ func (b *BlockAssembler) getReorgBlockHeaders(ctx context.Context, header *model
 // Returns:
 //   - *model.NBit: Next difficulty target
 //   - error: Any error encountered during retrieval
-func (b *BlockAssembler) getNextNbits(nextBlockTime int64) (*model.NBit, error) {
-	baBestBlockHeader, _ := b.CurrentBlock()
-
+func (b *BlockAssembler) getNextNbits(baBestBlockHeader *model.BlockHeader, nextBlockTime int64) (*model.NBit, error) {
 	nbit, err := b.blockchainClient.GetNextWorkRequired(context.Background(), baBestBlockHeader.Hash(), nextBlockTime)
 	if err != nil {
 		return nil, errors.NewProcessingError("error getting next work required", err)

@@ -884,7 +884,6 @@ func (t *TxMetaCache) SetConflicting(ctx context.Context, txHashes []chainhash.H
 }
 
 // SetLocked marks transactions as locked and not spendable.
-// This is a stub implementation that currently does nothing.
 //
 // Parameters:
 // - ctx: Context for the operation
@@ -892,13 +891,12 @@ func (t *TxMetaCache) SetConflicting(ctx context.Context, txHashes []chainhash.H
 // - setValue: Whether to mark the transactions as locked (true) or not locked (false)
 //
 // Returns:
-// - Error if the operation fails (currently always returns nil)
+// - Error if the operation fails
 func (t *TxMetaCache) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
-	return nil
+	return t.utxoStore.SetLocked(ctx, txHashes, setValue)
 }
 
 // MarkTransactionsOnLongestChain marks transactions as being on the longest chain or not.
-// This is a stub implementation that currently does nothing.
 //
 // Parameters:
 // - ctx: Context for the operation
@@ -906,9 +904,9 @@ func (t *TxMetaCache) SetLocked(ctx context.Context, txHashes []chainhash.Hash, 
 // - onLongestChain: Whether transactions are on the longest chain
 //
 // Returns:
-// - Error if the operation fails (currently always returns nil)
+// - Error if the operation fails
 func (t *TxMetaCache) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
-	return nil
+	return t.utxoStore.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain)
 }
 
 // SetBlockHeight updates the current block height in the underlying store.

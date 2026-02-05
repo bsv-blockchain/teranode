@@ -16,14 +16,18 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/mining"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/test"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
+	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2110,33 +2114,33 @@ func TestTransactionPurgeAndSyncConflicting(t *testing.T) {
 
 func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 	t.Skip()
-	var err error
-
-	// Start NodeA
-	t.Log("Starting NodeA...")
-	nodeA := daemon.NewTestDaemon(t, daemon.TestOptions{
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:     true,
 		EnableP2P:     true,
 		UTXOStoreType: "aerospike",
-		SettingsOverrideFunc: func(settings *settings.Settings) {
-			settings.Asset.HTTPPort = 18090
-			settings.Block.GetAndValidateSubtreesConcurrency = 1
-			settings.GlobalBlockHeightRetention = 1
-			settings.BlockValidation.OptimisticMining = false
-		},
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.Block.GetAndValidateSubtreesConcurrency = 1
+				s.GlobalBlockHeightRetention = 1
+				s.BlockValidation.OptimisticMining = false
+			},
+		),
 		FSMState: blockchain.FSMStateRUNNING,
 	})
-	defer nodeA.Stop(t)
+	defer td.Stop(t, true)
+
+	var err error
 
 	// Generate blocks to have coinbase maturity
-	t.Log("Generating blocks for coinbase maturity on NodeA...")
-	coinbaseTx := nodeA.MineToMaturityAndGetSpendableCoinbaseTx(t, nodeA.Ctx)
+	t.Log("Generating blocks for coinbase maturity...")
+	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
 	t.Logf("Coinbase transaction created: %s", coinbaseTx.TxIDChainHash().String())
 
-	// Create a parent transaction with 6 outputs
-	t.Log("Creating parent transaction with 1 outputs...")
+	// Create a parent transaction with 1 output
+	t.Log("Creating parent transaction with 1 output...")
 	outputAmount := uint64(1e8) // 1 BSV per output
-	parentTx := nodeA.CreateTransactionWithOptions(t,
+	parentTx := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(coinbaseTx, 0),
 		transactions.WithP2PKHOutputs(1, outputAmount),
 	)
@@ -2144,13 +2148,13 @@ func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 
 	// Send the parent transaction
 	t.Log("Sending parent transaction...")
-	err = nodeA.PropagationClient.ProcessTransaction(nodeA.Ctx, parentTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, parentTx)
 	require.NoError(t, err, "Failed to send parent transaction")
-	assert.Nil(t, GetRawTx(t, nodeA.UtxoStore, *parentTx.TxIDChainHash(), fields.DeleteAtHeight.String()))
+	assert.Nil(t, GetRawTx(t, td.UtxoStore, *parentTx.TxIDChainHash(), fields.DeleteAtHeight.String()))
 
 	// Verify parent transaction is in mempool
 	t.Log("Verifying parent transaction is in mempool...")
-	resp, err := nodeA.CallRPC(nodeA.Ctx, "getrawmempool", []interface{}{})
+	resp, err := td.CallRPC(td.Ctx, "getrawmempool", []interface{}{})
 	require.NoError(t, err, "Failed to get mempool")
 
 	var mempoolResp struct {
@@ -2172,7 +2176,7 @@ func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 	// Create a child transaction which spends one output of the parent
 	t.Log("Creating child transaction spending output 0 of parent...")
 	childAmount := outputAmount - 1000 // Leave 1000 satoshis for fee
-	childTx := nodeA.CreateTransactionWithOptions(t,
+	childTx := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(parentTx, 0),
 		transactions.WithP2PKHOutputs(1, childAmount),
 	)
@@ -2180,12 +2184,12 @@ func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 
 	// Send the child transaction
 	t.Log("Sending child transaction...")
-	err = nodeA.PropagationClient.ProcessTransaction(nodeA.Ctx, childTx)
+	err = td.PropagationClient.ProcessTransaction(td.Ctx, childTx)
 	require.NoError(t, err, "Failed to send child transaction")
 
 	// Verify child transaction is in mempool
 	t.Log("Verifying child transaction is in mempool...")
-	resp, err = nodeA.CallRPC(nodeA.Ctx, "getrawmempool", []interface{}{})
+	resp, err = td.CallRPC(td.Ctx, "getrawmempool", []interface{}{})
 	require.NoError(t, err, "Failed to get mempool after child transaction")
 
 	err = json.Unmarshal([]byte(resp), &mempoolResp)
@@ -2201,37 +2205,130 @@ func TestParentNotMinedNonOptimisticMining(t *testing.T) {
 	require.True(t, childFound, "Child transaction not found in mempool")
 
 	// Create a block with no transactions
-	bestBlockHeader, _, err := nodeA.BlockchainClient.GetBestBlockHeader(nodeA.Ctx)
+	bestBlockHeader, _, err := td.BlockchainClient.GetBestBlockHeader(td.Ctx)
 	require.NoError(t, err)
-	block2, err := nodeA.BlockchainClient.GetBlock(nodeA.Ctx, bestBlockHeader.Hash())
+	block2, err := td.BlockchainClient.GetBlock(td.Ctx, bestBlockHeader.Hash())
 	require.NoError(t, err)
 
-	_, block3 := nodeA.CreateTestBlock(t, block2, 1000)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block3, "legacy")
+	_, block3 := td.CreateTestBlock(t, block2, 1000)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block3, "legacy")
 	require.NoError(t, err)
-	nodeA.WaitForBlock(t, block3, 10*time.Second, true)
+	td.WaitForBlock(t, block3, 10*time.Second, true)
 
 	// mine upto GlobalBlockHeightRetention
-	_, block4 := nodeA.CreateTestBlock(t, block3, 1001)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block4, "legacy")
+	_, block4 := td.CreateTestBlock(t, block3, 1001)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block4, "legacy")
 	require.NoError(t, err)
-	nodeA.WaitForBlock(t, block4, 10*time.Second, true)
+	td.WaitForBlock(t, block4, 10*time.Second, true)
 
-	_, block5 := nodeA.CreateTestBlock(t, block4, 1002)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block5, "legacy")
+	_, block5 := td.CreateTestBlock(t, block4, 1002)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block5, "legacy")
 	require.NoError(t, err)
-	nodeA.WaitForBlock(t, block5, 10*time.Second, true)
+	td.WaitForBlock(t, block5, 10*time.Second, true)
 
-	_, invalidblock6 := nodeA.CreateTestBlock(t, block5, 1003, childTx)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, invalidblock6, "legacy")
+	_, invalidblock6 := td.CreateTestBlock(t, block5, 1003, childTx)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, invalidblock6, "legacy")
 	require.Error(t, err)
 
 	// create a block with both transactions
-	_, block6 := nodeA.CreateTestBlock(t, block5, 1004, parentTx, childTx)
-	err = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, block6, "legacy")
+	_, block6 := td.CreateTestBlock(t, block5, 1004, parentTx, childTx)
+	err = td.BlockValidation.ValidateBlock(td.Ctx, block6, "legacy")
 	require.NoError(t, err)
-	nodeA.WaitForBlockHeight(t, block6, 10*time.Second, true)
-	nodeA.WaitForBlock(t, block6, 10*time.Second, true)
+	td.WaitForBlockHeight(t, block6, 10*time.Second, true)
+	td.WaitForBlock(t, block6, 10*time.Second, true)
 
-	assert.Equal(t, 7, GetRawTx(t, nodeA.UtxoStore, *parentTx.TxIDChainHash(), fields.DeleteAtHeight.String()))
+	assert.Equal(t, 7, GetRawTx(t, td.UtxoStore, *parentTx.TxIDChainHash(), fields.DeleteAtHeight.String()))
+}
+
+func TestShouldAllowSubmitMiningSolutionUsingMiningCandidateFromRPC(t *testing.T) {
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:     true,
+		UTXOStoreType: "aerospike",
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.ChainCfgParams.CoinbaseMaturity = 1
+			},
+		),
+		FSMState: blockchain.FSMStateRUNNING,
+	})
+	defer td.Stop(t, true)
+
+	// Mine initial blocks to have proper blockchain state
+	td.MineBlocks(t, 2)
+
+	// Create and send a transaction that will be included in the mined block
+	coinbaseTx := td.MineToMaturityAndGetSpendableCoinbaseTx(t, td.Ctx)
+	newTx := td.CreateTransactionWithOptions(t,
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(1, 10000),
+	)
+
+	txBytes := hex.EncodeToString(newTx.ExtendedBytes())
+	_, err := td.CallRPC(td.Ctx, "sendrawtransaction", []any{txBytes})
+	require.NoError(t, err, "Failed to send transaction via RPC")
+	t.Logf("Transaction sent via RPC: %s", newTx.TxIDChainHash().String())
+
+	// Wait for transaction to be processed by block assembly
+	td.WaitForBlockAssemblyToProcessTx(t, newTx.TxIDChainHash().String())
+
+	// Get mining candidate via RPC
+	resp, err := td.CallRPC(td.Ctx, "getminingcandidate", []any{})
+	require.NoError(t, err, "Failed to get mining candidate via RPC")
+
+	var miningCandidateResp helper.MiningCandidate
+	err = json.Unmarshal([]byte(resp), &miningCandidateResp)
+	require.NoError(t, err, "Failed to parse mining candidate response")
+	require.Nil(t, miningCandidateResp.Error, "Mining candidate response should not have an error")
+
+	t.Logf("Mining candidate ID: %s, Height: %d", miningCandidateResp.Result.ID, miningCandidateResp.Result.Height)
+
+	// Get the mining candidate from block assembly client to use with mining helper
+	miningCandidate, err := td.BlockAssemblyClient.GetMiningCandidate(td.Ctx, false)
+	require.NoError(t, err, "Failed to get mining candidate from block assembly client")
+
+	// Mine a solution using the mining package
+	solution, err := mining.Mine(td.Ctx, td.Settings, miningCandidate, nil)
+	require.NoError(t, err, "Failed to mine block")
+
+	t.Logf("Found valid solution - Nonce: %d", solution.Nonce)
+
+	// Submit the mining solution via RPC
+	submitMiningSolutionCmd := bsvjson.MiningSolution{
+		ID:       utils.ReverseAndHexEncodeSlice(solution.Id),
+		Coinbase: hex.EncodeToString(solution.Coinbase),
+		Time:     solution.Time,
+		Nonce:    solution.Nonce,
+		Version:  solution.Version,
+	}
+
+	resp, err = td.CallRPC(td.Ctx, "submitminingsolution", []any{submitMiningSolutionCmd})
+	require.NoError(t, err, "Failed to submit mining solution via RPC")
+	t.Logf("Submit mining solution response: %s", resp)
+
+	// Parse the response to verify success
+	var submitResp struct {
+		Result bool        `json:"result"`
+		Error  interface{} `json:"error"`
+	}
+	err = json.Unmarshal([]byte(resp), &submitResp)
+	require.NoError(t, err, "Failed to parse submit solution response")
+	require.Nil(t, submitResp.Error, "Submit solution should not return an error")
+	require.True(t, submitResp.Result, "Submit solution should return true")
+
+	// Build the expected block hash
+	blockHeader, err := mining.BuildBlockHeader(miningCandidate, solution)
+	require.NoError(t, err, "Failed to build block header")
+	expectedBlockHash := utils.ReverseAndHexEncodeSlice(util.Sha256d(blockHeader))
+
+	// Verify the block was accepted by checking best block hash
+	resp, err = td.CallRPC(td.Ctx, "getbestblockhash", []any{})
+	require.NoError(t, err, "Failed to get best block hash")
+
+	var bestBlockHashResp helper.BestBlockHashResp
+	err = json.Unmarshal([]byte(resp), &bestBlockHashResp)
+	require.NoError(t, err, "Failed to parse best block hash response")
+
+	assert.Equal(t, expectedBlockHash, bestBlockHashResp.Result, "Best block hash should match the mined block")
+	t.Logf("Block successfully mined and accepted: %s", bestBlockHashResp.Result)
 }

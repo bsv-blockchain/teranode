@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,9 +40,11 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/propagation"
+	"github.com/bsv-blockchain/teranode/services/pruner"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -77,6 +80,7 @@ type TestDaemon struct {
 	PropagationClient     *propagation.Client
 	Settings              *settings.Settings
 	SubtreeStore          blob.Store
+	BlockchainStore       blockchainstore.Store
 	UtxoStore             utxo.Store
 	P2PClient             p2p.ClientI
 	composeDependencies   tc.ComposeStack
@@ -87,6 +91,7 @@ type TestDaemon struct {
 	rpcURL                *url.URL
 	skipContainerCleanup  bool
 	prunerObserver        *testPrunerObserver
+	blobDeletionObserver  *testBlobDeletionObserver
 	t                     *testing.T // Reference to testing.T for unified logging
 }
 
@@ -529,6 +534,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	subtreeStore, err := d.daemonStores.GetSubtreeStore(ctx, logger, appSettings)
 	require.NoError(t, err)
 
+	blockchainStore, err := d.daemonStores.GetBlockchainStore(ctx, logger, appSettings)
+	require.NoError(t, err)
+
 	var utxoStore utxo.Store
 
 	utxoStore, err = d.daemonStores.GetUtxoStore(ctx, logger, appSettings)
@@ -539,7 +547,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	p2pClient, err = p2p.NewClient(ctx, logger, appSettings)
 	require.NoError(t, err)
 
-	txStore, err := d.daemonStores.GetTxStore(logger, appSettings)
+	txStore, err := d.daemonStores.GetTxStore(ctx, logger, appSettings)
 	require.NoError(t, err)
 
 	if opts.FSMState.String() != "" {
@@ -600,6 +608,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		PropagationClient:     propagationClient,
 		Settings:              appSettings,
 		SubtreeStore:          subtreeStore,
+		BlockchainStore:       blockchainStore,
 		UtxoStore:             utxoStore,
 		P2PClient:             p2pClient,
 		composeDependencies:   composeDependencies,
@@ -633,6 +642,19 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 			t.Logf("Warning: Pruner service is nil")
 		}
 
+		// Register blob deletion observer with pruner Server
+		blobDeletionObserver := newTestBlobDeletionObserver(t)
+		td.blobDeletionObserver = blobDeletionObserver
+
+		prunerServerInterface, err := d.ServiceManager.GetService("Pruner")
+		if err != nil {
+			t.Logf("Warning: Failed to get Pruner Server: %v", err)
+		} else if prunerServer, ok := prunerServerInterface.(*pruner.Server); ok {
+			prunerServer.SetBlobDeletionObserver(blobDeletionObserver)
+			t.Logf("✓ Blob deletion observer registered with Pruner Server")
+		} else {
+			t.Logf("Warning: Pruner service is not a *pruner.Server")
+		}
 	}
 
 	return td
@@ -644,8 +666,13 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 		t.Errorf("Failed to stop daemon %s: %v", td.Settings.ClientName, err)
 	}
 
-	// Cancel context first to trigger HTTP server shutdowns
+	// Cancel context after daemon stop to trigger graceful shutdown of any remaining
+	// context-dependent components (HTTP servers, Kafka producers, etc.)
 	td.ctxCancel()
+
+	// Allow background goroutines (batchers, Kafka workers) to complete their cleanup.
+	// This prevents race conditions where goroutines try to access resources being closed.
+	runtime.Gosched()
 
 	// Shutdown the logger to prevent race conditions on testing.T access
 	// Background goroutines may still be running and trying to log errors
@@ -1076,6 +1103,49 @@ func (td *TestDaemon) WaitForPruner(t *testing.T, timeout time.Duration) {
 	prunedHeight, recordsProcessed, err := td.prunerObserver.waitForPrune(timeout)
 	require.NoError(t, err, "Timeout waiting for pruner to complete")
 	t.Logf("✓ Pruner completed pruning up to height %d, processed %d records", prunedHeight, recordsProcessed)
+}
+
+// WaitForBlobDeletion waits for the blob deletion worker to complete processing.
+// Returns the height processed and counts of successful/failed deletions.
+func (td *TestDaemon) WaitForBlobDeletion(timeout time.Duration) (height uint32, successCount, failCount int64, err error) {
+	if td.blobDeletionObserver == nil {
+		return 0, 0, 0, errors.NewProcessingError("blob deletion observer not registered")
+	}
+
+	return td.blobDeletionObserver.waitForBlobDeletion(timeout)
+}
+
+// WaitForBlockPersisted waits for a block to be marked as persisted in the blockchain database.
+// It polls GetBlocksNotPersisted until the specified block is no longer in the unpersisted list.
+func (td *TestDaemon) WaitForBlockPersisted(blockHash *chainhash.Hash, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	checkInterval := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		// Check if this block is still in the unpersisted list
+		unpersistedBlocks, err := td.BlockchainClient.GetBlocksNotPersisted(td.Ctx, 100)
+		if err != nil {
+			time.Sleep(checkInterval)
+			continue
+		}
+
+		// If the block is not in the unpersisted list, it has been persisted
+		found := false
+		for _, b := range unpersistedBlocks {
+			if b.Hash().String() == blockHash.String() {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return nil // Block is no longer in unpersisted list, so it's persisted
+		}
+
+		time.Sleep(checkInterval)
+	}
+
+	return context.DeadlineExceeded
 }
 
 // CreateTransaction creates a new transaction with a single input from the parent transaction.
@@ -1668,6 +1738,18 @@ func (td *TestDaemon) GetContainerManager() *containers.ContainerManager {
 	return td.containerManager
 }
 
+// GetBlockStore returns the block store used by this test daemon.
+// This is useful for tests that need to verify block persistence.
+func (td *TestDaemon) GetBlockStore() (blob.Store, error) {
+	return td.d.daemonStores.GetBlockStore(td.Ctx, td.Logger, td.Settings)
+}
+
+// GetTxStore returns the transaction store used by this test daemon.
+// This is useful for tests that need to verify transaction storage and deletion scheduling.
+func (td *TestDaemon) GetTxStore() (blob.Store, error) {
+	return td.d.daemonStores.GetTxStore(td.Ctx, td.Logger, td.Settings)
+}
+
 // WaitForHealthLiveness waits for the health readiness endpoint of the given ports to respond within the specified timeout.
 func WaitForHealthLiveness(ports []int, timeout time.Duration) error {
 	timeoutElapsed := time.After(timeout)
@@ -2164,5 +2246,41 @@ func (o *testPrunerObserver) waitForPrune(timeout time.Duration) (uint32, int64,
 		return event.height, event.recordsProcessed, nil
 	case <-time.After(timeout):
 		return 0, 0, errors.NewProcessingError("timeout waiting for prune completion")
+	}
+}
+
+type blobDeletionEvent struct {
+	height       uint32
+	successCount int64
+	failCount    int64
+}
+
+type testBlobDeletionObserver struct {
+	t                     *testing.T
+	blobDeletionCompleted chan blobDeletionEvent
+}
+
+func newTestBlobDeletionObserver(t *testing.T) *testBlobDeletionObserver {
+	return &testBlobDeletionObserver{
+		t:                     t,
+		blobDeletionCompleted: make(chan blobDeletionEvent, 10),
+	}
+}
+
+func (o *testBlobDeletionObserver) OnBlobDeletionComplete(height uint32, successCount, failCount int64) {
+	o.t.Logf("✓ Blob deletion callback invoked for height %d: %d succeeded, %d failed", height, successCount, failCount)
+	select {
+	case o.blobDeletionCompleted <- blobDeletionEvent{height: height, successCount: successCount, failCount: failCount}:
+	default:
+		o.t.Logf("Warning: blobDeletionCompleted channel is full, dropping event for height %d", height)
+	}
+}
+
+func (o *testBlobDeletionObserver) waitForBlobDeletion(timeout time.Duration) (uint32, int64, int64, error) {
+	select {
+	case event := <-o.blobDeletionCompleted:
+		return event.height, event.successCount, event.failCount, nil
+	case <-time.After(timeout):
+		return 0, 0, 0, errors.NewProcessingError("timeout waiting for blob deletion completion")
 	}
 }

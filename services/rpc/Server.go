@@ -111,6 +111,10 @@ const (
 	// maxProtocolVersion = wire.FeeFilterVersion
 )
 
+// timeZeroVal is simply the zero value for a time.Time and is used to avoid
+// creating multiple instances.
+var timeZeroVal time.Time
+
 // RPCStat provides performance statistics collection for the RPC service.
 var RPCStat = gocore.NewStat("RPC")
 
@@ -328,6 +332,11 @@ var rpcLimited = map[string]struct{}{
 	"version":               {},
 	"getminingcandidate":    {},
 	"submitminingsolution":  {},
+
+	// BSV-specific commands
+	"freeze":   {},
+	"unfreeze": {},
+	"reassign": {},
 }
 
 // builderScript is a convenience function which is used for hard-coded scripts
@@ -1123,7 +1132,8 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 
 	defer conn.Close()
 	defer buf.Flush()
-	// conn.SetReadDeadline(timeZeroVal)
+
+	_ = conn.SetReadDeadline(timeZeroVal)
 
 	// Attempt to parse the raw body into a JSON-RPC request.
 	var responseID interface{}

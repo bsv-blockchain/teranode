@@ -379,6 +379,8 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock_UOM(t *testing.T) {
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 	// Mock GetNextWorkRequired for difficulty validation
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
+	// Mock GetBlockIsMined for parent block mining status check
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
@@ -505,6 +507,8 @@ func TestBlockValidation_ReportsInvalidBlock_OnInvalidBlock(t *testing.T) {
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 	// Mock GetNextWorkRequired for difficulty validation
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
+	// Mock GetBlockIsMined for parent block mining status check
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()

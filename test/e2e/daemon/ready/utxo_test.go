@@ -24,7 +24,6 @@ import (
 )
 
 func TestFreezeAndUnfreezeUtxos(t *testing.T) {
-	t.Skip()
 	// Initialize test daemon with required services
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,

@@ -9,7 +9,7 @@ x-teranode-base: &teranode-base
     - ./data/test/${TEST_ID:-default}:/app/data
 
 x-aerospike-base: &aerospike-base
-  image: aerospike:ce-7.2.0.3_1
+  image: aerospike/aerospike-server:8.0
   networks:
     - teranode-network
   command: --config-file /etc/aerospike.conf
@@ -132,7 +132,7 @@ services:
 
   svnode1:
     container_name: svnode1-${TEST_ID:-default}
-    image: bitcoinsv/bitcoin-sv:1.1.0
+    image: bitcoinsv/bitcoin-sv:1.2.0
     platform: linux/amd64
     ports:
       - "18332:18332"
@@ -151,7 +151,7 @@ services:
 
   svnode2:
     container_name: svnode2-${TEST_ID:-default}
-    image: bitcoinsv/bitcoin-sv:1.1.0
+    image: bitcoinsv/bitcoin-sv:1.2.0
     platform: linux/amd64
     ports:
       - "48332:18332"
@@ -169,7 +169,7 @@ services:
 
   svnode3:
     container_name: svnode3-${TEST_ID:-default}
-    image: bitcoinsv/bitcoin-sv:1.1.0
+    image: bitcoinsv/bitcoin-sv:1.2.0
     platform: linux/amd64
     ports:
       - "58332:18332"

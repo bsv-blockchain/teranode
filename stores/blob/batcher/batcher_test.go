@@ -289,11 +289,10 @@ func TestBatcher_UnsupportedOperations(t *testing.T) {
 		}
 	})
 
-	t.Run("GetDAH", func(t *testing.T) {
-		_, err := batcher.GetDAH(context.Background(), []byte("key"), fileformat.FileTypeUtxoSet)
-		if err == nil {
-			t.Error("expected error for unsupported GetDAH operation")
-		}
+	t.Run("GetDAH removed", func(t *testing.T) {
+		// GetDAH has been removed from the blob.Store interface
+		// DAH functionality is now centralized in the pruner service
+		t.Skip("GetDAH removed from interface - see e2e pruner tests")
 	})
 
 	t.Run("GetIoReader", func(t *testing.T) {

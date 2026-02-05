@@ -38,6 +38,28 @@ func SystemTestSettings() func(*settings.Settings) {
 
 		// Tracing - disabled for faster test execution
 		s.TracingEnabled = false
+
+		// === File-based stores (must use DataFolder for proper test isolation) ===
+		// These paths must be set explicitly because the defaults are hardcoded
+		// and don't automatically update when DataFolder is changed by TestDaemon.
+		// File URLs use file://./relative/path format for relative paths (Host="." triggers relative path handling)
+
+		// Block store
+		blockStorePath := filepath.Join(s.DataFolder, "blockstore")
+		blockStoreURL := mustParseURL(fmt.Sprintf("file://./%s", blockStorePath))
+		s.Block.BlockStore = blockStoreURL
+		s.BlockPersister.Store = blockStoreURL
+
+		// Subtree store
+		subtreeStorePath := filepath.Join(s.DataFolder, "subtreestore")
+		subtreeStoreURL := mustParseURL(fmt.Sprintf("file://./%s", subtreeStorePath))
+		s.SubtreeValidation.SubtreeStore = subtreeStoreURL
+
+		// Quorum path
+		s.SubtreeValidation.QuorumPath = filepath.Join(s.DataFolder, "subtree_quorum")
+
+		// UTXO store (SQLite, relative to DataFolder)
+		s.UtxoStore.UtxoStore = mustParseURL("sqlite:///utxo")
 	}
 }
 

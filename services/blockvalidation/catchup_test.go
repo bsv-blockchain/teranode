@@ -3061,6 +3061,8 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 	// Use mainnet difficulty since most tests use mainnet headers from testdata
 	defaultNBitsCatchup, _ := model.NewNBitFromString("1d00ffff")
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
+	// Mock GetBlockIsMined for parent block verification during validation
+	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
 	bv := &BlockValidation{
@@ -3152,6 +3154,8 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 	// Use mainnet difficulty since most tests use mainnet headers from testdata
 	defaultNBitsCatchup, _ := model.NewNBitFromString("1d00ffff")
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
+	// Mock GetBlockIsMined for parent block verification during validation
+	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	mockUTXOStore := &utxo.MockUtxostore{}
 
 	bv := &BlockValidation{
@@ -3390,6 +3394,9 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 		},
 	}
 
+	// Enable quick validation for this test
+	suite.Server.settings.BlockValidation.CatchupAllowQuickValidation = true
+
 	// Create catchup context simulating the scenario
 	catchupCtx := &CatchupContext{
 		blockUpTo: &model.Block{
@@ -3409,7 +3416,8 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 			blocks[13].Header, // height 13
 			blocks[14].Header, // height 14
 		},
-		forkDepth: 0, // no fork
+		forkDepth:   0, // no fork
+		checkpoints: suite.Server.settings.ChainCfgParams.Checkpoints,
 	}
 
 	// Test the checkpoint verification
@@ -3417,7 +3425,7 @@ func TestCheckpointValidationHeightCalculation(t *testing.T) {
 
 	// This should succeed - checkpoint at height 10 should match
 	assert.NoError(t, err, "Checkpoint validation should succeed")
-	assert.False(t, catchupCtx.useQuickValidation, "Quick validation is currently disabled (needs more testing)")
+	assert.True(t, catchupCtx.useQuickValidation, "Quick validation should be enabled when checkpoints are verified")
 }
 
 // TestCheckpointValidationSkipsCheckpointsBelowAncestor verifies that checkpoint validation
@@ -3458,7 +3466,8 @@ func TestCheckpointValidationSkipsCheckpointsBelowAncestor(t *testing.T) {
 			blocks[13].Header, // height 13
 			blocks[14].Header, // height 14
 		},
-		forkDepth: 0, // no fork
+		forkDepth:   0, // no fork
+		checkpoints: suite.Server.settings.ChainCfgParams.Checkpoints,
 	}
 
 	// Test the checkpoint verification

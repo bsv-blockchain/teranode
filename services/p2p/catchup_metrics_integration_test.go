@@ -275,8 +275,8 @@ func TestDistributedCatchupMetrics_ReputationCalculation(t *testing.T) {
 	info, _ = p2pRegistry.Get(testPeerID)
 	assert.Equal(t, int64(1), info.InteractionSuccesses)
 	// With 100% success rate (1/1), reputation should be high
-	// Formula: 100 * 0.6 + 50 * 0.4 + 10 (recency bonus) = 60 + 20 + 10 = 90
-	assert.InDelta(t, 90.0, info.ReputationScore, 1.0, "First success should give ~90 reputation")
+	// Formula: (100 * 0.6 + 50 * 0.4 + 10 (recency bonus)) * 1.2 (speed factor for <200ms) = (60 + 20 + 10) * 1.2 = 108, clamped to 100
+	assert.Equal(t, 100.0, info.ReputationScore, "First success with fast response should give 100 reputation")
 
 	// Record more successful catchups
 	for i := 0; i < 4; i++ {
@@ -479,8 +479,8 @@ func TestReportValidSubtree_IncreasesReputation(t *testing.T) {
 
 	// Verify reputation increased due to successful interaction
 	// With 100% success rate (1 success / 1 total):
-	// Formula: 100 * 0.6 + 50 * 0.4 + 10 (recency bonus) = 60 + 20 + 10 = 90
-	assert.InDelta(t, 90.0, info.ReputationScore, 1.0, "First successful subtree should increase reputation to ~90")
+	// Formula: (100 * 0.6 + 50 * 0.4 + 10 (recency bonus)) * 1.2 (speed factor for <200ms) = (60 + 20 + 10) * 1.2 = 108, clamped to 100
+	assert.Equal(t, 100.0, info.ReputationScore, "First successful subtree with fast response should increase reputation to 100")
 
 	// Record multiple successful subtrees
 	for i := 0; i < 4; i++ {

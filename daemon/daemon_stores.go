@@ -14,6 +14,8 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
+	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
@@ -28,11 +30,13 @@ type Stores struct {
 	mainBlockAssemblyClient     blockassembly.ClientI
 	mainP2PClient               p2p.ClientI
 	mainSubtreeStore            blob.Store
+	mainBlockchainStore         blockchainstore.Store
 	mainSubtreeValidationClient subtreevalidation.Interface
 	mainTempStore               blob.Store
 	mainTxStore                 blob.Store
 	mainUtxoStore               utxostore.Store
 	mainValidatorClient         validator.Interface
+	mainBlobDeletionScheduler   options.BlobDeletionScheduler
 }
 
 // GetUtxoStore returns the main UTXO store instance. If the store hasn't been initialized yet,
@@ -218,10 +222,27 @@ func (d *Stores) GetValidatorClient(ctx context.Context, logger ulogger.Logger,
 	return d.mainValidatorClient, nil
 }
 
+// GetBlobDeletionScheduler returns a blob deletion scheduler (blockchain client).
+// The blockchain client implements BlobDeletionScheduler interface directly.
+func (d *Stores) GetBlobDeletionScheduler(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (options.BlobDeletionScheduler, error) {
+	if d.mainBlobDeletionScheduler != nil {
+		return d.mainBlobDeletionScheduler, nil
+	}
+
+	blockchainClient, err := d.GetBlockchainClient(ctx, logger, appSettings, "blob-deletion")
+	if err != nil {
+		return nil, errors.NewServiceError("failed to create blockchain client for blob deletion scheduling", err)
+	}
+
+	d.mainBlobDeletionScheduler = blockchainClient
+	logger.Infof("Blob deletion scheduling enabled via blockchain service")
+	return d.mainBlobDeletionScheduler, nil
+}
+
 // GetTxStore returns the main transaction store instance. If the store hasn't been initialized yet,
 // it creates a new one using the configured URL from settings. This function ensures only one
 // instance of the transaction store exists.
-func (d *Stores) GetTxStore(logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
+func (d *Stores) GetTxStore(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (blob.Store, error) {
 	if d.mainTxStore != nil {
 		return d.mainTxStore, nil
 	}
@@ -241,7 +262,16 @@ func (d *Stores) GetTxStore(logger ulogger.Logger, appSettings *settings.Setting
 		}
 	}
 
-	d.mainTxStore, err = blob.NewStore(logger, txStoreURL, options.WithHashPrefix(hashPrefix))
+	// Get blob deletion scheduler (blockchain client)
+	blobDeletionScheduler, err := d.GetBlobDeletionScheduler(ctx, logger, appSettings)
+	if err != nil {
+		return nil, errors.NewServiceError("could not get blob deletion scheduler for tx store", err)
+	}
+
+	d.mainTxStore, err = blob.NewStore(logger, txStoreURL,
+		options.WithHashPrefix(hashPrefix),
+		options.WithBlobDeletionScheduler(blobDeletionScheduler),
+		options.WithStoreType(storetypes.TXSTORE))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create tx store", err)
 	}
@@ -283,12 +313,43 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 		return nil, errors.NewServiceError("could not create block height tracker channel", err)
 	}
 
-	d.mainSubtreeStore, err = blob.NewStore(logger, subtreeStoreURL, options.WithHashPrefix(hashPrefix), options.WithBlockHeightCh(ch))
+	// Get blob deletion scheduler (blockchain client)
+	blobDeletionScheduler, err := d.GetBlobDeletionScheduler(ctx, logger, appSettings)
+	if err != nil {
+		return nil, errors.NewServiceError("could not get blob deletion scheduler for subtree store", err)
+	}
+
+	d.mainSubtreeStore, err = blob.NewStore(logger, subtreeStoreURL,
+		options.WithHashPrefix(hashPrefix),
+		options.WithBlockHeightCh(ch),
+		options.WithBlobDeletionScheduler(blobDeletionScheduler),
+		options.WithStoreType(storetypes.SUBTREESTORE))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
 
 	return d.mainSubtreeStore, nil
+}
+
+func (d *Stores) GetBlockchainStore(_ context.Context, logger ulogger.Logger, appSettings *settings.Settings) (blockchainstore.Store, error) {
+	if d.mainBlockchainStore != nil {
+		return d.mainBlockchainStore, nil
+	}
+
+	// Create the blockchain store url from the app settings
+	blockchainStoreURL := appSettings.BlockChain.StoreURL
+	if blockchainStoreURL == nil {
+		return nil, errors.NewStorageError("blockchain store url not found")
+	}
+
+	// Create the blockchain store
+	blockchainStore, err := blockchainstore.NewStore(logger, blockchainStoreURL, appSettings)
+	if err != nil {
+		return nil, err
+	}
+
+	d.mainBlockchainStore = blockchainStore
+	return blockchainStore, nil
 }
 
 // GetTempStore returns the main temporary store instance. If the store hasn't been initialized yet,
@@ -304,6 +365,16 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 		return nil, errors.NewConfigurationError("temp_store config not found")
 	}
 
+	var err error
+
+	hashPrefix := 0
+	if tempStoreURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(tempStoreURL.Query().Get("hashPrefix"))
+		if err != nil {
+			return nil, errors.NewConfigurationError("tempstore hashPrefix config error", err)
+		}
+	}
+
 	blockchainClient, err := d.GetBlockchainClient(ctx, logger, appSettings, "temp")
 	if err != nil {
 		return nil, errors.NewServiceError("could not create blockchain client for temp store", err)
@@ -314,7 +385,17 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 		return nil, errors.NewServiceError("could not create block height tracker channel", err)
 	}
 
-	d.mainTempStore, err = blob.NewStore(logger, tempStoreURL, options.WithBlockHeightCh(ch))
+	// Get blob deletion scheduler (blockchain client)
+	blobDeletionScheduler, err := d.GetBlobDeletionScheduler(ctx, logger, appSettings)
+	if err != nil {
+		return nil, errors.NewServiceError("could not get blob deletion scheduler for temp store", err)
+	}
+
+	d.mainTempStore, err = blob.NewStore(logger, tempStoreURL,
+		options.WithHashPrefix(hashPrefix),
+		options.WithBlockHeightCh(ch),
+		options.WithBlobDeletionScheduler(blobDeletionScheduler),
+		options.WithStoreType(storetypes.TEMPSTORE))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create temp_store", err)
 	}
@@ -357,7 +438,17 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 		return nil, errors.NewServiceError("could not create block height tracker channel", err)
 	}
 
-	d.mainBlockStore, err = blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix), options.WithBlockHeightCh(ch))
+	// Get blob deletion scheduler (blockchain client)
+	blobDeletionScheduler, err := d.GetBlobDeletionScheduler(ctx, logger, appSettings)
+	if err != nil {
+		return nil, errors.NewServiceError("could not get blob deletion scheduler for block store", err)
+	}
+
+	d.mainBlockStore, err = blob.NewStore(logger, blockStoreURL,
+		options.WithHashPrefix(hashPrefix),
+		options.WithBlockHeightCh(ch),
+		options.WithBlobDeletionScheduler(blobDeletionScheduler),
+		options.WithStoreType(storetypes.BLOCKSTORE))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block store", err)
 	}
@@ -399,7 +490,17 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 		return nil, errors.NewServiceError("could not create block height tracker channel", err)
 	}
 
-	d.mainBlockPersisterStore, err = blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix), options.WithBlockHeightCh(ch))
+	// Get blob deletion scheduler (blockchain client)
+	blobDeletionScheduler, err := d.GetBlobDeletionScheduler(ctx, logger, appSettings)
+	if err != nil {
+		return nil, errors.NewServiceError("could not get blob deletion scheduler for block persister store", err)
+	}
+
+	d.mainBlockPersisterStore, err = blob.NewStore(logger, blockStoreURL,
+		options.WithHashPrefix(hashPrefix),
+		options.WithBlockHeightCh(ch),
+		options.WithBlobDeletionScheduler(blobDeletionScheduler),
+		options.WithStoreType(storetypes.BLOCKPERSISTERSTORE))
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block persister store", err)
 	}

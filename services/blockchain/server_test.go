@@ -1424,6 +1424,130 @@ func Test_ServiceInvalidateBlock_ClearsBestAndDifficultyCache(t *testing.T) {
 	require.NotNil(t, diffAfter)
 }
 
+// Test_ServiceAddBlock_ClearsDifficultyCache ensures that adding a new block via the service
+// clears the difficulty cache to prevent stale cached values from being used during rapid block processing.
+func Test_ServiceAddBlock_ClearsDifficultyCache(t *testing.T) {
+	ctx := setup(t)
+
+	// Build a short chain of 2 blocks (heights 1,2) from genesis
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	prevHash := tSettings.ChainCfgParams.GenesisHash
+
+	var blocks []*model.Block
+	for i := 1; i <= 2; i++ {
+		coinbase := bt.NewTx()
+		err := coinbase.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+		require.NoError(t, err)
+
+		arbitraryData := []byte{0x03, byte(i), 0x00, 0x00}
+		coinbase.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData)
+		coinbase.Inputs[0].SequenceNumber = 0xffffffff
+		err = coinbase.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 5000000000)
+		require.NoError(t, err)
+
+		merkleRoot := coinbase.TxIDChainHash()
+
+		blk := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  prevHash,
+				HashMerkleRoot: merkleRoot,
+				Timestamp:      uint32(time.Now().Unix()) + uint32(i),
+				Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d}, // mainnet genesis bits 0x1d00ffff in little endian
+				Nonce:          uint32(i),
+			},
+			CoinbaseTx:       coinbase,
+			TransactionCount: 1,
+			SizeInBytes:      1000,
+			Height:           uint32(i),
+			ID:               uint32(i),
+		}
+
+		_, _, err = ctx.server.store.StoreBlock(context.Background(), blk, "test")
+		require.NoError(t, err)
+
+		blocks = append(blocks, blk)
+		prevHash = blk.Hash()
+	}
+
+	// Warm difficulty cache using the current best (height 2)
+	bestResp, err := ctx.server.GetBestBlockHeader(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.NotNil(t, bestResp)
+
+	bestHeader, err := model.NewBlockHeaderFromBytes(bestResp.BlockHeader)
+	require.NoError(t, err)
+
+	// Call GetNextWorkRequired twice to warm any internal caching
+	req := &blockchain_api.GetNextWorkRequiredRequest{PreviousBlockHash: bestHeader.Hash().CloneBytes(), CurrentBlockTime: time.Now().Unix()}
+	diff1, err := ctx.server.GetNextWorkRequired(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, diff1)
+
+	diff2, err := ctx.server.GetNextWorkRequired(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, diff2)
+
+	// Create a new block at height 3 to add via AddBlock
+	coinbase3 := bt.NewTx()
+	err = coinbase3.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0)
+	require.NoError(t, err)
+
+	arbitraryData3 := []byte{0x03, 0x03, 0x00, 0x00}
+	coinbase3.Inputs[0].UnlockingScript = bscript.NewFromBytes(arbitraryData3)
+	coinbase3.Inputs[0].SequenceNumber = 0xffffffff
+	err = coinbase3.AddP2PKHOutputFromAddress("mrs6FYWPcb441b4qfcEPyvLvzj64WHtwCU", 5000000000)
+	require.NoError(t, err)
+
+	merkleRoot3 := coinbase3.TxIDChainHash()
+
+	block3 := &model.Block{
+		Header: &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  prevHash,
+			HashMerkleRoot: merkleRoot3,
+			Timestamp:      uint32(time.Now().Unix()) + 3,
+			Bits:           model.NBit{0xff, 0xff, 0x00, 0x1d},
+			Nonce:          3,
+		},
+		CoinbaseTx:       coinbase3,
+		TransactionCount: 1,
+		SizeInBytes:      1000,
+	}
+
+	// Prepare AddBlockRequest
+	addBlockReq := &blockchain_api.AddBlockRequest{
+		Header:           block3.Header.Bytes(),
+		CoinbaseTx:       coinbase3.Bytes(),
+		SubtreeHashes:    [][]byte{},
+		TransactionCount: block3.TransactionCount,
+		SizeInBytes:      block3.SizeInBytes,
+		PeerId:           "test-peer",
+	}
+
+	// Add block via AddBlock (this should clear the difficulty cache)
+	_, err = ctx.server.AddBlock(context.Background(), addBlockReq)
+	require.NoError(t, err)
+
+	// Get the new best block header (should be the newly added block)
+	newBestResp, err := ctx.server.GetBestBlockHeader(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.NotNil(t, newBestResp)
+
+	newBestHeader, err := model.NewBlockHeaderFromBytes(newBestResp.BlockHeader)
+	require.NoError(t, err)
+
+	// Verify best tip changed to the new block
+	assert.True(t, newBestHeader.Hash().IsEqual(block3.Hash()))
+
+	// Ensure difficulty can be computed for the new best without using stale cache
+	reqAfter := &blockchain_api.GetNextWorkRequiredRequest{PreviousBlockHash: newBestHeader.Hash().CloneBytes(), CurrentBlockTime: time.Now().Unix()}
+	diffAfter, err := ctx.server.GetNextWorkRequired(context.Background(), reqAfter)
+	require.NoError(t, err)
+	require.NotNil(t, diffAfter)
+}
+
 func TestGetBlockByID(t *testing.T) {
 	ctx := setup(t)
 

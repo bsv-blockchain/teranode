@@ -394,6 +394,19 @@
     "admin": {
       "menu-label": "Admin",
       "title": "Admin Dashboard"
+    },
+    "settings": {
+      "menu-label": "Settings",
+      "title": "Settings Reference",
+      "search-placeholder": "Search settings...",
+      "all-categories": "All Categories",
+      "col-key": "Config Key",
+      "col-default": "Default",
+      "col-current": "Current",
+      "col-description": "Description",
+      "badge-modified": "Modified",
+      "show-more": "Show more details",
+      "show-less": "Show less"
     }
   },
   "notifications": {

@@ -13,7 +13,9 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
@@ -25,7 +27,7 @@ import (
 const (
 	// Test configuration
 	coinbaseMaturity = 5  // Blocks needed before coinbase can be spent
-	targetBlocks     = 6  // Total blocks to generate during test
+	targetBlocks     = 10 // Total blocks to generate during test (must be > coinbaseMaturity+1)
 	txsPerBlock      = 10 // Transactions to generate before mining a block
 	numWorkers       = 2  // Transaction workers per node
 )
@@ -105,21 +107,24 @@ func createNode(t *testing.T, _ context.Context, nodeNumber int) *daemon.TestDae
 	storeType := "aerospike"
 
 	node := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:          true,
-		EnableP2P:          true,
-		EnableValidator:    true,
-		UTXOStoreType:      storeType,
-		SkipRemoveDataDir:  nodeNumber > 1, // Only first node cleans the shared parent data dir; subsequent nodes share it
-		EnableDebugLogging: true,
-		SettingsOverrideFunc: func(s *settings.Settings) {
-			// Apply MultiNodeSettings for unique identity and separate stores per node
-			test.MultiNodeSettings(nodeNumber)(s)
-
-			// Additional overrides specific to this test
-			s.P2P.PeerCacheDir = t.TempDir()
-			s.ChainCfgParams.CoinbaseMaturity = coinbaseMaturity
-			s.P2P.SyncCoordinatorPeriodicEvaluationInterval = 1 * time.Second
-		},
+		EnableRPC:            true,
+		EnableP2P:            true,
+		EnableValidator:      true,
+		EnableBlockPersister: true, // Enable block persister for integrity verification
+		UTXOStoreType:        storeType,
+		SkipRemoveDataDir:    nodeNumber > 1, // Only first node cleans the shared parent data dir; subsequent nodes share it
+		EnableDebugLogging:   true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			test.MultiNodeSettings(nodeNumber),
+			func(s *settings.Settings) {
+				// Additional overrides specific to this test
+				s.P2P.PeerCacheDir = t.TempDir()
+				s.ChainCfgParams.CoinbaseMaturity = coinbaseMaturity
+				s.P2P.SyncCoordinatorPeriodicEvaluationInterval = 1 * time.Second
+				s.GlobalBlockHeightRetention = 100 // Keep blocks longer for integrity verification
+			},
+		),
 		FSMState: blockchain.FSMStateRUNNING,
 	})
 
@@ -174,19 +179,14 @@ func generateBlocksWithTransactions(t *testing.T, ctx context.Context, nodes []*
 
 	// Mine blocks periodically while blasters are running
 	for i := 0; i < blocksToMine; i++ {
-		// Wait a bit for transactions to accumulate
-		time.Sleep(500 * time.Millisecond)
-
 		// Mine a block on node 0
 		nodes[0].MineAndWait(t, 1)
 
-		if (i+1)%10 == 0 {
-			var txCount uint64
-			for _, blaster := range blasters {
-				txCount += blaster.GetTotalTxCount()
-			}
-			t.Logf("Progress: %d/%d blocks mined, %d total transactions created", i+1, blocksToMine, txCount)
+		var txCount uint64
+		for _, blaster := range blasters {
+			txCount += blaster.GetTotalTxCount()
 		}
+		t.Logf("Progress: %d/%d blocks mined, %d total transactions created", i+1, blocksToMine, txCount)
 	}
 
 	// Final stats
@@ -265,6 +265,14 @@ func verifyChainIntegrity(t *testing.T, nodes []*daemon.TestDaemon) {
 		t.Logf("Performing deep chain integrity verification on node %d...", i+1)
 		verifyNodeIntegrity(t, node, allChains[i].headers, allChains[i].metas)
 		t.Logf("✓ Node %d integrity verified", i+1)
+	}
+
+	// Block persister verification on ALL nodes
+	t.Log("Verifying block persister files on all nodes...")
+	for i, node := range nodes {
+		t.Logf("Verifying block persister files on node %d...", i+1)
+		verifyBlockPersisterFiles(t, node, allChains[i].headers, allChains[i].metas)
+		t.Logf("✓ Node %d block persister files verified", i+1)
 	}
 
 	t.Log("=== All chain integrity checks passed ===")
@@ -560,4 +568,247 @@ func closeReader(r io.ReadCloser) {
 	if r != nil {
 		_ = r.Close()
 	}
+}
+
+// verifyBlockPersisterFiles verifies that block persister has correctly persisted all block-related files
+// This includes block files, subtree data files, and UTXO additions/deletions files.
+func verifyBlockPersisterFiles(t *testing.T, node *daemon.TestDaemon, blockHeaders []*model.BlockHeader, blockMetas []*model.BlockHeaderMeta) {
+	ctx := node.Ctx
+
+	blockStore, err := node.GetBlockStore()
+	if err != nil {
+		t.Errorf("Failed to get block store: %v", err)
+		return
+	}
+
+	t.Logf("Verifying block persister files for %d blocks...", len(blockHeaders))
+
+	// Genesis script to identify genesis block
+	genesisScript := "04ffff001d0104455468652054696d65732030332f4a616e2f32303039204368616e63656c6c6f72206f6e" +
+		"206272696e6b206f66207365636f6e64206261696c6f757420666f722062616e6b73"
+
+	blocksVerified := 0
+	utxoAdditionsVerified := 0
+	utxoDeletionsVerified := 0
+	subtreeDataFilesVerified := 0
+
+	// Range through block headers in reverse order (oldest first)
+	for i := len(blockHeaders) - 1; i >= 0; i-- {
+		blockHeader := blockHeaders[i]
+		blockHash := blockHeader.Hash()
+		height := blockMetas[i].Height
+
+		block, err := node.BlockchainClient.GetBlock(ctx, blockHash)
+		if err != nil {
+			t.Errorf("Failed to get block %s: %v", blockHash, err)
+			continue
+		}
+
+		// Skip genesis block for persister checks
+		if block.CoinbaseTx.Inputs[0].UnlockingScript.String() == genesisScript {
+			continue
+		}
+
+		// Wait for block to be persisted (with timeout)
+		err = waitForBlockPersisted(ctx, blockStore, blockHash, 30*time.Second)
+		if err != nil {
+			t.Errorf("Block %s (height %d) was not persisted within timeout: %v", blockHash, height, err)
+			continue
+		}
+
+		// Verify block file exists and is readable
+		verifyBlockFile(t, ctx, blockStore, block)
+		blocksVerified++
+
+		// Verify subtree data files exist
+		for _, subtreeHash := range block.Subtrees {
+			if verifySubtreeDataFile(t, ctx, node.SubtreeStore, subtreeHash, blockHash) {
+				subtreeDataFilesVerified++
+			}
+		}
+
+		// Verify UTXO additions and deletions files
+		additionsOK, deletionsOK := verifyUTXOFiles(t, ctx, node, blockStore, block, height)
+		if additionsOK {
+			utxoAdditionsVerified++
+		}
+		if deletionsOK {
+			utxoDeletionsVerified++
+		}
+	}
+
+	t.Logf("✓ Block persister verification complete: %d blocks, %d utxo-additions, %d utxo-deletions, %d subtree-data files",
+		blocksVerified, utxoAdditionsVerified, utxoDeletionsVerified, subtreeDataFilesVerified)
+}
+
+// waitForBlockPersisted waits for a block file to exist in the blob store.
+func waitForBlockPersisted(ctx context.Context, blockStore blob.Store, blockHash *chainhash.Hash, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	checkInterval := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		exists, err := blockStore.Exists(ctx, blockHash.CloneBytes(), fileformat.FileTypeBlock)
+		if err == nil && exists {
+			return nil
+		}
+		time.Sleep(checkInterval)
+	}
+
+	return context.DeadlineExceeded
+}
+
+// verifyBlockFile verifies that the block file exists and can be read and parsed correctly.
+func verifyBlockFile(t *testing.T, ctx context.Context, blockStore blob.Store, block *model.Block) {
+	blockHash := block.Hash()
+
+	// Check block file exists
+	exists, err := blockStore.Exists(ctx, blockHash.CloneBytes(), fileformat.FileTypeBlock)
+	if err != nil {
+		t.Errorf("Failed to check if block file exists for %s: %v", blockHash, err)
+		return
+	}
+	if !exists {
+		t.Errorf("Block file does not exist for %s", blockHash)
+		return
+	}
+
+	// Read and verify block data can be parsed
+	blockData, err := blockStore.Get(ctx, blockHash.CloneBytes(), fileformat.FileTypeBlock)
+	if err != nil {
+		t.Errorf("Failed to read block data for %s: %v", blockHash, err)
+		return
+	}
+	if len(blockData) == 0 {
+		t.Errorf("Block data is empty for %s", blockHash)
+		return
+	}
+
+	// Verify the block data can be parsed as a valid block
+	parsedBlock, err := model.NewBlockFromBytes(blockData)
+	if err != nil {
+		t.Errorf("Failed to parse block data for %s: %v", blockHash, err)
+		return
+	}
+
+	// Verify parsed block hash matches
+	if !parsedBlock.Hash().IsEqual(blockHash) {
+		t.Errorf("Parsed block hash mismatch: expected %s, got %s", blockHash, parsedBlock.Hash())
+	}
+}
+
+// verifySubtreeDataFile verifies that the subtree data file exists.
+func verifySubtreeDataFile(t *testing.T, ctx context.Context, subtreeStore blob.Store, subtreeHash *chainhash.Hash, blockHash *chainhash.Hash) bool {
+	exists, err := subtreeStore.Exists(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtreeData)
+	if err != nil {
+		t.Errorf("Failed to check if subtree data file exists for %s in block %s: %v", subtreeHash, blockHash, err)
+		return false
+	}
+	if !exists {
+		t.Errorf("Subtree data file does not exist for %s in block %s", subtreeHash, blockHash)
+		return false
+	}
+	return true
+}
+
+// verifyUTXOFiles verifies that UTXO additions and deletions files exist and contain valid data.
+//
+//nolint:gocognit // complexity is acceptable for comprehensive verification
+func verifyUTXOFiles(t *testing.T, ctx context.Context, node *daemon.TestDaemon, blockStore blob.Store, block *model.Block, height uint32) (additionsOK, deletionsOK bool) {
+	blockHash := block.Hash()
+
+	// Wait for UTXO files to be persisted
+	deadline := time.Now().Add(30 * time.Second)
+	checkInterval := 500 * time.Millisecond
+
+	for time.Now().Before(deadline) {
+		additionsExists, err1 := blockStore.Exists(ctx, blockHash.CloneBytes(), fileformat.FileTypeUtxoAdditions)
+		deletionsExists, err2 := blockStore.Exists(ctx, blockHash.CloneBytes(), fileformat.FileTypeUtxoDeletions)
+
+		if err1 == nil && err2 == nil && additionsExists && deletionsExists {
+			break
+		}
+		time.Sleep(checkInterval)
+	}
+
+	// Verify UTXO additions file
+	additionsExists, err := blockStore.Exists(ctx, blockHash.CloneBytes(), fileformat.FileTypeUtxoAdditions)
+	if err != nil {
+		t.Errorf("Failed to check if utxo-additions file exists for block %s: %v", blockHash, err)
+	} else if !additionsExists {
+		t.Errorf("utxo-additions file does not exist for block %s", blockHash)
+	} else {
+		// Read and verify additions content
+		utxoSet, err := utxopersister.GetUTXOSet(ctx, node.Logger, node.Settings, blockStore, blockHash)
+		if err != nil {
+			t.Errorf("Failed to create UTXO set reader for block %s: %v", blockHash, err)
+		} else {
+			additionsReader, err := utxoSet.GetUTXOAdditionsReader(ctx)
+			if err != nil {
+				t.Errorf("Failed to get utxo-additions reader for block %s: %v", blockHash, err)
+			} else {
+				defer additionsReader.Close()
+				for {
+					utxoWrapper, err := utxopersister.NewUTXOWrapperFromReader(ctx, additionsReader)
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						t.Errorf("Failed to read UTXO wrapper from additions file for block %s: %v", blockHash, err)
+						break
+					}
+
+					// Verify height matches
+					if utxoWrapper.Height != height {
+						t.Errorf("UTXO height mismatch in block %s: expected %d, got %d", blockHash, height, utxoWrapper.Height)
+					}
+				}
+				additionsOK = true
+			}
+		}
+	}
+
+	// Verify UTXO deletions file
+	deletionsExists, err := blockStore.Exists(ctx, blockHash.CloneBytes(), fileformat.FileTypeUtxoDeletions)
+	if err != nil {
+		t.Errorf("Failed to check if utxo-deletions file exists for block %s: %v", blockHash, err)
+	} else if !deletionsExists {
+		t.Errorf("utxo-deletions file does not exist for block %s", blockHash)
+	} else {
+		// Read and verify deletions content
+		utxoSet, err := utxopersister.GetUTXOSet(ctx, node.Logger, node.Settings, blockStore, blockHash)
+		if err != nil {
+			t.Errorf("Failed to create UTXO set reader for deletions for block %s: %v", blockHash, err)
+		} else {
+			deletionsReader, err := utxoSet.GetUTXODeletionsReader(ctx)
+			if err != nil {
+				t.Errorf("Failed to get utxo-deletions reader for block %s: %v", blockHash, err)
+			} else {
+				defer deletionsReader.Close()
+				for {
+					deletion, err := utxopersister.NewUTXODeletionFromReader(deletionsReader)
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						break
+					}
+
+					// Check for EOF marker (32 zero bytes)
+					isEOFMarker := true
+					for _, b := range deletion.TxID[:] {
+						if b != 0 {
+							isEOFMarker = false
+							break
+						}
+					}
+					if isEOFMarker {
+						break
+					}
+				}
+				deletionsOK = true
+			}
+		}
+	}
+
+	return additionsOK, deletionsOK
 }

@@ -74,6 +74,7 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 
 	// Submit and mine parent
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, parent))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(parent, blockWait))
 	td.MineAndWait(t, 1)
 
 	_, err = td.BlockchainClient.GetBlockByHeight(td.Ctx, 3)
@@ -94,6 +95,7 @@ func testSameTxBothForks(t *testing.T, utxoStore string) {
 
 	// Submit and mine txOriginal
 	require.NoError(t, td.PropagationClient.ProcessTransaction(td.Ctx, txOriginal))
+	require.NoError(t, td.WaitForTransactionInBlockAssembly(txOriginal, blockWait))
 	td.MineAndWait(t, 1)
 
 	block4, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 4)

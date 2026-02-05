@@ -196,7 +196,14 @@ testall: test longtest sequentialtest
 smoketest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=5m -parallel 2 -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+
+# run legacy sync tests - tests teranode syncing with legacy svnode
+.PHONY: legacy-sync
+legacy-sync:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=15m -run 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates' 2>&1 | tee /tmp/teranode-test-results/legacy-sync-results.txt
 
 # run chain integrity tests - multi-node tests with deep chain verification
 # This test mines blocks across multiple nodes and verifies chain consistency
@@ -333,6 +340,14 @@ gen:
 	--go_opt=paths=source_relative \
 	--go-grpc_out=. \
 	--go-grpc_opt=paths=source_relative \
+	services/pruner/pruner_api/pruner_api.proto
+
+	protoc \
+	--proto_path=. \
+	--go_out=. \
+	--go_opt=paths=source_relative \
+	--go-grpc_out=. \
+	--go-grpc_opt=paths=source_relative \
 	util/kafka/kafka_message/kafka_messages.proto
 
 
@@ -349,6 +364,7 @@ clean_gen:
 	rm -f ./services/coinbase/coinbase_api/*.pb.go
 	rm -f ./services/legacy/peer_api/*.pb.go
 	rm -f ./services/p2p/p2p_api/*.pb.go
+	rm -f ./services/pruner/pruner_api/*.pb.go
 	rm -f ./model/*.pb.go
 	rm -f ./errors/*.pb.go
 	rm -f ./stores/utxo/*.pb.go
@@ -453,9 +469,6 @@ chain-integrity-test:
 
 	# Step 3: Build teranode image locally
 	@echo "Step 3: Building teranode image locally..."
-	@echo "  - Logging into AWS ECR..."
-	@aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com || (echo "  ✗ ECR login failed - skipping build"; exit 1)
-	@echo "  ✓ ECR login successful"
 	@echo "  - Building Docker image (this may take several minutes)..."
 	@docker build -t teranode:latest .
 	@echo "  ✓ Teranode Docker image built successfully"
@@ -726,17 +739,6 @@ clean-chain-integrity:
 	@echo "  ✓ Chain integrity test artifacts cleaned up."
 	@echo "  ✓ All containers stopped"
 	@echo "  ✓ All log files removed"
-
-# AWS ECR login for pulling required images
-.PHONY: ecr-login
-ecr-login:
-	@echo "🔐 AWS ECR Login"
-	@echo "=================="
-	@echo "  - Logging into AWS ECR (eu-north-1)..."
-	@aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 434394763103.dkr.ecr.eu-north-1.amazonaws.com
-	@echo "  ✓ ECR login completed successfully"
-	@echo "  - You can now pull ECR images"
-	@echo ""
 
 # Display hash analysis results from chainintegrity test
 .PHONY: show-hashes

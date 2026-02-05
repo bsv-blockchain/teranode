@@ -189,15 +189,8 @@ func TestMemory_TTLOperations(t *testing.T) {
 		t.Errorf("unexpected error on Set: %v", err)
 	}
 
-	// Get DAH
-	retrievedDAH, err := store.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-	if err != nil {
-		t.Errorf("unexpected error on GetDAH: %v", err)
-	}
-
-	if retrievedDAH != dah {
-		t.Errorf("expected DAH %v, got %v", dah, retrievedDAH)
-	}
+	// DAH is now managed centrally by pruner service, not by blob stores
+	// GetDAH removed from interface - use pruner service API to query DAH values
 
 	// Update DAH
 	newDAH := uint32(10)
@@ -207,15 +200,7 @@ func TestMemory_TTLOperations(t *testing.T) {
 		t.Errorf("unexpected error on SetDAH: %v", err)
 	}
 
-	// Verify updated DAH
-	retrievedDAH, err = store.GetDAH(context.Background(), key, fileformat.FileTypeTesting)
-	if err != nil {
-		t.Errorf("unexpected error on GetDAH: %v", err)
-	}
-
-	if retrievedDAH != newDAH {
-		t.Errorf("expected DAH %v, got %v", newDAH, retrievedDAH)
-	}
+	// DAH verification now done via pruner service in e2e tests
 }
 
 func TestMemory_Exists(t *testing.T) {
