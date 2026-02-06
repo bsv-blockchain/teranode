@@ -185,7 +185,7 @@ type Stats struct {
 	// EntriesCount is the current number of entries in the cache map.
 	// This includes both valid and stale entries.
 	// Use ValidEntriesCount for the actual number of readable entries.
-	EntriesCount uint64
+	// EntriesCount uint64
 
 	// ValidEntriesCount is the number of valid (readable) entries.
 	// This equals CurrentGenEntries + PreviousGenEntries.
@@ -783,7 +783,7 @@ func (b *bucketTrimmed) UpdateStats(s *Stats) {
 		validPreviousGenCount = b.previousGenCount - b.currentGenCount
 	}
 
-	s.EntriesCount += uint64(b.numberOfItems) // nolint:gosec
+	// s.EntriesCount += uint64(b.numberOfItems) // nolint:gosec
 	s.CurrentGenEntries += currentGen
 	s.PreviousGenEntries += validPreviousGenCount
 	s.ValidEntriesCount += currentGen + validPreviousGenCount
@@ -1202,7 +1202,7 @@ func (b *bucketPreallocated) UpdateStats(s *Stats) {
 		validPreviousGenCount = b.previousGenCount - b.currentGenCount
 	}
 
-	s.EntriesCount += uint64(len(b.m)) // nolint:gosec
+	// s.EntriesCount += uint64(len(b.m)) // nolint:gosec
 	s.CurrentGenEntries += currentGen
 	s.PreviousGenEntries += validPreviousGenCount
 	s.ValidEntriesCount += currentGen + validPreviousGenCount
@@ -1550,7 +1550,7 @@ func (b *bucketUnallocated) UpdateStats(s *Stats) {
 		validPreviousGenCount = b.previousGenCount - b.currentGenCount
 	}
 
-	s.EntriesCount += uint64(len(b.m))
+	// s.EntriesCount += uint64(len(b.m))
 	s.CurrentGenEntries += currentGen
 	s.PreviousGenEntries += validPreviousGenCount
 	s.ValidEntriesCount += currentGen + validPreviousGenCount

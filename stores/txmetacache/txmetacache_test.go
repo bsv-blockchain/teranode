@@ -568,8 +568,10 @@ func Test_TxMetaCache_GetCacheStats(t *testing.T) {
 	// Test empty cache stats
 	stats := cache.GetCacheStats()
 	require.NotNil(t, stats)
-	require.Equal(t, uint64(0), stats.EntriesCount)
 	require.Equal(t, uint64(0), stats.TotalElementsAdded)
+	require.Equal(t, uint64(0), stats.ValidEntriesCount)
+	require.Equal(t, uint64(0), stats.CurrentGenEntries)
+	require.Equal(t, uint64(0), stats.PreviousGenEntries)
 
 	// Add some entries and check stats again
 	hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
@@ -585,7 +587,9 @@ func Test_TxMetaCache_GetCacheStats(t *testing.T) {
 
 	stats = cache.GetCacheStats()
 	require.NotNil(t, stats)
-	require.Equal(t, uint64(1), stats.EntriesCount)
+	require.Equal(t, uint64(1), stats.ValidEntriesCount)
+	require.Equal(t, uint64(1), stats.CurrentGenEntries)
+	require.Equal(t, uint64(0), stats.PreviousGenEntries)
 }
 
 func Test_TxMetaCache_Health(t *testing.T) {

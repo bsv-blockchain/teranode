@@ -74,10 +74,25 @@ type TxMetaCache struct {
 // The metrics exposed through this struct are critical for operational monitoring,
 // capacity planning, and performance tuning of the transaction metadata cache.
 type CacheStats struct {
-	EntriesCount       uint64 // Number of entries currently in the cache; indicates current utilization
 	TrimCount          uint64 // Number of trim operations performed; indicates memory management activity
 	TotalMapSize       uint64 // Total size of all map buckets in the cache; reflects memory consumption
 	TotalElementsAdded uint64 // Cumulative count of all elements added to the cache; measures total throughput
+
+	// EntriesCount is the current number of entries in the cache map.
+	// This includes both valid and stale entries.
+	// Use ValidEntriesCount for the actual number of readable entries.
+	// EntriesCount uint64
+
+	// ValidEntriesCount is the number of valid (readable) entries.
+	// This equals CurrentGenEntries + PreviousGenEntries.
+	ValidEntriesCount uint64
+
+	// CurrentGenEntries is the count of entries written in the current generation.
+	CurrentGenEntries uint64
+
+	// PreviousGenEntries is the count of valid entries from the previous generation
+	// that have not yet been overwritten.
+	PreviousGenEntries uint64
 }
 
 // BucketType defines the allocation strategy for the cache's internal buckets.
@@ -179,7 +194,7 @@ func NewTxMetaCache(
 			case <-ticker.C:
 				cacheStats := m.GetCacheStats()
 				if prometheusBlockValidationTxMetaCacheInsertions != nil {
-					prometheusBlockValidationTxMetaCacheSize.Set(float64(cacheStats.EntriesCount))
+					// prometheusBlockValidationTxMetaCacheSize.Set(float64(cacheStats.EntriesCount))
 					prometheusBlockValidationTxMetaCacheInsertions.Set(float64(m.metrics.insertions.Load()))
 					prometheusBlockValidationTxMetaCacheHits.Set(float64(m.metrics.hits.Load()))
 					prometheusBlockValidationTxMetaCacheMisses.Set(float64(m.metrics.misses.Load()))
@@ -187,6 +202,9 @@ func NewTxMetaCache(
 					prometheusBlockValidationTxMetaCacheTrims.Set(float64(cacheStats.TrimCount))
 					prometheusBlockValidationTxMetaCacheMapSize.Set(float64(cacheStats.TotalMapSize))
 					prometheusBlockValidationTxMetaCacheTotalElementsAdded.Set(float64(cacheStats.TotalElementsAdded))
+					prometheusBlockValidationTxMetaCacheValidEntriesCount.Set(float64(cacheStats.ValidEntriesCount))
+					prometheusBlockValidationTxMetaCacheCurrentGenEntries.Set(float64(cacheStats.CurrentGenEntries))
+					prometheusBlockValidationTxMetaCachePreviousGenEntries.Set(float64(cacheStats.PreviousGenEntries))
 					prometheusBlockValidationTxMetaCacheHitOldTx.Set(float64(m.metrics.hitOldTx.Load()))
 				}
 			}
@@ -700,10 +718,13 @@ func (t *TxMetaCache) GetCacheStats() *CacheStats {
 	t.cache.UpdateStats(s)
 
 	return &CacheStats{
-		EntriesCount:       s.EntriesCount,
+		// EntriesCount:        s.EntriesCount,
 		TrimCount:          s.TrimCount,
 		TotalMapSize:       s.TotalMapSize,
 		TotalElementsAdded: s.TotalElementsAdded,
+		ValidEntriesCount:  s.ValidEntriesCount,
+		CurrentGenEntries:  s.CurrentGenEntries,
+		PreviousGenEntries: s.PreviousGenEntries,
 	}
 }
 
