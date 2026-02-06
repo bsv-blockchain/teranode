@@ -881,10 +881,10 @@ func TestImprovedCache_GenerationWraparound(t *testing.T) {
 // ValidEntriesCount == CurrentGenEntries + PreviousGenEntries, and valid count stays within capacity.
 func TestImprovedCache_OverfillGenerationStats(t *testing.T) {
 	const (
-		cacheSizeBytes = 64 * 1024   // 64KB total
-		keyLen         = 20          // bytes per key
-		valueLen       = 40          // bytes per value
-		overfillFactor = 2.5         // insert 2.5x estimated capacity
+		cacheSizeBytes = 64 * 1024 // 64KB total
+		keyLen         = 20        // bytes per key
+		valueLen       = 40        // bytes per value
+		overfillFactor = 2.5       // insert 2.5x estimated capacity
 	)
 	// Per-entry size: 4 (length) + key + value
 	entrySize := 4 + keyLen + valueLen
