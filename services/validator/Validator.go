@@ -58,6 +58,12 @@ const (
 	// Transactions exceeding this size are invalid by consensus rules post-Genesis.
 	MaxTxSizeConsensusAfterGenesis = 1_000_000_000 // 1 GB
 
+	// MaxTxSigopsCountConsensusBeforeGenesis defines the consensus limit for signature operations before Genesis.
+	// This matches C++ bitcoin-sv: MAX_TX_SIGOPS_COUNT_BEFORE_GENESIS in consensus/consensus.h
+	// Transactions exceeding this count are invalid by consensus rules pre-Genesis.
+	// After Genesis, sigops are unlimited.
+	MaxTxSigopsCountConsensusBeforeGenesis = 20_000
+
 	// MaxSatoshis defines the maximum number of satoshis that can exist in the Bitcoin SV ecosystem (21M BSV).
 	// This represents the absolute monetary supply limit, with each BSV consisting of 100,000,000 satoshis.
 	// Any transaction that would create more satoshis than this limit violates consensus rules and must be

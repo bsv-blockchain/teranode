@@ -242,7 +242,6 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 	}
 
 	// 3) check that each input value, as well as the sum, are in the allowed range of values (less than 21m coins)
-	// 5) None of the inputs have hash=0, N=–1 (coinbase transactions should not be relayed)
 	if err := tv.checkInputs(tx, blockHeight, validationOptions); err != nil {
 		return err
 	}
@@ -253,13 +252,29 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		return err
 	}
 
-	// 6) nLocktime is equal to INT_MAX, or nLocktime and nSequence values are satisfied according to MedianTimePast
+	// 5) Check that no inputs have null prevouts (hash=0, N=0xFFFFFFFF)
+	// This is a consensus check that prevents invalid input references
+	if err := tv.checkPrevOutputs(tx); err != nil {
+		return err
+	}
+
+	// 6) Consensus: Check signature operations count (pre-Genesis only)
+	// This check is ALWAYS enforced (even for block transactions) as it's a consensus rule.
+	// Before Genesis: limit is 20,000 sigops (counts only tx inputs/outputs, not P2SH redeem scripts)
+	// After Genesis: unlimited (no check needed)
+	// Matches C++ bitcoin-sv: CheckTransactionCommon in validation.cpp:561-567
+	if err := tv.checkConsensusSigops(tx, blockHeight); err != nil {
+		return err
+	}
+
+	// 7) nLocktime is equal to INT_MAX, or nLocktime and nSequence values are satisfied according to MedianTimePast
 	//    => checked by the node, we do not want to have to know the current block height
 
-	// 7) The transaction size in bytes is greater than or equal to 100
+	// 8) The transaction size in bytes is greater than or equal to 100
 	//    => This is a BCH only check, not applicable to BSV
 
-	// 8) The number of signature operations (SIGOPS) contained in the transaction is less than the signature operation limit
+	// 9) Policy: The number of signature operations (SIGOPS) contained in the transaction is less than the policy limit
+	// This is a policy check (not consensus) and only applies to mempool transactions.
 	if !validationOptions.SkipPolicyChecks {
 		if err := tv.sigOpsCheck(tx, blockHeight, utxoHeights, validationOptions); err != nil {
 			return err
@@ -429,6 +444,123 @@ func (tv *TxValidator) checkOutputs(tx *bt.Tx, blockHeight uint32, validationOpt
 
 	if total > MaxSatoshis {
 		return errors.NewTxInvalidError("transaction output total satoshis is too high")
+	}
+
+	// Consensus: After Genesis, P2SH outputs are not allowed in new transactions
+	// This check is ALWAYS enforced (for both block and mempool transactions) as it's a consensus rule.
+	// Matches C++ bitcoin-sv implementation: CheckRegularTransaction in validation.cpp:611-623
+	// where it checks: if (IsProtocolActive(era, ProtocolName::Genesis)) { check for P2SH outputs }
+	genesisActivationHeight := tv.settings.ChainCfgParams.GenesisActivationHeight
+	isPostGenesis := blockHeight >= genesisActivationHeight
+	if isPostGenesis {
+		for _, output := range tx.Outputs {
+			if output.LockingScript != nil && output.LockingScript.IsP2SH() {
+				return errors.NewTxInvalidError("bad-txns-vout-p2sh")
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkPrevOutputs validates that no transaction inputs have null prevouts.
+// A null prevout is one where the previous transaction ID is all zeros AND the output index is 0xFFFFFFFF.
+// This check is ALWAYS enforced (for both block and mempool transactions) as it's a consensus rule.
+// Matches C++ bitcoin-sv implementation: CheckRegularTransaction in validation.cpp:628-631
+// where it checks: if (txin.prevout.IsNull()) return error
+//
+// Parameters:
+//   - tx: The transaction to validate
+//
+// Returns:
+//   - error: Returns "bad-txns-prevout-null" if a null prevout is found, nil otherwise
+func (tv *TxValidator) checkPrevOutputs(tx *bt.Tx) error {
+	// Consensus check: No null prevouts allowed
+	// Matches C++ bitcoin-sv implementation: CheckRegularTransaction in validation.cpp:628-631
+	// A prevout is null if: txid.IsNull() && n == uint32_t(-1)
+	// In Go: all bytes of PreviousTxID are zero AND PreviousTxOutIndex is 0xFFFFFFFF (4294967295)
+
+	for _, input := range tx.Inputs {
+		// Check if this is a null prevout
+		// txid is all zeros
+		previousTxID := input.PreviousTxID()
+		isNullTxID := true
+		for _, b := range previousTxID {
+			if b != 0 {
+				isNullTxID = false
+				break
+			}
+		}
+
+		// output index is 0xFFFFFFFF (max uint32)
+		isMaxOutIndex := input.PreviousTxOutIndex == 0xFFFFFFFF
+
+		// If both conditions are true, this is a null prevout
+		if isNullTxID && isMaxOutIndex {
+			return errors.NewTxInvalidError("bad-txns-prevout-null")
+		}
+	}
+
+	return nil
+}
+
+// checkConsensusSigops validates that the transaction's signature operations count complies with consensus limits.
+// This check is ONLY for pre-Genesis transactions and ALWAYS runs (even with SkipPolicyChecks=true).
+// After Genesis, sigops are unlimited so this check is skipped.
+//
+// This implements the consensus check from C++ bitcoin-sv: CheckTransactionCommon in validation.cpp:561-567
+// where it counts sigops using GetSigOpCountWithoutP2SH (does NOT include P2SH redeem scripts).
+//
+// Key differences from policy sigops check:
+// - This is a CONSENSUS rule (always enforced), policy check is optional
+// - This counts WITHOUT P2SH redeem scripts (doesn't need UTXO data)
+// - This uses consensus limit (20,000), policy check uses configurable limit
+// - This only applies pre-Genesis, policy check can apply at any height
+//
+// Parameters:
+//   - tx: The transaction to validate
+//   - blockHeight: Current block height to determine if Genesis is active
+//
+// Returns:
+//   - error: Returns "bad-txn-sigops" if sigops exceed consensus limit, nil otherwise
+func (tv *TxValidator) checkConsensusSigops(tx *bt.Tx, blockHeight uint32) error {
+	// Consensus check: Only applies before Genesis (after Genesis, sigops are unlimited)
+	// Matches C++ bitcoin-sv implementation: CheckTransactionCommon in validation.cpp:561-567
+	genesisActivationHeight := tv.settings.ChainCfgParams.GenesisActivationHeight
+	isPostGenesis := blockHeight >= genesisActivationHeight
+
+	// After Genesis, sigops are unlimited, no consensus check needed
+	if isPostGenesis {
+		return nil
+	}
+
+	// Count sigops WITHOUT P2SH (only in transaction inputs and outputs)
+	// This matches C++ GetSigOpCountWithoutP2SH behavior
+	var totalSigOps uint64 = 0
+
+	// Count sigops in transaction inputs (unlocking scripts)
+	for _, input := range tx.Inputs {
+		sigOps, err := tv.countSigOpsInScript(input.UnlockingScript, false, false)
+		if err != nil {
+			// If we can't count sigops, treat it as exceeding the limit
+			return errors.NewTxInvalidError("bad-txn-sigops")
+		}
+		totalSigOps += sigOps
+	}
+
+	// Count sigops in transaction outputs (locking scripts)
+	for _, output := range tx.Outputs {
+		sigOps, err := tv.countSigOpsInScript(output.LockingScript, false, false)
+		if err != nil {
+			// If we can't count sigops, treat it as exceeding the limit
+			return errors.NewTxInvalidError("bad-txn-sigops")
+		}
+		totalSigOps += sigOps
+	}
+
+	// Check against consensus limit (20,000 sigops before Genesis)
+	if totalSigOps > MaxTxSigopsCountConsensusBeforeGenesis {
+		return errors.NewTxInvalidError("bad-txn-sigops")
 	}
 
 	return nil
