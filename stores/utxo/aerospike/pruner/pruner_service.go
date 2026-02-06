@@ -29,6 +29,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/text/language"
+	"golang.org/x/text/message"
 )
 
 // Ensure Store implements the Pruner Service interface
@@ -98,6 +100,7 @@ type Service struct {
 	progressLogInterval            time.Duration
 	partitionQueries               int     // Number of parallel partition queries (0 = auto-detect)
 	connectionPoolWarningThreshold float64 // Threshold for connection pool auto-adjustment (0.0-1.0)
+	utxoSetTTL                     bool    // Use TTL expiration instead of hard delete
 
 	// Cached field names (avoid repeated String() allocations in hot paths)
 	fieldTxID, fieldUtxos, fieldInputs, fieldDeletedChildren, fieldExternal        string
@@ -203,6 +206,7 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 		progressLogInterval:            tSettings.Pruner.UTXOProgressLogInterval,
 		partitionQueries:               tSettings.Pruner.UTXOPartitionQueries,
 		connectionPoolWarningThreshold: tSettings.Pruner.ConnectionPoolWarningThreshold,
+		utxoSetTTL:                     tSettings.Pruner.UTXOSetTTL,
 		fieldTxID:                      fields.TxID.String(),
 		fieldUtxos:                     fields.Utxos.String(),
 		fieldInputs:                    fields.Inputs.String(),
@@ -568,13 +572,20 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, n
 		tpsStr = fmt.Sprintf("%.2f records/sec", tps)
 	}
 
+	p := message.NewPrinter(language.English)
+	formattedTotal := p.Sprintf("%d", totalProcessed)
+	formattedSkipped := p.Sprintf("%d", totalSkipped)
+
+	var modeStr string
 	if s.defensiveEnabled {
-		s.logger.Infof("Completed parallel pruning for block height %d in %v: pruned %d records, skipped %d records (%s, defensive logic)",
-			blockHeight, elapsed, totalProcessed, totalSkipped, tpsStr)
-	} else {
-		s.logger.Infof("Completed parallel pruning for block height %d in %v: pruned %d records (%s)",
-			blockHeight, elapsed, totalProcessed, tpsStr)
+		modeStr = ", defensive logic"
 	}
+	if s.utxoSetTTL {
+		modeStr += ", TTL mode"
+	}
+
+	s.logger.Infof("Completed parallel pruning for block height %d in %v: pruned %s records, skipped %s records (%s%s)",
+		blockHeight, elapsed, formattedTotal, formattedSkipped, tpsStr, modeStr)
 
 	prometheusUtxoCleanupBatch.Observe(float64(elapsed.Microseconds()) / 1_000_000)
 
@@ -607,6 +618,10 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32) (int64, error) 
 	} else {
 		s.logger.Infof("Pruner triggered for height %d with %d partition workers",
 			blockHeight, numWorkers)
+	}
+
+	if s.utxoSetTTL {
+		s.logger.Infof("Pruner operating in TTL mode (records expire via nsup)")
 	}
 
 	// Always use partition-based approach (even if numWorkers=1)
@@ -1264,11 +1279,21 @@ func (s *Service) executeBatchDeletions(ctx context.Context, keys []*aerospike.K
 		return nil
 	}
 
-	// Create batch delete records
-	batchDeletePolicy := aerospike.NewBatchDeletePolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, len(keys))
-	for i, key := range keys {
-		batchRecords[i] = aerospike.NewBatchDelete(batchDeletePolicy, key)
+
+	if s.utxoSetTTL {
+		ttlWritePolicy := aerospike.NewBatchWritePolicy()
+		ttlWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+		ttlWritePolicy.Expiration = 1
+
+		for i, key := range keys {
+			batchRecords[i] = aerospike.NewBatchWrite(ttlWritePolicy, key, aerospike.TouchOp())
+		}
+	} else {
+		batchDeletePolicy := aerospike.NewBatchDeletePolicy()
+		for i, key := range keys {
+			batchRecords[i] = aerospike.NewBatchDelete(batchDeletePolicy, key)
+		}
 	}
 
 	// Check context before expensive operation
