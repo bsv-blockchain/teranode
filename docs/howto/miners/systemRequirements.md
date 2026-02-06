@@ -137,13 +137,14 @@ Teranode's P2P service uses QUIC transport via libp2p, which requires increased 
 **Apply these settings on all hosts running Teranode:**
 
 ```bash
-# Temporary (until reboot)
-sysctl -w net.core.rmem_max=7500000
-sysctl -w net.core.wmem_max=7500000
+# Create a dedicated sysctl configuration file
+cat << 'EOF' | sudo tee /etc/sysctl.d/99-teranode.conf
+net.core.rmem_max=7500000
+net.core.wmem_max=7500000
+EOF
 
-# Permanent (add to /etc/sysctl.conf or /etc/sysctl.d/99-teranode.conf)
-echo "net.core.rmem_max=7500000" >> /etc/sysctl.conf
-echo "net.core.wmem_max=7500000" >> /etc/sysctl.conf
+# Apply immediately
+sudo sysctl --system
 ```
 
 **For Docker deployments:** These settings must be applied on the host machine, not inside containers. Containers inherit the host's kernel limits.
