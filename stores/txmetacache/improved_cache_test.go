@@ -876,6 +876,132 @@ func TestImprovedCache_GenerationWraparound(t *testing.T) {
 		stats.ValidEntriesCount, stats.TotalElementsAdded)
 }
 
+// TestImprovedCache_OverfillGenerationStats verifies that when we add more elements than
+// the cache can hold (e.g. 2.5x capacity), generation and valid-entry stats remain consistent:
+// ValidEntriesCount == CurrentGenEntries + PreviousGenEntries, and valid count stays within capacity.
+func TestImprovedCache_OverfillGenerationStats(t *testing.T) {
+	const (
+		cacheSizeBytes = 64 * 1024   // 64KB total
+		keyLen         = 20          // bytes per key
+		valueLen       = 40          // bytes per value
+		overfillFactor = 2.5         // insert 2.5x estimated capacity
+	)
+	// Per-entry size: 4 (length) + key + value
+	entrySize := 4 + keyLen + valueLen
+	// Conservative capacity: total bytes / entry size, spread across buckets (lower bound)
+	estimatedCapacity := (cacheSizeBytes / entrySize) * 3 / 4 // leave margin for chunk alignment
+	numToInsert := int(float64(estimatedCapacity) * overfillFactor)
+	if numToInsert < 100 {
+		numToInsert = 100
+	}
+
+	bucketTypes := []struct {
+		name string
+		typ  BucketType
+	}{
+		{"Unallocated", Unallocated},
+		{"Trimmed", Trimmed},
+		{"Preallocated", Preallocated},
+	}
+
+	for _, bt := range bucketTypes {
+		t.Run(bt.name, func(t *testing.T) {
+			cache, err := New(cacheSizeBytes, bt.typ)
+			require.NoError(t, err)
+			defer cache.Reset()
+
+			// Insert more than the cache can hold (2.5x estimated capacity)
+			for i := 0; i < numToInsert; i++ {
+				key := make([]byte, keyLen)
+				value := make([]byte, valueLen)
+				binary.BigEndian.PutUint32(key[0:4], uint32(i))
+				binary.BigEndian.PutUint32(value[0:4], uint32(i))
+				err := cache.Set(key, value)
+				if err != nil {
+					t.Logf("Set failed at i=%d: %v (may be expected for very small caches)", i, err)
+					break
+				}
+			}
+
+			var stats Stats
+			cache.UpdateStats(&stats)
+
+			// Invariant: valid entries must equal current gen + previous gen
+			require.Equal(t, stats.CurrentGenEntries+stats.PreviousGenEntries, stats.ValidEntriesCount,
+				"ValidEntriesCount should equal CurrentGenEntries + PreviousGenEntries")
+
+			// For Trimmed bucket, TotalElementsAdded is populated; it should reflect overfill
+			if bt.typ == Trimmed {
+				require.GreaterOrEqual(t, stats.TotalElementsAdded, uint64(numToInsert*9/10),
+					"TotalElementsAdded should reflect overfill (at least 90%% of attempted inserts)")
+			}
+
+			// Valid entries cannot exceed a reasonable upper bound (capacity is finite)
+			// Allow up to 2x estimated capacity due to chunk alignment and bucket distribution
+			maxReasonableValid := uint64(estimatedCapacity) * 2
+			require.LessOrEqual(t, stats.ValidEntriesCount, maxReasonableValid,
+				"ValidEntriesCount should be bounded by cache capacity (got %d, max reasonable %d)",
+				stats.ValidEntriesCount, maxReasonableValid)
+
+			t.Logf("Overfill stats - ValidEntriesCount: %d, CurrentGen: %d, PreviousGen: %d, TotalElementsAdded: %d",
+				stats.ValidEntriesCount, stats.CurrentGenEntries, stats.PreviousGenEntries, stats.TotalElementsAdded)
+		})
+	}
+}
+
+// TestImprovedCache_OverfillRecentKeysRetrievable verifies that after overfilling (2.5x capacity),
+// recently inserted keys are still retrievable and very old keys may be evicted.
+func TestImprovedCache_OverfillRecentKeysRetrievable(t *testing.T) {
+	const (
+		cacheSizeBytes = 64 * 1024
+		keyLen         = 20
+		valueLen       = 40
+		overfillFactor = 2.5
+	)
+	entrySize := 4 + keyLen + valueLen
+	estimatedCapacity := (cacheSizeBytes / entrySize) * 3 / 4
+	numToInsert := int(float64(estimatedCapacity) * overfillFactor)
+	if numToInsert < 200 {
+		numToInsert = 200
+	}
+
+	cache, err := New(cacheSizeBytes, Unallocated)
+	require.NoError(t, err)
+	defer cache.Reset()
+
+	// Insert with unique keys
+	for i := 0; i < numToInsert; i++ {
+		key := make([]byte, keyLen)
+		value := make([]byte, valueLen)
+		binary.BigEndian.PutUint32(key[0:4], uint32(i))
+		binary.BigEndian.PutUint32(value[0:4], uint32(i))
+		_ = cache.Set(key, value)
+	}
+
+	var stats Stats
+	cache.UpdateStats(&stats)
+	require.Equal(t, stats.CurrentGenEntries+stats.PreviousGenEntries, stats.ValidEntriesCount)
+
+	// Recent keys (last 50) should still be in cache
+	for i := numToInsert - 50; i < numToInsert; i++ {
+		key := make([]byte, keyLen)
+		binary.BigEndian.PutUint32(key[0:4], uint32(i))
+		var dst []byte
+		err := cache.Get(&dst, key)
+		require.NoError(t, err, "recent key %d should be present after overfill", i)
+		require.GreaterOrEqual(t, len(dst), 4)
+		require.Equal(t, uint32(i), binary.BigEndian.Uint32(dst[0:4]))
+	}
+
+	// Very old keys (first 20) may or may not be evicted; we only check that Get does not crash
+	for i := 0; i < 20; i++ {
+		key := make([]byte, keyLen)
+		binary.BigEndian.PutUint32(key[0:4], uint32(i))
+		var dst []byte
+		_ = cache.Get(&dst, key) // may or may not find
+	}
+}
+
 // TestImprovedCache_CleanLockedMapEdgeCases tests edge cases in cleanLockedMap
 func TestImprovedCache_CleanLockedMapEdgeCases(t *testing.T) {
 	tests := []struct {
