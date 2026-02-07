@@ -133,7 +133,7 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 
 	// Start teranode with legacy enabled
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
+		EnableRPC: true,
 		// EnableP2P:       true,
 		EnableValidator: true,
 		// PreserveDataDir:   true,
@@ -180,7 +180,7 @@ func TestSVNodeSyncFromTeranode(t *testing.T) {
 	td.ResetServiceManagerContext(t)
 
 	td = daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
+		EnableRPC: true,
 		// EnableP2P:       true,
 		EnableValidator: true,
 		// PreserveDataDir:   true,
