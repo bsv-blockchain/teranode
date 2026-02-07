@@ -726,10 +726,10 @@ func TestUpdateBytesReceived(t *testing.T) {
 
 // Constants for handler tests
 const (
-	testPeerIDStr1       = "peer-1"
-	testPeerIDStr2       = "peer-2"
-	testAssetURL         = "http://example.com"
-	testPropagationURL   = "http://propagation.example.com"
+	testPeerIDStr1     = "peer-1"
+	testPeerIDStr2     = "peer-2"
+	testAssetURL       = "http://example.com"
+	testPropagationURL = "http://propagation.example.com"
 )
 
 // --- RecordBytesDownloaded gRPC tests ---
