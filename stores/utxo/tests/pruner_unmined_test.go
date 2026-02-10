@@ -118,7 +118,7 @@ func TestStoreAgnosticPreserveParentsOfOldUnminedTransactions(t *testing.T) {
 			require.Len(t, unmined, 8, "Should have 8 unmined transactions initially")
 
 			// Run parent preservation using the store-agnostic function
-			processedCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, currentBlockHeight, settings, logger)
+			processedCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, currentBlockHeight, "<test-hash>", settings, logger)
 			require.NoError(t, err, "Parent preservation should not return error")
 
 			// Verify processed count - only transactions older than cutoff should be processed
@@ -153,7 +153,7 @@ func TestStoreAgnosticPreserveParentsOfOldUnminedTransactions(t *testing.T) {
 			}
 
 			// Test edge case: run preservation again - should still process the same old transactions
-			processedCount2, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, currentBlockHeight, settings, logger)
+			processedCount2, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, currentBlockHeight, "<test-hash>", settings, logger)
 			require.NoError(t, err, "Second preservation should not return error")
 			assert.Equal(t, expectedProcessedCount, processedCount2, "Second preservation should process the same old transactions again")
 
@@ -180,7 +180,7 @@ func TestStoreAgnosticPreserveParentsOfOldUnminedTransactions_EdgeCases(t *testi
 				store := tc.createStore(t, ctx, logger)
 
 				// Test cleanup with no unmined transactions
-				cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 10, settings, logger)
+				cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 10, "<test-hash>", settings, logger)
 				require.NoError(t, err)
 				assert.Equal(t, 0, cleanupCount, "Should find nothing to clean in empty store")
 			})
@@ -189,7 +189,7 @@ func TestStoreAgnosticPreserveParentsOfOldUnminedTransactions_EdgeCases(t *testi
 				store := tc.createStore(t, ctx, logger)
 
 				// Test cleanup when current block height is too low (less than retention period)
-				cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 3, settings, logger) // 3 < 5 (retention)
+				cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 3, "<test-hash>", settings, logger) // 3 < 5 (retention)
 				require.NoError(t, err)
 				assert.Equal(t, 0, cleanupCount, "Should not clean anything when block height < retention period")
 			})
@@ -207,7 +207,7 @@ func TestStoreAgnosticPreserveParentsOfOldUnminedTransactions_EdgeCases(t *testi
 					require.NoError(t, err)
 				}
 
-				cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 10, settings, logger)
+				cleanupCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 10, "<test-hash>", settings, logger)
 				require.NoError(t, err)
 				assert.Equal(t, 0, cleanupCount, "Should not clean transactions that are newer than cutoff")
 
@@ -306,7 +306,7 @@ func TestCleanupWithMixedTransactionTypes(t *testing.T) {
 
 			// Run parent preservation (current height 10, retention 3, cutoff = 7)
 			// Only the old unmined transaction at height 2 should have its parents preserved
-			processedCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 10, settings, logger)
+			processedCount, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 10, "<test-hash>", settings, logger)
 			require.NoError(t, err)
 			assert.Equal(t, 1, processedCount, "Should process 1 old unmined transaction for parent preservation")
 

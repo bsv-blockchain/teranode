@@ -22,7 +22,7 @@ func TestPreserveParentsOfOldUnminedTransactions_EarlyReturn(t *testing.T) {
 	mockStore := new(MockUtxostore)
 
 	// Test early return when block height is less than retention
-	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 5, settings, logger)
+	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 5, "<test-hash>", settings, logger)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count)
@@ -45,7 +45,7 @@ func TestCleanupCutoffCalculation(t *testing.T) {
 	mockIter.On("Close").Return(nil)
 	mockStore.On("GetUnminedTxIterator").Return(mockIter, nil)
 
-	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 15, settings, logger)
+	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 15, "<test-hash>", settings, logger)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count)
@@ -64,7 +64,7 @@ func TestPreserveParentsOfOldUnminedTransactions_StorageError(t *testing.T) {
 	mockStore.On("GetUnminedTxIterator").
 		Return((*MockUnminedTxIterator)(nil), errors.NewStorageError("storage error"))
 
-	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, settings, logger)
+	count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, "<test-hash>", settings, logger)
 
 	assert.Error(t, err)
 	assert.Equal(t, 0, count)

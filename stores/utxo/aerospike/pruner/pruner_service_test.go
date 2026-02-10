@@ -82,7 +82,7 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 		pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(pruneCtx, 1)
+		recordsProcessed, err := service.Prune(pruneCtx, 1, "<test-hash>")
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -98,13 +98,13 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 
 		pruneCtx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel1()
-		recordsProcessed, err := service.Prune(pruneCtx1, 1)
+		recordsProcessed, err := service.Prune(pruneCtx1, 1, "<test-hash>")
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
 		pruneCtx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel2()
-		recordsProcessed, err = service.Prune(pruneCtx2, 2)
+		recordsProcessed, err = service.Prune(pruneCtx2, 2, "<test-hash>")
 		require.NoError(t, err)
 		require.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -121,7 +121,7 @@ func TestCleanupServiceLogicWithoutProcessor(t *testing.T) {
 		// Prune at multiple heights sequentially
 		for height := uint32(1); height <= 4; height++ {
 			pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			recordsProcessed, err := service.Prune(pruneCtx, height)
+			recordsProcessed, err := service.Prune(pruneCtx, height, "<test-hash>")
 			cancel()
 			require.NoError(t, err)
 			require.GreaterOrEqual(t, recordsProcessed, int64(0))
@@ -385,7 +385,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel1()
 
-	recordsProcessed, err := service.Prune(ctx1, 1)
+	recordsProcessed, err := service.Prune(ctx1, 1, "<test-hash>")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
@@ -420,7 +420,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel2()
 
-	recordsProcessed, err = service.Prune(ctx2, 2)
+	recordsProcessed, err = service.Prune(ctx2, 2, "<test-hash>")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
@@ -433,7 +433,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	ctx3, cancel3 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel3()
 
-	recordsProcessed, err = service.Prune(ctx3, 3)
+	recordsProcessed, err = service.Prune(ctx3, 3, "<test-hash>")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
@@ -460,7 +460,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	ctx4, cancel4 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel4()
 
-	recordsProcessed, err = service.Prune(ctx4, 4)
+	recordsProcessed, err = service.Prune(ctx4, 4, "<test-hash>")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
@@ -609,7 +609,7 @@ func TestCleanupWithBlockPersisterCoordination(t *testing.T) {
 		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer pruneCancel()
 
-		recordsProcessed, err := service.Prune(pruneCtx, 200)
+		recordsProcessed, err := service.Prune(pruneCtx, 200, "<test-hash>")
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 
@@ -674,7 +674,7 @@ func TestCleanupWithBlockPersisterCoordination(t *testing.T) {
 		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer pruneCancel()
 
-		recordsProcessed, err := service.Prune(pruneCtx, 200)
+		recordsProcessed, err := service.Prune(pruneCtx, 200, "<test-hash>")
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -734,7 +734,7 @@ func TestCleanupWithBlockPersisterCoordination(t *testing.T) {
 		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer pruneCancel()
 
-		recordsProcessed, err := service.Prune(pruneCtx, 100)
+		recordsProcessed, err := service.Prune(pruneCtx, 100, "<test-hash>")
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -790,7 +790,7 @@ func TestCleanupWithBlockPersisterCoordination(t *testing.T) {
 		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer pruneCancel()
 
-		recordsProcessed, err := service.Prune(pruneCtx, 100)
+		recordsProcessed, err := service.Prune(pruneCtx, 100, "<test-hash>")
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -854,7 +854,7 @@ func TestSetPersistedHeightGetter(t *testing.T) {
 	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer pruneCancel()
 
-	recordsProcessed, err := service.Prune(pruneCtx, 200)
+	recordsProcessed, err := service.Prune(pruneCtx, 200, "<test-hash>")
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 }

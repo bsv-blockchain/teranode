@@ -138,7 +138,7 @@ func TestService_PruneValidation(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -156,7 +156,7 @@ func TestService_PruneValidation(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 0)
+		recordsProcessed, err := service.Prune(ctx, 0, "<test-hash>")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "Cannot prune at block height 0")
 		assert.Equal(t, int64(0), recordsProcessed)
@@ -175,7 +175,7 @@ func TestService_PruneValidation(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -195,7 +195,7 @@ func TestService_Prune(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -213,7 +213,7 @@ func TestService_Prune(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -239,20 +239,20 @@ func TestService_PruneExecution(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 
 		// Verify logging
-		assert.GreaterOrEqual(t, len(loggedMessages), 2)
+		assert.GreaterOrEqual(t, len(loggedMessages), 1)
 		found := false
 		for _, msg := range loggedMessages {
-			if strings.Contains(msg, "Starting pruner for block height") {
+			if strings.Contains(msg, "phase 2: starting cleanup scan") {
 				found = true
 				break
 			}
 		}
-		assert.True(t, found, "Expected to find 'Starting pruner' in logged messages")
+		assert.True(t, found, "Expected to find 'starting cleanup scan' in logged messages")
 	})
 
 	t.Run("PruneWithNoRecords", func(t *testing.T) {
@@ -274,7 +274,7 @@ func TestService_PruneExecution(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -299,7 +299,7 @@ func TestService_PruneExecution(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // Cancel immediately
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		assert.Error(t, err)
 		assert.Equal(t, int64(0), recordsProcessed)
 	})
@@ -319,7 +319,7 @@ func TestDeleteTombstoned(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -343,7 +343,7 @@ func TestDeleteTombstoned(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		// The mock may or may not propagate the error depending on driver behavior
 		// Just verify the operation completes
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
@@ -363,7 +363,7 @@ func TestDeleteTombstoned(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 4294967295) // Max uint32
+		recordsProcessed, err := service.Prune(ctx, 4294967295, "<test-hash>") // Max uint32
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -396,7 +396,7 @@ func TestService_IntegrationTests(t *testing.T) {
 		pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer pruneCancel()
 
-		recordsProcessed, err := service.Prune(pruneCtx, 100)
+		recordsProcessed, err := service.Prune(pruneCtx, 100, "<test-hash>")
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -439,7 +439,7 @@ func TestService_EdgeCases(t *testing.T) {
 		defer cancel()
 
 		for i := uint32(1); i <= 10; i++ {
-			recordsProcessed, err := service.Prune(ctx, i)
+			recordsProcessed, err := service.Prune(ctx, i, "<test-hash>")
 			assert.NoError(t, err)
 			assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 		}
@@ -464,7 +464,7 @@ func TestService_EdgeCases(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 4294967295) // Max uint32
+		recordsProcessed, err := service.Prune(ctx, 4294967295, "<test-hash>") // Max uint32
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -491,7 +491,7 @@ func TestService_EdgeCases(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -536,7 +536,7 @@ func TestSQLCleanupWithBlockPersisterCoordination(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 500)
+		recordsProcessed, err := service.Prune(ctx, 500, "<test-hash>")
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -571,7 +571,7 @@ func TestSQLCleanupWithBlockPersisterCoordination(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 100)
+		recordsProcessed, err := service.Prune(ctx, 100, "<test-hash>")
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
@@ -601,7 +601,7 @@ func TestSQLCleanupWithBlockPersisterCoordination(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 
-		recordsProcessed, err := service.Prune(ctx, 150)
+		recordsProcessed, err := service.Prune(ctx, 150, "<test-hash>")
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})

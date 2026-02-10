@@ -100,7 +100,7 @@ func TestExternalTransactionPruning(t *testing.T) {
 
 	// Trigger cleanup at height 5
 	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	recordsProcessed, err := service.Prune(pruneCtx, 5)
+	recordsProcessed, err := service.Prune(pruneCtx, 5, "<test-hash>")
 	cancel()
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
@@ -190,7 +190,7 @@ func TestExternalTransactionOutputsOnlyPruning(t *testing.T) {
 
 	// Trigger cleanup at height 3
 	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	recordsProcessed, err := service.Prune(pruneCtx, 3)
+	recordsProcessed, err := service.Prune(pruneCtx, 3, "<test-hash>")
 	cancel()
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
@@ -315,7 +315,7 @@ func TestMultiRecordExternalTransactionPruning(t *testing.T) {
 
 	// Trigger cleanup at height 10
 	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	recordsProcessed, err := service.Prune(pruneCtx, 10)
+	recordsProcessed, err := service.Prune(pruneCtx, 10, "<test-hash>")
 	cancel()
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
@@ -408,7 +408,7 @@ func TestExternalFileAlreadyDeleted(t *testing.T) {
 
 	// Trigger cleanup - should handle missing file gracefully
 	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	recordsProcessed, err := service.Prune(pruneCtx, 7)
+	recordsProcessed, err := service.Prune(pruneCtx, 7, "<test-hash>")
 	cancel()
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
@@ -516,7 +516,7 @@ func TestMixedExternalAndNormalTransactions(t *testing.T) {
 
 	// Trigger cleanup at height 15
 	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	recordsProcessed, err := service.Prune(pruneCtx, 15)
+	recordsProcessed, err := service.Prune(pruneCtx, 15, "<test-hash>")
 	cancel()
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))

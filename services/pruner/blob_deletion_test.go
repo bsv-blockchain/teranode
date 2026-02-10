@@ -282,7 +282,7 @@ func TestBlobDeletionSchedulingAndExecution(t *testing.T) {
 
 	// Process deletions at height 10
 	t.Log("Processing deletions at height 10")
-	server.processBlobDeletionsAtHeight(10)
+	server.processBlobDeletionsAtHeight(10, nil)
 
 	// Wait for completion via observer
 	event, err := observer.waitFor(5 * time.Second)
@@ -318,7 +318,7 @@ func TestBlobDeletionSchedulingAndExecution(t *testing.T) {
 
 	// Process deletions at height 20
 	t.Log("Processing deletions at height 20")
-	server.processBlobDeletionsAtHeight(20)
+	server.processBlobDeletionsAtHeight(20, nil)
 
 	// Wait for completion
 	event, err = observer.waitFor(5 * time.Second)
@@ -408,7 +408,7 @@ func TestBlobDeletionIdempotency(t *testing.T) {
 	t.Logf("Scheduled deletion of already-deleted blob, id=%d", id)
 
 	// Process deletions (should handle gracefully)
-	server.processBlobDeletionsAtHeight(10)
+	server.processBlobDeletionsAtHeight(10, nil)
 
 	// Wait for completion (blob already deleted, so it should succeed idempotently)
 	event, err := observer.waitFor(5 * time.Second)
