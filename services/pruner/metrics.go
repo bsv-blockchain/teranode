@@ -8,10 +8,15 @@ import (
 )
 
 var (
-	prunerDuration  *prometheus.HistogramVec
-	prunerSkipped   *prometheus.CounterVec
-	prunerProcessed prometheus.Counter
-	prunerErrors    *prometheus.CounterVec
+	prunerDuration *prometheus.HistogramVec
+	prunerSkipped  *prometheus.CounterVec
+	prunerErrors   *prometheus.CounterVec
+
+	// Pruner operation metrics
+	prunerUpdatingParents  prometheus.Counter
+	prunerDeletingChildren prometheus.Counter
+	prunerCurrentHeight    prometheus.Gauge
+	prunerActive           prometheus.Gauge
 
 	// Blob deletion metrics
 	blobDeletionScheduledTotal  *prometheus.CounterVec
@@ -55,19 +60,40 @@ func _initPrometheusMetrics() {
 		[]string{"reason"}, // "not_running", "no_new_height", "already_in_progress"
 	)
 
-	prunerProcessed = promauto.NewCounter(
-		prometheus.CounterOpts{
-			Name: "pruner_processed_total",
-			Help: "Total number of successful pruner operations",
-		},
-	)
-
 	prunerErrors = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "pruner_errors_total",
 			Help: "Total number of pruner errors",
 		},
 		[]string{"operation"}, // "preserve_parents", "dah_pruner", "poll"
+	)
+
+	prunerUpdatingParents = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pruner_updating_parents_total",
+			Help: "Total number of unmined transactions whose parents were preserved",
+		},
+	)
+
+	prunerDeletingChildren = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Name: "pruner_deleting_children_total",
+			Help: "Total number of records deleted by the DAH pruner",
+		},
+	)
+
+	prunerCurrentHeight = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "pruner_current_height",
+			Help: "Current block height reached by the pruner",
+		},
+	)
+
+	prunerActive = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "pruner_active",
+			Help: "Whether the pruner is currently active (1) or idle (0)",
+		},
 	)
 
 	// Blob deletion metrics

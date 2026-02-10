@@ -47,7 +47,7 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 
 	t.Run("early return when block height too low", func(t *testing.T) {
 		mockStore := new(MockUtxostore)
-		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 3, tSettings, logger)
+		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 3, "<test-hash>", tSettings, logger)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, count)
 		// Should not call any store methods
@@ -59,7 +59,7 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 		mockStore.On("GetUnminedTxIterator").
 			Return((*MockUnminedTxIterator)(nil), errors.NewStorageError("iterator failed"))
 
-		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, tSettings, logger)
+		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, "<test-hash>", tSettings, logger)
 		assert.Error(t, err)
 		assert.Equal(t, 0, count)
 		assert.Contains(t, err.Error(), "failed to get unmined tx iterator")
@@ -91,7 +91,7 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 		mockStore.On("PreserveTransactions", mock.Anything, mock.Anything, mock.Anything).
 			Return(nil)
 
-		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, tSettings, logger)
+		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, "<test-hash>", tSettings, logger)
 
 		assert.NoError(t, err)
 		assert.Equal(t, 1, count)

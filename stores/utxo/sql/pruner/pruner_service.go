@@ -2,6 +2,7 @@ package pruner
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -9,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/dustin/go-humanize"
 )
 
 // Ensure Store implements the Pruner Service interface
@@ -93,12 +95,11 @@ func (s *Service) AddObserver(observer pruner.Observer) {
 // Prune removes transactions marked for deletion at or before the specified height.
 // Returns the number of records processed and any error encountered.
 // This method is synchronous and blocks until pruning completes or context is cancelled.
-func (s *Service) Prune(ctx context.Context, blockHeight uint32) (int64, error) {
+func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr string) (int64, error) {
 	if blockHeight == 0 {
 		return 0, errors.NewProcessingError("Cannot prune at block height 0")
 	}
 
-	s.logger.Infof("Starting pruner for block height %d", blockHeight)
 	startTime := time.Now()
 
 	// BLOCK PERSISTER COORDINATION: Calculate safe cleanup height
@@ -137,26 +138,40 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32) (int64, error) 
 			// Those transactions can be safely deleted after retention blocks.
 			maxSafeHeight := persistedHeight + retention
 			if maxSafeHeight < safeCleanupHeight {
-				s.logger.Infof("Limiting cleanup from height %d to %d (persisted: %d, retention: %d)",
-					blockHeight, maxSafeHeight, persistedHeight, retention)
+				s.logger.Infof("[pruner][%s:%d] phase 2: limiting cleanup to height %d (persisted: %d, retention: %d)",
+					blockHashStr, blockHeight, maxSafeHeight, persistedHeight, retention)
 				safeCleanupHeight = maxSafeHeight
 			}
 		}
 	}
 
 	// Log start of cleanup
-	s.logger.Infof("Starting cleanup scan for height %d (delete_at_height <= %d)",
-		blockHeight, safeCleanupHeight)
+	s.logger.Infof("[pruner][%s:%d] phase 2: starting cleanup scan (delete_at_height <= %d)",
+		blockHashStr, blockHeight, safeCleanupHeight)
 
 	// Execute the cleanup with safe height
 	deletedCount, err := s.deleteTombstoned(ctx, safeCleanupHeight)
 	if err != nil {
-		s.logger.Errorf("Cleanup failed for height %d: %v", blockHeight, err)
+		s.logger.Errorf("[pruner][%s:%d] phase 2: cleanup failed: %v", blockHashStr, blockHeight, err)
 		return 0, err
 	}
 
-	s.logger.Infof("Cleanup completed for block height %d in %v - deleted %d records",
-		blockHeight, time.Since(startTime), deletedCount)
+	// Calculate throughput
+	elapsed := time.Since(startTime)
+	tps := float64(deletedCount) / elapsed.Seconds()
+
+	// Format TPS for readability
+	var tpsStr string
+	if tps >= 1_000_000 {
+		tpsStr = fmt.Sprintf("%.1fM records/sec", tps/1_000_000)
+	} else if tps >= 1_000 {
+		tpsStr = fmt.Sprintf("%.1fK records/sec", tps/1_000)
+	} else {
+		tpsStr = fmt.Sprintf("%.2f records/sec", tps)
+	}
+
+	s.logger.Infof("[pruner][%s:%d] phase 2: completed cleanup in %v: deleted %s records (%s)",
+		blockHashStr, blockHeight, elapsed, humanize.Comma(deletedCount), tpsStr)
 
 	return deletedCount, nil
 }

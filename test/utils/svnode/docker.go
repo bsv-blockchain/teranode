@@ -78,7 +78,7 @@ func (d *DockerSVNode) Start(ctx context.Context) error {
 			}
 		},
 		// Use entrypoint.sh like docker-compose does
-		Cmd:        []string{"/entrypoint.sh", "bitcoind"},
+		Cmd:        d.buildCmd(),
 		WaitingFor: wait.ForLog("init message: Done loading").WithStartupTimeout(60 * time.Second),
 	}
 
@@ -105,6 +105,15 @@ func (d *DockerSVNode) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// buildCmd returns the container command, including any -connect flags.
+func (d *DockerSVNode) buildCmd() []string {
+	cmd := []string{"/entrypoint.sh", "bitcoind"}
+	for _, addr := range d.opts.ConnectTo {
+		cmd = append(cmd, fmt.Sprintf("-connect=%s", addr))
+	}
+	return cmd
 }
 
 // findConfigPath locates the bitcoin.conf file
@@ -503,6 +512,31 @@ func (d *DockerSVNode) GetChainTips() ([]map[string]interface{}, error) {
 	}
 
 	return result.Result, nil
+}
+
+// GetLogs returns the container's stdout/stderr logs
+func (d *DockerSVNode) GetLogs(ctx context.Context) (string, error) {
+	if d.container == nil {
+		return "", nil
+	}
+	reader, err := d.container.Logs(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = reader.Close() }()
+	buf := new(strings.Builder)
+	_, _ = fmt.Fprintf(buf, "")
+	b := make([]byte, 64*1024)
+	for {
+		n, readErr := reader.Read(b)
+		if n > 0 {
+			buf.Write(b[:n])
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	return buf.String(), nil
 }
 
 // DebugString returns a debug representation of the svnode state

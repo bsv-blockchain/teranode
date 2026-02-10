@@ -26,7 +26,7 @@ import (
 //
 // This ensures parent transactions remain available for future resubmissions of the unmined transactions.
 // Returns the number of transactions whose parents were processed and any error encountered.
-func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, blockHeight uint32, settings *settings.Settings, logger ulogger.Logger) (int, error) {
+func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, blockHeight uint32, blockHashStr string, settings *settings.Settings, logger ulogger.Logger) (int, error) {
 	// Input validation
 	if s == nil {
 		return 0, errors.NewProcessingError("store cannot be nil")
@@ -48,8 +48,7 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 	// Calculate cutoff block height
 	cutoffBlockHeight := blockHeight - settings.UtxoStore.UnminedTxRetention
 
-	logger.Infof("[PreserveParents] Starting preservation of parents for unmined transactions older than block height %d (current height %d - %d blocks retention)",
-		cutoffBlockHeight, blockHeight, settings.UtxoStore.UnminedTxRetention)
+	logger.Infof("[pruner][%s:%d] phase 1: starting parent preservation (cutoff: %d)", blockHashStr, blockHeight, cutoffBlockHeight)
 
 	// OPTIMIZATION: Use parallel partition iterator instead of sequential QueryOldUnminedTransactions
 	// This reuses the optimized GetUnminedTxIterator which already has:
@@ -63,7 +62,7 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 	}
 	defer func() {
 		if closeErr := iterator.Close(); closeErr != nil {
-			logger.Warnf("[PreserveParents] Failed to close iterator: %v", closeErr)
+			logger.Warnf("[pruner][%s:%d] phase 1: failed to close iterator: %v", blockHashStr, blockHeight, closeErr)
 		}
 	}()
 
@@ -101,8 +100,8 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 		}
 	}
 
-	logger.Debugf("[PreserveParents] Found %d old unmined transactions with %d unique parent hashes to preserve",
-		processedCount, len(allParents))
+	logger.Debugf("[pruner][%s:%d] phase 1: scanned %d unmined transactions, found %d unique parents",
+		blockHashStr, blockHeight, processedCount, len(allParents))
 
 	// Preserve all parents in single batch operation
 	if len(allParents) > 0 {
@@ -116,10 +115,10 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 			return 0, errors.NewStorageError("failed to preserve parent transactions", err)
 		}
 
-		logger.Infof("[PreserveParents] Completed parent preservation: preserved %d unique parents for %d old unmined transactions (cutoff block height %d)",
-			len(parentSlice), processedCount, cutoffBlockHeight)
+		logger.Infof("[pruner][%s:%d] phase 1: preserved %d unique parents for %d old unmined transactions",
+			blockHashStr, blockHeight, len(parentSlice), processedCount)
 	} else {
-		logger.Infof("[PreserveParents] No parents to preserve for old unmined transactions (cutoff block height %d)", cutoffBlockHeight)
+		logger.Infof("[pruner][%s:%d] phase 1: no parents to preserve", blockHashStr, blockHeight)
 	}
 
 	return processedCount, nil

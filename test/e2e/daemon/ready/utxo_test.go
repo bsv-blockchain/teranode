@@ -146,6 +146,9 @@ func TestFreezeAndUnfreezeUtxos(t *testing.T) {
 	spendingTx, err := createAndSendTx(parentTx.Outputs[:firstSet], 0)
 	require.NoError(t, err, "Failed to create and send transaction after unfreezing")
 
+	// Wait for the spending transaction to be processed by block assembly before mining
+	td.WaitForBlockAssemblyToProcessTx(t, spendingTx.TxIDChainHash().String())
+
 	// Mine a block
 	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err, "Failed to generate block")

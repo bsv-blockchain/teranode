@@ -11,6 +11,7 @@
     - [Mainnet](#kubernetes-mainnet)
     - [Testnet](#kubernetes-testnet)
 - [Storage Breakdown](#storage-breakdown)
+- [Network Configuration](#network-configuration)
 - [Important Notes](#important-notes)
 
 ## Overview
@@ -126,6 +127,36 @@ Understanding where storage is consumed helps with capacity planning.
 - **Aerospike**: NVMe SSD required. High random IOPS for UTXO lookups.
 - **Blob Storage**: SSD recommended. Sequential read/write for transaction data.
 - **PostgreSQL**: SSD recommended. Standard database workload.
+
+## Network Configuration
+
+### UDP Buffer Sizes (Required for QUIC)
+
+Teranode's P2P service uses QUIC transport via libp2p, which requires increased UDP buffer sizes for stable operation. The default Linux kernel buffer limits are too small for high-bandwidth QUIC transfers, causing packet drops and connection instability.
+
+**Apply these settings on all hosts running Teranode:**
+
+```bash
+# Create a dedicated sysctl configuration file
+cat << 'EOF' | sudo tee /etc/sysctl.d/99-teranode.conf
+net.core.rmem_max=7500000
+net.core.wmem_max=7500000
+EOF
+
+# Apply immediately
+sudo sysctl --system
+```
+
+**For Docker deployments:** These settings must be applied on the host machine, not inside containers. Containers inherit the host's kernel limits.
+
+**For Kubernetes deployments:** Apply these settings to all worker nodes in your cluster, or configure via a DaemonSet that runs a privileged init container.
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `net.core.rmem_max` | 7500000 | Maximum UDP receive buffer size (~7.5 MB) |
+| `net.core.wmem_max` | 7500000 | Maximum UDP send buffer size (~7.5 MB) |
+
+**Why this is needed:** QUIC is a UDP-based protocol. When the receive buffer fills up, the kernel drops incoming packets. The quic-go library attempts to request larger buffers but is constrained by the kernel maximum. Without this configuration, you may see warnings like: `failed to sufficiently increase receive buffer size`.
 
 ## Important Notes
 

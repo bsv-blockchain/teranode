@@ -13,9 +13,10 @@ type Service interface {
 	Start(ctx context.Context)
 
 	// Prune removes transactions marked for deletion at or before the specified height.
+	// blockHashStr is the block hash for logging/tracing purposes.
 	// Returns the number of records processed and any error encountered.
 	// This method is synchronous and blocks until pruning completes or context is cancelled.
-	Prune(ctx context.Context, height uint32) (recordsProcessed int64, err error)
+	Prune(ctx context.Context, height uint32, blockHashStr string) (recordsProcessed int64, err error)
 
 	// SetPersistedHeightGetter sets the function used to get block persister progress.
 	// This allows pruner to coordinate with block persister to avoid premature deletion.

@@ -10,7 +10,9 @@
         "vendor",
         "third_party$",
         "builtin$",
-        "examples$"
+        "examples$",
+        "data",
+        "logs"
       ]
     }
   },
@@ -45,7 +47,9 @@
         "vendor",
         "third_party$",
         "builtin$",
-        "examples$"
+        "examples$",
+        "data",
+        "logs"
       ],
       "presets": [
         "comments",
