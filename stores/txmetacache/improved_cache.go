@@ -15,6 +15,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 )
 
 // ImprovedCache Design Calculations and Memory Model:
@@ -295,6 +296,14 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 
 	switch bucketType {
 	// if the cache is unallocated cache, unallocatedCache is false, minedBlockStore
+	case Native:
+		for i := 0; i < BucketsCount; i++ {
+			c.buckets[i] = &bucketNative{}
+			if err := c.buckets[i].Init(maxBucketBytes, 0); err != nil {
+				return nil, errors.NewProcessingError("error creating unallocated cache", err)
+			}
+		}
+
 	case Unallocated:
 		for i := 0; i < BucketsCount; i++ {
 			c.buckets[i] = &bucketUnallocated{}
@@ -613,6 +622,374 @@ func (c *ImprovedCache) UpdateStats(s *Stats) {
 	for i := range c.buckets[:] {
 		c.buckets[i].UpdateStats(s)
 	}
+}
+
+// bucketNative implements a cache bucket with on-demand memory allocation.
+type bucketNative struct {
+	mu sync.RWMutex
+
+	// chunks is a ring buffer with encoded (k, v) pairs.
+	// It consists of maxValueSizeKB chunks.
+	chunks [][]byte
+
+	// m maps hash(k) to idx of (k, v) pair in chunks.
+	m map[uint64]uint64
+	// pass txId directly. How is memory?
+	// m map[[32]byte]uint64
+
+	// idx points to chunks for writing the next (k, v) pair.
+	idx uint64
+
+	// gen is the generation of chunks.
+	gen uint64
+
+	freeChunksLock sync.Mutex
+
+	// free chunks per bucket
+	freeChunks []*[ChunkSize]byte
+
+	// currentGenCount tracks the number of entries written in current generation.
+	currentGenCount uint64
+
+	// previousGenCount tracks the number of entries that existed at the start
+	// of current generation (from previous generation).
+	previousGenCount uint64
+}
+
+func (b *bucketNative) Init(maxBytes uint64, _ int) error {
+	if maxBytes == 0 {
+		return errors.NewProcessingError("maxBytes cannot be zero")
+	}
+
+	if maxBytes >= maxBucketSize {
+		return errors.NewProcessingError("too big maxBytes=%d; should be smaller than %d", maxBytes, maxBucketSize)
+	}
+
+	maxChunks := (maxBytes + ChunkSize - 1) / ChunkSize
+
+	b.chunks = make([][]byte, maxChunks)
+	b.m = make(map[uint64]uint64)
+
+	b.Reset()
+
+	return nil
+}
+
+func (b *bucketNative) Reset() {
+	b.mu.Lock()
+
+	chunks := b.chunks
+	for i := range chunks {
+		b.putChunk(chunks[i])
+		chunks[i] = nil
+	}
+
+	b.m = make(map[uint64]uint64)
+	b.idx = 0
+	b.gen = 1
+	b.currentGenCount = 0
+	b.previousGenCount = 0
+
+	b.mu.Unlock()
+}
+
+// cleanLockedMap removes expired k-v pairs from bucket map.
+func (b *bucketNative) cleanLockedMap() {
+	bGen := b.gen & ((1 << genSizeBits) - 1)
+	bIdx := b.idx
+	bm := b.m
+	newItems := 0
+
+	for _, v := range bm {
+		gen := v >> bucketSizeBits
+
+		idx := v & ((1 << bucketSizeBits) - 1)
+		if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+			newItems++
+		}
+	}
+
+	if newItems < len(bm) {
+		bmNew := make(map[uint64]uint64, newItems)
+
+		for k, v := range bm {
+			gen := v >> bucketSizeBits
+
+			idx := v & ((1 << bucketSizeBits) - 1)
+			if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+				bmNew[k] = v
+			}
+		}
+
+		b.m = bmNew
+	}
+}
+
+func (b *bucketNative) UpdateStats(s *Stats) {
+	b.mu.RLock()
+
+	// Current generation entries (all valid)
+	currentGen := b.currentGenCount
+
+	// Previous generation: estimate how many are still valid (not overwritten)
+	// As we write in current gen, we overwrite previous gen positions.
+	// Valid previous gen entries ≈ previousGenCount - currentGenCount (entries overwritten)
+	validPreviousGenCount := uint64(0)
+	if b.previousGenCount > b.currentGenCount {
+		validPreviousGenCount = b.previousGenCount - b.currentGenCount
+	}
+
+	// s.EntriesCount += uint64(len(b.m))
+	s.CurrentGenEntries += currentGen
+	s.PreviousGenEntries += validPreviousGenCount
+	s.ValidEntriesCount += currentGen + validPreviousGenCount
+
+	s.TotalMapSize += b.getMapSize()
+	b.mu.RUnlock()
+}
+
+func (b *bucketNative) listChunks() {
+	fmt.Println("chunks: ", b.chunks)
+}
+
+func (b *bucketNative) SetMulti(keys [][]byte, values [][]byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	var hash uint64
+
+	for i, key := range keys {
+		hash = xxhash.Sum64(key)
+		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
+		_ = b.Set(key, values[i], hash, false)
+	}
+}
+
+// Set skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
+func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
+	if len(k) >= (1<<maxValueSizeLog) || len(v) >= (1<<maxValueSizeLog) {
+		// Too big key or value - its length cannot be encoded
+		// with 2 bytes (see below). Skip the entry.
+		return errors.NewProcessingError("[bucketUnallocated.Set] too big key or value (key %d, value %d) max %d", len(k), len(v), 1<<maxValueSizeLog)
+	}
+
+	var kvLenBuf [4]byte
+
+	kvLenBuf[0] = byte(uint16(len(k)) >> 8) // nolint: gosec // higher order 8 bits of key's length
+	kvLenBuf[1] = byte(len(k))              // lower order 8 bits of key's length
+	kvLenBuf[2] = byte(uint16(len(v)) >> 8) // nolint: gosec // higher order 8 bits of value's length
+	kvLenBuf[3] = byte(len(v))              // lower order 8 bits of value's length
+
+	kvLen := uint64(len(kvLenBuf) + len(k) + len(v)) // nolint: gosec
+	if kvLen >= ChunkSize {
+		// Do not store too big keys and values, since they do not
+		// fit a chunk.
+		return errors.NewProcessingError("key, value, and k-v length %d bytes doesn't fit to a chunk %d bytes", kvLen, ChunkSize)
+	}
+
+	chunks := b.chunks
+	needClean := false
+
+	if len(skipLocking) == 0 || !skipLocking[0] {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+	}
+
+	// calculate the idx of the k-v pair to be added
+	// adjust idxNew, calculate where the new k-v pair will end
+	// the new k-v pair must be in the same chunk.
+	idx := b.idx
+	idxNew := idx + kvLen
+	chunkIdx := idx / ChunkSize
+	chunkIdxNew := idxNew / ChunkSize
+	// check if we are crossing the chunk boundary, we need to allocate a new chunk
+	if chunkIdxNew > chunkIdx {
+		// if there are no more chunks to allocate, we need to reset the bucket
+		if chunkIdxNew >= uint64(len(chunks)) {
+			// writing needs to start over from the beginning.
+			idx = 0
+			idxNew = kvLen
+			// the chunk index is set to 0
+			chunkIdx = 0
+			// the generation of the bucket is incremented
+			b.gen++
+
+			if b.gen&((1<<genSizeBits)-1) == 0 {
+				b.gen++
+			}
+
+			// On wrap: previous gen count = current gen count, reset current gen count
+			b.previousGenCount = b.currentGenCount
+			b.currentGenCount = 0
+
+			needClean = true
+		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
+			// calculate the index as byte offset
+			idx = chunkIdxNew * ChunkSize
+			idxNew = idx + kvLen
+			chunkIdx = chunkIdxNew
+		}
+
+		chunks[chunkIdx] = chunks[chunkIdx][:0]
+	}
+
+	chunk := chunks[chunkIdx]
+	if chunk == nil {
+		var err error
+		chunk, err = b.getChunk()
+
+		if err != nil {
+			return errors.NewProcessingError("cannot allocate chunk", err)
+		}
+
+		chunk = chunk[:0]
+	}
+
+	chunk = append(chunk, kvLenBuf[:]...)
+	chunk = append(chunk, k...)
+	chunk = append(chunk, v...)
+	chunks[chunkIdx] = chunk
+
+	// Track entry count in current generation, increase by 1
+	b.currentGenCount++
+
+	b.m[h] = idx | (b.gen << bucketSizeBits)
+	b.idx = idxNew
+
+	if needClean {
+		b.cleanLockedMap()
+	}
+
+	return nil
+}
+
+// Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
+func (b *bucketNative) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
+	found := false
+	chunks := b.chunks
+
+	b.mu.RLock()
+
+	// if len(skipLocking) == 0 || !skipLocking[0] {
+	// 	b.mu.RLock()
+	// 	defer b.mu.RUnlock()
+	// }
+
+	v := b.m[h]
+	bGen := b.gen & ((1 << genSizeBits) - 1)
+
+	if v > 0 {
+		gen := v >> bucketSizeBits
+		idx := v & ((1 << bucketSizeBits) - 1)
+
+		if gen == bGen && idx < b.idx || gen+1 == bGen && idx >= b.idx || gen == maxGen && bGen == 1 && idx >= b.idx {
+			chunkIdx := idx / ChunkSize
+			if chunkIdx >= uint64(len(chunks)) {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+
+			chunk := chunks[chunkIdx]
+			idx %= ChunkSize
+
+			if idx+4 >= ChunkSize {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+
+			kvLenBuf := chunk[idx : idx+4]
+			keyLen := (uint64(kvLenBuf[0]) << 8) | uint64(kvLenBuf[1])
+			valLen := (uint64(kvLenBuf[2]) << 8) | uint64(kvLenBuf[3])
+
+			idx += 4
+
+			if idx+keyLen+valLen >= ChunkSize {
+				// Corrupted data during the load from file. Just skip it.
+				goto end
+			}
+
+			if string(k) == string(chunk[idx:idx+keyLen]) {
+				idx += keyLen
+				if returnDst {
+					*dst = append(*dst, chunk[idx:idx+valLen]...)
+				}
+
+				found = true
+			}
+		}
+	}
+end:
+
+	b.mu.RUnlock()
+
+	return found
+}
+
+// SetMultiKeysSingleValue stores multiple (k, v) entries for the same bucket for a single v. Appends v to the existing v value, doesn't overwrite.
+func (b *bucketNative) SetMultiKeysSingleValue(keys [][]byte, value []byte) { // , hashes []uint64) { //error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	var prevValue []byte
+
+	var hash uint64
+
+	for _, key := range keys {
+		prevValue = value
+		hash = xxhash.Sum64(key)
+		b.Get(&prevValue, key, hash, true, false)
+		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
+		_ = b.Set(key, prevValue, hash, false)
+	}
+}
+
+func (b *bucketNative) getChunk() ([]byte, error) {
+	b.freeChunksLock.Lock()
+	if len(b.freeChunks) == 0 {
+		// Allocate offheap memory, so GOGC won't take into account cache size.
+		// This should reduce free memory waste.
+		data, err := unix.Mmap(-1, 0, ChunkSize*chunksPerAlloc, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+		if err != nil {
+			return nil, errors.NewProcessingError("cannot allocate %d bytes via mmap", ChunkSize*chunksPerAlloc, err)
+		}
+
+		for len(data) > 0 {
+			p := (*[ChunkSize]byte)(unsafe.Pointer(&data[0]))
+			b.freeChunks = append(b.freeChunks, p)
+			data = data[ChunkSize:]
+		}
+	}
+
+	n := len(b.freeChunks) - 1
+	p := b.freeChunks[n]
+	b.freeChunks[n] = nil
+	b.freeChunks = b.freeChunks[:n]
+	b.freeChunksLock.Unlock()
+
+	return p[:], nil
+}
+
+func (b *bucketNative) putChunk(chunk []byte) {
+	if chunk == nil {
+		return
+	}
+
+	chunk = chunk[:ChunkSize]
+	p := (*[ChunkSize]byte)(unsafe.Pointer(&chunk[0]))
+
+	b.freeChunksLock.Lock()
+	b.freeChunks = append(b.freeChunks, p)
+	b.freeChunksLock.Unlock()
+}
+
+func (b *bucketNative) Del(h uint64) {
+	b.mu.Lock()
+	delete(b.m, h)
+	b.mu.Unlock()
+}
+
+func (b *bucketNative) getMapSize() uint64 {
+	return uint64(len(b.m))
 }
 
 // bucketTrimmed implements a cache bucket with on-demand memory allocation and automatic trimming.

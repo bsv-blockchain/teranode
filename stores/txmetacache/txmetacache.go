@@ -119,6 +119,8 @@ const (
 	// less frequently used entries to maintain a smaller memory footprint.
 	// Suitable for long-running services with memory constraints.
 	Trimmed
+
+	Native
 )
 
 // NewTxMetaCache creates a new transaction metadata cache that wraps an existing UTXO store.
