@@ -130,6 +130,7 @@ func (s *Server) processBlobDeletionsAtHeight(height uint32, blockHash *chainhas
 		} else {
 			completedIDs = append(completedIDs, deletion.Id)
 			successCount++
+			blobDeletionProcessedTotal.Inc()
 		}
 	}
 
@@ -148,7 +149,6 @@ func (s *Server) processBlobDeletionsAtHeight(height uint32, blockHash *chainhas
 	duration := time.Since(batchStartTime).Round(time.Second)
 	s.logger.Infof("[pruner][%s:%d] blob deletion: batch complete - %s succeeded, %s failed (took %s)",
 		hashStr, height, humanize.Comma(successCount), humanize.Comma(failCount), duration)
-	blobDeletionProcessedTotal.Add(float64(successCount))
 
 	// Notify observer if registered (for testing)
 	if s.blobDeletionObserver != nil {

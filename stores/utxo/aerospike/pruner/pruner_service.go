@@ -39,10 +39,13 @@ var _ pruner.Service = (*Service)(nil)
 var IndexName, _ = gocore.Config().Get("pruner_IndexName", "pruner_dah_index")
 
 var (
-	prometheusMetricsInitOnce     sync.Once
-	prometheusUtxoCleanupBatch    prometheus.Histogram
-	prometheusUtxoRecordErrors    prometheus.Counter
-	prometheusUtxoBatchQueryError prometheus.Counter
+	prometheusMetricsInitOnce          sync.Once
+	prometheusUtxoCleanupBatch         prometheus.Histogram
+	prometheusUtxoRecordErrors         prometheus.Counter
+	prometheusUtxoBatchQueryError      prometheus.Counter
+	prometheusUtxoRecordsDeleted       prometheus.Counter
+	prometheusUtxoParentsUpdated       prometheus.Counter
+	prometheusUtxoExternalFilesDeleted prometheus.Counter
 )
 
 // Options contains configuration options for the cleanup service
@@ -172,6 +175,18 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		prometheusUtxoBatchQueryError = promauto.NewCounter(prometheus.CounterOpts{
 			Name: "utxo_pruner_batch_query_errors_total",
 			Help: "Total number of Aerospike batch query errors during child verification",
+		})
+		prometheusUtxoRecordsDeleted = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_records_deleted_total",
+			Help: "Total number of UTXO records deleted during pruning (updated incrementally)",
+		})
+		prometheusUtxoParentsUpdated = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_parents_updated_total",
+			Help: "Total number of parent records updated during pruning (updated incrementally)",
+		})
+		prometheusUtxoExternalFilesDeleted = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_external_files_deleted_total",
+			Help: "Total number of external files deleted during pruning (updated incrementally)",
 		})
 	})
 
@@ -455,6 +470,12 @@ func (s *Service) partitionWorker(
 			totalProcessed += int64(processed)
 			totalSkipped += int64(skipped)
 			mu.Unlock()
+
+			// Update Prometheus counter incrementally for real-time rate calculation
+			if processed > 0 {
+				prometheusUtxoRecordsDeleted.Add(float64(processed))
+			}
+
 			return nil
 		})
 	}
@@ -1331,6 +1352,11 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 		return errors.NewStorageError("%d parent update operations failed", errorCount)
 	}
 
+	// Update metric with successful parent updates
+	if successCount > 0 {
+		prometheusUtxoParentsUpdated.Add(float64(successCount))
+	}
+
 	return nil
 }
 
@@ -1452,6 +1478,11 @@ func (s *Service) executeBatchExternalFileDeletions(ctx context.Context, files [
 	}
 
 	s.logger.Debugf("External file deletion batch - success: %d, already deleted: %d, errors: %d", successCount, alreadyDeletedCount, errorCount)
+
+	// Update metric with successful deletions
+	if successCount > 0 {
+		prometheusUtxoExternalFilesDeleted.Add(float64(successCount))
+	}
 
 	// Return error if any deletions failed
 	if errorCount > 0 {
