@@ -66,6 +66,24 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 		require.Equal(t, metaCreated, metaGet)
 	})
 
+	t.Run("test in cache Native", func(t *testing.T) {
+		ctx := context.Background()
+
+		c, err := NewTxMetaCache(ctx, settings.NewSettings(), ulogger.TestLogger{}, utxoStore, Native)
+		require.NoError(t, err)
+
+		metaCreated, err := c.Create(ctx, coinbaseTx, 100)
+		require.NoError(t, err)
+
+		hash, _ := chainhash.NewHashFromStr("a6fa2d4d23292bef7e13ffbb8c03168c97c457e1681642bf49b3e2ba7d26bb89")
+		metaGet := &meta.Data{}
+		err = c.GetMeta(ctx, hash, metaGet)
+		require.NoError(t, err)
+
+		metaCreated.Tx = nil
+		require.Equal(t, metaCreated, metaGet)
+	})
+
 	t.Run("test set cache", func(t *testing.T) {
 		ctx := context.Background()
 
@@ -154,6 +172,43 @@ func Benchmark_txMetaCache_Set(b *testing.B) {
 	require.NoError(b, err)
 }
 
+func Benchmark_txMetaCache_Set_Native(b *testing.B) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(b)
+
+	tSettings := test.CreateBaseTestSettings(b)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(b, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(b, err)
+
+	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, Native)
+	cache := c.(*TxMetaCache)
+
+	// Pre-generate all hashes
+	hashes := make([]chainhash.Hash, b.N)
+	for i := 0; i < b.N; i++ {
+		hashes[i] = chainhash.HashH([]byte(string(rune(i))))
+	}
+
+	b.ResetTimer()
+
+	g := new(errgroup.Group)
+
+	for i := 0; i < b.N; i++ {
+		hash := hashes[i]
+
+		g.Go(func() error {
+			return cache.SetCache(&hash, &meta.Data{})
+		})
+	}
+
+	err = g.Wait()
+	require.NoError(b, err)
+}
+
 func Benchmark_txMetaCache_Get(b *testing.B) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(b)
@@ -167,6 +222,66 @@ func Benchmark_txMetaCache_Get(b *testing.B) {
 	require.NoError(b, err)
 
 	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, Unallocated)
+	cache := c.(*TxMetaCache)
+
+	metaData := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+	}
+
+	iterationCount := 50_000
+
+	// Pre-generate and pre-populate the cache
+	hashes := make([]chainhash.Hash, iterationCount)
+
+	for i := 0; i < iterationCount; i++ {
+		hash := chainhash.HashH([]byte(string(rune(i))))
+		hashes[i] = hash
+
+		if err := cache.SetCache(&hash, metaData); err != nil {
+			b.Fatalf("pre-population of cache failed: %v", err)
+		}
+	}
+
+	b.ResetTimer()
+
+	g := new(errgroup.Group)
+
+	for i := 0; i < iterationCount; i++ {
+		hash := hashes[i]
+		i := i
+
+		g.Go(func() error {
+			data := &meta.Data{}
+			err := cache.GetMeta(context.Background(), &hash, data)
+			_ = data
+
+			if err != nil {
+				b.Fatalf("cache miss, iteration %d: %v", i, err)
+			}
+
+			return nil
+		})
+	}
+
+	err = g.Wait()
+	require.NoError(b, err)
+}
+
+func Benchmark_txMetaCache_Get_Native(b *testing.B) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(b)
+
+	tSettings := test.CreateBaseTestSettings(b)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(b, err)
+
+	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(b, err)
+
+	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, Native)
 	cache := c.(*TxMetaCache)
 
 	metaData := &meta.Data{
@@ -277,6 +392,44 @@ func Benchmark_txMetaCache_BatchDecorate_1k(b *testing.B) {
 	}
 }
 
+// Benchmark_txMetaCache_BatchDecorate_1k_Native benchmarks BatchDecorate with 1k items using Native bucket type.
+func Benchmark_txMetaCache_BatchDecorate_1k_Native(b *testing.B) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(b)
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(b, err)
+	require.NoError(b, ns.SetBlockHeight(100))
+
+	metaData := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+		BlockIDs:    make([]uint32, 0),
+	}
+
+	store := &decoratingNullStore{
+		NullStore: ns,
+		metaData:  metaData,
+	}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, store, Native)
+	require.NoError(b, err)
+	cache := c.(*TxMetaCache)
+
+	const numTx = 1_000
+	unresolved := makeUnresolvedMetaForBench(numTx)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for iter := 0; iter < b.N; iter++ {
+		if err := cache.BatchDecorate(ctx, unresolved, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs, fields.Creating); err != nil {
+			b.Fatalf("BatchDecorate failed: %v", err)
+		}
+	}
+}
+
 // Benchmark_txMetaCache_BatchDecorate_100k benchmarks the actual TxMetaCache.BatchDecorate implementation.
 func Benchmark_txMetaCache_BatchDecorate_100k(b *testing.B) {
 	ctx := context.Background()
@@ -299,6 +452,44 @@ func Benchmark_txMetaCache_BatchDecorate_100k(b *testing.B) {
 	}
 
 	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, store, Unallocated)
+	require.NoError(b, err)
+	cache := c.(*TxMetaCache)
+
+	const numTx = 100_000
+	unresolved := makeUnresolvedMetaForBench(numTx)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for iter := 0; iter < b.N; iter++ {
+		if err := cache.BatchDecorate(ctx, unresolved, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs, fields.Creating); err != nil {
+			b.Fatalf("BatchDecorate failed: %v", err)
+		}
+	}
+}
+
+// Benchmark_txMetaCache_BatchDecorate_100k_Native benchmarks BatchDecorate with 100k items using Native bucket type.
+func Benchmark_txMetaCache_BatchDecorate_100k_Native(b *testing.B) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(b)
+
+	ns, err := nullstore.NewNullStore()
+	require.NoError(b, err)
+	require.NoError(b, ns.SetBlockHeight(100))
+
+	metaData := &meta.Data{
+		Fee:         100,
+		SizeInBytes: 111,
+		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+		BlockIDs:    make([]uint32, 0),
+	}
+
+	store := &decoratingNullStore{
+		NullStore: ns,
+		metaData:  metaData,
+	}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, store, Native)
 	require.NoError(b, err)
 	cache := c.(*TxMetaCache)
 

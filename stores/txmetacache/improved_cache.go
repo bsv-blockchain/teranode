@@ -276,6 +276,7 @@ type ImprovedCache struct {
 // with each bucket initialized according to the specified allocation strategy.
 func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 	LogCacheSize() // log whether we are using small or large cache
+	fmt.Printf("txmetacache: using const config BucketsCount=%d MapInitialCapacity=%d\n", BucketsCount, MapInitialCapacity)
 
 	if maxBytes <= 0 {
 		return nil, errors.NewServiceError("maxBytes must be greater than 0; got %d", maxBytes)
@@ -297,7 +298,7 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 	switch bucketType {
 	// if the cache is unallocated cache, unallocatedCache is false, minedBlockStore
 	case Native:
-		for i := 0; i < BucketsCount; i++ {
+		for i := range BucketsCount {
 			c.buckets[i] = &bucketNative{}
 			if err := c.buckets[i].Init(maxBucketBytes, 0); err != nil {
 				return nil, errors.NewProcessingError("error creating unallocated cache", err)
@@ -305,7 +306,7 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 		}
 
 	case Unallocated:
-		for i := 0; i < BucketsCount; i++ {
+		for i := range BucketsCount {
 			c.buckets[i] = &bucketUnallocated{}
 			if err := c.buckets[i].Init(maxBucketBytes, 0); err != nil {
 				return nil, errors.NewProcessingError("error creating unallocated cache", err)
@@ -321,7 +322,7 @@ func New(maxBytes int, bucketType BucketType) (*ImprovedCache, error) {
 			}
 		}
 	default: // trimmed cache
-		for i := 0; i < BucketsCount; i++ {
+		for i := range BucketsCount {
 			c.buckets[i] = &bucketTrimmed{}
 			if err := c.buckets[i].Init(maxBucketBytes, 0); err != nil {
 				return nil, errors.NewProcessingError("error creating trimmed cache", err)
@@ -625,6 +626,7 @@ func (c *ImprovedCache) UpdateStats(s *Stats) {
 }
 
 // bucketNative implements a cache bucket with on-demand memory allocation.
+// Uses SplitSwissLockFreeMapUint64 with shard count equal to BucketsCount (compile-time constant).
 type bucketNative struct {
 	mu sync.RWMutex
 
@@ -632,10 +634,8 @@ type bucketNative struct {
 	// It consists of maxValueSizeKB chunks.
 	chunks [][]byte
 
-	// m maps hash(k) to idx of (k, v) pair in chunks.
-	m map[uint64]uint64
-	// pass txId directly. How is memory?
-	// m map[[32]byte]uint64
+	// m maps hash(k) to idx of (k, v) pair in chunks. Shard count equals BucketsCount.
+	m *txmap.SplitSwissLockFreeMapUint64
 
 	// idx points to chunks for writing the next (k, v) pair.
 	idx uint64
@@ -666,9 +666,15 @@ func (b *bucketNative) Init(maxBytes uint64, _ int) error {
 	}
 
 	maxChunks := (maxBytes + ChunkSize - 1) / ChunkSize
+	maxChunksInt, errConv := safeconversion.Uint64ToInt(maxChunks)
+	if errConv != nil {
+		return errors.NewProcessingError("failed converting maxChunks", errConv)
+	}
 
-	b.chunks = make([][]byte, maxChunks)
-	b.m = make(map[uint64]uint64)
+	b.chunks = make([][]byte, maxChunksInt)
+	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
+	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
+	b.m = txmap.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
 
 	b.Reset()
 
@@ -684,7 +690,9 @@ func (b *bucketNative) Reset() {
 		chunks[i] = nil
 	}
 
-	b.m = make(map[uint64]uint64)
+	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
+	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
+	b.m = txmap.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
 	b.idx = 0
 	b.gen = 1
 	b.currentGenCount = 0
@@ -700,25 +708,28 @@ func (b *bucketNative) cleanLockedMap() {
 	bm := b.m
 	newItems := 0
 
-	for _, v := range bm {
-		gen := v >> bucketSizeBits
-
-		idx := v & ((1 << bucketSizeBits) - 1)
-		if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
-			newItems++
-		}
+	for _, shard := range bm.Map() {
+		shard.Map().Iter(func(k uint64, v uint64) (stop bool) {
+			gen := v >> bucketSizeBits
+			idx := v & ((1 << bucketSizeBits) - 1)
+			if (gen+1 == bGen || (gen == maxGen && bGen == 1) && idx >= bIdx) || (gen == bGen && idx < bIdx) {
+				newItems++
+			}
+			return false
+		})
 	}
 
-	if newItems < len(bm) {
-		bmNew := make(map[uint64]uint64, newItems)
-
-		for k, v := range bm {
-			gen := v >> bucketSizeBits
-
-			idx := v & ((1 << bucketSizeBits) - 1)
-			if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
-				bmNew[k] = v
-			}
+	if newItems < bm.Length() {
+		bmNew := txmap.NewSplitSwissLockFreeMapUint64(newItems, uint64(BucketsCount))
+		for _, shard := range bm.Map() {
+			shard.Map().Iter(func(k uint64, v uint64) (stop bool) {
+				gen := v >> bucketSizeBits
+				idx := v & ((1 << bucketSizeBits) - 1)
+				if (gen+1 == bGen || gen == maxGen && bGen == 1) && idx >= bIdx || gen == bGen && idx < bIdx {
+					_ = bmNew.Put(k, v)
+				}
+				return false
+			})
 		}
 
 		b.m = bmNew
@@ -753,6 +764,7 @@ func (b *bucketNative) listChunks() {
 }
 
 func (b *bucketNative) SetMulti(keys [][]byte, values [][]byte) {
+	// we lock here once for the whole SetMulti function
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -760,8 +772,7 @@ func (b *bucketNative) SetMulti(keys [][]byte, values [][]byte) {
 
 	for i, key := range keys {
 		hash = xxhash.Sum64(key)
-		// TODO: consider logging if set is not successful. But this should only happen when the key-value size is too big.
-		_ = b.Set(key, values[i], hash, false)
+		_ = b.Set(key, values[i], hash, true)
 	}
 }
 
@@ -853,7 +864,11 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	// Track entry count in current generation, increase by 1
 	b.currentGenCount++
 
-	b.m[h] = idx | (b.gen << bucketSizeBits)
+	// If key exists, skip (don't overwrite)
+	// SplitSwiss LockFree Map does not support overwrite, so we just skip the new value.
+	if !b.m.Exists(h) {
+		_ = b.m.Put(h, idx|(b.gen<<bucketSizeBits))
+	}
 	b.idx = idxNew
 
 	if needClean {
@@ -870,12 +885,11 @@ func (b *bucketNative) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skip
 
 	b.mu.RLock()
 
-	// if len(skipLocking) == 0 || !skipLocking[0] {
-	// 	b.mu.RLock()
-	// 	defer b.mu.RUnlock()
-	// }
-
-	v := b.m[h]
+	v, foundInMap := b.m.Get(h)
+	if !foundInMap {
+		b.mu.RUnlock()
+		return found
+	}
 	bGen := b.gen & ((1 << genSizeBits) - 1)
 
 	if v > 0 {
@@ -984,12 +998,13 @@ func (b *bucketNative) putChunk(chunk []byte) {
 
 func (b *bucketNative) Del(h uint64) {
 	b.mu.Lock()
-	delete(b.m, h)
+	shardIdx := h % uint64(BucketsCount)
+	b.m.Map()[shardIdx].Map().Delete(h)
 	b.mu.Unlock()
 }
 
 func (b *bucketNative) getMapSize() uint64 {
-	return uint64(len(b.m))
+	return uint64(b.m.Length())
 }
 
 // bucketTrimmed implements a cache bucket with on-demand memory allocation and automatic trimming.
@@ -1074,7 +1089,9 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 		return errors.NewProcessingError("failed converting maxChunks", err)
 	}
 	b.chunks = make([][]byte, maxChunksInt)
-	b.m = txmap.NewSplitSwissLockFreeMapUint64(1024)
+	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
+	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
+	b.m = txmap.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
 	b.overWriting = false
 	b.Reset()
 
@@ -1090,7 +1107,9 @@ func (b *bucketTrimmed) Reset() {
 		chunks[i] = nil
 	}
 
-	b.m = txmap.NewSplitSwissLockFreeMapUint64(1024)
+	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
+	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
+	b.m = txmap.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
 	b.idx = 0
 	b.gen = 1
 	b.currentGenCount = 0
@@ -1126,7 +1145,7 @@ func (b *bucketTrimmed) cleanLockedMap() {
 		// Re-create b.m with valid items, which weren't expired yet instead of deleting expired items from b.m.
 		// This should reduce memory fragmentation and the number Go objects behind b.m.
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
-		bmNew := txmap.NewSplitSwissLockFreeMapUint64(1024)
+		bmNew := txmap.NewSplitSwissLockFreeMapUint64(bm.Length(), uint64(BucketsCount))
 
 		for _, maps := range bm.Map() {
 			maps.Map().Iter(func(k uint64, v uint64) (stop bool) {
@@ -1448,6 +1467,7 @@ func (b *bucketTrimmed) putChunk(chunk []byte) {
 	b.freeChunks = append(b.freeChunks, p)
 }
 
+// Check if this del startegy for Native current makes more sense?
 func (b *bucketTrimmed) Del(h uint64) {
 	b.mu.Lock()
 	delete(b.m.Map(), h)
