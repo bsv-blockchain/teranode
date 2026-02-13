@@ -221,6 +221,7 @@ func (s *SQL) storeBlock(ctx context.Context, block *model.Block, peerID string,
 
 	genesis, height, previousBlockID, previousChainWork, previousBlockInvalid, err := s.getPreviousBlockData(ctx, coinbaseTxID, block)
 	if err != nil {
+		s.logger.Errorf("[StoreBlock] Failed to get previous block data for block %s: %v", block.Hash().String(), err)
 		return 0, 0, nil, false, err
 	}
 
@@ -365,6 +366,7 @@ RETURNING id
 	// Calculate Median Time Past (MTP) for this block
 	medianTimePast, err := s.calculateMedianTimePastForHeight(ctx, height)
 	if err != nil {
+		s.logger.Errorf("[StoreBlock] Failed to calculate MTP for height %d (CSVHeight=%d): %v", height, s.chainParams.CSVHeight, err)
 		return 0, 0, nil, false, err
 	}
 

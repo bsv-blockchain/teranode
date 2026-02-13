@@ -3,9 +3,9 @@ package validator
 import (
 	"testing"
 
-	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
 
