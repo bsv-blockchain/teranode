@@ -1,5 +1,7 @@
 package ulogger
 
+import "context"
+
 const (
 	colorBlack = iota + 30
 	colorRed
@@ -24,6 +26,11 @@ type Logger interface {
 	Fatalf(format string, args ...interface{})
 	New(service string, options ...Option) Logger
 	Duplicate(options ...Option) Logger
+	// WithTraceContext returns a new logger enriched with traceId and spanId from
+	// the OpenTelemetry span context. If the context has no valid span, the
+	// original logger is returned unchanged. This enables log-trace correlation
+	// in observability tools like Grafana Loki and Jaeger.
+	WithTraceContext(ctx context.Context) Logger
 }
 
 func New(service string, options ...Option) Logger {

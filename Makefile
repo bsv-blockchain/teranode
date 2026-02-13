@@ -196,7 +196,14 @@ testall: test longtest sequentialtest
 smoketest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestBlobDeletion|TestPruner' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+
+# run pruner e2e tests - heavyweight tests that mine blocks and verify pruning behavior
+.PHONY: prunertest
+prunertest:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	@mkdir -p /tmp/teranode-test-results
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=15m -parallel 1 -run 'TestBlobDeletion|TestPruner' 2>&1 | tee /tmp/teranode-test-results/prunertest-results.txt
 
 # run legacy sync tests - tests teranode syncing with legacy svnode
 .PHONY: legacy-sync

@@ -1,6 +1,8 @@
 package ulogger
 
 import (
+	"context"
+
 	"github.com/ordishs/gocore"
 )
 
@@ -66,4 +68,10 @@ func (g *GoCoreLogger) Duplicate(options ...Option) Logger {
 
 func (g *GoCoreLogger) SetLogLevel(_ string) {
 	// noop, has to be set when creating
+}
+
+// WithTraceContext returns the same logger since gocore.Logger does not support
+// structured fields. Consider using ZLoggerWrapper for full trace correlation.
+func (g *GoCoreLogger) WithTraceContext(_ context.Context) Logger {
+	return g
 }

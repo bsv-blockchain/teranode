@@ -66,6 +66,10 @@ func (m *mockLogger) Duplicate(options ...ulogger.Option) ulogger.Logger {
 	return m
 }
 
+func (m *mockLogger) WithTraceContext(_ context.Context) ulogger.Logger {
+	return m
+}
+
 type mockCache struct {
 	mock.Mock
 	txmetacache.TxMetaCache

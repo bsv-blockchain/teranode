@@ -269,6 +269,7 @@ func New(
 }
 
 func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
+	ctxLogger := u.logger.WithTraceContext(ctx)
 	var (
 		subscribeCtx    context.Context
 		subscribeCancel context.CancelFunc
@@ -277,16 +278,16 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			u.logger.Warnf("[SubtreeValidation:blockchainSubscriptionListener] exiting setMined goroutine: %s", ctx.Err())
+			ctxLogger.Warnf("[SubtreeValidation:blockchainSubscriptionListener] exiting setMined goroutine: %s", ctx.Err())
 			return
 		default:
-			u.logger.Infof("[SubtreeValidation:blockchainSubscriptionListener] subscribing to blockchain for setTxMined signal")
+			ctxLogger.Infof("[SubtreeValidation:blockchainSubscriptionListener] subscribing to blockchain for setTxMined signal")
 
 			subscribeCtx, subscribeCancel = context.WithCancel(ctx)
 
 			blockchainSubscription, err := u.blockchainClient.Subscribe(subscribeCtx, "subtreevalidation")
 			if err != nil {
-				u.logger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to subscribe to blockchain: %s", err)
+				ctxLogger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to subscribe to blockchain: %s", err)
 
 				// Cancel context before retrying to prevent leak
 				subscribeCancel()
@@ -307,7 +308,7 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 				case notification, ok := <-blockchainSubscription:
 					if !ok {
 						// Channel closed, reconnect
-						u.logger.Warnf("[SubtreeValidation:blockchainSubscriptionListener] subscription channel closed, reconnecting")
+						ctxLogger.Warnf("[SubtreeValidation:blockchainSubscriptionListener] subscription channel closed, reconnecting")
 						subscribeCancel()
 						time.Sleep(1 * time.Second)
 						break subscriptionLoop
@@ -319,17 +320,17 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 					if notification.Type == model.NotificationType_Block {
 						cHash := chainhash.Hash(notification.Hash)
-						u.logger.Infof("[SubtreeValidation:blockchainSubscriptionListener] received Block notification: %s", cHash.String())
+						ctxLogger.Infof("[SubtreeValidation:blockchainSubscriptionListener] received Block notification: %s", cHash.String())
 
 						// get the best block header, we might have just added an invalid block that we do not want to count
 						if err = u.updateBestBlock(ctx); err != nil {
 							// Check if context was cancelled - if so, exit gracefully
 							if ctx.Err() != nil {
-								u.logger.Infof("[SubtreeValidation:blockchainSubscriptionListener] context cancelled, stopping listener")
+								ctxLogger.Infof("[SubtreeValidation:blockchainSubscriptionListener] context cancelled, stopping listener")
 								subscribeCancel()
 								return
 							}
-							u.logger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to update best block: %s", err)
+							ctxLogger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to update best block: %s", err)
 						}
 					}
 				}
@@ -897,6 +898,7 @@ func initialiseInvalidSubtreeKafkaProducer(ctx context.Context, logger ulogger.L
 
 // publishInvalidSubtree publishes an invalid subtree event to Kafka
 func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL, reason string) {
+	ctxLogger := u.logger.WithTraceContext(ctx)
 	if u.invalidSubtreeKafkaProducer == nil {
 		return
 	}
@@ -908,7 +910,7 @@ func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL
 		)
 
 		if state, err = u.blockchainClient.GetFSMCurrentState(ctx); err != nil {
-			u.logger.Errorf("[publishInvalidSubtree] failed to publish invalid subtree - error getting blockchain FSM state: %v", err)
+			ctxLogger.Errorf("[publishInvalidSubtree] failed to publish invalid subtree - error getting blockchain FSM state: %v", err)
 
 			return
 		}
@@ -924,14 +926,14 @@ func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL
 
 	// de-duplicate the subtree hash to avoid flooding Kafka with the same message
 	if _, ok := u.invalidSubtreeDeDuplicateMap.Get(subtreeHash); ok {
-		u.logger.Debugf("[publishInvalidSubtree] Skipping duplicate invalid subtree %s from peer %s to Kafka: %s", subtreeHash, peerURL, reason)
+		ctxLogger.Debugf("[publishInvalidSubtree] Skipping duplicate invalid subtree %s from peer %s to Kafka: %s", subtreeHash, peerURL, reason)
 
 		return
 	}
 
 	u.invalidSubtreeDeDuplicateMap.Set(subtreeHash, struct{}{})
 
-	u.logger.Infof("[publishInvalidSubtree] publishing invalid subtree %s from peer %s to Kafka: %s", subtreeHash, peerURL, reason)
+	ctxLogger.Infof("[publishInvalidSubtree] publishing invalid subtree %s from peer %s to Kafka: %s", subtreeHash, peerURL, reason)
 
 	msg := &kafkamessage.KafkaInvalidSubtreeTopicMessage{
 		SubtreeHash: subtreeHash,
@@ -941,7 +943,7 @@ func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL
 
 	msgBytes, err := proto.Marshal(msg)
 	if err != nil {
-		u.logger.Errorf("[publishInvalidSubtree] failed to marshal invalid subtree message: %v", err)
+		ctxLogger.Errorf("[publishInvalidSubtree] failed to marshal invalid subtree message: %v", err)
 		return
 	}
 

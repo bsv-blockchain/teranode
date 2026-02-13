@@ -39,12 +39,10 @@ import (
 	"google.golang.org/grpc"
 )
 
-// PruneRequest represents a pruning request with height and optional block hash.
-// BlockHash is populated for Block notifications (needed for mined_set wait)
-// and nil for BlockPersisted notifications (already mined by definition).
-type PruneRequest struct {
-	Height    uint32
-	BlockHash *chainhash.Hash // nil for BlockPersisted
+// pruneSignal carries the block height and hash to prune up to.
+type pruneSignal struct {
+	blockHeight uint32
+	blockHash   chainhash.Hash
 }
 
 // BlobDeletionObserver is an optional callback interface for testing.
@@ -71,12 +69,12 @@ type Server struct {
 	prunerService       pruner.Service
 	lastProcessedHeight atomic.Uint32
 	lastPersistedHeight atomic.Uint32
-	prunerCh            chan *PruneRequest
+	pruneNotify         chan pruneSignal
 	stats               *gocore.Stat
 
 	// Blob deletion
 	blobStores           map[storetypes.BlobStoreType]blob.Store
-	blobDeletionCh       chan *PruneRequest
+	blobNotify           chan pruneSignal
 	blobDeletionObserver BlobDeletionObserver
 }
 
@@ -99,7 +97,6 @@ func New(
 		blockchainClient:    blockchainClient,
 		blockAssemblyClient: blockAssemblyClient,
 		blobStores:          make(map[storetypes.BlobStoreType]blob.Store),
-		blobDeletionCh:      make(chan *PruneRequest, 1),
 		stats:               gocore.NewStat("pruner"),
 	}
 }
@@ -164,50 +161,35 @@ func (s *Server) Init(ctx context.Context) error {
 				// Track persisted height for coordination with block persister
 				if notification.Metadata != nil && notification.Metadata.Metadata != nil {
 					if heightStr, ok := notification.Metadata.Metadata["height"]; ok {
-						if height, err := strconv.ParseUint(heightStr, 10, 32); err == nil {
-							height32 := uint32(height)
-							oldHeight := s.lastPersistedHeight.Swap(height32)
+						if parsedHeight, err := strconv.ParseUint(heightStr, 10, 32); err == nil {
+							height := uint32(parsedHeight)
+							oldHeight := s.lastPersistedHeight.Swap(height)
 
 							// Log at INFO level when Block Persister first becomes active (transition from 0)
-							if oldHeight == 0 && height32 > 0 {
-								s.logger.Infof("[pruner] block persister is now active (persisted height: %d)", height32)
+							if oldHeight == 0 && height > 0 {
+								s.logger.Infof("[pruner] block persister is now active (persisted height: %d)", height)
 							} else {
-								s.logger.Debugf("[pruner] updated persisted height to %d", height32)
+								s.logger.Debugf("[pruner] updated persisted height to %d", height)
 							}
 
-							// Queue pruning request
-							if height32 > s.lastProcessedHeight.Load() {
-								// Extract block hash from notification
-								var blockHash *chainhash.Hash
-								if notification.Hash != nil {
-									var err error
-									blockHash, err = chainhash.NewHash(notification.Hash)
-									if err != nil {
-										s.logger.Warnf("Failed to parse block hash from BlockPersisted notification: %v", err)
-										blockHash = nil
-									}
+							// Send signal to wake worker with latest height
+							if height > s.lastProcessedHeight.Load() {
+								blockHash, err := chainhash.NewHash(notification.Hash)
+								if err != nil {
+									s.logger.Warnf("Failed to parse block hash from BlockPersisted notification: %v", err)
+									continue
 								}
 
-								req := &PruneRequest{
-									Height:    height32,
-									BlockHash: blockHash, // For logging - BlockPersisted implies already mined
-								}
+								sig := pruneSignal{blockHeight: height, blockHash: *blockHash}
 
-								// Try to queue pruning (Phase 1 & 2, will trigger blob pruning)
+								s.logger.Infof("[pruner][%s:%d] notified from BlockPersisted notification", blockHash.String(), height)
+
+								// Drain old signal (if any) and replace with latest
 								select {
-								case s.prunerCh <- req:
-									hashStr := "<unknown>"
-									if blockHash != nil {
-										hashStr = blockHash.String()
-									}
-									s.logger.Infof("[pruner][%s:%d] queued from BlockPersisted notification", hashStr, height32)
+								case <-s.pruneNotify:
 								default:
-									hashStr := "<unknown>"
-									if blockHash != nil {
-										hashStr = blockHash.String()
-									}
-									s.logger.Warnf("[pruner][%s:%d] pruner channel full, skipping (already running)", hashStr, height32)
 								}
+								s.pruneNotify <- sig
 							}
 						}
 					}
@@ -245,21 +227,18 @@ func (s *Server) Init(ctx context.Context) error {
 				}
 				height := meta.Height
 
-				// Queue pruning request immediately - processor will wait for mined_set if block assembly is running
+				// Send signal to wake worker - processor will wait for mined_set if block assembly is running
 				if height > s.lastProcessedHeight.Load() {
-					req := &PruneRequest{
-						Height:    height,
-						BlockHash: blockHash, // Needed for mined_set wait
-					}
+					sig := pruneSignal{blockHeight: height, blockHash: *blockHash}
 
+					s.logger.Infof("[pruner][%s:%d] notified from Block notification", blockHash.String(), height)
+
+					// Drain old signal (if any) and replace with latest
 					select {
-					case s.prunerCh <- req:
-						s.logger.Infof("[pruner][%s:%d] queued from Block notification",
-							blockHash.String(), height)
+					case <-s.pruneNotify:
 					default:
-						s.logger.Warnf("[pruner][%s:%d] pruner channel full, skipping (already running)",
-							blockHash.String(), height)
 					}
+					s.pruneNotify <- sig
 				}
 			}
 		}
@@ -288,8 +267,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return err
 	}
 
-	// Initialize pruner channel (buffer of 1 to prevent blocking while ensuring only one pruner)
-	s.prunerCh = make(chan *PruneRequest, 1)
+	// Initialize notify channels (buffer of 1 for drain-and-replace pattern)
+	s.pruneNotify = make(chan pruneSignal, 1)
+	s.blobNotify = make(chan pruneSignal, 1)
 
 	// Start the pruner service (Aerospike or SQL)
 	if s.prunerService != nil {
@@ -304,7 +284,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// rather than waiting for the next block notification
 	go func() {
 		var currentHeight uint32
-		var blockHash *chainhash.Hash
+		var blockHash chainhash.Hash
 
 		// Determine height based on trigger mode
 		blockTrigger := s.settings.Pruner.BlockTrigger
@@ -312,34 +292,25 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		if blockTrigger == settings.PrunerBlockTriggerOnBlockPersisted {
 			// OnBlockPersisted mode: Use persisted height from block persister
 			currentHeight = s.lastPersistedHeight.Load()
-			// blockHash remains nil - BlockPersisted implies already mined
 
 		} else if blockTrigger == settings.PrunerBlockTriggerOnBlockMined {
 			// OnBlockMined mode: Get current blockchain height
 			if tipHeader, tipMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && tipHeader != nil && tipMeta != nil {
 				currentHeight = tipMeta.Height
-				blockHash = tipHeader.Hash() // Need hash for mined_set wait
+				blockHash = *tipHeader.Hash()
 			} else {
 				s.logger.Warnf("[pruner] failed to get best block header for initial pruning: %v", err)
 				return
 			}
 		}
 
-		// Queue initial pruning if we have a valid height
+		// Send initial pruning signal if we have a valid height
 		if currentHeight > 0 && currentHeight > s.lastProcessedHeight.Load() {
-			req := &PruneRequest{
-				Height:    currentHeight,
-				BlockHash: blockHash,
-			}
-
-			hashStr := "<startup>"
-			if blockHash != nil {
-				hashStr = blockHash.String()
-			}
+			sig := pruneSignal{blockHeight: currentHeight, blockHash: blockHash}
 
 			select {
-			case s.prunerCh <- req:
-				s.logger.Infof("[pruner][%s:%d] triggered initial pruning on startup (mode: %s)", hashStr, currentHeight, blockTrigger)
+			case s.pruneNotify <- sig:
+				s.logger.Infof("[pruner][%s:%d] triggered initial pruning on startup (mode: %s)", blockHash.String(), currentHeight, blockTrigger)
 			case <-time.After(5 * time.Second):
 				s.logger.Warnf("[pruner] failed to queue initial pruning request (timeout)")
 			case <-ctx.Done():

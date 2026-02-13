@@ -313,6 +313,7 @@ func (m *mockAsyncLogger) LogLevel() int                                        
 func (m *mockAsyncLogger) SetLogLevel(string)                                   {}
 func (m *mockAsyncLogger) New(string, ...ulogger.Option) ulogger.Logger         { return m }
 func (m *mockAsyncLogger) Duplicate(...ulogger.Option) ulogger.Logger           { return m }
+func (m *mockAsyncLogger) WithTraceContext(context.Context) ulogger.Logger      { return m }
 func (m *mockAsyncLogger) Health() bool                                         { return true }
 func (m *mockAsyncLogger) Close() error                                         { return nil }
 func (m *mockAsyncLogger) SetCurrentBlockHeight(uint64)                         {}

@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/retry"
 )
@@ -108,9 +109,9 @@ func (s *Server) waitForBlockMinedStatus(ctx context.Context, blockHash *chainha
 	return true
 }
 
-// prunerProcessor processes pruner requests from the pruner channel.
-// It drains the channel to get the latest height (deduplication), then performs
-// a two-phase pruning operation:
+// prunerProcessor processes pruning operations triggered by notification signals.
+// It reads the latest target height from an atomic variable (set by the notification handler),
+// then performs a two-phase pruning operation:
 //
 // PHASE 1 - PARENT PRESERVATION:
 // Preserves parents of old unmined transactions by setting PreserveUntil flags.
@@ -132,8 +133,8 @@ func (s *Server) waitForBlockMinedStatus(ctx context.Context, blockHash *chainha
 // pruning during reorgs or other state transitions.
 //
 // DEDUPLICATION:
-// Only one pruner operation runs at a time. The channel is drained to process only the latest
-// height, which is important during catchup when multiple heights may be queued.
+// Only one pruner operation runs at a time. The atomic target height always reflects the latest
+// notification, so intermediate heights are naturally skipped.
 func (s *Server) prunerProcessor(ctx context.Context) {
 	s.logger.Infof("Starting pruner processor")
 
@@ -143,31 +144,12 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			s.logger.Infof("Stopping pruner processor")
 			return
 
-		case req := <-s.prunerCh:
-			// Deduplicate: drain channel and process latest request only
-			// This is important during block catchup when multiple heights may be queued
-			latestReq := req
-			var hashStr string
-			drained := false
-		drainLoop:
-			for {
-				select {
-				case nextReq := <-s.prunerCh:
-					latestReq = nextReq
-					drained = true
-				default:
-					break drainLoop
-				}
-			}
+		case sig := <-s.pruneNotify:
+			blockHeight := sig.blockHeight
+			blockHashStr := sig.blockHash.String()
 
-			if drained {
-				if latestReq.BlockHash != nil {
-					hashStr = latestReq.BlockHash.String()
-				} else {
-					hashStr = "<unknown>"
-				}
-				s.logger.Debugf("[pruner][%s:%d] deduplicating operations, skipping to height %d",
-					hashStr, latestReq.Height, latestReq.Height)
+			if blockHeight <= s.lastProcessedHeight.Load() {
+				continue
 			}
 
 			// Check FSM state - skip during CATCHINGBLOCKS if configured
@@ -179,107 +161,65 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 					continue
 				}
 				if fsmState != nil && *fsmState == blockchain.FSMStateCATCHINGBLOCKS {
-					if latestReq.BlockHash != nil {
-						hashStr = latestReq.BlockHash.String()
-					} else {
-						hashStr = "<unknown>"
-					}
-					s.logger.Debugf("[pruner][%s:%d] skipping during catchup", hashStr, latestReq.Height)
+					s.logger.Debugf("[pruner][%s:%d] skipping during catchup", blockHashStr, blockHeight)
 					prunerSkipped.WithLabelValues("catchup_mode").Inc()
 					continue
 				}
 			}
 
-			// Initialize hashStr for logging
-			if latestReq.BlockHash != nil {
-				hashStr = latestReq.BlockHash.String()
-			} else {
-				hashStr = "<nil>"
-			}
-
-			// Wait for block to be mined (only if blockHash provided AND block assembly is running)
-			// BlockPersisted notifications have nil blockHash (already mined)
-			// Block notifications have blockHash and need mined_set wait only when block assembly is active
-			// When block assembly is not running (e.g., in tests), blocks are immediately mined
-			if latestReq.BlockHash != nil && s.blockAssemblyClient != nil {
-				s.logger.Debugf("[pruner][%s:%d] waiting for mined_set=true",
-					hashStr, latestReq.Height)
-				if !s.waitForBlockMinedStatus(ctx, latestReq.BlockHash) {
-					// Already logged by waitForBlockMinedStatus
+			// Wait for block to be mined (only in OnBlockMined trigger mode AND when block assembly is running)
+			// OnBlockPersisted mode receives notifications after block is already mined
+			// OnBlockMined mode needs to wait for mined_set=true before proceeding
+			if s.settings.Pruner.BlockTrigger == settings.PrunerBlockTriggerOnBlockMined && s.blockAssemblyClient != nil {
+				s.logger.Debugf("[pruner][%s:%d] waiting for mined_set=true", blockHashStr, blockHeight)
+				if !s.waitForBlockMinedStatus(ctx, &sig.blockHash) {
 					continue
 				}
-				s.logger.Debugf("[pruner][%s:%d] block has mined_set=true",
-					hashStr, latestReq.Height)
+				s.logger.Debugf("[pruner][%s:%d] block has mined_set=true", blockHashStr, blockHeight)
 			}
 
 			// Safety check before pruning
-			if !s.checkBlockAssemblySafeForPruner(ctx, "pruner", latestReq.Height) {
+			if !s.checkBlockAssemblySafeForPruner(ctx, "pruner", blockHeight) {
 				continue
 			}
 
-			// Safety check passed - now queue blob pruning to run concurrently with Phase 1&2
+			// Safety check passed - wake blob deletion worker to run concurrently with Phase 1&2
 			select {
-			case s.blobDeletionCh <- &PruneRequest{
-				Height:    latestReq.Height,
-				BlockHash: latestReq.BlockHash,
-			}:
-				hashStr := "<unknown>"
-				if latestReq.BlockHash != nil {
-					hashStr = latestReq.BlockHash.String()
-				}
-				s.logger.Debugf("[pruner][%s:%d] queued blob pruning", hashStr, latestReq.Height)
+			case <-s.blobNotify:
 			default:
-				hashStr := "<unknown>"
-				if latestReq.BlockHash != nil {
-					hashStr = latestReq.BlockHash.String()
-				}
-				s.logger.Warnf("[pruner][%s:%d] blob deletion channel full, skipping blob pruning", hashStr, latestReq.Height)
 			}
+			s.blobNotify <- sig
+			s.logger.Debugf("[pruner][%s:%d] notified blob deletion worker", blockHashStr, blockHeight)
 
 			prunerActive.Set(1)
 
 			// Phase 1: Preserve parents of old unmined transactions
 			// This must run before Phase 2 to protect parents from deletion
 			if s.utxoStore != nil && !s.settings.Pruner.SkipPreserveParents {
-				hashStr := "<unknown>"
-				if latestReq.BlockHash != nil {
-					hashStr = latestReq.BlockHash.String()
-				}
-				s.logger.Debugf("[pruner][%s:%d] phase 1: preserving parents", hashStr, latestReq.Height)
-				startTimePhase1 := time.Now()
-				if count, err := utxo.PreserveParentsOfOldUnminedTransactions(
-					ctx, s.utxoStore, latestReq.Height, hashStr, s.settings, s.logger,
+				s.logger.Debugf("[pruner][%s:%d] phase 1: preserving parents", blockHashStr, blockHeight)
+				startTime := time.Now()
+				if recordsProcessed, err := utxo.PreserveParentsOfOldUnminedTransactions(
+					ctx, s.utxoStore, blockHeight, blockHashStr, s.settings, s.logger,
 				); err != nil {
-					s.logger.Warnf("[pruner][%s:%d] phase 1: failed to preserve parents: %v", hashStr, latestReq.Height, err)
+					s.logger.Warnf("[pruner][%s:%d] phase 1: failed to preserve parents: %v", blockHashStr, blockHeight, err)
 					prunerErrors.WithLabelValues("parent_preservation").Inc()
-					// Continue to Phase 2 - best effort, don't block pruning
 				} else {
-					prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTimePhase1).Seconds())
-					if count > 0 {
-						// Detailed logging already happens in pruner_unmined.go with correct parent/tx counts
-						prunerUpdatingParents.Add(float64(count))
+					prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTime).Seconds())
+					if recordsProcessed > 0 {
+						prunerUpdatingParents.Add(float64(recordsProcessed))
 					}
 				}
 			} else if s.settings.Pruner.SkipPreserveParents {
-				hashStr := "<unknown>"
-				if latestReq.BlockHash != nil {
-					hashStr = latestReq.BlockHash.String()
-				}
-				s.logger.Infof("[pruner][%s:%d] phase 1: skipped (pruner_skipPreserveParents=true)", hashStr, latestReq.Height)
+				s.logger.Infof("[pruner][%s:%d] phase 1: skipped (pruner_skipPreserveParents=true)", blockHashStr, blockHeight)
 			}
 
 			// Phase 2: DAH pruning (deletion)
 			// Deletes transactions marked for deletion at or before the current height
 			if s.prunerService != nil {
-				hashStr := "<unknown>"
-				if latestReq.BlockHash != nil {
-					hashStr = latestReq.BlockHash.String()
-				}
 				startTime := time.Now()
-
-				recordsProcessed, err := s.prunerService.Prune(ctx, latestReq.Height, hashStr)
+				recordsProcessed, err := s.prunerService.Prune(ctx, blockHeight, blockHashStr)
 				if err != nil {
-					s.logger.Errorf("[pruner][%s:%d] phase 2: DAH pruner failed: %v", hashStr, latestReq.Height, err)
+					s.logger.Errorf("[pruner][%s:%d] phase 2: DAH pruner failed: %v", blockHashStr, blockHeight, err)
 					prunerErrors.WithLabelValues("dah_pruner").Inc()
 				} else {
 					prunerDuration.WithLabelValues("dah_pruner").Observe(time.Since(startTime).Seconds())
@@ -287,11 +227,11 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				}
 			}
 
-			prunerCurrentHeight.Set(float64(latestReq.Height))
+			prunerCurrentHeight.Set(float64(blockHeight))
 			prunerActive.Set(0)
 
 			// Update last processed height atomically
-			s.lastProcessedHeight.Store(latestReq.Height)
+			s.lastProcessedHeight.Store(blockHeight)
 		}
 	}
 }

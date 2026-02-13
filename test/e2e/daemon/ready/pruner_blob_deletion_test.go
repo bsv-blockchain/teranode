@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -313,6 +315,279 @@ func TestBlobDeletionSchedulingViaBlobStore(t *testing.T) {
 	t.Logf("Verified %d deletion(s) remain scheduled for future height %d", futureCount, currentHeight+2)
 
 	t.Log("E2E blob deletion scheduling via blob store validated successfully")
+}
+
+// TestBlobDeletionSafetyWindow verifies that the BlobDeletionSafetyWindow setting
+// prevents premature deletion of blobs. With a safety window of 2, blob deletions
+// are only processed when persistedHeight - safetyWindow >= deleteAtHeight.
+//
+// The safety window logic in processBlobDeletionsAtHeight:
+//   - If persistedHeight > 0 and safetyWindow > 0:
+//     safeHeight = persistedHeight - safetyWindow
+//   - Only blobs with delete_at_height <= safeHeight are eligible for deletion
+//   - This ensures data is safely persisted before blob removal
+//   - Note: the safeHeight calculation only applies when persistedHeight > safetyWindow
+//     (uint32 underflow guard), so we mine initial blocks to establish a baseline
+//
+// Test flow:
+// 1. Create TestDaemon with block persister + pruner, safety window = 2
+// 2. Mine initial blocks so persistedHeight > safetyWindow (required for safeHeight calc)
+// 3. Schedule blob deletions at DAH = H+1 and DAH = H+3
+// 4. Mine 1 block (persisted H+1, safeHeight = H-1): verify NOTHING deleted
+// 5. Mine 2 more blocks (persisted H+3, safeHeight = H+1): verify first blob deleted
+// 6. Mine 2 more blocks (persisted H+5, safeHeight = H+3): verify second blob deleted
+func TestBlobDeletionSafetyWindow(t *testing.T) {
+	node := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableBlockPersister: true,
+		EnablePruner:         true,
+		EnableRPC:            true,
+		EnableValidator:      true,
+		UTXOStoreType:        "aerospike",
+		UseUnifiedLogger:     false,
+		PreserveDataDir:      true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			test.MultiNodeSettings(1),
+			func(s *settings.Settings) {
+				s.Pruner.SkipBlobDeletion = false
+				s.Pruner.BlobDeletionSafetyWindow = 2
+				s.Pruner.BlobDeletionBatchSize = 100
+				s.Pruner.BlobDeletionMaxRetries = 3
+				s.Pruner.BlockTrigger = settings.PrunerBlockTriggerOnBlockPersisted
+				s.ChainCfgParams.CoinbaseMaturity = 5
+				s.GlobalBlockHeightRetention = 100
+			},
+		),
+		FSMState: blockchain.FSMStateRUNNING,
+	})
+	defer node.Stop(t, true)
+
+	ctx := context.Background()
+	db := node.BlockchainStore.GetDB()
+
+	// Mine initial blocks so persistedHeight > safetyWindow (2).
+	// The safeHeight = persistedHeight - safetyWindow calculation only executes
+	// when persistedHeight > safetyWindow (uint32 underflow guard in blob_deletion_worker.go:60).
+	t.Log("Mining initial blocks to establish baseline above safety window threshold...")
+	var block *model.Block
+	for i := 0; i < 5; i++ {
+		block = node.MineAndWait(t, 1)
+	}
+	err := node.WaitForBlockPersisted(block.Hash(), 30*time.Second)
+	require.NoError(t, err)
+
+	_, meta, err := node.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	currentHeight := meta.Height
+	t.Logf("Baseline height established: %d (> safetyWindow=%d)", currentHeight, 2)
+
+	initialDBCount := getDBDeletionCount(t, db)
+	t.Logf("Initial deletion queue count: %d", initialDBCount)
+
+	// Schedule 2 blob deletions at different heights
+	testBlobs := []struct {
+		key            []byte
+		fileType       string
+		storeType      storetypes.BlobStoreType
+		deleteAtHeight uint32
+	}{
+		{
+			key:            make([]byte, 32),
+			fileType:       "test",
+			storeType:      storetypes.TXSTORE,
+			deleteAtHeight: currentHeight + 1,
+		},
+		{
+			key:            make([]byte, 32),
+			fileType:       "test",
+			storeType:      storetypes.TXSTORE,
+			deleteAtHeight: currentHeight + 3,
+		},
+	}
+
+	for i := range testBlobs {
+		_, err := rand.Read(testBlobs[i].key)
+		require.NoError(t, err)
+	}
+
+	for i, blob := range testBlobs {
+		_, scheduled, err := node.BlockchainClient.ScheduleBlobDeletion(ctx, blob.key, blob.fileType, blob.storeType, blob.deleteAtHeight)
+		require.NoError(t, err)
+		require.True(t, scheduled, "Blob %d should be scheduled", i)
+		t.Logf("Scheduled blob %d: key=%x, DAH=%d", i, blob.key[:8], blob.deleteAtHeight)
+	}
+
+	require.Equal(t, initialDBCount+2, getDBDeletionCount(t, db), "Should have 2 new scheduled deletions")
+
+	// Phase 1: Mine 1 block -> height H+1, persisted ~ H+1
+	// safeHeight = (H+1) - 2 = H-1
+	// Neither DAH H+1 nor DAH H+3 <= H-1, so NOTHING should be deleted
+	t.Log("Phase 1: Mining 1 block - safety window should prevent all deletions...")
+	block = node.MineAndWait(t, 1)
+	err = node.WaitForBlockPersisted(block.Hash(), 30*time.Second)
+	require.NoError(t, err)
+	t.Logf("Block persisted at height %d", currentHeight+1)
+
+	// Give the pruner blob deletion worker time to process (should be a no-op)
+	time.Sleep(3 * time.Second)
+
+	count := getDBDeletionCount(t, db)
+	require.Equal(t, initialDBCount+2, count,
+		"Safety window should prevent all deletions (persisted=%d, safeHeight=%d, DAH values: %d, %d)",
+		currentHeight+1, currentHeight+1-2, currentHeight+1, currentHeight+3)
+	t.Log("Verified: both deletions still in queue (safety window active)")
+
+	// Phase 2: Mine 2 more blocks -> height H+3, persisted ~ H+3
+	// safeHeight = (H+3) - 2 = H+1
+	// Blob 0 (DAH H+1) <= H+1 -> DELETED
+	// Blob 1 (DAH H+3) > H+1 -> stays
+	t.Log("Phase 2: Mining 2 more blocks - first deletion should be processed...")
+	for i := 0; i < 2; i++ {
+		block = node.MineAndWait(t, 1)
+		err = node.WaitForBlockPersisted(block.Hash(), 30*time.Second)
+		require.NoError(t, err)
+	}
+	t.Logf("Blocks persisted up to height %d", currentHeight+3)
+
+	require.Eventually(t, func() bool {
+		c := getDBDeletionCount(t, db)
+		t.Logf("Waiting for first deletion... queue count: %d (expecting %d)", c, initialDBCount+1)
+		return c == initialDBCount+1
+	}, 15*time.Second, 500*time.Millisecond,
+		"First blob (DAH=%d) should be deleted once safeHeight >= %d", currentHeight+1, currentHeight+1)
+	t.Logf("Verified: first blob deleted (DAH=%d), one still pending (DAH=%d)", currentHeight+1, currentHeight+3)
+
+	// Phase 3: Mine 2 more blocks -> height H+5, persisted ~ H+5
+	// safeHeight = (H+5) - 2 = H+3
+	// Blob 1 (DAH H+3) <= H+3 -> DELETED
+	t.Log("Phase 3: Mining 2 more blocks - second deletion should be processed...")
+	for i := 0; i < 2; i++ {
+		block = node.MineAndWait(t, 1)
+		err = node.WaitForBlockPersisted(block.Hash(), 30*time.Second)
+		require.NoError(t, err)
+	}
+	t.Logf("Blocks persisted up to height %d", currentHeight+5)
+
+	require.Eventually(t, func() bool {
+		c := getDBDeletionCount(t, db)
+		t.Logf("Waiting for second deletion... queue count: %d (expecting %d)", c, initialDBCount)
+		return c == initialDBCount
+	}, 15*time.Second, 500*time.Millisecond,
+		"Second blob (DAH=%d) should be deleted once safeHeight >= %d", currentHeight+3, currentHeight+3)
+	t.Logf("Verified: all scheduled blobs deleted after safety window passed")
+
+	t.Log("E2E blob deletion safety window enforcement validated successfully")
+}
+
+// TestBlobDeletionOnBlockPersistedTrigger verifies that blob deletions are correctly
+// triggered via BlockPersisted notifications (the default production code path).
+//
+// The existing tests (TestBlobDeletionScheduling, TestBlobDeletionSchedulingViaBlobStore)
+// both use OnBlockMined trigger mode. This test exercises the OnBlockPersisted path where:
+//   - Block notifications are ignored (server.go line 194: continue)
+//   - BlockPersisted notifications update lastPersistedHeight and trigger blob deletion
+//   - The block persister must be running for notifications to arrive
+//
+// Test flow:
+// 1. Create TestDaemon with block persister + pruner, trigger = OnBlockPersisted
+// 2. Schedule blob deletions at DAH = H+1 (two blobs) and DAH = H+2 (one blob)
+// 3. Mine 1 block, wait for persistence, verify deletions at H+1 are processed
+// 4. Mine 1 more block, wait for persistence, verify deletion at H+2 is processed
+func TestBlobDeletionOnBlockPersistedTrigger(t *testing.T) {
+	node := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableBlockPersister: true,
+		EnablePruner:         true,
+		EnableRPC:            true,
+		EnableValidator:      true,
+		UTXOStoreType:        "aerospike",
+		UseUnifiedLogger:     false,
+		PreserveDataDir:      true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			test.MultiNodeSettings(1),
+			func(s *settings.Settings) {
+				s.Pruner.SkipBlobDeletion = false
+				s.Pruner.BlobDeletionSafetyWindow = 0 // No safety window - isolate trigger mechanism
+				s.Pruner.BlobDeletionBatchSize = 100
+				s.Pruner.BlobDeletionMaxRetries = 3
+				s.Pruner.BlockTrigger = settings.PrunerBlockTriggerOnBlockPersisted
+				s.ChainCfgParams.CoinbaseMaturity = 5
+				s.GlobalBlockHeightRetention = 100
+			},
+		),
+		FSMState: blockchain.FSMStateRUNNING,
+	})
+	defer node.Stop(t, true)
+
+	ctx := context.Background()
+	db := node.BlockchainStore.GetDB()
+
+	_, meta, err := node.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	currentHeight := meta.Height
+	t.Logf("Current blockchain height: %d", currentHeight)
+
+	initialDBCount := getDBDeletionCount(t, db)
+	t.Logf("Initial deletion queue count: %d", initialDBCount)
+
+	// Schedule 3 blob deletions: 2 at H+1, 1 at H+2
+	testBlobs := []struct {
+		key            []byte
+		fileType       string
+		storeType      storetypes.BlobStoreType
+		deleteAtHeight uint32
+	}{
+		{key: make([]byte, 32), fileType: "test", storeType: storetypes.TXSTORE, deleteAtHeight: currentHeight + 1},
+		{key: make([]byte, 32), fileType: "test", storeType: storetypes.TXSTORE, deleteAtHeight: currentHeight + 1},
+		{key: make([]byte, 32), fileType: "test", storeType: storetypes.TXSTORE, deleteAtHeight: currentHeight + 2},
+	}
+
+	for i := range testBlobs {
+		_, err := rand.Read(testBlobs[i].key)
+		require.NoError(t, err)
+	}
+
+	for i, blob := range testBlobs {
+		_, scheduled, err := node.BlockchainClient.ScheduleBlobDeletion(ctx, blob.key, blob.fileType, blob.storeType, blob.deleteAtHeight)
+		require.NoError(t, err)
+		require.True(t, scheduled, "Blob %d should be scheduled", i)
+		t.Logf("Scheduled blob %d: key=%x, DAH=%d", i, blob.key[:8], blob.deleteAtHeight)
+	}
+
+	require.Equal(t, initialDBCount+3, getDBDeletionCount(t, db), "Should have 3 new scheduled deletions")
+
+	// Mine 1 block and wait for it to be persisted (BlockPersisted notification triggers deletion)
+	t.Log("Mining block 1 and waiting for persistence (triggers OnBlockPersisted path)...")
+	block := node.MineAndWait(t, 1)
+	err = node.WaitForBlockPersisted(block.Hash(), 30*time.Second)
+	require.NoError(t, err)
+	t.Logf("Block persisted at height %d", currentHeight+1)
+
+	// Verify the 2 blobs at DAH=H+1 are deleted, 1 at DAH=H+2 remains
+	require.Eventually(t, func() bool {
+		c := getDBDeletionCount(t, db)
+		t.Logf("Waiting for deletions at H+1... queue count: %d (expecting %d)", c, initialDBCount+1)
+		return c == initialDBCount+1
+	}, 15*time.Second, 500*time.Millisecond,
+		"Blobs at DAH=%d should be deleted via BlockPersisted trigger", currentHeight+1)
+	t.Logf("Verified: 2 blobs at DAH=%d deleted via OnBlockPersisted trigger", currentHeight+1)
+
+	// Mine another block to trigger deletion of the remaining blob
+	t.Log("Mining block 2 and waiting for persistence...")
+	block = node.MineAndWait(t, 1)
+	err = node.WaitForBlockPersisted(block.Hash(), 30*time.Second)
+	require.NoError(t, err)
+	t.Logf("Block persisted at height %d", currentHeight+2)
+
+	require.Eventually(t, func() bool {
+		c := getDBDeletionCount(t, db)
+		t.Logf("Waiting for deletion at H+2... queue count: %d (expecting %d)", c, initialDBCount)
+		return c == initialDBCount
+	}, 15*time.Second, 500*time.Millisecond,
+		"Blob at DAH=%d should be deleted via BlockPersisted trigger", currentHeight+2)
+	t.Logf("Verified: blob at DAH=%d deleted via OnBlockPersisted trigger", currentHeight+2)
+
+	t.Log("E2E blob deletion OnBlockPersisted trigger mechanism validated successfully")
 }
 
 func getDBDeletionCount(t *testing.T, db *usql.DB) int {

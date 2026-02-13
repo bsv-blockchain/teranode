@@ -639,7 +639,7 @@ func TestMoveForwardBlock(t *testing.T) {
 	// there should be 4 chained subtrees
 	assert.Equal(t, 4, len(stp.chainedSubtrees))
 	assert.Equal(t, 4, stp.chainedSubtrees[0].Size())
-	assert.Equal(t, 2, stp.currentSubtree.Load().Length())
+	assert.Equal(t, 2, stp.GetCurrentLength())
 
 	assert.Equal(t, int(n-1), stp.currentTxMap.Length()) //nolint:gosec
 
@@ -668,7 +668,7 @@ func TestMoveForwardBlock(t *testing.T) {
 	// we added the coinbase placeholder
 	assert.Equal(t, 5, len(stp.chainedSubtrees))
 	assert.Equal(t, 2, stp.chainedSubtrees[0].Size())
-	assert.Equal(t, 1, stp.currentSubtree.Load().Length())
+	assert.Equal(t, 1, stp.GetCurrentLength())
 
 	// check the currentTxMap, it will have 1 less than the tx count, which has the coinbase placeholder
 	assert.Equal(t, int(stp.TxCount()), stp.currentTxMap.Length()+1) // nolint:gosec

@@ -574,15 +574,16 @@ func (s *Server) banPeer(peerAddr string, until int64) error {
 // Parameters:
 //   - ctx: Context that controls when logging should stop
 func (s *Server) logPeerStats(ctx context.Context) {
+	ctxLogger := s.logger.WithTraceContext(ctx)
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Infof("[Legacy Server] Stopping peer statistics logging")
+			ctxLogger.Infof("[Legacy Server] Stopping peer statistics logging")
 			return
 		case <-time.After(time.Minute):
 			peersResp, err := s.GetPeers(ctx, &emptypb.Empty{})
 			if err != nil {
-				s.logger.Errorf("[Legacy Server] Failed to get peers for stats: %v", err)
+				ctxLogger.Errorf("[Legacy Server] Failed to get peers for stats: %v", err)
 				continue
 			}
 
@@ -591,15 +592,15 @@ func (s *Server) logPeerStats(ctx context.Context) {
 			for _, p := range peers {
 				lastSendElapsed := time.Since(time.Unix(p.GetLastSend(), 0))
 				lastRecvElapsed := time.Since(time.Unix(p.GetLastRecv(), 0))
-				s.logger.Infof("[Legacy Server] Peer %s (ID: %d) - Services: %s, Inbound: %t, Bytes Sent: %d, Bytes Received: %d, Ping: %dµs, Last Send: %v ago, Last Recv: %v ago, Height: %d, BanScore: %d",
+				ctxLogger.Infof("[Legacy Server] Peer %s (ID: %d) - Services: %s, Inbound: %t, Bytes Sent: %d, Bytes Received: %d, Ping: %dµs, Last Send: %v ago, Last Recv: %v ago, Height: %d, BanScore: %d",
 					p.GetAddr(), p.GetId(), p.GetServices(), p.GetInbound(), p.GetBytesSent(), p.GetBytesReceived(), p.GetPingTime(), lastSendElapsed, lastRecvElapsed, p.GetCurrentHeight(), p.GetBanscore())
 			}
 
 			state, err := s.blockchainClient.GetFSMCurrentState(context.Background())
 			if err != nil {
-				s.logger.Debugf("Peer stats - Connected: %d, Current FSM State: unknown, error: %v", len(peers), err)
+				ctxLogger.Debugf("Peer stats - Connected: %d, Current FSM State: unknown, error: %v", len(peers), err)
 			} else {
-				s.logger.Debugf("Peer stats - Connected: %d, Current FSM State: %v", len(peers), state)
+				ctxLogger.Debugf("Peer stats - Connected: %d, Current FSM State: %v", len(peers), state)
 			}
 		}
 	}

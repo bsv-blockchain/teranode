@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -282,7 +283,7 @@ func TestBlobDeletionSchedulingAndExecution(t *testing.T) {
 
 	// Process deletions at height 10
 	t.Log("Processing deletions at height 10")
-	server.processBlobDeletionsAtHeight(10, nil)
+	server.processBlobDeletionsAtHeight(10, chainhash.Hash{})
 
 	// Wait for completion via observer
 	event, err := observer.waitFor(5 * time.Second)
@@ -318,7 +319,7 @@ func TestBlobDeletionSchedulingAndExecution(t *testing.T) {
 
 	// Process deletions at height 20
 	t.Log("Processing deletions at height 20")
-	server.processBlobDeletionsAtHeight(20, nil)
+	server.processBlobDeletionsAtHeight(20, chainhash.Hash{})
 
 	// Wait for completion
 	event, err = observer.waitFor(5 * time.Second)
@@ -408,7 +409,7 @@ func TestBlobDeletionIdempotency(t *testing.T) {
 	t.Logf("Scheduled deletion of already-deleted blob, id=%d", id)
 
 	// Process deletions (should handle gracefully)
-	server.processBlobDeletionsAtHeight(10, nil)
+	server.processBlobDeletionsAtHeight(10, chainhash.Hash{})
 
 	// Wait for completion (blob already deleted, so it should succeed idempotently)
 	event, err := observer.waitFor(5 * time.Second)

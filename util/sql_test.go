@@ -1,6 +1,7 @@
 package util_test
 
 import (
+	"context"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,15 +21,16 @@ import (
 // mockLogger implements ulogger.Logger for testing
 type mockLogger struct{}
 
-func (m *mockLogger) LogLevel() int                                { return 0 }
-func (m *mockLogger) SetLogLevel(string)                           {}
-func (m *mockLogger) Debugf(string, ...interface{})                {}
-func (m *mockLogger) Infof(string, ...interface{})                 {}
-func (m *mockLogger) Warnf(string, ...interface{})                 {}
-func (m *mockLogger) Errorf(string, ...interface{})                {}
-func (m *mockLogger) Fatalf(string, ...interface{})                {}
-func (m *mockLogger) New(string, ...ulogger.Option) ulogger.Logger { return m }
-func (m *mockLogger) Duplicate(...ulogger.Option) ulogger.Logger   { return m }
+func (m *mockLogger) LogLevel() int                                   { return 0 }
+func (m *mockLogger) SetLogLevel(string)                              {}
+func (m *mockLogger) Debugf(string, ...interface{})                   {}
+func (m *mockLogger) Infof(string, ...interface{})                    {}
+func (m *mockLogger) Warnf(string, ...interface{})                    {}
+func (m *mockLogger) Errorf(string, ...interface{})                   {}
+func (m *mockLogger) Fatalf(string, ...interface{})                   {}
+func (m *mockLogger) New(string, ...ulogger.Option) ulogger.Logger    { return m }
+func (m *mockLogger) Duplicate(...ulogger.Option) ulogger.Logger      { return m }
+func (m *mockLogger) WithTraceContext(context.Context) ulogger.Logger { return m }
 
 // createTestSettings creates a test settings object with default values
 func createTestSettings() *settings.Settings {

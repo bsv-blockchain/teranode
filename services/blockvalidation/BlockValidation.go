@@ -1095,42 +1095,45 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 	return u.runOncePerBlock(blockHash, opts, func(opts *ValidateBlockOptions) error {
 		var err error
 
+		// Use context-aware logger for trace correlation
+		ctxLogger := u.logger.WithTraceContext(ctx)
+
 		// Check if block already exists to prevent duplicate validation (unless revalidating)
 		if !opts.IsRevalidation {
 			blockExists, err := u.GetBlockExists(ctx, block.Header.Hash())
 			if err != nil {
 				// If there's an error checking existence, proceed with validation
-				u.logger.Warnf("[ValidateBlock][%s] error checking block existence: %v, proceeding with validation", block.Header.Hash().String(), err)
+				ctxLogger.Warnf("[ValidateBlock][%s] error checking block existence: %v, proceeding with validation", block.Header.Hash().String(), err)
 			} else if blockExists {
 				// Block exists - check if it's invalid
 				_, blockMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.Hash())
 				if err != nil {
-					u.logger.Warnf("[ValidateBlock][%s] failed to get block metadata for existing block: %v, assuming valid", block.Header.Hash().String(), err)
+					ctxLogger.Warnf("[ValidateBlock][%s] failed to get block metadata for existing block: %v, assuming valid", block.Header.Hash().String(), err)
 					return nil
 				}
 
 				if blockMeta != nil && blockMeta.Invalid {
-					u.logger.Warnf("[ValidateBlock][%s] block already exists and is marked as invalid", block.Header.Hash().String())
+					ctxLogger.Warnf("[ValidateBlock][%s] block already exists and is marked as invalid", block.Header.Hash().String())
 					return errors.NewBlockInvalidError("[ValidateBlock][%s] block already exists as invalid", block.Header.Hash().String())
 				}
 
-				u.logger.Warnf("[ValidateBlock][%s] tried to validate existing valid block", block.Header.Hash().String())
+				ctxLogger.Warnf("[ValidateBlock][%s] tried to validate existing valid block", block.Header.Hash().String())
 				return nil
 			}
 		} else {
 			// If this is a revalidation, verify the block is actually marked as invalid
 			_, blockMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.Hash())
 			if err != nil {
-				u.logger.Warnf("[ValidateBlock][%s] revalidation requested but couldn't get block metadata: %v", block.Header.Hash().String(), err)
+				ctxLogger.Warnf("[ValidateBlock][%s] revalidation requested but couldn't get block metadata: %v", block.Header.Hash().String(), err)
 				return errors.NewServiceError("[ValidateBlock][%s] failed to get block metadata for revalidation", block.Header.Hash().String(), err)
 			}
 
 			if !blockMeta.Invalid {
-				u.logger.Warnf("[ValidateBlock][%s] revalidation requested but block is not marked as invalid", block.Header.Hash().String())
+				ctxLogger.Warnf("[ValidateBlock][%s] revalidation requested but block is not marked as invalid", block.Header.Hash().String())
 				return errors.NewProcessingError("[ValidateBlock][%s] cannot revalidate block that is not marked as invalid", block.Header.Hash().String())
 			}
 
-			u.logger.Infof("[ValidateBlock][%s] revalidating invalid block", block.Header.Hash().String())
+			ctxLogger.Infof("[ValidateBlock][%s] revalidating invalid block", block.Header.Hash().String())
 		}
 
 		// check the size of the block
@@ -1167,9 +1170,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// Use provided cached headers
 			blockHeaders = opts.CachedHeaders
 			if opts.IsCatchupMode {
-				u.logger.Debugf("[ValidateBlock][%s] using %d cached headers", block.Header.Hash().String(), len(blockHeaders))
+				ctxLogger.Debugf("[ValidateBlock][%s] using %d cached headers", block.Header.Hash().String(), len(blockHeaders))
 			} else {
-				u.logger.Infof("[ValidateBlock][%s] using %d cached headers", block.Header.Hash().String(), len(blockHeaders))
+				ctxLogger.Infof("[ValidateBlock][%s] using %d cached headers", block.Header.Hash().String(), len(blockHeaders))
 			}
 
 			// Check if parent block is invalid - if so, child is automatically invalid
@@ -1177,7 +1180,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// For catchup mode with cached headers, we need to query parent metadata
 			_, parentMeta, err := u.blockchainClient.GetBlockHeader(ctx, block.Header.HashPrevBlock)
 			if err != nil {
-				u.logger.Warnf("[ValidateBlock][%s] failed to get parent block metadata: %v, continuing with validation", block.Hash().String(), err)
+				ctxLogger.Warnf("[ValidateBlock][%s] failed to get parent block metadata: %v, continuing with validation", block.Hash().String(), err)
 				// Continue with validation - this is defensive programming
 			}
 			if err := u.checkParentInvalidAndStore(ctx, block, baseURL, parentMeta); err != nil {
@@ -1186,9 +1189,9 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		} else {
 			// Fetch headers from blockchain service
 			if opts.IsCatchupMode {
-				u.logger.Debugf("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+				ctxLogger.Debugf("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
 			} else {
-				u.logger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
+				ctxLogger.Infof("[ValidateBlock][%s] GetBlockHeaders", block.Header.Hash().String())
 			}
 
 			// get all X previous block headers, 100 is the default
@@ -1197,7 +1200,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			var parentBlockHeadersMeta []*model.BlockHeaderMeta
 			blockHeaders, parentBlockHeadersMeta, err = u.blockchainClient.GetBlockHeaders(ctx, block.Header.HashPrevBlock, previousBlockHeaderCount)
 			if err != nil {
-				u.logger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
+				ctxLogger.Errorf("[ValidateBlock][%s] failed to get block headers: %s", block.String(), err)
 				u.ReValidateBlock(block, baseURL)
 
 				return errors.NewServiceError("[ValidateBlock][%s] failed to get block headers", block.String(), err)
@@ -1226,11 +1229,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		}
 
 		// validate all the subtrees in the block
-		u.logger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
+		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 
 		if err = u.validateBlockSubtrees(ctx, block, opts.PeerID, baseURL); err != nil {
 			if errors.Is(err, errors.ErrTxInvalid) || errors.Is(err, errors.ErrTxMissingParent) || errors.Is(err, errors.ErrTxNotFound) {
-				u.logger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
+				ctxLogger.Warnf("[ValidateBlock][%s] block contains invalid transactions, marking as invalid: %s", block.Hash().String(), err)
 				reason := fmt.Sprintf("block contains invalid transactions: %s", err.Error())
 				u.storeInvalidBlock(ctx, block, baseURL, reason)
 				return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains invalid transactions: %s", block.Hash().String(), err)
@@ -1239,14 +1242,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			return err
 		}
 
-		u.logger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
+		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees DONE", block.Hash().String(), len(block.Subtrees))
 
 		useOptimisticMining := u.settings.BlockValidation.OptimisticMining
 		if opts.DisableOptimisticMining {
 			// if the disableOptimisticMining is set to true, then we don't use optimistic mining, even if it is enabled
 			useOptimisticMining = false
 			if !opts.IsCatchupMode {
-				u.logger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
+				ctxLogger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
 			}
 		}
 
@@ -1256,7 +1259,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		skipDifficultyCheck := block.Height <= highestCheckpointHeight
 
 		if skipDifficultyCheck {
-			u.logger.Debugf("[ValidateBlock][%s] skipping difficulty validation for block at height %d (at or below checkpoint height %d)",
+			ctxLogger.Debugf("[ValidateBlock][%s] skipping difficulty validation for block at height %d (at or below checkpoint height %d)",
 				block.Header.Hash().String(), block.Height, highestCheckpointHeight)
 		} else {
 			// First check that the nBits (difficulty target) is correct for this block
@@ -1295,16 +1298,16 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// NOTE: We do NOT cache the block here as subtrees are not yet loaded.
 			// The block will be cached after subtrees are validated in the background goroutine.
 
-			u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
+			ctxLogger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain", block.Hash().String())
 
 			if err = u.blockchainClient.AddBlock(ctx, block, baseURL); err != nil {
 				return errors.NewServiceError("[ValidateBlock][%s] failed to store block", block.Hash().String(), err)
 			}
 
-			u.logger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
+			ctxLogger.Infof("[ValidateBlock][%s] adding block optimistically to blockchain DONE", block.Hash().String())
 
 			if err = u.SetBlockExists(block.Header.Hash()); err != nil {
-				u.logger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
+				ctxLogger.Errorf("[ValidateBlock][%s] failed to set block exists cache: %s", block.Header.Hash().String(), err)
 			}
 
 			// decouple the tracing context to not cancel the context when finalize the block processing in the background

@@ -1,6 +1,7 @@
 package ulogger
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"sync/atomic"
@@ -143,4 +144,10 @@ func (l *ErrorTestLogger) Fatalf(format string, args ...interface{}) {
 	// }
 
 	// l.t.FailNow()
+}
+
+// WithTraceContext returns the same logger since ErrorTestLogger is a test logger
+// that doesn't support structured fields.
+func (l *ErrorTestLogger) WithTraceContext(_ context.Context) Logger {
+	return l
 }

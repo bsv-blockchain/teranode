@@ -207,6 +207,10 @@ func (l *lineLogger) log(_ string, format string, args ...interface{}) {
 	l.lastLog = fmt.Sprintf(format, args...)
 }
 
+func (l *lineLogger) WithTraceContext(_ context.Context) ulogger.Logger {
+	return l
+}
+
 func setTestTracerProvider(provider *sdktrace.TracerProvider) {
 	mu.Lock()
 	defer mu.Unlock()

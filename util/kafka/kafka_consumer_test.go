@@ -273,20 +273,21 @@ type mockLogger struct {
 	warnCount int
 }
 
-func (m *mockLogger) Debug()                                       {}
-func (m *mockLogger) Debugf(string, ...interface{})                {}
-func (m *mockLogger) Info()                                        {}
-func (m *mockLogger) Infof(string, ...interface{})                 {}
-func (m *mockLogger) Warn()                                        { m.warnCount++ }
-func (m *mockLogger) Warnf(string, ...interface{})                 { m.warnCount++ }
-func (m *mockLogger) Error(...interface{})                         {}
-func (m *mockLogger) Errorf(string, ...interface{})                {}
-func (m *mockLogger) Fatal(...interface{})                         {}
-func (m *mockLogger) Fatalf(string, ...interface{})                {}
-func (m *mockLogger) LogLevel() int                                { return 0 }
-func (m *mockLogger) SetLogLevel(string)                           {}
-func (m *mockLogger) New(string, ...ulogger.Option) ulogger.Logger { return m }
-func (m *mockLogger) Duplicate(...ulogger.Option) ulogger.Logger   { return m }
+func (m *mockLogger) Debug()                                          {}
+func (m *mockLogger) Debugf(string, ...interface{})                   {}
+func (m *mockLogger) Info()                                           {}
+func (m *mockLogger) Infof(string, ...interface{})                    {}
+func (m *mockLogger) Warn()                                           { m.warnCount++ }
+func (m *mockLogger) Warnf(string, ...interface{})                    { m.warnCount++ }
+func (m *mockLogger) Error(...interface{})                            {}
+func (m *mockLogger) Errorf(string, ...interface{})                   {}
+func (m *mockLogger) Fatal(...interface{})                            {}
+func (m *mockLogger) Fatalf(string, ...interface{})                   {}
+func (m *mockLogger) LogLevel() int                                   { return 0 }
+func (m *mockLogger) SetLogLevel(string)                              {}
+func (m *mockLogger) New(string, ...ulogger.Option) ulogger.Logger    { return m }
+func (m *mockLogger) Duplicate(...ulogger.Option) ulogger.Logger      { return m }
+func (m *mockLogger) WithTraceContext(context.Context) ulogger.Logger { return m }
 
 type mockConsumerGroupSession struct {
 	commitCalled bool

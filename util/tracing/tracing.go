@@ -367,20 +367,6 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 	// add the start time to the context
 	ctx = context.WithValue(ctx, StartTime, start)
 
-	// Log start messages (only if logging is enabled)
-	if options.Logger != nil && len(options.LogMessages) > 0 {
-		for _, l := range options.LogMessages {
-			switch l.level {
-			case "WARN":
-				options.Logger.Warnf(l.message, l.args...)
-			case "DEBUG":
-				options.Logger.Debugf(l.message, l.args...)
-			default:
-				options.Logger.Infof(l.message, l.args...)
-			}
-		}
-	}
-
 	var span trace.Span
 
 	if tracingEnabled {
@@ -405,6 +391,23 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		span = trace.SpanFromContext(ctx)
 	}
 
+	// Log start messages (only if logging is enabled)
+	// This is done AFTER starting the span so that WithTraceContext can extract
+	// traceId/spanId from the context for log-trace correlation.
+	if options.Logger != nil && len(options.LogMessages) > 0 {
+		ctxLogger := options.Logger.WithTraceContext(ctx)
+		for _, l := range options.LogMessages {
+			switch l.level {
+			case "WARN":
+				ctxLogger.Warnf(l.message, l.args...)
+			case "DEBUG":
+				ctxLogger.Debugf(l.message, l.args...)
+			default:
+				ctxLogger.Infof(l.message, l.args...)
+			}
+		}
+	}
+
 	endFn := func(optionalError ...error) {
 		var err error
 
@@ -423,7 +426,7 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 		}
 
 		u.recordMetrics(options, start)
-		u.logEndMessage(options, start, err)
+		u.logEndMessage(ctx, options, start, err)
 
 		// Ensure the cancelCtx function is called when the span ends
 		if cancelFunc != nil {
@@ -475,15 +478,16 @@ func DecoupleTracingSpan(ctx context.Context, name string, spanName string) (con
 	return Tracer(name).Start(newCtx, spanName)
 }
 
-// logEndMessage logs the completion message for a span
-func (u *UTracer) logEndMessage(options *TraceOptions, start time.Time, err error) {
+// logEndMessage logs the completion message for a span with trace context correlation
+func (u *UTracer) logEndMessage(ctx context.Context, options *TraceOptions, start time.Time, err error) {
 	if options.Logger == nil || len(options.LogMessages) == 0 {
 		return
 	}
 
 	// Duplicate the logger to ensure the skip frame is correct, since we are calling this from
-	// a closure and we want to skip the frame of this function
-	logger := options.Logger.Duplicate(ulogger.WithSkipFrameIncrement(1))
+	// a closure and we want to skip the frame of this function.
+	// Then enrich with trace context for log-trace correlation.
+	logger := options.Logger.Duplicate(ulogger.WithSkipFrameIncrement(1)).WithTraceContext(ctx)
 
 	var done string
 	if err != nil {
