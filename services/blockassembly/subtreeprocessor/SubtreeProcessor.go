@@ -564,6 +564,26 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 							logger.Errorf("[SubtreeProcessor] error creating incomplete subtree snapshot: %s", err.Error())
 							responseChan <- nil
 						} else {
+							// Store (and announce) the incomplete subtree so it exists in the blob store
+							// when callers read it by hash (e.g., checkTransactionsInMiningCandidate).
+							send := NewSubtreeRequest{
+								Subtree:     incompleteSubtree,
+								ParentTxMap: stp.currentTxMap,
+								ErrChan:     make(chan error),
+							}
+
+							select {
+							case stp.newSubtreeChan <- send:
+								select {
+								case <-send.ErrChan:
+									stp.resetAnnouncementTicker()
+								case <-processorCtx.Done():
+									return
+								}
+							case <-processorCtx.Done():
+								return
+							}
+
 							currentBlockHeader := stp.currentBlockHeader.Load()
 							responseChan <- &PrecomputedMiningData{
 								PreviousHeader:   currentBlockHeader,

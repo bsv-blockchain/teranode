@@ -267,10 +267,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UnminedTxDiskSortPath:                getString("blockassembly_unminedTxDiskSortPath", "", alternativeContext...),
 			UnminedTxDiskSortEnabled:             getBool("blockassembly_unminedTxDiskSortEnabled", false, alternativeContext...),
 			UnminedLoadingBatchSize:              getInt("blockassembly_unminedLoadingBatchSize", 1024*1024*10, alternativeContext...), // 10 million
-			SubtreeAnnouncementInterval:       getDuration("blockassembly_subtreeAnnouncementInterval", 10*time.Second, alternativeContext...),
-			ParallelSetIfNotExistsThreshold:   getInt("blockassembly_parallelSetIfNotExistsThreshold", 10_000, alternativeContext...),
-			StoreTxInpointsForSubtreeMeta:     getBool("blockassembly_storeTxInpointsForSubtreeMeta", false, alternativeContext...), // memory optimization
-			IdleSleepDuration:                 getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
+			SubtreeAnnouncementInterval:          getDuration("blockassembly_subtreeAnnouncementInterval", 10*time.Second, alternativeContext...),
+			ParallelSetIfNotExistsThreshold:      getInt("blockassembly_parallelSetIfNotExistsThreshold", 10_000, alternativeContext...),
+			StoreTxInpointsForSubtreeMeta:        getBool("blockassembly_storeTxInpointsForSubtreeMeta", false, alternativeContext...), // memory optimization
+			IdleSleepDuration:                    getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
 		},
 
 		BlockChain: BlockChainSettings{
