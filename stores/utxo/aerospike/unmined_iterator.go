@@ -23,6 +23,8 @@ import (
 type unminedTxIterator struct {
 	store         *Store
 	fullScan      bool
+	prunerMode    bool   // when true, uses pruner-specific bins and filter
+	prunerCutoff  uint32 // cutoff block height for pruner mode
 	err           error
 	done          bool
 	recordset     *as.Recordset
@@ -193,7 +195,25 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 	defer it.wg.Done()
 
 	stmt := as.NewStatement(it.store.namespace, it.store.setName)
-	if !it.fullScan {
+
+	if it.prunerMode {
+		// Pruner mode: tight server-side filter for only old unmined transactions
+		if err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(it.prunerCutoff))); err != nil {
+			select {
+			case it.errorChan <- err:
+			default:
+			}
+			return
+		}
+
+		// Minimal bins: only what the pruner needs for parent preservation
+		stmt.BinNames = []string{
+			fields.TxID.String(),
+			fields.UnminedSince.String(),
+			fields.External.String(),
+			fields.Inputs.String(),
+		}
+	} else if !it.fullScan {
 		if err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(math.MaxUint32))); err != nil {
 			select {
 			case it.errorChan <- err:
@@ -201,24 +221,42 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 			}
 			return
 		}
-	}
 
-	// Set the bins to retrieve only the necessary fields for unmined transactions
-	stmt.BinNames = []string{
-		fields.TxID.String(),
-		fields.Fee.String(),
-		fields.SizeInBytes.String(),
-		fields.CreatedAt.String(),
-		fields.Conflicting.String(),
-		fields.Locked.String(),
-		fields.BlockIDs.String(),
-		fields.UnminedSince.String(),
-		fields.IsCoinbase.String(),
-	}
+		// Full bin set for block assembly iterator
+		stmt.BinNames = []string{
+			fields.TxID.String(),
+			fields.Fee.String(),
+			fields.SizeInBytes.String(),
+			fields.CreatedAt.String(),
+			fields.Conflicting.String(),
+			fields.Locked.String(),
+			fields.BlockIDs.String(),
+			fields.UnminedSince.String(),
+			fields.IsCoinbase.String(),
+		}
 
-	if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-		stmt.BinNames = append(stmt.BinNames, fields.External.String())
-		stmt.BinNames = append(stmt.BinNames, fields.Inputs.String())
+		if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
+			stmt.BinNames = append(stmt.BinNames, fields.External.String())
+			stmt.BinNames = append(stmt.BinNames, fields.Inputs.String())
+		}
+	} else {
+		// Full scan mode: no filter, full bin set
+		stmt.BinNames = []string{
+			fields.TxID.String(),
+			fields.Fee.String(),
+			fields.SizeInBytes.String(),
+			fields.CreatedAt.String(),
+			fields.Conflicting.String(),
+			fields.Locked.String(),
+			fields.BlockIDs.String(),
+			fields.UnminedSince.String(),
+			fields.IsCoinbase.String(),
+		}
+
+		if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
+			stmt.BinNames = append(stmt.BinNames, fields.External.String())
+			stmt.BinNames = append(stmt.BinNames, fields.Inputs.String())
+		}
 	}
 
 	// Create partition filter for this range
@@ -304,44 +342,66 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 
 		itemsProcessed++
 
-		// check whether this is a main record (split records are loaded when full is set)
-		// createAt is not set for split records
-		if rec.Record.Bins[fields.CreatedAt.String()] == nil {
-			continue
-		}
-
-		// Quick inline filtering checks
-		if conflictingVal := rec.Record.Bins[conflictingField]; conflictingVal != nil {
-			if conflicting, ok := conflictingVal.(bool); ok && conflicting {
-				continue
+		if it.prunerMode {
+			// Pruner mode: skip checks for bins we didn't fetch (createdAt, conflicting, coinbase)
+			// The server-side filter already ensures unminedSince is in [1, cutoff]
+			unminedTx, err := it.processPrunerRecord(ctx, rec.Record.Bins)
+			if err != nil {
+				select {
+				case it.errorChan <- err:
+				default:
+				}
+				return
 			}
-		}
 
-		if coinbaseBool, ok := rec.Record.Bins[coinbaseField].(bool); ok && coinbaseBool {
-			localBuffer = append(localBuffer, &utxo.UnminedTransaction{Skip: true})
-			if len(localBuffer) >= batchSize {
-				if err := flush(); err != nil {
-					return
+			if unminedTx != nil {
+				localBuffer = append(localBuffer, unminedTx)
+				if len(localBuffer) >= batchSize {
+					if err := flush(); err != nil {
+						return
+					}
 				}
 			}
-			continue
-		}
-
-		// Process the record
-		unminedTx, err := it.processRecord(ctx, rec.Record.Bins)
-		if err != nil {
-			select {
-			case it.errorChan <- err:
-			default:
+		} else {
+			// check whether this is a main record (split records are loaded when full is set)
+			// createAt is not set for split records
+			if rec.Record.Bins[fields.CreatedAt.String()] == nil {
+				continue
 			}
-			return
-		}
 
-		if unminedTx != nil {
-			localBuffer = append(localBuffer, unminedTx)
-			if len(localBuffer) >= batchSize {
-				if err := flush(); err != nil {
-					return
+			// Quick inline filtering checks
+			if conflictingVal := rec.Record.Bins[conflictingField]; conflictingVal != nil {
+				if conflicting, ok := conflictingVal.(bool); ok && conflicting {
+					continue
+				}
+			}
+
+			if coinbaseBool, ok := rec.Record.Bins[coinbaseField].(bool); ok && coinbaseBool {
+				localBuffer = append(localBuffer, &utxo.UnminedTransaction{Skip: true})
+				if len(localBuffer) >= batchSize {
+					if err := flush(); err != nil {
+						return
+					}
+				}
+				continue
+			}
+
+			// Process the record
+			unminedTx, err := it.processRecord(ctx, rec.Record.Bins)
+			if err != nil {
+				select {
+				case it.errorChan <- err:
+				default:
+				}
+				return
+			}
+
+			if unminedTx != nil {
+				localBuffer = append(localBuffer, unminedTx)
+				if len(localBuffer) >= batchSize {
+					if err := flush(); err != nil {
+						return
+					}
 				}
 			}
 		}
@@ -408,6 +468,44 @@ func (it *unminedTxIterator) processRecord(ctx context.Context, bins map[string]
 		CreatedAt:    createdAt,
 		Locked:       locked,
 		BlockIDs:     blockIDs,
+	}, nil
+}
+
+// processPrunerRecord processes a single Aerospike record in pruner mode.
+// Only extracts the minimal data needed for parent preservation: txID, unminedSince, and TxInpoints.
+func (it *unminedTxIterator) processPrunerRecord(ctx context.Context, bins map[string]interface{}) (*utxo.UnminedTransaction, error) {
+	// Extract txID
+	txidVal := bins[fields.TxID.String()]
+	if txidVal == nil {
+		return nil, errors.NewProcessingError("txid not found")
+	}
+
+	txidValBytes, ok := txidVal.([]byte)
+	if !ok {
+		return nil, errors.NewProcessingError("txid not []byte")
+	}
+
+	hash, err := chainhash.NewHash(txidValBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	unminedSince, _ := bins[fields.UnminedSince.String()].(int)
+
+	// Process inpoints for parent preservation
+	var txInpoints subtree.TxInpoints
+	txInpoints, err = it.processTransactionInpoints(ctx, &transactionData{hash: hash, unminedSince: unminedSince}, bins)
+	if err != nil {
+		// In pruner mode, skip records with inpoint errors rather than failing
+		return nil, nil
+	}
+
+	return &utxo.UnminedTransaction{
+		Node: &subtree.Node{
+			Hash: *hash,
+		},
+		UnminedSince: unminedSince,
+		TxInpoints:   &txInpoints,
 	}, nil
 }
 
@@ -648,4 +746,102 @@ func (s *Store) GetUnminedTxIterator(fullScan bool) (utxo.UnminedTxIterator, err
 	}
 
 	return newUnminedTxIterator(s, fullScan)
+}
+
+// GetPrunableUnminedTxIterator returns a lightweight iterator optimized for pruner use.
+// It filters server-side for unminedSince in [1, cutoffBlockHeight] and fetches only
+// the bins needed by the pruner (txID, unminedSince, external, inputs).
+func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	if s.client == nil {
+		return nil, errors.NewProcessingError("aerospike client not initialized")
+	}
+
+	return newPrunableUnminedTxIterator(s, cutoffBlockHeight)
+}
+
+// newPrunableUnminedTxIterator creates a pruner-specific iterator that:
+// - Filters server-side: unminedSince in [1, cutoffBlockHeight] (only old unmined txs)
+// - Fetches minimal bins: txID, unminedSince, external, inputs (4 bins vs 9-11)
+func newPrunableUnminedTxIterator(store *Store, cutoffBlockHeight uint32) (*unminedTxIterator, error) {
+	queryThreadsLimitStr, err := getConfigValue(store, "query-threads-limit")
+	if err != nil {
+		return nil, err
+	}
+
+	queryThreadsLimit, err := strconv.ParseInt(queryThreadsLimitStr, 10, 64)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to parse query-threads-limit: %v", err)
+	}
+
+	if queryThreadsLimit > int64(math.MaxInt) || queryThreadsLimit < int64(math.MinInt) {
+		return nil, errors.NewProcessingError("query-threads-limit value %d out of range for int type", queryThreadsLimit)
+	}
+
+	numPartitionQueries := runtime.NumCPU()
+
+	queryLimits := int(queryThreadsLimit) / 4
+	if queryThreadsLimit > 0 && numPartitionQueries > queryLimits {
+		numPartitionQueries = queryLimits
+	}
+
+	store.logger.Infof("[newPrunableUnminedTxIterator] Using %d parallel partition queries (cutoff=%d)", numPartitionQueries, cutoffBlockHeight)
+
+	return newPrunableUnminedTxIteratorWithPartitions(store, cutoffBlockHeight, numPartitionQueries)
+}
+
+// newPrunableUnminedTxIteratorWithPartitions creates a pruner-specific iterator with configurable parallelism.
+func newPrunableUnminedTxIteratorWithPartitions(store *Store, cutoffBlockHeight uint32, numPartitionQueries int) (*unminedTxIterator, error) {
+	const totalPartitions = 4096
+
+	if numPartitionQueries < 1 {
+		numPartitionQueries = 1
+	}
+	if numPartitionQueries > totalPartitions {
+		numPartitionQueries = totalPartitions
+	}
+
+	partitionsPerQuery := totalPartitions / numPartitionQueries
+	remainingPartitions := totalPartitions % numPartitionQueries
+
+	policy := util.GetAerospikeQueryPolicy(store.settings)
+	policy.IncludeBinData = true
+	policy.RecordQueueSize = (10 * 1024 * 1024) / numPartitionQueries
+	if policy.RecordQueueSize < 1024 {
+		policy.RecordQueueSize = 1024
+	}
+
+	workerCtx, cancel := context.WithCancel(context.Background())
+
+	resultChanSize := numPartitionQueries * 2
+
+	it := &unminedTxIterator{
+		store:         store,
+		fullScan:      false,
+		prunerMode:    true,
+		prunerCutoff:  cutoffBlockHeight,
+		resultChan:    make(chan []*utxo.UnminedTransaction, resultChanSize),
+		errorChan:     make(chan error, numPartitionQueries),
+		cancelWorkers: cancel,
+	}
+
+	partitionStart := 0
+	for i := 0; i < numPartitionQueries; i++ {
+		partitionCount := partitionsPerQuery
+		if i < remainingPartitions {
+			partitionCount++
+		}
+
+		it.wg.Add(1)
+		go it.partitionWorker(workerCtx, policy, partitionStart, partitionCount)
+
+		partitionStart += partitionCount
+	}
+
+	go func() {
+		it.wg.Wait()
+		close(it.resultChan)
+		close(it.errorChan)
+	}()
+
+	return it, nil
 }

@@ -975,6 +975,9 @@ func (m *MockUTXOStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.H
 	return nil, nil
 }
 func (m *MockUTXOStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) { return nil, nil }
+func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
 func (m *MockUTXOStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
 	return nil, nil
 }

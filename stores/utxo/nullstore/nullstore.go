@@ -156,6 +156,10 @@ func (m *NullStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
 	return nil, nil
 }
 
+func (m *NullStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
 func (m *NullStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
 }

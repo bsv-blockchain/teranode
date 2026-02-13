@@ -51,12 +51,13 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 0, count)
 		// Should not call any store methods
-		mockStore.AssertNotCalled(t, "GetUnminedTxIterator")
+		mockStore.AssertNotCalled(t, "GetPrunableUnminedTxIterator")
 	})
 
 	t.Run("handles iterator error", func(t *testing.T) {
 		mockStore := new(MockUtxostore)
-		mockStore.On("GetUnminedTxIterator").
+		// cutoff = blockHeight(10) - retention(5) = 5
+		mockStore.On("GetPrunableUnminedTxIterator", uint32(5)).
 			Return((*MockUnminedTxIterator)(nil), errors.NewStorageError("iterator failed"))
 
 		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, "<test-hash>", tSettings, logger)
@@ -87,7 +88,8 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 		mockIter.On("Next", mock.Anything).Return(([]*UnminedTransaction)(nil), nil).Once() // End iteration
 		mockIter.On("Close").Return(nil)
 
-		mockStore.On("GetUnminedTxIterator").Return(mockIter, nil)
+		// cutoff = blockHeight(10) - retention(5) = 5
+		mockStore.On("GetPrunableUnminedTxIterator", uint32(5)).Return(mockIter, nil)
 		mockStore.On("PreserveTransactions", mock.Anything, mock.Anything, mock.Anything).
 			Return(nil)
 

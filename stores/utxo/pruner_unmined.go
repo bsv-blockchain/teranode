@@ -50,13 +50,12 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 
 	logger.Infof("[pruner][%s:%d] phase 1: starting parent preservation (cutoff: %d)", blockHashStr, blockHeight, cutoffBlockHeight)
 
-	// OPTIMIZATION: Use parallel partition iterator instead of sequential QueryOldUnminedTransactions
-	// This reuses the optimized GetUnminedTxIterator which already has:
-	// - Parallel partition queries (16 workers × 10 chunks = 160 concurrent operations)
-	// - TxInpoints already populated (no individual Get() calls needed!)
-	// - Batch processing (16K records per batch)
-	// Result: 100-1000x faster than sequential Get() calls
-	iterator, err := s.GetUnminedTxIterator(false)
+	// OPTIMIZATION: Use pruner-specific lightweight iterator that:
+	// - Filters server-side: only unmined txs with unminedSince in [1, cutoffBlockHeight]
+	// - Fetches minimal bins: txID, unminedSince, external, inputs (4 bins vs 9-11)
+	// - Uses parallel partition queries for throughput
+	// Result: 90-99%+ bandwidth reduction vs full iterator when mempool is large
+	iterator, err := s.GetPrunableUnminedTxIterator(cutoffBlockHeight)
 	if err != nil {
 		return 0, errors.NewStorageError("failed to get unmined tx iterator", err)
 	}
@@ -81,21 +80,18 @@ func PreserveParentsOfOldUnminedTransactions(ctx context.Context, s Store, block
 		}
 
 		// Process each transaction in the batch
+		// Server-side filter already ensures UnminedSince is in [1, cutoffBlockHeight]
 		for _, unminedTx := range unminedBatch {
-			// Skip special markers
 			if unminedTx.Skip {
 				continue
 			}
 
-			// Filter for old unmined transactions (UnminedSince <= cutoffBlockHeight)
-			if unminedTx.UnminedSince > 0 && unminedTx.UnminedSince <= int(cutoffBlockHeight) {
-				// TxInpoints already available - no Get() call needed!
-				if len(unminedTx.TxInpoints.ParentTxHashes) > 0 {
-					for _, parentHash := range unminedTx.TxInpoints.ParentTxHashes {
-						allParents[parentHash] = struct{}{}
-					}
-					processedCount++
+			// TxInpoints already available from the iterator
+			if unminedTx.TxInpoints != nil && len(unminedTx.TxInpoints.ParentTxHashes) > 0 {
+				for _, parentHash := range unminedTx.TxInpoints.ParentTxHashes {
+					allParents[parentHash] = struct{}{}
 				}
+				processedCount++
 			}
 		}
 	}

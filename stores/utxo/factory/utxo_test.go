@@ -93,6 +93,10 @@ func (m *MockUTXOStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, erro
 	return nil, nil
 }
 
+func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	return nil, nil
+}
+
 func (m *MockUTXOStore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
 	return nil, nil
 }
