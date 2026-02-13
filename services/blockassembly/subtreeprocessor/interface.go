@@ -279,6 +279,15 @@ type Interface interface {
 	//   - uint64: Total size in bytes of all chained subtrees
 	GetChainedSubtreesTotalSize() uint64
 
+	// GetPrecomputedMiningData returns the pre-computed mining data for lock-free reads.
+	// This can be called from any goroutine without synchronization.
+	GetPrecomputedMiningData() *PrecomputedMiningData
+
+	// GetIncompleteSubtreeMiningData requests a snapshot of the incomplete subtree
+	// from the processing goroutine. Called on-demand when no complete subtrees exist.
+	// The context is used for cancellation/timeout to prevent blocking indefinitely.
+	GetIncompleteSubtreeMiningData(ctx context.Context) *PrecomputedMiningData
+
 	// WaitForPendingBlocks waits for any pending block operations to complete.
 	// This ensures that all block-related processing is finalized before proceeding.
 	//

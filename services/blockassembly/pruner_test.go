@@ -59,7 +59,6 @@ func TestCleanupDuringStartup(t *testing.T) {
 			bestBlock:        atomic.Pointer[BestBlockInfo]{},
 			subtreeProcessor: subtreeProcessor,
 			blockchainClient: blockchainClient,
-			cachedCandidate:  &CachedMiningCandidate{},
 		}
 
 		// Set block height
@@ -160,7 +159,6 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 			settings:         settings,
 			subtreeProcessor: mockSubtreeProcessor,
 			blockchainClient: blockchainClient,
-			cachedCandidate:  &CachedMiningCandidate{},
 		}
 
 		// Set block height

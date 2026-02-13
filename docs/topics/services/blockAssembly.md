@@ -210,35 +210,22 @@ This self-tuning mechanism helps maintain consistent processing rates and optima
 - The Block Assembly Server makes status announcements, using the Status Client, about the mining candidate's height and previous hash.
 - Finally, the Server tracks the current candidate in the JobStore within a new "job" and its TTL. This information will be retrieved at a later stage, if and when the miner submits a solution to the mining challenge for this specific mining candidate.
 
-#### 2.4.1. Mining Candidate Caching
+#### 2.4.1. Pre-computed Mining Data
 
-The Block Assembly service implements an intelligent caching mechanism for mining candidates to optimize performance and reduce redundant computations:
+The Block Assembly service uses a pre-computed data pattern for efficient mining candidate generation:
 
-**Cache Behavior:**
+**How It Works:**
 
-- Mining candidates are cached when the block height remains unchanged
-- The cache has a configurable timeout (via `MiningCandidateCacheTimeout` setting)
-- Cache is automatically invalidated when:
-
-    - A new block is added to the blockchain (height changes)
-    - New subtrees become available
-    - The cache timeout expires
+- The Subtree Processor atomically publishes pre-computed mining data (subtree snapshots) whenever a subtree completes or a block is processed
+- `GetMiningCandidate` reads this pre-computed data via a lock-free atomic pointer, requiring no locks or channel synchronization
+- When no complete subtrees exist, an on-demand snapshot of the incomplete subtree is requested from the processing goroutine
+- Derived values (fees, tx count, merkle proof, etc.) are computed per-request from the subtree snapshot
 
 **Performance Benefits:**
 
-- Reduces CPU overhead for miners requesting frequent updates
-- Eliminates redundant subtree processing and merkle tree calculations
-- Improves response times for mining candidate requests
-- Particularly beneficial for mining pools making high-frequency requests
-
-**Implementation Details:**
-
-- Uses thread-safe locking to prevent race conditions during cache updates
-- Implements a generation flag to serialize concurrent candidate creation requests
-- Cache hit/miss metrics are exposed via Prometheus for monitoring
-- Disabled for difficulty adjustment scenarios (when `ReduceMinDifficulty` is enabled) to ensure accurate difficulty calculations
-
-This caching mechanism is transparent to miners and significantly improves the efficiency of the mining candidate generation process during normal operations.
+- Lock-free reads eliminate contention under concurrent mining requests
+- No channel round-trips for the common case (completed subtrees available)
+- Supports high-frequency mining pool requests without serialization
 
 ### 2.5. Submit Mining Solution
 
