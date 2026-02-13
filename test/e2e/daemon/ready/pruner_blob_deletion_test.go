@@ -590,7 +590,6 @@ func TestBlobDeletionOnBlockPersistedTrigger(t *testing.T) {
 	t.Log("E2E blob deletion OnBlockPersisted trigger mechanism validated successfully")
 }
 
-
 func getDBDeletionCount(t *testing.T, db *usql.DB) int {
 	var count int
 	err := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM scheduled_blob_deletions").Scan(&count)
