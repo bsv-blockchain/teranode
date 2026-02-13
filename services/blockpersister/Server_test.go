@@ -738,6 +738,16 @@ func (m *MockBlockchainClient) GetSubscribers(ctx context.Context) ([]string, er
 func (m *MockBlockchainClient) GetState(ctx context.Context, key string) ([]byte, error) {
 	return nil, nil
 }
+func (m *MockBlockchainClient) CalculateMedianTimePastForHeight(ctx context.Context, height uint32) (uint32, error) {
+	// Return a simple mock value - tests don't rely on actual MTP calculation
+	return 0, nil
+}
+func (m *MockBlockchainClient) CalculateMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	// Return simple mock values - tests don't rely on actual MTP calculation
+	mtps := make([]uint32, len(heights))
+	// All zeros - sufficient for tests that don't check MTP values
+	return mtps, nil
+}
 func (m *MockBlockchainClient) SetState(ctx context.Context, key string, data []byte) error {
 	return nil
 }

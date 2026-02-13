@@ -9,20 +9,20 @@ import (
 )
 
 type BlockHeaderMeta struct {
-	ID              uint32     `json:"id"`                // ID of the block in the internal blockchain DB.
-	Height          uint32     `json:"height"`            // Height of the block in the blockchain.
-	TxCount         uint64     `json:"tx_count"`          // Number of transactions in the block.
-	SizeInBytes     uint64     `json:"size_in_bytes"`     // Size of the block in bytes.
-	Miner           string     `json:"miner"`             // Miner
-	PeerID          string     `json:"peer_id"`           // Peer ID of the miner that mined the block.
-	BlockTime       uint32     `json:"block_time"`        // Time of the block.
-	Timestamp       uint32     `json:"timestamp"`         // Timestamp of creation of the block in the db.
-	MedianTimePast  uint32     `json:"median_time_past"`  // Median Time Past (MTP) - median of last 11 block timestamps (BIP113)
-	ChainWork       []byte     `json:"chainwork"`         // ChainWork of the block.
-	MinedSet        bool       `json:"mined_set"`         // Whether the block is in the mined set.
-	SubtreesSet     bool       `json:"subtrees_set"`      // Whether the block has its subtrees set.
-	Invalid         bool       `json:"invalid"`           // Whether the block is marked as invalid.
-	ProcessedAt     *time.Time `json:"processed_at"`      // Timestamp when the block was processed (nullable).
+	ID             uint32     `json:"id"`               // ID of the block in the internal blockchain DB.
+	Height         uint32     `json:"height"`           // Height of the block in the blockchain.
+	TxCount        uint64     `json:"tx_count"`         // Number of transactions in the block.
+	SizeInBytes    uint64     `json:"size_in_bytes"`    // Size of the block in bytes.
+	Miner          string     `json:"miner"`            // Miner
+	PeerID         string     `json:"peer_id"`          // Peer ID of the miner that mined the block.
+	BlockTime      uint32     `json:"block_time"`       // Time of the block.
+	Timestamp      uint32     `json:"timestamp"`        // Timestamp of creation of the block in the db.
+	MedianTimePast uint32     `json:"median_time_past"` // Median Time Past (MTP) - median of last 11 block timestamps (BIP113)
+	ChainWork      []byte     `json:"chainwork"`        // ChainWork of the block.
+	MinedSet       bool       `json:"mined_set"`        // Whether the block is in the mined set.
+	SubtreesSet    bool       `json:"subtrees_set"`     // Whether the block has its subtrees set.
+	Invalid        bool       `json:"invalid"`          // Whether the block is marked as invalid.
+	ProcessedAt    *time.Time `json:"processed_at"`     // Timestamp when the block was processed (nullable).
 }
 
 func (m *BlockHeaderMeta) Bytes() []byte {
