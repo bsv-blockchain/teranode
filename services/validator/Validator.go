@@ -504,17 +504,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	// validate the transaction format, consensus rules etc.
-	// this does not validate the signatures in the transaction yet
-	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
-		span.RecordError(err)
-
-		return nil, err
-	}
-
 	// if the transaction was extended, we still need to get the block heights of the inputs
-	// since that processing did not happen before the validateTransaction step
+	// since that processing did not happen before extending the transaction
+	// This must be done BEFORE validateTransaction to ensure BIP68 sequence lock validation has the required heights
 	if len(utxoHeights) == 0 {
 		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
 			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
@@ -522,6 +514,15 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 			return nil, err
 		}
+	}
+
+	// validate the transaction format, consensus rules etc.
+	// this does not validate the signatures in the transaction yet
+	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
+		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
+		span.RecordError(err)
+
+		return nil, err
 	}
 
 	// validate the transaction scripts and signatures
