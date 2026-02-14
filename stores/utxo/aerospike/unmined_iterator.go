@@ -47,33 +47,44 @@ type unminedTxIterator struct {
 //   - *unminedTxIterator: A new iterator instance ready for use
 //   - error: Any error encountered during iterator initialization
 func newUnminedTxIterator(store *Store, fullScan bool) (*unminedTxIterator, error) {
-	queryThreadsLimitStr, err := getConfigValue(store, "query-threads-limit")
+	numPartitionQueries, err := calculatePartitionQueries(store)
 	if err != nil {
 		return nil, err
-	}
-
-	// convert to int
-	queryThreadsLimit, err := strconv.ParseInt(queryThreadsLimitStr, 10, 64)
-	if err != nil {
-		return nil, errors.NewProcessingError("failed to parse query-threads-limit: %v", err)
-	}
-
-	// Check that queryThreadsLimit fits in int before conversion
-	if queryThreadsLimit > int64(math.MaxInt) || queryThreadsLimit < int64(math.MinInt) {
-		return nil, errors.NewProcessingError("query-threads-limit value %d out of range for int type", queryThreadsLimit)
-	}
-
-	numPartitionQueries := runtime.NumCPU()
-
-	// Ensure we don't exceed query-threads-limit, assuming each partition query uses up to 4 threads
-	queryLimits := int(queryThreadsLimit) / 4
-	if queryThreadsLimit > 0 && numPartitionQueries > queryLimits {
-		numPartitionQueries = queryLimits
 	}
 
 	store.logger.Infof("[newUnminedTxIterator] Using %d parallel Aerospike partition queries for unmined transactions (fullScan=%t)", numPartitionQueries, fullScan)
 
 	return newUnminedTxIteratorWithPartitions(store, fullScan, numPartitionQueries)
+}
+
+// calculatePartitionQueries determines the optimal number of parallel partition queries
+// based on CPU cores and Aerospike's query-threads-limit configuration.
+func calculatePartitionQueries(store *Store) (int, error) {
+	queryThreadsLimitStr, err := getConfigValue(store, "query-threads-limit")
+	if err != nil {
+		return 0, err
+	}
+
+	queryThreadsLimit, err := strconv.ParseInt(queryThreadsLimitStr, 10, 64)
+	if err != nil {
+		return 0, errors.NewProcessingError("failed to parse query-threads-limit: %v", err)
+	}
+
+	// Check that queryThreadsLimit fits in int before conversion
+	if queryThreadsLimit > int64(math.MaxInt) || queryThreadsLimit < int64(math.MinInt) {
+		return 0, errors.NewProcessingError("query-threads-limit value %d out of range for int type", queryThreadsLimit)
+	}
+
+	numPartitionQueries := runtime.NumCPU()
+
+	// Ensure we don't exceed query-threads-limit, assuming each partition query uses up to 4 threads
+	// nolint:gosec // bounds checked above
+	queryLimits := int(queryThreadsLimit) / 4
+	if queryThreadsLimit > 0 && numPartitionQueries > queryLimits {
+		numPartitionQueries = queryLimits
+	}
+
+	return numPartitionQueries, nil
 }
 
 func getConfigValue(store *Store, configParam string) (string, error) {
@@ -763,25 +774,9 @@ func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.Unm
 // - Filters server-side: unminedSince in [1, cutoffBlockHeight] (only old unmined txs)
 // - Fetches minimal bins: txID, unminedSince, external, inputs (4 bins vs 9-11)
 func newPrunableUnminedTxIterator(store *Store, cutoffBlockHeight uint32) (*unminedTxIterator, error) {
-	queryThreadsLimitStr, err := getConfigValue(store, "query-threads-limit")
+	numPartitionQueries, err := calculatePartitionQueries(store)
 	if err != nil {
 		return nil, err
-	}
-
-	queryThreadsLimit, err := strconv.ParseInt(queryThreadsLimitStr, 10, 64)
-	if err != nil {
-		return nil, errors.NewProcessingError("failed to parse query-threads-limit: %v", err)
-	}
-
-	if queryThreadsLimit > int64(math.MaxInt) || queryThreadsLimit < int64(math.MinInt) {
-		return nil, errors.NewProcessingError("query-threads-limit value %d out of range for int type", queryThreadsLimit)
-	}
-
-	numPartitionQueries := runtime.NumCPU()
-
-	queryLimits := int(queryThreadsLimit) / 4
-	if queryThreadsLimit > 0 && numPartitionQueries > queryLimits {
-		numPartitionQueries = queryLimits
 	}
 
 	store.logger.Infof("[newPrunableUnminedTxIterator] Using %d parallel partition queries (cutoff=%d)", numPartitionQueries, cutoffBlockHeight)
