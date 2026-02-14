@@ -12,7 +12,7 @@ const BucketsCount = 8
 
 // MapInitialCapacity is the expected total number of entries across the entire cache (test env).
 // Used as capacity hint when creating SplitSwissLockFreeMapUint64 index maps.
-const MapInitialCapacity = 1_000
+const MapInitialCapacity = 1
 
 // ChunkSize defines the memory chunk size (maxValueSizeKB * 2 * 1024 bytes).
 const ChunkSize = maxValueSizeKB * 2 * 1024

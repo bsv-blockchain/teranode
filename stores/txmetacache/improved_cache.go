@@ -879,7 +879,7 @@ func (b *bucketNative) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 }
 
 // Get skips locking if skipLocking is set to true. Locking should be only skipped when the caller holds the lock, i.e. when called from SetMulti.
-func (b *bucketNative) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
+func (b *bucketNative) Get(dst *[]byte, key []byte, h uint64, returnDst bool, skipLocking ...bool) bool {
 	found := false
 	chunks := b.chunks
 
@@ -922,7 +922,7 @@ func (b *bucketNative) Get(dst *[]byte, k []byte, h uint64, returnDst bool, skip
 				goto end
 			}
 
-			if string(k) == string(chunk[idx:idx+keyLen]) {
+			if string(key) == string(chunk[idx:idx+keyLen]) {
 				idx += keyLen
 				if returnDst {
 					*dst = append(*dst, chunk[idx:idx+valLen]...)

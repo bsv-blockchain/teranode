@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -135,198 +136,145 @@ func Test_txMetaCache_GetMeta(t *testing.T) {
 	})
 }
 
-func Benchmark_txMetaCache_Set(b *testing.B) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(b)
+func Test_txMetaCache_Set_FixedIterations(t *testing.T) {
+	maxSetBenchmarkTxs := 1_000_000
+	scenarioRuns := 5
 
-	tSettings := test.CreateBaseTestSettings(b)
-
-	utxoStoreURL, err := url.Parse("sqlitememory:///test")
-	require.NoError(b, err)
-
-	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
-	require.NoError(b, err)
-
-	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, Unallocated)
-	cache := c.(*TxMetaCache)
-
-	// Pre-generate all hashes
-	hashes := make([]chainhash.Hash, b.N)
-	for i := 0; i < b.N; i++ {
-		hashes[i] = chainhash.HashH([]byte(string(rune(i))))
+	// Generate once and reuse across all bucket-type scenarios.
+	preGeneratedHashes := make([]chainhash.Hash, maxSetBenchmarkTxs)
+	for i := 0; i < maxSetBenchmarkTxs; i++ {
+		preGeneratedHashes[i] = chainhash.HashH([]byte(string(rune(i))))
 	}
 
-	b.ResetTimer()
+	testCases := []struct {
+		name       string
+		bucketType BucketType
+	}{
+		{name: "Preallocated", bucketType: Preallocated},
+		{name: "Unallocated", bucketType: Unallocated},
+		{name: "Trimmed", bucketType: Trimmed},
+		{name: "Native", bucketType: Native},
+	}
 
-	g := new(errgroup.Group)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			hashes := preGeneratedHashes
+			var totalDuration time.Duration
 
-	for i := 0; i < b.N; i++ {
-		hash := hashes[i]
+			for run := 1; run <= scenarioRuns; run++ {
+				ctx := context.Background()
+				logger := ulogger.NewErrorTestLogger(t)
+				tSettings := test.CreateBaseTestSettings(t)
 
-		g.Go(func() error {
-			return cache.SetCache(&hash, &meta.Data{})
+				utxoStoreURL, err := url.Parse("sqlitememory:///test")
+				require.NoError(t, err)
+
+				utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+				require.NoError(t, err)
+
+				c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, tc.bucketType)
+				cache := c.(*TxMetaCache)
+
+				start := time.Now()
+				g := new(errgroup.Group)
+
+				for i := 0; i < maxSetBenchmarkTxs; i++ {
+					hash := hashes[i]
+
+					g.Go(func() error {
+						return cache.SetCache(&hash, &meta.Data{})
+					})
+				}
+
+				err = g.Wait()
+				require.NoError(t, err)
+
+				runDuration := time.Since(start)
+				totalDuration += runDuration
+				t.Logf("%s run %d/%d: %s for %d txs", tc.name, run, scenarioRuns, runDuration, maxSetBenchmarkTxs)
+			}
+
+			avgDuration := totalDuration / time.Duration(scenarioRuns)
+			t.Logf("%s avg over %d runs: %s for %d txs", tc.name, scenarioRuns, avgDuration, maxSetBenchmarkTxs)
 		})
 	}
-
-	err = g.Wait()
-	require.NoError(b, err)
-}
-
-func Benchmark_txMetaCache_Set_Native(b *testing.B) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(b)
-
-	tSettings := test.CreateBaseTestSettings(b)
-
-	utxoStoreURL, err := url.Parse("sqlitememory:///test")
-	require.NoError(b, err)
-
-	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
-	require.NoError(b, err)
-
-	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, Native)
-	cache := c.(*TxMetaCache)
-
-	// Pre-generate all hashes
-	hashes := make([]chainhash.Hash, b.N)
-	for i := 0; i < b.N; i++ {
-		hashes[i] = chainhash.HashH([]byte(string(rune(i))))
-	}
-
-	b.ResetTimer()
-
-	g := new(errgroup.Group)
-
-	for i := 0; i < b.N; i++ {
-		hash := hashes[i]
-
-		g.Go(func() error {
-			return cache.SetCache(&hash, &meta.Data{})
-		})
-	}
-
-	err = g.Wait()
-	require.NoError(b, err)
 }
 
 func Benchmark_txMetaCache_Get(b *testing.B) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(b)
+	const iterationCount = 50_000
 
-	tSettings := test.CreateBaseTestSettings(b)
-
-	utxoStoreURL, err := url.Parse("sqlitememory:///test")
-	require.NoError(b, err)
-
-	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
-	require.NoError(b, err)
-
-	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, Unallocated)
-	cache := c.(*TxMetaCache)
-
-	metaData := &meta.Data{
-		Fee:         100,
-		SizeInBytes: 111,
-		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
+	// Generate once and reuse across all bucket-type scenarios.
+	preGeneratedHashes := make([]chainhash.Hash, iterationCount)
+	for i := 0; i < iterationCount; i++ {
+		preGeneratedHashes[i] = chainhash.HashH([]byte(string(rune(i))))
 	}
 
-	iterationCount := 50_000
-
-	// Pre-generate and pre-populate the cache
-	hashes := make([]chainhash.Hash, iterationCount)
-
-	for i := 0; i < iterationCount; i++ {
-		hash := chainhash.HashH([]byte(string(rune(i))))
-		hashes[i] = hash
-
-		if err := cache.SetCache(&hash, metaData); err != nil {
-			b.Fatalf("pre-population of cache failed: %v", err)
-		}
+	benchmarks := []struct {
+		name       string
+		bucketType BucketType
+	}{
+		{name: "Preallocated", bucketType: Preallocated},
+		{name: "Unallocated", bucketType: Unallocated},
+		{name: "Trimmed", bucketType: Trimmed},
+		{name: "Native", bucketType: Native},
 	}
 
-	b.ResetTimer()
+	for _, bm := range benchmarks {
+		b.Run(bm.name, func(b *testing.B) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(b)
 
-	g := new(errgroup.Group)
+			tSettings := test.CreateBaseTestSettings(b)
 
-	for i := 0; i < iterationCount; i++ {
-		hash := hashes[i]
-		i := i
+			utxoStoreURL, err := url.Parse("sqlitememory:///test")
+			require.NoError(b, err)
 
-		g.Go(func() error {
-			data := &meta.Data{}
-			err := cache.GetMeta(context.Background(), &hash, data)
-			_ = data
+			utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+			require.NoError(b, err)
 
-			if err != nil {
-				b.Fatalf("cache miss, iteration %d: %v", i, err)
+			c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, bm.bucketType)
+			cache := c.(*TxMetaCache)
+
+			metaData := &meta.Data{
+				Fee:         100,
+				SizeInBytes: 111,
+				TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
 			}
 
-			return nil
-		})
-	}
+			hashes := preGeneratedHashes[:iterationCount]
 
-	err = g.Wait()
-	require.NoError(b, err)
-}
-
-func Benchmark_txMetaCache_Get_Native(b *testing.B) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(b)
-
-	tSettings := test.CreateBaseTestSettings(b)
-
-	utxoStoreURL, err := url.Parse("sqlitememory:///test")
-	require.NoError(b, err)
-
-	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
-	require.NoError(b, err)
-
-	c, _ := NewTxMetaCache(ctx, settings.NewSettings(), logger, utxoStore, Native)
-	cache := c.(*TxMetaCache)
-
-	metaData := &meta.Data{
-		Fee:         100,
-		SizeInBytes: 111,
-		TxInpoints:  subtree.TxInpoints{ParentTxHashes: []chainhash.Hash{}},
-	}
-
-	iterationCount := 50_000
-
-	// Pre-generate and pre-populate the cache
-	hashes := make([]chainhash.Hash, iterationCount)
-
-	for i := 0; i < iterationCount; i++ {
-		hash := chainhash.HashH([]byte(string(rune(i))))
-		hashes[i] = hash
-
-		if err := cache.SetCache(&hash, metaData); err != nil {
-			b.Fatalf("pre-population of cache failed: %v", err)
-		}
-	}
-
-	b.ResetTimer()
-
-	g := new(errgroup.Group)
-
-	for i := 0; i < iterationCount; i++ {
-		hash := hashes[i]
-		i := i
-
-		g.Go(func() error {
-			data := &meta.Data{}
-			err := cache.GetMeta(context.Background(), &hash, data)
-			_ = data
-
-			if err != nil {
-				b.Fatalf("cache miss, iteration %d: %v", i, err)
+			for i := 0; i < iterationCount; i++ {
+				hash := hashes[i]
+				if err := cache.SetCache(&hash, metaData); err != nil {
+					b.Fatalf("pre-population of cache failed: %v", err)
+				}
 			}
 
-			return nil
+			b.ResetTimer()
+
+			g := new(errgroup.Group)
+
+			for i := range iterationCount {
+				hash := hashes[i]
+				i := i
+
+				g.Go(func() error {
+					data := &meta.Data{}
+					err := cache.GetMeta(context.Background(), &hash, data)
+					_ = data
+
+					if err != nil {
+						b.Fatalf("cache miss, iteration %d: %v", i, err)
+					}
+
+					return nil
+				})
+			}
+
+			err = g.Wait()
+			require.NoError(b, err)
 		})
 	}
-
-	err = g.Wait()
-	require.NoError(b, err)
 }
 
 type decoratingNullStore struct {
