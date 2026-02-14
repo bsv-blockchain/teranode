@@ -716,7 +716,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	// assert.Equal(t, subtreeHash.String(), subtreeProcessor.currentSubtree.RootHash().String())
 
 	// we must set the current block header before calling moveForwardBlock
-	subtreeProcessor.currentBlockHeader = model.GenesisBlockHeader
+	subtreeProcessor.currentBlockHeader.Store(model.GenesisBlockHeader)
 
 	// Move up the block
 	blockBytes, err := hex.DecodeString("000000206a21d13c3d2656557493b4652f67a763f835b86bf90107a60f412c290000000083ba48026c405d5a4b4d5aa3f10cee9de605a012e9a25f72a19aa9fe123380c689505c67c874461cc6dda18002fde501016b104579e34c5c12fad8899035be27f7605f8ff95db814ba02fbc49397a761fd01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1903af32190000000000205f7c477c327c437c5f200001000000ffffffff01e50b5402000000001976a9147a112f6a373b80b4ebb2b02acef97f35aef7494488ac00000000feaf321900")
@@ -725,7 +725,7 @@ func TestMoveForwardBlock_LeftInQueue(t *testing.T) {
 	block, err := model.NewBlockFromBytes(blockBytes)
 	require.NoError(t, err)
 
-	block.Header.HashPrevBlock = subtreeProcessor.currentBlockHeader.Hash()
+	block.Header.HashPrevBlock = subtreeProcessor.currentBlockHeader.Load().Hash()
 
 	err = subtreeProcessor.MoveForwardBlock(block)
 	require.NoError(t, err)
@@ -3476,7 +3476,7 @@ func TestInitCurrentBlockHeader_SubtreeCountingFix(t *testing.T) {
 
 		// Verify subtreesInBlock starts at 0, not 1
 		assert.Equal(t, 0, stp.subtreesInBlock, "subtreesInBlock should start at 0")
-		assert.Equal(t, prevBlockHeader, stp.currentBlockHeader, "currentBlockHeader should be set")
+		assert.Equal(t, prevBlockHeader, stp.currentBlockHeader.Load(), "currentBlockHeader should be set")
 		assert.False(t, stp.blockStartTime.IsZero(), "blockStartTime should be set")
 	})
 
@@ -3489,7 +3489,7 @@ func TestInitCurrentBlockHeader_SubtreeCountingFix(t *testing.T) {
 		// This should not panic
 		stp.InitCurrentBlockHeader(nil)
 
-		assert.Nil(t, stp.currentBlockHeader, "currentBlockHeader should be nil")
+		assert.Nil(t, stp.currentBlockHeader.Load(), "currentBlockHeader should be nil")
 		assert.Equal(t, 0, stp.subtreesInBlock, "subtreesInBlock should be 0")
 		assert.False(t, stp.blockStartTime.IsZero(), "blockStartTime should still be set")
 	})

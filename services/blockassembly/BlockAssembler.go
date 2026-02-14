@@ -29,21 +29,8 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 )
-
-// miningCandidateResponse encapsulates all data needed for a mining candidate response.
-type miningCandidateResponse struct {
-	// miningCandidate contains the block template for mining
-	miningCandidate *model.MiningCandidate
-
-	// subtrees contains all transaction subtrees included in the candidate
-	subtrees []*subtree.Subtree
-
-	// err contains any error encountered during candidate creation
-	err error
-}
 
 // State represents the current operational state of the BlockAssembler.
 // It tracks the assembler's lifecycle and processing phases.
@@ -66,9 +53,6 @@ var (
 	// StateResetting indicates the processor is resetting
 	StateResetting State = 2
 
-	// StateGetMiningCandidate indicates the processor is getting a mining candidate
-	StateGetMiningCandidate State = 3
-
 	// StateBlockchainSubscription indicates the processor is receiving blockchain notifications
 	StateBlockchainSubscription State = 4
 
@@ -83,7 +67,6 @@ var StateStrings = map[State]string{
 	StateStarting:               "starting",
 	StateRunning:                "running",
 	StateResetting:              "resetting",
-	StateGetMiningCandidate:     "getMiningCandidate",
 	StateBlockchainSubscription: "blockchainSubscription",
 	StateReorging:               "reorging",
 	StateMovingUp:               "movingUp",
@@ -118,9 +101,6 @@ type BlockAssembler struct {
 
 	// subtreeProcessor handles the processing and organization of transaction subtrees
 	subtreeProcessor subtreeprocessor.Interface
-
-	// miningCandidateCh coordinates requests for mining candidates
-	miningCandidateCh chan chan *miningCandidateResponse
 
 	// bestBlock atomically stores the current best block header and height together
 	bestBlock atomic.Pointer[BestBlockInfo]
@@ -157,9 +137,6 @@ type BlockAssembler struct {
 	// unminedCleanupTicker manages periodic cleanup of old unmined transactions
 	unminedCleanupTicker *time.Ticker
 
-	// cachedCandidate stores the cached mining candidate
-	cachedCandidate *CachedMiningCandidate
-
 	// skipWaitForPendingBlocks allows tests to skip waiting for pending blocks during startup
 	skipWaitForPendingBlocks bool
 
@@ -184,21 +161,6 @@ type blockHeaderWithMeta struct {
 type blockWithMeta struct {
 	block *model.Block
 	meta  *model.BlockHeaderMeta
-}
-
-// CachedMiningCandidate holds a cached mining candidate with expiration
-type CachedMiningCandidate struct {
-	mu             sync.RWMutex
-	candidate      *model.MiningCandidate
-	subtrees       []*subtree.Subtree
-	lastHeight     uint32
-	lastUpdate     time.Time
-	generating     bool
-	generationChan chan struct{}
-	// Track state for smart invalidation
-	lastTxCount      uint32
-	lastSizeInBytes  uint64
-	lastSubtreeCount int
 }
 
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
@@ -243,13 +205,11 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		subtreeStore:        subtreeStore,
 		blockchainClient:    blockchainClient,
 		subtreeProcessor:    subtreeProcessor,
-		miningCandidateCh:   make(chan chan *miningCandidateResponse),
 		currentChainMap:     make(map[chainhash.Hash]uint32, tSettings.BlockAssembly.MaxBlockReorgCatchup),
 		currentChainMapIDs:  make(map[uint32]struct{}, tSettings.BlockAssembly.MaxBlockReorgCatchup),
 		defaultMiningNBits:  defaultMiningBits,
 		resetCh:             make(chan resetRequest, 2),
 		currentRunningState: atomic.Value{},
-		cachedCandidate:     &CachedMiningCandidate{},
 	}
 
 	b.setCurrentRunningState(StateStarting)
@@ -322,7 +282,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 			select {
 			case <-ctx.Done():
 				b.logger.Infof("Stopping blockassembler as ctx is done")
-				close(b.miningCandidateCh)
 				// Note: We don't close blockchainSubscriptionCh here because we don't own it -
 				// it's created by the blockchain client's Subscribe method
 				return
@@ -344,35 +303,6 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 					resetReq.ErrCh <- err
 				}
 
-				b.setCurrentRunningState(StateRunning)
-
-			case responseCh := <-b.miningCandidateCh:
-				b.setCurrentRunningState(StateGetMiningCandidate)
-				// start, stat, _ := util.NewStatFromContext(context, "miningCandidateCh", channelStats)
-				// wait for the reset to complete before getting a new mining candidate
-				// 2 blocks && at least 20 minutes
-
-				currentState, err := b.blockchainClient.GetFSMCurrentState(ctx)
-				if err != nil {
-					// TODO: how to handle it gracefully?
-					b.logger.Errorf("[BlockAssembly] Failed to get current state: %s", err)
-				}
-
-				// if the current state is not running, we don't give a mining candidate
-				if *currentState == blockchain.FSMStateRUNNING {
-					miningCandidate, subtrees, err := b.getMiningCandidate()
-					utils.SafeSend(responseCh, &miningCandidateResponse{
-						miningCandidate: miningCandidate,
-						subtrees:        subtrees,
-						err:             err,
-					})
-				} else {
-					utils.SafeSend(responseCh, &miningCandidateResponse{
-						err: errors.NewProcessingError("blockchain is not in running state, current state: " + currentState.String()),
-					})
-				}
-
-				// stat.AddTime(start)
 				b.setCurrentRunningState(StateRunning)
 
 			case notification := <-b.blockchainSubscriptionCh:
@@ -564,7 +494,6 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 
 	baBestBlockHeader, _ := b.CurrentBlock()
 
-	// TODO: Is this logic right?
 	if response := b.subtreeProcessor.Reset(baBestBlockHeader, moveBackBlocks, moveForwardBlocks, isLegacySync, postProcessFn); response.Err != nil {
 		b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", response.Err)
 		// something went wrong, we need to set the best block header in the block assembly to be the
@@ -721,9 +650,6 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 			}
 		}()
 	}
-
-	// Invalidate cache when block height changes
-	b.invalidateMiningCandidateCache()
 }
 
 // setCurrentRunningState sets the current operational state.
@@ -981,8 +907,10 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	)
 	defer deferFn()
 
-	currentState := b.GetCurrentRunningState()
+	prometheusBlockAssemblerGetMiningCandidate.Inc()
 
+	// Handle block-processing-in-progress state
+	currentState := b.GetCurrentRunningState()
 	if currentState == StateBlockchainSubscription || currentState == StateMovingUp {
 		b.logger.Infof("[GetMiningCandidate] Block processing in progress (state: %s), returning empty block template for new height", StateStrings[currentState])
 
@@ -994,172 +922,160 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 		return b.generateEmptyBlockCandidate(bestBlockHeader, bestBlockMeta.Height)
 	}
 
-	// Declare currentHeight outside loop so it's available for cache update later
-	var currentHeight uint32
-
-	// Use iterative approach instead of recursion to prevent stack overflow under load
-	for {
-		// Try to get from cache first
-		b.cachedCandidate.mu.RLock()
-
-		_, currentHeight = b.CurrentBlock()
-
-		// Return cached if still valid (same height and within timeout)
-		if !b.settings.ChainCfgParams.ReduceMinDifficulty && b.cachedCandidate.candidate != nil &&
-			b.cachedCandidate.lastHeight == currentHeight &&
-			time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateCacheTimeout {
-			candidate := b.cachedCandidate.candidate
-			subtrees := b.cachedCandidate.subtrees
-			b.cachedCandidate.mu.RUnlock()
-
-			// Record cache hit metrics
-			prometheusBlockAssemblerCacheHits.Inc()
-
-			b.logger.Debugf("[BlockAssembler] Returning cached mining candidate %s", candidate.Id)
-
-			return candidate, subtrees, nil
-		}
-
-		// Check if already generating
-		if b.cachedCandidate.generating {
-			// Return stale cache if available rather than blocking
-			// Miners can work with slightly stale data during high load
-			if b.cachedCandidate.candidate != nil &&
-				time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge {
-				candidate := b.cachedCandidate.candidate
-				subtrees := b.cachedCandidate.subtrees
-				b.cachedCandidate.mu.RUnlock()
-
-				b.logger.Debugf("[BlockAssembler] Returning stale cache during generation (age: %v)",
-					time.Since(b.cachedCandidate.lastUpdate))
-				prometheusBlockAssemblerCacheHits.Inc()
-
-				return candidate, subtrees, nil
-			}
-
-			// If stale cache too old or doesn't exist, wait for generation
-			ch := b.cachedCandidate.generationChan
-			b.cachedCandidate.mu.RUnlock()
-
-			// Wait for ongoing generation with timeout
-			select {
-			case <-ch:
-				// Generation complete, retry to get fresh cache (loop continues)
-				continue
-			case <-ctx.Done():
-				return nil, nil, ctx.Err()
-			case <-time.After(b.settings.BlockAssembly.GetMiningCandidateResponseTimeout):
-				// Timeout waiting for generation, retry (loop continues)
-				continue
-			}
-		}
-
-		// Mark as generating - upgrade to write lock
-		b.cachedCandidate.mu.RUnlock()
-		b.cachedCandidate.mu.Lock()
-
-		// Double check generating flag in case another goroutine set it while we upgraded locks
-		if b.cachedCandidate.generating {
-			// Return stale cache if available (same logic as above)
-			if b.cachedCandidate.candidate != nil &&
-				time.Since(b.cachedCandidate.lastUpdate) < b.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge {
-				candidate := b.cachedCandidate.candidate
-				subtrees := b.cachedCandidate.subtrees
-				b.cachedCandidate.mu.Unlock()
-
-				b.logger.Debugf("[BlockAssembler] Returning stale cache after lock upgrade (age: %v)",
-					time.Since(b.cachedCandidate.lastUpdate))
-				prometheusBlockAssemblerCacheHits.Inc()
-
-				return candidate, subtrees, nil
-			}
-
-			ch := b.cachedCandidate.generationChan
-			b.cachedCandidate.mu.Unlock()
-
-			// Wait for ongoing generation
-			select {
-			case <-ch:
-				// Generation complete, retry (loop continues)
-				continue
-			case <-ctx.Done():
-				return nil, nil, ctx.Err()
-			case <-time.After(b.settings.BlockAssembly.GetMiningCandidateResponseTimeout):
-				// Timeout waiting for generation, retry (loop continues)
-				continue
-			}
-		}
-
-		// We have the write lock and no one else is generating - break out to generate
-		break
+	// Get current block state first (single atomic read for consistency)
+	baBestBlockHeader, baBestBlockHeight := b.CurrentBlock()
+	if baBestBlockHeader == nil {
+		return nil, nil, errors.NewError("best block header is not available")
 	}
 
-	b.cachedCandidate.generating = true
-	b.cachedCandidate.generationChan = make(chan struct{})
-	b.cachedCandidate.mu.Unlock()
+	// Get pre-computed data (atomic read, no locks, no channel sync)
+	data := b.subtreeProcessor.GetPrecomputedMiningData()
 
-	// Ensure cache state is always cleaned up, even on early returns
-	defer func() {
-		b.cachedCandidate.mu.Lock()
-		b.cachedCandidate.generating = false
-		if b.cachedCandidate.generationChan != nil {
-			close(b.cachedCandidate.generationChan)
-			b.cachedCandidate.generationChan = nil
-		}
-		b.cachedCandidate.mu.Unlock()
-	}()
-
-	// Generate new candidate
-	responseCh := make(chan *miningCandidateResponse)
-
-	select {
-	case <-ctx.Done():
-		close(responseCh)
-		return nil, nil, ctx.Err()
-	case <-time.After(b.settings.BlockAssembly.GetMiningCandidateSendTimeout):
-		return nil, nil, errors.NewServiceError("timeout sending mining candidate request")
-	case b.miningCandidateCh <- responseCh:
-	}
-
-	var candidate *model.MiningCandidate
+	// Check if we have valid precomputed data with subtrees
 	var subtrees []*subtree.Subtree
-	var err error
-
-	select {
-	case <-ctx.Done():
-		close(responseCh)
-		err = ctx.Err()
-	case <-time.After(b.settings.BlockAssembly.GetMiningCandidateResponseTimeout):
-		close(responseCh)
-		err = errors.NewServiceError("timeout getting mining candidate")
-	case response := <-responseCh:
-		candidate = response.miningCandidate
-		subtrees = response.subtrees
-		err = response.err
+	if data != nil && data.PreviousHeader != nil && data.PreviousHeader.Hash().IsEqual(baBestBlockHeader.Hash()) {
+		subtrees = data.Subtrees
+	} else if data != nil && data.PreviousHeader != nil {
+		b.logger.Warnf("[GetMiningCandidate] Pre-computed data is stale (data prev: %s, current best: %s)", data.PreviousHeader.Hash().String(), baBestBlockHeader.Hash().String())
 	}
 
-	if err == nil {
-		var totalTxCount uint32
-		var totalSize uint64
-		for _, st := range subtrees {
-			totalTxCount += uint32(st.Length())
-			totalSize += st.SizeInBytes
+	// If no complete subtrees, try on-demand incomplete subtree snapshot
+	if len(subtrees) == 0 {
+		incompleteData := b.subtreeProcessor.GetIncompleteSubtreeMiningData(ctx)
+		if incompleteData != nil && len(incompleteData.Subtrees) > 0 && incompleteData.PreviousHeader.Hash().IsEqual(baBestBlockHeader.Hash()) {
+			data = incompleteData
+			subtrees = incompleteData.Subtrees
+		} else {
+			return b.generateEmptyBlockCandidate(baBestBlockHeader, baBestBlockHeight)
 		}
-
-		b.cachedCandidate.mu.Lock()
-		b.cachedCandidate.candidate = candidate
-		b.cachedCandidate.subtrees = subtrees
-		b.cachedCandidate.lastHeight = currentHeight
-		b.cachedCandidate.lastUpdate = time.Now()
-		b.cachedCandidate.lastTxCount = totalTxCount
-		b.cachedCandidate.lastSizeInBytes = totalSize
-		b.cachedCandidate.lastSubtreeCount = len(subtrees)
-		b.cachedCandidate.mu.Unlock()
-
-		prometheusBlockAssemblerCacheMisses.Inc()
 	}
 
-	return candidate, subtrees, err
+	// Apply max block size limit if configured
+	maxBlockSize := b.settings.Policy.BlockMaxSize
+	if maxBlockSize > 0 && len(subtrees) > 0 {
+		var filterErr error
+		subtrees, filterErr = b.filterSubtreesByMaxSize(subtrees, maxBlockSize)
+		if filterErr != nil {
+			return nil, nil, filterErr
+		}
+	}
+
+	// Compute derived values from subtrees
+	var totalFees uint64
+	var txCount uint32
+	var sizeWithoutCoinbase = uint64(model.BlockHeaderSize)
+	subtreeHashes := make([][]byte, len(subtrees))
+
+	topTree, err := subtree.NewIncompleteTreeByLeafCount(len(subtrees))
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("error creating top tree", err)
+	}
+
+	for i, st := range subtrees {
+		totalFees += st.Fees
+		sizeWithoutCoinbase += st.SizeInBytes
+		subtreeHashes[i] = st.RootHash().CloneBytes()
+
+		lenNodes, convErr := safeconversion.IntToUint32(len(st.Nodes))
+		if convErr != nil {
+			b.logger.Errorf("[GetMiningCandidate] error converting nodes length: %s", convErr)
+			continue
+		}
+		txCount += lenNodes
+
+		_ = topTree.AddNode(*st.RootHash(), st.Fees, st.SizeInBytes)
+	}
+
+	// Remove coinbase from tx count (it's a placeholder in the first subtree)
+	if txCount > 0 {
+		txCount--
+	}
+
+	// Compute merkle proof for coinbase
+	coinbaseMerkleProof, err := subtree.GetMerkleProofForCoinbase(subtrees)
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("error getting merkle proof", err)
+	}
+	merkleProofBytes := make([][]byte, len(coinbaseMerkleProof))
+	for i, hash := range coinbaseMerkleProof {
+		merkleProofBytes[i] = hash.CloneBytes()
+	}
+
+	subtreeCountUint32, _ := safeconversion.IntToUint32(len(subtrees))
+
+	// Compute time-sensitive fields
+	timeNow := time.Now().Unix()
+	timeNowUint32, err := safeconversion.Int64ToUint32(timeNow)
+	if err != nil {
+		return nil, nil, errors.NewProcessingError("error converting time now", err)
+	}
+
+	nBits, err := b.getNextNbits(data.PreviousHeader, timeNow)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if b.settings.ChainCfgParams == nil {
+		return nil, nil, errors.NewProcessingError("ChainCfgParams is nil")
+	}
+
+	blockSubsidy := util.GetBlockSubsidyForHeight(baBestBlockHeight+1, b.settings.ChainCfgParams)
+
+	// Generate job ID from top tree hash, previous hash, and time
+	topTreeRootHash := topTree.RootHash()
+	timeBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
+	previousHash := data.PreviousHeader.Hash()
+	id := chainhash.HashB(append(append(topTreeRootHash[:], previousHash[:]...), timeBytes...))
+
+	candidate := &model.MiningCandidate{
+		Id:                  id,
+		PreviousHash:        previousHash[:],
+		CoinbaseValue:       totalFees + blockSubsidy,
+		Version:             0x20000000,
+		NBits:               nBits.CloneBytes(),
+		Height:              baBestBlockHeight + 1, // next block height
+		Time:                timeNowUint32,
+		MerkleProof:         merkleProofBytes,
+		NumTxs:              txCount,
+		SizeWithoutCoinbase: sizeWithoutCoinbase,
+		SubtreeCount:        subtreeCountUint32,
+		SubtreeHashes:       subtreeHashes,
+	}
+
+	b.logger.Debugf("[GetMiningCandidate] Returning mining candidate: height=%d, fees=%d, subsidy=%d, txCount=%d, subtreeCount=%d", candidate.Height, totalFees, blockSubsidy, txCount, subtreeCountUint32)
+
+	return candidate, subtrees, nil
+}
+
+// filterSubtreesByMaxSize filters subtrees to fit within the configured maximum block size.
+// Returns the filtered subtrees slice. Derived values are computed by the caller from the result.
+// Returns an error if the first subtree doesn't fit within maxBlockSize.
+func (b *BlockAssembler) filterSubtreesByMaxSize(subtrees []*subtree.Subtree, maxBlockSize int) ([]*subtree.Subtree, error) {
+	maxBlockSizeUint64 := uint64(maxBlockSize)
+
+	var totalSize = uint64(model.BlockHeaderSize)
+	includedSubtrees := make([]*subtree.Subtree, 0, len(subtrees))
+
+	for _, st := range subtrees {
+		if totalSize+st.SizeInBytes > maxBlockSizeUint64 {
+			break
+		}
+		totalSize += st.SizeInBytes
+		includedSubtrees = append(includedSubtrees, st)
+	}
+
+	// If all subtrees fit, return original slice
+	if len(includedSubtrees) == len(subtrees) {
+		return subtrees, nil
+	}
+
+	// If no subtrees fit, return an error
+	if len(includedSubtrees) == 0 {
+		return nil, errors.NewProcessingError("max block size is less than the size of the subtree")
+	}
+
+	return includedSubtrees, nil
 }
 
 func (b *BlockAssembler) generateEmptyBlockCandidate(bestBlockHeader *model.BlockHeader, bestBlockHeight uint32) (*model.MiningCandidate, []*subtree.Subtree, error) {
@@ -1193,7 +1109,7 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(bestBlockHeader *model.Bloc
 		Time:                timeNowUint32,
 		Height:              nextBlockHeight,
 		NumTxs:              0,
-		SizeWithoutCoinbase: 80,
+		SizeWithoutCoinbase: uint64(model.BlockHeaderSize),
 		MerkleProof:         [][]byte{},
 		SubtreeHashes:       [][]byte{},
 	}
@@ -1201,198 +1117,6 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(bestBlockHeader *model.Bloc
 	b.logger.Infof("[generateEmptyBlockCandidate] Empty block template: height=%d, subsidy=%d, prev=%s", nextBlockHeight, blockSubsidy, bestBlockHeader.Hash())
 
 	return miningCandidate, []*subtree.Subtree{}, nil
-}
-
-// getMiningCandidate creates a new mining candidate from the current block state.
-// This is an internal method called by GetMiningCandidate.
-//
-// Returns:
-//   - *model.MiningCandidate: Created mining candidate
-//   - []*util.Subtree: Associated subtrees
-//   - error: Any error encountered during candidate creation
-func (b *BlockAssembler) getMiningCandidate() (*model.MiningCandidate, []*subtree.Subtree, error) {
-	prometheusBlockAssemblerGetMiningCandidate.Inc()
-
-	baBestBlockHeader, baBestBlockHeight := b.CurrentBlock()
-
-	if baBestBlockHeader == nil {
-		return nil, nil, errors.NewError("best block header is not available")
-	}
-
-	b.logger.Debugf("[BlockAssembler] getting mining candidate for header: %s", baBestBlockHeader.Hash())
-
-	// Get the list of completed containers for the current chaintip and height...
-	subtrees := b.subtreeProcessor.GetCompletedSubtreesForMiningCandidate()
-
-	blockMaxSizeUint64, err := safeconversion.IntToUint64(b.settings.Policy.BlockMaxSize)
-	if err != nil {
-		return nil, nil, errors.NewProcessingError("error converting block max size", err)
-	}
-
-	if b.settings.Policy.BlockMaxSize > 0 && len(subtrees) > 0 && blockMaxSizeUint64 < subtrees[0].SizeInBytes {
-		b.logger.Warnf("[BlockAssembler] max block size is less than the size of the subtree: %d < %d", b.settings.Policy.BlockMaxSize, subtrees[0].SizeInBytes)
-
-		return nil, nil, errors.NewProcessingError("max block size is less than the size of the subtree")
-	}
-
-	var coinbaseValue uint64
-
-	currentHeight := baBestBlockHeight + 1
-
-	// Log initial state for debugging
-	b.logger.Debugf("Starting coinbase calculation for height %d", currentHeight)
-
-	// Get the hash of the last subtree in the list...
-	// We do this by using the same subtree processor logic to get the top tree hash.
-	id := &chainhash.Hash{}
-
-	var txCount uint32
-
-	var sizeWithoutCoinbase uint64
-
-	var subtreesToInclude []*subtree.Subtree
-
-	var subtreeBytesToInclude [][]byte
-
-	var coinbaseMerkleProofBytes [][]byte
-
-	// set the size without the coinbase to the size of the block header
-	// This should probably have the size of the varint for the tx count as well
-	// but bitcoin-sv node doesn't do that.
-	sizeWithoutCoinbase = 80
-
-	if len(subtrees) == 0 {
-		txCount = 1
-
-		b.logger.Debugf("No subtrees to include, creating empty block with coinbase only")
-	} else {
-		currentBlockSize := uint64(0)
-		totalFees := uint64(0)
-		subtreeCount := 0
-
-		topTree, err := subtree.NewIncompleteTreeByLeafCount(len(subtrees))
-		if err != nil {
-			return nil, nil, errors.NewProcessingError("error creating top tree", err)
-		}
-
-		b.logger.Debugf("Processing %d subtrees for inclusion", len(subtrees))
-
-		for _, subtree := range subtrees {
-			if b.settings.Policy.BlockMaxSize == 0 || currentBlockSize+subtree.SizeInBytes <= blockMaxSizeUint64 {
-				subtreesToInclude = append(subtreesToInclude, subtree)
-				subtreeBytesToInclude = append(subtreeBytesToInclude, subtree.RootHash().CloneBytes())
-				coinbaseValue += subtree.Fees
-				totalFees += subtree.Fees
-				subtreeCount++
-				currentBlockSize += subtree.SizeInBytes
-				_ = topTree.AddNode(*subtree.RootHash(), subtree.Fees, subtree.SizeInBytes)
-
-				b.logger.Debugf("Included subtree %d: fees=%d, size=%d, total_fees=%d", subtreeCount, subtree.Fees, subtree.SizeInBytes, totalFees)
-
-				lenSubtreeNodesUint32, err := safeconversion.IntToUint32(len(subtree.Nodes))
-				if err != nil {
-					return nil, nil, errors.NewProcessingError("error converting subtree nodes length", err)
-				}
-
-				txCount += lenSubtreeNodesUint32
-
-				sizeWithoutCoinbase += subtree.SizeInBytes
-			} else {
-				break
-			}
-		}
-
-		b.logger.Debugf("Fee accumulation complete: included %d subtrees, total_fees=%d satoshis (%.8f BSV)", subtreeCount, totalFees, float64(totalFees)/1e8)
-
-		if len(subtreesToInclude) > 0 {
-			coinbaseMerkleProof, err := subtree.GetMerkleProofForCoinbase(subtreesToInclude)
-			if err != nil {
-				return nil, nil, errors.NewProcessingError("error getting merkle proof for coinbase", err)
-			}
-
-			for _, hash := range coinbaseMerkleProof {
-				coinbaseMerkleProofBytes = append(coinbaseMerkleProofBytes, hash.CloneBytes())
-			}
-		}
-
-		id = topTree.RootHash()
-	}
-
-	timeNow := time.Now().Unix()
-	b.logger.Debugf("Current time: %d", timeNow)
-	timeNowUint32, err := safeconversion.Int64ToUint32(timeNow)
-	if err != nil {
-		return nil, nil, errors.NewProcessingError("error converting time now", err)
-	}
-
-	timeBytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
-
-	nBits, err := b.getNextNbits(baBestBlockHeader, timeNow)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Log coinbase value before adding subsidy
-	feesOnly := coinbaseValue
-	b.logger.Debugf("Before adding subsidy: coinbase_value=%d satoshis (%.8f BSV) from transaction fees", feesOnly, float64(feesOnly)/1e8)
-
-	// Critical subsidy calculation - add comprehensive logging
-	subsidyHeight := baBestBlockHeight + 1
-	b.logger.Debugf("Calculating block subsidy for height %d", subsidyHeight)
-
-	// Validate ChainCfgParams before using
-	if b.settings.ChainCfgParams == nil {
-		b.logger.Errorf("CRITICAL: ChainCfgParams is nil! This will cause subsidy calculation to fail")
-		return nil, nil, errors.NewProcessingError("ChainCfgParams is nil")
-	}
-
-	blockSubsidy := util.GetBlockSubsidyForHeight(subsidyHeight, b.settings.ChainCfgParams)
-	b.logger.Debugf("Block subsidy calculated: %d satoshis (%.8f BSV) for height %d", blockSubsidy, float64(blockSubsidy)/1e8, subsidyHeight)
-
-	coinbaseValue += blockSubsidy
-
-	// Log final coinbase value
-	b.logger.Debugf("Final coinbase value: fees=%d + subsidy=%d = total=%d satoshis (%.8f BSV)", feesOnly, blockSubsidy, coinbaseValue, float64(coinbaseValue)/1e8)
-
-	// Additional validation - check for suspicious values
-	if blockSubsidy == 0 && subsidyHeight < 6930000 {
-		b.logger.Errorf("SUSPICIOUS: Block subsidy is 0 for height %d (should be non-zero until height 6930000)", subsidyHeight)
-	}
-
-	if coinbaseValue < blockSubsidy {
-		b.logger.Errorf("CRITICAL BUG: Final coinbase value %d is less than subsidy %d - this indicates an overflow or logic error", coinbaseValue, blockSubsidy)
-	}
-
-	previousHash := baBestBlockHeader.Hash().CloneBytes()
-
-	lenSubtreesToIncludeUint32, err := safeconversion.IntToUint32(len(subtreesToInclude))
-	if err != nil {
-		return nil, nil, errors.NewProcessingError("error converting subtree count", err)
-	}
-
-	// remove the coinbase tx from the tx count
-	if txCount > 0 {
-		txCount--
-	}
-
-	miningCandidate := &model.MiningCandidate{
-		// create a job ID from the top tree hash and the previous block hash, to prevent empty block job id collisions
-		Id:                  chainhash.HashB(append(append(id[:], previousHash...), timeBytes...)),
-		PreviousHash:        previousHash,
-		CoinbaseValue:       coinbaseValue,
-		Version:             0x20000000,
-		NBits:               nBits.CloneBytes(),
-		Height:              baBestBlockHeight + 1, // next block height
-		Time:                timeNowUint32,
-		MerkleProof:         coinbaseMerkleProofBytes,
-		NumTxs:              txCount,
-		SizeWithoutCoinbase: sizeWithoutCoinbase,
-		SubtreeCount:        lenSubtreesToIncludeUint32,
-		SubtreeHashes:       subtreeBytesToInclude,
-	}
-
-	return miningCandidate, subtreesToInclude, nil
 }
 
 // handleReorg handles blockchain reorganization.
@@ -2647,90 +2371,6 @@ func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context
 	}
 
 	return nil
-}
-
-// invalidateMiningCandidateCache invalidates the cached mining candidate
-func (b *BlockAssembler) invalidateMiningCandidateCache() {
-	b.cachedCandidate.mu.Lock()
-	b.cachedCandidate.candidate = nil
-	b.cachedCandidate.subtrees = nil
-	b.cachedCandidate.lastHeight = 0
-	b.cachedCandidate.lastUpdate = time.Time{}
-	b.cachedCandidate.generating = false
-	b.cachedCandidate.lastTxCount = 0
-	b.cachedCandidate.lastSizeInBytes = 0
-	b.cachedCandidate.lastSubtreeCount = 0
-	b.cachedCandidate.mu.Unlock()
-}
-
-// shouldInvalidateCache determines if cache should be invalidated based on significant changes.
-// This prevents unnecessary invalidation during high-load scenarios when changes are minor.
-//
-// Returns true if ANY of these conditions are met:
-// - Cache age exceeds MiningCandidateSmartCacheMaxAge (default 10s) - ensures new txs are eventually included
-// - Transaction count changed by >10%
-// - Block size changed by >1MB
-// - Number of subtrees changed (structural change)
-func (b *BlockAssembler) shouldInvalidateCache(newTxCount uint32, newSizeInBytes uint64, newSubtreeCount int) bool {
-	b.cachedCandidate.mu.RLock()
-	defer b.cachedCandidate.mu.RUnlock()
-
-	// If no cache exists, don't invalidate (nothing to invalidate)
-	if b.cachedCandidate.candidate == nil {
-		return false
-	}
-
-	// Cache age check: invalidate if older than configured max age
-	// This ensures new transactions are included even if they don't trigger
-	// the threshold checks (e.g., steady trickle of small transactions)
-	cacheAge := time.Since(b.cachedCandidate.lastUpdate)
-	if cacheAge > b.settings.BlockAssembly.MiningCandidateSmartCacheMaxAge {
-		return true
-	}
-
-	lastTxCount := b.cachedCandidate.lastTxCount
-	lastSizeInBytes := b.cachedCandidate.lastSizeInBytes
-	lastSubtreeCount := b.cachedCandidate.lastSubtreeCount
-
-	// Subtree count changed - definitely invalidate (structure changed)
-	if newSubtreeCount != lastSubtreeCount {
-		return true
-	}
-
-	// Transaction count changed by >10%
-	if lastTxCount > 0 {
-		var txDelta uint32
-
-		if newTxCount > lastTxCount {
-			txDelta = newTxCount - lastTxCount
-		} else {
-			txDelta = lastTxCount - newTxCount
-		}
-
-		txChangePercent := (float64(txDelta) / float64(lastTxCount)) * 100
-		if txChangePercent > 10.0 {
-			return true
-		}
-	}
-
-	// Block size changed by >1MB (1048576 bytes)
-	const oneMB uint64 = 1048576
-	if lastSizeInBytes > 0 {
-		var sizeDelta uint64
-
-		if newSizeInBytes > lastSizeInBytes {
-			sizeDelta = newSizeInBytes - lastSizeInBytes
-		} else {
-			sizeDelta = lastSizeInBytes - newSizeInBytes
-		}
-
-		if sizeDelta > oneMB {
-			return true
-		}
-	}
-
-	// Changes are minor, keep cache valid
-	return false
 }
 
 // SetSkipWaitForPendingBlocks sets the flag to skip waiting for pending blocks during startup.

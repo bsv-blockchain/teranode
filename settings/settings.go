@@ -259,8 +259,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			MinerWalletPrivateKeys:               getMultiString("miner_wallet_private_keys", "|", []string{}, alternativeContext...),
 			DifficultyCache:                      getBool("blockassembly_difficultyCache", true, alternativeContext...),
 			UseDynamicSubtreeSize:                getBool("blockassembly_useDynamicSubtreeSize", false, alternativeContext...),
-			MiningCandidateCacheTimeout:          getDuration("blockassembly_miningCandidateCacheTimeout", 5*time.Second),
-			MiningCandidateSmartCacheMaxAge:      getDuration("blockassembly_miningCandidateSmartCacheMaxAge", 10*time.Second, alternativeContext...),
 			BlockchainSubscriptionTimeout:        getDuration("blockassembly_blockchainSubscriptionTimeout", 5*time.Minute, alternativeContext...),
 			OnRestartValidateParentChain:         getBool("blockassembly_onRestartValidateParentChain", true, alternativeContext...),
 			ParentValidationBatchSize:            getInt("blockassembly_parentValidationBatchSize", 1000, alternativeContext...),
@@ -269,13 +267,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			UnminedTxDiskSortPath:                getString("blockassembly_unminedTxDiskSortPath", "", alternativeContext...),
 			UnminedTxDiskSortEnabled:             getBool("blockassembly_unminedTxDiskSortEnabled", false, alternativeContext...),
 			UnminedLoadingBatchSize:              getInt("blockassembly_unminedLoadingBatchSize", 1024*1024*10, alternativeContext...), // 10 million
-			// getMiningCandidate timeout settings
-			GetMiningCandidateSendTimeout:     getDuration("blockassembly_getMiningCandidate_send_timeout", 1*time.Second, alternativeContext...),
-			GetMiningCandidateResponseTimeout: getDuration("blockassembly_getMiningCandidate_response_timeout", 10*time.Second, alternativeContext...),
-			SubtreeAnnouncementInterval:       getDuration("blockassembly_subtreeAnnouncementInterval", 10*time.Second, alternativeContext...),
-			ParallelSetIfNotExistsThreshold:   getInt("blockassembly_parallelSetIfNotExistsThreshold", 10_000, alternativeContext...),
-			StoreTxInpointsForSubtreeMeta:     getBool("blockassembly_storeTxInpointsForSubtreeMeta", false, alternativeContext...), // memory optimization
-			IdleSleepDuration:                 getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
+			SubtreeAnnouncementInterval:          getDuration("blockassembly_subtreeAnnouncementInterval", 10*time.Second, alternativeContext...),
+			ParallelSetIfNotExistsThreshold:      getInt("blockassembly_parallelSetIfNotExistsThreshold", 10_000, alternativeContext...),
+			StoreTxInpointsForSubtreeMeta:        getBool("blockassembly_storeTxInpointsForSubtreeMeta", false, alternativeContext...), // memory optimization
+			IdleSleepDuration:                    getDuration("blockassembly_idle_sleep_duration", 10*time.Millisecond, alternativeContext...),
 		},
 
 		BlockChain: BlockChainSettings{

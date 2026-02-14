@@ -421,20 +421,6 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 			return
 		}
 
-		// Smart cache invalidation: only invalidate if significant change
-		currentTxCount := uint32(ba.blockAssembler.TxCount())
-		currentSubtreeCount := ba.blockAssembler.SubtreeCount()
-		// Use atomic access instead of iterating GetChainedSubtrees() to avoid deadlock
-		// when the worker is blocked waiting for ErrChan response
-		currentSize := ba.blockAssembler.GetChainedSubtreesTotalSize()
-
-		if ba.blockAssembler.shouldInvalidateCache(currentTxCount, currentSize, currentSubtreeCount) {
-			ba.logger.Debugf("[Server] Invalidating cache: significant change detected (txs=%d, size=%d, subtrees=%d)", currentTxCount, currentSize, currentSubtreeCount)
-			ba.blockAssembler.invalidateMiningCandidateCache()
-		} else {
-			ba.logger.Debugf("[Server] Keeping cache valid: minor change (txs=%d, size=%d, subtrees=%d)", currentTxCount, currentSize, currentSubtreeCount)
-		}
-
 		// Wait for all work to complete before sending response to caller
 		if allDone != nil {
 			<-allDone
