@@ -5439,17 +5439,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#mining-candidate-caching" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Mining Candidate Caching
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#mining-solution-processing" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6411,17 +6400,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#mining-candidate-caching" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Mining Candidate Caching
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#mining-solution-processing" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6749,20 +6727,6 @@
 <td>Dynamic subtree sizing</td>
 </tr>
 <tr>
-<td>MiningCandidateCacheTimeout</td>
-<td>time.Duration</td>
-<td>5s</td>
-<td>blockassembly_miningCandidateCacheTimeout</td>
-<td>Mining candidate cache validity (same height)</td>
-</tr>
-<tr>
-<td>MiningCandidateSmartCacheMaxAge</td>
-<td>time.Duration</td>
-<td>10s</td>
-<td>blockassembly_miningCandidateSmartCacheMaxAge</td>
-<td>Stale cache max age for high-load scenarios</td>
-</tr>
-<tr>
 <td>BlockchainSubscriptionTimeout</td>
 <td>time.Duration</td>
 <td>5m</td>
@@ -6789,20 +6753,6 @@
 <td>false</td>
 <td>blockassembly_onRestartRemoveInvalidParentChainTxs</td>
 <td>Filters transactions with invalid parent chains</td>
-</tr>
-<tr>
-<td>GetMiningCandidateSendTimeout</td>
-<td>time.Duration</td>
-<td>1s</td>
-<td>blockassembly_getMiningCandidate_send_timeout</td>
-<td>Timeout sending request on internal channel</td>
-</tr>
-<tr>
-<td>GetMiningCandidateResponseTimeout</td>
-<td>time.Duration</td>
-<td>10s</td>
-<td>blockassembly_getMiningCandidate_response_timeout</td>
-<td>Timeout waiting for mining candidate response</td>
 </tr>
 <tr>
 <td>SubtreeAnnouncementInterval</td>
@@ -6845,12 +6795,6 @@
 <ul>
 <li><code>NewSubtreeChanBuffer</code> and <code>SubtreeRetryChanBuffer</code> must accommodate concurrent processing loads</li>
 <li>Buffer sizes affect pipeline performance and memory usage</li>
-</ul>
-<h3 id="mining-candidate-caching">Mining Candidate Caching</h3>
-<ul>
-<li><code>MiningCandidateCacheTimeout</code>: Cache valid for same height within timeout</li>
-<li><code>MiningCandidateSmartCacheMaxAge</code>: Fallback for stale cache during high load</li>
-<li>Cache invalidated on significant transaction/subtree changes</li>
 </ul>
 <h3 id="mining-solution-processing">Mining Solution Processing</h3>
 <ul>
@@ -6951,8 +6895,6 @@ blockassembly_disabled = false
 </code></pre></div>
 <h3 id="mining-configuration">Mining Configuration</h3>
 <div class="highlight"><pre><span></span><code><span class="nv">blockassembly_SubmitMiningSolution_waitForResponse</span><span class="o">=</span><span class="nb">true</span>
-<span class="nv">blockassembly_miningCandidateCacheTimeout</span><span class="o">=</span>10s
-<span class="nv">blockassembly_miningCandidateSmartCacheMaxAge</span><span class="o">=</span>15s
 <span class="nv">miner_wallet_private_keys</span><span class="o">=</span>key1<span class="p">|</span>key2
 </code></pre></div>
 

@@ -3066,10 +3066,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#241-mining-candidate-caching" class="md-nav__link">
+  <a href="#241-pre-computed-mining-data" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.4.1. Mining Candidate Caching
+        2.4.1. Pre-computed Mining Data
       
     </span>
   </a>
@@ -6716,10 +6716,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#241-mining-candidate-caching" class="md-nav__link">
+  <a href="#241-pre-computed-mining-data" class="md-nav__link">
     <span class="md-ellipsis">
       
-        2.4.1. Mining Candidate Caching
+        2.4.1. Pre-computed Mining Data
       
     </span>
   </a>
@@ -7253,36 +7253,21 @@
 <li>The Block Assembly Server makes status announcements, using the Status Client, about the mining candidate's height and previous hash.</li>
 <li>Finally, the Server tracks the current candidate in the JobStore within a new "job" and its TTL. This information will be retrieved at a later stage, if and when the miner submits a solution to the mining challenge for this specific mining candidate.</li>
 </ul>
-<h4 id="241-mining-candidate-caching">2.4.1. Mining Candidate Caching</h4>
-<p>The Block Assembly service implements an intelligent caching mechanism for mining candidates to optimize performance and reduce redundant computations:</p>
-<p><strong>Cache Behavior:</strong></p>
+<h4 id="241-pre-computed-mining-data">2.4.1. Pre-computed Mining Data</h4>
+<p>The Block Assembly service uses a pre-computed data pattern for efficient mining candidate generation:</p>
+<p><strong>How It Works:</strong></p>
 <ul>
-<li>Mining candidates are cached when the block height remains unchanged</li>
-<li>The cache has a configurable timeout (via <code>MiningCandidateCacheTimeout</code> setting)</li>
-<li>
-<p>Cache is automatically invalidated when:</p>
-<ul>
-<li>A new block is added to the blockchain (height changes)</li>
-<li>New subtrees become available</li>
-<li>The cache timeout expires</li>
-</ul>
-</li>
+<li>The Subtree Processor atomically publishes pre-computed mining data (subtree snapshots) whenever a subtree completes or a block is processed</li>
+<li><code>GetMiningCandidate</code> reads this pre-computed data via a lock-free atomic pointer, requiring no locks or channel synchronization</li>
+<li>When no complete subtrees exist, an on-demand snapshot of the incomplete subtree is requested from the processing goroutine</li>
+<li>Derived values (fees, tx count, merkle proof, etc.) are computed per-request from the subtree snapshot</li>
 </ul>
 <p><strong>Performance Benefits:</strong></p>
 <ul>
-<li>Reduces CPU overhead for miners requesting frequent updates</li>
-<li>Eliminates redundant subtree processing and merkle tree calculations</li>
-<li>Improves response times for mining candidate requests</li>
-<li>Particularly beneficial for mining pools making high-frequency requests</li>
+<li>Lock-free reads eliminate contention under concurrent mining requests</li>
+<li>No channel round-trips for the common case (completed subtrees available)</li>
+<li>Supports high-frequency mining pool requests without serialization</li>
 </ul>
-<p><strong>Implementation Details:</strong></p>
-<ul>
-<li>Uses thread-safe locking to prevent race conditions during cache updates</li>
-<li>Implements a generation flag to serialize concurrent candidate creation requests</li>
-<li>Cache hit/miss metrics are exposed via Prometheus for monitoring</li>
-<li>Disabled for difficulty adjustment scenarios (when <code>ReduceMinDifficulty</code> is enabled) to ensure accurate difficulty calculations</li>
-</ul>
-<p>This caching mechanism is transparent to miners and significantly improves the efficiency of the mining candidate generation process during normal operations.</p>
 <h3 id="25-submit-mining-solution">2.5. Submit Mining Solution</h3>
 <p>Once a miner solves the mining challenge, it submits a solution to the Block Assembly Service. The solution includes the nonce required to solve the mining challenge.</p>
 <p><img alt="block_assembly_submit_mining_solution.svg" src="../img/plantuml/blockassembly/block_assembly_submit_mining_solution.svg" /></p>

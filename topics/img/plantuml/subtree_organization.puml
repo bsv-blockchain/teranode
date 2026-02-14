@@ -110,35 +110,59 @@ alt Subtree ready for completion
   deactivate P2P
 end
 
-== 3. Mining Candidate Preparation ==
+== 3. Pre-computed Mining Data ==
 note over BA, SP
-  **Block Assembly retrieves completed subtrees for mining**
+  **SubtreeProcessor pre-computes mining data via atomic pointer updates**
 end note
 
-BA -> SP : GetCompletedSubtreesForMiningCandidate()
-activate SP
-SP -> SP : Collect all completed subtrees
-SP -> SP : Sort by priority/fee
+SP -> SP : updatePrecomputedMiningData()
 note right of SP
-  **Subtree Selection:**
-  • Completed subtrees only
-  • Ordered by total fees
-  • Dependency ordering maintained
-  • Size constraints respected
-end note
-SP -> BA : Return []*subtree.Subtree
-deactivate SP
+  **Triggered on:**
+  • Subtree completion
+  • Block finalization
+  • Reset / reorg completion
 
-BA -> BA : Create mining candidate template
+  **Stores atomically:**
+  • PreviousHeader (chain tip)
+  • Subtrees snapshot (copy)
+  • UpdatedAt timestamp
+end note
+
+== 4. Mining Candidate Generation ==
+note over BA, SP
+  **Block Assembly reads pre-computed data lock-free**
+end note
+
+BA -> SP : GetPrecomputedMiningData()
+note right of SP
+  **Atomic pointer read**
+  No locks, no channel sync
+end note
+SP -> BA : Return PrecomputedMiningData
+
+alt No completed subtrees available
+  BA -> SP : GetIncompleteSubtreeMiningData(ctx)
+  note right of SP
+    **On-demand snapshot:**
+    • Channel request to processing goroutine
+    • Creates copy of incomplete subtree
+    • Only when no completed subtrees exist
+  end note
+  SP -> BA : Return incomplete subtree snapshot
+end
+
+BA -> BA : Compute derived values and create candidate
 note right of BA
-  **Mining Template:**
-  • Coinbase transaction
-  • Subtree merkle roots
-  • Block header template
-  • Total fee calculation
+  **Mining Template (computed per-request):**
+  • Filter subtrees by max block size
+  • Total fees and tx count
+  • Coinbase merkle proof
+  • nBits difficulty target
+  • Block subsidy + fees = coinbaseValue
+  • Job ID from top tree hash + previous hash + time
 end note
 
-== 4. Parallel Processing Benefits ==
+== 5. Parallel Processing Benefits ==
 group Independent Validation
   note over SP
     **Subtree Independence:**
@@ -164,7 +188,6 @@ group State Management
   note right of SP
     **State Management:**
     • StateRunning: Normal processing
-    • StateGetMiningCandidate: Preparing blocks
     • StateReorging: Handling reorganizations
     • StateResetting: Recovery operations
   end note
@@ -179,7 +202,7 @@ group State Management
   end note
 end
 
-== 5. Reorganization Handling ==
+== 6. Reorganization Handling ==
 group Blockchain Reorganization
   note over SP
     **Subtree state must be maintained during chain reorganizations**
