@@ -60,7 +60,7 @@ func verifyTxInpointsViaIterator(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx,
 
 			require.Equal(t, 1, len(unminedTx.TxInpoints.ParentTxHashes),
 				"Transaction TxInpoints should have exactly 1 parent tx hash. "+
-					"If this is 0, ParseInputReferencesOnly failed to parse Extended Format correctly.")
+					"If this is 0, ParseInputReferencesFromExtendedTx failed to parse Extended Format correctly.")
 
 			// Verify the parent tx hash matches
 			actualParentTxHash := unminedTx.TxInpoints.ParentTxHashes[0]

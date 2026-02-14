@@ -59,7 +59,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"io"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
@@ -1454,13 +1453,6 @@ func (s *Store) GetTxInpointsFromExternalStore(ctx context.Context, txHash chain
 	s.logger.Debugf("[GetTxInpointsFromExternalStore] Streamed and parsed %d input references from external tx %s, skipped all scripts", len(inputs), txHash.String())
 
 	return subtree.NewTxInpointsFromInputs(inputs)
-}
-
-// ParseInputReferencesOnly parses Extended Format Bitcoin transactions from a reader to extract only input references
-// (prevTxID + prevOutIndex), skipping all scripts and Extended Format metadata to minimize memory usage.
-// Deprecated: Use txparse.ParseInputReferencesFromExtendedTx directly.
-func ParseInputReferencesOnly(reader io.Reader) ([]*bt.Input, error) {
-	return txparse.ParseInputReferencesFromExtendedTx(reader)
 }
 
 // sendGetBatch processes a batch of get requests efficiently
