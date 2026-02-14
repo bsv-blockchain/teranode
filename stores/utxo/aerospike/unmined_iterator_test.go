@@ -356,6 +356,45 @@ func Test_closeWithLogging(t *testing.T) {
 	})
 }
 
+func Test_extractTxIDAndUnminedSince(t *testing.T) {
+	t.Run("valid", func(t *testing.T) {
+		validHash := chainhash.HashH([]byte("test"))
+		bins := map[string]interface{}{
+			fields.TxID.String():         validHash[:],
+			fields.UnminedSince.String(): 42,
+		}
+		hash, unminedSince, err := extractTxIDAndUnminedSince(bins)
+		require.NoError(t, err)
+		assert.Equal(t, validHash, *hash)
+		assert.Equal(t, 42, unminedSince)
+	})
+
+	t.Run("missing txid", func(t *testing.T) {
+		_, _, err := extractTxIDAndUnminedSince(map[string]interface{}{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "txid not found")
+	})
+
+	t.Run("wrong txid type", func(t *testing.T) {
+		bins := map[string]interface{}{
+			fields.TxID.String(): 12345,
+		}
+		_, _, err := extractTxIDAndUnminedSince(bins)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "txid not []byte")
+	})
+
+	t.Run("missing unmined_since defaults to zero", func(t *testing.T) {
+		validHash := chainhash.HashH([]byte("test"))
+		bins := map[string]interface{}{
+			fields.TxID.String(): validHash[:],
+		}
+		_, unminedSince, err := extractTxIDAndUnminedSince(bins)
+		require.NoError(t, err)
+		assert.Equal(t, 0, unminedSince)
+	})
+}
+
 func Test_processPrunerRecord(t *testing.T) {
 	ctx := context.Background()
 

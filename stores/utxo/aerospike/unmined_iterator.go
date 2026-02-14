@@ -314,6 +314,17 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 
 		itemsProcessed++
 
+		// bufferTx appends to localBuffer and flushes when full
+		bufferTx := func(tx *utxo.UnminedTransaction) bool {
+			localBuffer = append(localBuffer, tx)
+			if len(localBuffer) >= batchSize {
+				if err := flush(); err != nil {
+					return false
+				}
+			}
+			return true
+		}
+
 		if it.prunerMode {
 			// Pruner mode: skip checks for bins we didn't fetch (createdAt, conflicting, coinbase)
 			// The server-side filter already ensures unminedSince is in [1, cutoff]
@@ -327,11 +338,8 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 			}
 
 			if unminedTx != nil {
-				localBuffer = append(localBuffer, unminedTx)
-				if len(localBuffer) >= batchSize {
-					if err := flush(); err != nil {
-						return
-					}
+				if !bufferTx(unminedTx) {
+					return
 				}
 			}
 		} else {
@@ -349,11 +357,8 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 			}
 
 			if coinbaseBool, ok := rec.Record.Bins[coinbaseField].(bool); ok && coinbaseBool {
-				localBuffer = append(localBuffer, &utxo.UnminedTransaction{Skip: true})
-				if len(localBuffer) >= batchSize {
-					if err := flush(); err != nil {
-						return
-					}
+				if !bufferTx(&utxo.UnminedTransaction{Skip: true}) {
+					return
 				}
 				continue
 			}
@@ -369,11 +374,8 @@ func (it *unminedTxIterator) processRecordset(ctx context.Context, results <-cha
 			}
 
 			if unminedTx != nil {
-				localBuffer = append(localBuffer, unminedTx)
-				if len(localBuffer) >= batchSize {
-					if err := flush(); err != nil {
-						return
-					}
+				if !bufferTx(unminedTx) {
+					return
 				}
 			}
 		}
@@ -446,27 +448,12 @@ func (it *unminedTxIterator) processRecord(ctx context.Context, bins map[string]
 // processPrunerRecord processes a single Aerospike record in pruner mode.
 // Only extracts the minimal data needed for parent preservation: txID, unminedSince, and TxInpoints.
 func (it *unminedTxIterator) processPrunerRecord(ctx context.Context, bins map[string]interface{}) (*utxo.UnminedTransaction, error) {
-	// Extract txID
-	txidVal := bins[fields.TxID.String()]
-	if txidVal == nil {
-		return nil, errors.NewProcessingError("txid not found")
-	}
-
-	txidValBytes, ok := txidVal.([]byte)
-	if !ok {
-		return nil, errors.NewProcessingError("txid not []byte")
-	}
-
-	hash, err := chainhash.NewHash(txidValBytes)
+	hash, unminedSince, err := extractTxIDAndUnminedSince(bins)
 	if err != nil {
 		return nil, err
 	}
 
-	unminedSince, _ := bins[fields.UnminedSince.String()].(int)
-
-	// Process inpoints for parent preservation
-	var txInpoints subtree.TxInpoints
-	txInpoints, err = it.processTransactionInpoints(ctx, &transactionData{hash: hash, unminedSince: unminedSince}, bins)
+	txInpoints, err := it.processTransactionInpoints(ctx, &transactionData{hash: hash, unminedSince: unminedSince}, bins)
 	if err != nil {
 		// In pruner mode, skip records with inpoint errors rather than failing
 		return nil, nil
@@ -541,25 +528,36 @@ func (it *unminedTxIterator) closeWithLogging() {
 	}
 }
 
-// extractTransactionData extracts basic transaction data from Aerospike record bins
-func (it *unminedTxIterator) extractTransactionData(bins map[string]interface{}) (*transactionData, error) {
-	// Extract and validate txid
+// extractTxIDAndUnminedSince extracts the txID hash and unminedSince from record bins.
+// Shared by both the full record processor and the pruner record processor.
+func extractTxIDAndUnminedSince(bins map[string]interface{}) (*chainhash.Hash, int, error) {
 	txidVal := bins[fields.TxID.String()]
 	if txidVal == nil {
-		return nil, errors.NewProcessingError("txid not found")
+		return nil, 0, errors.NewProcessingError("txid not found")
 	}
 
 	txidValBytes, ok := txidVal.([]byte)
 	if !ok {
-		return nil, errors.NewProcessingError("txid not []byte")
+		return nil, 0, errors.NewProcessingError("txid not []byte")
 	}
 
 	hash, err := chainhash.NewHash(txidValBytes)
 	if err != nil {
+		return nil, 0, err
+	}
+
+	unminedSince, _ := bins[fields.UnminedSince.String()].(int)
+
+	return hash, unminedSince, nil
+}
+
+// extractTransactionData extracts basic transaction data from Aerospike record bins
+func (it *unminedTxIterator) extractTransactionData(bins map[string]interface{}) (*transactionData, error) {
+	hash, unminedSince, err := extractTxIDAndUnminedSince(bins)
+	if err != nil {
 		return nil, err
 	}
 
-	// Extract and validate fee
 	feeVal := bins[fields.Fee.String()]
 	if feeVal == nil {
 		return nil, errors.NewProcessingError("fee not found")
@@ -570,15 +568,12 @@ func (it *unminedTxIterator) extractTransactionData(bins map[string]interface{})
 		return nil, errors.NewProcessingError("Failed to convert fee")
 	}
 
-	// Extract and validate size
 	sizeVal := bins[fields.SizeInBytes.String()]
 	if sizeVal == nil {
 		return nil, errors.NewProcessingError("size not found")
 	}
 
 	size, _ := toUint64(sizeVal)
-
-	unminedSince, _ := bins[fields.UnminedSince.String()].(int)
 
 	return &transactionData{
 		hash:         hash,
