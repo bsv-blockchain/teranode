@@ -54,7 +54,7 @@ func newUnminedTxIterator(store *Store, fullScan bool) (*unminedTxIterator, erro
 
 	store.logger.Infof("[newUnminedTxIterator] Using %d parallel Aerospike partition queries for unmined transactions (fullScan=%t)", numPartitionQueries, fullScan)
 
-	return newUnminedTxIteratorWithPartitions(store, fullScan, numPartitionQueries)
+	return launchPartitionIterator(store, numPartitionQueries, fullScan, false, 0)
 }
 
 // calculatePartitionQueries determines the optimal number of parallel partition queries
@@ -120,67 +120,46 @@ func getConfigValue(store *Store, configParam string) (string, error) {
 	return "", errors.NewProcessingError("config parameter %s not found", configParam)
 }
 
-// newUnminedTxIteratorWithPartitions creates a new iterator with configurable partition parallelism.
-// It launches multiple concurrent Aerospike partition queries to maximize throughput.
-// Each partition query processes its records directly into batches on the result channel,
-// avoiding intermediate merging for better performance.
-//
-// Parameters:
-//   - store: The Aerospike store instance to iterate over
-//   - fullScan: If true, performs a full scan of all records; if false, applies a filter
-//   - numPartitionQueries: Number of parallel partition queries to run (each handles 4096/n partitions)
-//
-// Returns:
-//   - *unminedTxIterator: A new iterator instance ready for use
-//   - error: Any error encountered during iterator initialization
-func newUnminedTxIteratorWithPartitions(store *Store, fullScan bool, numPartitionQueries int) (*unminedTxIterator, error) {
+// launchPartitionIterator creates and starts a partition-parallel iterator.
+// Both the block assembly and pruner iterators use this shared setup.
+func launchPartitionIterator(store *Store, numPartitionQueries int, fullScan, prunerMode bool, prunerCutoff uint32) (*unminedTxIterator, error) {
 	const totalPartitions = 4096 // Aerospike has 4096 partitions
 
-	// Ensure at least 1 partition query
 	if numPartitionQueries < 1 {
 		numPartitionQueries = 1
 	}
-	// Cap at total partitions
 	if numPartitionQueries > totalPartitions {
 		numPartitionQueries = totalPartitions
 	}
 
-	// Calculate partitions per query
 	partitionsPerQuery := totalPartitions / numPartitionQueries
 	remainingPartitions := totalPartitions % numPartitionQueries
 
 	policy := util.GetAerospikeQueryPolicy(store.settings)
 	policy.IncludeBinData = true
-	// Distribute queue size across partition queries
 	policy.RecordQueueSize = (10 * 1024 * 1024) / numPartitionQueries
 	if policy.RecordQueueSize < 1024 {
 		policy.RecordQueueSize = 1024
 	}
 
-	// Create context for workers
 	workerCtx, cancel := context.WithCancel(context.Background())
-
-	// Buffer size for result channel - each partition query writes batches directly
-	// With numPartitionQueries workers each potentially buffering a batch
 	resultChanSize := numPartitionQueries * 2
 
 	it := &unminedTxIterator{
 		store:         store,
 		fullScan:      fullScan,
+		prunerMode:    prunerMode,
+		prunerCutoff:  prunerCutoff,
 		resultChan:    make(chan []*utxo.UnminedTransaction, resultChanSize),
-		errorChan:     make(chan error, numPartitionQueries), // One error slot per partition query
+		errorChan:     make(chan error, numPartitionQueries),
 		cancelWorkers: cancel,
 	}
 
-	store.logger.Infof("[newUnminedTxIterator] Starting %d parallel Aerospike partition queries for unmined transactions (fullScan=%t)", numPartitionQueries, fullScan)
-
-	// Launch partition queries - each processes directly into result channel
 	partitionStart := 0
 	for i := 0; i < numPartitionQueries; i++ {
-		// Calculate partition range for this query
 		partitionCount := partitionsPerQuery
 		if i < remainingPartitions {
-			partitionCount++ // Distribute remaining partitions
+			partitionCount++
 		}
 
 		it.wg.Add(1)
@@ -189,9 +168,6 @@ func newUnminedTxIteratorWithPartitions(store *Store, fullScan bool, numPartitio
 		partitionStart += partitionCount
 	}
 
-	store.logger.Infof("[newUnminedTxIterator] Aerospike partition queries started successfully")
-
-	// Start a goroutine to close channels after all partition workers finish
 	go func() {
 		it.wg.Wait()
 		close(it.resultChan)
@@ -224,34 +200,19 @@ func (it *unminedTxIterator) partitionWorker(ctx context.Context, policy *as.Que
 			fields.External.String(),
 			fields.Inputs.String(),
 		}
-	} else if !it.fullScan {
-		if err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(math.MaxUint32))); err != nil {
-			select {
-			case it.errorChan <- err:
-			default:
-			}
-			return
-		}
-
-		// Full bin set for block assembly iterator
-		stmt.BinNames = []string{
-			fields.TxID.String(),
-			fields.Fee.String(),
-			fields.SizeInBytes.String(),
-			fields.CreatedAt.String(),
-			fields.Conflicting.String(),
-			fields.Locked.String(),
-			fields.BlockIDs.String(),
-			fields.UnminedSince.String(),
-			fields.IsCoinbase.String(),
-		}
-
-		if it.store.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-			stmt.BinNames = append(stmt.BinNames, fields.External.String())
-			stmt.BinNames = append(stmt.BinNames, fields.Inputs.String())
-		}
 	} else {
-		// Full scan mode: no filter, full bin set
+		// Non-pruner mode: apply unmined filter unless full scan
+		if !it.fullScan {
+			if err := stmt.SetFilter(as.NewRangeFilter(fields.UnminedSince.String(), 1, int64(math.MaxUint32))); err != nil {
+				select {
+				case it.errorChan <- err:
+				default:
+				}
+				return
+			}
+		}
+
+		// Full bin set for block assembly / full scan
 		stmt.BinNames = []string{
 			fields.TxID.String(),
 			fields.Fee.String(),
@@ -781,62 +742,5 @@ func newPrunableUnminedTxIterator(store *Store, cutoffBlockHeight uint32) (*unmi
 
 	store.logger.Infof("[newPrunableUnminedTxIterator] Using %d parallel partition queries (cutoff=%d)", numPartitionQueries, cutoffBlockHeight)
 
-	return newPrunableUnminedTxIteratorWithPartitions(store, cutoffBlockHeight, numPartitionQueries)
-}
-
-// newPrunableUnminedTxIteratorWithPartitions creates a pruner-specific iterator with configurable parallelism.
-func newPrunableUnminedTxIteratorWithPartitions(store *Store, cutoffBlockHeight uint32, numPartitionQueries int) (*unminedTxIterator, error) {
-	const totalPartitions = 4096
-
-	if numPartitionQueries < 1 {
-		numPartitionQueries = 1
-	}
-	if numPartitionQueries > totalPartitions {
-		numPartitionQueries = totalPartitions
-	}
-
-	partitionsPerQuery := totalPartitions / numPartitionQueries
-	remainingPartitions := totalPartitions % numPartitionQueries
-
-	policy := util.GetAerospikeQueryPolicy(store.settings)
-	policy.IncludeBinData = true
-	policy.RecordQueueSize = (10 * 1024 * 1024) / numPartitionQueries
-	if policy.RecordQueueSize < 1024 {
-		policy.RecordQueueSize = 1024
-	}
-
-	workerCtx, cancel := context.WithCancel(context.Background())
-
-	resultChanSize := numPartitionQueries * 2
-
-	it := &unminedTxIterator{
-		store:         store,
-		fullScan:      false,
-		prunerMode:    true,
-		prunerCutoff:  cutoffBlockHeight,
-		resultChan:    make(chan []*utxo.UnminedTransaction, resultChanSize),
-		errorChan:     make(chan error, numPartitionQueries),
-		cancelWorkers: cancel,
-	}
-
-	partitionStart := 0
-	for i := 0; i < numPartitionQueries; i++ {
-		partitionCount := partitionsPerQuery
-		if i < remainingPartitions {
-			partitionCount++
-		}
-
-		it.wg.Add(1)
-		go it.partitionWorker(workerCtx, policy, partitionStart, partitionCount)
-
-		partitionStart += partitionCount
-	}
-
-	go func() {
-		it.wg.Wait()
-		close(it.resultChan)
-		close(it.errorChan)
-	}()
-
-	return it, nil
+	return launchPartitionIterator(store, numPartitionQueries, false, true, cutoffBlockHeight)
 }

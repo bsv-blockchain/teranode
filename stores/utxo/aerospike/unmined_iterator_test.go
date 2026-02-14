@@ -355,3 +355,86 @@ func Test_closeWithLogging(t *testing.T) {
 		})
 	})
 }
+
+func Test_processPrunerRecord(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("valid record", func(t *testing.T) {
+		validHash := chainhash.HashH([]byte("test"))
+		it := &unminedTxIterator{
+			store: &Store{},
+		}
+
+		bins := map[string]interface{}{
+			fields.TxID.String():         validHash[:],
+			fields.UnminedSince.String(): 5,
+			// No external flag and no inputs = empty inpoints (skipped gracefully)
+		}
+
+		result, err := it.processPrunerRecord(ctx, bins)
+		require.NoError(t, err)
+		// No inpoints available (no external, no inputs bin) so processTransactionInpoints
+		// returns error and processPrunerRecord returns nil
+		assert.Nil(t, result)
+	})
+
+	t.Run("missing txid", func(t *testing.T) {
+		it := &unminedTxIterator{
+			store: &Store{},
+		}
+
+		bins := map[string]interface{}{
+			fields.UnminedSince.String(): 5,
+		}
+
+		_, err := it.processPrunerRecord(ctx, bins)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "txid not found")
+	})
+
+	t.Run("invalid txid type", func(t *testing.T) {
+		it := &unminedTxIterator{
+			store: &Store{},
+		}
+
+		bins := map[string]interface{}{
+			fields.TxID.String():         "not-bytes",
+			fields.UnminedSince.String(): 5,
+		}
+
+		_, err := it.processPrunerRecord(ctx, bins)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "txid not []byte")
+	})
+
+	t.Run("invalid txid length", func(t *testing.T) {
+		it := &unminedTxIterator{
+			store: &Store{},
+		}
+
+		bins := map[string]interface{}{
+			fields.TxID.String():         []byte{0x01, 0x02}, // too short
+			fields.UnminedSince.String(): 5,
+		}
+
+		_, err := it.processPrunerRecord(ctx, bins)
+		require.Error(t, err)
+	})
+
+	t.Run("missing unmined since defaults to zero", func(t *testing.T) {
+		validHash := chainhash.HashH([]byte("test"))
+		it := &unminedTxIterator{
+			store: &Store{},
+		}
+
+		bins := map[string]interface{}{
+			fields.TxID.String(): validHash[:],
+			// No UnminedSince - should default to 0
+		}
+
+		result, err := it.processPrunerRecord(ctx, bins)
+		require.NoError(t, err)
+		// inpoint error → returns nil
+		assert.Nil(t, result)
+	})
+}
