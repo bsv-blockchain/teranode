@@ -798,15 +798,20 @@ func (sp *serverPeer) openRequiredStreams() {
 		return
 	}
 
-	// Create the stream peer now that the remote side has acknowledged.
-	streamPeerCfg := newPeerConfig(sp)
+	// Create a serverPeer wrapper for the stream connection, matching the
+	// pattern used by inboundPeerConnected/outboundPeerConnected so that
+	// callbacks reference the correct serverPeer instance.
+	streamSP := newServerPeer(sp.server, false)
+	streamPeerCfg := newPeerConfig(streamSP)
 	streamPeerCfg.AllowBlockPriority = true
-	streamPeer := peer.NewInboundPeer(sp.server.logger, sp.server.settings, streamPeerCfg)
+	streamSP.Peer = peer.NewInboundPeer(sp.server.logger, sp.server.settings, streamPeerCfg)
 
-	streamPeer.SetAssociation(assoc)
-	streamPeer.SetStreamType(wire.StreamTypeData1)
-	assoc.AddStream(wire.StreamTypeData1, streamPeer)
-	streamPeer.AssociateConnection(conn)
+	streamSP.Peer.SetAssociation(assoc)
+	streamSP.Peer.SetStreamType(wire.StreamTypeData1)
+	assoc.AddStream(wire.StreamTypeData1, streamSP.Peer)
+	streamSP.AssociateConnection(conn)
+
+	go sp.server.peerDoneHandler(streamSP)
 	sp.server.logger.Infof("DATA1 stream established to %s for association %s", peerAddr, assoc.ID())
 }
 
