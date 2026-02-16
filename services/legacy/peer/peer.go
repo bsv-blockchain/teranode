@@ -2052,13 +2052,16 @@ out:
 
 			// With multistream associations, the stream policy determines
 			// which stream carries pings. If the policy routes pings to a
-			// different stream (e.g. DATA1 for BlockPriority), skip sending
-			// here - that stream's own pingHandler will handle it.
+			// different stream (e.g. DATA1 for BlockPriority) and that
+			// stream is active, skip sending here - that stream's own
+			// pingHandler will handle it. If the target stream is down,
+			// fall through so this stream sends pings as a fallback.
 			if assoc := p.AssociationRef(); assoc != nil && assoc.Policy() != "" {
 				policy := PolicyForName(assoc.Policy())
 				targetType := policy.StreamForMessage(msg)
 				if targetType != p.StreamType() {
-					if stream := assoc.Stream(targetType); stream != nil && stream.Peer != nil {
+					stream := assoc.Stream(targetType)
+					if stream != nil && stream.Peer != nil {
 						continue
 					}
 				}

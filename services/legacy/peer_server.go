@@ -783,7 +783,22 @@ func (sp *serverPeer) openRequiredStreams() {
 		return
 	}
 
-	// Create a new peer for this stream connection.
+	// Read STREAMACK response before creating the peer to avoid resource
+	// leaks if the remote side rejects or fails to acknowledge the stream.
+	_, msg, _, err := wire.ReadMessageWithEncodingN(conn, wire.ProtocolVersion, sp.server.settings.ChainCfgParams.Net, wire.BaseEncoding)
+	if err != nil {
+		sp.server.logger.Warnf("Failed to read streamack from %s: %v", peerAddr, err)
+		conn.Close()
+		return
+	}
+
+	if _, ok := msg.(*wire.MsgStreamAck); !ok {
+		sp.server.logger.Warnf("Expected streamack from %s, got %s", peerAddr, msg.Command())
+		conn.Close()
+		return
+	}
+
+	// Create the stream peer now that the remote side has acknowledged.
 	streamPeerCfg := newPeerConfig(sp)
 	streamPeerCfg.AllowBlockPriority = true
 	streamPeer := peer.NewInboundPeer(sp.server.logger, sp.server.settings, streamPeerCfg)
@@ -791,23 +806,6 @@ func (sp *serverPeer) openRequiredStreams() {
 	streamPeer.SetAssociation(assoc)
 	streamPeer.SetStreamType(wire.StreamTypeData1)
 	assoc.AddStream(wire.StreamTypeData1, streamPeer)
-
-	// Read STREAMACK response.
-	_, msg, _, err := wire.ReadMessageWithEncodingN(conn, wire.ProtocolVersion, sp.server.settings.ChainCfgParams.Net, wire.BaseEncoding)
-	if err != nil {
-		sp.server.logger.Warnf("Failed to read streamack from %s: %v", peerAddr, err)
-		assoc.RemoveStream(wire.StreamTypeData1)
-		conn.Close()
-		return
-	}
-
-	if _, ok := msg.(*wire.MsgStreamAck); !ok {
-		sp.server.logger.Warnf("Expected streamack from %s, got %s", peerAddr, msg.Command())
-		assoc.RemoveStream(wire.StreamTypeData1)
-		conn.Close()
-		return
-	}
-
 	streamPeer.AssociateConnection(conn)
 	sp.server.logger.Infof("DATA1 stream established to %s for association %s", peerAddr, assoc.ID())
 }
