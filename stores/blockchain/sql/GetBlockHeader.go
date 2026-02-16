@@ -197,17 +197,17 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 	blockHeaderMeta.Timestamp = uint32(insertedAt.Unix())
 
 	if len(coinbaseBytes) > 0 {
-		coinbaseTx, err := bt.NewTxFromBytes(coinbaseBytes)
-		if err != nil {
-			return nil, nil, errors.NewProcessingError("failed to convert coinbaseTx", err)
+		coinbaseTx, parseErr := bt.NewTxFromBytes(coinbaseBytes)
+		if parseErr != nil {
+			s.logger.Warnf("[GetBlockHeader] failed to parse coinbaseTx bytes (%d bytes): %v", len(coinbaseBytes), parseErr)
+		} else {
+			miner, minerErr := util.ExtractCoinbaseMiner(coinbaseTx)
+			if minerErr != nil {
+				s.logger.Warnf("[GetBlockHeader] failed to extract miner from coinbaseTx: %v", minerErr)
+			} else {
+				blockHeaderMeta.Miner = miner
+			}
 		}
-
-		miner, err := util.ExtractCoinbaseMiner(coinbaseTx)
-		if err != nil {
-			return nil, nil, errors.NewProcessingError("failed to extract miner", err)
-		}
-
-		blockHeaderMeta.Miner = miner
 	}
 
 	// Cache the result in response cache

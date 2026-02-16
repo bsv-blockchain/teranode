@@ -14,9 +14,9 @@ require (
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.17.66
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.78.2
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0
-	github.com/bsv-blockchain/go-bt/v2 v2.5.2
+	github.com/bsv-blockchain/go-bt/v2 v2.5.3
 	github.com/bsv-blockchain/go-chaincfg v1.5.3
-	github.com/bsv-blockchain/go-sdk v1.2.14
+	github.com/bsv-blockchain/go-sdk v1.2.17
 	github.com/bsv-blockchain/go-subtree v1.1.7-0.20251217151250-1cd1ee64efac
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.3.2
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
@@ -62,12 +62,12 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0
 	go.opentelemetry.io/otel/trace v1.39.0
 	go.uber.org/atomic v1.11.0
-	golang.org/x/crypto v0.46.0
+	golang.org/x/crypto v0.47.0
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93
 	golang.org/x/sync v0.19.0
-	golang.org/x/sys v0.39.0
-	golang.org/x/term v0.38.0
-	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/sys v0.40.0
+	golang.org/x/term v0.39.0
+	golang.org/x/text v0.33.0
 	golang.org/x/time v0.14.0
 	google.golang.org/grpc v1.77.0
 	google.golang.org/protobuf v1.36.11
@@ -195,7 +195,7 @@ require (
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.7
 	github.com/bsv-blockchain/go-safe-conversion v1.1.0
 	github.com/bsv-blockchain/go-tx-map v1.3.0
-	github.com/bsv-blockchain/go-wire v1.1.1
+	github.com/bsv-blockchain/go-wire v1.1.4
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
@@ -258,7 +258,7 @@ require (
 	github.com/docker/cli v28.5.1+incompatible // indirect
 	github.com/docker/compose/v2 v2.40.2 // indirect
 	github.com/docker/distribution v2.8.3+incompatible // indirect
-	github.com/docker/docker v28.5.2+incompatible // indirect
+	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
 	github.com/docker/go v1.5.1-1.0.20160303222718-d30aec9fd63c // indirect
 	github.com/docker/go-metrics v0.0.1 // indirect
@@ -439,7 +439,7 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
 	golang.org/x/mod v0.31.0 // indirect
-	golang.org/x/net v0.48.0 // indirect
+	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/oauth2 v0.32.0 // indirect
 	golang.org/x/tools v0.40.0 // indirect
 	gonum.org/v1/gonum v0.16.0 // indirect

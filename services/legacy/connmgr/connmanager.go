@@ -73,6 +73,10 @@ type ConnReq struct {
 
 	Permanent bool
 
+	// IsStreamConn indicates this connection is a multistream stream
+	// connection that should bypass duplicate address detection.
+	IsStreamConn bool
+
 	addr       net.Addr
 	conn       net.Conn
 	state      ConnState

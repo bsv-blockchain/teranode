@@ -415,9 +415,9 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 			BytesSent:     sp.BytesSent(),
 			BytesReceived: sp.BytesReceived(),
 			// AvgRecvBandwidth: sp.AvgRecvBandwidth(),
-			// AssocId:          sp.AssocId(),
-			// StreamPolicy:     sp.StreamPolicy(),
-			Inbound: sp.Inbound(),
+			AssocId:      sp.associationIDString(),
+			StreamPolicy: sp.streamPolicyString(),
+			Inbound:      sp.Inbound(),
 		})
 	}
 
