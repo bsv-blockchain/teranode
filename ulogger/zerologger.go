@@ -1,6 +1,7 @@
 package ulogger
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ordishs/gocore"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/term"
 )
 
@@ -435,6 +437,42 @@ func (z *ZLoggerWrapper) Printf(format string, v ...interface{}) {
 // for the standard library log.
 func (z *ZLoggerWrapper) Write(p []byte) (n int, err error) {
 	return z.Logger.Write(p)
+}
+
+// WithTraceContext returns a new logger enriched with traceId and spanId from
+// the OpenTelemetry span context. If the context has no valid span, the
+// original logger is returned unchanged.
+func (z *ZLoggerWrapper) WithTraceContext(ctx context.Context) Logger {
+	spanCtx := trace.SpanContextFromContext(ctx)
+	if !spanCtx.IsValid() {
+		return z
+	}
+
+	traceID := spanCtx.TraceID().String()
+	spanID := spanCtx.SpanID().String()
+
+	// Create new logger with trace fields baked in
+	enrichedLogger := z.Logger.With().
+		Str("traceId", traceID).
+		Str("spanId", spanID).
+		Logger()
+
+	var enrichedJSONLogger *zerolog.Logger
+	if z.jsonLogger != nil {
+		jl := z.jsonLogger.With().
+			Str("traceId", traceID).
+			Str("spanId", spanID).
+			Logger()
+		enrichedJSONLogger = &jl
+	}
+
+	return &ZLoggerWrapper{
+		Logger:     enrichedLogger,
+		service:    z.service,
+		w:          z.w,
+		skipFrame:  z.skipFrame,
+		jsonLogger: enrichedJSONLogger,
+	}
 }
 
 // colorize returns the string s wrapped in ANSI code c, unless disabled is true or c is 0.

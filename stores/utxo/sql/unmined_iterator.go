@@ -257,3 +257,39 @@ func (it *unminedTxIterator) Close() error {
 func (s *Store) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
 	return newUnminedTxIterator(s)
 }
+
+func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	return newPrunableUnminedTxIterator(s, cutoffBlockHeight)
+}
+
+func newPrunableUnminedTxIterator(store *Store, cutoffBlockHeight uint32) (*unminedTxIterator, error) {
+	it := &unminedTxIterator{
+		store: store,
+	}
+
+	q := `
+		SELECT
+		 t.id
+		,t.hash
+		,t.fee
+		,t.size_in_bytes
+		,t.inserted_at
+		,t.locked
+		,t.coinbase
+		,t.unmined_since
+		FROM transactions t
+		WHERE t.unmined_since IS NOT NULL
+		  AND t.unmined_since <= $1
+		  AND t.conflicting = false
+		ORDER BY t.id ASC
+	`
+
+	rows, err := store.db.Query(q, cutoffBlockHeight)
+	if err != nil {
+		return nil, err
+	}
+
+	it.rows = rows
+
+	return it, nil
+}

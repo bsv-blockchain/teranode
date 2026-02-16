@@ -22,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
+	"github.com/bsv-blockchain/teranode/stores/utxo/txparse"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
@@ -38,9 +39,33 @@ var _ pruner.Service = (*Service)(nil)
 
 var IndexName, _ = gocore.Config().Get("pruner_IndexName", "pruner_dah_index")
 
+// TimeoutError indicates that a query operation timed out or encountered a network error.
+// This error type is used to distinguish retriable timeout errors from other errors.
+type TimeoutError struct {
+	cause error
+}
+
+func (e *TimeoutError) Error() string {
+	return fmt.Sprintf("query timeout or network error: %v", e.cause)
+}
+
+func (e *TimeoutError) Unwrap() error {
+	return e.cause
+}
+
 var (
-	prometheusMetricsInitOnce  sync.Once
-	prometheusUtxoCleanupBatch prometheus.Histogram
+	prometheusMetricsInitOnce                 sync.Once
+	prometheusUtxoCleanupBatch                prometheus.Histogram
+	prometheusUtxoRecordErrors                prometheus.Counter
+	prometheusUtxoBatchQueryError             prometheus.Counter
+	prometheusUtxoRecordsDeleted              prometheus.Counter
+	prometheusUtxoRecordsDeletedSkipped       prometheus.Counter
+	prometheusUtxoParentsUpdated              prometheus.Counter
+	prometheusUtxoParentsUpdatedSkipped       prometheus.Counter
+	prometheusUtxoExternalFilesDeleted        prometheus.Counter
+	prometheusUtxoExternalFilesDeletedSkipped prometheus.Counter
+	prometheusUtxoRetryAttempts               prometheus.Counter
+	prometheusUtxoTimeoutEvents               prometheus.Counter
 )
 
 // Options contains configuration options for the cleanup service
@@ -81,6 +106,7 @@ type Options struct {
 // are accessed millions of times (e.g., utxoBatchSize in per-record processing loops).
 type Service struct {
 	logger      ulogger.Logger
+	settings    *settings.Settings
 	client      *uaerospike.Client
 	external    blob.Store
 	namespace   string
@@ -111,10 +137,6 @@ type Service struct {
 	writePolicy      *aerospike.WritePolicy
 	batchWritePolicy *aerospike.BatchWritePolicy
 	batchPolicy      *aerospike.BatchPolicy
-
-	// getPersistedHeight returns the last block height processed by block persister
-	// Used to coordinate cleanup with block persister progress (can be nil)
-	getPersistedHeight func() uint32
 }
 
 // parentUpdateInfo holds accumulated parent update information for batching
@@ -130,7 +152,7 @@ type externalFileInfo struct {
 }
 
 // NewService creates a new cleanup service
-func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
+func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 	if opts.Logger == nil {
 		return nil, errors.NewProcessingError("logger is required")
 	}
@@ -162,21 +184,61 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 			Help:    "Time taken to process a batch of cleanup jobs",
 			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60, 120},
 		})
+		prometheusUtxoRecordErrors = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_record_errors_total",
+			Help: "Total number of Aerospike record-level errors during pruning",
+		})
+		prometheusUtxoBatchQueryError = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_batch_query_errors_total",
+			Help: "Total number of Aerospike batch query errors during child verification",
+		})
+		prometheusUtxoRecordsDeleted = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_records_deleted_total",
+			Help: "Total number of UTXO records deleted during pruning (updated incrementally)",
+		})
+		prometheusUtxoRecordsDeletedSkipped = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_records_deleted_skipped_total",
+			Help: "Total number of UTXO records skipped during pruning (updated incrementally)",
+		})
+		prometheusUtxoParentsUpdated = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_parents_updated_total",
+			Help: "Total number of parent records updated during pruning (updated incrementally)",
+		})
+		prometheusUtxoParentsUpdatedSkipped = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_parents_updated_skipped_total",
+			Help: "Total number of parent records skipped during pruning (updated incrementally)",
+		})
+		prometheusUtxoExternalFilesDeleted = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_external_files_deleted_total",
+			Help: "Total number of external files deleted during pruning (updated incrementally)",
+		})
+		prometheusUtxoExternalFilesDeletedSkipped = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_external_files_deleted_skipped_total",
+			Help: "Total number of external files skipped during pruning (updated incrementally)",
+		})
+		prometheusUtxoRetryAttempts = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_retry_attempts_total",
+			Help: "Total number of retry attempts across all pruning operations (indicates catchup with timeouts)",
+		})
+		prometheusUtxoTimeoutEvents = promauto.NewCounter(prometheus.CounterOpts{
+			Name: "utxo_pruner_timeout_events_total",
+			Help: "Total number of timeout events requiring retry during pruning operations",
+		})
 	})
 
 	// Use the configured query policy from settings (configured via aerospike_queryPolicy URL)
-	queryPolicy := util.GetAerospikeQueryPolicy(tSettings)
+	queryPolicy := util.GetAerospikeQueryPolicy(settings)
 	queryPolicy.IncludeBinData = true // Need to include bin data for cleanup processing
 
 	// Use the configured write policy from settings
-	writePolicy := util.GetAerospikeWritePolicy(tSettings, 0)
+	writePolicy := util.GetAerospikeWritePolicy(settings, 0)
 
 	// Use the configured batch policies from settings
-	batchWritePolicy := util.GetAerospikeBatchWritePolicy(tSettings)
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(settings)
 	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	// Use the configured batch policy from settings (configured via aerospike_batchPolicy URL)
-	batchPolicy := util.GetAerospikeBatchPolicy(tSettings)
+	batchPolicy := util.GetAerospikeBatchPolicy(settings)
 
 	notifier := NewPrunerEventNotifier()
 	for _, observer := range opts.Observers {
@@ -186,6 +248,7 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 	service := &Service{
 		logger:                         opts.Logger,
 		client:                         opts.Client,
+		settings:                       settings,
 		external:                       opts.ExternalStore,
 		namespace:                      opts.Namespace,
 		set:                            opts.Set,
@@ -196,17 +259,16 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 		writePolicy:                    writePolicy,
 		batchWritePolicy:               batchWritePolicy,
 		batchPolicy:                    batchPolicy,
-		getPersistedHeight:             opts.GetPersistedHeight,
-		utxoBatchSize:                  tSettings.UtxoStore.UtxoBatchSize,
-		blockHeightRetention:           tSettings.GetUtxoStoreBlockHeightRetention(),
-		defensiveEnabled:               tSettings.Pruner.UTXODefensiveEnabled,
-		defensiveBatchReadSize:         tSettings.Pruner.UTXODefensiveBatchReadSize,
-		chunkSize:                      tSettings.Pruner.UTXOChunkSize,
-		chunkGroupLimit:                tSettings.Pruner.UTXOChunkGroupLimit,
-		progressLogInterval:            tSettings.Pruner.UTXOProgressLogInterval,
-		partitionQueries:               tSettings.Pruner.UTXOPartitionQueries,
-		connectionPoolWarningThreshold: tSettings.Pruner.ConnectionPoolWarningThreshold,
-		utxoSetTTL:                     tSettings.Pruner.UTXOSetTTL,
+		utxoBatchSize:                  settings.UtxoStore.UtxoBatchSize,
+		blockHeightRetention:           settings.GetUtxoStoreBlockHeightRetention(),
+		defensiveEnabled:               settings.Pruner.UTXODefensiveEnabled,
+		defensiveBatchReadSize:         settings.Pruner.UTXODefensiveBatchReadSize,
+		chunkSize:                      settings.Pruner.UTXOChunkSize,
+		chunkGroupLimit:                settings.Pruner.UTXOChunkGroupLimit,
+		progressLogInterval:            settings.Pruner.UTXOProgressLogInterval,
+		partitionQueries:               settings.Pruner.UTXOPartitionQueries,
+		connectionPoolWarningThreshold: settings.Pruner.ConnectionPoolWarningThreshold,
+		utxoSetTTL:                     settings.Pruner.UTXOSetTTL,
 		fieldTxID:                      fields.TxID.String(),
 		fieldUtxos:                     fields.Utxos.String(),
 		fieldInputs:                    fields.Inputs.String(),
@@ -239,12 +301,6 @@ func (s *Service) Start(ctx context.Context) {
 		s.indexReady.Store(true)
 		s.logger.Infof("[AerospikeCleanupService] index ready")
 	}()
-}
-
-// SetPersistedHeightGetter sets the function used to get block persister progress.
-// This should be called after service creation to wire up coordination with block persister.
-func (s *Service) SetPersistedHeightGetter(getter func() uint32) {
-	s.getPersistedHeight = getter
 }
 
 // AddObserver adds an observer to be notified when pruning completes.
@@ -289,9 +345,11 @@ func (s *Service) getConfigValue(configParam string) (string, error) {
 // calculatePartitionWorkers determines the optimal number of partition workers
 // based on CPU cores and Aerospike's query-threads-limit configuration
 func (s *Service) calculatePartitionWorkers() int {
+	maxPartitions := aerospike.NewPartitionFilterAll().Count // Total partitions in Aerospike (4096)
+
 	// If explicitly configured, use that value
 	if s.partitionQueries > 0 {
-		return min(s.partitionQueries, 4096) // Cap at total partitions
+		return min(s.partitionQueries, maxPartitions) // Cap at total partitions
 	}
 
 	// Auto-detect based on CPU cores and Aerospike query-threads-limit
@@ -322,7 +380,7 @@ func (s *Service) calculatePartitionWorkers() int {
 	}
 
 	// Ensure at least 1 worker, cap at total partitions
-	return max(1, min(numPartitionQueries, 4096))
+	return max(1, min(numPartitionQueries, maxPartitions))
 }
 
 // getConnectionQueueSize returns the Aerospike connection pool size from the client.
@@ -380,7 +438,6 @@ func (s *Service) validateConnectionPoolSettings() {
 func (s *Service) partitionWorker(
 	ctx context.Context,
 	blockHeight uint32,
-	safeCleanupHeight uint32,
 	partitionStart int,
 	partitionCount int,
 ) (processed int64, skipped int64, err error) {
@@ -392,8 +449,8 @@ func (s *Service) partitionWorker(
 	// Create statement with delete_at_height filter
 	stmt := aerospike.NewStatement(s.namespace, s.set)
 
-	// Set the filter to find records with delete_at_height <= safeCleanupHeight
-	if err := stmt.SetFilter(aerospike.NewRangeFilter(s.fieldDeleteAtHeight, 1, int64(safeCleanupHeight))); err != nil {
+	// Set the filter to find records with delete_at_height <= blockHeight
+	if err := stmt.SetFilter(aerospike.NewRangeFilter(s.fieldDeleteAtHeight, 1, int64(blockHeight))); err != nil {
 		return 0, 0, err
 	}
 
@@ -441,6 +498,15 @@ func (s *Service) partitionWorker(
 			totalProcessed += int64(processed)
 			totalSkipped += int64(skipped)
 			mu.Unlock()
+
+			// Update Prometheus counter incrementally for real-time rate calculation
+			if processed > 0 {
+				prometheusUtxoRecordsDeleted.Add(float64(processed))
+			}
+
+			if skipped > 0 {
+				prometheusUtxoRecordsDeletedSkipped.Add(float64(skipped))
+			}
 			return nil
 		})
 	}
@@ -462,6 +528,41 @@ func (s *Service) partitionWorker(
 			break
 		}
 
+		// Check for timeout/network errors in the record
+		if rec.Err != nil {
+			var asErr aerospike.Error
+			if errors.As(rec.Err, &asErr) {
+				isTimeoutError := asErr.Matches(
+					types.TIMEOUT,
+					types.NETWORK_ERROR,
+					types.NO_RESPONSE,
+					types.SERVER_NOT_AVAILABLE,
+				)
+
+				if isTimeoutError {
+					s.logger.Infof("Partition range [%d-%d] hit timeout/network error after processing records, stopping gracefully: %v",
+						partitionStart, partitionStart+partitionCount-1, rec.Err)
+
+					// Process any accumulated records in current chunk before returning
+					if len(chunk) > 0 {
+						submitChunk(chunk)
+					}
+
+					// Wait for any in-flight chunk processing to complete
+					if err := chunkGroup.Wait(); err != nil {
+						return 0, 0, err
+					}
+
+					// Return TimeoutError to signal retry is needed (partial progress is already recorded)
+					return totalProcessed, totalSkipped, &TimeoutError{cause: rec.Err}
+				}
+			}
+
+			// Non-timeout errors: add record to chunk for normal error handling in processRecordChunk
+			// These errors are tracked via prometheusUtxoRecordErrors in processRecordChunk
+		}
+
+		// Add record to chunk (even if it has non-timeout errors - processRecordChunk will handle them)
 		chunk = append(chunk, rec)
 		if len(chunk) >= s.chunkSize {
 			submitChunk(chunk)
@@ -483,121 +584,148 @@ type workerResult struct {
 	err       error
 }
 
-// PruneWithPartitions implements parallel partition-based pruning
+// PruneWithPartitions implements parallel partition-based pruning with retry logic for timeout handling
 // This method splits the Aerospike keyspace (4096 partitions) across multiple workers
-// for maximum throughput, achieving 100x performance improvement over sequential queries
-func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, numPartitionQueries int) (int64, error) {
+// for maximum throughput, achieving 100x performance improvement over sequential queries.
+//
+// Timeout Handling: If any worker encounters a timeout or network error, the entire query is restarted
+// from the beginning. This is safe due to idempotent operations (already-processed records are handled
+// gracefully). Multiple retry attempts allow the system to adaptively process large catchup workloads
+// that accumulate when the pruner is stopped for extended periods.
+func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, blockHashStr string, numPartitionQueries int) (int64, error) {
 	startTime := time.Now()
+	maxRetries := 10 // Reasonable limit to prevent infinite loop
+	var lastErr error
 
-	// BLOCK PERSISTER COORDINATION: Calculate safe cleanup height
-	// (keep existing logic from sequential implementation)
-	safeCleanupHeight := blockHeight
-
-	if s.getPersistedHeight != nil {
-		persistedHeight := s.getPersistedHeight()
-
-		// Only apply limitation if block persister has actually processed blocks (height > 0)
-		if persistedHeight > 0 {
-			retention := s.blockHeightRetention
-
-			// Calculate max safe height: persisted_height + retention
-			maxSafeHeight := persistedHeight + retention
-			if maxSafeHeight < safeCleanupHeight {
-				s.logger.Infof("Limiting cleanup from height %d to %d (persisted: %d, retention: %d)",
-					blockHeight, maxSafeHeight, persistedHeight, retention)
-				safeCleanupHeight = maxSafeHeight
-			}
-		}
-	}
-
-	// Calculate partition distribution
-	const totalPartitions = 4096
+	// Calculate partition distribution (remains constant across retries)
+	// Get total partitions from Aerospike client library (always 4096 in Aerospike architecture)
+	totalPartitions := aerospike.NewPartitionFilterAll().Count
 	partitionsPerQuery := totalPartitions / numPartitionQueries
 	remainingPartitions := totalPartitions % numPartitionQueries
 
-	s.logger.Infof("Starting parallel pruning with %d partition workers for height %d (safe cleanup height: %d)",
-		numPartitionQueries, blockHeight, safeCleanupHeight)
-
-	// Launch partition workers
-	results := make(chan workerResult, numPartitionQueries)
-	var wg sync.WaitGroup
-
-	partitionStart := 0
-	for i := 0; i < numPartitionQueries; i++ {
-		partitionCount := partitionsPerQuery
-		if i < remainingPartitions {
-			partitionCount++ // Distribute remainder
+	// Retry loop: restart entire query on timeout, leveraging idempotency
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Track retry attempts (attempt 1 is initial, attempts 2+ are retries)
+		if attempt > 1 {
+			prometheusUtxoRetryAttempts.Inc()
 		}
 
-		wg.Add(1)
-		go func(start, count int) {
-			defer wg.Done() // Call Done() AFTER sending to channel
-			processed, skipped, err := s.partitionWorker(ctx, blockHeight, safeCleanupHeight,
-				start, count)
-			results <- workerResult{processed, skipped, err}
-		}(partitionStart, partitionCount)
+		s.logger.Infof("[pruner][%s:%d] phase 2: pruning attempt %d with %d partition workers (total partitions: %d)",
+			blockHashStr, blockHeight, attempt, numPartitionQueries, totalPartitions)
 
-		partitionStart += partitionCount
-	}
+		// Launch partition workers
+		results := make(chan workerResult, numPartitionQueries)
+		var wg sync.WaitGroup
 
-	// Close results channel when all workers done
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
+		partitionStart := 0
+		for i := 0; i < numPartitionQueries; i++ {
+			partitionCount := partitionsPerQuery
+			if i < remainingPartitions {
+				partitionCount++ // Distribute remainder
+			}
 
-	// Aggregate results from all workers
-	var totalProcessed, totalSkipped int64
+			wg.Add(1)
+			go func(start, count int) {
+				defer wg.Done() // Call Done() AFTER sending to channel
+				processed, skipped, err := s.partitionWorker(ctx, blockHeight, start, count)
+				results <- workerResult{processed, skipped, err}
+			}(partitionStart, partitionCount)
 
-	for result := range results {
-		if result.err != nil {
-			s.logger.Errorf("Partition worker error: %v", result.err)
-			return 0, result.err // First error stops everything
+			partitionStart += partitionCount
 		}
-		totalProcessed += result.processed
-		totalSkipped += result.skipped
+
+		// Close results channel when all workers done
+		go func() {
+			wg.Wait()
+			close(results)
+		}()
+
+		// Aggregate results from all workers
+		var totalProcessed, totalSkipped int64
+		var workerErr error
+
+		for result := range results {
+			if result.err != nil {
+				workerErr = result.err
+				// Don't break early - drain the channel to allow workers to finish
+			}
+			totalProcessed += result.processed
+			totalSkipped += result.skipped
+		}
+
+		// Check if error is timeout (retriable)
+		if workerErr != nil {
+			var timeoutErr *TimeoutError
+			if errors.As(workerErr, &timeoutErr) {
+				// Timeout error - record partial progress and retry
+				prometheusUtxoTimeoutEvents.Inc()
+
+				p := message.NewPrinter(language.English)
+				formattedProcessed := p.Sprintf("%d", totalProcessed)
+
+				s.logger.Infof("[pruner][%s:%d] phase 2: timeout detected on attempt %d, processed %s records. Restarting query immediately...",
+					blockHashStr, blockHeight, attempt, formattedProcessed)
+
+				lastErr = workerErr
+				continue // Retry from beginning
+			}
+
+			// Other errors: return immediately (don't retry)
+			s.logger.Errorf("[pruner][%s:%d] phase 2: partition worker error (non-timeout): %v", blockHashStr, blockHeight, workerErr)
+			return 0, workerErr
+		}
+
+		// Success - all partitions processed without timeout
+		elapsed := time.Since(startTime)
+		tps := float64(totalProcessed) / elapsed.Seconds()
+
+		// Format TPS for readability (e.g., "24.3M records/sec" for large numbers)
+		var tpsStr string
+		if tps >= 1_000_000 {
+			tpsStr = fmt.Sprintf("%.1fM records/sec", tps/1_000_000)
+		} else if tps >= 1_000 {
+			tpsStr = fmt.Sprintf("%.1fK records/sec", tps/1_000)
+		} else {
+			tpsStr = fmt.Sprintf("%.2f records/sec", tps)
+		}
+
+		p := message.NewPrinter(language.English)
+		formattedTotal := p.Sprintf("%d", totalProcessed)
+		formattedSkipped := p.Sprintf("%d", totalSkipped)
+
+		var modeStr string
+		if s.defensiveEnabled {
+			modeStr = ", defensive logic"
+		}
+		if s.utxoSetTTL {
+			modeStr += ", TTL mode"
+		}
+
+		var attemptsStr string
+		if attempt > 1 {
+			attemptsStr = fmt.Sprintf(" (after %d attempts)", attempt)
+		}
+
+		s.logger.Infof("[pruner][%s:%d] phase 2: completed parallel pruning in %v: pruned %s records, skipped %s records (%s%s)%s",
+			blockHashStr, blockHeight, elapsed, formattedTotal, formattedSkipped, tpsStr, modeStr, attemptsStr)
+
+		prometheusUtxoCleanupBatch.Observe(float64(elapsed.Microseconds()) / 1_000_000)
+
+		s.notifier.NotifyPruneComplete(blockHeight, totalProcessed)
+
+		return totalProcessed, nil
 	}
 
-	// Log completion with effective throughput
-	elapsed := time.Since(startTime)
-	tps := float64(totalProcessed) / elapsed.Seconds()
-
-	// Format TPS for readability (e.g., "24.3M records/sec" for large numbers)
-	var tpsStr string
-	if tps >= 1_000_000 {
-		tpsStr = fmt.Sprintf("%.1fM records/sec", tps/1_000_000)
-	} else if tps >= 1_000 {
-		tpsStr = fmt.Sprintf("%.1fK records/sec", tps/1_000)
-	} else {
-		tpsStr = fmt.Sprintf("%.2f records/sec", tps)
-	}
-
-	p := message.NewPrinter(language.English)
-	formattedTotal := p.Sprintf("%d", totalProcessed)
-	formattedSkipped := p.Sprintf("%d", totalSkipped)
-
-	var modeStr string
-	if s.defensiveEnabled {
-		modeStr = ", defensive logic"
-	}
-	if s.utxoSetTTL {
-		modeStr += ", TTL mode"
-	}
-
-	s.logger.Infof("Completed parallel pruning for block height %d in %v: pruned %s records, skipped %s records (%s%s)",
-		blockHeight, elapsed, formattedTotal, formattedSkipped, tpsStr, modeStr)
-
-	prometheusUtxoCleanupBatch.Observe(float64(elapsed.Microseconds()) / 1_000_000)
-
-	s.notifier.NotifyPruneComplete(blockHeight, totalProcessed)
-
-	return totalProcessed, nil
+	// Max retries exceeded
+	s.logger.Warnf("[pruner][%s:%d] phase 2: max retries (%d) exceeded for pruning, last error: %v",
+		blockHashStr, blockHeight, maxRetries, lastErr)
+	return 0, errors.NewProcessingError("max retries (%d) exceeded: %v", maxRetries, lastErr)
 }
 
 // Prune removes transactions marked for deletion at or before the specified height.
 // Returns the number of records processed and any error encountered.
 // This method is synchronous and blocks until pruning completes or context is cancelled.
-func (s *Service) Prune(ctx context.Context, blockHeight uint32) (int64, error) {
+func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr string) (int64, error) {
 	if blockHeight == 0 {
 		return 0, errors.NewProcessingError("block height cannot be zero")
 	}
@@ -610,22 +738,16 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32) (int64, error) 
 	// Calculate optimal number of partition workers
 	numWorkers := s.calculatePartitionWorkers()
 
-	// Log pruner trigger - note that blockHeight is from BlockPersisted notification
-	// which may lag behind current block validation height during catchup
-	if s.getPersistedHeight != nil && s.getPersistedHeight() > 0 {
-		s.logger.Infof("Pruner triggered for height %d with %d partition workers (block persister last reported: %d)",
-			blockHeight, numWorkers, s.getPersistedHeight())
-	} else {
-		s.logger.Infof("Pruner triggered for height %d with %d partition workers",
-			blockHeight, numWorkers)
-	}
+	// Log pruner trigger
+	s.logger.Debugf("[pruner][%s:%d] phase 2: DAH pruner triggered with %d partition workers",
+		blockHashStr, blockHeight, numWorkers)
 
 	if s.utxoSetTTL {
 		s.logger.Infof("Pruner operating in TTL mode (records expire via nsup)")
 	}
 
 	// Always use partition-based approach (even if numWorkers=1)
-	return s.PruneWithPartitions(ctx, blockHeight, numWorkers)
+	return s.PruneWithPartitions(ctx, blockHeight, blockHashStr, numWorkers)
 }
 
 // processRecordChunk processes a chunk of parent records with batched child verification
@@ -639,6 +761,10 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	// When disabled, parents are deleted without verifying children are stable
 	var safetyMap map[string]bool
 	var parentToChildren map[string][]string
+
+	// Track record errors for batch-level reporting (avoid log flooding)
+	var recordErrorCount int
+	var firstRecordError error
 
 	if !s.defensiveEnabled {
 		// Defensive mode disabled - allow all deletions without child verification
@@ -654,6 +780,7 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 
 		for _, rec := range chunk {
 			if rec.Err != nil || rec.Record == nil || rec.Record.Bins == nil {
+				// Skip errored/empty records - errors will be tracked in main processing loop
 				continue
 			}
 
@@ -734,7 +861,15 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	skippedCount := 0
 
 	for _, rec := range chunk {
-		if rec.Err != nil || rec.Record == nil || rec.Record.Bins == nil {
+		if rec.Err != nil {
+			if firstRecordError == nil {
+				firstRecordError = rec.Err
+			}
+			recordErrorCount++
+			prometheusUtxoRecordErrors.Inc()
+			continue
+		}
+		if rec.Record == nil || rec.Record.Bins == nil {
 			continue
 		}
 
@@ -829,6 +964,11 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	// Flush all accumulated operations in one batch per chunk
 	if err := s.flushCleanupBatches(ctx, allParentUpdates, allDeletions, allExternalFiles); err != nil {
 		return 0, 0, err
+	}
+
+	// Report record-level errors once per chunk (avoid log flooding)
+	if recordErrorCount > 0 {
+		s.logger.Errorf("Aerospike record errors in chunk: %d records failed (sample error: %v)", recordErrorCount, firstRecordError)
 	}
 
 	return processedCount, skippedCount, nil
@@ -954,7 +1094,8 @@ func (s *Service) processBatchOfChildren(batch []childHashEntry, safetyMap map[s
 	// Execute batch operation
 	err := s.client.BatchOperate(batchPolicy, batchRecords)
 	if err != nil {
-		s.logger.Errorf("[processBatchOfChildren] Batch operation failed: %v", err)
+		s.logger.Errorf("[processBatchOfChildren] Batch operation failed (affected %d child records): %v", len(batchRecords), err)
+		prometheusUtxoBatchQueryError.Inc()
 		// Mark all in this batch as unsafe on batch error
 		for hexHash := range hashToKey {
 			safetyMap[hexHash] = false
@@ -971,6 +1112,10 @@ func (s *Service) processBatchOfChildren(batch []childHashEntry, safetyMap map[s
 	for _, batchRec := range batchRecords {
 		keyToRecord[batchRec.BatchRec().Key.String()] = batchRec.BatchRec()
 	}
+
+	// Track individual record errors in batch (avoid log flooding)
+	var batchRecordErrorCount int
+	var firstBatchRecordError error
 
 	for hexHash, keyStr := range hashToKey {
 		// O(1) map lookup instead of O(n) scan
@@ -989,13 +1134,18 @@ func (s *Service) processBatchOfChildren(batch []childHashEntry, safetyMap map[s
 			// In this case, the child is ALREADY deleted, so it's safe to consider it stable
 			if aerospikeErr, ok := record.Err.(*aerospike.AerospikeError); ok {
 				if aerospikeErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
-					// Child already deleted by another chunk - safe to proceed with parent deletion
+					// Idempotent race handling: Child already deleted by concurrent partition processing
+					// This is safe - child is gone so parent's deletedChildren map doesn't need updating
 					safetyMap[hexHash] = true
 					continue
 				}
 			}
 			// Any other error → be conservative, don't delete parent
-			s.logger.Warnf("[batchVerifyChildrenSafety] Unexpected error for child %s: %v", hexHash[:8], record.Err)
+			// Track for batch-level reporting (avoid log flooding)
+			if firstBatchRecordError == nil {
+				firstBatchRecordError = record.Err
+			}
+			batchRecordErrorCount++
 			safetyMap[hexHash] = false
 			continue
 		}
@@ -1050,6 +1200,11 @@ func (s *Service) processBatchOfChildren(batch []childHashEntry, safetyMap map[s
 			safetyMap[hexHash] = true
 		}
 	}
+
+	// Report individual record errors from this batch (avoid log flooding)
+	if batchRecordErrorCount > 0 {
+		s.logger.Warnf("[batchVerifyChildrenSafety] %d child record errors in batch (sample error: %v)", batchRecordErrorCount, firstBatchRecordError)
+	}
 }
 
 // extractInputReference extracts only the previous TX reference from input bytes
@@ -1085,8 +1240,10 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 
 	external, ok := bins[s.fieldExternal].(bool)
 	if ok && external {
-		// transaction is external, we need to get the data from the external store
-		txBytes, err := s.external.Get(ctx, txHash.CloneBytes(), fileformat.FileTypeTx)
+		// OPTIMIZATION: Use streaming parser that only extracts input references (prevTxID + prevIndex),
+		// skipping all scripts and outputs. This avoids downloading and deserializing the entire
+		// transaction which can be megabytes, achieving ~90% bandwidth reduction for external txs.
+		reader, err := s.external.GetIoReader(ctx, txHash.CloneBytes(), fileformat.FileTypeTx)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) {
 				// Check if outputs exist (sometimes only outputs are stored)
@@ -1100,7 +1257,8 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 					return nil, nil
 				}
 
-				// External blob already deleted (by LocalDAH or previous cleanup), just need to delete Aerospike record
+				// Idempotent: External file missing (cleaned by LocalDAH or previous run)
+				// We can still proceed with record deletion - return empty inputs list
 				s.logger.Debugf("external tx %s already deleted from blob store at height %d, proceeding to delete Aerospike record",
 					txHash.String(), blockHeight)
 				return []*bt.Input{}, nil
@@ -1108,13 +1266,12 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 			// Other errors should still be reported
 			return nil, errors.NewProcessingError("error getting external tx %s at height %d: %v", txHash.String(), blockHeight, err)
 		}
+		defer reader.Close()
 
-		tx, err := bt.NewTxFromBytes(txBytes)
+		inputs, err = txparse.ParseInputReferencesFromExtendedTx(reader)
 		if err != nil {
-			return nil, errors.NewProcessingError("invalid tx bytes for external tx %s at height %d: %v", txHash.String(), blockHeight, err)
+			return nil, errors.NewProcessingError("failed to parse input references for external tx %s at height %d: %v", txHash.String(), blockHeight, err)
 		}
-
-		inputs = tx.Inputs
 	} else {
 		// get the inputs from the record directly (internal transactions)
 		inputsValue := bins[s.fieldInputs]
@@ -1164,11 +1321,12 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 }
 
 // flushCleanupBatches flushes accumulated parent updates, external file deletions, and Aerospike deletions
-func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[string]*parentUpdateInfo, deletions []*aerospike.Key, externalFiles []*externalFileInfo) error {
-	// Execute parent updates first
-	if len(parentUpdates) > 0 {
-		if err := s.executeBatchParentUpdates(ctx, parentUpdates); err != nil {
-			return err
+func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[string]*parentUpdateInfo, deletions []*aerospike.Key, externalFiles []*externalFileInfo) error { // Execute parent updates first
+	if !s.settings.Pruner.SkipParentUpdates {
+		if len(parentUpdates) > 0 {
+			if err := s.executeBatchParentUpdates(ctx, parentUpdates); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1179,10 +1337,12 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 		}
 	}
 
-	// Delete Aerospike records last
-	if len(deletions) > 0 {
-		if err := s.executeBatchDeletions(ctx, deletions); err != nil {
-			return err
+	if !s.settings.Pruner.SkipDeletions {
+		// Delete Aerospike records last
+		if len(deletions) > 0 {
+			if err := s.executeBatchDeletions(ctx, deletions); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1209,7 +1369,15 @@ func (s *Service) extractInputs(ctx context.Context, blockHeight uint32, bins ae
 	return s.getTxInputsFromBins(ctx, blockHeight, bins, txHash)
 }
 
-// executeBatchParentUpdates executes a batch of parent update operations
+// executeBatchParentUpdates performs Phase 2a: updates parent records to mark that their
+// child transactions have been deleted (adds to deletedChildren map).
+//
+// IDEMPOTENCY: This operation is safely re-runnable:
+// - Missing parents (KEY_NOT_FOUND) are skipped - they were already deleted
+// - Duplicate updates are no-ops - deletedChildren map updates are idempotent
+// - Partial batch failures can be retried without side effects
+//
+// This must complete before Phase 2b (child deletion) to maintain referential integrity.
 func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[string]*parentUpdateInfo) error {
 	if len(updates) == 0 {
 		return nil
@@ -1252,8 +1420,9 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 
 	for _, rec := range batchRecords {
 		if rec.BatchRec().Err != nil {
-			// Ignore KEY_NOT_FOUND - parent may have been deleted already
 			if rec.BatchRec().Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
+				// Idempotent: Parent may have been deleted by concurrent pruning or LocalDAH cleanup
+				// This is a success condition - parent is already gone so we don't need to update it
 				notFoundCount++
 				continue
 			}
@@ -1270,10 +1439,27 @@ func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[str
 		return errors.NewStorageError("%d parent update operations failed", errorCount)
 	}
 
+	// Update metric with successful parent updates
+	if successCount > 0 {
+		prometheusUtxoParentsUpdated.Add(float64(successCount))
+	}
+
+	if notFoundCount > 0 {
+		prometheusUtxoParentsUpdatedSkipped.Add(float64(notFoundCount))
+	}
+
 	return nil
 }
 
-// executeBatchDeletions executes a batch of deletion operations
+// executeBatchDeletions performs Phase 2b: removes child transaction records from Aerospike
+// after their parents have been updated (Phase 2a).
+//
+// IDEMPOTENCY: This operation is safely re-runnable:
+// - Already-deleted records (KEY_NOT_FOUND) are counted as success
+// - Multiple delete attempts on same record are harmless
+// - Partial batch failures can be retried without side effects
+//
+// Parents must be updated first (Phase 2a) before calling this function.
 func (s *Service) executeBatchDeletions(ctx context.Context, keys []*aerospike.Key) error {
 	if len(keys) == 0 {
 		return nil
@@ -1318,7 +1504,8 @@ func (s *Service) executeBatchDeletions(ctx context.Context, keys []*aerospike.K
 	for _, rec := range batchRecords {
 		if rec.BatchRec().Err != nil {
 			if rec.BatchRec().Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
-				// Already deleted
+				// Idempotent: Record already deleted by concurrent pruning or previous run
+				// This operation is safely re-runnable - treat as success
 				alreadyDeletedCount++
 			} else {
 				s.logger.Errorf("Deletion error for key %v: %v", rec.BatchRec().Key, rec.BatchRec().Err)
@@ -1337,7 +1524,15 @@ func (s *Service) executeBatchDeletions(ctx context.Context, keys []*aerospike.K
 	return nil
 }
 
-// executeBatchExternalFileDeletions deletes external blob files for transactions being pruned
+// executeBatchExternalFileDeletions performs Phase 3: removes external blob files
+// for transactions that have been deleted from Aerospike (Phase 2b).
+//
+// IDEMPOTENCY: This operation is safely re-runnable:
+// - Already-deleted files (ErrNotFound) are counted as success
+// - Files deleted by LocalDAH cleanup are handled gracefully
+// - Partial batch failures can be retried without side effects
+//
+// This runs after Phase 2b (child deletion) but can run concurrently with other blocks.
 func (s *Service) executeBatchExternalFileDeletions(ctx context.Context, files []*externalFileInfo) error {
 	if len(files) == 0 {
 		return nil
@@ -1360,7 +1555,8 @@ func (s *Service) executeBatchExternalFileDeletions(ctx context.Context, files [
 		err := s.external.Del(ctx, fileInfo.txHash.CloneBytes(), fileInfo.fileType)
 		if err != nil {
 			if errors.Is(err, errors.ErrNotFound) {
-				// Already deleted (by LocalDAH cleanup or previous pruning)
+				// Idempotent: File already deleted by LocalDAH cleanup, concurrent pruning, or previous run
+				// This operation is safely re-runnable - treat as success
 				alreadyDeletedCount++
 				s.logger.Debugf("External file for tx %s (type %d) already deleted", fileInfo.txHash.String(), fileInfo.fileType)
 			} else {
@@ -1373,6 +1569,15 @@ func (s *Service) executeBatchExternalFileDeletions(ctx context.Context, files [
 	}
 
 	s.logger.Debugf("External file deletion batch - success: %d, already deleted: %d, errors: %d", successCount, alreadyDeletedCount, errorCount)
+
+	// Update metric with successful deletions
+	if successCount > 0 {
+		prometheusUtxoExternalFilesDeleted.Add(float64(successCount))
+	}
+
+	if alreadyDeletedCount > 0 {
+		prometheusUtxoExternalFilesDeletedSkipped.Add(float64(alreadyDeletedCount))
+	}
 
 	// Return error if any deletions failed
 	if errorCount > 0 {

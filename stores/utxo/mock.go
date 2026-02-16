@@ -108,6 +108,12 @@ func (m *MockUtxostore) GetUnminedTxIterator(bool) (UnminedTxIterator, error) {
 	return args.Get(0).(UnminedTxIterator), args.Error(1)
 }
 
+// GetPrunableUnminedTxIterator mocks the creation of a pruner-specific lightweight iterator.
+func (m *MockUtxostore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (UnminedTxIterator, error) {
+	args := m.Called(cutoffBlockHeight)
+	return args.Get(0).(UnminedTxIterator), args.Error(1)
+}
+
 // BatchDecorate mocks the batch decoration of unresolved metadata with field data.
 // Returns the configured mock response for batch metadata decoration operations.
 func (m *MockUtxostore) BatchDecorate(ctx context.Context, unresolvedMetaDataSlice []*UnresolvedMetaData, fields ...fields.FieldName) error {

@@ -321,12 +321,13 @@ func (repo *Repository) writeTransactionsViaSubtreeStoreStreaming(ctx context.Co
 
 			if missed > 0 {
 				// Log which transactions are missing in this chunk
+				ctxLogger := repo.logger.WithTraceContext(gCtx)
 				for i := 0; i < currentChunkSize; i++ {
 					if subtreepkg.CoinbasePlaceholderHash.Equal(chunkHashes[i]) {
 						continue
 					}
 					if chunkMetaSlice[i] == nil || chunkMetaSlice[i].Tx == nil {
-						repo.logger.Errorf("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get tx meta from store for tx %s at offset %d", subtreeHash.String(), chunkHashes[i].String(), offset+i)
+						ctxLogger.Errorf("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get tx meta from store for tx %s at offset %d", subtreeHash.String(), chunkHashes[i].String(), offset+i)
 					}
 				}
 				missErr := errors.NewProcessingError("[writeTransactionsViaSubtreeStoreStreaming][%s] failed to get %d of %d tx meta from store in chunk at offset %d", subtreeHash.String(), missed, currentChunkSize, offset)

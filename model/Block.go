@@ -360,7 +360,7 @@ type SubtreeStore interface {
 }
 
 func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore SubtreeStore, txMetaStore utxo.Store, oldBlockIDsMap *txmap.SyncedMap[chainhash.Hash, []uint32],
-	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings) (bool, error) {
+	currentChain []*BlockHeader, currentBlockHeaderIDs []uint32, settings *settings.Settings, metaRegenerator SubtreeMetaRegeneratorI) (bool, error) {
 	ctx, _, deferFn := tracing.Tracer("block").Start(ctx, "Valid",
 		tracing.WithHistogram(prometheusBlockValid),
 		tracing.WithLogMessage(logger, "[Block:Valid] called for %s", b.Header.String()),
@@ -511,6 +511,7 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 			currentChain:          currentChain,
 			currentBlockHeaderIDs: currentBlockHeaderIDs,
 			oldBlockIDsMap:        oldBlockIDsMap,
+			metaRegenerator:       metaRegenerator,
 		}
 		err = b.validOrderAndBlessed(ctx, logger, deps, settings.Block.ValidOrderAndBlessedConcurrency)
 		if err != nil {
@@ -663,6 +664,7 @@ type validationDependencies struct {
 	currentChain          []*BlockHeader
 	currentBlockHeaderIDs []uint32
 	oldBlockIDsMap        *txmap.SyncedMap[chainhash.Hash, []uint32]
+	metaRegenerator       SubtreeMetaRegeneratorI // optional: nil means no regeneration
 }
 
 func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger, deps *validationDependencies, validOrderAndBlessedConcurrency int) error {
@@ -712,9 +714,17 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 		err                 error
 	)
 
-	subtreeMetaSlice, err = retry.Retry(ctx, logger, func() (*subtreepkg.Meta, error) {
-		return b.getSubtreeMetaSlice(ctx, deps.subtreeStore, *subtreeHash, subtree)
-	}, retry.WithMessage(fmt.Sprintf("[validOrderAndBlessed][%s][%s:%d] error getting subtree meta slice", b.String(), subtreeHash.String(), sIdx)))
+	subtreeMetaSlice, err = b.getSubtreeMetaSlice(ctx, deps.subtreeStore, *subtreeHash, subtree)
+
+	// Attempt regeneration if meta not found and regenerator is available
+	if err != nil && deps.metaRegenerator != nil {
+		logger.Warnf("[validateSubtree][%s][%s:%d] subtree meta not found, attempting regeneration", b.String(), subtreeHash.String(), sIdx)
+
+		subtreeMetaSlice, err = deps.metaRegenerator.RegenerateMeta(ctx, subtreeHash, subtree)
+		if err == nil {
+			logger.Warnf("[validateSubtree][%s][%s:%d] successfully regenerated subtree meta", b.String(), subtreeHash.String(), sIdx)
+		}
+	}
 
 	// a subtreeMetaSlice is required for further block validation, so if we cannot get it, we return an error
 	if err != nil {

@@ -10,7 +10,7 @@ repos:
     hooks:
       - id: golangci-lint
         name: Run go linter
-        entry: golangci-lint run --new ./...
+        entry: golangci-lint run --new-from-rev=HEAD ./...
         language: system
         types: [ go ]
         pass_filenames: false

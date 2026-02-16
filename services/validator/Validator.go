@@ -306,7 +306,9 @@ func (v *Validator) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32,
 //   - *meta.Data: Transaction metadata if validation succeeds, includes fee calculations
 //   - error: Detailed validation error if validation fails, nil on success
 func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *meta.Data, err error) {
-	v.logger.Debugf("[ValidateWithOptions] Validate tx %s", tx.TxID())
+	// Use context-aware logger for trace correlation
+	ctxLogger := v.logger.WithTraceContext(ctx)
+	ctxLogger.Debugf("[ValidateWithOptions] Validate tx %s", tx.TxID())
 
 	// Retry logic for TX_LOCKED errors with exponential backoff
 	// TX_LOCKED occurs when multiple transactions try to spend the same UTXO concurrently
@@ -327,9 +329,9 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 			// Exponential backoff: 10ms, 20ms, 40ms
 			backoff := time.Duration(1<<attempt) * baseBackoff
 			if attempt < 2 {
-				v.logger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
+				ctxLogger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
 			} else {
-				v.logger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
+				ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
 			}
 
 			select {
@@ -339,7 +341,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 				// Continue to next attempt
 			}
 		} else {
-			v.logger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d attempts, giving up", tx.TxID(), maxRetries)
+			ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d attempts, giving up", tx.TxID(), maxRetries)
 		}
 	}
 
@@ -354,7 +356,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 					)
 
 					if state, err1 = v.blockchainClient.GetFSMCurrentState(ctx); err1 != nil {
-						v.logger.Errorf("[ValidateWithOptions] failed to publish rejected tx - error getting blockchain FSM state: %v", err1)
+						ctxLogger.Errorf("[ValidateWithOptions] failed to publish rejected tx - error getting blockchain FSM state: %v", err1)
 
 						return
 					}

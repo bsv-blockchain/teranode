@@ -31,14 +31,10 @@
 | MinerWalletPrivateKeys | []string | [] | miner_wallet_private_keys | Mining wallet keys |
 | DifficultyCache | bool | true | blockassembly_difficultyCache | Enables difficulty calculation caching (Blockchain service) |
 | UseDynamicSubtreeSize | bool | false | blockassembly_useDynamicSubtreeSize | Dynamic subtree sizing |
-| MiningCandidateCacheTimeout | time.Duration | 5s | blockassembly_miningCandidateCacheTimeout | Mining candidate cache validity (same height) |
-| MiningCandidateSmartCacheMaxAge | time.Duration | 10s | blockassembly_miningCandidateSmartCacheMaxAge | Stale cache max age for high-load scenarios |
 | BlockchainSubscriptionTimeout | time.Duration | 5m | blockassembly_blockchainSubscriptionTimeout | Blockchain event subscription timeout |
 | OnRestartValidateParentChain | bool | true | blockassembly_onRestartValidateParentChain | Enables parent chain validation on restart |
 | ParentValidationBatchSize | int | 1000 | blockassembly_parentValidationBatchSize | Parent validation batch size |
 | OnRestartRemoveInvalidParentChainTxs | bool | false | blockassembly_onRestartRemoveInvalidParentChainTxs | Filters transactions with invalid parent chains |
-| GetMiningCandidateSendTimeout | time.Duration | 1s | blockassembly_getMiningCandidate_send_timeout | Timeout sending request on internal channel |
-| GetMiningCandidateResponseTimeout | time.Duration | 10s | blockassembly_getMiningCandidate_response_timeout | Timeout waiting for mining candidate response |
 | SubtreeAnnouncementInterval | time.Duration | 10s | blockassembly_subtreeAnnouncementInterval | Subtree announcement frequency |
 
 ## Hardcoded Settings (Not Configurable)
@@ -62,12 +58,6 @@
 ### Channel Buffer Management
 - `NewSubtreeChanBuffer` and `SubtreeRetryChanBuffer` must accommodate concurrent processing loads
 - Buffer sizes affect pipeline performance and memory usage
-
-### Mining Candidate Caching
-
-- `MiningCandidateCacheTimeout`: Cache valid for same height within timeout
-- `MiningCandidateSmartCacheMaxAge`: Fallback for stale cache during high load
-- Cache invalidated on significant transaction/subtree changes
 
 ### Mining Solution Processing
 
@@ -130,7 +120,5 @@ blockassembly_subtreeRetryChanBuffer=2000
 
 ```bash
 blockassembly_SubmitMiningSolution_waitForResponse=true
-blockassembly_miningCandidateCacheTimeout=10s
-blockassembly_miningCandidateSmartCacheMaxAge=15s
 miner_wallet_private_keys=key1|key2
 ```

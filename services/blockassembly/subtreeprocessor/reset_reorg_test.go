@@ -671,7 +671,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		require.NoError(t, err)
 
 		// Initialize the processor state
-		stp.currentBlockHeader = blockHeader
+		stp.currentBlockHeader.Store(blockHeader)
 
 		// Set up mock expectations for SetBlockProcessedAt calls
 		mockBlockchainClient.On("SetBlockProcessedAt", mock.Anything, mock.AnythingOfType("*chainhash.Hash"), mock.AnythingOfType("[]bool")).Return(nil)
@@ -715,7 +715,7 @@ func TestSubtreeProcessor_Reorg(t *testing.T) {
 		}
 
 		// Initialize the processor state
-		stp.currentBlockHeader = blockHeader
+		stp.currentBlockHeader.Store(blockHeader)
 
 		// Test reorg with only blocks to move forward - should fail
 		err = stp.Reorg(nil, []*model.Block{block2})

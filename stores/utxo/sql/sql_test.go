@@ -522,7 +522,7 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer pruneCancel()
 
-	recordsProcessed, err := cleanupService.Prune(pruneCtx, 1)
+	recordsProcessed, err := cleanupService.Prune(pruneCtx, 1, "<test-hash>")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed, int64(0))
 
@@ -572,7 +572,7 @@ func TestTombstoneAfterSpendAndUnspend(t *testing.T) {
 	pruneCtx2, pruneCancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer pruneCancel2()
 
-	recordsProcessed2, err := cleanupService.Prune(pruneCtx2, 21)
+	recordsProcessed2, err := cleanupService.Prune(pruneCtx2, 21, "<test-hash>")
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, recordsProcessed2, int64(0))
 
@@ -770,7 +770,7 @@ func TestPreserveParentsOfOldUnminedTransactions(t *testing.T) {
 	store, tx := setup(ctx, t)
 
 	// Test case 1: No parent preservation needed when blockHeight <= retention
-	count, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 5, store.settings, store.logger)
+	count, err := utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, 5, "<test-hash>", store.settings, store.logger)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 
@@ -790,7 +790,7 @@ func TestPreserveParentsOfOldUnminedTransactions(t *testing.T) {
 	// Use the actual retention setting from the store
 	retention := store.settings.UtxoStore.UnminedTxRetention
 	cleanupHeight := currentHeight + retention - 1 // Just within retention period
-	count, err = utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, cleanupHeight, store.settings, store.logger)
+	count, err = utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, cleanupHeight, "<test-hash>", store.settings, store.logger)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 
@@ -803,7 +803,7 @@ func TestPreserveParentsOfOldUnminedTransactions(t *testing.T) {
 	// Test case 4: Transaction should have its parents preserved when it's old enough
 	// Set a preservation height that exceeds retention period
 	cleanupHeight = currentHeight + retention + 1 // Beyond retention period
-	count, err = utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, cleanupHeight, store.settings, store.logger)
+	count, err = utxo.PreserveParentsOfOldUnminedTransactions(ctx, store, cleanupHeight, "<test-hash>", store.settings, store.logger)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
 

@@ -1,6 +1,7 @@
 package mocklogger
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -96,4 +97,10 @@ func (l *MockLogger) Reset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.calls = make(map[string]int)
+}
+
+// WithTraceContext returns the same logger since MockLogger is a mock that doesn't
+// support structured fields.
+func (l *MockLogger) WithTraceContext(_ context.Context) ulogger.Logger {
+	return l
 }

@@ -59,6 +59,8 @@ func setupTest(t *testing.T) (*nodehelpers.BlockchainDaemon, *BlockAssembly, con
 	baPort := getFreePort(t)
 	tSettings.BlockAssembly.GRPCListenAddress = fmt.Sprintf("localhost:%d", baPort)
 	tSettings.BlockAssembly.GRPCAddress = fmt.Sprintf("localhost:%d", baPort)
+	// Set DoubleSpendWindow to 0 so transactions are dequeued immediately in tests
+	tSettings.BlockAssembly.DoubleSpendWindow = 0
 
 	ctx, cancel := context.WithCancel(context.Background())
 	memStore := memory.New()
@@ -322,7 +324,7 @@ func TestShouldAddSubtreesToLongerChain(t *testing.T) {
 	var s []*subtree.Subtree
 	require.Eventually(t, func() bool {
 		// Use internal method to get subtrees directly (gRPC client doesn't return SubtreeSlices)
-		_, subtrees, err := ba.blockAssembler.getMiningCandidate()
+		_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
 		if err != nil {
 			return false
 		}
@@ -468,19 +470,21 @@ func TestShouldHandleReorg(t *testing.T) {
 	err = waitForBestBlockHash(ctx, ba.blockchainClient, chainAHeader1.Hash(), 10*time.Second)
 	require.NoError(t, err, "Timeout waiting for Chain A block to be processed")
 
-	// Wait for the block assembly service to process the block
+	// Wait for the block assembly service to process the block AND for transactions to be available
+	var mc1 *model.MiningCandidate
+	var st1 []*subtree.Subtree
 	require.Eventually(t, func() bool {
-		mc1, _, err := ba.blockAssembler.getMiningCandidate()
+		var err error
+		mc1, st1, err = ba.blockAssembler.GetMiningCandidate(context.Background())
 		if err != nil || mc1 == nil {
 			return false
 		}
 		prevHash := chainhash.Hash(mc1.PreviousHash)
-		return prevHash.String() == chainAHeader1.Hash().String()
+		// Wait for both correct previous hash AND subtrees to be available
+		return prevHash.String() == chainAHeader1.Hash().String() && len(st1) > 0
 	}, 5*time.Second, 100*time.Millisecond, "Timeout waiting for block assembly to process the block")
 
 	// Verify transactions in original chain
-	mc1, st1, err := ba.blockAssembler.getMiningCandidate()
-	require.NoError(t, err)
 	require.NotNil(t, mc1)
 	require.NotEmpty(t, st1)
 
@@ -510,7 +514,7 @@ func TestShouldHandleReorg(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Verify transactions are still present after reorg
-	mc2, st2, err := ba.blockAssembler.getMiningCandidate()
+	mc2, st2, err := ba.blockAssembler.GetMiningCandidate(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, st2)
@@ -716,7 +720,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	// Get mining candidate while on Chain A
 	t.Log("Getting mining candidate on Chain A...")
 
-	mc1, subtrees1, err := ba.blockAssembler.getMiningCandidate()
+	mc1, subtrees1, err := ba.blockAssembler.GetMiningCandidate(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, mc1)
 	require.NotEmpty(t, subtrees1)
@@ -747,7 +751,7 @@ func TestShouldHandleReorgWithLongerChain(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Verify transactions are still present after reorg
-	mc2, subtrees2, err := ba.blockAssembler.getMiningCandidate()
+	mc2, subtrees2, err := ba.blockAssembler.GetMiningCandidate(context.Background())
 	require.NoError(t, err)
 	require.NotNil(t, mc2)
 	require.NotEmpty(t, subtrees2)

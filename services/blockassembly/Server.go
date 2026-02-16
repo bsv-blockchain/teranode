@@ -421,20 +421,6 @@ func (ba *BlockAssembly) subtreeStorageWorker(ctx context.Context, workChan <-ch
 			return
 		}
 
-		// Smart cache invalidation: only invalidate if significant change
-		currentTxCount := uint32(ba.blockAssembler.TxCount())
-		currentSubtreeCount := ba.blockAssembler.SubtreeCount()
-		// Use atomic access instead of iterating GetChainedSubtrees() to avoid deadlock
-		// when the worker is blocked waiting for ErrChan response
-		currentSize := ba.blockAssembler.GetChainedSubtreesTotalSize()
-
-		if ba.blockAssembler.shouldInvalidateCache(currentTxCount, currentSize, currentSubtreeCount) {
-			ba.logger.Debugf("[Server] Invalidating cache: significant change detected (txs=%d, size=%d, subtrees=%d)", currentTxCount, currentSize, currentSubtreeCount)
-			ba.blockAssembler.invalidateMiningCandidateCache()
-		} else {
-			ba.logger.Debugf("[Server] Keeping cache valid: minor change (txs=%d, size=%d, subtrees=%d)", currentTxCount, currentSize, currentSubtreeCount)
-		}
-
 		// Wait for all work to complete before sending response to caller
 		if allDone != nil {
 			<-allDone
@@ -1411,7 +1397,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	// check fully valid, including whether difficulty in header is low enough
 	// TODO add more checks to the Valid function, like whether the parent/child relationships are OK
-	if ok, err := block.Valid(ctx, ba.logger, ba.subtreeStore, nil, nil, nil, nil, ba.settings); !ok {
+	if ok, err := block.Valid(ctx, ba.logger, ba.subtreeStore, nil, nil, nil, nil, ba.settings, nil); !ok {
 		ba.logger.Errorf("[BlockAssembly][%s][%s] invalid block: %v - %v", jobID, block.Hash().String(), block.Header, err)
 
 		// the subtreeprocessor created an invalid block, we must reset

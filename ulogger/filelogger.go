@@ -1,10 +1,13 @@
 package ulogger
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 type FileLogger struct {
@@ -13,6 +16,8 @@ type FileLogger struct {
 	writer    io.Writer
 	logFile   *os.File
 	skipFrame int
+	traceID   string // Optional trace ID for log-trace correlation
+	spanID    string // Optional span ID for log-trace correlation
 }
 
 // Log levels
@@ -56,30 +61,30 @@ func (fl *FileLogger) SetLogLevel(level string) {
 
 func (fl *FileLogger) Debugf(format string, args ...interface{}) {
 	if fl.logLevel <= LogLevelDebug {
-		logMessage(fl.logFile, fl.service, "DEBUG", format, args...)
+		logMessage(fl.logFile, fl.service, "DEBUG", format, fl.traceID, fl.spanID, args...)
 	}
 }
 
 func (fl *FileLogger) Infof(format string, args ...interface{}) {
 	if fl.logLevel <= LogLevelInfo {
-		logMessage(fl.logFile, fl.service, "INFO", format, args...)
+		logMessage(fl.logFile, fl.service, "INFO", format, fl.traceID, fl.spanID, args...)
 	}
 }
 
 func (fl *FileLogger) Warnf(format string, args ...interface{}) {
 	if fl.logLevel <= LogLevelWarning {
-		logMessage(fl.logFile, fl.service, "WARNING", format, args...)
+		logMessage(fl.logFile, fl.service, "WARNING", format, fl.traceID, fl.spanID, args...)
 	}
 }
 
 func (fl *FileLogger) Errorf(format string, args ...interface{}) {
 	if fl.logLevel <= LogLevelError {
-		logMessage(fl.logFile, fl.service, "ERROR", format, args...)
+		logMessage(fl.logFile, fl.service, "ERROR", format, fl.traceID, fl.spanID, args...)
 	}
 }
 
 func (fl *FileLogger) Fatalf(format string, args ...interface{}) {
-	logMessage(fl.logFile, fl.service, "FATAL", format, args...)
+	logMessage(fl.logFile, fl.service, "FATAL", format, fl.traceID, fl.spanID, args...)
 	os.Exit(1)
 }
 
@@ -126,12 +131,38 @@ func (fl *FileLogger) Duplicate(options ...Option) Logger {
 	return newLogger
 }
 
-func logMessage(logFile *os.File, _, level, format string, args ...interface{}) {
-	message := fmt.Sprintf("[%s] [%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), level, fmt.Sprintf(format, args...))
+func logMessage(logFile *os.File, _, level, format string, traceID, spanID string, args ...interface{}) {
+	var message string
+	if traceID != "" && spanID != "" {
+		message = fmt.Sprintf("[%s] [%s] [traceId=%s spanId=%s] %s\n",
+			time.Now().Format("2006-01-02 15:04:05"), level, traceID, spanID, fmt.Sprintf(format, args...))
+	} else {
+		message = fmt.Sprintf("[%s] [%s] %s\n",
+			time.Now().Format("2006-01-02 15:04:05"), level, fmt.Sprintf(format, args...))
+	}
 
 	_, err := logFile.Write([]byte(message))
 	if err != nil {
 		fmt.Printf("Failed to write log message: %s", err)
+	}
+}
+
+// WithTraceContext returns a new FileLogger enriched with traceId and spanId
+// from the OpenTelemetry span context.
+func (fl *FileLogger) WithTraceContext(ctx context.Context) Logger {
+	spanCtx := trace.SpanContextFromContext(ctx)
+	if !spanCtx.IsValid() {
+		return fl
+	}
+
+	return &FileLogger{
+		service:   fl.service,
+		logLevel:  fl.logLevel,
+		writer:    fl.writer,
+		logFile:   fl.logFile,
+		skipFrame: fl.skipFrame,
+		traceID:   spanCtx.TraceID().String(),
+		spanID:    spanCtx.SpanID().String(),
 	}
 }
 

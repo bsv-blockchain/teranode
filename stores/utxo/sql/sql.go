@@ -2680,6 +2680,11 @@ func (s *Store) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeig
 // PreserveTransactions marks transactions to be preserved from deletion until a specific block height.
 // This clears any existing DeleteAtHeight and sets PreserveUntil to the specified height.
 // Used to protect parent transactions when cleaning up unmined transactions.
+//
+// IDEMPOTENCY: This operation is safely re-runnable:
+// - SQL UPDATE returns 0 rows affected (not an error) if records already deleted
+// - Multiple preservation attempts with same preserveUntil are idempotent
+// - Missing transactions are logged but don't cause failures
 func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
 	if len(txIDs) == 0 {
 		return nil

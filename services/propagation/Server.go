@@ -50,7 +50,6 @@ import (
 	"github.com/ordishs/gocore"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
@@ -741,17 +740,13 @@ func (ps *PropagationServer) startAndMonitorHTTPServer(ctx context.Context, http
 //   - *propagation_api.EmptyMessage: Empty response on successful processing
 //   - error: Error with specific details if transaction processing fails
 func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propagation_api.ProcessTransactionRequest) (*propagation_api.EmptyMessage, error) {
-	// Debug: Check if span context was received from client
-	spanCtx := trace.SpanContextFromContext(ctx)
-	if spanCtx.IsValid() {
-		ps.logger.Infof("[ProcessTransaction] Server received span context: TraceID=%s, SpanID=%s",
-			spanCtx.TraceID().String(), spanCtx.SpanID().String())
-	} else {
-		ps.logger.Warnf("[ProcessTransaction] Server received INVALID span context")
-	}
+	// Use context-aware logger for automatic trace correlation
+	ctxLogger := ps.logger.WithTraceContext(ctx)
+
+	ctxLogger.Debugf("[ProcessTransaction] processing transaction request")
 
 	if err := ps.processTransaction(ctx, req); err != nil {
-		ps.logger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
+		ctxLogger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
 
 		return nil, errors.WrapGRPC(err)
 	}
@@ -816,7 +811,8 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 				Tx: tx,
 			}); err != nil {
 				e := errors.Wrap(err)
-				ps.logger.Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, e)
+				// Use context-aware logger for trace correlation
+				ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, e)
 
 				response.Errors[idx] = e
 			} else {
@@ -828,7 +824,7 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 	}
 
 	if err := g.Wait(); err != nil {
-		ps.logger.Errorf("[ProcessTransactionBatch] failed to process transaction batch: %v", err)
+		ps.logger.WithTraceContext(ctx).Errorf("[ProcessTransactionBatch] failed to process transaction batch: %v", err)
 
 		return nil, errors.WrapGRPC(err)
 	}
@@ -860,7 +856,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		defer func() {
 			if r := recover(); r != nil {
 				err = errors.NewProcessingError("transaction parsing panic: %v", r)
-				ps.logger.Errorf("Recovered from panic in bt.NewTxFromBytes: %v", r)
+				ps.logger.WithTraceContext(ctx).Errorf("Recovered from panic in bt.NewTxFromBytes: %v", r)
 			}
 		}()
 		btTx, err = bt.NewTxFromBytes(req.Tx)
@@ -943,7 +939,7 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 		// For normal-sized transactions, continue with Kafka
 		return ps.validateTransactionViaKafka(btTx)
 	} else {
-		ps.logger.Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
+		ps.logger.WithTraceContext(ctx).Debugf("[ProcessTransaction][%s] Calling validate function", btTx.TxID())
 
 		// All transactions entering Teranode can be assumed to be after Genesis activation height
 		// but we pass in no block height, and just use the block height set in the utxo store
@@ -993,7 +989,7 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 			btTx.TxID(), txSize, maxKafkaMessageSize)
 	}
 
-	ps.logger.Warnf("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), falling back to validator /tx endpoint",
+	ps.logger.WithTraceContext(ctx).Warnf("[ProcessTransaction][%s] Transaction size %d bytes exceeds Kafka message limit (%d bytes), falling back to validator /tx endpoint",
 		btTx.TxID(), txSize, maxKafkaMessageSize)
 
 	// Create an HTTP client with a timeout
@@ -1028,7 +1024,7 @@ func (ps *PropagationServer) validateTransactionViaHTTP(ctx context.Context, btT
 			btTx.TxID(), resp.StatusCode, string(body))
 	}
 
-	ps.logger.Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", btTx.TxID())
+	ps.logger.WithTraceContext(ctx).Debugf("[ProcessTransaction][%s] successfully validated using validator /tx endpoint", btTx.TxID())
 
 	return nil
 }

@@ -291,11 +291,15 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 // Returns:
 //   - error: Any error encountered during shutdown
 func (s *Server) Stop(ctx context.Context) error {
-	s.appConfig.CloseAll(ctx)
+	if s.appConfig != nil {
+		s.appConfig.CloseAll(ctx)
+	}
 
 	// Shutdown the p2p server
-	if err := s.p2pServer.Stop(ctx); err != nil {
-		s.logger.Errorf("error shutting down p2p server: %s", err)
+	if s.p2pServer != nil {
+		if err := s.p2pServer.Stop(ctx); err != nil {
+			s.logger.Errorf("error shutting down p2p server: %s", err)
+		}
 	}
 
 	return nil

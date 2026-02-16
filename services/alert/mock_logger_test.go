@@ -2,6 +2,8 @@
 package alert
 
 import (
+	"context"
+
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
@@ -55,5 +57,9 @@ func (m *MockLogger) New(service string, options ...ulogger.Option) ulogger.Logg
 }
 
 func (m *MockLogger) Duplicate(options ...ulogger.Option) ulogger.Logger {
+	return m
+}
+
+func (m *MockLogger) WithTraceContext(_ context.Context) ulogger.Logger {
 	return m
 }

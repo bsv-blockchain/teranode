@@ -110,21 +110,23 @@ func (h *BlockHandler) handleBlockOperation(c echo.Context, operationName string
 
 	defer deferFn()
 
+	ctxLogger := h.logger.WithTraceContext(ctx)
+
 	// First check if the block exists
 	exists, err := h.blockchainClient.GetBlockExists(ctx, blockHash)
 	if err != nil {
-		h.logger.Errorf("Error checking if block %s exists: %v", blockHash, err)
+		ctxLogger.Errorf("Error checking if block %s exists: %v", blockHash, err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error checking if block exists: "+err.Error())
 	}
 
 	if !exists {
-		h.logger.Warnf("Block not found for %s: %s", operationName, blockHash)
+		ctxLogger.Warnf("Block not found for %s: %s", operationName, blockHash)
 		return echo.NewHTTPError(http.StatusNotFound, fmt.Sprintf("Block with hash %s not found", blockHash))
 	}
 
 	// Call the blockchain service to perform the operation
 	if err = operation(c, blockHash); err != nil {
-		h.logger.Errorf("[Asset_http] %s block operation failed: %s", operationName, err.Error())
+		ctxLogger.Errorf("[Asset_http] %s block operation failed: %s", operationName, err.Error())
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to %s block: %s", operationName, err.Error()))
 	}
 
@@ -157,12 +159,13 @@ func (h *BlockHandler) handleBlockOperation(c echo.Context, operationName string
 //   - error: Any error encountered during block invalidation
 func (h *BlockHandler) InvalidateBlock(c echo.Context) error {
 	return h.handleBlockOperation(c, "invalidate", func(ctx echo.Context, blockHash *chainhash.Hash) error {
-		invalidatedHashes, err := h.blockchainClient.InvalidateBlock(ctx.Request().Context(), blockHash)
+		reqCtx := ctx.Request().Context()
+		invalidatedHashes, err := h.blockchainClient.InvalidateBlock(reqCtx, blockHash)
 		if err != nil {
 			return err
 		}
 
-		h.logger.Infof("[Asset_http][InvalidateBlock] Invalidated %d blocks", len(invalidatedHashes))
+		h.logger.WithTraceContext(reqCtx).Infof("[Asset_http][InvalidateBlock] Invalidated %d blocks", len(invalidatedHashes))
 
 		return nil
 	})

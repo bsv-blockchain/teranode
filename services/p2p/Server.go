@@ -1002,6 +1002,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 		return nil
 	}
 
+	ctxLogger := s.logger.WithTraceContext(ctx)
 	var msgBytes []byte
 
 	h, meta, err := s.blockchainClient.GetBlockHeader(ctx, hash)
@@ -1011,7 +1012,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 
 	if meta.Invalid {
 		// do not announce invalid blocks
-		s.logger.Infof("[handleBlockNotification] Not announcing invalid block %s", hash.String())
+		ctxLogger.Infof("[handleBlockNotification] Not announcing invalid block %s", hash.String())
 		return nil
 	}
 
@@ -1036,7 +1037,7 @@ func (s *Server) handleBlockNotification(ctx context.Context, hash *chainhash.Ha
 	// Also send a node_status update when best block changes
 	if err = s.handleNodeStatusNotification(ctx); err != nil {
 		// Log the error but don't fail the block notification
-		s.logger.Warnf("[handleBlockNotification] error sending node status update: %v", err)
+		ctxLogger.Warnf("[handleBlockNotification] error sending node status update: %v", err)
 	}
 
 	return nil
@@ -1404,6 +1405,7 @@ func (s *Server) handlePeerFailureNotification(_ context.Context, notification *
 }
 
 func (s *Server) processBlockchainNotification(ctx context.Context, notification *blockchain.Notification) error {
+	ctxLogger := s.logger.WithTraceContext(ctx)
 	hash, err := chainhash.NewHash(notification.Hash)
 	if err != nil {
 		// Specific error about hash conversion, not logged here, but returned to caller.
@@ -1412,25 +1414,26 @@ func (s *Server) processBlockchainNotification(ctx context.Context, notification
 
 	switch notification.Type {
 	case model.NotificationType_Block:
-		s.logger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
 		return s.handleBlockNotification(ctx, hash) // These handlers return wrapped errors
 
 	case model.NotificationType_Subtree:
-		s.logger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
 		return s.handleSubtreeNotification(ctx, hash)
 
 	case model.NotificationType_PeerFailure:
-		s.logger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
+		ctxLogger.Infof("[processBlockchainNotification] Processing %s notification: %s", notification.Type, hash.String())
 		return s.handlePeerFailureNotification(ctx, notification)
 
 	default:
-		s.logger.Warnf("[processBlockchainNotification] Received unhandled notification type: %s for hash %s", notification.Type, hash.String())
+		ctxLogger.Warnf("[processBlockchainNotification] Received unhandled notification type: %s for hash %s", notification.Type, hash.String())
 	}
 
 	return nil // For unhandled types, not an error that stops the listener
 }
 
 func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainSubscription <-chan *blockchain.Notification) {
+	ctxLogger := s.logger.WithTraceContext(ctx)
 
 	// define vars here to prevent too many allocs
 	var notification *blockchain.Notification
@@ -1438,7 +1441,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 	for {
 		select {
 		case <-ctx.Done():
-			s.logger.Infof("[blockchainSubscriptionListener] P2P service shutting down")
+			ctxLogger.Infof("[blockchainSubscriptionListener] P2P service shutting down")
 			return
 		case notification = <-blockchainSubscription:
 			if notification == nil {
@@ -1451,7 +1454,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 			)
 
 			if syncing, err = s.isBlockchainSyncingOrCatchingUp(ctx); err != nil {
-				s.logger.Errorf("[blockchainSubscriptionListener] error getting blockchain FSM state: %v", err)
+				ctxLogger.Errorf("[blockchainSubscriptionListener] error getting blockchain FSM state: %v", err)
 
 				continue
 			}
@@ -1463,7 +1466,7 @@ func (s *Server) blockchainSubscriptionListener(ctx context.Context, blockchainS
 
 			// received a message
 			if err := s.processBlockchainNotification(ctx, notification); err != nil {
-				s.logger.Errorf("[blockchainSubscriptionListener] Error processing notification (Type: %s, Hash: %s): %v", notification.Type, notification.Hash, err)
+				ctxLogger.Errorf("[blockchainSubscriptionListener] Error processing notification (Type: %s, Hash: %s): %v", notification.Type, notification.Hash, err)
 				continue // Continue to next notification on error
 			}
 		}

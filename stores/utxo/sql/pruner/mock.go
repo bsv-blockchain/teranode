@@ -85,6 +85,10 @@ func (m *MockLogger) Duplicate(options ...ulogger.Option) ulogger.Logger {
 	return &MockLogger{}
 }
 
+func (m *MockLogger) WithTraceContext(_ context.Context) ulogger.Logger {
+	return m
+}
+
 // MockDB is a mock implementation that satisfies usql.DB interface
 type MockDB struct {
 	DB       *usql.DB

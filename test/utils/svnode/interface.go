@@ -56,6 +56,9 @@ type SVNodeI interface {
 
 	// Debug
 	DebugString() string
+
+	// GetLogs returns the container's stdout/stderr logs
+	GetLogs(ctx context.Context) (string, error)
 }
 
 // Options configures SVNode creation
@@ -70,6 +73,10 @@ type Options struct {
 	P2PPort int
 	// KeepRunning prevents container cleanup after Stop() for debugging
 	KeepRunning bool
+	// ConnectTo specifies addresses to connect to at startup via -connect flag.
+	// Unlike addnode, -connect creates regular outbound connections that are
+	// used for initial block download in Bitcoin SV.
+	ConnectTo []string
 }
 
 // DefaultOptions returns sensible defaults for SVNode

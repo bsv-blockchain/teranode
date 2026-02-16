@@ -353,10 +353,12 @@ type SyncManager struct {
 	legacyKafkaInvCh  chan *kafka.Message
 	txAnnounceBatcher *batcher.BatcherWithDedup[TxHashAndFee]
 
-	// These fields should only be accessed from the blockHandler thread.
+	// These fields should only be accessed from the blockHandler thread
+	// (except syncPeer/syncPeerState which are protected by syncPeerMu).
 	rejectedTxns    *txmap.SyncedMap[chainhash.Hash, struct{}]
 	requestedTxns   *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
 	requestedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	syncPeerMu      sync.RWMutex // protects syncPeer and syncPeerState
 	syncPeer        *peerpkg.Peer
 	syncPeerState   *syncPeerState
 	peerStates      *txmap.SyncedMap[*peerpkg.Peer, *peerSyncState]
@@ -375,6 +377,28 @@ type SyncManager struct {
 	// minSyncPeerNetworkSpeed is the minimum speed allowed for
 	// a sync peer.
 	minSyncPeerNetworkSpeed uint64
+}
+
+// loadSyncPeer returns the current sync peer, safe for concurrent access.
+func (sm *SyncManager) loadSyncPeer() *peerpkg.Peer {
+	sm.syncPeerMu.RLock()
+	defer sm.syncPeerMu.RUnlock()
+	return sm.syncPeer
+}
+
+// loadSyncPeerAndState returns the current sync peer and its state, safe for concurrent access.
+func (sm *SyncManager) loadSyncPeerAndState() (*peerpkg.Peer, *syncPeerState) {
+	sm.syncPeerMu.RLock()
+	defer sm.syncPeerMu.RUnlock()
+	return sm.syncPeer, sm.syncPeerState
+}
+
+// storeSyncPeer sets the sync peer and its state, safe for concurrent access.
+func (sm *SyncManager) storeSyncPeer(peer *peerpkg.Peer, state *syncPeerState) {
+	sm.syncPeerMu.Lock()
+	defer sm.syncPeerMu.Unlock()
+	sm.syncPeer = peer
+	sm.syncPeerState = state
 }
 
 // resetHeaderState sets the headers-first mode state to values appropriate for
@@ -430,11 +454,11 @@ func (sm *SyncManager) findNextHeaderCheckpoint(height int32) *chaincfg.Checkpoi
 // candidates and removes them as needed.
 func (sm *SyncManager) startSync() {
 	// Return now if we're already syncing.
-	if sm.syncPeer != nil {
+	if sm.loadSyncPeer() != nil {
 		return
 	}
 
-	sm.logger.Debugf("startSync - Syncing from %v", sm.syncPeer)
+	sm.logger.Debugf("startSync - Syncing from %v", sm.loadSyncPeer())
 
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
@@ -589,12 +613,11 @@ func (sm *SyncManager) startSync() {
 	}
 
 	bestPeer.SetSyncPeer(true)
-	sm.syncPeer = bestPeer
-	sm.syncPeerState = &syncPeerState{
+	sm.storeSyncPeer(bestPeer, &syncPeerState{
 		lastBlockTime:     time.Now(),
 		recvBytes:         bestPeer.BytesReceived(),
 		recvBytesLastTick: uint64(0),
-	}
+	})
 }
 
 func (sm *SyncManager) resetFeeFilterToDefault() {
@@ -619,7 +642,7 @@ func (sm *SyncManager) resetFeeFilterToDefault() {
 
 // SyncHeight returns latest known block being synced to.
 func (sm *SyncManager) SyncHeight() uint64 {
-	if sm.syncPeer == nil {
+	if sm.loadSyncPeer() == nil {
 		return 0
 	}
 
@@ -708,7 +731,7 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	})
 
 	// Start syncing by choosing the best candidate if needed.
-	if isSyncCandidate && sm.syncPeer == nil {
+	if isSyncCandidate && sm.loadSyncPeer() == nil {
 		sm.startSync()
 	}
 }
@@ -719,20 +742,22 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 		return
 	}
 
+	sp, sps := sm.loadSyncPeerAndState()
+
 	// If we don't have a sync peer, select a new one and return.
-	if sm.syncPeer == nil {
+	if sp == nil {
 		sm.startSync()
 
 		return
 	}
 
 	// Update network stats at the end of this tick.
-	defer sm.syncPeerState.updateNetwork(sm.syncPeer)
+	defer sps.updateNetwork(sp)
 
-	validNetworkSpeed := sm.syncPeerState.validNetworkSpeed(sm.minSyncPeerNetworkSpeed)
-	lastBlockSince := time.Since(sm.syncPeerState.getLastBlockTime())
+	validNetworkSpeed := sps.validNetworkSpeed(sm.minSyncPeerNetworkSpeed)
+	lastBlockSince := time.Since(sps.getLastBlockTime())
 
-	sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v), headers-first mode: %v", sm.syncPeer.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime, sm.headersFirstMode.Load())
+	sm.logger.Debugf("[CheckSyncPeer] sync peer %s check, network violations: %v (limit %v), time since last block: %v (limit %v), headers-first mode: %v", sp.String(), validNetworkSpeed, maxNetworkViolations, lastBlockSince, maxLastBlockTime, sm.headersFirstMode.Load())
 
 	// Don't check network speed during headers-first mode, as we're intentionally
 	// downloading small headers (80 bytes each) rather than full blocks. The peer
@@ -751,14 +776,14 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 	} else if lastBlockSince > maxLastBlockTime {
 		reason = "last block time out of range"
 	}
-	sm.logger.Debugf("[CheckSyncPeer] sync peer %s is stalled due to %s, updating sync peer", sm.syncPeer.String(), reason)
+	sm.logger.Debugf("[CheckSyncPeer] sync peer %s is stalled due to %s, updating sync peer", sp.String(), reason)
 
-	state, exists := sm.peerStates.Get(sm.syncPeer)
+	state, exists := sm.peerStates.Get(sp)
 	if !exists {
 		return
 	}
 
-	sm.logger.Debugf("[CheckSyncPeer] removing sync peer %s", sm.syncPeer.String())
+	sm.logger.Debugf("[CheckSyncPeer] removing sync peer %s", sp.String())
 
 	sm.clearRequestedState(state)
 	sm.updateSyncPeer(state)
@@ -766,15 +791,16 @@ func (sm *SyncManager) handleCheckSyncPeer() {
 
 // topBlock returns the best chains top block height
 func (sm *SyncManager) topBlock() int32 {
-	if sm.syncPeer == nil {
+	sp := sm.loadSyncPeer()
+	if sp == nil {
 		return 0
 	}
 
-	if sm.syncPeer.LastBlock() > sm.syncPeer.StartingHeight() {
-		return sm.syncPeer.LastBlock()
+	if sp.LastBlock() > sp.StartingHeight() {
+		return sp.LastBlock()
 	}
 
-	return sm.syncPeer.StartingHeight()
+	return sp.StartingHeight()
 }
 
 // handleDonePeerMsg deals with peers that have signalled they are done.  It
@@ -799,7 +825,7 @@ func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
 	sm.clearRequestedState(state)
 
 	// Fetch a new sync peer if this is the sync peer.
-	if peer == sm.syncPeer {
+	if peer == sm.loadSyncPeer() {
 		sm.updateSyncPeer(state)
 	}
 }
@@ -818,26 +844,26 @@ func (sm *SyncManager) clearRequestedState(state *peerSyncState) {
 
 // updateSyncPeer picks a new peer to sync from.
 func (sm *SyncManager) updateSyncPeer(_ *peerSyncState) {
+	sp, sps := sm.loadSyncPeerAndState()
 	sm.logger.Infof("Updating sync peer, last block: %v, violations: %v, headers-first mode: %v",
-		sm.syncPeerState.getLastBlockTime(),
-		sm.syncPeerState.getViolations(),
+		sps.getLastBlockTime(),
+		sps.getViolations(),
 		sm.headersFirstMode.Load())
 
 	// Only disconnect if we have a valid sync peer
-	if sm.syncPeer != nil {
+	if sp != nil {
 		// Log current sync state before disconnecting
 		if sm.headersFirstMode.Load() {
 			sm.logger.Debugf("Current header sync state - headerList length: %d, startHeader exists: %v",
 				sm.headerList.Len(), sm.startHeader != nil)
 		}
 
-		sm.syncPeer.SetSyncPeer(false)
-		sm.syncPeer.DisconnectWithInfo("updateSyncPeer - disconnect old sync peer")
+		sp.SetSyncPeer(false)
+		sp.DisconnectWithInfo("updateSyncPeer - disconnect old sync peer")
 	}
 
 	// Reset sync peer state
-	sm.syncPeer = nil
-	sm.syncPeerState = nil
+	sm.storeSyncPeer(nil, nil)
 
 	bestBlockHeader, bestBlockHeaderMeta, err := sm.blockchainClient.GetBestBlockHeader(sm.ctx)
 	if err != nil {
@@ -1074,7 +1100,8 @@ func (sm *SyncManager) current() bool {
 	}
 
 	// if blockChain thinks we are current, and we have no syncPeer, it is probably right.
-	if sm.syncPeer == nil {
+	sp := sm.loadSyncPeer()
+	if sp == nil {
 		return true
 	}
 
@@ -1084,7 +1111,7 @@ func (sm *SyncManager) current() bool {
 	}
 
 	// No matter what the chain thinks, if we are below the block we are syncing to we are not current.
-	if bestBlockHeightInt32 < sm.syncPeer.LastBlock() {
+	if bestBlockHeightInt32 < sp.LastBlock() {
 		return false
 	}
 
@@ -1246,8 +1273,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 		blkHashUpdate *chainhash.Hash
 	)
 
-	if peer == sm.syncPeer {
-		sm.syncPeerState.updateLastBlockTime()
+	if sp, sps := sm.loadSyncPeerAndState(); peer == sp && sps != nil {
+		sps.updateLastBlockTime()
 	}
 
 	// When the block is not an orphan, log information about it and update the chain state.
@@ -1342,12 +1369,12 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 			return errors.NewServiceError("failed to send getheaders message to peer %s", peer.String(), err)
 		}
 
-		if sm.syncPeer != nil {
+		if sp := sm.loadSyncPeer(); sp != nil {
 			sm.logger.Infof(
 				"handleBlockMsg - Downloading headers for blocks %d to %d from peer %s",
 				prevHeight+1,
 				sm.nextCheckpoint.Height,
-				sm.syncPeer.String(),
+				sp.String(),
 			)
 		}
 
@@ -1373,7 +1400,8 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 // list of blocks to be downloaded based on the current list of headers.
 func (sm *SyncManager) fetchHeaderBlocks() {
 	// Nothing to do if there is no sync peer.
-	if sm.syncPeer == nil {
+	sp := sm.loadSyncPeer()
+	if sp == nil {
 		sm.logger.Warnf("fetchHeaderBlocks called with no sync peer")
 		return
 	}
@@ -1386,7 +1414,7 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 
 	// Calculate how many blocks to request to reach the dynamic max limit.
 	// The limit adjusts based on observed block sizes (20 for small, down to 1 for >2GB).
-	peerState, exists := sm.peerStates.Get(sm.syncPeer)
+	peerState, exists := sm.peerStates.Get(sp)
 	if !exists {
 		sm.logger.Warnf("[fetchHeaderBlocks] sync peer state not found")
 		return
@@ -1434,7 +1462,7 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 			}
 
 			sm.requestedBlocks.Set(*node.hash, struct{}{})
-			peerState, _ := sm.peerStates.Get(sm.syncPeer)
+			peerState, _ := sm.peerStates.Get(sp)
 			peerState.requestedBlocks.Set(*node.hash, struct{}{})
 
 			numRequested++
@@ -1443,13 +1471,13 @@ func (sm *SyncManager) fetchHeaderBlocks() {
 		sm.startHeader = e.Next()
 
 		if numRequested >= maxBlocks {
-			sm.logger.Debugf("[fetchHeaderBlocks] Limiting to %d block(s) from %s", numRequested, sm.syncPeer)
+			sm.logger.Debugf("[fetchHeaderBlocks] Limiting to %d block(s) from %s", numRequested, sp)
 			break
 		}
 	}
 
 	if len(getDataMessage.InvList) > 0 {
-		sm.syncPeer.QueueMessage(getDataMessage, nil)
+		sp.QueueMessage(getDataMessage, nil)
 	}
 }
 
@@ -1649,13 +1677,14 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 	// announced block for this peer. We'll use this information later to
 	// update the heights of peers based on blocks we've accepted that they
 	// previously announced.
-	if lastBlock != -1 && peer != sm.syncPeer {
+	sp := sm.loadSyncPeer()
+	if lastBlock != -1 && peer != sp {
 		peer.UpdateLastAnnouncedBlock(&invVects[lastBlock].Hash)
 	}
 
 	// Ignore invs from peers that aren't the sync if we are not current.
 	// Helps prevent fetching a mass of orphans.
-	if peer != sm.syncPeer && !sm.current() {
+	if peer != sp && !sm.current() {
 		return
 	}
 
@@ -1935,8 +1964,8 @@ out:
 			case getSyncPeerMsg:
 				var peerID int32
 
-				if sm.syncPeer != nil {
-					peerID = sm.syncPeer.ID()
+				if sp := sm.loadSyncPeer(); sp != nil {
+					peerID = sp.ID()
 				}
 				msg.reply <- peerID
 

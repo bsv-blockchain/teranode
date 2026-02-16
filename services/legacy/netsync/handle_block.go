@@ -445,57 +445,61 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 		return nil
 	})
 
-	// if we are not in quickValidationMode, we don't need to store the subtree meta data
-	// it will be stored by the subtree validation service
-	if quickValidationMode {
-		g.Go(func() error {
-			subtreeBytes, err := subtreeMetaData.Serialize()
-			if err != nil {
-				return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
-			}
-
-			dah := uint32(block.Height()) + sm.settings.GlobalBlockHeightRetention // nolint: gosec
-
-			storer, err := filestorer.NewFileStorer(
-				gCtx,
-				sm.logger,
-				sm.settings,
-				sm.subtreeStore,
-				subtreeData.RootHash()[:],
-				fileformat.FileTypeSubtreeMeta,
-				options.WithDeleteAt(dah),
-			)
-			if err != nil {
-				if errors.Is(err, errors.ErrBlobAlreadyExists) {
-					return nil
-				}
-
-				return errors.NewStorageError("[writeSubtree][%s] failed to store subtree meta data", subtree.RootHash().String(), err)
-			}
-
-			// Track whether write succeeded to determine whether to close or abort
-			var writeSucceeded bool
-			defer func() {
-				if !writeSucceeded {
-					storer.Abort(errors.NewProcessingError("[writeSubtree] write failed for subtree meta %s", subtree.RootHash().String()))
-				}
-			}()
-
-			// TODO Write header extra - , *subtree.RootHash(), uint32(block.Height())
-
-			if _, err = storer.Write(subtreeBytes); err != nil {
-				return errors.NewStorageError("error writing subtree meta to disk", err)
-			}
-
-			if err = storer.Close(gCtx); err != nil {
-				return errors.NewStorageError("error closing subtree meta file", err)
-			}
-
-			writeSucceeded = true
-
+	// Always store subtree meta data - even when not in quickValidationMode, we need to ensure
+	// metadata exists because checkSubtreeFromBlock may return early if the subtree already exists
+	// (e.g., created by block assembly) without creating the metadata
+	g.Go(func() error {
+		// Check if metadata already exists (e.g., came in via P2P) to avoid unnecessary work
+		if exists, _ := sm.subtreeStore.Exists(gCtx, subtreeData.RootHash()[:], fileformat.FileTypeSubtreeMeta); exists {
 			return nil
-		})
-	}
+		}
+
+		subtreeBytes, err := subtreeMetaData.Serialize()
+		if err != nil {
+			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
+		}
+
+		dah := uint32(block.Height()) + sm.settings.GlobalBlockHeightRetention // nolint: gosec
+
+		storer, err := filestorer.NewFileStorer(
+			gCtx,
+			sm.logger,
+			sm.settings,
+			sm.subtreeStore,
+			subtreeData.RootHash()[:],
+			fileformat.FileTypeSubtreeMeta,
+			options.WithDeleteAt(dah),
+		)
+		if err != nil {
+			if errors.Is(err, errors.ErrBlobAlreadyExists) {
+				return nil
+			}
+
+			return errors.NewStorageError("[writeSubtree][%s] failed to store subtree meta data", subtree.RootHash().String(), err)
+		}
+
+		// Track whether write succeeded to determine whether to close or abort
+		var writeSucceeded bool
+		defer func() {
+			if !writeSucceeded {
+				storer.Abort(errors.NewProcessingError("[writeSubtree] write failed for subtree meta %s", subtree.RootHash().String()))
+			}
+		}()
+
+		// TODO Write header extra - , *subtree.RootHash(), uint32(block.Height())
+
+		if _, err = storer.Write(subtreeBytes); err != nil {
+			return errors.NewStorageError("error writing subtree meta to disk", err)
+		}
+
+		if err = storer.Close(gCtx); err != nil {
+			return errors.NewStorageError("error closing subtree meta file", err)
+		}
+
+		writeSucceeded = true
+
+		return nil
+	})
 
 	return g.Wait()
 }

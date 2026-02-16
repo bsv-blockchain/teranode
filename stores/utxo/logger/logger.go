@@ -227,6 +227,10 @@ func (s *Store) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
 	return s.store.GetUnminedTxIterator(false)
 }
 
+func (s *Store) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	return s.store.GetPrunableUnminedTxIterator(cutoffBlockHeight)
+}
+
 func (s *Store) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	resp, err := s.store.GetSpend(ctx, spend)
 	s.logger.Debugf("[UTXOStore][logger][GetSpend] spend %v resp %v err %v : %s", spend, resp, err, caller())

@@ -177,10 +177,26 @@ const chunkSizeTest = maxValueSizeKB * 2 * 1024  //nolint:unused
 // Use ImprovedCache.UpdateStats method to obtain the most current statistics.
 type Stats struct {
 	// EntriesCount is the current number of entries in the cache.
-	EntriesCount       uint64 // Current number of entries stored in the cache
+	// EntriesCount       uint64 // Current number of entries stored in the cache
 	TrimCount          uint64 // Number of trim operations performed on the cache
 	TotalMapSize       uint64 // Total size of all hash maps used by the cache buckets
 	TotalElementsAdded uint64 // Cumulative count of all elements ever added to the cache
+
+	// EntriesCount is the current number of entries in the cache map.
+	// This includes both valid and stale entries.
+	// Use ValidEntriesCount for the actual number of readable entries.
+	// EntriesCount uint64
+
+	// ValidEntriesCount is the number of valid (readable) entries.
+	// This equals CurrentGenEntries + PreviousGenEntries.
+	ValidEntriesCount uint64
+
+	// CurrentGenEntries is the count of entries written in the current generation.
+	CurrentGenEntries uint64
+
+	// PreviousGenEntries is the count of valid entries from the previous generation
+	// that have not yet been overwritten.
+	PreviousGenEntries uint64
 }
 
 // Reset clears all statistics in the Stats object.
@@ -651,6 +667,13 @@ type bucketTrimmed struct {
 	numberOfItems int
 
 	overWriting bool
+
+	// currentGenCount tracks the number of entries written in current generation.
+	currentGenCount uint64
+
+	// previousGenCount tracks the number of entries that existed at the start
+	// of current generation (from previous generation).
+	previousGenCount uint64
 }
 
 func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
@@ -693,6 +716,8 @@ func (b *bucketTrimmed) Reset() {
 	b.m = txmap.NewSplitSwissLockFreeMapUint64(1024)
 	b.idx = 0
 	b.gen = 1
+	b.currentGenCount = 0
+	b.previousGenCount = 0
 	b.overWriting = false
 	// Keep allocatedChunks (we keep the mmap'd chunks in freeChunks for reuse),
 	// but reset growth with smart initial sizing based on bucket capacity.
@@ -746,9 +771,26 @@ func (b *bucketTrimmed) cleanLockedMap() {
 
 func (b *bucketTrimmed) UpdateStats(s *Stats) {
 	b.mu.RLock()
-	s.EntriesCount += uint64(b.numberOfItems)       // nolint:gosec
+
+	// Current generation entries (all valid)
+	currentGen := b.currentGenCount
+
+	// Previous generation: estimate how many are still valid (not overwritten)
+	// As we write in current gen, we overwrite previous gen positions.
+	// Valid previous gen entries ≈ previousGenCount - currentGenCount (entries overwritten)
+	validPreviousGenCount := uint64(0)
+	if b.previousGenCount > b.currentGenCount {
+		validPreviousGenCount = b.previousGenCount - b.currentGenCount
+	}
+
+	// s.EntriesCount += uint64(b.numberOfItems) // nolint:gosec
+	s.CurrentGenEntries += currentGen
+	s.PreviousGenEntries += validPreviousGenCount
+	s.ValidEntriesCount += currentGen + validPreviousGenCount
+
 	s.TotalElementsAdded += uint64(b.elementsAdded) // nolint:gosec
 	s.TotalMapSize += b.getMapSize()
+
 	b.mu.RUnlock()
 }
 
@@ -822,6 +864,10 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 				b.gen++
 			}
 
+			// On wrap: previous gen count = current gen count, reset current gen count
+			b.previousGenCount = b.currentGenCount
+			b.currentGenCount = 0
+
 			b.overWriting = true
 			needClean = true
 		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
@@ -855,6 +901,9 @@ func (b *bucketTrimmed) Set(k, v []byte, h uint64, skipLocking ...bool) error {
 	// TODO: consider handling error
 	_ = b.m.Put(h, idx|(b.gen<<bucketSizeBits))
 	b.idx = idxNew
+
+	// Track entry count in current generation, increase by 1
+	b.currentGenCount++
 
 	if needClean {
 		b.cleanLockedMap()
@@ -1066,6 +1115,13 @@ type bucketPreallocated struct {
 	trimRatio int
 
 	trimCount uint64
+
+	// currentGenCount tracks the number of entries written in current generation.
+	currentGenCount uint64
+
+	// previousGenCount tracks the number of entries that existed at the start
+	// of current generation (from previous generation).
+	previousGenCount uint64
 }
 
 func (b *bucketPreallocated) Init(maxBytes uint64, trimRatio int) error {
@@ -1102,6 +1158,8 @@ func (b *bucketPreallocated) Reset() {
 	b.m = make(map[uint64]uint64)
 	b.idx = 0
 	b.gen = 1
+	b.currentGenCount = 0
+	b.previousGenCount = 0
 	b.mu.Unlock()
 }
 
@@ -1132,9 +1190,26 @@ func (b *bucketPreallocated) cleanLockedMap(startingOffset int) {
 
 func (b *bucketPreallocated) UpdateStats(s *Stats) {
 	b.mu.RLock()
-	s.EntriesCount += uint64(len(b.m))
+
+	// Current generation entries (all valid)
+	currentGen := b.currentGenCount
+
+	// Previous generation: estimate how many are still valid (not overwritten)
+	// As we write in current gen, we overwrite previous gen positions.
+	// Valid previous gen entries ≈ previousGenCount - currentGenCount (entries overwritten)
+	validPreviousGenCount := uint64(0)
+	if b.previousGenCount > b.currentGenCount {
+		validPreviousGenCount = b.previousGenCount - b.currentGenCount
+	}
+
+	// s.EntriesCount += uint64(len(b.m)) // nolint:gosec
+	s.CurrentGenEntries += currentGen
+	s.PreviousGenEntries += validPreviousGenCount
+	s.ValidEntriesCount += currentGen + validPreviousGenCount
+
 	s.TrimCount = b.trimCount
 	s.TotalMapSize += b.getMapSize()
+
 	b.mu.RUnlock()
 }
 
@@ -1230,6 +1305,10 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 			// calculate the where the next write should occur based on new index
 			chunkIdx = idx / ChunkSize
 
+			// On wrap: previous gen count = current gen count, reset current gen count
+			b.previousGenCount = b.currentGenCount
+			b.currentGenCount = 0
+
 			b.cleanLockedMap(numOfChunksToRemove * ChunkSize)
 		} else {
 			// if the new item doesn't overflow the chunks, we need to allocate a new chunk
@@ -1250,6 +1329,10 @@ func (b *bucketPreallocated) Set(k, v []byte, h uint64, skipLocking ...bool) err
 	copy(chunk[idx%ChunkSize:], data)
 
 	chunks[chunkIdx] = chunk
+
+	// Track entry count in current generation, increase by 1
+	b.currentGenCount++
+
 	b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
 
@@ -1355,6 +1438,13 @@ type bucketUnallocated struct {
 	// maxSlabChunks is the per-bucket cap for mmap slab size (in chunks).
 	// It is computed from the configured bucket maxBytes.
 	maxSlabChunks uint64
+
+	// currentGenCount tracks the number of entries written in current generation.
+	currentGenCount uint64
+
+	// previousGenCount tracks the number of entries that existed at the start
+	// of current generation (from previous generation).
+	previousGenCount uint64
 }
 
 func (b *bucketUnallocated) Init(maxBytes uint64, _ int) error {
@@ -1400,6 +1490,8 @@ func (b *bucketUnallocated) Reset() {
 	b.m = make(map[uint64]uint64)
 	b.idx = 0
 	b.gen = 1
+	b.currentGenCount = 0
+	b.previousGenCount = 0
 
 	// Keep allocatedChunks -> we keep the mmap'd chunks in freeChunks for reuse,
 	// but reset growth with smart initial sizing based on bucket capacity.
@@ -1446,7 +1538,23 @@ func (b *bucketUnallocated) cleanLockedMap() {
 
 func (b *bucketUnallocated) UpdateStats(s *Stats) {
 	b.mu.RLock()
-	s.EntriesCount += uint64(len(b.m))
+
+	// Current generation entries (all valid)
+	currentGen := b.currentGenCount
+
+	// Previous generation: estimate how many are still valid (not overwritten)
+	// As we write in current gen, we overwrite previous gen positions.
+	// Valid previous gen entries ≈ previousGenCount - currentGenCount (entries overwritten)
+	validPreviousGenCount := uint64(0)
+	if b.previousGenCount > b.currentGenCount {
+		validPreviousGenCount = b.previousGenCount - b.currentGenCount
+	}
+
+	// s.EntriesCount += uint64(len(b.m))
+	s.CurrentGenEntries += currentGen
+	s.PreviousGenEntries += validPreviousGenCount
+	s.ValidEntriesCount += currentGen + validPreviousGenCount
+
 	s.TotalMapSize += b.getMapSize()
 	b.mu.RUnlock()
 }
@@ -1521,6 +1629,10 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 				b.gen++
 			}
 
+			// On wrap: previous gen count = current gen count, reset current gen count
+			b.previousGenCount = b.currentGenCount
+			b.currentGenCount = 0
+
 			needClean = true
 		} else { // if the new item doesn't overflow the chunks, we need to allocate a new chunk
 			// calculate the index as byte offset
@@ -1548,6 +1660,10 @@ func (b *bucketUnallocated) Set(k, v []byte, h uint64, skipLocking ...bool) erro
 	chunk = append(chunk, k...)
 	chunk = append(chunk, v...)
 	chunks[chunkIdx] = chunk
+
+	// Track entry count in current generation, increase by 1
+	b.currentGenCount++
+
 	b.m[h] = idx | (b.gen << bucketSizeBits)
 	b.idx = idxNew
 

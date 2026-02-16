@@ -100,6 +100,11 @@ func (m *MockStore) GetUnminedTxIterator(bool) (utxo.UnminedTxIterator, error) {
 	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
 }
 
+func (m *MockStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (utxo.UnminedTxIterator, error) {
+	args := m.Called(cutoffBlockHeight)
+	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
+}
+
 func (m *MockStore) GetSpend(ctx context.Context, spendArg *utxo.Spend) (*utxo.SpendResponse, error) {
 	args := m.Called(ctx, spendArg)
 	return args.Get(0).(*utxo.SpendResponse), args.Error(1)

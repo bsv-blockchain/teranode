@@ -340,12 +340,13 @@ func (m *mockListenerLogger) Errorf(string, ...interface{}) {
 	defer m.mu.Unlock()
 	m.errorCount++
 }
-func (m *mockListenerLogger) Fatal(...interface{})                         {}
-func (m *mockListenerLogger) Fatalf(string, ...interface{})                {}
-func (m *mockListenerLogger) LogLevel() int                                { return 0 }
-func (m *mockListenerLogger) SetLogLevel(string)                           {}
-func (m *mockListenerLogger) New(string, ...ulogger.Option) ulogger.Logger { return m }
-func (m *mockListenerLogger) Duplicate(...ulogger.Option) ulogger.Logger   { return m }
+func (m *mockListenerLogger) Fatal(...interface{})                            {}
+func (m *mockListenerLogger) Fatalf(string, ...interface{})                   {}
+func (m *mockListenerLogger) LogLevel() int                                   { return 0 }
+func (m *mockListenerLogger) SetLogLevel(string)                              {}
+func (m *mockListenerLogger) New(string, ...ulogger.Option) ulogger.Logger    { return m }
+func (m *mockListenerLogger) Duplicate(...ulogger.Option) ulogger.Logger      { return m }
+func (m *mockListenerLogger) WithTraceContext(context.Context) ulogger.Logger { return m }
 
 func (m *mockListenerLogger) getInfoCount() int {
 	m.mu.Lock()

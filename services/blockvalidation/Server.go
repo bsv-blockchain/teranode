@@ -1288,7 +1288,9 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 
 	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
 
-	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings); !ok {
+	// Create meta regenerator for potential meta file recovery (no peer URL for gRPC, local store only)
+	metaRegenerator := u.blockValidation.createMetaRegenerator(nil)
+	if ok, err := block.Valid(ctx, u.logger, u.subtreeStore, u.utxoStore, oldBlockIDsMap, blockHeaders, blockHeaderIDs, u.settings, metaRegenerator); !ok {
 		return nil, errors.WrapGRPC(errors.NewBlockInvalidError("[ValidateBlock][%s] block is not valid", block.String(), err))
 	}
 

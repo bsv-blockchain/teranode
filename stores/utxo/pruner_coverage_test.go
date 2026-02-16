@@ -47,19 +47,20 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 
 	t.Run("early return when block height too low", func(t *testing.T) {
 		mockStore := new(MockUtxostore)
-		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 3, tSettings, logger)
+		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 3, "<test-hash>", tSettings, logger)
 		assert.NoError(t, err)
 		assert.Equal(t, 0, count)
 		// Should not call any store methods
-		mockStore.AssertNotCalled(t, "GetUnminedTxIterator")
+		mockStore.AssertNotCalled(t, "GetPrunableUnminedTxIterator")
 	})
 
 	t.Run("handles iterator error", func(t *testing.T) {
 		mockStore := new(MockUtxostore)
-		mockStore.On("GetUnminedTxIterator").
+		// cutoff = blockHeight(10) - retention(5) = 5
+		mockStore.On("GetPrunableUnminedTxIterator", uint32(5)).
 			Return((*MockUnminedTxIterator)(nil), errors.NewStorageError("iterator failed"))
 
-		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, tSettings, logger)
+		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, "<test-hash>", tSettings, logger)
 		assert.Error(t, err)
 		assert.Equal(t, 0, count)
 		assert.Contains(t, err.Error(), "failed to get unmined tx iterator")
@@ -87,11 +88,12 @@ func TestPreserveParentsOfOldUnminedTransactions_Coverage(t *testing.T) {
 		mockIter.On("Next", mock.Anything).Return(([]*UnminedTransaction)(nil), nil).Once() // End iteration
 		mockIter.On("Close").Return(nil)
 
-		mockStore.On("GetUnminedTxIterator").Return(mockIter, nil)
+		// cutoff = blockHeight(10) - retention(5) = 5
+		mockStore.On("GetPrunableUnminedTxIterator", uint32(5)).Return(mockIter, nil)
 		mockStore.On("PreserveTransactions", mock.Anything, mock.Anything, mock.Anything).
 			Return(nil)
 
-		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, tSettings, logger)
+		count, err := PreserveParentsOfOldUnminedTransactions(ctx, mockStore, 10, "<test-hash>", tSettings, logger)
 
 		assert.NoError(t, err)
 		assert.Equal(t, 1, count)
