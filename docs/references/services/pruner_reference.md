@@ -456,5 +456,5 @@ ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborti
 
 - [Pruner Service Topic Documentation](../../topics/services/pruner.md)
 - [Pruner Settings Reference](../settings/services/pruner_settings.md)
-- [UTXO Store Reference](utxo_reference.md)
-- [Prometheus Metrics Reference](../prometheusMetricsReference.md)
+- [UTXO Store Reference](../stores/utxo_reference.md)
+- [Prometheus Metrics Reference](../prometheusMetrics.md)

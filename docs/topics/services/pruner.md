@@ -597,8 +597,4 @@ startPruner.docker.host.teranode2 = false
 
 ### Metrics Documentation
 
-For Prometheus metrics details, see [Prometheus Metrics Reference](../../references/prometheusMetricsReference.md).
-
-### Call Graph Visualization
-
-For visual representation of the Pruner service's function call patterns, see the [Call Graphs documentation](../../references/call_graphs.md).
+For Prometheus metrics details, see [Prometheus Metrics Reference](../../references/prometheusMetrics.md).

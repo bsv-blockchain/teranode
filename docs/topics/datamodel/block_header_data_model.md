@@ -302,4 +302,4 @@ Core implementation files:
 - [Subtree Data Model](./subtree_data_model.md) - How transactions are organized in subtrees
 - [Transaction Data Model](./transaction_data_model.md) - Transaction format and validation
 - [Blockchain Service Documentation](../services/blockchain.md) - Header storage and chain management
-- [Block Validation Service Documentation](../services/blockvalidation.md) - Header validation process
+- [Block Validation Service Documentation](../services/blockValidation.md) - Header validation process
