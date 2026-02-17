@@ -144,7 +144,7 @@ make show-hashes
 ```
 
 This will display output similar to:
-```
+```text
 📊 Hash Analysis Results:
 ==========================
   - Extracting hash information...

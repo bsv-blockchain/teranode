@@ -261,7 +261,7 @@ Validates a subtree and its transactions based on the provided request. This met
 - **Structured responses**: Appropriate gRPC status codes
 - **Orphan processing**: Handles orphaned transactions after subtree validation
 
-!!! check "Validation Criteria"
+!!! success "Validation Criteria"
     The validation process ensures that:
 
     - **Consensus compliance**: All transactions are valid according to consensus rules
@@ -460,7 +460,7 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 
 Handles the retrieval and validation of missing transactions in a subtree, coordinating both the retrieval process and the validation workflow. This method is a critical part of the subtree validation process.
 
-!!! important "Key Responsibilities"
+!!! warning "Key Responsibilities"
     1. **Retrieving transactions** that are referenced in the subtree but not available locally
     2. **Organizing transactions** into dependency levels for ordered processing
     3. **Validating each transaction** according to consensus rules
@@ -591,7 +591,7 @@ func (u *Server) consumerMessageHandler(ctx context.Context) func(msg *kafka.Kaf
 
 Returns a function that processes Kafka messages for subtree validation. It handles both recoverable and unrecoverable errors appropriately. The handler includes sophisticated error categorization to determine whether errors should result in message reprocessing or rejection.
 
-!!! gear "Handler Features"
+!!! info "Handler Features"
     Key features include:
 
     - **Error categorization**: Different handling for recoverable vs. non-recoverable errors

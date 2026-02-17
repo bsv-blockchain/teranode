@@ -1,6 +1,6 @@
-## Setting Up Test Environment
+# Setting Up Test Environment
 
-### How to Set Up Your Local Test Environment
+## How to Set Up Your Local Test Environment
 
 1. Prerequisites:
 
@@ -27,7 +27,7 @@
     make smoketest
     ```
 
-### How to Configure Test Settings
+## How to Configure Test Settings
 
 1. Create local settings:
 
@@ -41,9 +41,9 @@
     - `docker` - Docker-based testing
     - `docker.ci` - CI environment testing
 
-## Running Tests
+# Running Tests
 
-### How to Run Test Suites
+## How to Run Test Suites
 
 1. Run all tests in a suite:
 
@@ -89,7 +89,7 @@
     go test -v -tags "test_tna,testtxmetacache"
     ```
 
-### How to Debug Failed Tests
+## How to Debug Failed Tests
 
 1. Enable verbose logging:
 
@@ -117,9 +117,9 @@
     curl http://localhost:38090/api/v1/bestblockheader/json
     ```
 
-## Adding New Tests
+# Adding New Tests
 
-### How to Add a New Test Case
+## How to Add a New Test Case
 
 1. Create test file with proper structure:
 
@@ -221,7 +221,7 @@
     }
     ```
 
-### How to Add Custom Test Configuration
+## How to Add Custom Test Configuration
 
 1. Use TConfig system to customize settings:
 
@@ -256,9 +256,9 @@
           - CUSTOM_SETTING=value
     ```
 
-## Working with Multiple Nodes
+# Working with Multiple Nodes
 
-### How to Test Node Communication
+## How to Test Node Communication
 
 1. Setup multiple nodes:
 
@@ -294,7 +294,7 @@
     }
     ```
 
-### How to Test Node Failure Scenarios
+## How to Test Node Failure Scenarios
 
 1. Stop specific containers:
 
@@ -326,9 +326,9 @@
     }
     ```
 
-## Cleanup and Maintenance
+# Cleanup and Maintenance
 
-### How to Clean Test Environment
+## How to Clean Test Environment
 
 1. Remove test data:
 
@@ -355,7 +355,7 @@
     }
     ```
 
-### How to Handle Common Issues
+## How to Handle Common Issues
 
 1. Port conflicts:
 
@@ -386,7 +386,7 @@
     sudo rm -rf ./data/test
     ```
 
-## Available Test Tags
+# Available Test Tags
 
 Teranode uses build tags to control which tests run:
 
@@ -403,7 +403,7 @@ Teranode uses build tags to control which tests run:
 - `aerospike` - Tests requiring Aerospike
 - `debug` - Enable debug mode for tests
 
-## Other Resources
+# Other Resources
 
 - [QA Guide & Instructions for Functional Requirement Tests](../topics/functionalRequirementTests.md)
 - [Understanding The Testing Framework](../topics/understandingTheTestingFramework.md)

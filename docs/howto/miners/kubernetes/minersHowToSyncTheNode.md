@@ -565,6 +565,7 @@ If catch-up is too slow, use Method 2 or Method 3 from this guide with recent da
 #### Issue: Sync Stalled
 
 **Symptoms:**
+
 - Block height not increasing
 - No new blocks being processed
 - Peer connections established but inactive
@@ -585,6 +586,7 @@ kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli setfsmsta
 #### Issue: Database Connection Errors
 
 **Symptoms:**
+
 - Connection timeouts to PostgreSQL/Aerospike
 - "Database unavailable" errors in logs
 
@@ -604,6 +606,7 @@ kubectl delete pod -n teranode-operator -l app=postgres
 #### Issue: Storage Space Exhausted
 
 **Symptoms:**
+
 - "No space left on device" errors
 - Pods in CrashLoopBackOff state
 

@@ -61,7 +61,7 @@ The first subtree in a block (the subtree in the 0'th position of the block) con
 The merkle root for the block is calculated when this placeholder transaction is replaced with the real coinbase transaction; but the subtree hash *does not change* within the block. This means to calculate the merkle root of a block, you cannot simply use subtree hashes as nodes in a merkle tree.
 
 As a simple example using 2 subtrees `S0` and `S1` with a size of 2; the true merkle root for the block with 4 transactions `CT` (Coinbase Transaction), `T1`, `T2`, and `T3` is calculated via:
-```
+```text
         ROOT = H(S0 + S1)
        /                  \
    S0 = H(H0 + H1)      S1 = H(H2 + H3)
@@ -70,7 +70,7 @@ As a simple example using 2 subtrees `S0` and `S1` with a size of 2; the true me
 ```
 
 But, the root subtree hash for `S0` is actually calculated with placeholder transaction `FF`; so the subtree that was actually broadcasted has a hash that looks like:
-```
+```text
    S0 = H(H0 + H1)
     /           \
   H0 = H(FF)  H1 = H(T1)

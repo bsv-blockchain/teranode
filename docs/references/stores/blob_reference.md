@@ -247,6 +247,7 @@ err := store.SetFromReader(ctx, key, fileType, reader)
 ```
 
 When the pipe is closed with an error:
+
 - `io.Copy` inside `SetFromReader` receives the error
 - The defer cleanup removes the temporary file
 - No incomplete data is left in storage

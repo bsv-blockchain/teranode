@@ -87,6 +87,7 @@
 ### Quick Validation Pipeline
 
 For checkpoint-verified blocks, a fan-in pipeline overlaps I/O with processing:
+
 - `SubtreeBatchPrefetchDepth` controls how many batches to prefetch ahead (default: 2)
 - Setting to 0 disables the pipeline and uses sequential processing
 - Three pipeline stages:

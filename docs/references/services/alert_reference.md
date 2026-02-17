@@ -379,7 +379,7 @@ Operational configuration and state:
 
 The datastore connection is configured via the `StoreURL` setting:
 
-```
+```yaml
 # SQLite example
 StoreURL: sqlite://path/to/alert.db
 

@@ -317,7 +317,7 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 
 Handles reading and responding to RPC messages. This method is the core request processing function.
 
-!!! gear "Request Processing Steps"
+!!! info "Request Processing Steps"
     1. **Parses incoming JSON-RPC requests** from HTTP request bodies
     2. **Validates request format** and structure
     3. **Routes requests** to appropriate command handlers
@@ -355,7 +355,7 @@ Some key handlers include:
 
 ## Configuration
 
-!!! settings "RPC Configuration Settings"
+!!! example "RPC Configuration Settings"
     The RPC Service uses various configuration values:
 
     **Authentication Settings:**
@@ -389,7 +389,7 @@ Configuration values can be provided through the configuration file, environment
 
 ## Authentication
 
-!!! key "Authentication Levels"
+!!! info "Authentication Levels"
     The server supports two levels of authentication:
 
     1. **Admin-level access** with full permissions
