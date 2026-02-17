@@ -178,14 +178,6 @@ Returns an error if shutdown fails, or nil on successful shutdown.
 
 ### Internal Methods
 
-#### getNextBlockToProcess
-
-```go
-func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error)
-```
-
-Retrieves the next block that needs to be processed based on the current state and configuration. This method determines the next block to persist by comparing the last persisted block height with the current blockchain tip. It ensures blocks are persisted in sequence without gaps and respects the configured persistence age policy to control how far behind persistence can lag.
-
 #### persistBlock
 
 ```go

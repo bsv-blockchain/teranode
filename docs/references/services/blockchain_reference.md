@@ -26,6 +26,8 @@ type Blockchain struct {
     AppCtx                        context.Context                      // Application context
     localTestStartState           string                               // Initial state for testing
     subscriptionManagerReady      atomic.Bool                          // Flag indicating subscription manager is ready
+    batchTokens                   map[string]*blobDeletionBatchToken   // Active batch tokens for blob deletion
+    batchTokensMu                 sync.RWMutex                         // Mutex for batch tokens map
 }
 ```
 
@@ -433,14 +435,6 @@ func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Con
 ```
 
 Retrieves the latest block header from a block locator request.
-
-### ReportPeerFailure
-
-```go
-func (b *Blockchain) ReportPeerFailure(ctx context.Context, req *blockchain_api.ReportPeerFailureRequest) (*emptypb.Empty, error)
-```
-
-Handles reports of peer download failures and broadcasts to subscribers. This method logs peer failures and sends notifications to all subscribers about the failed peer.
 
 ### SetBlockProcessedAt
 

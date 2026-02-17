@@ -117,17 +117,6 @@ type Store interface {
     //   - error: Any error that occurred during DAH setting
     SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error
 
-    // GetDAH retrieves the remaining time-to-live for a blob.
-    // Parameters:
-    //   - ctx: The context for the operation
-    //   - key: The key identifying the blob
-    //   - fileType: The type of the file
-    //   - opts: Optional file options
-    // Returns:
-    //   - uint32: The delete at height value
-    //   - error: Any error that occurred during retrieval
-    GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error)
-
     // Del deletes a blob from the store.
     // Parameters:
     //   - ctx: The context for the operation
