@@ -43,9 +43,8 @@ func NewDockerSVNode(opts Options) *DockerSVNode {
 	}
 
 	return &DockerSVNode{
-		opts:    opts,
-		rpcURL:  fmt.Sprintf("http://localhost:%d", opts.RPCPort),
-		p2pHost: fmt.Sprintf("localhost:%d", opts.P2PPort),
+		opts: opts,
+		// rpcURL and p2pHost will be set dynamically in Start() using testcontainers' address discovery
 	}
 }
 
@@ -72,8 +71,8 @@ func (d *DockerSVNode) Start(ctx context.Context) error {
 				nat.Port(rpcPortStr): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", d.opts.RPCPort)}},
 				nat.Port(p2pPortStr): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", d.opts.P2PPort)}},
 			}
-			// Use host network mode for easier connectivity with teranode running on host
-			hc.NetworkMode = "host"
+			// Use default bridge network mode for cross-platform compatibility
+			// Testcontainers will provide correct host/port mapping for the environment
 			// Mount the config file (not read-only as entrypoint needs to chown it)
 			hc.Binds = []string{
 				fmt.Sprintf("%s:/data/bitcoin.conf", configPath),
@@ -99,6 +98,30 @@ func (d *DockerSVNode) Start(ctx context.Context) error {
 	}
 
 	d.container = ctr
+
+	// Get the actual accessible addresses using testcontainers' dynamic discovery
+	// This works correctly in all environments: CI, WSL2, Docker Desktop, etc.
+	host, err := ctr.Host(ctx)
+	if err != nil {
+		_ = d.Stop(ctx)
+		return errors.NewProcessingError("failed to get container host", err)
+	}
+
+	rpcPort, err := ctr.MappedPort(ctx, nat.Port(rpcPortStr))
+	if err != nil {
+		_ = d.Stop(ctx)
+		return errors.NewProcessingError("failed to get mapped RPC port", err)
+	}
+
+	p2pPort, err := ctr.MappedPort(ctx, nat.Port(p2pPortStr))
+	if err != nil {
+		_ = d.Stop(ctx)
+		return errors.NewProcessingError("failed to get mapped P2P port", err)
+	}
+
+	// Build addresses using discovered values (e.g., "localhost:18332")
+	d.rpcURL = fmt.Sprintf("http://%s:%s", host, rpcPort.Port())
+	d.p2pHost = fmt.Sprintf("%s:%s", host, p2pPort.Port())
 
 	// Wait for RPC to be ready
 	if err := d.WaitForReady(ctx, 60*time.Second); err != nil {
