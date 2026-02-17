@@ -12,7 +12,7 @@
 | MaxRetries | int | 3 | blockchain_maxRetries | Retry attempts for operations |
 | RetrySleep | int | 1000 | blockchain_retrySleep | Retry delay timing (milliseconds) |
 | StoreURL | *url.URL | "sqlite:///blockchain" | blockchain_store | **CRITICAL** - Database connection (fails during daemon startup if null) |
-| FSMStateRestore | bool | false | fsm_state_restore | Triggers FSM restore mode via RPC service |
+| FSMStateRestore | bool | false | fsm_state_restore | **UNUSED** - Previously triggered FSM restore via RPC service, implementation is currently disabled |
 | FSMStateChangeDelay | time.Duration | 0 | fsm_state_change_delay | **TESTING ONLY** - Delays FSM state transitions |
 | StoreDBTimeoutMillis | int | 5000 | blockchain_store_dbTimeoutMillis | Database operation timeout (store-level) |
 | InitializeNodeInState | string | "" | blockchain_initializeNodeInState | **UNUSED** - Defined but not referenced in code |
@@ -33,9 +33,10 @@
 
 ### FSM State Management
 
-- `FSMStateRestore = true`: RPC service sends Restore event to Blockchain FSM during initialization
-- `FSMStateChangeDelay` delays state transitions for test timing control
-- Initial FSM state set via `-localTestStartFromState` CLI argument
+- `FSMStateRestore`: Currently unused. The implementation that sent a Restore event via RPC is disabled.
+- On startup, the blockchain service restores the last persisted FSM state from the database store.
+- `FSMStateChangeDelay` delays state transitions for test timing control.
+- Initial FSM state set via `-localTestStartFromState` CLI argument.
 
 ### Database Configuration
 

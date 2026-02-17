@@ -704,7 +704,7 @@ kubectl exec -it <aerospike-pod> -n teranode-operator -- asinfo -v "statistics" 
 # Verify FSM is in correct state
 kubectl exec -it <blockchain-pod> -n teranode-operator -- teranode-cli getfsmstate
 
-# Should show "running" or "synced" for a fully synchronized node
+# Should show "RUNNING" for a fully synchronized node
 ```
 
 ### Ongoing Monitoring

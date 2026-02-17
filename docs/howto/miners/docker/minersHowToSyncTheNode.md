@@ -630,7 +630,7 @@ docker exec -it aerospike asinfo -v "statistics" | grep "objects"
 # Verify FSM is in correct state
 docker exec -it blockchain teranode-cli getfsmstate
 
-# Should show "running" or "synced" for a fully synchronized node
+# Should show "RUNNING" for a fully synchronized node
 ```
 
 ### Ongoing Monitoring
