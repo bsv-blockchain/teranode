@@ -651,3 +651,10 @@ func (q *LockFreeQueue) Dequeue(validFromMillis int64) *TxIDAndFee
 ```
 
 Removes and returns a transaction from the queue if its validation time has passed. This method implements the delay mechanism that allows transactions to be properly validated before being included in subtrees.
+
+## Related Documents
+
+- [Block Assembly Topic Guide](../../topics/services/blockAssembly.md)
+- [Block Assembly Settings](../settings/services/blockassembly_settings.md)
+- [Block Assembly Protobuf Reference](../protobuf_docs/blockassemblyProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

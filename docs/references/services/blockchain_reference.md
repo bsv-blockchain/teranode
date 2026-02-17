@@ -608,3 +608,10 @@ This method is commonly used during:
 - Quick validation of checkpointed blocks
 - Parallel block processing where IDs need to be reserved in advance
 - Recovery scenarios where block IDs need to be coordinated across services
+
+## Related Documents
+
+- [Blockchain Topic Guide](../../topics/services/blockchain.md)
+- [Blockchain Settings](../settings/services/blockchain_settings.md)
+- [Blockchain Protobuf Reference](../protobuf_docs/blockchainProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

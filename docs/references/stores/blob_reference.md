@@ -244,3 +244,8 @@ When the pipe is closed with an error:
 ### Stale Temporary File Cleanup
 
 During store initialization, the file store automatically cleans up stale `.tmp` files that are older than 10 minutes. This handles cases where the process crashed during a write operation.
+
+## Related Documents
+
+- [Blob Store Topic Guide](../../topics/stores/blob.md)
+- [Blob Store Settings](../settings/stores/blob_settings.md)

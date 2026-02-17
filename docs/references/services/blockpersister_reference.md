@@ -551,7 +551,8 @@ Required components:
     - **Store connectivity verification**
     - **Service operational status**
 
-## Other Resources
+## Related Documents
 
-- [Block Persister](../../topics/services/blockPersister.md)
+- [Block Persister Topic Guide](../../topics/services/blockPersister.md)
+- [Block Persister Settings](../settings/services/blockpersister_settings.md)
 - [Prometheus Metrics](../prometheusMetrics.md)

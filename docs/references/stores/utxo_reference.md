@@ -346,3 +346,8 @@ type Store interface {
 ## Mock Implementation
 
 The `MockUtxostore` struct provides a mock implementation of the `Store` interface for testing purposes.
+
+## Related Documents
+
+- [UTXO Store Topic Guide](../../topics/stores/utxo.md)
+- [UTXO Store Settings](../settings/stores/utxo_settings.md)

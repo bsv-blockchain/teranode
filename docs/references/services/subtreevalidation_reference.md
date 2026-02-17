@@ -646,3 +646,10 @@ Background goroutine that listens for blockchain events and updates the service'
 - **Block notifications**: Processes block addition notifications
 - **State synchronization**: Updates best block information on block events
 - **Graceful shutdown**: Properly handles context cancellation
+
+## Related Documents
+
+- [Subtree Validation Topic Guide](../../topics/services/subtreeValidation.md)
+- [Subtree Validation Settings](../settings/services/subtreevalidation_settings.md)
+- [Subtree Validation Protobuf Reference](../protobuf_docs/subtreevalidationProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

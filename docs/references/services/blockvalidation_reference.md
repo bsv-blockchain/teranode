@@ -425,3 +425,10 @@ The service provides comprehensive performance monitoring through Prometheus met
 - Memory cache utilization
 - Store operation latencies
 - Background worker statistics
+
+## Related Documents
+
+- [Block Validation Topic Guide](../../topics/services/blockValidation.md)
+- [Block Validation Settings](../settings/services/blockvalidation_settings.md)
+- [Block Validation Protobuf Reference](../protobuf_docs/blockvalidationProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

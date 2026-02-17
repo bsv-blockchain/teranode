@@ -20,6 +20,7 @@ type Server struct {
     blockchainClient                  blockchain.ClientI        // Client for blockchain interactions
     blockAssemblyClient               blockassembly.ClientI     // Client for block assembly operations
     AssetHTTPAddressURL               string                    // HTTP address URL for assets
+    PropagationURL                    string                    // URL for peers to use for propagating txs (defaults to AssetHTTPAddressURL)
     e                                 *echo.Echo                // Echo server instance
     notificationCh                    chan *notificationMsg     // Channel for notifications
     rejectedTxKafkaConsumerClient     kafka.KafkaConsumerGroupI // Kafka consumer for rejected transactions
@@ -662,3 +663,10 @@ The server uses goroutines for handling concurrent operations, such as message p
 ## Security
 
 The server supports both HTTP and HTTPS configurations based on the `securityLevelHTTP` setting. When using HTTPS, it requires certificate and key files to be specified in the configuration.
+
+## Related Documents
+
+- [P2P Topic Guide](../../topics/services/p2p.md)
+- [P2P Settings](../settings/services/p2p_settings.md)
+- [P2P Protobuf Reference](../protobuf_docs/p2pProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)
