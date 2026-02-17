@@ -153,6 +153,9 @@ func waitForSync(t *testing.T, ctx context.Context, td *daemon.TestDaemon,
 
 // TestBIP68_HeightBased_Accept verifies valid height-based sequence lock is accepted
 func TestBIP68_HeightBased_Accept(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
 	ctx := t.Context()
 
 	// Setup with CSV height = 10, generate 120 blocks before Teranode starts
@@ -201,6 +204,9 @@ func TestBIP68_HeightBased_Accept(t *testing.T) {
 
 // TestBIP68_HeightBased_Reject verifies invalid height-based sequence lock is rejected
 func TestBIP68_HeightBased_Reject(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
 	ctx := t.Context()
 
 	// Setup with CSV height = 10, generate 115 blocks before Teranode starts
@@ -252,6 +258,9 @@ func TestBIP68_HeightBased_Reject(t *testing.T) {
 
 // TestBIP68_TimeBased_Accept verifies valid time-based sequence lock is accepted
 func TestBIP68_TimeBased_Accept(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
 	ctx := t.Context()
 
 	// Setup with CSV height = 10, generate 120 blocks before Teranode starts
@@ -299,6 +308,9 @@ func TestBIP68_TimeBased_Accept(t *testing.T) {
 
 // TestBIP68_TimeBased_Reject verifies invalid time-based sequence lock is rejected
 func TestBIP68_TimeBased_Reject(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
 	ctx := t.Context()
 
 	// Setup with CSV height = 10, generate 115 blocks before Teranode starts
@@ -345,6 +357,9 @@ func TestBIP68_TimeBased_Reject(t *testing.T) {
 
 // TestBIP68_DisableFlag verifies disable flag bypasses BIP68 enforcement
 func TestBIP68_DisableFlag(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
 	ctx := t.Context()
 
 	td, sv, txCreator := setupBIP68Test(t, 10, 115)
@@ -390,6 +405,9 @@ func TestBIP68_DisableFlag(t *testing.T) {
 
 // TestBIP68_BeforeCSVHeight verifies BIP68 not enforced before CSV activation
 func TestBIP68_BeforeCSVHeight(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
 	ctx := t.Context()
 
 	// Set CSV height to 150 (won't be active during test)
@@ -434,6 +452,9 @@ func TestBIP68_BeforeCSVHeight(t *testing.T) {
 
 // TestBIP68_Version1Bypass verifies version 1 transactions bypass BIP68
 func TestBIP68_Version1Bypass(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
 	ctx := t.Context()
 
 	td, sv, txCreator := setupBIP68Test(t, 10, 115)
@@ -478,6 +499,9 @@ func TestBIP68_Version1Bypass(t *testing.T) {
 
 // TestBIP68_MixedInputTypes verifies mixed sequence lock types in single transaction
 func TestBIP68_MixedInputTypes(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
 	ctx := t.Context()
 
 	td, sv, txCreator := setupBIP68Test(t, 10, 115)
@@ -570,6 +594,9 @@ func TestBIP68_MixedInputTypes(t *testing.T) {
 
 // TestBIP68_ZeroSequence verifies zero sequence number imposes no constraint
 func TestBIP68_ZeroSequence(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
 	ctx := t.Context()
 
 	td, sv, txCreator := setupBIP68Test(t, 10, 115)
@@ -608,6 +635,9 @@ func TestBIP68_ZeroSequence(t *testing.T) {
 
 // TestBIP68_AtExactCSVHeight verifies BIP68 enforced at exact activation height
 func TestBIP68_AtExactCSVHeight(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
 	ctx := t.Context()
 
 	// Set CSV height to 120
