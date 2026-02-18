@@ -72,7 +72,6 @@ func (d *DockerSVNode) Start(ctx context.Context) error {
 				nat.Port(rpcPortStr): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", d.opts.RPCPort)}},
 				nat.Port(p2pPortStr): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", d.opts.P2PPort)}},
 			}
-			// Use host network mode for easier connectivity with teranode running on host
 			hc.NetworkMode = "host"
 			// Mount the config file (not read-only as entrypoint needs to chown it)
 			hc.Binds = []string{
@@ -479,6 +478,25 @@ func (d *DockerSVNode) GetRawTransaction(txid string) (*bt.Tx, error) {
 	}
 
 	return tx, nil
+}
+
+// GetRawTransactionVerbose gets verbose transaction info by txid (requires txindex=1)
+// Returns the full transaction details including confirmations, blockhash, etc.
+func (d *DockerSVNode) GetRawTransactionVerbose(txid string) (map[string]interface{}, error) {
+	resp, err := helper.CallRPC(d.rpcURL, "getrawtransaction", []interface{}{txid, 1})
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Result map[string]interface{} `json:"result"`
+	}
+
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+		return nil, errors.NewProcessingError("failed to parse getrawtransaction verbose response", err)
+	}
+
+	return result.Result, nil
 }
 
 // AddNode adds a node to connect to
