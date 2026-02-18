@@ -117,17 +117,6 @@ type Store interface {
     //   - error: Any error that occurred during DAH setting
     SetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, dah uint32, opts ...options.FileOption) error
 
-    // GetDAH retrieves the remaining time-to-live for a blob.
-    // Parameters:
-    //   - ctx: The context for the operation
-    //   - key: The key identifying the blob
-    //   - fileType: The type of the file
-    //   - opts: Optional file options
-    // Returns:
-    //   - uint32: The delete at height value
-    //   - error: Any error that occurred during retrieval
-    GetDAH(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (uint32, error)
-
     // Del deletes a blob from the store.
     // Parameters:
     //   - ctx: The context for the operation
@@ -247,6 +236,7 @@ err := store.SetFromReader(ctx, key, fileType, reader)
 ```
 
 When the pipe is closed with an error:
+
 - `io.Copy` inside `SetFromReader` receives the error
 - The defer cleanup removes the temporary file
 - No incomplete data is left in storage
@@ -254,3 +244,8 @@ When the pipe is closed with an error:
 ### Stale Temporary File Cleanup
 
 During store initialization, the file store automatically cleans up stale `.tmp` files that are older than 10 minutes. This handles cases where the process crashed during a write operation.
+
+## Related Documents
+
+- [Blob Store Topic Guide](../../topics/stores/blob.md)
+- [Blob Store Settings](../settings/stores/blob_settings.md)

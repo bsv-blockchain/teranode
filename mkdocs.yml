@@ -124,10 +124,14 @@ nav:
           - Network Consensus Rules: references/networkConsensusRules.md
           - Protobuf API:
               - Alert Proto: references/protobuf_docs/alertProto.md
+              - Asset Proto: references/protobuf_docs/assetProto.md
               - Block Assembly Proto: references/protobuf_docs/blockassemblyProto.md
               - Blockchain Proto: references/protobuf_docs/blockchainProto.md
               - Block Validation Proto: references/protobuf_docs/blockvalidationProto.md
+              - Legacy Peer Proto: references/protobuf_docs/legacyPeerProto.md
+              - P2P Proto: references/protobuf_docs/p2pProto.md
               - Propagation Proto: references/protobuf_docs/propagationProto.md
+              - Pruner Proto: references/protobuf_docs/prunerProto.md
               - Subtree Validation Proto: references/protobuf_docs/subtreevalidationProto.md
               - Validator Proto: references/protobuf_docs/validatorProto.md
       - Core Services:

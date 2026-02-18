@@ -9,7 +9,7 @@
     - [2.3. Grouping Transactions into Subtrees](#23-grouping-transactions-into-subtrees)
     - [2.3.1 Dynamic Subtree Size Adjustment](#231-dynamic-subtree-size-adjustment)
     - [2.4. Creating Mining Candidates](#24-creating-mining-candidates)
-    - [2.4.1. Mining Candidate Caching](#241-mining-candidate-caching)
+    - [2.4.1. Pre-computed Mining Data](#241-pre-computed-mining-data)
     - [2.5. Submit Mining Solution](#25-submit-mining-solution)
     - [2.6. Processing Subtrees and Blocks from other Nodes and Handling Forks and Conflicts](#26-processing-subtrees-and-blocks-from-other-nodes-and-handling-forks-and-conflicts)
     - [2.6.1. The block received is the same as the current chaintip (i.e. the block we have already seen).](#261-the-block-received-is-the-same-as-the-current-chaintip-ie-the-block-we-have-already-seen)

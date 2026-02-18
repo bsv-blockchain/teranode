@@ -26,6 +26,8 @@ type Blockchain struct {
     AppCtx                        context.Context                      // Application context
     localTestStartState           string                               // Initial state for testing
     subscriptionManagerReady      atomic.Bool                          // Flag indicating subscription manager is ready
+    batchTokens                   map[string]*blobDeletionBatchToken   // Active batch tokens for blob deletion
+    batchTokensMu                 sync.RWMutex                         // Mutex for batch tokens map
 }
 ```
 
@@ -434,14 +436,6 @@ func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Con
 
 Retrieves the latest block header from a block locator request.
 
-### ReportPeerFailure
-
-```go
-func (b *Blockchain) ReportPeerFailure(ctx context.Context, req *blockchain_api.ReportPeerFailureRequest) (*emptypb.Empty, error)
-```
-
-Handles reports of peer download failures and broadcasts to subscribers. This method logs peer failures and sends notifications to all subscribers about the failed peer.
-
 ### SetBlockProcessedAt
 
 ```go
@@ -614,3 +608,10 @@ This method is commonly used during:
 - Quick validation of checkpointed blocks
 - Parallel block processing where IDs need to be reserved in advance
 - Recovery scenarios where block IDs need to be coordinated across services
+
+## Related Documents
+
+- [Blockchain Topic Guide](../../topics/services/blockchain.md)
+- [Blockchain Settings](../settings/services/blockchain_settings.md)
+- [Blockchain Protobuf Reference](../protobuf_docs/blockchainProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

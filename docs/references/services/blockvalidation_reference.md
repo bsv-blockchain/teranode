@@ -162,7 +162,7 @@ The `BlockValidation` type handles the core validation logic for blocks in Teran
 #### New
 
 ```go
-func New(logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, txStore blob.Store, utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, kafkaConsumerClient kafka.KafkaConsumerGroupI, blockAssemblyClient blockassembly.ClientI) *Server
+func New(logger ulogger.Logger, tSettings *settings.Settings, subtreeStore blob.Store, txStore blob.Store, utxoStore utxo.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, kafkaConsumerClient kafka.KafkaConsumerGroupI, blockAssemblyClient blockassembly.ClientI, p2pClient P2PClientI) *Server
 ```
 
 Creates a new instance of the `Server` with:
@@ -262,14 +262,6 @@ Processes complete blocks:
 - Validates block structure
 - Handles height calculation
 - Integrates with blockchain state
-
-#### ValidateBlock
-
-```go
-func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api.ValidateBlockRequest) (*blockvalidation_api.ValidateBlockResponse, error)
-```
-
-Validates a block directly from the block bytes without needing to fetch it from the network or database. This method is typically used for testing or when the block is already available in memory, and no internal updates or database operations are needed.
 
 #### ValidateBlock
 
@@ -433,3 +425,10 @@ The service provides comprehensive performance monitoring through Prometheus met
 - Memory cache utilization
 - Store operation latencies
 - Background worker statistics
+
+## Related Documents
+
+- [Block Validation Topic Guide](../../topics/services/blockValidation.md)
+- [Block Validation Settings](../settings/services/blockvalidation_settings.md)
+- [Block Validation Protobuf Reference](../protobuf_docs/blockvalidationProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

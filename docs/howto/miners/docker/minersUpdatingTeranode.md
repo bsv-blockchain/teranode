@@ -6,19 +6,19 @@
 
     Pull the latest versions of all images:
 
-    ```
+    ```bash
     docker compose pull
     ```
 
 3. **Stop the Current Stack**
 
-    ```
+    ```bash
     docker compose down
     ```
 
 4. **Start the Updated Stack**
 
-    ```
+    ```bash
     docker compose up -d
     ```
 
@@ -26,13 +26,13 @@
 
     Check that all services are running and healthy:
 
-    ```
+    ```bash
     docker compose ps
     ```
 
 6. **Check Logs for Any Issues**
 
-    ```
+    ```bash
     docker compose logs
     ```
 

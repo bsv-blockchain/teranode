@@ -6,6 +6,17 @@ The UTXO (Unspent Transaction Output) Store provides an interface for managing a
 
 ## Core Types
 
+### BlockState
+
+An atomic snapshot of both block height and median block time, preventing race conditions when reading these values separately.
+
+```go
+type BlockState struct {
+    Height     uint32 // Current block height
+    MedianTime uint32 // Median time of recent blocks
+}
+```
+
 ### Spend
 
 Represents a UTXO being spent.
@@ -197,11 +208,11 @@ type Store interface {
     // GetSpend retrieves information about a UTXO's spend status.
     GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error)
 
-    // GetMeta retrieves transaction metadata.
-    GetMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
+    // GetMeta retrieves transaction metadata into the provided data object.
+    GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 
     // Spend marks all the UTXOs of the transaction as spent.
-    Spend(ctx context.Context, tx *bt.Tx, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
+    Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
 
     // Unspend reverses a previous spend operation, marking UTXOs as unspent.
     // This is used during blockchain reorganizations.
@@ -259,10 +270,22 @@ type Store interface {
     // GetMedianBlockTime returns the current median block time from the store.
     GetMedianBlockTime() uint32
 
+    // GetBlockState returns an atomic snapshot of both block height and median block time.
+    // This prevents race conditions that could occur when reading these values separately,
+    // ensuring consistency during validation operations.
+    GetBlockState() BlockState
+
     // GetUnminedTxIterator returns an iterator for all unmined transactions in the store.
     // This is used by the Block Assembly service to recover transactions on startup.
     // The fullScan parameter determines whether to perform a full scan of all transactions.
     GetUnminedTxIterator(fullScan bool) (UnminedTxIterator, error)
+
+    // GetPrunableUnminedTxIterator returns a lightweight iterator optimized for the pruner's needs.
+    // Unlike GetUnminedTxIterator, this iterator:
+    // - Filters server-side for only unmined transactions with unminedSince <= cutoffBlockHeight
+    // - Fetches only the bins needed by the pruner (txID, unminedSince, external, inputs)
+    // This reduces bandwidth by 90-99%+ compared to the full iterator when the mempool is large.
+    GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (UnminedTxIterator, error)
 
     // QueryOldUnminedTransactions returns transaction hashes for unmined transactions older than the cutoff height.
     // This method is used by the store-agnostic cleanup implementation to identify transactions for removal.
@@ -299,6 +322,8 @@ type Store interface {
 - `ReAssignUTXO`: Reassigns a UTXO to a new transaction output with safety measures.
 - `GetCounterConflicting`/`GetConflictingChildren`: Manages conflict relationships between transactions.
 - `SetBlockHeight`/`GetBlockHeight`/`SetMedianBlockTime`/`GetMedianBlockTime`: Manages blockchain state.
+- `GetBlockState`: Returns an atomic snapshot of block height and median block time.
+- `GetPrunableUnminedTxIterator`: Lightweight iterator optimized for pruner, reduces bandwidth by 90-99%+.
 - `GetUnminedTxIterator`: Returns an iterator for efficiently accessing all unmined transactions.
 - `QueryOldUnminedTransactions`: Identifies unmined transactions older than a specified block height for cleanup.
 - `PreserveTransactions`: Protects transactions from deletion by setting a preservation period.
@@ -321,3 +346,8 @@ type Store interface {
 ## Mock Implementation
 
 The `MockUtxostore` struct provides a mock implementation of the `Store` interface for testing purposes.
+
+## Related Documents
+
+- [UTXO Store Topic Guide](../../topics/stores/utxo.md)
+- [UTXO Store Settings](../settings/stores/utxo_settings.md)
