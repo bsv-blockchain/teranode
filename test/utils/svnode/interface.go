@@ -51,6 +51,7 @@ type SVNodeI interface {
 	SendRawTransaction(txHex string) (string, error)
 	SendToAddress(address string, amount float64) (string, error)
 	GetRawTransaction(txid string) (*bt.Tx, error)
+	GetRawTransactionVerbose(txid string) (map[string]interface{}, error)
 
 	// Waiting helpers
 	WaitForBlockHeight(ctx context.Context, height int, timeout time.Duration) error

@@ -1569,10 +1569,11 @@ func TestFloatingBlock_SubmitToBSVFirst(t *testing.T) {
 
 	// Start Teranode and wait for sync
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
-		EnableRPC:       true,
-		EnableP2P:       true,
-		EnableLegacy:    true,
-		EnableValidator: true,
+		EnableRPC:          true,
+		EnableP2P:          true,
+		EnableLegacy:       true,
+		EnableValidator:    true,
+		EnableDebugLogging: true, // Add debug logging
 		SettingsOverrideFunc: test.ComposeSettings(
 			test.SystemTestSettings(),
 			func(s *settings.Settings) {
@@ -1629,7 +1630,13 @@ func TestFloatingBlock_SubmitToBSVFirst(t *testing.T) {
 	require.NoError(t, err, "BSV Node should accept the block")
 	t.Logf("BSV Node submitblock result: %v", result)
 
-	expectedHeight := fundingBlockHeight + 1
+	// Verify BSV Node accepted the block by checking block height increased by 1
+	svBlockCount, err := sv.GetBlockCount()
+	require.NoError(t, err, "Should get BSV Node block count after submitblock")
+	t.Logf("BSV Node block height after submitblock: %d", svBlockCount)
+	require.Equal(t, int(fundingBlockHeight)+1, svBlockCount, "BSV Node should have accepted the block, height should increase by 1")
+
+	expectedHeight := uint32(svBlockCount)
 	t.Logf("Expected new height: %d", expectedHeight)
 
 	// Wait for Teranode to sync the new block via P2P

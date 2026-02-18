@@ -281,13 +281,15 @@ func (bc *BlockCreator) serializeBlockHeader(header *BlockHeader) []byte {
 	// Version (4 bytes, little endian)
 	binary.LittleEndian.PutUint32(buf[0:4], uint32(header.Version))
 
-	// Previous block hash (32 bytes, reversed)
+	// Previous block hash (32 bytes in wire byte order)
+	// NewHashFromStr parses the display hex and reverses it to internal/wire byte order,
+	// so hash[:] is already the correct wire format - no additional reversal needed.
 	prevHash, _ := chainhash.NewHashFromStr(header.PrevBlock)
-	copy(buf[4:36], reverseBytes(prevHash[:]))
+	copy(buf[4:36], prevHash[:])
 
-	// Merkle root (32 bytes, reversed)
+	// Merkle root (32 bytes in wire byte order) - same convention as prev_block
 	merkleHash, _ := chainhash.NewHashFromStr(header.MerkleRoot)
-	copy(buf[36:68], reverseBytes(merkleHash[:]))
+	copy(buf[36:68], merkleHash[:])
 
 	// Timestamp (4 bytes, little endian)
 	binary.LittleEndian.PutUint32(buf[68:72], header.Timestamp)
