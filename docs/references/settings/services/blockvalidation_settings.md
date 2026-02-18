@@ -56,12 +56,17 @@
 | MaxTrackedForks | int | 1000 | blockvalidation_max_tracked_forks | Maximum total forks tracked |
 | NearForkThreshold | int | 0 | blockvalidation_near_fork_threshold | Near fork detection (0=coinbase maturity/2) |
 | FetchLargeBatchSize | int | 100 | blockvalidation_fetch_large_batch_size | Block fetch batch size |
-| FetchNumWorkers | int | 16 | blockvalidation_fetch_num_workers | Block fetch worker goroutines |
+| FetchNumWorkers | int | 1 | blockvalidation_fetch_num_workers | Block fetch worker goroutines |
 | FetchBufferSize | int | 50 | blockvalidation_fetch_buffer_size | Block fetch channel buffer |
 | SubtreeFetchConcurrency | int | 8 | blockvalidation_subtree_fetch_concurrency | Concurrent subtree fetches per block |
 | SubtreeBatchSize | int | 16 | blockvalidation_subtree_batch_size | Subtrees processed per batch in quick validation |
 | SubtreeBatchPrefetchDepth | int | 2 | blockvalidation_subtree_batch_prefetch_depth | Batches to prefetch ahead in pipeline (0=sequential) |
 | GetBlockTransactionsConcurrency | int | 64 | blockvalidation_get_block_transactions_concurrency | Block transaction fetch concurrency |
+| ExtendTransactionTimeout | time.Duration | 120s | blockvalidation_extend_transaction_timeout | Timeout for extending transaction inputs |
+| SubtreeBatchWriteConcurrency | int | 64 | blockvalidation_subtree_batch_write_concurrency | Concurrent subtree file writes per batch |
+| CatchupMinThroughputKBps | int | 100 | blockvalidation_catchup_min_throughput_kbps | Minimum throughput (KB/s) before switching peers |
+| CatchupParallelFetchEnabled | bool | true | blockvalidation_catchup_parallel_fetch_enabled | Enable parallel fetching from multiple peers |
+| CatchupParallelFetchWorkers | int | 3 | blockvalidation_catchup_parallel_fetch_workers | Number of parallel fetch workers |
 
 ## Configuration Dependencies
 

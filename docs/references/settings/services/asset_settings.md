@@ -15,6 +15,7 @@
 | HTTPPublicAddress | string | "" | asset_httpPublicAddress | **UNUSED** - Reserved for future use |
 | SignHTTPResponses | bool | false | asset_sign_http_responses | Adds X-Signature header (requires P2P.PrivateKey, non-fatal if invalid) |
 | EchoDebug | bool | false | ECHO_DEBUG | Enables verbose logging and request middleware |
+| PropagationPublicURL | string | "" | asset_propagation_public_url | Public-facing URL for propagation service |
 
 ## Concurrency Settings
 
@@ -29,6 +30,8 @@
 | ConcurrencyGetSubtreeHead | int | 0 | asset_concurrency_get_subtree_head | Rate limit for GetSubtreeHead |
 | ConcurrencyGetUtxo | int | 0 | asset_concurrency_get_utxo | Rate limit for GetUtxo |
 | ConcurrencyGetLegacyBlockReader | int | -1 | asset_concurrency_get_legacy_block_reader | Rate limit for GetLegacyBlockReader (default: NumCPU) |
+| SubtreeDataStreamingChunkSize | int | 10000 | asset_subtreeDataStreamingChunkSize | Records per subtree data streaming chunk |
+| SubtreeDataStreamingConcurrency | int | 4 | asset_subtreeDataStreamingConcurrency | Parallel workers for subtree data streaming |
 
 **Concurrency Control:**
 
