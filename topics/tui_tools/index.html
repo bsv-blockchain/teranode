@@ -9,25 +9,25 @@
       
       
       
-        <link rel="prev" href="../../docker/minersHowToInstallation/">
+        <link rel="prev" href="../dashboard/">
       
       
-        <link rel="next" href="../../../../staging/TeranodePOC/AWS-POC-Setup/">
+        <link rel="next" href="../services/alert/">
       
       
         
       
       
-      <link rel="icon" href="../../../../topics/architecture/img/bsvblockchain_blue_logo.svg">
+      <link rel="icon" href="../architecture/img/bsvblockchain_blue_logo.svg">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.2">
     
     
       
-        <title>Kubernetes - Teranode</title>
+        <title>TUI Tools - Teranode</title>
       
     
     
-      <link rel="stylesheet" href="../../../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
       
       
 
@@ -41,14 +41,14 @@
         
         
         
-        <link rel="stylesheet" href="../../../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
+        <link rel="stylesheet" href="../../assets/external/fonts.googleapis.com/css.49ea35f2.css">
         <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
       
     
     
-      <link rel="stylesheet" href="../../../../overrides/custom.css">
+      <link rel="stylesheet" href="../../overrides/custom.css">
     
-    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -66,7 +66,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#how-to-install-teranode-with-kubernetes-helm" class="md-skip">
+        <a href="#tui-tools" class="md-skip">
           Skip to content
         </a>
       
@@ -82,9 +82,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../../../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
+    <a href="../.." title="Teranode" class="md-header__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../architecture/img/bsvblockchain_logo.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -101,7 +101,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Kubernetes
+              TUI Tools
             
           </span>
         </div>
@@ -170,7 +170,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../../.." class="md-tabs__link">
+      <a href="../.." class="md-tabs__link">
         
   
   
@@ -191,11 +191,31 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../../tutorials/developers/forkAndPullRequestGuidelines/" class="md-tabs__link">
+        <a href="../../tutorials/developers/forkAndPullRequestGuidelines/" class="md-tabs__link">
           
   
   
   Tutorials
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../howto/locallyRunningServices/" class="md-tabs__link">
+          
+  
+  
+  How-To Guides
 
         </a>
       </li>
@@ -213,27 +233,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../../../locallyRunningServices/" class="md-tabs__link">
-          
-  
-  
-  How-To Guides
-
-        </a>
-      </li>
-    
-  
-
-      
-        
-  
-  
-  
-  
-    
-    
-      <li class="md-tabs__item">
-        <a href="../../../../topics/teranodeIntro/" class="md-tabs__link">
+        <a href="../teranodeIntro/" class="md-tabs__link">
           
   
   
@@ -253,7 +253,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../../references/projectStructure/" class="md-tabs__link">
+        <a href="../../references/projectStructure/" class="md-tabs__link">
           
   
   
@@ -293,9 +293,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../../../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
+    <a href="../.." title="Teranode" class="md-nav__button md-logo" aria-label="Teranode" data-md-component="logo">
       
-  <img src="../../../../topics/architecture/img/bsvblockchain_logo.svg" alt="logo">
+  <img src="../architecture/img/bsvblockchain_logo.svg" alt="logo">
 
     </a>
     Teranode
@@ -310,7 +310,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../.." class="md-nav__link">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -391,7 +391,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tutorials/developers/forkAndPullRequestGuidelines/" class="md-nav__link">
+      <a href="../../tutorials/developers/forkAndPullRequestGuidelines/" class="md-nav__link">
         
   
   
@@ -419,7 +419,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tutorials/developers/developerSetup/" class="md-nav__link">
+      <a href="../../tutorials/developers/developerSetup/" class="md-nav__link">
         
   
   
@@ -447,7 +447,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../tutorials/miners/minersGettingStarted/" class="md-nav__link">
+      <a href="../../tutorials/miners/minersGettingStarted/" class="md-nav__link">
         
   
   
@@ -479,31 +479,28 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -521,7 +518,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -539,7 +536,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../locallyRunningServices/" class="md-nav__link">
+      <a href="../../howto/locallyRunningServices/" class="md-nav__link">
         
   
   
@@ -567,7 +564,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../howToRemoteDebugTeranode/" class="md-nav__link">
+      <a href="../../howto/howToRemoteDebugTeranode/" class="md-nav__link">
         
   
   
@@ -595,7 +592,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../generatingProtobuf/" class="md-nav__link">
+      <a href="../../howto/generatingProtobuf/" class="md-nav__link">
         
   
   
@@ -623,7 +620,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../addingNewProtobufServices/" class="md-nav__link">
+      <a href="../../howto/addingNewProtobufServices/" class="md-nav__link">
         
   
   
@@ -651,7 +648,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../configuringGrpcLogging/" class="md-nav__link">
+      <a href="../../howto/configuringGrpcLogging/" class="md-nav__link">
         
   
   
@@ -679,7 +676,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../runningTests/" class="md-nav__link">
+      <a href="../../howto/runningTests/" class="md-nav__link">
         
   
   
@@ -707,7 +704,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../automatedTestingHowTo/" class="md-nav__link">
+      <a href="../../howto/automatedTestingHowTo/" class="md-nav__link">
         
   
   
@@ -735,7 +732,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../chain-integrity-testing/" class="md-nav__link">
+      <a href="../../howto/chain-integrity-testing/" class="md-nav__link">
         
   
   
@@ -763,7 +760,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../makefile/" class="md-nav__link">
+      <a href="../../howto/makefile/" class="md-nav__link">
         
   
   
@@ -791,7 +788,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../bugReporting/" class="md-nav__link">
+      <a href="../../howto/bugReporting/" class="md-nav__link">
         
   
   
@@ -819,7 +816,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../developersHowToTeranodeCLI/" class="md-nav__link">
+      <a href="../../howto/developersHowToTeranodeCLI/" class="md-nav__link">
         
   
   
@@ -844,31 +841,28 @@
                 
   
   
-    
   
   
-  
     
     
     
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
         
           
-          
         
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12" checked>
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12" >
         
           
-          <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_12" id="__nav_3_12_label" tabindex="0">
             
   
   
@@ -886,7 +880,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_12_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_12_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_12">
             <span class="md-nav__icon md-icon"></span>
             
@@ -901,8 +895,6 @@
                 
   
   
-    
-  
   
   
     
@@ -915,11 +907,13 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_12_1" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_12_1" >
         
           
           <label class="md-nav__link" for="__nav_3_12_1" id="__nav_3_12_1_label" tabindex="0">
@@ -940,7 +934,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_1_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_3_12_1_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_12_1">
             <span class="md-nav__icon md-icon"></span>
             
@@ -958,7 +952,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToInstallation/" class="md-nav__link">
+      <a href="../../howto/miners/docker/minersHowToInstallation/" class="md-nav__link">
         
   
   
@@ -983,37 +977,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Kubernetes
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../howto/miners/kubernetes/minersHowToInstallation/" class="md-nav__link">
         
   
   
@@ -1029,320 +996,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#index" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Index
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#introduction" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Introduction
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#hardware-requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Hardware Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prerequisites
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#download-the-teranode-source-code" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Download the Teranode source code
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#deployment-with-minikube" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Deployment with Minikube
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deployment with Minikube">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#start-minikube" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Start Minikube
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-dependencies" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Deploy Dependencies
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deploy Dependencies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#create-namespace" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Create Namespace
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-backing-services" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Deploy Backing Services
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#create-persistent-volume-provider" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Create Persistent Volume Provider
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Create Persistent Volume Provider">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#standard-x86x64-systems" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Standard x86/x64 Systems
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#load-teranode-images" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Load Teranode Images
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Load Teranode Images">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#identify-available-versions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Identify Available Versions
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#set-image-versions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Set Image Versions
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#load-images-into-minikube" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Load Images into Minikube
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-teranode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Deploy Teranode
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deploy Teranode">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#install-teranode-operator" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Install Teranode Operator
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#apply-teranode-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Apply Teranode Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#start-syncing-process" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Start Syncing Process
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#verifying-the-deployment" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Verifying the Deployment
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#production-considerations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Production Considerations
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#resetting-teranode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Resetting Teranode
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#other-resources" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Other Resources
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1355,7 +1008,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
+      <a href="../../staging/TeranodePOC/AWS-POC-Setup/" class="md-nav__link">
         
   
   
@@ -1383,7 +1036,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToInstallationDeprecated/" class="md-nav__link">
+      <a href="../../howto/miners/kubernetes/minersHowToInstallationDeprecated/" class="md-nav__link">
         
   
   
@@ -1473,7 +1126,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToConfigureTheNode/" class="md-nav__link">
+      <a href="../../howto/miners/docker/minersHowToConfigureTheNode/" class="md-nav__link">
         
   
   
@@ -1501,7 +1154,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToConfigureTheNode/" class="md-nav__link">
+      <a href="../../howto/miners/kubernetes/minersHowToConfigureTheNode/" class="md-nav__link">
         
   
   
@@ -1529,7 +1182,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../minersHowToAerospikeTuning/" class="md-nav__link">
+      <a href="../../howto/miners/minersHowToAerospikeTuning/" class="md-nav__link">
         
   
   
@@ -1557,7 +1210,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../minersHowToInteractWithAssetServer/" class="md-nav__link">
+      <a href="../../howto/miners/minersHowToInteractWithAssetServer/" class="md-nav__link">
         
   
   
@@ -1585,7 +1238,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../minersHowToInteractWithFSM/" class="md-nav__link">
+      <a href="../../howto/miners/minersHowToInteractWithFSM/" class="md-nav__link">
         
   
   
@@ -1613,7 +1266,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../minersHowToInteractWithRPCServer/" class="md-nav__link">
+      <a href="../../howto/miners/minersHowToInteractWithRPCServer/" class="md-nav__link">
         
   
   
@@ -1703,7 +1356,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToStopStartDockerTeranode/" class="md-nav__link">
+      <a href="../../howto/miners/docker/minersHowToStopStartDockerTeranode/" class="md-nav__link">
         
   
   
@@ -1731,7 +1384,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
+      <a href="../../howto/miners/kubernetes/minersHowToStopStartKubernetesTeranode/" class="md-nav__link">
         
   
   
@@ -1821,7 +1474,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersUpdatingTeranode/" class="md-nav__link">
+      <a href="../../howto/miners/docker/minersUpdatingTeranode/" class="md-nav__link">
         
   
   
@@ -1849,7 +1502,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersUpdatingTeranode/" class="md-nav__link">
+      <a href="../../howto/miners/kubernetes/minersUpdatingTeranode/" class="md-nav__link">
         
   
   
@@ -1939,7 +1592,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersSecurityBestPractices/" class="md-nav__link">
+      <a href="../../howto/miners/docker/minersSecurityBestPractices/" class="md-nav__link">
         
   
   
@@ -1967,7 +1620,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersSecurityBestPractices/" class="md-nav__link">
+      <a href="../../howto/miners/kubernetes/minersSecurityBestPractices/" class="md-nav__link">
         
   
   
@@ -2057,7 +1710,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToTroubleshooting/" class="md-nav__link">
+      <a href="../../howto/miners/docker/minersHowToTroubleshooting/" class="md-nav__link">
         
   
   
@@ -2085,7 +1738,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToTroubleshooting/" class="md-nav__link">
+      <a href="../../howto/miners/kubernetes/minersHowToTroubleshooting/" class="md-nav__link">
         
   
   
@@ -2175,7 +1828,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToResetTeranode/" class="md-nav__link">
+      <a href="../../howto/miners/docker/minersHowToResetTeranode/" class="md-nav__link">
         
   
   
@@ -2203,7 +1856,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToResetTeranode/" class="md-nav__link">
+      <a href="../../howto/miners/kubernetes/minersHowToResetTeranode/" class="md-nav__link">
         
   
   
@@ -2293,7 +1946,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../docker/minersHowToSyncTheNode/" class="md-nav__link">
+      <a href="../../howto/miners/docker/minersHowToSyncTheNode/" class="md-nav__link">
         
   
   
@@ -2321,7 +1974,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../minersHowToSyncTheNode/" class="md-nav__link">
+      <a href="../../howto/miners/kubernetes/minersHowToSyncTheNode/" class="md-nav__link">
         
   
   
@@ -2411,7 +2064,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../minersHowToBackup/" class="md-nav__link">
+      <a href="../../howto/miners/minersHowToBackup/" class="md-nav__link">
         
   
   
@@ -2439,7 +2092,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../minersHowToCPUMiner/" class="md-nav__link">
+      <a href="../../howto/miners/minersHowToCPUMiner/" class="md-nav__link">
         
   
   
@@ -2467,7 +2120,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../minersHowToTeranodeCLI/" class="md-nav__link">
+      <a href="../../howto/miners/minersHowToTeranodeCLI/" class="md-nav__link">
         
   
   
@@ -2495,7 +2148,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../minersManagingDiskSpace/" class="md-nav__link">
+      <a href="../../howto/miners/minersManagingDiskSpace/" class="md-nav__link">
         
   
   
@@ -2523,7 +2176,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../minersHowToUseListenMode/" class="md-nav__link">
+      <a href="../../howto/miners/minersHowToUseListenMode/" class="md-nav__link">
         
   
   
@@ -2571,28 +2224,31 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
-        
-          
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
             
   
   
@@ -2610,7 +2266,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -2628,7 +2284,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/teranodeIntro/" class="md-nav__link">
+      <a href="../teranodeIntro/" class="md-nav__link">
         
   
   
@@ -2656,7 +2312,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/architecture/teranode-overall-system-design/" class="md-nav__link">
+      <a href="../architecture/teranode-overall-system-design/" class="md-nav__link">
         
   
   
@@ -2684,7 +2340,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/architecture/teranode-architecture-brief/" class="md-nav__link">
+      <a href="../architecture/teranode-architecture-brief/" class="md-nav__link">
         
   
   
@@ -2712,7 +2368,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/architecture/teranode-microservices-overview/" class="md-nav__link">
+      <a href="../architecture/teranode-microservices-overview/" class="md-nav__link">
         
   
   
@@ -2740,7 +2396,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/transactionLifecycle/" class="md-nav__link">
+      <a href="../transactionLifecycle/" class="md-nav__link">
         
   
   
@@ -2768,7 +2424,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/architecture/stateManagement/" class="md-nav__link">
+      <a href="../architecture/stateManagement/" class="md-nav__link">
         
   
   
@@ -2796,7 +2452,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../state-machine.diagram/" class="md-nav__link">
+      <a href="../../state-machine.diagram/" class="md-nav__link">
         
   
   
@@ -2824,7 +2480,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/architecture/understandingDoubleSpends/" class="md-nav__link">
+      <a href="../architecture/understandingDoubleSpends/" class="md-nav__link">
         
   
   
@@ -2852,7 +2508,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/technologyStack/" class="md-nav__link">
+      <a href="../technologyStack/" class="md-nav__link">
         
   
   
@@ -2880,7 +2536,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/understandingTheTestingFramework/" class="md-nav__link">
+      <a href="../understandingTheTestingFramework/" class="md-nav__link">
         
   
   
@@ -2908,7 +2564,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/functionalRequirementTests/" class="md-nav__link">
+      <a href="../functionalRequirementTests/" class="md-nav__link">
         
   
   
@@ -2942,10 +2598,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -2954,7 +2613,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_12" >
         
           
-          <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_12" id="__nav_4_12_label" tabindex="">
             
   
   
@@ -2990,7 +2649,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/features/two_phase_commit/" class="md-nav__link">
+      <a href="../features/two_phase_commit/" class="md-nav__link">
         
   
   
@@ -3018,7 +2677,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/features/peer_registry_reputation/" class="md-nav__link">
+      <a href="../features/peer_registry_reputation/" class="md-nav__link">
         
   
   
@@ -3046,7 +2705,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/features/utxo_lock_records/" class="md-nav__link">
+      <a href="../features/utxo_lock_records/" class="md-nav__link">
         
   
   
@@ -3082,7 +2741,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/dashboard/" class="md-nav__link">
+      <a href="../dashboard/" class="md-nav__link">
         
   
   
@@ -3107,10 +2766,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../../../topics/tui_tools/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TUI Tools
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -3126,6 +2812,214 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Index
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-node-status-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Node Status Monitor
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Node Status Monitor">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-dashboard-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1. Dashboard View
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-settings-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2. Settings View
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-health-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3. Health View
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-aerospike-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4. Aerospike View
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-keyboard-shortcuts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.5. Keyboard Shortcuts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-running-the-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.6. Running the Monitor
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-interactive-log-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Interactive Log Viewer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Interactive Log Viewer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-log-display" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1. Log Display
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2. Filtering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-error-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3. Error Summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-keyboard-shortcuts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4. Keyboard Shortcuts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-running-the-log-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5. Running the Log Viewer
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Related Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -3144,10 +3038,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -3156,7 +3053,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_15" >
         
           
-          <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_15" id="__nav_4_15_label" tabindex="">
             
   
   
@@ -3192,7 +3089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/alert/" class="md-nav__link">
+      <a href="../services/alert/" class="md-nav__link">
         
   
   
@@ -3220,7 +3117,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/assetServer/" class="md-nav__link">
+      <a href="../services/assetServer/" class="md-nav__link">
         
   
   
@@ -3248,7 +3145,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/blockAssembly/" class="md-nav__link">
+      <a href="../services/blockAssembly/" class="md-nav__link">
         
   
   
@@ -3276,7 +3173,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/blockValidation/" class="md-nav__link">
+      <a href="../services/blockValidation/" class="md-nav__link">
         
   
   
@@ -3304,7 +3201,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/blockchain/" class="md-nav__link">
+      <a href="../services/blockchain/" class="md-nav__link">
         
   
   
@@ -3332,7 +3229,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/propagation/" class="md-nav__link">
+      <a href="../services/propagation/" class="md-nav__link">
         
   
   
@@ -3360,7 +3257,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/subtreeValidation/" class="md-nav__link">
+      <a href="../services/subtreeValidation/" class="md-nav__link">
         
   
   
@@ -3388,7 +3285,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/validator/" class="md-nav__link">
+      <a href="../services/validator/" class="md-nav__link">
         
   
   
@@ -3430,10 +3327,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -3442,7 +3342,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_16" >
         
           
-          <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_16" id="__nav_4_16_label" tabindex="">
             
   
   
@@ -3478,7 +3378,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/blockPersister/" class="md-nav__link">
+      <a href="../services/blockPersister/" class="md-nav__link">
         
   
   
@@ -3506,7 +3406,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/p2p/" class="md-nav__link">
+      <a href="../services/p2p/" class="md-nav__link">
         
   
   
@@ -3534,7 +3434,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../P2P_NAT_TRAVERSAL/" class="md-nav__link">
+      <a href="../../P2P_NAT_TRAVERSAL/" class="md-nav__link">
         
   
   
@@ -3562,7 +3462,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/pruner/" class="md-nav__link">
+      <a href="../services/pruner/" class="md-nav__link">
         
   
   
@@ -3590,7 +3490,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/legacy/" class="md-nav__link">
+      <a href="../services/legacy/" class="md-nav__link">
         
   
   
@@ -3618,7 +3518,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/rpc/" class="md-nav__link">
+      <a href="../services/rpc/" class="md-nav__link">
         
   
   
@@ -3646,7 +3546,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/services/utxoPersister/" class="md-nav__link">
+      <a href="../services/utxoPersister/" class="md-nav__link">
         
   
   
@@ -3688,10 +3588,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -3700,7 +3603,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_17" >
         
           
-          <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_17" id="__nav_4_17_label" tabindex="">
             
   
   
@@ -3736,7 +3639,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/stores/blob/" class="md-nav__link">
+      <a href="../stores/blob/" class="md-nav__link">
         
   
   
@@ -3764,7 +3667,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/stores/utxo/" class="md-nav__link">
+      <a href="../stores/utxo/" class="md-nav__link">
         
   
   
@@ -3806,10 +3709,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -3818,7 +3724,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_18" >
         
           
-          <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_18" id="__nav_4_18_label" tabindex="">
             
   
   
@@ -3854,7 +3760,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/datamodel/block_data_model/" class="md-nav__link">
+      <a href="../datamodel/block_data_model/" class="md-nav__link">
         
   
   
@@ -3882,7 +3788,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/datamodel/block_header_data_model/" class="md-nav__link">
+      <a href="../datamodel/block_header_data_model/" class="md-nav__link">
         
   
   
@@ -3910,7 +3816,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/datamodel/subtree_data_model/" class="md-nav__link">
+      <a href="../datamodel/subtree_data_model/" class="md-nav__link">
         
   
   
@@ -3938,7 +3844,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/datamodel/transaction_data_model/" class="md-nav__link">
+      <a href="../datamodel/transaction_data_model/" class="md-nav__link">
         
   
   
@@ -3966,7 +3872,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/datamodel/utxo_data_model/" class="md-nav__link">
+      <a href="../datamodel/utxo_data_model/" class="md-nav__link">
         
   
   
@@ -4008,10 +3914,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -4020,7 +3929,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_19" >
         
           
-          <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_19" id="__nav_4_19_label" tabindex="">
             
   
   
@@ -4056,7 +3965,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/kafka/kafka/" class="md-nav__link">
+      <a href="../kafka/kafka/" class="md-nav__link">
         
   
   
@@ -4098,10 +4007,13 @@
       
       
         
+          
+          
+        
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
@@ -4110,7 +4022,7 @@
         <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_20" >
         
           
-          <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4_20" id="__nav_4_20_label" tabindex="">
             
   
   
@@ -4146,7 +4058,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../topics/commands/seeder/" class="md-nav__link">
+      <a href="../commands/seeder/" class="md-nav__link">
         
   
   
@@ -4243,7 +4155,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/projectStructure/" class="md-nav__link">
+      <a href="../../references/projectStructure/" class="md-nav__link">
         
   
   
@@ -4325,7 +4237,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/errorHandling/" class="md-nav__link">
+      <a href="../../references/errorHandling/" class="md-nav__link">
         
   
   
@@ -4353,7 +4265,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/glossary/" class="md-nav__link">
+      <a href="../../references/glossary/" class="md-nav__link">
         
   
   
@@ -4381,7 +4293,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/codingConventions/" class="md-nav__link">
+      <a href="../../references/codingConventions/" class="md-nav__link">
         
   
   
@@ -4409,7 +4321,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/kafkaMessageFormat/" class="md-nav__link">
+      <a href="../../references/kafkaMessageFormat/" class="md-nav__link">
         
   
   
@@ -4437,7 +4349,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/networkConsensusRules/" class="md-nav__link">
+      <a href="../../references/networkConsensusRules/" class="md-nav__link">
         
   
   
@@ -4519,7 +4431,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/alertProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/alertProto/" class="md-nav__link">
         
   
   
@@ -4547,7 +4459,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/assetProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/assetProto/" class="md-nav__link">
         
   
   
@@ -4575,7 +4487,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
   
@@ -4603,7 +4515,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/blockchainProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/blockchainProto/" class="md-nav__link">
         
   
   
@@ -4631,7 +4543,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/blockvalidationProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/blockvalidationProto/" class="md-nav__link">
         
   
   
@@ -4659,7 +4571,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
         
   
   
@@ -4687,7 +4599,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/p2pProto/" class="md-nav__link">
         
   
   
@@ -4715,7 +4627,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
   
@@ -4743,7 +4655,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/prunerProto/" class="md-nav__link">
         
   
   
@@ -4771,7 +4683,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/subtreevalidationProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/subtreevalidationProto/" class="md-nav__link">
         
   
   
@@ -4799,7 +4711,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/protobuf_docs/validatorProto/" class="md-nav__link">
+      <a href="../../references/protobuf_docs/validatorProto/" class="md-nav__link">
         
   
   
@@ -4897,7 +4809,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/alert_reference/" class="md-nav__link">
+      <a href="../../references/services/alert_reference/" class="md-nav__link">
         
   
   
@@ -4925,7 +4837,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/asset_reference/" class="md-nav__link">
+      <a href="../../references/services/asset_reference/" class="md-nav__link">
         
   
   
@@ -4953,7 +4865,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/blockassembly_reference/" class="md-nav__link">
+      <a href="../../references/services/blockassembly_reference/" class="md-nav__link">
         
   
   
@@ -4981,7 +4893,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/blockvalidation_reference/" class="md-nav__link">
+      <a href="../../references/services/blockvalidation_reference/" class="md-nav__link">
         
   
   
@@ -5009,7 +4921,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/blockchain_reference/" class="md-nav__link">
+      <a href="../../references/services/blockchain_reference/" class="md-nav__link">
         
   
   
@@ -5037,7 +4949,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/propagation_reference/" class="md-nav__link">
+      <a href="../../references/services/propagation_reference/" class="md-nav__link">
         
   
   
@@ -5065,7 +4977,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/subtreevalidation_reference/" class="md-nav__link">
+      <a href="../../references/services/subtreevalidation_reference/" class="md-nav__link">
         
   
   
@@ -5093,7 +5005,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/validator_reference/" class="md-nav__link">
+      <a href="../../references/services/validator_reference/" class="md-nav__link">
         
   
   
@@ -5183,7 +5095,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/blockpersister_reference/" class="md-nav__link">
+      <a href="../../references/services/blockpersister_reference/" class="md-nav__link">
         
   
   
@@ -5211,7 +5123,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/p2p_reference/" class="md-nav__link">
+      <a href="../../references/services/p2p_reference/" class="md-nav__link">
         
   
   
@@ -5239,7 +5151,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/legacy_reference/" class="md-nav__link">
+      <a href="../../references/services/legacy_reference/" class="md-nav__link">
         
   
   
@@ -5267,7 +5179,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/pruner_reference/" class="md-nav__link">
+      <a href="../../references/services/pruner_reference/" class="md-nav__link">
         
   
   
@@ -5295,7 +5207,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/rpc_reference/" class="md-nav__link">
+      <a href="../../references/services/rpc_reference/" class="md-nav__link">
         
   
   
@@ -5323,7 +5235,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/services/utxopersister_reference/" class="md-nav__link">
+      <a href="../../references/services/utxopersister_reference/" class="md-nav__link">
         
   
   
@@ -5413,7 +5325,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/stores/blob_reference/" class="md-nav__link">
+      <a href="../../references/stores/blob_reference/" class="md-nav__link">
         
   
   
@@ -5441,7 +5353,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/stores/utxo_reference/" class="md-nav__link">
+      <a href="../../references/stores/utxo_reference/" class="md-nav__link">
         
   
   
@@ -5531,7 +5443,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/" class="md-nav__link">
+      <a href="../../references/settings/" class="md-nav__link">
         
   
   
@@ -5559,7 +5471,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings_reference/" class="md-nav__link">
+      <a href="../../references/settings_reference/" class="md-nav__link">
         
   
   
@@ -5587,7 +5499,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/global_settings/" class="md-nav__link">
+      <a href="../../references/settings/global_settings/" class="md-nav__link">
         
   
   
@@ -5615,7 +5527,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/policy_settings/" class="md-nav__link">
+      <a href="../../references/settings/policy_settings/" class="md-nav__link">
         
   
   
@@ -5643,7 +5555,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/kafka_settings/" class="md-nav__link">
+      <a href="../../references/settings/kafka_settings/" class="md-nav__link">
         
   
   
@@ -5725,7 +5637,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/alert_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/alert_settings/" class="md-nav__link">
         
   
   
@@ -5753,7 +5665,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/asset_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/asset_settings/" class="md-nav__link">
         
   
   
@@ -5781,7 +5693,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/blockassembly_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/blockassembly_settings/" class="md-nav__link">
         
   
   
@@ -5809,7 +5721,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/blockchain_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/blockchain_settings/" class="md-nav__link">
         
   
   
@@ -5837,7 +5749,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/blockpersister_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/blockpersister_settings/" class="md-nav__link">
         
   
   
@@ -5865,7 +5777,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/blockvalidation_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/blockvalidation_settings/" class="md-nav__link">
         
   
   
@@ -5893,7 +5805,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/legacy_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/legacy_settings/" class="md-nav__link">
         
   
   
@@ -5921,7 +5833,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/p2p_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/p2p_settings/" class="md-nav__link">
         
   
   
@@ -5949,7 +5861,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/propagation_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/propagation_settings/" class="md-nav__link">
         
   
   
@@ -5977,7 +5889,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/pruner_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/pruner_settings/" class="md-nav__link">
         
   
   
@@ -6005,7 +5917,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/rpc_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/rpc_settings/" class="md-nav__link">
         
   
   
@@ -6033,7 +5945,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/subtreevalidation_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/subtreevalidation_settings/" class="md-nav__link">
         
   
   
@@ -6061,7 +5973,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/utxopersister_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/utxopersister_settings/" class="md-nav__link">
         
   
   
@@ -6089,7 +6001,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/services/validator_settings/" class="md-nav__link">
+      <a href="../../references/settings/services/validator_settings/" class="md-nav__link">
         
   
   
@@ -6179,7 +6091,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/stores/aerospike_settings/" class="md-nav__link">
+      <a href="../../references/settings/stores/aerospike_settings/" class="md-nav__link">
         
   
   
@@ -6207,7 +6119,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/stores/blob_settings/" class="md-nav__link">
+      <a href="../../references/settings/stores/blob_settings/" class="md-nav__link">
         
   
   
@@ -6235,7 +6147,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/settings/stores/utxo_settings/" class="md-nav__link">
+      <a href="../../references/settings/stores/utxo_settings/" class="md-nav__link">
         
   
   
@@ -6333,7 +6245,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../misc/BIP-239/" class="md-nav__link">
+      <a href="../../misc/BIP-239/" class="md-nav__link">
         
   
   
@@ -6361,7 +6273,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/gitCommitSigningSetupGuide/" class="md-nav__link">
+      <a href="../../references/gitCommitSigningSetupGuide/" class="md-nav__link">
         
   
   
@@ -6389,7 +6301,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/licenseInformation/" class="md-nav__link">
+      <a href="../../references/licenseInformation/" class="md-nav__link">
         
   
   
@@ -6417,7 +6329,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/prometheusMetrics/" class="md-nav__link">
+      <a href="../../references/prometheusMetrics/" class="md-nav__link">
         
   
   
@@ -6445,7 +6357,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/teranodeDaemonReference/" class="md-nav__link">
+      <a href="../../references/teranodeDaemonReference/" class="md-nav__link">
         
   
   
@@ -6473,7 +6385,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/testingTechnicalReference/" class="md-nav__link">
+      <a href="../../references/testingTechnicalReference/" class="md-nav__link">
         
   
   
@@ -6501,7 +6413,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../../references/thirdPartySoftwareRequirements/" class="md-nav__link">
+      <a href="../../references/thirdPartySoftwareRequirements/" class="md-nav__link">
         
   
   
@@ -6575,10 +6487,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#introduction" class="md-nav__link">
+  <a href="#1-overview" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Introduction
+        1. Overview
       
     </span>
   </a>
@@ -6586,55 +6498,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#hardware-requirements" class="md-nav__link">
+  <a href="#2-node-status-monitor" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Hardware Requirements
+        2. Node Status Monitor
       
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prerequisites
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#download-the-teranode-source-code" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Download the Teranode source code
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#deployment-with-minikube" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Deployment with Minikube
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deployment with Minikube">
+    <nav class="md-nav" aria-label="2. Node Status Monitor">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#start-minikube" class="md-nav__link">
+  <a href="#21-dashboard-view" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Start Minikube
+        2.1. Dashboard View
       
     </span>
   </a>
@@ -6642,22 +6521,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#deploy-dependencies" class="md-nav__link">
+  <a href="#22-settings-view" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deploy Dependencies
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deploy Dependencies">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#create-namespace" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Create Namespace
+        2.2. Settings View
       
     </span>
   </a>
@@ -6665,10 +6532,43 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#deploy-backing-services" class="md-nav__link">
+  <a href="#23-health-view" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deploy Backing Services
+        2.3. Health View
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-aerospike-view" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4. Aerospike View
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-keyboard-shortcuts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.5. Keyboard Shortcuts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#26-running-the-monitor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.6. Running the Monitor
       
     </span>
   </a>
@@ -6679,24 +6579,68 @@
     </nav>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#create-persistent-volume-provider" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#3-interactive-log-viewer" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Create Persistent Volume Provider
+        3. Interactive Log Viewer
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Create Persistent Volume Provider">
+    <nav class="md-nav" aria-label="3. Interactive Log Viewer">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#standard-x86x64-systems" class="md-nav__link">
+  <a href="#31-log-display" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Standard x86/x64 Systems
+        3.1. Log Display
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-filtering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2. Filtering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-error-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3. Error Summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-keyboard-shortcuts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4. Keyboard Shortcuts
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-running-the-log-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5. Running the Log Viewer
       
     </span>
   </a>
@@ -6707,150 +6651,12 @@
     </nav>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#load-teranode-images" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Load Teranode Images
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Load Teranode Images">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#identify-available-versions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Identify Available Versions
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#set-image-versions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Set Image Versions
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#load-images-into-minikube" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Load Images into Minikube
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-teranode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Deploy Teranode
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Deploy Teranode">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#install-teranode-operator" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Install Teranode Operator
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#apply-teranode-configuration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Apply Teranode Configuration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#start-syncing-process" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Start Syncing Process
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
       
         <li class="md-nav__item">
-  <a href="#verifying-the-deployment" class="md-nav__link">
+  <a href="#4-related-documentation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Verifying the Deployment
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#production-considerations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Production Considerations
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#resetting-teranode" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Resetting Teranode
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#other-resources" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Other Resources
+        4. Related Documentation
       
     </span>
   </a>
@@ -6874,197 +6680,466 @@
 
 
 
-<h1 id="how-to-install-teranode-with-kubernetes-helm">How to Install Teranode with Kubernetes Helm</h1>
-<p>Last modified: 29-October-2025</p>
+<h1 id="tui-tools">TUI Tools</h1>
 <h2 id="index">Index</h2>
-<ul>
-<li><a href="#introduction">Introduction</a></li>
-<li><a href="#prerequisites">Prerequisites</a></li>
-<li><a href="#deployment-with-minikube">Deployment with Minikube</a><ul>
-<li><a href="#start-minikube">Start Minikube</a></li>
-<li><a href="#deploy-dependencies">Deploy Dependencies</a></li>
-<li><a href="#create-persistent-volume-provider">Create Persistent Volume Provider</a></li>
-<li><a href="#load-teranode-images">Load Teranode Images</a></li>
-<li><a href="#deploy-teranode">Deploy Teranode</a></li>
-</ul>
-</li>
-<li><a href="#verifying-the-deployment">Verifying the Deployment</a></li>
-<li><a href="#production-considerations">Production Considerations</a></li>
-<li><a href="#other-resources">Other Resources</a></li>
-</ul>
-<h2 id="introduction">Introduction</h2>
-<p>This guide provides instructions for deploying Teranode in a Kubernetes environment. While this guide shows the steps to deploy on a single server cluster using Minikube, these configurations can be adapted for production use with appropriate modifications.</p>
-<p><img alt="kubernetesOperatorComponents.svg" src="../img/mermaid/kubernetesOperatorComponents.svg" /></p>
-<h2 id="hardware-requirements">Hardware Requirements</h2>
-<p>For detailed hardware specifications including per-service resource requirements, see the <a href="../../systemRequirements/">System Requirements</a> document.</p>
-<p>Kubernetes deployments require:</p>
-<ul>
-<li>Sufficient cluster resources for Teranode pods</li>
-<li>External dependencies (Aerospike, PostgreSQL, Kafka) deployed separately or as managed services</li>
-<li>ReadWriteMany (RWX) storage for shared blob storage</li>
-</ul>
-<h2 id="prerequisites">Prerequisites</h2>
-<p>Before you begin, ensure you have the following tools installed and configured:</p>
-<ul>
-<li><a href="https://docs.docker.com/get-docker/">Docker</a></li>
-<li><a href="https://minikube.sigs.k8s.io/docs/start/">Minikube</a></li>
-<li><a href="https://kubernetes.io/docs/tasks/tools/">kubectl</a></li>
-<li><a href="https://helm.sh/docs/intro/install/">Helm</a></li>
-</ul>
-<p>Additionally, ensure you have a storage provider capable of providing ReadWriteMany (RWX) storage. As an example, this guide includes setting up an NFS server via Docker for this purpose.</p>
-<p><img alt="miniKubeOperatorPrerequisites.svg" src="../img/mermaid/miniKubeOperatorPrerequisites.svg" /></p>
-<h2 id="download-the-teranode-source-code">Download the Teranode source code</h2>
-<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span><span class="nv">$YOUR_WORKING_DIR</span>
-git<span class="w"> </span>clone<span class="w"> </span>git@github.com:bsv-blockchain/teranode.git
-<span class="nb">cd</span><span class="w"> </span>teranode
-</code></pre></div>
-<h2 id="deployment-with-minikube">Deployment with Minikube</h2>
-<p>Minikube creates a local Kubernetes cluster on your machine. For running Teranode, we recommend the following process:</p>
-<p><img alt="KubernetesOperatorInstallationSteps.svg" src="../img/mermaid/KubernetesOperatorInstallationSteps.svg" /></p>
-<h3 id="start-minikube">Start Minikube</h3>
-<p>Start minikube with recommended resources and verify its status:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Start minikube with recommended resources</span>
-minikube<span class="w"> </span>start<span class="w"> </span>--cpus<span class="o">=</span><span class="m">4</span><span class="w"> </span>--memory<span class="o">=</span><span class="m">8192</span><span class="w"> </span>--disk-size<span class="o">=</span>20gb
-
-<span class="c1"># Verify minikube status</span>
-minikube<span class="w"> </span>status
-</code></pre></div>
-<h3 id="deploy-dependencies">Deploy Dependencies</h3>
-<p>Teranode requires several backing services. While these services should be deployed separately in production, for local development we'll deploy them within the same cluster.</p>
-<h4 id="create-namespace">Create Namespace</h4>
-<p>Create a namespace for the deployment:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>create<span class="w"> </span>namespace<span class="w"> </span>teranode-operator
-</code></pre></div>
-<h4 id="deploy-backing-services">Deploy Backing Services</h4>
-<p>Deploy all dependencies in the teranode namespace:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/aerospike/<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/postgres/<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/kafka/<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-</code></pre></div>
-<p>To know more, please refer to the <a href="../../../../references/thirdPartySoftwareRequirements/">Third Party Reference Documentation</a></p>
-<h3 id="create-persistent-volume-provider">Create Persistent Volume Provider</h3>
-<p>For this example, we will create a local folder and expose it to Minikube via a docker based NFS server.</p>
-<h4 id="standard-x86x64-systems">Standard x86/x64 Systems</h4>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>volume<span class="w"> </span>create<span class="w"> </span>nfs-volume
-
-docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--name<span class="w"> </span>nfs-server<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-e<span class="w"> </span><span class="nv">NFS_EXPORT_0</span><span class="o">=</span><span class="s1">&#39;/minikube-storage *(rw,no_subtree_check,fsid=0,no_root_squash)&#39;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-v<span class="w"> </span>nfs-volume:/minikube-storage<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--cap-add<span class="w"> </span>SYS_ADMIN<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-p<span class="w"> </span><span class="m">2049</span>:2049<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>erichough/nfs-server
-
-<span class="c1"># connect the nfs-server to the minikube network</span>
-docker<span class="w"> </span>network<span class="w"> </span>connect<span class="w"> </span>minikube<span class="w"> </span>nfs-server
-
-<span class="c1"># create the PersistentVolume</span>
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/nfs/
-</code></pre></div>
-<h3 id="load-teranode-images">Load Teranode Images</h3>
-<p>Pull and load the required Teranode images into Minikube:</p>
-<h4 id="identify-available-versions">Identify Available Versions</h4>
-<p>You can find the latest available version published on GitHub Container Registry:</p>
-<ul>
-<li><a href="https://github.com/bsv-blockchain/teranode/pkgs/container/teranode">https://github.com/bsv-blockchain/teranode/pkgs/container/teranode</a></li>
-<li><a href="https://github.com/bsv-blockchain/teranode-operator/pkgs/container/teranode-operator">https://github.com/bsv-blockchain/teranode-operator/pkgs/container/teranode-operator</a></li>
-</ul>
-<h4 id="set-image-versions">Set Image Versions</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Set image versions (please derive the right TERANODE_VERSION from the results of the previous command)</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">OPERATOR_VERSION</span><span class="o">=</span>v0.2.6
-<span class="nb">export</span><span class="w"> </span><span class="nv">TERANODE_VERSION</span><span class="o">=</span>v0.13.1
-<span class="nb">export</span><span class="w"> </span><span class="nv">GHCR_REGISTRY</span><span class="o">=</span>ghcr.io/bsv-blockchain
-</code></pre></div>
-<h4 id="load-images-into-minikube">Load Images into Minikube</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Load Teranode Operator</span>
-docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
-minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode-operator:<span class="nv">$OPERATOR_VERSION</span>
-
-<span class="c1"># Load Teranode Public</span>
-docker<span class="w"> </span>pull<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
-minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span><span class="nv">$GHCR_REGISTRY</span>/teranode:<span class="nv">$TERANODE_VERSION</span>
-</code></pre></div>
-<h3 id="deploy-teranode">Deploy Teranode</h3>
-<p>The Teranode Operator manages the lifecycle of Teranode instances:</p>
-<h4 id="install-teranode-operator">Install Teranode Operator</h4>
-<div class="highlight"><pre><span></span><code><span class="c1"># Install CRDs first</span>
-kubectl<span class="w"> </span>apply<span class="w"> </span>--server-side<span class="w"> </span>-f<span class="w"> </span>https://raw.githubusercontent.com/bsv-blockchain/teranode-operator/<span class="nv">$OPERATOR_VERSION</span>/deploy/crds.yaml
-<span class="c1"># Install operator</span>
-helm<span class="w"> </span>upgrade<span class="w"> </span>--install<span class="w"> </span>teranode-operator<span class="w"> </span>oci://ghcr.io/bsv-blockchain/helm/teranode-operator<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-operator.yaml
-</code></pre></div>
-<h4 id="apply-teranode-configuration">Apply Teranode Configuration</h4>
-<p>Apply the Teranode configuration and custom resources:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-configmap.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-cr.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-</code></pre></div>
-<p><strong>Network Configuration:</strong></p>
-<p>By default, this configuration deploys Teranode to connect to the <strong>teratestnet</strong> network. To connect to a different network:</p>
 <ol>
-<li>
-<p>Edit <code>deploy/kubernetes/teranode/teranode-configmap.yaml</code> and change the <code>network</code> setting:</p>
-<ul>
-<li>For BSV testnet: <code>network: "testnet"</code></li>
-<li>For BSV mainnet: <code>network: "mainnet"</code></li>
+<li><a href="#1-overview">Overview</a></li>
+<li><a href="#2-node-status-monitor">Node Status Monitor</a><ul>
+<li><a href="#21-dashboard-view">2.1. Dashboard View</a></li>
+<li><a href="#22-settings-view">2.2. Settings View</a></li>
+<li><a href="#23-health-view">2.3. Health View</a></li>
+<li><a href="#24-aerospike-view">2.4. Aerospike View</a></li>
+<li><a href="#25-keyboard-shortcuts">2.5. Keyboard Shortcuts</a></li>
+<li><a href="#26-running-the-monitor">2.6. Running the Monitor</a></li>
 </ul>
 </li>
-<li>
-<p>For <strong>testnet</strong> or <strong>mainnet</strong>, you must enable the legacy service in <code>deploy/kubernetes/teranode/teranode-cr.yaml</code>:</p>
-<div class="highlight"><pre><span></span><code><span class="nt">legacy</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<span class="w">  </span><span class="nt">spec</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">deploymentOverrides</span><span class="p">:</span>
-<span class="w">      </span><span class="nt">imagePullPolicy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Never</span>
-<span class="w">      </span><span class="nt">replicas</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<span class="w">      </span><span class="nt">resources</span><span class="p">:</span>
-<span class="w">        </span><span class="nt">requests</span><span class="p">:</span>
-<span class="w">          </span><span class="nt">cpu</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
-<span class="w">          </span><span class="nt">memory</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256Mi</span>
-</code></pre></div>
+<li><a href="#3-interactive-log-viewer">Interactive Log Viewer</a><ul>
+<li><a href="#31-log-display">3.1. Log Display</a></li>
+<li><a href="#32-filtering">3.2. Filtering</a></li>
+<li><a href="#33-error-summary">3.3. Error Summary</a></li>
+<li><a href="#34-keyboard-shortcuts">3.4. Keyboard Shortcuts</a></li>
+<li><a href="#35-running-the-log-viewer">3.5. Running the Log Viewer</a></li>
+</ul>
 </li>
-<li>
-<p>Apply the updated configuration:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-configmap.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>deploy/kubernetes/teranode/teranode-cr.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
-</code></pre></div>
-</li>
+<li><a href="#4-related-documentation">Related Documentation</a></li>
 </ol>
-<h4 id="start-syncing-process">Start Syncing Process</h4>
-<p>A fresh Teranode starts up in IDLE state by default. To start syncing from the network, you can run:</p>
-<div class="highlight"><pre><span></span><code>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.items[0].metadata.name}&#39;</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>-fsmstate<span class="w"> </span>running
-</code></pre></div>
-<p>To know more about the syncing process, please refer to the <a href="../minersHowToSyncTheNode/">Teranode Sync Guide</a></p>
-<h2 id="verifying-the-deployment">Verifying the Deployment</h2>
-<p><img alt="kubernetesOperatorVerification.svg" src="../img/mermaid/kubernetesOperatorVerification.svg" /></p>
-<p>To verify your deployment:</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># Check all pods are running</span>
-kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s1">&#39;aerospike|postgres|kafka|teranode-operator&#39;</span>
-
-<span class="c1"># Check Teranode services are ready</span>
-kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>ready<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--timeout<span class="o">=</span>300s
-
-<span class="c1"># View Teranode logs</span>
-kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-f
-</code></pre></div>
-<h2 id="production-considerations">Production Considerations</h2>
-<p>For production deployments, consider:</p>
+<h2 id="1-overview">1. Overview</h2>
+<p>Teranode includes two terminal-based monitoring tools in <code>teranode-cli</code>, both built with the <a href="https://github.com/charmbracelet/bubbletea">Bubble Tea</a> TUI framework and <a href="https://github.com/charmbracelet/lipgloss">Lip Gloss</a> for styling:</p>
 <ul>
-<li>Deploying dependencies (Aerospike, PostgreSQL, Kafka) in separate clusters or using managed services</li>
-<li>Implementing proper security measures (network policies, RBAC, etc.)</li>
-<li>Setting up monitoring and alerting</li>
-<li>Configuring appropriate resource requests and limits</li>
-<li>Setting up proper backup and disaster recovery procedures</li>
+<li><strong>Node Status Monitor</strong> (<code>teranode-cli monitor</code>) - a live dashboard showing blockchain state, FSM status, peer connections, service health, and Aerospike statistics.</li>
+<li><strong>Interactive Log Viewer</strong> (<code>teranode-cli logs</code>) - a real-time log tail with per-service color coding, filtering, text search, and transaction ID tracking.</li>
 </ul>
-<p>An example CR for a mainnet deployment is available in <a href="https://github.com/bsv-blockchain/teranode/blob/main/deploy/kubernetes/teranode/teranode-cr-mainnet.yaml">kubernetes/teranode/teranode-cr-mainnet.yaml</a>.</p>
-<h2 id="resetting-teranode">Resetting Teranode</h2>
-<p>If you need to reset your Teranode deployment, see the <a href="../minersHowToResetTeranode/">How to Reset Teranode</a> guide for complete instructions on cleaning up Aerospike, PostgreSQL, and persistent volumes.</p>
-<h2 id="other-resources">Other Resources</h2>
+<p>Both tools run in an alternate screen buffer and refresh automatically, providing a lightweight alternative to the <a href="../dashboard/">web dashboard</a> that requires no browser or additional dependencies.</p>
+<h2 id="2-node-status-monitor">2. Node Status Monitor</h2>
+<p>The monitor connects to Teranode's gRPC services and polls them every two seconds to display a consolidated view of node health.</p>
+<h3 id="21-dashboard-view">2.1. Dashboard View</h3>
+<p>The default view shows five panels arranged in a responsive layout (side-by-side on wide terminals, stacked on narrow ones):</p>
+<p><strong>Blockchain Panel</strong></p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Height</td>
+<td>Maximum chain height</td>
+</tr>
+<tr>
+<td>Blocks</td>
+<td>Total block count</td>
+</tr>
+<tr>
+<td>Transactions</td>
+<td>Total transaction count (formatted with commas)</td>
+</tr>
+<tr>
+<td>Avg Block Size</td>
+<td>Average block size in human-readable units (KB, MB, etc.)</td>
+</tr>
+<tr>
+<td>Avg Tx/Block</td>
+<td>Average transactions per block</td>
+</tr>
+<tr>
+<td>Last Block</td>
+<td>Time since the most recent block (e.g. "5m ago")</td>
+</tr>
+</tbody>
+</table>
+<p><strong>FSM State Panel</strong></p>
+<p>Displays the current Finite State Machine state with color coding:</p>
 <ul>
-<li><a href="../../../../references/thirdPartySoftwareRequirements/">Third Party Reference Documentation</a></li>
-<li><a href="../minersHowToSyncTheNode/">Teranode Sync Guide</a></li>
-<li><a href="../minersHowToResetTeranode/">How to Reset Teranode</a></li>
-<li><a href="../minersHowToConfigureTheNode/">How-To Configure the Node</a></li>
+<li>Green for "running"</li>
+<li>Yellow for "idle", "catching", or "sync" states (sync states also show a spinner)</li>
+<li>White for other states</li>
+</ul>
+<p>Below the state, connectivity indicators show whether the Blockchain and P2P services are reachable (green checkmark or red X).</p>
+<p><strong>Peers Panel</strong></p>
+<ul>
+<li>Connected and total known peer counts</li>
+<li>Top 5 connected peers sorted by height, showing truncated peer ID, height, and reputation score</li>
+<li>Reputation scores are color-coded: green (&gt;= 80), yellow (&gt;= 50), red (&lt; 50)</li>
+</ul>
+<p><strong>Services Health Row</strong></p>
+<p>A compact one-line summary using short labels and status icons:</p>
+<table>
+<thead>
+<tr>
+<th>Label</th>
+<th>Service</th>
+<th>Icons</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BC</td>
+<td>Blockchain</td>
+<td>checkmark = healthy, X = down, circle = not configured</td>
+</tr>
+<tr>
+<td>VAL</td>
+<td>Validator</td>
+<td>checkmark = healthy, X = down, circle = not configured</td>
+</tr>
+<tr>
+<td>BV</td>
+<td>Block Validation</td>
+<td>checkmark = healthy, X = down, circle = not configured</td>
+</tr>
+<tr>
+<td>BA</td>
+<td>Block Assembly</td>
+<td>checkmark = healthy, X = down, circle = not configured</td>
+</tr>
+<tr>
+<td>ST</td>
+<td>Subtree Validation</td>
+<td>checkmark = healthy, X = down, circle = not configured</td>
+</tr>
+<tr>
+<td>P2P</td>
+<td>P2P</td>
+<td>checkmark = healthy, X = down, circle = not configured</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Aerospike Summary Row</strong></p>
+<p>A one-line status showing connection state, namespace name, node count, object count, disk usage percentage, and alert indicators for overloads, key contention, low available space, or low memory.</p>
+<h3 id="22-settings-view">2.2. Settings View</h3>
+<p>Press <code>s</code> to switch to a scrollable display of the loaded Teranode settings, grouped by section:</p>
+<ul>
+<li><strong>General</strong> - version, commit, network, data folder, log level</li>
+<li><strong>Blockchain</strong> - gRPC address, listen address, HTTP listen, store URL</li>
+<li><strong>P2P</strong> - gRPC address, listen address, HTTP address, port, listen mode, DHT mode, bootstrap/static peer counts</li>
+<li><strong>Validator</strong> - gRPC address, listen address</li>
+<li><strong>Block Assembly</strong> - disabled flag, gRPC address, listen address</li>
+<li><strong>Kafka</strong> - hosts, port, partitions</li>
+<li><strong>Aerospike</strong> - host, port</li>
+<li><strong>Asset</strong> - HTTP address, listen address</li>
+</ul>
+<p>The current settings context is shown at the top. Values that are not set appear as "(not set)".</p>
+<h3 id="23-health-view">2.3. Health View</h3>
+<p>Press <code>h</code> to switch to a detailed service health table:</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SERVICE</td>
+<td>Service name (Blockchain, Validator, Block Validation, Block Assembly, Subtree Validation, P2P)</td>
+</tr>
+<tr>
+<td>STATUS</td>
+<td>Health status with icon (checkmark OK, X DOWN, circle N/A)</td>
+</tr>
+<tr>
+<td>LATENCY</td>
+<td>Response time in milliseconds (or "-" if not applicable)</td>
+</tr>
+<tr>
+<td>MESSAGE</td>
+<td>Status message (e.g. "OK", "Connection failed", "3 peers connected")</td>
+</tr>
+</tbody>
+</table>
+<h3 id="24-aerospike-view">2.4. Aerospike View</h3>
+<p>Press <code>a</code> to switch to a scrollable detailed Aerospike statistics view containing:</p>
+<p><strong>Cluster Info</strong> - node count, open connections, namespace name, node names.</p>
+<p><strong>Per-Node Stats</strong> - for each node: host address, cluster size, uptime, free memory percentage, client connections, batch/scan queue depths.</p>
+<p><strong>Namespace Statistics</strong> (aggregated across nodes for multi-node clusters):</p>
+<ul>
+<li>Disk usage (used/total with percentage)</li>
+<li>Critical flags: <code>stop_writes</code>, <code>clock_skew_stop_writes</code>, <code>hwm_breached</code> (highlighted in red if non-zero)</li>
+<li>Storage metrics: available percentage, memory usage, index usage, cache read percentage</li>
+<li>Object metrics: objects, tombstones, evicted/expired/truncated counts</li>
+<li>Throughput metrics: read/write successes, errors, and timeouts (errors highlighted in red)</li>
+<li>Migration metrics (shown only when non-zero)</li>
+</ul>
+<p><strong>Latencies</strong> - operation latency histograms from the Aerospike server.</p>
+<h3 id="25-keyboard-shortcuts">2.5. Keyboard Shortcuts</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>q</code>, <code>Ctrl+C</code></td>
+<td>Quit</td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>Return to dashboard (or quit if already on dashboard)</td>
+</tr>
+<tr>
+<td><code>r</code></td>
+<td>Force refresh</td>
+</tr>
+<tr>
+<td><code>s</code></td>
+<td>Toggle settings view</td>
+</tr>
+<tr>
+<td><code>h</code></td>
+<td>Toggle health view</td>
+</tr>
+<tr>
+<td><code>a</code></td>
+<td>Toggle Aerospike view</td>
+</tr>
+<tr>
+<td><code>j</code> / <code>Down</code></td>
+<td>Scroll down (in settings/Aerospike views)</td>
+</tr>
+<tr>
+<td><code>k</code> / <code>Up</code></td>
+<td>Scroll up (in settings/Aerospike views)</td>
+</tr>
+<tr>
+<td><code>g</code> / <code>Home</code></td>
+<td>Scroll to top (in settings/Aerospike views)</td>
+</tr>
+<tr>
+<td><code>G</code> / <code>End</code></td>
+<td>Scroll to bottom (in settings/Aerospike views)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="26-running-the-monitor">2.6. Running the Monitor</h3>
+<p><strong>Build:</strong></p>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>build-teranode-cli
+</code></pre></div>
+<p><strong>Launch:</strong></p>
+<div class="highlight"><pre><span></span><code>./teranode-cli<span class="w"> </span>monitor
+</code></pre></div>
+<p>The monitor reads Teranode's <code>settings.conf</code> (and <code>settings_local.conf</code> if present) to discover service addresses. At minimum, the Blockchain and P2P gRPC addresses must be configured for the dashboard to display data. Other services (Validator, Block Validation, Block Assembly, Subtree Validation, Aerospike) are optional and will show as "Not configured" if their addresses are not set.</p>
+<h2 id="3-interactive-log-viewer">3. Interactive Log Viewer</h2>
+<p>The log viewer tails a Teranode log file in real time, parsing each line into structured fields and rendering them with color coding and alignment.</p>
+<h3 id="31-log-display">3.1. Log Display</h3>
+<p>Each parsed log line is displayed with the following columns:</p>
+<div class="highlight"><pre><span></span><code>HH:MM:SS  LEVEL  SERVICE   Message text...
+</code></pre></div>
+<ul>
+<li><strong>Timestamp</strong> - displayed in gray (<code>HH:MM:SS</code> format)</li>
+<li><strong>Level</strong> - color-coded: gray (DEBUG), blue (INFO), yellow (WARN), red (ERROR), magenta (FATAL)</li>
+<li><strong>Service</strong> - padded to 8 characters, each service gets a distinct color:</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Color</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>p2p</td>
+<td>Green</td>
+</tr>
+<tr>
+<td>bchn</td>
+<td>Purple</td>
+</tr>
+<tr>
+<td>validator / valid</td>
+<td>Blue</td>
+</tr>
+<tr>
+<td>prop</td>
+<td>Orange</td>
+</tr>
+<tr>
+<td>ba</td>
+<td>Pink</td>
+</tr>
+<tr>
+<td>rpc</td>
+<td>Cyan</td>
+</tr>
+<tr>
+<td>asset</td>
+<td>Gold</td>
+</tr>
+<tr>
+<td>alert</td>
+<td>Red</td>
+</tr>
+<tr>
+<td>pruner</td>
+<td>Light purple</td>
+</tr>
+<tr>
+<td>legacy</td>
+<td>Gray</td>
+</tr>
+</tbody>
+</table>
+<p>Lines that do not match the expected log format are displayed as raw text in gray.</p>
+<p>The header shows:</p>
+<ul>
+<li><strong>Title</strong> ("TERANODE LOGS")</li>
+<li><strong>Rate sparkline</strong> - a Unicode block-character graph showing log frequency over the last 30 seconds, with a current rate counter (e.g. "42/s"). Toggle with <code>r</code>.</li>
+<li><strong>Status indicator</strong> - "LIVE" (green) or "PAUSED" (yellow)</li>
+<li><strong>Line counts</strong> - filtered line count and total count (if different)</li>
+</ul>
+<h3 id="32-filtering">3.2. Filtering</h3>
+<p>The log viewer supports four types of filters that can be combined:</p>
+<p><strong>Service Filter</strong> (<code>s</code>)</p>
+<p>Enter a comma-separated list of service names to show only those services. Press <code>Tab</code> to autocomplete from discovered service names. Services are discovered automatically as log entries are parsed.</p>
+<p><strong>Log Level Filter</strong> (<code>+</code> / <code>-</code>)</p>
+<p>Increase or decrease the minimum log level to display. The hierarchy is: DEBUG &lt; INFO &lt; WARN &lt; ERROR &lt; FATAL. The default shows all levels.</p>
+<p><strong>Text Search</strong> (<code>/</code>)</p>
+<p>Enter a search string to filter log entries. Matches are case-insensitive and search across the message, service name, and caller fields. Matching text is highlighted with a yellow background.</p>
+<p><strong>Transaction ID Search</strong> (<code>t</code>)</p>
+<p>Enter a 64-character hex transaction ID to filter logs to only entries containing that ID. The ID is highlighted in matching lines.</p>
+<p>All filters can be cleared at once with <code>c</code>. The current filter state is shown in the status bar at the bottom (e.g. "Filter: WARN+ | p2p,validator | "search text" | tx:abcd1234...").</p>
+<h3 id="33-error-summary">3.3. Error Summary</h3>
+<p>Press <code>e</code> to toggle the error summary panel. This shows a 5-minute sliding window of error and warning counts per service, sorted by total count (descending). The panel displays up to 4 services plus a total, in the format:</p>
+<div class="highlight"><pre><span></span><code>ERRORS (5m): service1: 3E 2W | service2: 1E 0W | Total: 4E 2W
+</code></pre></div>
+<p>Error counts are shown in red and warning counts in yellow.</p>
+<h3 id="34-keyboard-shortcuts">3.4. Keyboard Shortcuts</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Navigation</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>j</code> / <code>k</code>, <code>Up</code> / <code>Down</code></td>
+<td>Scroll up/down one line</td>
+</tr>
+<tr>
+<td><code>g</code> / <code>G</code>, <code>Home</code> / <code>End</code></td>
+<td>Go to top/bottom</td>
+</tr>
+<tr>
+<td><code>PgUp</code> / <code>PgDn</code></td>
+<td>Page up/down</td>
+</tr>
+<tr>
+<td><code>Ctrl+U</code> / <code>Ctrl+D</code></td>
+<td>Half page up/down</td>
+</tr>
+<tr>
+<td><strong>Filtering</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>/</code></td>
+<td>Open text search</td>
+</tr>
+<tr>
+<td><code>s</code></td>
+<td>Open service filter</td>
+</tr>
+<tr>
+<td><code>t</code></td>
+<td>Open transaction ID search</td>
+</tr>
+<tr>
+<td><code>+</code> / <code>-</code></td>
+<td>Increase/decrease minimum log level</td>
+</tr>
+<tr>
+<td><code>c</code></td>
+<td>Clear all filters</td>
+</tr>
+<tr>
+<td><code>Tab</code></td>
+<td>Autocomplete service name (in filter mode)</td>
+</tr>
+<tr>
+<td><strong>Controls</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><code>p</code>, <code>Space</code></td>
+<td>Pause/resume auto-scroll</td>
+</tr>
+<tr>
+<td><code>m</code></td>
+<td>Toggle mouse mode (off enables text selection for copy)</td>
+</tr>
+<tr>
+<td><code>e</code></td>
+<td>Toggle error summary panel</td>
+</tr>
+<tr>
+<td><code>r</code></td>
+<td>Toggle rate sparkline graph</td>
+</tr>
+<tr>
+<td><code>?</code></td>
+<td>Toggle full help screen</td>
+</tr>
+<tr>
+<td><code>q</code>, <code>Ctrl+C</code></td>
+<td>Quit</td>
+</tr>
+<tr>
+<td><code>Esc</code></td>
+<td>Cancel current input / close help</td>
+</tr>
+<tr>
+<td><code>Enter</code></td>
+<td>Confirm current input</td>
+</tr>
+</tbody>
+</table>
+<h3 id="35-running-the-log-viewer">3.5. Running the Log Viewer</h3>
+<p><strong>Build:</strong></p>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>build-teranode-cli
+</code></pre></div>
+<p><strong>Launch:</strong></p>
+<div class="highlight"><pre><span></span><code>./teranode-cli<span class="w"> </span>logs<span class="w"> </span><span class="o">[</span>--file<span class="w"> </span>&lt;path&gt;<span class="o">]</span><span class="w"> </span><span class="o">[</span>--buffer<span class="w"> </span>&lt;size&gt;<span class="o">]</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--file</code></td>
+<td><code>./logs/teranode.log</code></td>
+<td>Path to the log file to tail</td>
+</tr>
+<tr>
+<td><code>--buffer</code></td>
+<td><code>10000</code></td>
+<td>Number of log entries to keep in memory</td>
+</tr>
+</tbody>
+</table>
+<p>The log viewer requires Teranode to be running with log output directed to a file. The recommended way is to use the log rotation script:</p>
+<div class="highlight"><pre><span></span><code>./scripts/run-teranode-with-logrotate.sh
+</code></pre></div>
+<p>The viewer reads the last 1,000 lines on startup and then tails new entries in real time.</p>
+<h2 id="4-related-documentation">4. Related Documentation</h2>
+<ul>
+<li><a href="../dashboard/">Dashboard</a> - web-based monitoring UI</li>
+<li><a href="../../references/settings/">Settings Overview</a> - configuration reference for service addresses</li>
+<li><a href="../services/blockchain/">Blockchain Service</a> - FSM states and blockchain gRPC API</li>
+<li><a href="../services/p2p/">P2P Service</a> - peer management and P2P gRPC API</li>
 </ul>
 
 
@@ -7130,12 +7205,12 @@ kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.instant", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
       
-        <script src="../../../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
+        <script src="../../assets/external/unpkg.com/mermaid@11/dist/mermaid.min.js"></script>
       
     
   </body>
