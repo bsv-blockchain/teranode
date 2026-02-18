@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -7014,29 +7126,39 @@
 </table>
 <h4 id="debug-toggle-details">Debug Toggle Details</h4>
 <p><strong>Prerequisites</strong>: All debug toggles require <code>logLevel = DEBUG</code> to emit logs. Setting a debug flag without DEBUG log level has no effect.</p>
-<p><strong><code>debug_file</code></strong> - Low-level filesystem operations:
-- Detailed logs of file system I/O operations
-- File paths, byte counts, checksums, DAH cleanup operations
-- Use when debugging: disk space issues, file I/O problems, filesystem-level errors
-- Example logs: <code>"[File] SetFromReader start key=... type=... size=..."</code>, <code>"[File] removing expired file: ..."</code></p>
-<p><strong><code>debug_blobstore</code></strong> - High-level blob store API tracing:
-- Logs all blob store API calls (Get, Set, Exists, Del, etc.) with 5-level deep call stacks
-- Shows which code is calling blob store operations and why
-- Use when debugging: application-level blob access patterns, API usage tracking
-- Example logs: <code>"[BlobStore][logger][Get] key ... fileType ... : called from ..."</code>
-- Note: Only active when <code>?logger=true</code> is set in blob store URL configuration</p>
-<p><strong><code>debug_utxostore</code></strong> - UTXO store file operations:
-- Similar to <code>debug_file</code> but specific to UTXO store file operations
-- Use when debugging UTXO-specific storage issues</p>
-<p><strong><code>debug_all</code></strong> - Enable all subsystems:
-- Shortcut to enable all debug flags at once
-- Equivalent to setting all individual flags to true
-- Use for comprehensive debugging or when you're unsure which subsystem is involved</p>
+<p><strong><code>debug_file</code></strong> - Low-level filesystem operations:</p>
+<ul>
+<li>Detailed logs of file system I/O operations</li>
+<li>File paths, byte counts, checksums, DAH cleanup operations</li>
+<li>Use when debugging: disk space issues, file I/O problems, filesystem-level errors</li>
+<li>Example logs: <code>"[File] SetFromReader start key=... type=... size=..."</code>, <code>"[File] removing expired file: ..."</code></li>
+</ul>
+<p><strong><code>debug_blobstore</code></strong> - High-level blob store API tracing:</p>
+<ul>
+<li>Logs all blob store API calls (Get, Set, Exists, Del, etc.) with 5-level deep call stacks</li>
+<li>Shows which code is calling blob store operations and why</li>
+<li>Use when debugging: application-level blob access patterns, API usage tracking</li>
+<li>Example logs: <code>"[BlobStore][logger][Get] key ... fileType ... : called from ..."</code></li>
+<li>Note: Only active when <code>?logger=true</code> is set in blob store URL configuration</li>
+</ul>
+<p><strong><code>debug_utxostore</code></strong> - UTXO store file operations:</p>
+<ul>
+<li>Similar to <code>debug_file</code> but specific to UTXO store file operations</li>
+<li>Use when debugging UTXO-specific storage issues</li>
+</ul>
+<p><strong><code>debug_all</code></strong> - Enable all subsystems:</p>
+<ul>
+<li>Shortcut to enable all debug flags at once</li>
+<li>Equivalent to setting all individual flags to true</li>
+<li>Use for comprehensive debugging or when you're unsure which subsystem is involved</li>
+</ul>
 <h4 id="hierarchical-relationships">Hierarchical Relationships</h4>
-<p>Debug flags have hierarchical dependencies:
-- <code>debug_file = true</code> → enables both File logs AND Blobstore logs (when <code>?logger=true</code> is set)
-- <code>debug_blobstore = true</code> → enables only Blobstore logs
-- <code>debug_all = true</code> → enables ALL debug logs across all subsystems</p>
+<p>Debug flags have hierarchical dependencies:</p>
+<ul>
+<li><code>debug_file = true</code> → enables both File logs AND Blobstore logs (when <code>?logger=true</code> is set)</li>
+<li><code>debug_blobstore = true</code> → enables only Blobstore logs</li>
+<li><code>debug_all = true</code> → enables ALL debug logs across all subsystems</li>
+</ul>
 <p>This hierarchy exists because file-level operations are the foundation of blob store operations. When debugging filesystem issues, you typically want to see both layers.</p>
 <h3 id="http-security-settings">HTTP Security Settings</h3>
 <table>

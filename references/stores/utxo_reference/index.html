@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -5052,6 +5164,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#blockstate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BlockState
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#spend" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5193,6 +5316,17 @@
     <span class="md-ellipsis">
       
         Mock Implementation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
       
     </span>
   </a>
@@ -6339,6 +6473,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#blockstate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BlockState
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#spend" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6486,6 +6631,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6507,6 +6663,13 @@
 <h2 id="overview">Overview</h2>
 <p>The UTXO (Unspent Transaction Output) Store provides an interface for managing and querying UTXO data in a blockchain system.</p>
 <h2 id="core-types">Core Types</h2>
+<h3 id="blockstate">BlockState</h3>
+<p>An atomic snapshot of both block height and median block time, preventing race conditions when reading these values separately.</p>
+<div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">BlockState</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">Height</span><span class="w">     </span><span class="kt">uint32</span><span class="w"> </span><span class="c1">// Current block height</span>
+<span class="w">    </span><span class="nx">MedianTime</span><span class="w"> </span><span class="kt">uint32</span><span class="w"> </span><span class="c1">// Median time of recent blocks</span>
+<span class="p">}</span>
+</code></pre></div>
 <h3 id="spend">Spend</h3>
 <p>Represents a UTXO being spent.</p>
 <div class="highlight"><pre><span></span><code><span class="kd">type</span><span class="w"> </span><span class="nx">Spend</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
@@ -6662,11 +6825,11 @@
 <span class="w">    </span><span class="c1">// GetSpend retrieves information about a UTXO&#39;s spend status.</span>
 <span class="w">    </span><span class="nx">GetSpend</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">spend</span><span class="w"> </span><span class="o">*</span><span class="nx">Spend</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">SpendResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 
-<span class="w">    </span><span class="c1">// GetMeta retrieves transaction metadata.</span>
-<span class="w">    </span><span class="nx">GetMeta</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">meta</span><span class="p">.</span><span class="nx">Data</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<span class="w">    </span><span class="c1">// GetMeta retrieves transaction metadata into the provided data object.</span>
+<span class="w">    </span><span class="nx">GetMeta</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">data</span><span class="w"> </span><span class="o">*</span><span class="nx">meta</span><span class="p">.</span><span class="nx">Data</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 
 <span class="w">    </span><span class="c1">// Spend marks all the UTXOs of the transaction as spent.</span>
-<span class="w">    </span><span class="nx">Spend</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">ignoreFlags</span><span class="w"> </span><span class="o">...</span><span class="nx">IgnoreFlags</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="o">*</span><span class="nx">Spend</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<span class="w">    </span><span class="nx">Spend</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">tx</span><span class="w"> </span><span class="o">*</span><span class="nx">bt</span><span class="p">.</span><span class="nx">Tx</span><span class="p">,</span><span class="w"> </span><span class="nx">blockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">ignoreFlags</span><span class="w"> </span><span class="o">...</span><span class="nx">IgnoreFlags</span><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="o">*</span><span class="nx">Spend</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 
 <span class="w">    </span><span class="c1">// Unspend reverses a previous spend operation, marking UTXOs as unspent.</span>
 <span class="w">    </span><span class="c1">// This is used during blockchain reorganizations.</span>
@@ -6724,10 +6887,22 @@
 <span class="w">    </span><span class="c1">// GetMedianBlockTime returns the current median block time from the store.</span>
 <span class="w">    </span><span class="nx">GetMedianBlockTime</span><span class="p">()</span><span class="w"> </span><span class="kt">uint32</span>
 
+<span class="w">    </span><span class="c1">// GetBlockState returns an atomic snapshot of both block height and median block time.</span>
+<span class="w">    </span><span class="c1">// This prevents race conditions that could occur when reading these values separately,</span>
+<span class="w">    </span><span class="c1">// ensuring consistency during validation operations.</span>
+<span class="w">    </span><span class="nx">GetBlockState</span><span class="p">()</span><span class="w"> </span><span class="nx">BlockState</span>
+
 <span class="w">    </span><span class="c1">// GetUnminedTxIterator returns an iterator for all unmined transactions in the store.</span>
 <span class="w">    </span><span class="c1">// This is used by the Block Assembly service to recover transactions on startup.</span>
 <span class="w">    </span><span class="c1">// The fullScan parameter determines whether to perform a full scan of all transactions.</span>
 <span class="w">    </span><span class="nx">GetUnminedTxIterator</span><span class="p">(</span><span class="nx">fullScan</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">UnminedTxIterator</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+
+<span class="w">    </span><span class="c1">// GetPrunableUnminedTxIterator returns a lightweight iterator optimized for the pruner&#39;s needs.</span>
+<span class="w">    </span><span class="c1">// Unlike GetUnminedTxIterator, this iterator:</span>
+<span class="w">    </span><span class="c1">// - Filters server-side for only unmined transactions with unminedSince &lt;= cutoffBlockHeight</span>
+<span class="w">    </span><span class="c1">// - Fetches only the bins needed by the pruner (txID, unminedSince, external, inputs)</span>
+<span class="w">    </span><span class="c1">// This reduces bandwidth by 90-99%+ compared to the full iterator when the mempool is large.</span>
+<span class="w">    </span><span class="nx">GetPrunableUnminedTxIterator</span><span class="p">(</span><span class="nx">cutoffBlockHeight</span><span class="w"> </span><span class="kt">uint32</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">UnminedTxIterator</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 
 <span class="w">    </span><span class="c1">// QueryOldUnminedTransactions returns transaction hashes for unmined transactions older than the cutoff height.</span>
 <span class="w">    </span><span class="c1">// This method is used by the store-agnostic cleanup implementation to identify transactions for removal.</span>
@@ -6763,6 +6938,8 @@
 <li><code>ReAssignUTXO</code>: Reassigns a UTXO to a new transaction output with safety measures.</li>
 <li><code>GetCounterConflicting</code>/<code>GetConflictingChildren</code>: Manages conflict relationships between transactions.</li>
 <li><code>SetBlockHeight</code>/<code>GetBlockHeight</code>/<code>SetMedianBlockTime</code>/<code>GetMedianBlockTime</code>: Manages blockchain state.</li>
+<li><code>GetBlockState</code>: Returns an atomic snapshot of block height and median block time.</li>
+<li><code>GetPrunableUnminedTxIterator</code>: Lightweight iterator optimized for pruner, reduces bandwidth by 90-99%+.</li>
 <li><code>GetUnminedTxIterator</code>: Returns an iterator for efficiently accessing all unmined transactions.</li>
 <li><code>QueryOldUnminedTransactions</code>: Identifies unmined transactions older than a specified block height for cleanup.</li>
 <li><code>PreserveTransactions</code>: Protects transactions from deletion by setting a preservation period.</li>
@@ -6784,6 +6961,11 @@
 </ul>
 <h2 id="mock-implementation">Mock Implementation</h2>
 <p>The <code>MockUtxostore</code> struct provides a mock implementation of the <code>Store</code> interface for testing purposes.</p>
+<h2 id="related-documents">Related Documents</h2>
+<ul>
+<li><a href="../../../topics/stores/utxo/">UTXO Store Topic Guide</a></li>
+<li><a href="../../settings/stores/utxo_settings/">UTXO Store Settings</a></li>
+</ul>
 
 
 

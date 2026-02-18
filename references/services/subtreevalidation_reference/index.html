@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -5186,6 +5298,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
   
 </li>
       
@@ -7230,6 +7353,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -7467,7 +7601,7 @@
 <li><strong>Structured responses</strong>: Appropriate gRPC status codes</li>
 <li><strong>Orphan processing</strong>: Handles orphaned transactions after subtree validation</li>
 </ul>
-<div class="admonition check">
+<div class="admonition success">
 <p class="admonition-title">Validation Criteria</p>
 <p>The validation process ensures that:</p>
 <ul>
@@ -7620,7 +7754,7 @@
 <span class="w">    </span><span class="nx">blockIds</span><span class="w"> </span><span class="kd">map</span><span class="p">[</span><span class="kt">uint32</span><span class="p">]</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="nx">validationOptions</span><span class="w"> </span><span class="o">...</span><span class="nx">validator</span><span class="p">.</span><span class="nx">Option</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
 <p>Handles the retrieval and validation of missing transactions in a subtree, coordinating both the retrieval process and the validation workflow. This method is a critical part of the subtree validation process.</p>
-<div class="admonition important">
+<div class="admonition warning">
 <p class="admonition-title">Key Responsibilities</p>
 <ol>
 <li><strong>Retrieving transactions</strong> that are referenced in the subtree but not available locally</li>
@@ -7719,7 +7853,7 @@
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">consumerMessageHandler</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="kd">func</span><span class="p">(</span><span class="nx">msg</span><span class="w"> </span><span class="o">*</span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaMessage</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </code></pre></div>
 <p>Returns a function that processes Kafka messages for subtree validation. It handles both recoverable and unrecoverable errors appropriately. The handler includes sophisticated error categorization to determine whether errors should result in message reprocessing or rejection.</p>
-<div class="admonition gear">
+<div class="admonition info">
 <p class="admonition-title">Handler Features</p>
 <p>Key features include:</p>
 <ul>
@@ -7759,6 +7893,13 @@
 <li><strong>Block notifications</strong>: Processes block addition notifications</li>
 <li><strong>State synchronization</strong>: Updates best block information on block events</li>
 <li><strong>Graceful shutdown</strong>: Properly handles context cancellation</li>
+</ul>
+<h2 id="related-documents">Related Documents</h2>
+<ul>
+<li><a href="../../../topics/services/subtreeValidation/">Subtree Validation Topic Guide</a></li>
+<li><a href="../../settings/services/subtreevalidation_settings/">Subtree Validation Settings</a></li>
+<li><a href="../../protobuf_docs/subtreevalidationProto/">Subtree Validation Protobuf Reference</a></li>
+<li><a href="../../prometheusMetrics/">Prometheus Metrics</a></li>
 </ul>
 
 

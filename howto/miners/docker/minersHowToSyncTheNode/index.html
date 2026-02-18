@@ -5052,6 +5052,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../../references/protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -5136,6 +5164,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -5144,6 +5228,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -8343,10 +8455,12 @@ docker<span class="w"> </span>compose<span class="w"> </span>logs<span class="w"
 <p>If catch-up is too slow, use Method 2 or Method 3 from this guide with recent data.</p>
 <h3 id="troubleshooting-common-issues">Troubleshooting Common Issues</h3>
 <h4 id="issue-sync-stalled">Issue: Sync Stalled</h4>
-<p><strong>Symptoms:</strong>
-- Block height not increasing
-- No new blocks being processed
-- Peer connections established but inactive</p>
+<p><strong>Symptoms:</strong></p>
+<ul>
+<li>Block height not increasing</li>
+<li>No new blocks being processed</li>
+<li>Peer connections established but inactive</li>
+</ul>
 <p><strong>Solutions:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Check peer connections</span>
 docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>getpeerinfo
@@ -8358,9 +8472,11 @@ docker<span class="w"> </span>compose<span class="w"> </span>restart<span class=
 docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>setfsmstate<span class="w"> </span>--fsmstate<span class="w"> </span>legacysyncing
 </code></pre></div>
 <h4 id="issue-database-connection-errors">Issue: Database Connection Errors</h4>
-<p><strong>Symptoms:</strong>
-- Connection timeouts to PostgreSQL/Aerospike
-- "Database unavailable" errors in logs</p>
+<p><strong>Symptoms:</strong></p>
+<ul>
+<li>Connection timeouts to PostgreSQL/Aerospike</li>
+<li>"Database unavailable" errors in logs</li>
+</ul>
 <p><strong>Solutions:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Check database container status</span>
 docker<span class="w"> </span>compose<span class="w"> </span>ps<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">&quot;postgres\|aerospike&quot;</span>
@@ -8372,9 +8488,11 @@ docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </spa
 docker<span class="w"> </span>compose<span class="w"> </span>restart<span class="w"> </span>postgres<span class="w"> </span>aerospike
 </code></pre></div>
 <h4 id="issue-storage-space-exhausted">Issue: Storage Space Exhausted</h4>
-<p><strong>Symptoms:</strong>
-- "No space left on device" errors
-- Containers crashing</p>
+<p><strong>Symptoms:</strong></p>
+<ul>
+<li>"No space left on device" errors</li>
+<li>Containers crashing</li>
+</ul>
 <p><strong>Solutions:</strong></p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Check storage usage</span>
 df<span class="w"> </span>-h
@@ -8442,7 +8560,7 @@ docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </spa
 <div class="highlight"><pre><span></span><code><span class="c1"># Verify FSM is in correct state</span>
 docker<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span>blockchain<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
 
-<span class="c1"># Should show &quot;running&quot; or &quot;synced&quot; for a fully synchronized node</span>
+<span class="c1"># Should show &quot;RUNNING&quot; for a fully synchronized node</span>
 </code></pre></div>
 <h3 id="ongoing-monitoring">Ongoing Monitoring</h3>
 <h4 id="daily-health-checks">Daily Health Checks</h4>

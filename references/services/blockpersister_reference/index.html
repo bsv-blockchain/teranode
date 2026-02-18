@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -4903,17 +5015,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#getnextblocktoprocess" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        getNextBlockToProcess
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#persistblock" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4925,7 +5026,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#getnextblocktoprocess_1" class="md-nav__link">
+  <a href="#getnextblocktoprocess" class="md-nav__link">
     <span class="md-ellipsis">
       
         getNextBlockToProcess
@@ -5285,10 +5386,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#other-resources" class="md-nav__link">
+  <a href="#related-documents" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Other Resources
+        Related Documents
       
     </span>
   </a>
@@ -6808,17 +6909,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#getnextblocktoprocess" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        getNextBlockToProcess
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#persistblock" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6830,7 +6920,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#getnextblocktoprocess_1" class="md-nav__link">
+  <a href="#getnextblocktoprocess" class="md-nav__link">
     <span class="md-ellipsis">
       
         getNextBlockToProcess
@@ -7190,10 +7280,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#other-resources" class="md-nav__link">
+  <a href="#related-documents" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Other Resources
+        Related Documents
       
     </span>
   </a>
@@ -7357,10 +7447,6 @@
 </ul>
 <p>Returns an error if shutdown fails, or nil on successful shutdown.</p>
 <h3 id="internal-methods">Internal Methods</h3>
-<h4 id="getnextblocktoprocess">getNextBlockToProcess</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getNextBlockToProcess</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Block</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
-<p>Retrieves the next block that needs to be processed based on the current state and configuration. This method determines the next block to persist by comparing the last persisted block height with the current blockchain tip. It ensures blocks are persisted in sequence without gaps and respects the configured persistence age policy to control how far behind persistence can lag.</p>
 <h4 id="persistblock">persistBlock</h4>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">persistBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">hash</span><span class="w"> </span><span class="o">*</span><span class="nx">chainhash</span><span class="p">.</span><span class="nx">Hash</span><span class="p">,</span><span class="w"> </span><span class="nx">blockBytes</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </code></pre></div>
@@ -7393,7 +7479,7 @@
 <p class="admonition-title">Atomicity</p>
 <p>Block persistence is atomic - if any part fails, the entire operation is considered failed and should be retried after resolving the underlying issue.</p>
 </div>
-<h4 id="getnextblocktoprocess_1">getNextBlockToProcess</h4>
+<h4 id="getnextblocktoprocess">getNextBlockToProcess</h4>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getNextBlockToProcess</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Block</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
 <p>Retrieves the next block that needs to be persisted to blob storage.</p>
@@ -7712,9 +7798,10 @@
 <li><strong>Service operational status</strong></li>
 </ul>
 </div>
-<h2 id="other-resources">Other Resources</h2>
+<h2 id="related-documents">Related Documents</h2>
 <ul>
-<li><a href="../../../topics/services/blockPersister/">Block Persister</a></li>
+<li><a href="../../../topics/services/blockPersister/">Block Persister Topic Guide</a></li>
+<li><a href="../../settings/services/blockpersister_settings/">Block Persister Settings</a></li>
 <li><a href="../../prometheusMetrics/">Prometheus Metrics</a></li>
 </ul>
 

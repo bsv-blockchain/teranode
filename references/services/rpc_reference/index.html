@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -7575,7 +7687,6 @@
 <li><a href="#freeze">freeze</a> - Freezes specified UTXOs or OUTPUTs</li>
 <li><a href="#unfreeze">unfreeze</a> - Unfreezes specified UTXOs or OUTPUTs</li>
 <li><a href="#reassign">reassign</a> - Reassigns specified frozen UTXOs to a new address</li>
-<li><a href="#getrawmempool">getrawmempool</a> - Returns all transaction IDs available for block assembly</li>
 <li><a href="#getchaintips">getchaintips</a> - Returns information about all known chain tips</li>
 </ul>
 </li>
@@ -7662,9 +7773,9 @@
 <span class="w">    </span><span class="c1">// Used for mining-related RPC commands like getminingcandidate and generate</span>
 <span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span>
 
-<span class="w">    </span><span class="c1">// peerClient provides access to legacy peer network services</span>
+<span class="w">    </span><span class="c1">// legacyP2PClient provides access to legacy peer network services</span>
 <span class="w">    </span><span class="c1">// Used for peer management and information retrieval</span>
-<span class="w">    </span><span class="nx">peerClient</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ClientI</span>
+<span class="w">    </span><span class="nx">legacyP2PClient</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ClientI</span>
 
 <span class="w">    </span><span class="c1">// p2pClient provides access to the P2P network services</span>
 <span class="w">    </span><span class="c1">// Used for modern peer management and network operations</span>
@@ -7695,7 +7806,7 @@
 <p>The RPCServer is designed for concurrent operation, employing synchronization mechanisms to handle multiple simultaneous client connections without race conditions or resource conflicts. It implements proper connection management, graceful shutdown, and health monitoring.</p>
 <h2 id="functions">Functions</h2>
 <h3 id="newserver">NewServer</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">NewServer</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">blockValidationClient</span><span class="w"> </span><span class="nx">blockvalidation</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">peerClient</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">p2p</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">RPCServer</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">NewServer</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">blockValidationClient</span><span class="w"> </span><span class="nx">blockvalidation</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">legacyPeerClient</span><span class="w"> </span><span class="nx">peer</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">p2p</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">RPCServer</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
 <p>Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, block validation client, UTXO store, transaction store, validator client, and service clients.</p>
 <p>This factory function creates a fully configured RPCServer instance, setting up:</p>
@@ -7713,7 +7824,7 @@
 <li><code>blockValidationClient</code>: Interface to the block validation service for block validation operations</li>
 <li><code>utxoStore</code>: Interface to the UTXO database for transaction validation</li>
 <li><code>blockAssemblyClient</code>: Interface to the block assembly service for mining operations</li>
-<li><code>peerClient</code>: Interface to the legacy peer network services</li>
+<li><code>legacyPeerClient</code>: Interface to the legacy peer network services</li>
 <li><code>p2pClient</code>: Interface to the P2P network services</li>
 </ul>
 <p>The RPC server requires connections to several other Teranode services to function properly, as it primarily serves as an API gateway to underlying node functionality. These dependencies are injected through this constructor to maintain proper service separation and testability.</p>
@@ -7812,7 +7923,7 @@
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="o">*</span><span class="nx">RPCServer</span><span class="p">)</span><span class="w"> </span><span class="nx">jsonRPCRead</span><span class="p">(</span><span class="nx">w</span><span class="w"> </span><span class="nx">http</span><span class="p">.</span><span class="nx">ResponseWriter</span><span class="p">,</span><span class="w"> </span><span class="nx">r</span><span class="w"> </span><span class="o">*</span><span class="nx">http</span><span class="p">.</span><span class="nx">Request</span><span class="p">,</span><span class="w"> </span><span class="nx">isAdmin</span><span class="w"> </span><span class="kt">bool</span><span class="p">)</span>
 </code></pre></div>
 <p>Handles reading and responding to RPC messages. This method is the core request processing function.</p>
-<div class="admonition gear">
+<div class="admonition info">
 <p class="admonition-title">Request Processing Steps</p>
 <ol>
 <li><strong>Parses incoming JSON-RPC requests</strong> from HTTP request bodies</li>
@@ -7846,7 +7957,7 @@
 <li><code>handleListBanned</code>: Lists all currently banned IP addresses and subnets</li>
 </ul>
 <h2 id="configuration">Configuration</h2>
-<div class="admonition settings">
+<div class="admonition example">
 <p class="admonition-title">RPC Configuration Settings</p>
 <p>The RPC Service uses various configuration values:</p>
 <p><strong>Authentication Settings:</strong></p>
@@ -7883,7 +7994,7 @@
 </div>
 <p>Configuration values can be provided through the configuration file, environment variables, or command-line flags, with precedence in that order.</p>
 <h2 id="authentication">Authentication</h2>
-<div class="admonition key">
+<div class="admonition info">
 <p class="admonition-title">Authentication Levels</p>
 <p>The server supports two levels of authentication:</p>
 <ol>
@@ -9149,6 +9260,14 @@
 <li>TLS support for encrypted communications (when configured)</li>
 </ul>
 <h2 id="related-documents">Related Documents</h2>
+<ul>
+<li><a href="../../../topics/services/rpc/">RPC Service Topic Documentation</a></li>
+<li><a href="../../settings/services/rpc_settings/">RPC Settings Reference</a></li>
+<li><a href="../blockchain_reference/">Blockchain Reference</a></li>
+<li><a href="../blockassembly_reference/">Block Assembly Reference</a></li>
+<li><a href="../legacy_reference/">Legacy Service Reference</a></li>
+<li><a href="../p2p_reference/">P2P Service Reference</a></li>
+</ul>
 
 
 

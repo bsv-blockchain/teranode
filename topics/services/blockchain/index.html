@@ -4736,6 +4736,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4820,6 +4848,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4828,6 +4912,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -7237,9 +7349,13 @@
 </li>
 </ol>
 <p>The sequence diagram for the Block Assembly to add a new block to the blockchain is as follows:</p>
-<p><img alt="blockchain_add_block.svg" src="../img/plantuml/blockchain/blockchain_add_block.svg" />
-2. <strong>The <code>Block Validation</code> service:</strong>
-    - The <code>Block Validation</code> service calls the <code>AddBlock</code> method on the <code>Blockchain Service</code> to add a new block (received from another node) to the blockchain.</p>
+<p><img alt="blockchain_add_block.svg" src="../img/plantuml/blockchain/blockchain_add_block.svg" /></p>
+<ol>
+<li><strong>The <code>Block Validation</code> service:</strong><ul>
+<li>The <code>Block Validation</code> service calls the <code>AddBlock</code> method on the <code>Blockchain Service</code> to add a new block (received from another node) to the blockchain.</li>
+</ul>
+</li>
+</ol>
 <p>The sequence diagram for the Block Validation to add a new block to the blockchain is as follows:</p>
 <p><img alt="block_validation_p2p_block_validation.svg" src="../img/plantuml/blockvalidation/block_validation_p2p_block_validation.svg" />
 Explanation of the sequences:</p>

@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -5191,6 +5303,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
   
 </li>
       
@@ -6532,6 +6655,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6652,17 +6786,6 @@
 <span class="w">    </span><span class="c1">//   - error: Any error that occurred during DAH setting</span>
 <span class="w">    </span><span class="nx">SetDAH</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">,</span><span class="w"> </span><span class="nx">fileType</span><span class="w"> </span><span class="nx">fileformat</span><span class="p">.</span><span class="nx">FileType</span><span class="p">,</span><span class="w"> </span><span class="nx">dah</span><span class="w"> </span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">options</span><span class="p">.</span><span class="nx">FileOption</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 
-<span class="w">    </span><span class="c1">// GetDAH retrieves the remaining time-to-live for a blob.</span>
-<span class="w">    </span><span class="c1">// Parameters:</span>
-<span class="w">    </span><span class="c1">//   - ctx: The context for the operation</span>
-<span class="w">    </span><span class="c1">//   - key: The key identifying the blob</span>
-<span class="w">    </span><span class="c1">//   - fileType: The type of the file</span>
-<span class="w">    </span><span class="c1">//   - opts: Optional file options</span>
-<span class="w">    </span><span class="c1">// Returns:</span>
-<span class="w">    </span><span class="c1">//   - uint32: The delete at height value</span>
-<span class="w">    </span><span class="c1">//   - error: Any error that occurred during retrieval</span>
-<span class="w">    </span><span class="nx">GetDAH</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="w"> </span><span class="p">[]</span><span class="kt">byte</span><span class="p">,</span><span class="w"> </span><span class="nx">fileType</span><span class="w"> </span><span class="nx">fileformat</span><span class="p">.</span><span class="nx">FileType</span><span class="p">,</span><span class="w"> </span><span class="nx">opts</span><span class="w"> </span><span class="o">...</span><span class="nx">options</span><span class="p">.</span><span class="nx">FileOption</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-
 <span class="w">    </span><span class="c1">// Del deletes a blob from the store.</span>
 <span class="w">    </span><span class="c1">// Parameters:</span>
 <span class="w">    </span><span class="c1">//   - ctx: The context for the operation</span>
@@ -6768,12 +6891,19 @@
 
 <span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">store</span><span class="p">.</span><span class="nx">SetFromReader</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">key</span><span class="p">,</span><span class="w"> </span><span class="nx">fileType</span><span class="p">,</span><span class="w"> </span><span class="nx">reader</span><span class="p">)</span>
 </code></pre></div>
-<p>When the pipe is closed with an error:
-- <code>io.Copy</code> inside <code>SetFromReader</code> receives the error
-- The defer cleanup removes the temporary file
-- No incomplete data is left in storage</p>
+<p>When the pipe is closed with an error:</p>
+<ul>
+<li><code>io.Copy</code> inside <code>SetFromReader</code> receives the error</li>
+<li>The defer cleanup removes the temporary file</li>
+<li>No incomplete data is left in storage</li>
+</ul>
 <h3 id="stale-temporary-file-cleanup">Stale Temporary File Cleanup</h3>
 <p>During store initialization, the file store automatically cleans up stale <code>.tmp</code> files that are older than 10 minutes. This handles cases where the process crashed during a write operation.</p>
+<h2 id="related-documents">Related Documents</h2>
+<ul>
+<li><a href="../../../topics/stores/blob/">Blob Store Topic Guide</a></li>
+<li><a href="../../settings/stores/blob_settings/">Blob Store Settings</a></li>
+</ul>
 
 
 

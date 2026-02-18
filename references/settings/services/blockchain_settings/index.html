@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -6510,7 +6622,7 @@
 <td>bool</td>
 <td>false</td>
 <td>fsm_state_restore</td>
-<td>Triggers FSM restore mode via RPC service</td>
+<td><strong>UNUSED</strong> - Previously triggered FSM restore via RPC service, implementation is currently disabled</td>
 </tr>
 <tr>
 <td>FSMStateChangeDelay</td>
@@ -6550,9 +6662,10 @@
 </ul>
 <h3 id="fsm-state-management">FSM State Management</h3>
 <ul>
-<li><code>FSMStateRestore = true</code>: RPC service sends Restore event to Blockchain FSM during initialization</li>
-<li><code>FSMStateChangeDelay</code> delays state transitions for test timing control</li>
-<li>Initial FSM state set via <code>-localTestStartFromState</code> CLI argument</li>
+<li><code>FSMStateRestore</code>: Currently unused. The implementation that sent a Restore event via RPC is disabled.</li>
+<li>On startup, the blockchain service restores the last persisted FSM state from the database store.</li>
+<li><code>FSMStateChangeDelay</code> delays state transitions for test timing control.</li>
+<li>Initial FSM state set via <code>-localTestStartFromState</code> CLI argument.</li>
 </ul>
 <h3 id="database-configuration">Database Configuration</h3>
 <ul>

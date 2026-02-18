@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -5013,6 +5125,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
   
 </li>
       
@@ -7220,6 +7343,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -7536,14 +7670,14 @@
 <h3 id="database-configuration">Database Configuration</h3>
 <h4 id="connection-settings">Connection Settings</h4>
 <p>The datastore connection is configured via the <code>StoreURL</code> setting:</p>
-<div class="highlight"><pre><span></span><code># SQLite example
-StoreURL: sqlite://path/to/alert.db
+<div class="highlight"><pre><span></span><code><span class="c1"># SQLite example</span>
+<span class="nt">StoreURL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">sqlite://path/to/alert.db</span>
 
-# PostgreSQL example
-StoreURL: postgres://user:password@host:port/database?sslmode=disable
+<span class="c1"># PostgreSQL example</span>
+<span class="nt">StoreURL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">postgres://user:password@host:port/database?sslmode=disable</span>
 
-# MySQL example
-StoreURL: mysql://user:password@host:port/database
+<span class="c1"># MySQL example</span>
+<span class="nt">StoreURL</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mysql://user:password@host:port/database</span>
 </code></pre></div>
 <h4 id="auto-migration">Auto-Migration</h4>
 <p>The Alert service supports automatic database schema migration:</p>
@@ -7574,6 +7708,13 @@ StoreURL: mysql://user:password@host:port/database
 <li><strong>Alert History</strong>: All alert messages are retained for audit purposes</li>
 <li><strong>Consensus Data</strong>: Consensus validation data is preserved</li>
 <li><strong>Cleanup</strong>: No automatic cleanup - manual maintenance may be required</li>
+</ul>
+<h2 id="related-documents">Related Documents</h2>
+<ul>
+<li><a href="../../../topics/services/alert/">Alert Topic Guide</a></li>
+<li><a href="../../settings/services/alert_settings/">Alert Settings</a></li>
+<li><a href="../../protobuf_docs/alertProto/">Alert Protobuf Reference</a></li>
+<li><a href="../../prometheusMetrics/">Prometheus Metrics</a></li>
 </ul>
 
 

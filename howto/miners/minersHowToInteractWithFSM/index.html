@@ -4453,6 +4453,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4537,6 +4565,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4545,6 +4629,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -6727,7 +6839,7 @@ grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>localhost:18087
 </code></pre></div>
 <h3 id="wait-for-state-change">Wait for State Change</h3>
 <p>You can wait for a specific state transition to complete:</p>
-<div class="highlight"><pre><span></span><code>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;state&quot;:&quot;Running&quot;}&#39;</span><span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.WaitForFSMtoTransitionToGivenState
+<div class="highlight"><pre><span></span><code>grpcurl<span class="w"> </span>-plaintext<span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;state&quot;:&quot;Running&quot;}&#39;</span><span class="w"> </span>localhost:18087<span class="w"> </span>blockchain_api.BlockchainAPI.WaitFSMToTransitionToGivenState
 </code></pre></div>
 <h2 id="further-reading">Further Reading</h2>
 <ul>

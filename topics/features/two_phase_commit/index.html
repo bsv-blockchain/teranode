@@ -4537,6 +4537,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4621,6 +4649,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4629,6 +4713,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -6817,24 +6929,27 @@
 <blockquote>
 <p><strong>Critical Assumption</strong>: Parent transactions are either mined, in block template, or in previous block. No other option is possible.</p>
 </blockquote>
-<p>This means that for any transaction being processed,  <strong>all input transactions (parent transactions) must be in one of these states</strong>:</p>
-<div class="highlight"><pre><span></span><code>- Already mined in a confirmed block (transactions in blocks with multiple confirmations)
-- Currently in a block template (pending mining, not yet in a block)
-- In the immediately previous block (transactions in the most recently mined block)
-</code></pre></div>
+<p>This means that for any transaction being processed, <strong>all input transactions (parent transactions) must be in one of these states</strong>:</p>
+<ul>
+<li>Already mined in a confirmed block (transactions in blocks with multiple confirmations)</li>
+<li>Currently in a block template (pending mining, not yet in a block)</li>
+<li>In the immediately previous block (transactions in the most recently mined block)</li>
+</ul>
 <blockquote>
 <p><strong>Note</strong>: The distinction between "already mined in a confirmed block" and "in the immediately previous block" is important. The former refers to transactions with multiple confirmations that are considered stable, while the latter refers specifically to transactions in the most recently added block that have only one confirmation and may still be subject to reorganization.</p>
 </blockquote>
 <p><strong>Implications</strong>:</p>
-<div class="highlight"><pre><span></span><code>- This assumption ensures that all parent transactions are either confirmed or in the process of being confirmed
-- It prevents the system from processing transactions that refer to parent transactions that are still in an intermediate state
-- It creates a clean dependency chain where transactions build upon others that are already securely in the system
-</code></pre></div>
+<ul>
+<li>This assumption ensures that all parent transactions are either confirmed or in the process of being confirmed</li>
+<li>It prevents the system from processing transactions that refer to parent transactions that are still in an intermediate state</li>
+<li>It creates a clean dependency chain where transactions build upon others that are already securely in the system</li>
+</ul>
 <p><strong>Security Benefits</strong>:</p>
-<div class="highlight"><pre><span></span><code>- Prevents transaction graph inconsistencies
-- Eliminates scenarios where transaction outputs could be spent before their parent transactions are fully committed
-- Supports the effectiveness of the locked flag mechanism
-</code></pre></div>
+<ul>
+<li>Prevents transaction graph inconsistencies</li>
+<li>Eliminates scenarios where transaction outputs could be spent before their parent transactions are fully committed</li>
+<li>Supports the effectiveness of the locked flag mechanism</li>
+</ul>
 <p>This assumption is foundational to the system's security model and crucial for the proper functioning of the two-phase commit process.</p>
 <h2 id="3-implementation-details">3. Implementation Details</h2>
 <h3 id="31-phase-1-initial-transaction-creation-with-locked-flag">3.1. Phase 1: Initial Transaction Creation with Locked Flag</h3>

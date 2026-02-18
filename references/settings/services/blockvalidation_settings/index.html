@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -6988,13 +7100,15 @@
 <li>Disabled during catchup mode for better performance</li>
 </ul>
 <h3 id="quick-validation-pipeline">Quick Validation Pipeline</h3>
-<p>For checkpoint-verified blocks, a fan-in pipeline overlaps I/O with processing:
-- <code>SubtreeBatchPrefetchDepth</code> controls how many batches to prefetch ahead (default: 2)
-- Setting to 0 disables the pipeline and uses sequential processing
-- Three pipeline stages:
-  1. <strong>Reader</strong>: Prefetches subtree batches from disk
-  2. <strong>Extender</strong>: Extends transactions with UTXO data (sequential for map dependency)
-  3. <strong>Processor</strong>: Creates/spends UTXOs and writes files in parallel per batch</p>
+<p>For checkpoint-verified blocks, a fan-in pipeline overlaps I/O with processing:</p>
+<ul>
+<li><code>SubtreeBatchPrefetchDepth</code> controls how many batches to prefetch ahead (default: 2)</li>
+<li>Setting to 0 disables the pipeline and uses sequential processing</li>
+<li>Three pipeline stages:</li>
+<li><strong>Reader</strong>: Prefetches subtree batches from disk</li>
+<li><strong>Extender</strong>: Extends transactions with UTXO data (sequential for map dependency)</li>
+<li><strong>Processor</strong>: Creates/spends UTXOs and writes files in parallel per batch</li>
+</ul>
 <h3 id="transaction-metadata-processing">Transaction Metadata Processing</h3>
 <ul>
 <li>Cache and store processing work together with threshold-based fallback</li>

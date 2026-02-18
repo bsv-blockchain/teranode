@@ -601,6 +601,8 @@
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
       
+        
+      
       
         <label class="md-nav__link md-nav__link--active" for="__toc">
           
@@ -643,23 +645,14 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#how-to-generate-protobuf-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How to Generate Protobuf Files
-      
-    </span>
-  </a>
-  
-</li>
       
         <li class="md-nav__item">
   <a href="#prerequisites" class="md-nav__link">
@@ -4348,6 +4341,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../references/protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4432,6 +4453,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4440,6 +4517,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -6243,23 +6348,14 @@
   
   
   
+    
+  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#how-to-generate-protobuf-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How to Generate Protobuf Files
-      
-    </span>
-  </a>
-  
-</li>
       
         <li class="md-nav__item">
   <a href="#prerequisites" class="md-nav__link">
@@ -6394,18 +6490,16 @@
 
 
 
-  <h1>Generating Protobuf</h1>
-
-<h3 id="how-to-generate-protobuf-files">How to Generate Protobuf Files</h3>
+<h1 id="how-to-generate-protobuf-files">How to Generate Protobuf Files</h1>
 <p>This guide will walk you through the process of generating Protobuf files for the Teranode project. Protobuf files define the structure and services used across the project, and the <code>Makefile</code> provides a simple way to compile these <code>.proto</code> files into Go source code using the <code>protoc</code> compiler.</p>
-<h3 id="prerequisites">Prerequisites</h3>
+<h2 id="prerequisites">Prerequisites</h2>
 <p>Before proceeding, make sure the following tools and resources are available:</p>
 <ol>
 <li><strong>Protobuf Compiler (<code>protoc</code>)</strong>: Ensure you have the <code>protoc</code> tool installed. If you have followed the <a href="../../tutorials/developers/developerSetup/">Installation Guide for Developers and Contributors</a>, you are ready to use it. For more information, you can follow the <a href="https://grpc.io/docs/protoc-installation/">official guide</a> too.</li>
 <li><strong>Makefile</strong>: This project uses the Teranode <code>Makefile</code> to manage protobuf compilation tasks. Familiarity with running <code>make</code> commands is useful.</li>
 </ol>
-<h3 id="step-by-step-generating-protobuf-files">Step-by-Step: Generating Protobuf Files</h3>
-<h4 id="step-1-overview-of-proto-files">Step 1: Overview of <code>.proto</code> Files</h4>
+<h2 id="step-by-step-generating-protobuf-files">Step-by-Step: Generating Protobuf Files</h2>
+<h3 id="step-1-overview-of-proto-files">Step 1: Overview of <code>.proto</code> Files</h3>
 <p>The project uses <code>.proto</code> files to define the structure of its services and messages. Each service is typically located in the <code>services</code> directory, and they follow the pattern:</p>
 <div class="highlight"><pre><span></span><code>services/&lt;service_name&gt;/&lt;service_name&gt;_api.proto
 </code></pre></div>
@@ -6428,7 +6522,7 @@
 <span class="kt">string</span><span class="w"> </span><span class="na">validation_message</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
 <span class="p">}</span>
 </code></pre></div>
-<h4 id="step-2-generating-the-protobuf-files">Step 2: Generating the Protobuf Files</h4>
+<h3 id="step-2-generating-the-protobuf-files">Step 2: Generating the Protobuf Files</h3>
 <p>To generate the Go files from the <code>.proto</code> definitions, simply run the following command from the project’s root directory:</p>
 <div class="highlight"><pre><span></span><code>make<span class="w"> </span>gen
 </code></pre></div>
@@ -6437,7 +6531,7 @@
 <li>Process all <code>.proto</code> files listed in the <code>Makefile</code> using <code>protoc</code>.</li>
 <li>Generate the corresponding Go source code files (<code>*.pb.go</code> and <code>*_grpc.pb.go</code>) in the same directory as the <code>.proto</code> files.</li>
 </ul>
-<h4 id="how-the-make-gen-command-works">How the <code>make gen</code> Command Works</h4>
+<h3 id="how-the-make-gen-command-works">How the <code>make gen</code> Command Works</h3>
 <p>The <code>make gen</code> command runs several <code>protoc</code> commands, which are defined in the <code>Makefile</code>. Each <code>protoc</code> command processes a <code>.proto</code> file and generates its corresponding Go files.</p>
 <p>For example, to generate files for the <code>blockassembly</code> service, the command looks like this:</p>
 <div class="highlight"><pre><span></span><code>protoc<span class="w"> </span><span class="se">\</span>
@@ -6453,7 +6547,7 @@ services/blockassembly/blockassembly_api/blockassembly_api.proto
 <li><code>services/blockassembly/blockassembly_api/blockassembly_api.pb.go</code> (message definitions)</li>
 <li><code>services/blockassembly/blockassembly_api/blockassembly_api_grpc.pb.go</code> (gRPC client and server stubs)</li>
 </ul>
-<h4 id="step-3-handling-dependencies">Step 3: Handling Dependencies</h4>
+<h3 id="step-3-handling-dependencies">Step 3: Handling Dependencies</h3>
 <p>Some services have dependencies on common <code>.proto</code> files, like <code>model.proto</code>. The <code>Makefile</code> is configured to handle these dependencies.</p>
 <p>For example:
 <div class="highlight"><pre><span></span><code>protoc<span class="w"> </span><span class="se">\</span>
@@ -6463,19 +6557,19 @@ services/blockassembly/blockassembly_api/blockassembly_api.proto
 model/model.proto
 </code></pre></div>
 This command generates the necessary Go files for <code>model.proto</code> and ensures that services depending on <code>model.proto</code> can compile successfully.</p>
-<h4 id="step-4-cleaning-generated-files">Step 4: Cleaning Generated Files</h4>
+<h3 id="step-4-cleaning-generated-files">Step 4: Cleaning Generated Files</h3>
 <p>If you need to remove the generated Protobuf files, you can run the following command:</p>
 <div class="highlight"><pre><span></span><code>make<span class="w"> </span>clean_gen
 </code></pre></div>
 <p>This will remove all <code>.pb.go</code> files generated by the <code>make gen</code> command across the different services, as defined in the <code>Makefile</code>.</p>
-<h4 id="additional-make-commands">Additional Make Commands</h4>
+<h3 id="additional-make-commands">Additional Make Commands</h3>
 <p>More information on available <code>make</code> commands, including options for customization and dependency handling, can be found in the <a href="../makefile/">Makefile Documentation</a>.</p>
-<h3 id="common-errors-and-troubleshooting">Common Errors and Troubleshooting</h3>
+<h2 id="common-errors-and-troubleshooting">Common Errors and Troubleshooting</h2>
 <ol>
 <li><strong><code>protoc</code> not found</strong>: Ensure that the <code>protoc</code> tool is installed and available in your system’s PATH.</li>
 <li><strong>Missing dependencies</strong>: If a <code>.proto</code> file depends on another file (e.g., <code>model.proto</code>), ensure that all required <code>.proto</code> files are included in the <code>proto_path</code> during compilation.</li>
 </ol>
-<h3 id="conclusion">Conclusion</h3>
+<h2 id="conclusion">Conclusion</h2>
 <p>You should now be able to generate Protobuf files for the Teranode Go services. The <code>make gen</code> command simplifies the process by automating the <code>protoc</code> compilation.</p>
 <p>For more advanced usage and detailed configuration, check out the <a href="../makefile/">Makefile Documentation</a>.</p>
 

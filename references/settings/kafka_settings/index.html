@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -7356,10 +7468,12 @@
 </table>
 <h3 id="consumer-group-settings">Consumer Group Settings</h3>
 <p><strong>Consumer Group ID Pattern:</strong> <code>{serviceName}.{clientName}</code></p>
-<p>Examples:
-- <code>blockvalidation.defaultClientName</code>
-- <code>subtreevalidation.mynode</code>
-- <code>p2p.node1</code></p>
+<p>Examples:</p>
+<ul>
+<li><code>blockvalidation.defaultClientName</code></li>
+<li><code>subtreevalidation.mynode</code></li>
+<li><code>p2p.node1</code></li>
+</ul>
 <p><strong>Special Case - Block Persister TxMeta:</strong> <code>{serviceName}.{clientName}.{random16chars}</code></p>
 <p>The Block Persister appends a random 16-character suffix to its TxMeta consumer group ID, allowing multiple instances to independently process all messages.</p>
 <p><strong>Auto-Commit Behavior:</strong></p>

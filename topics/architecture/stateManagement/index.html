@@ -4532,6 +4532,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4616,6 +4644,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4624,6 +4708,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -6833,6 +6945,7 @@
 <li><strong>LegacySync</strong> - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent method)</li>
 <li><strong>Run</strong> - Transitions the FSM to the Running state (delegates on the SendFSMEvent method)</li>
 <li><strong>CatchUpBlocks</strong> - Transitions the FSM to the CatchingBlocks state (delegates on the SendFSMEvent method)</li>
+<li><strong>Idle</strong> - Transitions the FSM to the Idle state by sending the STOP event (delegates on the SendFSMEvent method)</li>
 </ul>
 <h3 id="33-state-machine-states">3.3. State Machine States</h3>
 <h4 id="331-fsm-idle-state">3.3.1. FSM: Idle State</h4>
@@ -6888,8 +7001,8 @@
 <li>✅ Create subtrees (or propagate them)</li>
 <li>✅ Create blocks (mine candidates)</li>
 </ul>
-<p>If <code>fsm_state_restore</code> setting is enabled, and if the node was previously in the <code>Idle</code> state, all services will start their operations once the FSM transitions to the <code>Running</code> state.</p>
-<p>If the node was previously in any other state, the Block Assembler would now start mining blocks. The Block Assembler will never mine blocks under any other node state.</p>
+<p>Once the FSM transitions to the <code>Running</code> state, all services will start their normal operations.</p>
+<p>The Block Assembler will only mine blocks when the node is in the <code>Running</code> state. The Block Assembler will never mine blocks under any other node state.</p>
 <h4 id="334-fsm-catching-blocks-state">3.3.4. FSM: Catching Blocks State</h4>
 <p>The <code>CatchingBlocks</code> state represents the node catching up on blocks. This state is triggered by BlockValidation when the node needs to catch up with the network. In this state:</p>
 <p>Allowed Operations in Catching Blocks State:</p>
@@ -6935,19 +7048,17 @@
 <p>The gRPC <code>Idle</code> method sends a <code>Stop</code> event to the FSM, which triggers a transition to the <code>Idle</code> state. This event is used to stop the node from participating in the network and halt all operations.</p>
 <p>This method is not currently used.</p>
 <h3 id="35-waiting-on-state-machine-transitions">3.5. Waiting on State Machine Transitions</h3>
-<p>Through internal helper methods, services can wait for the FSM to transition to a specific state before proceeding with their operations. This method is used by various services to ensure that the node is in the correct state before starting their activities.</p>
-<p>The method blocks until the FSM transitions to the specified state or until a timeout occurs. This ensures that services are synchronized with the node's state changes and can respond accordingly.</p>
-<p>This method is widely used by all Teranode services to await for the blockchain to signal a transition to the <code>Running</code> state, after which all services can resume normal operations.</p>
-<p>Specifically, and subject to the <code>fsm_state_restore</code> setting being enabled, the following services wait for the FSM to transition to the <code>Running</code> state before starting their operations:</p>
+<p>Through internal helper methods, services can wait for the FSM to transition out of the <code>Idle</code> state before proceeding with their operations. This method is used by various services to ensure that the node is in the correct state before starting their activities.</p>
+<p>The method blocks until the FSM transitions from the <code>Idle</code> state to any non-Idle state (such as <code>Running</code>, <code>LegacySyncing</code>, or <code>CatchingBlocks</code>) or until a timeout occurs. This ensures that services are synchronized with the node's state changes and can respond accordingly.</p>
+<p>The following services wait for the FSM to transition from the <code>Idle</code> state before starting their operations:</p>
 <ul>
 <li>Asset Server</li>
-<li>Block Assembly Service</li>
 <li>Block Persister</li>
 <li>Block Validation</li>
-<li>Coinbase</li>
 <li>Legacy P2P Gateway</li>
 <li>P2P</li>
 <li>Propagation</li>
+<li>Pruner</li>
 <li>Subtree Validation</li>
 <li>UTXO Persister</li>
 <li>Validator</li>

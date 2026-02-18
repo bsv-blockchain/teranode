@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -4746,17 +4858,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#validateblock_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ValidateBlock
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -4858,7 +4959,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#validateblock_2" class="md-nav__link">
+  <a href="#validateblock_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         ValidateBlock
@@ -5075,6 +5176,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
   
 </li>
       
@@ -6844,17 +6956,6 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#validateblock_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ValidateBlock
-      
-    </span>
-  </a>
-  
-</li>
-        
       </ul>
     </nav>
   
@@ -6956,7 +7057,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#validateblock_2" class="md-nav__link">
+  <a href="#validateblock_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         ValidateBlock
@@ -7176,6 +7277,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -7335,7 +7447,7 @@
 <h2 id="functions">Functions</h2>
 <h3 id="server_1">Server</h3>
 <h4 id="new">New</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">kafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span><span class="w"> </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span>
+<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="nx">New</span><span class="p">(</span><span class="nx">logger</span><span class="w"> </span><span class="nx">ulogger</span><span class="p">.</span><span class="nx">Logger</span><span class="p">,</span><span class="w"> </span><span class="nx">tSettings</span><span class="w"> </span><span class="o">*</span><span class="nx">settings</span><span class="p">.</span><span class="nx">Settings</span><span class="p">,</span><span class="w"> </span><span class="nx">subtreeStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">txStore</span><span class="w"> </span><span class="nx">blob</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">utxoStore</span><span class="w"> </span><span class="nx">utxo</span><span class="p">.</span><span class="nx">Store</span><span class="p">,</span><span class="w"> </span><span class="nx">validatorClient</span><span class="w"> </span><span class="nx">validator</span><span class="p">.</span><span class="nx">Interface</span><span class="p">,</span><span class="w"> </span><span class="nx">blockchainClient</span><span class="w"> </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">kafkaConsumerClient</span><span class="w"> </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="p">,</span><span class="w"> </span><span class="nx">blockAssemblyClient</span><span class="w"> </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="p">,</span><span class="w"> </span><span class="nx">p2pClient</span><span class="w"> </span><span class="nx">P2PClientI</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span>
 </code></pre></div>
 <p>Creates a new instance of the <code>Server</code> with:</p>
 <ul>
@@ -7420,10 +7532,6 @@
 <h4 id="validateblock">ValidateBlock</h4>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">ValidateBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">ValidateBlockResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
-<p>Validates a block directly from the block bytes without needing to fetch it from the network or database. This method is typically used for testing or when the block is already available in memory, and no internal updates or database operations are needed.</p>
-<h4 id="validateblock_1">ValidateBlock</h4>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">ValidateBlockRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockvalidation_api</span><span class="p">.</span><span class="nx">ValidateBlockResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
 <p>Validates a block and returns validation results without adding it to the blockchain. This method performs comprehensive block validation including structure checks, transaction validation, and consensus rule verification.</p>
 <h3 id="internal-methods">Internal Methods</h3>
 <h4 id="processblockfound_1">processBlockFound</h4>
@@ -7451,7 +7559,7 @@
 </code></pre></div>
 <p>Processes a block based on its assigned priority, handling both normal processing and retry scenarios with alternative peer sources.</p>
 <h3 id="blockvalidation_1">BlockValidation</h3>
-<h4 id="validateblock_2">ValidateBlock</h4>
+<h4 id="validateblock_1">ValidateBlock</h4>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">BlockValidation</span><span class="p">)</span><span class="w"> </span><span class="nx">ValidateBlock</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">block</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Block</span><span class="p">,</span><span class="w"> </span><span class="nx">baseURL</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">bloomStats</span><span class="w"> </span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">BloomStats</span><span class="p">,</span><span class="w"> </span><span class="nx">disableOptimisticMining</span><span class="w"> </span><span class="o">...</span><span class="kt">bool</span><span class="p">)</span><span class="w"> </span><span class="kt">error</span>
 </code></pre></div>
 <p>Performs comprehensive block validation:</p>
@@ -7526,6 +7634,13 @@
 <li>Memory cache utilization</li>
 <li>Store operation latencies</li>
 <li>Background worker statistics</li>
+</ul>
+<h2 id="related-documents">Related Documents</h2>
+<ul>
+<li><a href="../../../topics/services/blockValidation/">Block Validation Topic Guide</a></li>
+<li><a href="../../settings/services/blockvalidation_settings/">Block Validation Settings</a></li>
+<li><a href="../../protobuf_docs/blockvalidationProto/">Block Validation Protobuf Reference</a></li>
+<li><a href="../../prometheusMetrics/">Prometheus Metrics</a></li>
 </ul>
 
 

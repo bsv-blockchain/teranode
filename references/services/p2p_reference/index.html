@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -5188,6 +5300,17 @@
     <span class="md-ellipsis">
       
         Security
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
       
     </span>
   </a>
@@ -6942,6 +7065,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -6974,6 +7108,7 @@
 <span class="w">    </span><span class="nx">blockchainClient</span><span class="w">                  </span><span class="nx">blockchain</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">        </span><span class="c1">// Client for blockchain interactions</span>
 <span class="w">    </span><span class="nx">blockAssemblyClient</span><span class="w">               </span><span class="nx">blockassembly</span><span class="p">.</span><span class="nx">ClientI</span><span class="w">     </span><span class="c1">// Client for block assembly operations</span>
 <span class="w">    </span><span class="nx">AssetHTTPAddressURL</span><span class="w">               </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// HTTP address URL for assets</span>
+<span class="w">    </span><span class="nx">PropagationURL</span><span class="w">                    </span><span class="kt">string</span><span class="w">                    </span><span class="c1">// URL for peers to use for propagating txs (defaults to AssetHTTPAddressURL)</span>
 <span class="w">    </span><span class="nx">e</span><span class="w">                                 </span><span class="o">*</span><span class="nx">echo</span><span class="p">.</span><span class="nx">Echo</span><span class="w">                </span><span class="c1">// Echo server instance</span>
 <span class="w">    </span><span class="nx">notificationCh</span><span class="w">                    </span><span class="kd">chan</span><span class="w"> </span><span class="o">*</span><span class="nx">notificationMsg</span><span class="w">     </span><span class="c1">// Channel for notifications</span>
 <span class="w">    </span><span class="nx">rejectedTxKafkaConsumerClient</span><span class="w">     </span><span class="nx">kafka</span><span class="p">.</span><span class="nx">KafkaConsumerGroupI</span><span class="w"> </span><span class="c1">// Kafka consumer for rejected transactions</span>
@@ -7459,6 +7594,13 @@
 <p>The server uses goroutines for handling concurrent operations, such as message processing, HTTP server, and blockchain subscription listening. It also uses contexts for cancellation and timeout management.</p>
 <h2 id="security">Security</h2>
 <p>The server supports both HTTP and HTTPS configurations based on the <code>securityLevelHTTP</code> setting. When using HTTPS, it requires certificate and key files to be specified in the configuration.</p>
+<h2 id="related-documents">Related Documents</h2>
+<ul>
+<li><a href="../../../topics/services/p2p/">P2P Topic Guide</a></li>
+<li><a href="../../settings/services/p2p_settings/">P2P Settings</a></li>
+<li><a href="../../protobuf_docs/p2pProto/">P2P Protobuf Reference</a></li>
+<li><a href="../../prometheusMetrics/">Prometheus Metrics</a></li>
+</ul>
 
 
 

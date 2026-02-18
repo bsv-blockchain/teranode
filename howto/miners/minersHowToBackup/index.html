@@ -4281,6 +4281,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4365,6 +4393,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../../references/protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4373,6 +4457,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../references/protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -6262,11 +6374,11 @@
 <p>Last modified: 6-March-2025</p>
 <p>Regular and secure backups are essential for protecting a Teranode installation, ensuring data integrity, and safeguarding your wallet. The next steps outline how to back up your Teranode wallet and data:</p>
 <p>There are three main options for backing up and restoring a Teranode system. Each option has its own use cases and procedures.</p>
-<h4 id="option-1-full-system-backup">Option 1: Full System Backup</h4>
+<h2 id="option-1-full-system-backup">Option 1: Full System Backup</h2>
 <p>This option involves stopping all services, then performing backups of both the UTXO data and the blockchain data, plus the node data (typically under the /data directory).</p>
 <p>In a production environment, UTXOs will be typically stored in Aerospike, and the blockchain data will be stored in Postgres.</p>
 <p>The below is an example procedure, however you must adapt this to your specific needs.</p>
-<h5 id="procedure">Procedure:</h5>
+<h3 id="procedure">Procedure:</h3>
 <p>Note: This is not a hot backup. All services must be stopped before performing the backup.</p>
 <ol>
 <li>Stop all Teranode services.</li>
@@ -6275,9 +6387,9 @@
 <li>Perform a backup of the filesystem data (typically under /data).</li>
 <li>Restart services after backup completion.</li>
 </ol>
-<h4 id="option-2-archive-mode-backup">Option 2: Archive Mode Backup</h4>
+<h2 id="option-2-archive-mode-backup">Option 2: Archive Mode Backup</h2>
 <p>If running the node in Archive mode (with Block Persister and UTXO Persister), users can use their own exported UTXO set as an alternative to exporting the Aerospike data.</p>
-<h5 id="procedure_1">Procedure:</h5>
+<h3 id="procedure_1">Procedure:</h3>
 <ol>
 <li>Ensure Block Persister and UTXO Persister are enabled and running.</li>
 <li>Use the persisted UTXO set and header files, together with a blockchain postgres export, for backup purposes.</li>

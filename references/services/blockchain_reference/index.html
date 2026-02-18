@@ -4178,6 +4178,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/assetProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Asset Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/blockassemblyProto/" class="md-nav__link">
         
   
@@ -4262,6 +4290,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../protobuf_docs/legacyPeerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Legacy Peer Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/p2pProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    P2P Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../protobuf_docs/propagationProto/" class="md-nav__link">
         
   
@@ -4270,6 +4354,34 @@
     
   
     Propagation Proto
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../protobuf_docs/prunerProto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Pruner Proto
   
 
     
@@ -5245,17 +5357,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#reportpeerfailure_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ReportPeerFailure
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#setblockprocessedat" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -5517,6 +5618,17 @@
         
       </ul>
     </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
   
 </li>
       
@@ -7729,17 +7841,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#reportpeerfailure_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ReportPeerFailure
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#setblockprocessedat" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -8004,6 +8105,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#related-documents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documents
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -8045,6 +8157,8 @@
 <span class="w">    </span><span class="nx">AppCtx</span><span class="w">                        </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="w">                      </span><span class="c1">// Application context</span>
 <span class="w">    </span><span class="nx">localTestStartState</span><span class="w">           </span><span class="kt">string</span><span class="w">                               </span><span class="c1">// Initial state for testing</span>
 <span class="w">    </span><span class="nx">subscriptionManagerReady</span><span class="w">      </span><span class="nx">atomic</span><span class="p">.</span><span class="nx">Bool</span><span class="w">                          </span><span class="c1">// Flag indicating subscription manager is ready</span>
+<span class="w">    </span><span class="nx">batchTokens</span><span class="w">                   </span><span class="kd">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="o">*</span><span class="nx">blobDeletionBatchToken</span><span class="w">   </span><span class="c1">// Active batch tokens for blob deletion</span>
+<span class="w">    </span><span class="nx">batchTokensMu</span><span class="w">                 </span><span class="nx">sync</span><span class="p">.</span><span class="nx">RWMutex</span><span class="w">                         </span><span class="c1">// Mutex for batch tokens map</span>
 <span class="p">}</span>
 </code></pre></div>
 <p>The <code>Blockchain</code> type is the main structure for the blockchain server. It implements the <code>UnimplementedBlockchainAPIServer</code> and contains various channels and components for managing the blockchain state, subscribers, and notifications. It uses a finite state machine (FSM) to manage its operational states and provides resilience across service restarts.</p>
@@ -8260,10 +8374,6 @@
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">GetLatestBlockHeaderFromBlockLocatorRequest</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">request</span><span class="w"> </span><span class="o">*</span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">GetLatestBlockHeaderFromBlockLocatorRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">GetBlockHeaderResponse</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
 <p>Retrieves the latest block header from a block locator request.</p>
-<h3 id="reportpeerfailure_1">ReportPeerFailure</h3>
-<div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">ReportPeerFailure</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">ReportPeerFailureRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</code></pre></div>
-<p>Handles reports of peer download failures and broadcasts to subscribers. This method logs peer failures and sends notifications to all subscribers about the failed peer.</p>
 <h3 id="setblockprocessedat">SetBlockProcessedAt</h3>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">b</span><span class="w"> </span><span class="o">*</span><span class="nx">Blockchain</span><span class="p">)</span><span class="w"> </span><span class="nx">SetBlockProcessedAt</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">*</span><span class="nx">blockchain_api</span><span class="p">.</span><span class="nx">SetBlockProcessedAtRequest</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">emptypb</span><span class="p">.</span><span class="nx">Empty</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
@@ -8357,6 +8467,13 @@
 <li>Quick validation of checkpointed blocks</li>
 <li>Parallel block processing where IDs need to be reserved in advance</li>
 <li>Recovery scenarios where block IDs need to be coordinated across services</li>
+</ul>
+<h2 id="related-documents">Related Documents</h2>
+<ul>
+<li><a href="../../../topics/services/blockchain/">Blockchain Topic Guide</a></li>
+<li><a href="../../settings/services/blockchain_settings/">Blockchain Settings</a></li>
+<li><a href="../../protobuf_docs/blockchainProto/">Blockchain Protobuf Reference</a></li>
+<li><a href="../../prometheusMetrics/">Prometheus Metrics</a></li>
 </ul>
 
 
