@@ -5,7 +5,7 @@ import (
 	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -23,16 +23,15 @@ type S3Client interface {
 	CompleteMultipartUpload(ctx context.Context, input *s3.CompleteMultipartUploadInput) (*s3.CompleteMultipartUploadOutput, error)
 	AbortMultipartUpload(ctx context.Context, input *s3.AbortMultipartUploadInput) (*s3.AbortMultipartUploadOutput, error)
 
-	// Uploader/Downloader operations
-	Upload(ctx context.Context, input *s3.PutObjectInput) (*manager.UploadOutput, error)
-	Download(ctx context.Context, w io.WriterAt, input *s3.GetObjectInput) (n int64, err error)
+	// Transfer manager operations
+	Upload(ctx context.Context, input *s3.PutObjectInput) error
+	Download(ctx context.Context, input *s3.GetObjectInput) ([]byte, error)
 }
 
 // realS3Client wraps the actual AWS S3 client
 type realS3Client struct {
-	client     *s3.Client
-	uploader   *manager.Uploader
-	downloader *manager.Downloader
+	client   *s3.Client
+	transfer *transfermanager.Client
 }
 
 // NewRealS3Client creates a new S3 client using AWS SDK
@@ -40,9 +39,8 @@ func NewRealS3Client(cfg aws.Config) S3Client {
 	client := s3.NewFromConfig(cfg)
 
 	return &realS3Client{
-		client:     client,
-		uploader:   manager.NewUploader(client),
-		downloader: manager.NewDownloader(client),
+		client:   client,
+		transfer: transfermanager.New(client),
 	}
 }
 
@@ -79,10 +77,22 @@ func (c *realS3Client) AbortMultipartUpload(ctx context.Context, input *s3.Abort
 	return c.client.AbortMultipartUpload(ctx, input)
 }
 
-func (c *realS3Client) Upload(ctx context.Context, input *s3.PutObjectInput) (*manager.UploadOutput, error) {
-	return c.uploader.Upload(ctx, input)
+func (c *realS3Client) Upload(ctx context.Context, input *s3.PutObjectInput) error {
+	_, err := c.transfer.UploadObject(ctx, &transfermanager.UploadObjectInput{
+		Bucket: input.Bucket,
+		Key:    input.Key,
+		Body:   input.Body,
+	})
+	return err
 }
 
-func (c *realS3Client) Download(ctx context.Context, w io.WriterAt, input *s3.GetObjectInput) (n int64, err error) {
-	return c.downloader.Download(ctx, w, input)
+func (c *realS3Client) Download(ctx context.Context, input *s3.GetObjectInput) ([]byte, error) {
+	output, err := c.transfer.GetObject(ctx, &transfermanager.GetObjectInput{
+		Bucket: input.Bucket,
+		Key:    input.Key,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(output.Body)
 }

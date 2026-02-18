@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -136,33 +135,19 @@ func (m *mockS3Client) AbortMultipartUpload(ctx context.Context, input *s3.Abort
 	return &s3.AbortMultipartUploadOutput{}, nil
 }
 
-func (m *mockS3Client) Upload(ctx context.Context, input *s3.PutObjectInput) (*manager.UploadOutput, error) {
-	output, err := m.PutObject(ctx, input)
+func (m *mockS3Client) Upload(ctx context.Context, input *s3.PutObjectInput) error {
+	_, err := m.PutObject(ctx, input)
+	return err
+}
+
+func (m *mockS3Client) Download(ctx context.Context, input *s3.GetObjectInput) ([]byte, error) {
+	output, err := m.GetObject(ctx, input)
 	if err != nil {
 		return nil, err
 	}
-
-	return &manager.UploadOutput{
-		Location:  aws.ToString(input.Bucket) + "/" + aws.ToString(input.Key),
-		VersionID: output.VersionId,
-	}, nil
-}
-
-func (m *mockS3Client) Download(ctx context.Context, w io.WriterAt, input *s3.GetObjectInput) (n int64, err error) {
-	output, err := m.GetObject(ctx, input)
-	if err != nil {
-		return 0, err
-	}
 	defer output.Body.Close()
 
-	data, err := io.ReadAll(output.Body)
-	if err != nil {
-		return 0, err
-	}
-
-	written, err := w.WriteAt(data, 0)
-
-	return int64(written), err
+	return io.ReadAll(output.Body)
 }
 
 func parseRange(rangeStr string, size int) (start, end int, err error) {
