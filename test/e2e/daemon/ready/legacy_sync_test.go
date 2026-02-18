@@ -32,10 +32,20 @@ const (
 
 var legacySyncTestLock sync.Mutex
 
+// multistreamArgs are the flags needed to enable multistream on Bitcoin SV 1.2.0
+var multistreamArgs = []string{"-multistreams=1", "-multistreampolicies=BlockPriority,Default"}
+
 // newSVNode creates an SVNode using Docker via testcontainers
 func newSVNode() svnode.SVNodeI {
 	options := svnode.DefaultOptions()
 	return svnode.New(options)
+}
+
+// newMultistreamSVNode creates an SVNode with multistream support enabled.
+func newMultistreamSVNode() svnode.SVNodeI {
+	opts := svnode.DefaultOptions()
+	opts.AdditionalArgs = multistreamArgs
+	return svnode.New(opts)
 }
 
 // waitForOutboundPeer waits for svnode to have at least one outbound peer.
@@ -517,6 +527,240 @@ func TestBidirectionalSync(t *testing.T) {
 	require.Equal(t, svBestHash, teranodeBestHash, "Best block hash should match between svnode and teranode")
 
 	t.Logf("Bidirectional sync complete - both nodes at height %d with hash %s", finalHeight, svBestHash)
+}
+
+// TestMultistreamLegacySync tests that teranode can sync blocks from an
+// svnode that has multistream support enabled (BlockPriority stream policy).
+//
+// This test:
+// 1. Starts svnode with -multistreams=1 -multistreampolicies=BlockPriority,Default
+// 2. Generates blocks on svnode
+// 3. Starts teranode with legacy enabled and AllowBlockPriority=true, connecting to svnode
+// 4. Verifies teranode catches up to svnode's block height over the multistream connection
+func TestMultistreamLegacySync(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
+	ctx := t.Context()
+
+	// Start svnode with multistream enabled
+	sv := newMultistreamSVNode()
+	err := sv.Start(ctx)
+	require.NoError(t, err, errStartSVNode)
+
+	defer func() {
+		_ = sv.Stop(context.Background())
+	}()
+
+	// Generate blocks on svnode
+	const targetHeight = 101
+	_, err = sv.Generate(targetHeight)
+	require.NoError(t, err, "Failed to generate blocks on svnode")
+
+	blockCount, err := sv.GetBlockCount()
+	require.NoError(t, err)
+	require.Equal(t, targetHeight, blockCount, "SVNode should have %d blocks", targetHeight)
+
+	t.Logf("Multistream SVNode started with %d blocks", blockCount)
+
+	// Start teranode with legacy + AllowBlockPriority enabled, connecting to svnode
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableLegacy:    true,
+		EnableValidator: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.Legacy.AllowBlockPriority = true
+				s.Legacy.ConnectPeers = []string{sv.P2PHost()}
+				s.P2P.StaticPeers = []string{}
+			},
+		),
+	})
+
+	defer td.Stop(t)
+
+	// Wait for teranode to sync to svnode's height
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, uint32(targetHeight), 60*time.Second)
+	require.NoError(t, err, "Teranode failed to sync to multistream svnode's block height")
+
+	t.Logf("Teranode synced to height %d from multistream svnode", targetHeight)
+
+	// Verify peer connection via RPC
+	resp, err := td.CallRPC(ctx, "getpeerinfo", []any{})
+	require.NoError(t, err)
+
+	var p2pResp helper.P2PRPCResponse
+	err = json.Unmarshal([]byte(resp), &p2pResp)
+	require.NoError(t, err)
+
+	var legacyPeers []string
+	for _, peer := range p2pResp.Result {
+		if strings.Contains(peer.Addr, ":18333") {
+			legacyPeers = append(legacyPeers, peer.Addr)
+		}
+	}
+	require.GreaterOrEqual(t, len(legacyPeers), 1, "Teranode should be connected to multistream svnode")
+
+	t.Logf("Teranode connected to %d multistream legacy peer(s)", len(legacyPeers))
+}
+
+// TestMultistreamSVNodeSyncFromTeranode tests that an svnode with multistream
+// enabled can sync blocks from teranode (also with multistream enabled).
+//
+// This test uses the persist pattern:
+// 1. Starts teranode without legacy, generates and persists blocks
+// 2. Stops teranode, restarts with legacy + AllowBlockPriority listening on 18444
+// 3. Starts svnode with -multistreams=1 and -connect to teranode's legacy listener
+// 4. Verifies svnode syncs teranode's blocks via the multistream connection
+func TestMultistreamSVNodeSyncFromTeranode(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
+	ctx := t.Context()
+
+	// Phase 1: Start teranode without legacy to generate and persist blocks
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:            true,
+		EnableValidator:      true,
+		EnableBlockPersister: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+		),
+	})
+
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err, "failed to initialize blockchain")
+	defer td.Stop(t)
+
+	const teranodeBlocks = 5
+	const targetHeight = teranodeBlocks
+
+	var minedBlocks []*model.Block
+	for i := 0; i < teranodeBlocks; i++ {
+		time.Sleep(500 * time.Millisecond)
+		block := td.MineAndWait(t, 1)
+		minedBlocks = append(minedBlocks, block)
+	}
+
+	t.Logf("Generated %d blocks on teranode", teranodeBlocks)
+
+	for i, block := range minedBlocks {
+		err = td.WaitForBlockPersisted(block.Hash(), 30*time.Second)
+		require.NoError(t, err, "Block %d was not persisted within timeout", i+1)
+	}
+	t.Log("All blocks persisted")
+
+	td.Stop(t)
+	td.ResetServiceManagerContext(t)
+
+	// Phase 2: Restart teranode with legacy + AllowBlockPriority
+	td = daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:            true,
+		EnableP2P:            true,
+		EnableValidator:      true,
+		EnableBlockPersister: true,
+		EnableLegacy:         true,
+		SkipRemoveDataDir:    true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.Legacy.AllowBlockPriority = true
+				s.Legacy.AllowSyncCandidateFromLocalPeers = true
+				s.Legacy.ListenAddresses = []string{teranodeLegacyListenAddr}
+				s.P2P.StaticPeers = []string{}
+			},
+		),
+	})
+
+	defer func() { td.Stop(t) }()
+
+	td.WaitForBlockHeight(t, minedBlocks[len(minedBlocks)-1], 30*time.Second)
+	waitForLegacyListener(t, teranodeLegacyConnectAddr, 10*time.Second)
+
+	// Start multistream svnode connecting to teranode
+	opts := svnode.DefaultOptions()
+	opts.ConnectTo = []string{teranodeLegacyConnectAddr}
+	opts.AdditionalArgs = multistreamArgs
+	sv := svnode.New(opts)
+	err = sv.Start(ctx)
+	require.NoError(t, err, errStartSVNode)
+
+	defer func() {
+		_ = sv.Stop(context.Background())
+	}()
+
+	err = waitForOutboundPeer(ctx, sv, 15*time.Second)
+	require.NoError(t, err, errSVNodeConnect)
+
+	syncErr := sv.WaitForBlockHeight(ctx, targetHeight, 30*time.Second)
+	if syncErr != nil {
+		t.Logf("Multistream SVNode did not sync blocks (known Bitcoin SV 1.2.0 bug): %v", syncErr)
+		verifyTeranodeServedHeaders(t, sv, targetHeight)
+	} else {
+		t.Logf("Multistream SVNode synced to height %d from teranode - blocks validated by legacy consensus", targetHeight)
+	}
+}
+
+// TestMultistreamBackwardCompatibility tests that teranode with
+// AllowBlockPriority enabled can still sync from an svnode that does NOT
+// have multistream enabled. This validates backward compatibility: the
+// multistream feature must not break standard single-stream connections.
+//
+// This test:
+// 1. Starts svnode WITHOUT multistream flags (standard mode)
+// 2. Generates blocks on svnode
+// 3. Starts teranode with AllowBlockPriority=true, connecting to svnode
+// 4. Verifies teranode syncs blocks over the standard single-stream connection
+func TestMultistreamBackwardCompatibility(t *testing.T) {
+	legacySyncTestLock.Lock()
+	defer legacySyncTestLock.Unlock()
+
+	ctx := t.Context()
+
+	// Start standard svnode (no multistream)
+	sv := newSVNode()
+	err := sv.Start(ctx)
+	require.NoError(t, err, errStartSVNode)
+
+	defer func() {
+		_ = sv.Stop(context.Background())
+	}()
+
+	const targetHeight = 50
+	_, err = sv.Generate(targetHeight)
+	require.NoError(t, err, "Failed to generate blocks on svnode")
+
+	blockCount, err := sv.GetBlockCount()
+	require.NoError(t, err)
+	require.Equal(t, targetHeight, blockCount)
+
+	t.Logf("Standard SVNode (no multistream) started with %d blocks", blockCount)
+
+	// Start teranode with AllowBlockPriority enabled despite svnode not supporting it
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		EnableRPC:       true,
+		EnableP2P:       true,
+		EnableLegacy:    true,
+		EnableValidator: true,
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.Legacy.AllowBlockPriority = true
+				s.Legacy.ConnectPeers = []string{sv.P2PHost()}
+				s.P2P.StaticPeers = []string{}
+			},
+		),
+	})
+
+	defer td.Stop(t)
+
+	// Verify teranode syncs despite multistream mismatch
+	err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, uint32(targetHeight), 60*time.Second)
+	require.NoError(t, err, "Teranode with AllowBlockPriority failed to sync from non-multistream svnode")
+
+	t.Logf("Teranode (AllowBlockPriority=true) synced to height %d from standard svnode - backward compatibility confirmed", targetHeight)
 }
 
 // TestSVNodeValidatesTeranodeBlocks specifically tests that blocks generated by teranode

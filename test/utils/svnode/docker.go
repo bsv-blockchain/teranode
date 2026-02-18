@@ -107,12 +107,13 @@ func (d *DockerSVNode) Start(ctx context.Context) error {
 	return nil
 }
 
-// buildCmd returns the container command, including any -connect flags.
+// buildCmd returns the container command, including any -connect flags and additional args.
 func (d *DockerSVNode) buildCmd() []string {
 	cmd := []string{"/entrypoint.sh", "bitcoind"}
 	for _, addr := range d.opts.ConnectTo {
 		cmd = append(cmd, fmt.Sprintf("-connect=%s", addr))
 	}
+	cmd = append(cmd, d.opts.AdditionalArgs...)
 	return cmd
 }
 
