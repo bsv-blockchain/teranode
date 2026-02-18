@@ -194,7 +194,7 @@ Retrieves block headers starting from a specific height up to the specified limi
 #### GetSubtree
 
 ```go
-func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, error)
+func (repo *Repository) GetSubtree(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, error)
 ```
 
 Retrieves a subtree by its hash.
@@ -207,21 +207,45 @@ func (repo *Repository) GetSubtreeBytes(ctx context.Context, hash *chainhash.Has
 
 Retrieves the raw bytes of a subtree.
 
-#### GetSubtreeReader
+#### GetSubtreeData
 
 ```go
-func (repo *Repository) GetSubtreeReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+func (repo *Repository) GetSubtreeData(ctx context.Context, hash *chainhash.Hash) (*subtree.Data, error)
 ```
 
-Provides a reader interface for accessing subtree data.
+Retrieves the parsed data contents of a subtree.
+
+#### GetSubtreeTxIDsReader
+
+```go
+func (repo *Repository) GetSubtreeTxIDsReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+```
+
+Provides a reader interface for streaming subtree transaction IDs.
 
 #### GetSubtreeDataReader
 
 ```go
-func (repo *Repository) GetSubtreeDataReader(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+func (repo *Repository) GetSubtreeDataReader(ctx context.Context, subtreeHash *chainhash.Hash) (io.ReadCloser, error)
 ```
 
-Provides a reader interface for accessing subtree data from the block persister.
+Provides a reader interface for accessing subtree data from the subtree store.
+
+#### GetSubtreeDataReaderFromBlockPersister
+
+```go
+func (repo *Repository) GetSubtreeDataReaderFromBlockPersister(ctx context.Context, hash *chainhash.Hash) (io.ReadCloser, error)
+```
+
+Provides a reader interface for accessing subtree data from the block persister store.
+
+#### GetSubtreeTransactions
+
+```go
+func (repo *Repository) GetSubtreeTransactions(ctx context.Context, hash *chainhash.Hash) (map[chainhash.Hash]*bt.Tx, error)
+```
+
+Retrieves all transactions contained in a subtree, returned as a map keyed by transaction hash.
 
 #### GetSubtreeExists
 
@@ -234,10 +258,18 @@ Checks if a subtree with the given hash exists in the store.
 #### GetSubtreeHead
 
 ```go
-func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*util.Subtree, int, error)
+func (repo *Repository) GetSubtreeHead(ctx context.Context, hash *chainhash.Hash) (*subtree.Subtree, int, error)
 ```
 
 Retrieves only the head portion of a subtree, containing fees and size information.
+
+#### FindBlocksContainingSubtree
+
+```go
+func (repo *Repository) FindBlocksContainingSubtree(ctx context.Context, subtreeHash *chainhash.Hash) ([]uint32, []uint32, []int, error)
+```
+
+Finds all blocks that contain the specified subtree, returning block heights, block IDs, and subtree indices.
 
 #### GetUtxo
 
@@ -263,29 +295,85 @@ func (repo *Repository) GetBlockLocator(ctx context.Context, blockHeaderHash *ch
 
 Retrieves a sequence of block hashes at exponentially increasing distances back from the provided block hash or the best block if no hash is specified.
 
-#### GetBalance
+#### GetTxMeta
 
 ```go
-func (repo *Repository) GetBalance(ctx context.Context) (uint64, uint64, error)
+func (repo *Repository) GetTxMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
 ```
 
-Retrieves the balance information.
+Retrieves raw transaction metadata from the UTXO store.
 
-#### GetBlockForks
+#### GetTransactionMeta
 
 ```go
-func (repo *Repository) GetBlockForks(ctx context.Context, hash *chainhash.Hash) (*model.ForkInfo, error)
+func (repo *Repository) GetTransactionMeta(ctx context.Context, hash *chainhash.Hash) (*meta.Data, error)
 ```
 
-Retrieves information about forks related to the specified block.
+Retrieves transaction metadata including block height and mined status.
 
-#### GetBlockSubtrees
+#### GetBlocks
 
 ```go
-func (repo *Repository) GetBlockSubtrees(ctx context.Context, hash *chainhash.Hash) ([]*util.Subtree, error)
+func (repo *Repository) GetBlocks(ctx context.Context, hash *chainhash.Hash, n uint32) ([]*model.Block, error)
 ```
 
-Retrieves all subtrees included in the specified block.
+Retrieves N consecutive blocks starting from the specified hash.
+
+#### GetBlocksByHeight
+
+```go
+func (repo *Repository) GetBlocksByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.Block, error)
+```
+
+Retrieves blocks within a height range.
+
+#### GetBlockHeadersFromCommonAncestor
+
+```go
+func (repo *Repository) GetBlockHeadersFromCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+```
+
+Retrieves block headers from the common ancestor forward to the target hash, using the provided block locator to find the fork point.
+
+#### GetLegacyBlockReader
+
+```go
+func (repo *Repository) GetLegacyBlockReader(ctx context.Context, hash *chainhash.Hash, wireBlock ...bool) (*io.PipeReader, error)
+```
+
+Returns a streaming reader for a block in legacy wire format, suitable for serving to legacy Bitcoin nodes.
+
+#### GetBlockByID
+
+```go
+func (repo *Repository) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
+```
+
+Retrieves a block by its internal database ID.
+
+#### GetBlockchainClient
+
+```go
+func (repo *Repository) GetBlockchainClient() blockchain.ClientI
+```
+
+Returns the blockchain client used by the repository.
+
+#### GetBlockvalidationClient
+
+```go
+func (repo *Repository) GetBlockvalidationClient() blockvalidation.Interface
+```
+
+Returns the block validation client used by the repository.
+
+#### GetP2PClient
+
+```go
+func (repo *Repository) GetP2PClient() p2p.ClientI
+```
+
+Returns the P2P client used by the repository.
 
 ### HTTP Functions
 
@@ -339,7 +427,7 @@ Signs the HTTP response.
 
 ## Configuration
 
-The Asset Service uses configuration values from the `gocore.Config()` function, including:
+The Asset Service uses the following configuration values from the settings system:
 
 ### Network and API Configuration
 
@@ -456,8 +544,13 @@ Error responses include a JSON object with an error message:
     - Parameters: `hash` - Transaction ID hash (hex string)
     - Returns: Transaction data (JSON)
 
+- **POST `/api/v1/txs`**
+    - Purpose: Batch retrieve multiple transactions (legacy endpoint)
+    - Request Body: Concatenated 32-byte transaction hashes
+    - Returns: Concatenated transactions (binary)
+
 - **POST `/api/v1/subtree/:hash/txs`**
-    - Purpose: Batch retrieve multiple transactions
+    - Purpose: Batch retrieve multiple transactions for a subtree
     - Request Body: Concatenated 32-byte transaction hashes
     - Returns: Concatenated transactions (binary)
 
@@ -579,9 +672,16 @@ Error responses include a JSON object with an error message:
     - Also available: `/api/v1/headers/:hash/hex` (hex), `/api/v1/headers/:hash/json` (JSON)
 
 - **GET `/api/v1/headers_to_common_ancestor/:hash`**
-    - Purpose: Get headers to common ancestor (binary)
+    - Purpose: Get headers from target back to common ancestor (binary)
     - Parameters: `hash` - Target hash, `locator` - Comma-separated block hashes
     - Returns: Block headers (binary)
+    - Also available: `/api/v1/headers_to_common_ancestor/:hash/hex` (hex), `/api/v1/headers_to_common_ancestor/:hash/json` (JSON)
+
+- **GET `/api/v1/headers_from_common_ancestor/:hash`**
+    - Purpose: Get headers from common ancestor forward to target (binary)
+    - Parameters: `hash` - Target hash, `locator` - Comma-separated block locator hashes
+    - Returns: Block headers (binary)
+    - Also available: `/api/v1/headers_from_common_ancestor/:hash/hex` (hex), `/api/v1/headers_from_common_ancestor/:hash/json` (JSON)
 
 - **GET `/api/v1/bestblockheader`**
     - Purpose: Get best block header (binary)
@@ -684,6 +784,12 @@ Error responses include a JSON object with an error message:
     - Purpose: Get subtree data (binary)
     - Parameters: `hash` - Subtree hash
     - Returns: Subtree data (binary)
+    - Also available: `/api/v1/subtree/:hash/hex` (hex), `/api/v1/subtree/:hash/json` (JSON)
+
+- **GET `/api/v1/subtree_data/:hash`**
+    - Purpose: Get subtree data content as a streaming download
+    - Parameters: `hash` - Subtree hash (hex string)
+    - Returns: Subtree data (binary stream)
 
 - **GET `/api/v1/subtree/:hash/txs/json`**
     - Purpose: Get transactions in a subtree
@@ -699,6 +805,24 @@ Error responses include a JSON object with an error message:
         - `limit` (integer, optional, default: 20, max: 100) - Maximum subtrees to return
     - Returns: Subtree data array (JSON) with pagination metadata
 
+### Merkle Proof Endpoints
+
+- **GET `/api/v1/merkle_proof/:hash`**
+    - Purpose: Get merkle proof for a transaction (binary)
+    - Parameters: `hash` - Transaction hash (hex string)
+    - Returns: Merkle proof data in BRC-74 BUMP format (binary)
+    - Also available: `/api/v1/merkle_proof/:hash/hex` (hex), `/api/v1/merkle_proof/:hash/json` (JSON)
+
+### Chain Information Endpoints
+
+- **GET `/api/v1/chainparams`**
+    - Purpose: Get chain configuration parameters
+    - Returns: Chain parameters (JSON) including network name and configuration
+
+- **GET `/api/v1/service/heights`**
+    - Purpose: Get current heights reported by each service
+    - Returns: JSON object with per-service height information
+
 ### P2P and Network Endpoints
 
 - **GET `/api/p2p/peers`**
@@ -706,10 +830,37 @@ Error responses include a JSON object with an error message:
     - Returns: Peer list (JSON) with reputation metrics, connection status, and catchup statistics
     - Response includes: peer ID, client name, blockchain height, reputation score, catchup metrics, ban status
 
+- **POST `/api/p2p/reset-reputation`**
+    - Purpose: Reset all peer reputation scores to neutral
+    - Returns: Status of the reset operation
+    - Security: Requires dashboard authentication
+
 - **GET `/api/catchup/status`**
     - Purpose: Get current blockchain synchronization status
     - Returns: Catchup status (JSON) with progress metrics and peer information
     - Response includes: current/target heights, blocks fetched/validated, peer details, fork depth, previous attempt data
+
+- **GET `/api/v1/peers`**
+    - Purpose: Get peer registry (alternative endpoint under API prefix)
+    - Returns: Same as `/api/p2p/peers`
+
+- **GET `/api/v1/catchup/status`**
+    - Purpose: Get catchup status (alternative endpoint under API prefix)
+    - Returns: Same as `/api/catchup/status`
+
+### Settings Endpoints
+
+These endpoints require authentication.
+
+- **GET `/api/v1/settings`**
+    - Purpose: Get all current node settings
+    - Returns: JSON object with all settings grouped by section
+    - Security: Requires authentication
+
+- **GET `/api/v1/settings/categories`**
+    - Purpose: Get available settings categories
+    - Returns: JSON array of settings category names
+    - Security: Requires authentication
 
 ### Search Endpoints
 
