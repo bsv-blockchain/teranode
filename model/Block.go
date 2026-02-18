@@ -710,7 +710,7 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	var (
 		subtreeMetaSlice    *subtreepkg.Meta
 		subtreeHash         = subtree.RootHash()
-		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes))
+		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes)/16)
 		err                 error
 	)
 
