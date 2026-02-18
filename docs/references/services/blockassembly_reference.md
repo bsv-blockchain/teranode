@@ -353,6 +353,14 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 
 Resets the block assembly service to a clean state, removing all transactions and subtrees. This is useful for recovery after errors or when a full reset is needed.
 
+#### ResetBlockAssemblyFully
+
+```go
+func (ba *BlockAssembly) ResetBlockAssemblyFully(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error)
+```
+
+Performs a comprehensive reset of block assembly state, including clearing the mempool and all unmined transactions in addition to the standard reset. This is a more thorough version of `ResetBlockAssembly` intended for complete recovery scenarios.
+
 #### GetBlockAssemblyState
 
 ```go
