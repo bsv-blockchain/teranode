@@ -36,12 +36,15 @@ func NewSplitSyncedParentMap(nrOfBuckets uint16, expectedInpoints ...uint64) *Sp
 func (s *SplitSyncedParentMap) SetIfNotExists(inpoint subtreepkg.Inpoint) bool {
 	idx := txmap.Bytes2Uint16Buckets(inpoint.Hash, s.nrOfBuckets)
 	b := &s.buckets[idx]
+
 	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if b.m.Has(inpoint) {
-		b.mu.Unlock()
 		return false
 	}
+
 	b.m.Put(inpoint, struct{}{})
-	b.mu.Unlock()
+
 	return true
 }
