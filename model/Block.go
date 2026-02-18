@@ -680,7 +680,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: b.buildBlockHeaderHashesMap(deps.currentChain),
 		currentBlockHeaderIDsMap:    b.buildBlockHeaderIDsMap(deps.currentBlockHeaderIDs),
-		parentSpendsMap:             NewSplitSyncedParentMap(4096),
+		parentSpendsMap:             NewSplitSyncedParentMap(4096, b.TransactionCount*3),
 	}
 
 	concurrency := b.getValidationConcurrency(validOrderAndBlessedConcurrency)
