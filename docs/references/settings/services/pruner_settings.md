@@ -580,6 +580,30 @@ pruner_utxoProgressLogInterval = 30s
 
 **Use Case**: Monitor progress during large pruning operations or troubleshoot slow pruning.
 
+### pruner_utxoPartitionQueries
+
+**Type**: Integer
+
+**Default**: `0` (auto-detect based on CPU cores)
+
+**Environment Variable**: `pruner_utxoPartitionQueries`
+
+**Description**: Number of parallel Aerospike partition queries for scanning prunable records
+
+Aerospike's keyspace is divided into 4096 partitions. This setting controls how many workers scan partitions in parallel. Each worker processes a range of partitions independently, achieving up to 100x performance improvement over sequential queries.
+
+**Values:**
+
+- `0` (default): Auto-detect based on CPU cores and Aerospike query-threads-limit
+- `N > 0`: Fixed number of partition workers (capped at 4096)
+
+**Tuning:**
+
+- **Higher values**: Faster scanning, more Aerospike load and connections
+- **Lower values**: Reduced cluster pressure, slower pruning
+
+**Recommendation**: Use default (`0`) for automatic scaling. Set explicitly to match your Aerospike cluster's capacity.
+
 ## Defensive Mode Settings
 
 These settings control the defensive pruning mode, which adds safety checks before deleting parent transactions.

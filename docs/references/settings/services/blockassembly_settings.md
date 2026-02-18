@@ -17,7 +17,7 @@
 | MoveBackBlockConcurrency | int | 375 | blockassembly_moveBackBlockConcurrency | Concurrency limit for reorg processing (SubtreeProcessor) |
 | ProcessRemainderTxHashesConcurrency | int | 375 | blockassembly_processRemainderTxHashesConcurrency | Concurrency limit for remainder tx hash processing |
 | SendBatchSize | int | 100 | blockassembly_sendBatchSize | Client batch size for sending transactions |
-| SendBatchTimeout | int | 2 | blockassembly_sendBatchTimeout | Client batch timeout in milliseconds |
+| SendBatchTimeout | int | 2 | blockassembly_sendBatchTimeout | Client batch timeout in seconds |
 | SubtreeProcessorBatcherSize | int | 1000 | blockassembly_subtreeProcessorBatcherSize | Subtree processing batch size |
 | SubtreeProcessorConcurrentReads | int | 375 | blockassembly_subtreeProcessorConcurrentReads | **CRITICAL** - Subtree read parallelism |
 | NewSubtreeChanBuffer | int | 1000 | blockassembly_newSubtreeChanBuffer | **CRITICAL** - New subtree channel buffer |

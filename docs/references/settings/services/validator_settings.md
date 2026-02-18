@@ -21,6 +21,8 @@
 | HTTPRateLimit | int | 1024 | validator_httpRateLimit | **CRITICAL** - HTTP request rate limiting |
 | KafkaMaxMessageBytes | int | 1048576 | validator_kafka_maxMessageBytes | Kafka message size limits |
 | UseLocalValidator | bool | false | useLocalValidator | **CRITICAL** - Local vs remote validator deployment mode |
+| TxMetaKafkaBatchSize | int | 1024 | validator_txmeta_kafka_batchSize | Transaction metadata Kafka batch size |
+| TxMetaKafkaBatchTimeoutMs | int | 5 | validator_txmeta_kafka_batchTimeoutMs | Transaction metadata Kafka batch timeout (ms) |
 
 ## Configuration Dependencies
 

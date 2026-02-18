@@ -18,8 +18,10 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
 | MaxTxSizePolicy | int | 10485760 (10MB) | maxtxsizepolicy | **CRITICAL** - Maximum transaction size policy |
+| MaxOrphanTxSize | int | 1000000 (1MB) | maxorphantxsize | Maximum orphan transaction size |
 | MaxScriptSizePolicy | int | 500000 (500KB) | maxscriptsizepolicy | **CRITICAL** - Maximum script size policy |
 | MaxScriptNumLengthPolicy | int | 10000 | maxscriptnumlengthpolicy | Maximum script number length |
+| MaxOpsPerScriptPolicy | int64 | 1000000 | maxopsperscriptpolicy | Maximum operations per script |
 
 ### Multisig and Signature Limits
 
@@ -34,6 +36,29 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 |---------|------|---------|---------------------|-------|
 | MaxStackMemoryUsagePolicy | int | 104857600 (100MB) | maxstackmemoryusagepolicy | **CRITICAL** - Maximum stack memory usage (policy) |
 | MaxStackMemoryUsageConsensus | int | 0 (unlimited) | maxstackmemoryusageconsensus | **CRITICAL** - Maximum stack memory usage (consensus) |
+
+### Validation Timeout Settings
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| MaxStdTxValidationDuration | int | 3 | maxstdtxvalidationduration | Maximum validation time for standard transactions (ms) |
+| MaxNonStdTxValidationDuration | int | 1000 | maxnonstdtxvalidationduration | Maximum validation time for non-standard transactions (ms) |
+| MaxTxChainValidationBudget | int | 50 | maxtxchainvalidationbudget | Total time budget for chain validation (ms) |
+| ValidationClockCPU | bool | false | validationclockcpu | Use CPU time instead of wall-clock for validation timeouts |
+
+### Data Carrier Settings
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| DataCarrier | bool | false | datacarrier | Enable relaying of OP_RETURN data carrier transactions |
+| DataCarrierSize | int64 | 1000000 (1MB) | datacarriersize | Maximum OP_RETURN data size when DataCarrier is enabled |
+
+### Transaction Chain Limits
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| LimitAncestorCount | int | 1000000 | limitancestorcount | Maximum unconfirmed ancestor count in mempool |
+| LimitCPFPGroupMembersCount | int | 1000000 | limitcpfpgroupmemberscount | Maximum CPFP group members |
 
 ### Mining and Fee Settings
 
