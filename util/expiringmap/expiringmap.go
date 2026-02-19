@@ -20,6 +20,7 @@ type ExpiringMap[K comparable, V any] struct {
 	items      map[K]*itemWrapper[V]
 	evictionCh chan []V
 	evictionFn func(K, V) bool
+	stopCh     chan struct{}
 }
 
 // New creates a new ExpiringMap with the given expiry duration.
@@ -27,17 +28,35 @@ func New[K comparable, V any](expire time.Duration) *ExpiringMap[K, V] {
 	m := &ExpiringMap[K, V]{
 		expiry: expire,
 		items:  make(map[K]*itemWrapper[V]),
+		stopCh: make(chan struct{}),
 	}
 
 	if expire != 0 {
+		ticker := time.NewTicker(expire)
 		go func() {
-			for range time.Tick(expire) {
-				m.clean()
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					m.clean()
+				case <-m.stopCh:
+					return
+				}
 			}
 		}()
 	}
 
 	return m
+}
+
+// Stop stops the background cleanup goroutine.
+func (m *ExpiringMap[K, V]) Stop() {
+	select {
+	case <-m.stopCh:
+		// already stopped
+	default:
+		close(m.stopCh)
+	}
 }
 
 func (m *ExpiringMap[K, V]) WithEvictionChannel(ch chan []V) *ExpiringMap[K, V] {
