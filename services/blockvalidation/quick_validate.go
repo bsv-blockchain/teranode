@@ -101,7 +101,7 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 			return nil, errors.NewProcessingError("[buildSubtreeAndQueueWrite][%s] failed to get existing full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
 
-		fullSubtree, err := subtreepkg.NewSubtreeFromBytes(fullSubtreeBytes)
+		fullSubtree, err := u.newSubtreeFromBytes(fullSubtreeBytes)
 		if err != nil {
 			return nil, errors.NewProcessingError("[buildSubtreeAndQueueWrite][%s] failed to deserialize full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
@@ -716,7 +716,12 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	}()
 
 	// subtree only contains the tx hashes (nodes) of the subtree
-	subtree, err := subtreepkg.NewSubtreeFromReader(bufferedReader)
+	var subtree *subtreepkg.Subtree
+	if u.mmapDir != "" {
+		subtree, err = subtreepkg.NewSubtreeFromReaderMmap(bufferedReader, u.mmapDir)
+	} else {
+		subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
+	}
 	if err != nil {
 		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree %s", block.Hash().String(), subtreeHash.String(), err)}
 	}
@@ -825,7 +830,7 @@ func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *m
 			return errors.NewNotFoundError("[writeSubtreeFilesFromTxs][%s] failed to get full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
 
-		fullSubtree, err := subtreepkg.NewSubtreeFromBytes(fullSubtreeBytes)
+		fullSubtree, err := u.newSubtreeFromBytes(fullSubtreeBytes)
 		if err != nil {
 			return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to deserialize full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}

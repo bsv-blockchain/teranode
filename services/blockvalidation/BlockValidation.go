@@ -15,6 +15,7 @@
 package blockvalidation
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -172,6 +173,26 @@ type BlockValidation struct {
 
 	// backgroundTasks tracks background goroutines to ensure proper shutdown
 	backgroundTasks sync.WaitGroup
+
+	// mmapDir, when non-empty, enables mmap-backed subtree loading.
+	mmapDir string
+}
+
+// subtreeFromBytesWithMmap creates a subtree from bytes, using mmap if dir is non-empty.
+func subtreeFromBytesWithMmap(b []byte, mmapDir string) (*subtreepkg.Subtree, error) {
+	if mmapDir != "" {
+		st, err := subtreepkg.NewSubtreeFromReaderMmap(bytes.NewReader(b), mmapDir)
+		if err != nil {
+			return subtreepkg.NewSubtreeFromBytes(b)
+		}
+		return st, nil
+	}
+	return subtreepkg.NewSubtreeFromBytes(b)
+}
+
+// newSubtreeFromBytes creates a subtree from bytes, using mmap when configured.
+func (u *BlockValidation) newSubtreeFromBytes(b []byte) (*subtreepkg.Subtree, error) {
+	return subtreeFromBytesWithMmap(b, u.mmapDir)
 }
 
 // subtreeStoreWrapper wraps blob.Store to implement model.SubtreeStoreWriter
@@ -263,6 +284,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		setMinedChan:                  make(chan *chainhash.Hash, 1000),
 		revalidateBlockChan:           make(chan revalidateBlockData, 2),
 		stats:                         gocore.NewStat("blockvalidation"),
+		mmapDir:                       tSettings.BlockValidation.SubtreeMmapDir,
 	}
 
 	go func() {
@@ -908,7 +930,7 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 				}
 			}
 
-			subtree, err := subtreepkg.NewSubtreeFromBytes(subtreeBytes)
+			subtree, err := u.newSubtreeFromBytes(subtreeBytes)
 			if err != nil {
 				u.logger.Warnf("[setTxMined][%s] failed to parse subtree %d/%s: %s", block.Hash().String(), subtreeIdx, subtreeHash.String(), err)
 				continue
@@ -964,9 +986,12 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		return errors.NewProcessingError("[setTxMined][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 
-	// Clear subtrees to free memory - they're no longer needed after UpdateTxMinedStatus
-	// This prevents memory retention in the blockchain store cache if block came from there and was mutated
-	// Note: lastValidatedBlocks cache was already cleared at line 799 when we retrieved the block
+	// Close mmap-backed subtrees and clear to free memory
+	for _, st := range block.SubtreeSlices {
+		if st != nil {
+			st.Close()
+		}
+	}
 	block.SubtreeSlices = nil
 
 	// update block mined_set to true
