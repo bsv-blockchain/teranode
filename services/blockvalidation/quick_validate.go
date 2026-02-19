@@ -719,6 +719,12 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	var subtree *subtreepkg.Subtree
 	if u.mmapDir != "" {
 		subtree, err = subtreepkg.NewSubtreeFromReaderMmap(bufferedReader, u.mmapDir)
+		if err != nil {
+			// Fallback to heap on mmap failure — reset reader and retry
+			u.logger.Warnf("[getBlockTransactions][%s] mmap deserialization failed for subtree %s, falling back to heap: %v", block.Hash().String(), subtreeHash.String(), err)
+			bufferedReader.Reset(subtreeReader)
+			subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
+		}
 	} else {
 		subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
 	}

@@ -179,10 +179,13 @@ type BlockValidation struct {
 }
 
 // subtreeFromBytesWithMmap creates a subtree from bytes, using mmap if dir is non-empty.
+// Falls back to heap allocation on mmap failure.
 func subtreeFromBytesWithMmap(b []byte, mmapDir string) (*subtreepkg.Subtree, error) {
 	if mmapDir != "" {
 		st, err := subtreepkg.NewSubtreeFromReaderMmap(bytes.NewReader(b), mmapDir)
 		if err != nil {
+			// mmap failed — fall back to heap. This can happen if the mmap dir is
+			// misconfigured, out of disk, or permissions are wrong.
 			return subtreepkg.NewSubtreeFromBytes(b)
 		}
 		return st, nil

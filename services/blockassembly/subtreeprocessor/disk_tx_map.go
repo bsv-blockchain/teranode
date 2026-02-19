@@ -8,9 +8,9 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
-	cuckoo "github.com/seiflotfy/cuckoofilter"
-
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/tempstore"
+	cuckoo "github.com/seiflotfy/cuckoofilter"
 )
 
 const (
@@ -55,13 +55,13 @@ type diskShard struct {
 //   - Write throughput scales linearly with disk count (~500K/s per disk)
 //   - TxInpoints read only during rare ops (reorg, removeTx)
 type DiskTxMap struct {
-	shards     [numFilterShards]filterShard
-	disks      []diskShard
-	numDisks   int
-	count      atomic.Int64
-	basePaths  []string
-	prefix     string
-	capacity   uint
+	shards    [numFilterShards]filterShard
+	disks     []diskShard
+	numDisks  int
+	count     atomic.Int64
+	basePaths []string
+	prefix    string
+	capacity  uint
 }
 
 // DiskTxMapOptions configures the DiskTxMap.
@@ -113,7 +113,7 @@ func NewDiskTxMap(opts DiskTxMapOptions) (*DiskTxMap, error) {
 			for j := 0; j < i; j++ {
 				_ = m.disks[j].store.Close()
 			}
-			return nil, fmt.Errorf("failed to create badger store for disk %d (%s): %w", i, path, err)
+			return nil, errors.NewServiceError("failed to create badger store for disk %d (%s)", i, path, err)
 		}
 
 		m.disks[i] = diskShard{
@@ -244,6 +244,7 @@ func (m *DiskTxMap) Get(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool) {
 }
 
 // Delete removes a hash from the filter, recent map, and the correct disk shard.
+// Flushes the disk shard first to prevent a pending write from re-creating the entry.
 func (m *DiskTxMap) Delete(hash chainhash.Hash) bool {
 	s := &m.shards[shardOf(hash)]
 	s.mu.Lock()
@@ -251,7 +252,9 @@ func (m *DiskTxMap) Delete(hash chainhash.Hash) bool {
 	delete(s.recent, hash)
 	s.mu.Unlock()
 
-	_ = m.disks[m.diskOf(hash)].store.Delete(hash[:])
+	diskIdx := m.diskOf(hash)
+	m.flushDisk(diskIdx)
+	_ = m.disks[diskIdx].store.Delete(hash[:])
 	m.count.Add(-1)
 	return true
 }
@@ -296,7 +299,7 @@ func (m *DiskTxMap) Clear() {
 	for i := range m.disks {
 		d := &m.disks[i]
 		d.batch.Cancel()
-		_ = d.store.Close()
+		oldStore := d.store
 
 		store, err := tempstore.New(tempstore.Options{
 			BasePath:   d.path,
@@ -304,8 +307,12 @@ func (m *DiskTxMap) Clear() {
 			SyncWrites: false,
 		})
 		if err != nil {
+			// Keep old store to avoid nil-pointer panics on subsequent operations
+			d.batch = oldStore.NewWriteBatch()
 			continue
 		}
+
+		_ = oldStore.Close()
 		d.store = store
 		d.batch = store.NewWriteBatch()
 	}
@@ -343,15 +350,18 @@ func (m *DiskTxMap) UpdateSubtreeIndex(hash chainhash.Hash, subtreeIndex int16) 
 	d := &m.disks[m.diskOf(hash)]
 	val, err := d.store.Get(hash[:])
 	if err != nil || val == nil {
-		return fmt.Errorf("entry not found for hash %s", hash)
+		return errors.NewNotFoundError("entry not found for hash %s", hash.String())
 	}
 
 	if len(val) >= 2 {
-		binary.LittleEndian.PutUint16(val[:2], uint16(subtreeIndex))
-		return d.store.Put(hash[:], val)
+		// Copy before modifying — BadgerDB returned bytes must not be mutated in-place
+		valCopy := make([]byte, len(val))
+		copy(valCopy, val)
+		binary.LittleEndian.PutUint16(valCopy[:2], uint16(subtreeIndex))
+		return d.store.Put(hash[:], valCopy)
 	}
 
-	return fmt.Errorf("value too short for hash %s", hash)
+	return errors.NewProcessingError("value too short for hash %s", hash.String())
 }
 
 // flushDisk sends a flush request to a single disk shard and waits for completion.
