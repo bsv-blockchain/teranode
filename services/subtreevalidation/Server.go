@@ -560,8 +560,12 @@ func (u *Server) Stop(_ context.Context) error {
 		}
 	}
 
-	u.invalidSubtreeDeDuplicateMap.Stop()
-	u.orphanage.Stop()
+	if u.invalidSubtreeDeDuplicateMap != nil {
+		u.invalidSubtreeDeDuplicateMap.Stop()
+	}
+	if u.orphanage != nil {
+		u.orphanage.Stop()
+	}
 
 	return nil
 }
