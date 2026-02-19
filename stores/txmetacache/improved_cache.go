@@ -10,7 +10,7 @@ import (
 	"unsafe"
 
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
-	txmap "github.com/bsv-blockchain/go-tx-map"
+	swiss "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/cespare/xxhash/v2"
 	"github.com/ordishs/gocore"
@@ -635,7 +635,7 @@ type bucketNative struct {
 	chunks [][]byte
 
 	// m maps hash(k) to idx of (k, v) pair in chunks. Shard count equals BucketsCount.
-	m *txmap.SplitSwissLockFreeMapUint64
+	m *swiss.SplitSwissLockFreeMapUint64
 
 	// idx points to chunks for writing the next (k, v) pair.
 	idx uint64
@@ -674,7 +674,7 @@ func (b *bucketNative) Init(maxBytes uint64, _ int) error {
 	b.chunks = make([][]byte, maxChunksInt)
 	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
 	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
-	b.m = txmap.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
+	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
 
 	b.Reset()
 
@@ -692,7 +692,7 @@ func (b *bucketNative) Reset() {
 
 	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
 	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
-	b.m = txmap.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
+	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
 	b.idx = 0
 	b.gen = 1
 	b.currentGenCount = 0
@@ -720,7 +720,7 @@ func (b *bucketNative) cleanLockedMap() {
 	}
 
 	if newItems < bm.Length() {
-		bmNew := txmap.NewSplitSwissLockFreeMapUint64(newItems, uint64(BucketsCount))
+		bmNew := swiss.NewSplitSwissLockFreeMapUint64(newItems, uint64(BucketsCount))
 		for _, shard := range bm.Map() {
 			shard.Map().Iter(func(k uint64, v uint64) (stop bool) {
 				gen := v >> bucketSizeBits
@@ -1028,7 +1028,7 @@ type bucketTrimmed struct {
 
 	// m maps hash(k) to idx of (k, v) pair in chunks.
 	// m map[uint64]uint64
-	m *txmap.SplitSwissLockFreeMapUint64
+	m *swiss.SplitSwissLockFreeMapUint64
 	// pass txId directly. How is memory?
 	// m map[[32]byte]uint64
 
@@ -1091,7 +1091,7 @@ func (b *bucketTrimmed) Init(maxBytes uint64, _ int) error {
 	b.chunks = make([][]byte, maxChunksInt)
 	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
 	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
-	b.m = txmap.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
+	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
 	b.overWriting = false
 	b.Reset()
 
@@ -1109,7 +1109,7 @@ func (b *bucketTrimmed) Reset() {
 
 	// Capacity hint: expected entries per bucket (total MapInitialCapacity / BucketsCount)
 	mapCapacityPerBucket := MapInitialCapacity / BucketsCount
-	b.m = txmap.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
+	b.m = swiss.NewSplitSwissLockFreeMapUint64(mapCapacityPerBucket, uint64(BucketsCount))
 	b.idx = 0
 	b.gen = 1
 	b.currentGenCount = 0
@@ -1145,7 +1145,7 @@ func (b *bucketTrimmed) cleanLockedMap() {
 		// Re-create b.m with valid items, which weren't expired yet instead of deleting expired items from b.m.
 		// This should reduce memory fragmentation and the number Go objects behind b.m.
 		// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/5379
-		bmNew := txmap.NewSplitSwissLockFreeMapUint64(bm.Length(), uint64(BucketsCount))
+		bmNew := swiss.NewSplitSwissLockFreeMapUint64(bm.Length(), uint64(BucketsCount))
 
 		for _, maps := range bm.Map() {
 			maps.Map().Iter(func(k uint64, v uint64) (stop bool) {
