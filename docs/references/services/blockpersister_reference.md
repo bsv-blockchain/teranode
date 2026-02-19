@@ -406,20 +406,25 @@ The function includes safety checks to handle nil transactions, logging errors b
 
 The service uses settings from the `settings.Settings` structure, primarily focused on the Block section. These settings control various aspects of block persistence behavior, from storage locations to processing strategies.
 
-### Block Settings
+### BlockPersister Settings
+
+All settings use the `BlockPersister` section (setting keys prefixed with `blockpersister_`).
 
 #### Storage Configuration
 
-- **`Block.BlockStore`**: Block store URL. Defines the location of the blob store used for block data.
+- **`BlockPersister.Store`**: Block persister storage URL (default: `file://./data/blockstore`). Defines the location of the blob store used for persisted block data.
 
 #### Network Configuration
 
-- **`Block.PersisterHTTPListenAddress`**: HTTP listener address for the blob server if enabled. Format should be "host:port".
+- **`BlockPersister.HTTPListenAddress`**: HTTP listener address for the blob server (default: `:8083`).
 
 #### Processing Configuration
 
-- **`Block.BlockPersisterPersistSleep`**: Sleep duration between processing attempts when no blocks are available to process. Specified in milliseconds.
-- **`Block.BatchMissingTransactions`**: When true, enables batched retrieval of transaction metadata, which improves performance for high transaction volumes by reducing individual store requests.
+- **`BlockPersister.PersistSleep`**: Sleep duration between processing attempts when no blocks are available (default: `10s`).
+- **`BlockPersister.Concurrency`**: Number of parallel persistence workers (default: `8`).
+- **`BlockPersister.BatchMissingTransactions`**: When true, enables batched retrieval of transaction metadata for better performance (default: `true`).
+- **`BlockPersister.ProcessUTXOFiles`**: When true, processes UTXO files during block persistence (default: `true`).
+- **`BlockPersister.SkipUTXODelete`**: Debug setting to skip UTXO deletion during persistence (default: `false`).
 
 ### Interaction with Other Components
 

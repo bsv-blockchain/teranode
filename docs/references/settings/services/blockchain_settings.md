@@ -16,6 +16,26 @@
 | FSMStateChangeDelay | time.Duration | 0 | fsm_state_change_delay | **TESTING ONLY** - Delays FSM state transitions |
 | StoreDBTimeoutMillis | int | 5000 | blockchain_store_dbTimeoutMillis | Database operation timeout (store-level) |
 | InitializeNodeInState | string | "" | blockchain_initializeNodeInState | **UNUSED** - Defined but not referenced in code |
+| PostgresPool | *PostgresSettings | (see below) | blockchain_postgres_pool | PostgreSQL connection pool settings |
+
+### PostgreSQL Connection Pool (PostgresPool)
+
+When using PostgreSQL as the blockchain store, these nested settings configure connection pooling and resilience. All settings are prefixed with `blockchain_postgres_pool_`.
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| MaxOpenConns | int | 50 | blockchain_postgres_pool_postgres_maxOpenConns | Maximum concurrent database connections |
+| MaxIdleConns | int | 10 | blockchain_postgres_pool_postgres_maxIdleConns | Maximum idle connections in pool |
+| ConnMaxLifetime | time.Duration | 5m | blockchain_postgres_pool_postgres_connMaxLifetime | Maximum connection reuse duration |
+| ConnMaxIdleTime | time.Duration | 1m | blockchain_postgres_pool_postgres_connMaxIdleTime | Maximum idle time before closing |
+| RetryEnabled | bool | false | blockchain_postgres_pool_postgres_retryEnabled | Enable retries for transient errors |
+| RetryMaxAttempts | int | 3 | blockchain_postgres_pool_postgres_retryMaxAttempts | Maximum retry attempts |
+| RetryBaseDelay | time.Duration | 100ms | blockchain_postgres_pool_postgres_retryBaseDelay | Base delay for retry backoff |
+| CircuitBreakerEnabled | bool | false | blockchain_postgres_pool_postgres_circuitBreakerEnabled | Enable circuit breaker for database operations |
+| CircuitBreakerFailureThreshold | int | 5 | blockchain_postgres_pool_postgres_circuitBreakerFailureThreshold | Consecutive failures before opening circuit |
+| CircuitBreakerHalfOpenMax | int | 3 | blockchain_postgres_pool_postgres_circuitBreakerHalfOpenMax | Successful probes required to close circuit |
+| CircuitBreakerCooldown | time.Duration | 30s | blockchain_postgres_pool_postgres_circuitBreakerCooldown | Duration circuit stays open before testing |
+| CircuitBreakerFailureWindow | time.Duration | 10s | blockchain_postgres_pool_postgres_circuitBreakerFailureWindow | Time window for counting consecutive failures |
 
 ## Configuration Dependencies
 

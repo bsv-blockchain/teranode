@@ -76,9 +76,6 @@ type Server struct {
     // orphanage manages orphaned transactions that are missing their parent transactions
     orphanage *Orphanage
 
-    // pauseSubtreeProcessing is used to pause subtree processing while a block is being processed
-    pauseSubtreeProcessing atomic.Bool
-
     // bestBlockHeader is used to store the current best block header
     bestBlockHeader atomic.Pointer[model.BlockHeader]
 
@@ -282,8 +279,7 @@ Validates all subtrees referenced in a block to ensure they exist in storage and
 
 **Key Features:**
 
-- **Pause mechanism**: Temporarily pauses subtree processing during validation to avoid conflicts
-- **Chain awareness**: Only pauses processing for blocks on the current chain or extending it
+- **Chain awareness**: Checks whether the block is on the current chain or extending it
 - **Parallel processing**: Validates multiple subtrees concurrently for performance
 - **Level-based validation**: Processes transactions in dependency order across all subtrees
 - **Stream processing**: Efficiently processes subtree data directly from HTTP streams

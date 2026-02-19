@@ -391,8 +391,8 @@ Configuration values can be provided through the configuration file, environment
 !!! info "Authentication Levels"
     The server supports two levels of authentication:
 
-    1. **Admin-level access** with full permissions
-    2. **Limited access** with restricted permissions
+    1. **Admin-level access** with full permissions (configured via `rpc_user` / `rpc_pass`)
+    2. **Limited access** with restricted permissions (configured via `rpc_limit_user` / `rpc_limit_pass`)
 
 Authentication is performed using HTTP Basic Auth.
 
@@ -401,6 +401,24 @@ Authentication is performed using HTTP Basic Auth.
 - **Username and password** in the HTTP header
 - **Cookie-based authentication**
 - **Configuration file settings**
+
+### Admin vs Limited Access
+
+Admin users can execute all RPC commands. Limited users can execute the following commands:
+
+**Read-only commands:**
+createrawtransaction, decoderawtransaction, decodescript, estimatefee, getbestblock, getbestblockhash,
+getblock, getblockcount, getblockhash, getblockheader, getcfilter, getcfilterheader, getcurrentnet,
+getdifficulty, getheaders, getinfo, getnettotals, getnetworkhashps, getrawmempool, getrawtransaction,
+gettxout, gettxoutproof, help, searchrawtransactions, uptime, validateaddress, verifymessage,
+verifytxoutproof, version
+
+**State-changing commands (also available to limited users):**
+sendrawtransaction, submitblock, getminingcandidate, submitminingsolution, freeze, unfreeze, reassign
+
+**Admin-only commands (not available to limited users):**
+generate, generatetoaddress, getblockbyheight, getblockchaininfo, getchaintips, getmininginfo,
+getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, clearbanned, stop
 
 ### GRPC API Key Authentication
 
@@ -1592,36 +1610,15 @@ Mines blocks immediately to a specified address (for testing only).
 
 ### help
 
-Returns help text for RPC commands.
+**Note:** This command is registered but not yet implemented. It currently returns a null result. A future release will provide help text for RPC commands.
 
 **Parameters:**
 
-1. `command` (string, optional) - The command to get help for. If not provided, returns a list of all commands.
+1. `command` (string, optional) - The command to get help for.
 
 **Returns:**
 
-- `string` - Help text for the specified command or list of all commands
-
-**Example Request:**
-
-```json
-{
-    "jsonrpc": "1.0",
-    "id": "curltest",
-    "method": "help",
-    "params": ["getblock"]
-}
-```
-
-**Example Response:**
-
-```json
-{
-    "result": "getblock \"blockhash\" ( verbosity )\n\nReturns information about a block.\n\nArguments:\n1. blockhash (string, required) The block hash\n2. verbosity (numeric, optional, default=1) 0 for hex-encoded data, 1 for a json object, 2 for json object with tx data\n\nResult:\n...",
-    "error": null,
-    "id": "curltest"
-}
-```
+- `null` - The handler is not yet functional.
 
 ### getrawmempool
 
@@ -1858,7 +1855,7 @@ Common error codes that may be returned:
 
 The RPC interface implements connection limiting to prevent resource exhaustion. Default limits:
 
-- Maximum concurrent connections: 16 (configurable via `rpc_maxClients`)
+- Maximum concurrent connections: 1 (configurable via `rpc_max_clients`)
 
 ## Version Compatibility
 

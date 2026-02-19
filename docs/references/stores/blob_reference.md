@@ -33,7 +33,6 @@ Creates a new `HTTPBlobServer` instance with the provided logger and store URL.
 
 - `Start(ctx context.Context, addr string) error`: Starts the HTTP server on the specified address.
 - `ServeHTTP(w http.ResponseWriter, r *http.Request)`: Handles incoming HTTP requests.
-- `setCurrentBlockHeight(height uint32) error`: Updates the current block height in the underlying store if it supports this operation. Used for DAH (Delete-At-Height) functionality.
 
 ### Store Interface
 

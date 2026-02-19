@@ -271,6 +271,23 @@ func (u *Server) ValidateBlock(ctx context.Context, request *blockvalidation_api
 
 Validates a block and returns validation results without adding it to the blockchain. This method performs comprehensive block validation including structure checks, transaction validation, and consensus rule verification.
 
+#### GetCatchupStatus
+
+```go
+func (u *Server) GetCatchupStatus(ctx context.Context, _ *blockvalidation_api.EmptyMessage) (*blockvalidation_api.CatchupStatusResponse, error)
+```
+
+Returns the current status of any in-progress chain catchup operation. The response includes:
+
+- `is_catching_up` - whether a catchup is currently active
+- `peer_id`, `peer_url` - the peer being caught up from
+- `target_block_hash`, `target_block_height` - the target block
+- `current_height` - the local chain height when catchup started
+- `total_blocks`, `blocks_fetched`, `blocks_validated` - progress counters
+- `start_time`, `duration_ms` - timing information
+- `fork_depth`, `common_ancestor_hash`, `common_ancestor_height` - fork details
+- `previous_attempt` - details of the last failed catchup attempt (if any)
+
 ### Internal Methods
 
 #### processBlockFound

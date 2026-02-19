@@ -84,6 +84,7 @@ nav:
           - Peer Registry and Reputation: topics/features/peer_registry_reputation.md
           - UTXO Lock Records: topics/features/utxo_lock_records.md
       - Dashboard: topics/dashboard.md
+      - TUI Tools: topics/tui_tools.md
       - Core Services:
           - Alert Service: topics/services/alert.md
           - Asset Server: topics/services/assetServer.md
