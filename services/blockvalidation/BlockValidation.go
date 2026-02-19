@@ -267,16 +267,16 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 	}
 
 	bv := &BlockValidation{
-		logger:                        logger,
-		settings:                      tSettings,
-		blockchainClient:              blockchainClient,
-		subtreeStore:                  subtreeStore,
-		subtreeBlockHeightRetention:   tSettings.GetSubtreeValidationBlockHeightRetention(),
-		txStore:                       txStore,
-		utxoStore:                     utxoStore,
-		validatorClient:               validatorClient,
-		subtreeValidationClient:       subtreeValidationClient,
-		subtreeDeDuplicator:           NewDeDuplicator(tSettings.GetSubtreeValidationBlockHeightRetention()),
+		logger:                      logger,
+		settings:                    tSettings,
+		blockchainClient:            blockchainClient,
+		subtreeStore:                subtreeStore,
+		subtreeBlockHeightRetention: tSettings.GetSubtreeValidationBlockHeightRetention(),
+		txStore:                     txStore,
+		utxoStore:                   utxoStore,
+		validatorClient:             validatorClient,
+		subtreeValidationClient:     subtreeValidationClient,
+		subtreeDeDuplicator:         NewDeDuplicator(tSettings.GetSubtreeValidationBlockHeightRetention()),
 		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute).
 			WithEvictionFunction(func(_ chainhash.Hash, block *model.Block) bool {
 				// Close mmap-backed subtrees when block expires from cache
