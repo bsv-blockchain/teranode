@@ -1558,9 +1558,9 @@ func (s *Service) executeBatchExternalFileDeletions(ctx context.Context, files [
 				// Idempotent: File already deleted by LocalDAH cleanup, concurrent pruning, or previous run
 				// This operation is safely re-runnable - treat as success
 				alreadyDeletedCount++
-				s.logger.Debugf("External file for tx %s (type %d) already deleted", fileInfo.txHash.String(), fileInfo.fileType)
+				s.logger.Debugf("External file for tx %s (type %s) already deleted", fileInfo.txHash.String(), fileInfo.fileType)
 			} else {
-				s.logger.Errorf("Failed to delete external file for tx %s (type %d): %v", fileInfo.txHash.String(), fileInfo.fileType, err)
+				s.logger.Errorf("Failed to delete external file for tx %s (type %s): %v", fileInfo.txHash.String(), fileInfo.fileType, err)
 				errorCount++
 			}
 		} else {

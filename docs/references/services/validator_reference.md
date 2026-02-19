@@ -274,3 +274,10 @@ The service integrates with Kafka for:
 - Producing metadata for validated transactions for downstream consumers
 - Producing information about rejected transactions for monitoring and analysis
 - Supporting asynchronous processing for high throughput
+
+## Related Documents
+
+- [Validator Topic Guide](../../topics/services/validator.md)
+- [Validator Settings](../settings/services/validator_settings.md)
+- [Validator Protobuf Reference](../protobuf_docs/validatorProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

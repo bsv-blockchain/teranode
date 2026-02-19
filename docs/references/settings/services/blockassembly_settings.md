@@ -17,7 +17,7 @@
 | MoveBackBlockConcurrency | int | 375 | blockassembly_moveBackBlockConcurrency | Concurrency limit for reorg processing (SubtreeProcessor) |
 | ProcessRemainderTxHashesConcurrency | int | 375 | blockassembly_processRemainderTxHashesConcurrency | Concurrency limit for remainder tx hash processing |
 | SendBatchSize | int | 100 | blockassembly_sendBatchSize | Client batch size for sending transactions |
-| SendBatchTimeout | int | 2 | blockassembly_sendBatchTimeout | Client batch timeout in milliseconds |
+| SendBatchTimeout | int | 2 | blockassembly_sendBatchTimeout | Client batch timeout in seconds |
 | SubtreeProcessorBatcherSize | int | 1000 | blockassembly_subtreeProcessorBatcherSize | Subtree processing batch size |
 | SubtreeProcessorConcurrentReads | int | 375 | blockassembly_subtreeProcessorConcurrentReads | **CRITICAL** - Subtree read parallelism |
 | NewSubtreeChanBuffer | int | 1000 | blockassembly_newSubtreeChanBuffer | **CRITICAL** - New subtree channel buffer |
@@ -35,7 +35,15 @@
 | OnRestartValidateParentChain | bool | true | blockassembly_onRestartValidateParentChain | Enables parent chain validation on restart |
 | ParentValidationBatchSize | int | 1000 | blockassembly_parentValidationBatchSize | Parent validation batch size |
 | OnRestartRemoveInvalidParentChainTxs | bool | false | blockassembly_onRestartRemoveInvalidParentChainTxs | Filters transactions with invalid parent chains |
+| SubtreeStorageWorkers | int | 4 | blockassembly_subtreeStorageWorkers | Workers for subtree storage operations |
 | SubtreeAnnouncementInterval | time.Duration | 10s | blockassembly_subtreeAnnouncementInterval | Subtree announcement frequency |
+| UseColumnarBatch | bool | false | blockassembly_useColumnarBatch | Use columnar batch format for data layout |
+| UnminedTxDiskSortPath | string | "" | blockassembly_unminedTxDiskSortPath | Path for unmined transaction disk sorting |
+| UnminedTxDiskSortEnabled | bool | false | blockassembly_unminedTxDiskSortEnabled | Enable disk-based sorting for large mempools |
+| UnminedLoadingBatchSize | int | 10485760 | blockassembly_unminedLoadingBatchSize | Batch size for loading unmined transactions |
+| ParallelSetIfNotExistsThreshold | int | 10000 | blockassembly_parallelSetIfNotExistsThreshold | Threshold for parallelizing conditional writes |
+| StoreTxInpointsForSubtreeMeta | bool | false | blockassembly_storeTxInpointsForSubtreeMeta | Store transaction input points in subtree metadata |
+| IdleSleepDuration | time.Duration | 10ms | blockassembly_idle_sleep_duration | Sleep duration when subtree processor queue is empty |
 
 ## Hardcoded Settings (Not Configurable)
 

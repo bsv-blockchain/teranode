@@ -79,6 +79,7 @@ There are 2 clients invoking this endpoint:
 The sequence diagram for the Block Assembly to add a new block to the blockchain is as follows:
 
 ![blockchain_add_block.svg](img/plantuml/blockchain/blockchain_add_block.svg)
+
 2. **The `Block Validation` service:**
     - The `Block Validation` service calls the `AddBlock` method on the `Blockchain Service` to add a new block (received from another node) to the blockchain.
 

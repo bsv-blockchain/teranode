@@ -6,8 +6,20 @@
 |------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Counter    | A cumulative metric that represents an increasing counter whose value can only increase OR be reset to zero. <br/>Used for counting events or operations (e.g., number of requests, errors).                                                              |
 | CounterVec | A Counter that includes additional labels/dimensions. <br/>Allows for breaking down the counter by various labels (e.g., counting errors by type, requests by status code).                                                                               |
-| Gauge      | A metric that represents a single numerical value that can arbitrarily go up and down. <br/>Used for measured values like items in a channel or queue.                                                                                                    |
-| Histogram  | Samples observations (such as duration or size) and counts them in configurable buckets. <br/>Also provides a sum of all observed values and count of observations. <br/>Used for measuring distributions of values (e.g., request durations, response sizes). |
+| Gauge        | A metric that represents a single numerical value that can arbitrarily go up and down. <br/>Used for measured values like items in a channel or queue.                                                                                                    |
+| GaugeVec     | A Gauge that includes additional labels/dimensions. <br/>Allows for breaking down the gauge by various labels (e.g., index readiness by name).                                                                                                           |
+| Histogram    | Samples observations (such as duration or size) and counts them in configurable buckets. <br/>Also provides a sum of all observed values and count of observations. <br/>Used for measuring distributions of values (e.g., request durations, response sizes). |
+| HistogramVec | A Histogram that includes additional labels/dimensions. <br/>Allows for breaking down the histogram by various labels (e.g., duration by state, operation by scan type).                                                                                  |
+
+## Block Model Metrics
+
+| Metric Name                                    | Type      | Description                                  |
+|------------------------------------------------|-----------|----------------------------------------------|
+| `teranode_block_from_bytes`                    | Histogram | Histogram of Block.FromBytes                 |
+| `teranode_block_valid`                         | Histogram | Histogram of Block.Valid                     |
+| `teranode_block_check_merkle_root`             | Histogram | Histogram of Block.CheckMerkleRoot           |
+| `teranode_block_get_subtrees`                  | Histogram | Histogram of Block.GetSubtrees               |
+| `teranode_block_get_and_validate_subtrees`     | Histogram | Histogram of Block.GetAndValidateSubtrees    |
 
 ## Alert Service Metrics
 
@@ -45,7 +57,7 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockassembly_submit_mining_solution`               | Histogram | Histogram of SubmitMiningSolution in the blockassembly service                   |
 | `teranode_blockassembly_update_subtrees_dah`                  | Histogram | Histogram of updating subtrees DAH in the blockassembly service                  |
 | `teranode_blockassembly_block_assembler_get_mining_candidate` | Counter   | Number of calls to GetMiningCandidate in the block assembler                     |
-| `teranode_blockassembly_subtree_created`                      | Counter   | Number of subtrees created in the block assembler                                |
+| `teranode_blockassembly_subtree_stored`                       | Histogram | Histogram of subtree stored duration in block assembler                          |
 | `teranode_blockassembly_transactions`                         | Gauge     | Number of transactions currently in the block assembler subtree processor        |
 | `teranode_blockassembly_queued_transactions`                  | Gauge     | Number of transactions currently queued in the block assembler subtree processor |
 | `teranode_blockassembly_subtrees`                             | Gauge     | Number of subtrees currently in the block assembler subtree processor            |
@@ -57,7 +69,24 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockassembly_best_block_height`                    | Gauge     | Best block height in block assembly                                              |
 | `teranode_blockassembly_current_block_height`                 | Gauge     | Current block height in block assembly                                           |
 | `teranode_blockassembly_generate_blocks`                      | Histogram | Histogram of generating blocks in block assembler                                |
-| `teranode_blockassembly_current_state`                       | Gauge     | Current state of the block assembly process                                     |
+| `teranode_blockassembly_current_state`                                    | Gauge        | Current state of the block assembly process                                     |
+| `teranode_blockassembly_add_tx_counter`                                   | Counter      | Number of transactions added in the blockassembly service                       |
+| `teranode_blockassembly_state_transitions_total`                          | CounterVec   | Total number of state transitions (labels: `from`, `to`)                        |
+| `teranode_blockassembly_state_duration_seconds`                           | HistogramVec | Time spent in each state (label: `state`)                                       |
+| `teranode_blockassembly_utxo_index_ready`                                 | GaugeVec     | Status of UTXO index readiness (label: `index_name`)                            |
+| `teranode_blockassembly_utxo_index_wait_seconds`                          | HistogramVec | Time taken waiting for UTXO index to become ready (labels: `index_name`, `status`) |
+| `teranode_blockassembly_get_unmined_tx_iterator_seconds`                  | HistogramVec | Time taken to get unmined transaction iterator (labels: `full_scan`, `status`)  |
+| `teranode_blockassembly_iterator_processing_seconds`                      | HistogramVec | Time taken to process all transactions from the unmined iterator (label: `full_scan`) |
+| `teranode_blockassembly_iterator_transactions_total`                      | CounterVec   | Total number of transactions processed from the unmined iterator (label: `full_scan`) |
+| `teranode_blockassembly_iterator_transactions_stats`                      | CounterVec   | Statistics about transactions processed from the iterator (labels: `full_scan`, `category`) |
+| `teranode_blockassembly_mark_transactions_on_longest_chain_seconds`       | Histogram    | Time taken to mark transactions as mined on longest chain                       |
+| `teranode_blockassembly_mark_transactions_on_longest_chain_total`         | Counter      | Total number of transactions marked as mined on longest chain                   |
+| `teranode_blockassembly_sort_transactions_seconds`                        | HistogramVec | Time taken to sort unmined transactions by createdAt (label: `transaction_count_bucket`) |
+| `teranode_blockassembly_validate_parent_chain_seconds`                    | Histogram    | Time taken to validate parent chain for unmined transactions                    |
+| `teranode_blockassembly_validate_parent_chain_filtered_total`             | Counter      | Total number of transactions filtered out during parent chain validation        |
+| `teranode_blockassembly_add_directly_seconds`                             | Histogram    | Time taken for individual AddDirectly calls to subtree processor                |
+| `teranode_blockassembly_add_directly_total`                               | Counter      | Total number of transactions added directly to subtree processor                |
+| `teranode_blockassembly_add_directly_batch_seconds`                       | Histogram    | Time taken to add all unmined transactions to subtree processor                 |
 
 ## Blockchain Service Metrics
 
@@ -94,8 +123,14 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockchain_get_blocks_subtrees_not_set`       | Histogram | Histogram of GetBlocksSubtreesNotSet calls to the blockchain service    |
 | `teranode_blockchain_fsm_current_state`                 | Gauge     | Current state of the blockchain FSM                                     |
 | `teranode_blockchain_get_fsm_current_state`             | Histogram | Histogram of GetFSMCurrentState calls to the blockchain service         |
-| `teranode_blockchain_get_block_locator`                 | Histogram | Histogram of GetBlockLocator calls to the blockchain service            |
-| `teranode_blockchain_locate_block_headers`              | Histogram | Histogram of LocateBlockHeaders calls to the blockchain service         |
+| `teranode_blockchain_get_block_locator`                              | Histogram | Histogram of GetBlockLocator calls to the blockchain service                           |
+| `teranode_blockchain_locate_block_headers`                           | Histogram | Histogram of LocateBlockHeaders calls to the blockchain service                        |
+| `teranode_blockchain_get_latest_block_header_from_block_locator`     | Histogram | Histogram of GetLatestBlockHeaderFromBlockLocator calls to the blockchain service      |
+| `teranode_blockchain_get_block_headers_from_oldest`                  | Histogram | Histogram of GetBlockHeadersFromOldest calls to the blockchain service                 |
+| `teranode_blockchain_check_block_is_ancestor_of_block`               | Histogram | Histogram of CheckBlockIsAncestorOfBlock calls to the blockchain service               |
+| `teranode_blockchain_get_blocks_by_height`                           | Histogram | Histogram of GetBlocksByHeight calls to the blockchain service                         |
+| `teranode_blockchain_set_block_persisted_at`                         | Histogram | Histogram of SetBlockPersistedAt calls to the blockchain service                       |
+| `teranode_blockchain_get_blocks_not_persisted`                       | Histogram | Histogram of GetBlocksNotPersisted calls to the blockchain service                     |
 
 ## Block Persister Service Metrics
 
@@ -182,7 +217,9 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_legacy_peer_server_OnReject`     | Histogram | The time taken to handle OnReject     |
 | `teranode_legacy_peer_server_OnNotFound`   | Histogram | The time taken to handle OnNotFound   |
 | `teranode_legacy_peer_server_OnRead`       | Histogram | The time taken to handle OnRead       |
-| `teranode_legacy_peer_server_OnWrite`      | Histogram | The time taken to handle OnWrite      |
+| `teranode_legacy_peer_server_OnWrite`          | Histogram | The time taken to handle OnWrite          |
+| `teranode_legacy_peer_server_OnCreateStream`   | Histogram | The time taken to handle OnCreateStream   |
+| `teranode_legacy_peer_server_OnStreamAck`      | Histogram | The time taken to handle OnStreamAck      |
 
 ## Legacy NetSync Service Metrics
 
@@ -268,7 +305,6 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka`        | Histogram | Duration of setting tx meta cache from kafka      |
 | `teranode_subtreevalidation_del_tx_meta_cache_kafka`        | Histogram | Duration of deleting tx meta cache from kafka     |
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_errors` | Counter   | Number of errors setting tx meta cache from kafka |
-| `teranode_subtreevalidation_pause_duration`                | Histogram | Duration of subtree processing pauses                      |
 
 ## Validator Service Metrics
 
@@ -295,7 +331,7 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 
 | Metric Name                                   | Type  | Description                                                  |
 |-----------------------------------------------|-------|--------------------------------------------------------------|
-| `teranode_tx_meta_cache_size`                 | Gauge | Number of items in the tx meta cache                         |
+| `teranode_tx_meta_cache_size`                 | Gauge | Number of items in the tx meta cache (commented out in code, not emitted) |
 | `teranode_tx_meta_cache_insertions`           | Gauge | Number of insertions into the tx meta cache                  |
 | `teranode_tx_meta_cache_hits`                 | Gauge | Number of hits in the tx meta cache                          |
 | `teranode_tx_meta_cache_misses`               | Gauge | Number of misses in the tx meta cache                        |
@@ -305,6 +341,9 @@ Each metric measures "The time taken to handle a specific legacy action handler"
 | `teranode_tx_meta_cache_map_size`             | Gauge | Number of total elements in the improved cache's bucket maps |
 | `teranode_tx_meta_cache_total_elements_added` | Gauge | Number of total number of elements added to the txmetacache  |
 | `teranode_tx_meta_cache_hit_old_tx`           | Gauge | Number of hits on old txs in the tx meta cache              |
+| `teranode_tx_meta_cache_valid_entries_count`  | Gauge | Number of valid (readable) entries in the tx meta cache     |
+| `teranode_tx_meta_cache_current_gen_entries`  | Gauge | Number of entries in the current generation of the tx meta cache |
+| `teranode_tx_meta_cache_previous_gen_entries` | Gauge | Number of valid entries from the previous generation in the tx meta cache |
 
 ## Aerospike Service Metrics
 
@@ -314,7 +353,6 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 |---------------------------------------------------|------------|-----------------------------------------------------------------|
 | `teranode_aerospike_txmeta_get`                   | Counter    | Number of txmeta get calls done to aerospike                    |
 | `teranode_aerospike_utxo_store`                   | Counter    | Number of Create calls done to aerospike                        |
-| `teranode_aerospike_txmeta_set_mined`             | Counter    | Number of txmeta set_mined calls done to aerospike              |
 | `teranode_aerospike_txmeta_errors`                | CounterVec | Number of txmeta map errors                                     |
 | `teranode_aerospike_txmeta_get_multi`             | Counter    | Number of txmeta get_multi calls done to aerospike map          |
 | `teranode_aerospike_txmeta_get_multi_n`           | Counter    | Number of txmeta get_multi txs done to aerospike map            |
@@ -332,12 +370,8 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_aerospike_utxo_spend_batch_size`        | Histogram  | Size of utxo spend batch                                        |
 | `teranode_aerospike_get_external`                 | Histogram  | Duration of getting an external transaction from the blob store |
 | `teranode_aerospike_set_external`                 | Histogram  | Duration of setting an external transaction to the blob store   |
-| `teranode_aerospike_txmeta_get_counter_conflicting` | Counter    | Counter of conflicting TxMeta GET operations using Aerospike    |
-| `teranode_aerospike_txmeta_get_conflicting`        | Histogram  | Histogram of conflicting TxMeta GET operations using Aerospike  |
-| `teranode_aerospike_external_tx_errors`            | CounterVec | Number of external transaction operation errors                 |
-| `teranode_aerospike_batch_operation_duration`      | Histogram  | Duration of batch operations in aerospike                       |
-| `teranode_aerospike_connection_pool_size`          | Gauge      | Current size of aerospike connection pool                       |
-| `teranode_aerospike_operation_retries`             | Counter    | Number of operation retries in aerospike                        |
+| `teranode_aerospike_txmeta_get_counter_conflicting` | Histogram  | Duration of getting counter conflicting transactions from the blob store |
+| `teranode_aerospike_txmeta_get_conflicting`        | Histogram  | Duration of getting conflicting transactions from the blob store |
 
 ## SQL Service Metrics
 
@@ -350,8 +384,8 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_sql_utxo_reset`  | Counter    | Number of utxo reset calls done to sql  |
 | `teranode_sql_utxo_delete` | Counter    | Number of utxo delete calls done to sql |
 | `teranode_sql_utxo_errors` | CounterVec | Number of utxo errors                   |
-| `teranode_sql_utxo_get_counter_conflicting` | Counter | Counter of conflicting UTXO GET operations using SQL |
-| `teranode_sql_utxo_get_conflicting` | Histogram | Histogram of conflicting UTXO GET operations using SQL |
+| `teranode_sql_utxo_get_counter_conflicting` | Histogram  | Histogram of utxo get counter conflicting calls done to sql |
+| `teranode_sql_utxo_get_conflicting`         | Histogram  | Histogram of utxo get conflicting calls done to sql         |
 
 ## Subtree Processor Service Metrics
 

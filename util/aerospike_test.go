@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
@@ -484,7 +485,7 @@ func TestGetAerospikeClient_MultipleHosts(t *testing.T) {
 			aerospikeConnections = make(map[string]*uaerospike.Client)
 			aerospikeConnectionMutex.Unlock()
 
-			u, err := url.Parse(tt.urlString)
+			u, err := urlutil.ParseMultiHostURL(tt.urlString)
 			require.NoError(t, err)
 
 			_, err = GetAerospikeClient(logger, u, testSettings)

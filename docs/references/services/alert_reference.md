@@ -379,7 +379,7 @@ Operational configuration and state:
 
 The datastore connection is configured via the `StoreURL` setting:
 
-```
+```yaml
 # SQLite example
 StoreURL: sqlite://path/to/alert.db
 
@@ -422,3 +422,10 @@ For PostgreSQL and MySQL connections:
 - **Alert History**: All alert messages are retained for audit purposes
 - **Consensus Data**: Consensus validation data is preserved
 - **Cleanup**: No automatic cleanup - manual maintenance may be required
+
+## Related Documents
+
+- [Alert Topic Guide](../../topics/services/alert.md)
+- [Alert Settings](../settings/services/alert_settings.md)
+- [Alert Protobuf Reference](../protobuf_docs/alertProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

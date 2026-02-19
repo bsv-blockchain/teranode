@@ -1,4 +1,4 @@
-### How to Add a New Protobuf Service
+# How to Add a New Protobuf Service
 
 In addition to [generating existing Protobuf files](./generatingProtobuf.md), you may need to extend the project by adding a new Protobuf service or message (e.g., defining a new RPC endpoint) or adding a dependency on a new `.proto` file. This section explains how to:
 
@@ -6,7 +6,7 @@ In addition to [generating existing Protobuf files](./generatingProtobuf.md), yo
 2. **Update the `Makefile`** to ensure your new Protobuf definitions are compiled correctly.
 3. **Verify the changes** by generating the necessary Go files.
 
-#### Step 1: Define the New Protobuf Service or Endpoint
+## Step 1: Define the New Protobuf Service or Endpoint
 
 To start, you’ll need to define your new service or message by creating or modifying a `.proto` file. For example, if you want to add a new RPC method to an existing service or create a completely new service, you would write it in a `.proto` file.
 
@@ -32,7 +32,7 @@ message NewValidationResponse {
 
 You can also define a completely new service and corresponding messages in a new `.proto` file, such as `services/newservice/newservice_api/newservice_api.proto`.
 
-#### Step 2: Update the `Makefile`
+## Step 2: Update the `Makefile`
 
 Once your new or modified `.proto` file is ready, you need to update the `Makefile` to ensure the file is included in the Protobuf generation process.
 
@@ -57,7 +57,7 @@ services/newservice/newservice_api/newservice_api.proto
 
 This ensures that the new `.proto` file is processed and generates the corresponding Go code (both the message definitions and the gRPC stubs).
 
-#### Step 3: Regenerate the Protobuf Files
+## Step 3: Regenerate the Protobuf Files
 
 After updating the `Makefile`, you need to regenerate the Go files to reflect the changes in your new or modified `.proto` files.
 
@@ -69,7 +69,7 @@ make gen
 
 This will generate the necessary Go files for all services, including the newly added ones. The generated files will be located alongside the `.proto` files, following the standard naming conventions (e.g., `newservice_api.pb.go` and `newservice_api_grpc.pb.go`).
 
-#### Step 4: Verify the Changes
+## Step 4: Verify the Changes
 
 Once the Go files have been generated, you can verify that the new service or endpoint is available by checking the generated `.pb.go` and `_grpc.pb.go` files. For instance, after adding a new method, you should see:
 
@@ -86,7 +86,7 @@ type SubtreeValidationAPIServer interface {
 }
 ```
 
-#### Example: Creating a Complete New Service
+## Example: Creating a Complete New Service
 
 When creating a new service from scratch, your `.proto` file should include all required elements. Here's a complete example for `services/newservice/newservice_api/newservice_api.proto`:
 
@@ -140,7 +140,7 @@ message ProcessDataResponse {
 - Common patterns like `HealthGRPC` endpoint (present in all services)
 - Comprehensive comments for all messages and RPC methods
 
-#### Example: Using Shared Protobuf Models
+## Example: Using Shared Protobuf Models
 
 Teranode already provides shared data models in `model/model.proto` that can be used across services. To use these in your new service:
 
@@ -167,7 +167,7 @@ If you need to add new shared models, update `model/model.proto` directly. The M
 - `errors/error.proto` - Error handling structures
 - `stores/utxo/status.proto` - UTXO status definitions
 
-#### Step 5: Implement the Service Interface
+## Step 5: Implement the Service Interface
 
 After generating the protobuf files, you need to implement the service interface in your Go code. Create an implementation file (e.g., `services/newservice/service.go`):
 
@@ -217,7 +217,7 @@ func (s *Service) ProcessData(ctx context.Context, req *newservice_api.ProcessDa
 3. Write unit tests for your service implementation
 4. Add integration tests if needed
 
-#### Step 6: Cleaning Up Generated Files (Optional)
+## Step 6: Cleaning Up Generated Files (Optional)
 
 If you need to remove the previously generated files for some reason (e.g., during refactoring), you can use the following command:
 
@@ -227,7 +227,7 @@ make clean_gen
 
 This will delete all generated `.pb.go` files, allowing you to start fresh when running `make gen` again.
 
-#### Additional Makefile Commands
+## Additional Makefile Commands
 
 For more information about the `Makefile` and additional commands you can use, please refer to the [Makefile Documentation](./makefile.md).
 

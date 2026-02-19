@@ -6,7 +6,7 @@
 2. [Functionality](#2-functionality)
     - [2.1 Service Initialization](#21-service-initialization)
     - [2.2 Block Discovery and Processing](#22-block-discovery-and-processing)
-    - [2.3 Subtree Processing Details](#23-subtree-processing-details)
+    - [2.3 Subtree Processing Details (Two-Phase Architecture)](#23-subtree-processing-details-two-phase-architecture)
 3. [Data Model](#3-data-model)
 4. [Technology](#4-technology)
 5. [Directory Structure and Main Files](#5-directory-structure-and-main-files)

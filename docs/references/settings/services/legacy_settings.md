@@ -25,6 +25,7 @@
 | TempStore | *url.URL | "file://./data/tempstore" | temp_store | **CRITICAL** - Temporary storage location |
 | PeerIdleTimeout | time.Duration | 125s | legacy_peerIdleTimeout | **CRITICAL** - Peer inactivity timeout |
 | PeerProcessingTimeout | time.Duration | 3m | legacy_peerProcessingTimeout | **CRITICAL** - Message processing timeout |
+| Upnp | bool | false | legacy_upnp | Enable UPnP for automatic port mapping |
 
 ## Configuration Dependencies
 

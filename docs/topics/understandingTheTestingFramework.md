@@ -70,7 +70,7 @@ The framework uses three nodes by default because this is the minimum number nee
 
 ### Service Organization
 
-```
+```text
 Node Instance
 ├── Blockchain Service
 ├── Block Assembly Service
@@ -227,7 +227,7 @@ Why it matters: Ensures compliance with Bitcoin consensus rules.
 
 1. **Setup**
 
-    ```
+    ```text
     Initialize Framework
     ├── Create Docker environment
     ├── Start services
@@ -237,7 +237,7 @@ Why it matters: Ensures compliance with Bitcoin consensus rules.
 
 2. **Execution**
 
-    ```
+    ```text
     Run Test
     ├── Prepare test state
     ├── Execute test actions
@@ -247,7 +247,7 @@ Why it matters: Ensures compliance with Bitcoin consensus rules.
 
 3. **Teardown**
 
-    ```
+    ```text
     Cleanup
     ├── Stop services
     ├── Remove containers

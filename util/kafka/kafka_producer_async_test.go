@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -350,7 +351,7 @@ func TestKafkaAsyncProducerBrokersURLParsing(t *testing.T) {
 	logger := &mockAsyncLogger{}
 	ctx := context.Background()
 
-	kafkaURL, err := url.Parse("memory://broker1:9092,broker2:9092,broker3:9092/test-topic")
+	kafkaURL, err := urlutil.ParseMultiHostURL("memory://broker1:9092,broker2:9092,broker3:9092/test-topic")
 	require.NoError(t, err)
 
 	producer, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, nil)
@@ -368,7 +369,7 @@ func TestKafkaAsyncProducerWithMultipleBrokers(t *testing.T) {
 	ctx := context.Background()
 
 	// Test with multiple brokers in URL
-	kafkaURL, err := url.Parse("memory://broker1:9092,broker2:9093/test-topic?partitions=3")
+	kafkaURL, err := urlutil.ParseMultiHostURL("memory://broker1:9092,broker2:9093/test-topic?partitions=3")
 	require.NoError(t, err)
 
 	producer, err := NewKafkaAsyncProducerFromURL(ctx, logger, kafkaURL, nil)

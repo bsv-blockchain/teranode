@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/ordishs/gocore"
 )
 
@@ -56,9 +57,17 @@ func getUint64(key string, defaultValue uint64, alternativeContext ...string) ui
 }
 
 func getURL(key string, defaultValue string, alternativeContext ...string) *url.URL {
-	value, _, _ := gocore.Config(alternativeContext...).GetURL(key, defaultValue)
+	str, _ := gocore.Config(alternativeContext...).Get(key, defaultValue)
+	if str == "" {
+		return nil
+	}
 
-	return value
+	u, err := urlutil.ParseMultiHostURL(str)
+	if err != nil {
+		return nil
+	}
+
+	return u
 }
 
 func getBool(key string, defaultValue bool, alternativeContext ...string) bool {

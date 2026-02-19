@@ -261,3 +261,10 @@ The server initializes Prometheus metrics for monitoring various aspects of its 
 ## Extensibility
 
 The server is designed to be extensible, supporting multiple communication protocols (UDP, gRPC) for transaction ingestion. New protocols or processing methods can be added by implementing additional handlers and integrating them into the server's start-up process.
+
+## Related Documents
+
+- [Propagation Topic Guide](../../topics/services/propagation.md)
+- [Propagation Settings](../settings/services/propagation_settings.md)
+- [Propagation Protobuf Reference](../protobuf_docs/propagationProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

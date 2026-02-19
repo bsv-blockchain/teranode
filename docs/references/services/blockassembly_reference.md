@@ -353,6 +353,14 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 
 Resets the block assembly service to a clean state, removing all transactions and subtrees. This is useful for recovery after errors or when a full reset is needed.
 
+#### ResetBlockAssemblyFully
+
+```go
+func (ba *BlockAssembly) ResetBlockAssemblyFully(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error)
+```
+
+Performs a comprehensive reset of block assembly state, including clearing the mempool and all unmined transactions in addition to the standard reset. This is a more thorough version of `ResetBlockAssembly` intended for complete recovery scenarios.
+
 #### GetBlockAssemblyState
 
 ```go
@@ -651,3 +659,10 @@ func (q *LockFreeQueue) Dequeue(validFromMillis int64) *TxIDAndFee
 ```
 
 Removes and returns a transaction from the queue if its validation time has passed. This method implements the delay mechanism that allows transactions to be properly validated before being included in subtrees.
+
+## Related Documents
+
+- [Block Assembly Topic Guide](../../topics/services/blockAssembly.md)
+- [Block Assembly Settings](../settings/services/blockassembly_settings.md)
+- [Block Assembly Protobuf Reference](../protobuf_docs/blockassemblyProto.md)
+- [Prometheus Metrics](../prometheusMetrics.md)

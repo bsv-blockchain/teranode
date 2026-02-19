@@ -770,8 +770,6 @@ The `getminingcandidate` RPC command in Bitcoin RPC is used to retrieve a candid
 
 #### Process Flow
 
-![rpc-get-mining-candidate.svg](img/plantuml/rpc/rpc-get-mining-candidate.svg)
-
 1. **Mining Candidate Retrieval**:
 
     - Calls the `GetMiningCandidate` method on the `blockAssemblyClient` to retrieve a mining candidate.

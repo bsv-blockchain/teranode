@@ -25,12 +25,17 @@ Usage: teranode-cli <command> [options]
     fix-chainwork        Fix incorrect chainwork values in blockchain database
     getfsmstate          Get the current FSM State
     import-blocks        Import blockchain from CSV
+    loadunminedbench     Benchmark loadUnminedTransactions with CPU and memory profiling
     logs                 Interactive log viewer with filtering and search
     monitor              Live TUI dashboard for monitoring node status
+    reconsiderblock      Reconsider a block that was previously marked as invalid
+    remainderbench       Benchmark processRemainderTransactionsAndDequeue with CPU and memory profiling
     resetblockassembly   Reset block assembly state
     seeder               Seeder
     setfsmstate          Set the FSM State
     settings             Settings
+    subtreebench         Benchmark SubtreeProcessor throughput with CPU and memory profiling
+    txmapbench           Benchmark CreateTransactionMap with CPU and memory profiling
     utxopersister        Utxo Persister
     validate-utxo-set    Validate UTXO set file
 
@@ -78,6 +83,7 @@ Usage: teranode-cli <command> [options]
 |                      |                               | `--hash` - Hash of the data to process                           |
 |                      |                               | `--skipHeaders` - Skip processing headers                        |
 |                      |                               | `--skipUTXOs` - Skip processing UTXOs                            |
+|                      |                               | `--force` - Force processing even if lastProcessed.dat exists    |
 | `filereader`         | Read and process files        | `--verbose` - Enable verbose output                              |
 |                      |                               | `--checkHeights` - Check heights in UTXO headers                 |
 |                      |                               | `--useStore` - Use store                                         |
@@ -85,6 +91,7 @@ Usage: teranode-cli <command> [options]
 | `getfsmstate`        | Get the current FSM state     | None                                                             |
 | `setfsmstate`        | Set the FSM state             | `--fsmstate` - Target FSM state                                  |
 |                      |                               | &nbsp;&nbsp;Values: running, idle, catchingblocks, legacysyncing |
+| `reconsiderblock`    | Reconsider an invalid block   | `<blockhash>` - Hash of the block to reconsider                 |
 | `resetblockassembly` | Reset block assembly state    | `--full-reset` - Perform full reset including clearing mempool  |
 
 ### Database Maintenance
@@ -240,6 +247,15 @@ Options:
 - `--hash`: Hash of the UTXO set / headers to process (required)
 - `--skipHeaders`: Skip processing headers
 - `--skipUTXOs`: Skip processing UTXOs
+- `--force`: Force processing even if `lastProcessed.dat` exists
+
+### Reconsider Block
+
+```bash
+teranode-cli reconsiderblock <blockhash>
+```
+
+Re-validates a block that was previously marked as invalid, allowing it to be reconsidered for inclusion in the active chain.
 
 ### Reset Block Assembly
 
@@ -422,6 +438,73 @@ Comprehensive Aerospike statistics including:
 # Launch the monitor dashboard
 teranode-cli monitor
 ```
+
+## Benchmarking Tools
+
+Four profiling commands for measuring block assembly performance. Each writes CPU and memory profiles to disk for analysis with `go tool pprof`.
+
+### Subtree Benchmark
+
+```bash
+teranode-cli subtreebench [options]
+```
+
+Benchmarks SubtreeProcessor throughput.
+
+Options:
+
+- `--subtree-size`: Size of subtree (default: 1048576)
+- `--producers`: Number of producer goroutines (default: 16)
+- `--iterations`: Number of transactions to process (default: 10000000)
+- `--duration`: Duration in seconds, 0 for iteration-based (default: 0)
+- `--cpu-profile`: CPU profile output file (default: `cpu.prof`)
+- `--mem-profile`: Memory profile output file (default: `mem.prof`)
+
+### Load Unmined Benchmark
+
+```bash
+teranode-cli loadunminedbench [options]
+```
+
+Benchmarks loadUnminedTransactions performance.
+
+Options:
+
+- `--tx-count`: Number of transactions (default: 1000000)
+- `--full-scan`: Use full scan mode
+- `--aerospike-url`: Aerospike URL (empty uses a testcontainer)
+- `--cpu-profile`: CPU profile output file (default: `loadunmined_cpu.prof`)
+- `--mem-profile`: Memory profile output file (default: `loadunmined_mem.prof`)
+
+### Transaction Map Benchmark
+
+```bash
+teranode-cli txmapbench [options]
+```
+
+Benchmarks CreateTransactionMap performance.
+
+Options:
+
+- `--subtrees`: Number of subtrees (default: 100)
+- `--txs-per-subtree`: Transactions per subtree (default: 1048576)
+- `--cpu-profile`: CPU profile output file (default: `createtransactionmap_cpu.prof`)
+- `--mem-profile`: Memory profile output file (default: `createtransactionmap_mem.prof`)
+
+### Remainder Benchmark
+
+```bash
+teranode-cli remainderbench [options]
+```
+
+Benchmarks processRemainderTransactionsAndDequeue performance.
+
+Options:
+
+- `--subtrees`: Number of subtrees (default: 100)
+- `--txs-per-subtree`: Transactions per subtree (default: 1048576)
+- `--cpu-profile`: CPU profile output file (default: `processremaindertxanddequeue_cpu.prof`)
+- `--mem-profile`: Memory profile output file (default: `processremaindertxanddequeue_mem.prof`)
 
 ## Error Handling
 

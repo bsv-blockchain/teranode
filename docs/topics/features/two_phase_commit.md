@@ -54,25 +54,25 @@ The Two-Phase Transaction Commit process is built on a critical assumption that 
 
 > **Critical Assumption**: Parent transactions are either mined, in block template, or in previous block. No other option is possible.
 
-This means that for any transaction being processed,  **all input transactions (parent transactions) must be in one of these states**:
+This means that for any transaction being processed, **all input transactions (parent transactions) must be in one of these states**:
 
-    - Already mined in a confirmed block (transactions in blocks with multiple confirmations)
-    - Currently in a block template (pending mining, not yet in a block)
-    - In the immediately previous block (transactions in the most recently mined block)
+- Already mined in a confirmed block (transactions in blocks with multiple confirmations)
+- Currently in a block template (pending mining, not yet in a block)
+- In the immediately previous block (transactions in the most recently mined block)
 
 > **Note**: The distinction between "already mined in a confirmed block" and "in the immediately previous block" is important. The former refers to transactions with multiple confirmations that are considered stable, while the latter refers specifically to transactions in the most recently added block that have only one confirmation and may still be subject to reorganization.
 
 **Implications**:
 
-    - This assumption ensures that all parent transactions are either confirmed or in the process of being confirmed
-    - It prevents the system from processing transactions that refer to parent transactions that are still in an intermediate state
-    - It creates a clean dependency chain where transactions build upon others that are already securely in the system
+- This assumption ensures that all parent transactions are either confirmed or in the process of being confirmed
+- It prevents the system from processing transactions that refer to parent transactions that are still in an intermediate state
+- It creates a clean dependency chain where transactions build upon others that are already securely in the system
 
 **Security Benefits**:
 
-    - Prevents transaction graph inconsistencies
-    - Eliminates scenarios where transaction outputs could be spent before their parent transactions are fully committed
-    - Supports the effectiveness of the locked flag mechanism
+- Prevents transaction graph inconsistencies
+- Eliminates scenarios where transaction outputs could be spent before their parent transactions are fully committed
+- Supports the effectiveness of the locked flag mechanism
 
 This assumption is foundational to the system's security model and crucial for the proper functioning of the two-phase commit process.
 

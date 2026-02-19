@@ -1,13 +1,11 @@
 
-## 📜 Network Consensus Rules
+# Network Consensus Rules
 
 Bitcoin Nodes must adhere to the following network consensus rules. These rules are **protocol level rules** that are **set in stone**:
 
 ---
 
----
-
-### 📦 Block Size Rule
+## 📦 Block Size Rule
 
 When a block is found, there is an economic limit applied to the block size which is imposed by nodes on the network.
 
@@ -17,7 +15,7 @@ The Teranode Node system will be unbounded, so the block size limit will be pure
 
 ---
 
-### 💰 Block Subsidy Rule
+## 💰 Block Subsidy Rule
 
 Nodes receive a reward each time they add a new block to the blockchain. The reward consists of a Block Subsidy and transaction fees.
 
@@ -27,7 +25,7 @@ Every **210,000 blocks**, the value of the block subsidy is halved. The last hal
 
 ---
 
-### ⚖️ Proof-of-Work Target Adjustment Rule
+## ⚖️ Proof-of-Work Target Adjustment Rule
 
 The Target value to find a Proof-of-Work is adjusted to maintain a block discovery rate of approximately **10 minutes**.
 
@@ -37,7 +35,7 @@ The Teranode Node system will maintain the current Target Adjustment schedule of
 
 ---
 
-### 🏗️ Genesis Block Rule
+## 🏗️ Genesis Block Rule
 
 All new blocks must be added to the unbroken chain of Proof-of-Work leading back to the Genesis block or the initial block in the chain.
 
@@ -47,13 +45,13 @@ Given the chain of block headers can be used to adhere to the Genesis Block rule
 
 ---
 
-### ⏰ Coinbase Maturity Rule
+## ⏰ Coinbase Maturity Rule
 
 Nodes cannot spend the output of a Coinbase Transaction unless **99 blocks** have been added to the chain after it. In other words, for a node to spend its block reward, **99 more blocks** must be added to the chain.
 
 ---
 
-### 📏 Maximum Transaction Size Rule
+## 📏 Maximum Transaction Size Rule
 
 Bitcoin Nodes collectively set a practical limit for the size of transactions they are willing to timestamp into a block.
 
@@ -61,7 +59,7 @@ The Teranode Node project will ensure this limit is entirely economic by allowin
 
 ---
 
-### 🔒 nLockTime and nSequence Rules
+## 🔒 nLockTime and nSequence Rules
 
 The nSequence fields of every transaction input and the nLockTime field of every transaction collectively determine the finality of a transaction.
 
@@ -105,6 +103,6 @@ For example, a standard transaction template type could be transactions that onl
 
 ---
 
-### 📝 Transaction Format Rule
+## 📝 Transaction Format Rule
 
 Transactions must conform to the data formatting rules of the Bitcoin protocol.

@@ -483,7 +483,7 @@ func (b *Blockchain) startHTTP(ctx context.Context) error {
 
 		err := e.Shutdown(context.Background())
 		if err != nil {
-			b.logger.Errorf("[Blockchain] %s (http) service shutdown error: %s", err)
+			b.logger.Errorf("[Blockchain] (http) service shutdown error: %s", err)
 		}
 	}()
 

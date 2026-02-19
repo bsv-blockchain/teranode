@@ -11,7 +11,7 @@ This guide assists you in setting up the Teranode project on your machine. The b
     - [3.2 (Recommended) Use a Python Virtual Environment to install PyYAML](#32-recommended-use-a-python-virtual-environment-to-install-pyyaml)
     - [3.3 Install Dependencies Within the Virtual Environment](#33-install-dependencies-within-the-virtual-environment)
     - [3.4 Verify Installation](#34-verify-installation)
-    - [Alternative: Use pipx for CLI tools - NOT recommended for Teranode Development](#alternative-use-pipx-for-cli-tools---not-recommended-for-teranode-development)
+    - [Alternative: Use pipx for CLI tools - NOT recommended for Teranode Development](#alternative-use-pipx-for-cli-tools-not-recommended-for-teranode-development)
 4. [Clone the Project and Install Dependencies](#4-clone-the-project-and-install-dependencies)
 5. [Configure Settings](#5-configure-settings)
     - [5.1 Introducing developer-specific settings in `settings_local.conf`](#51-introducing-developer-specific-settings-in-settings_localconf)
@@ -27,7 +27,7 @@ This guide assists you in setting up the Teranode project on your machine. The b
 
 ## 1. Install Go
 
-Download and install the latest version of Go. As of October 2025, it's `1.25.2`.
+Download and install the latest version of Go. As of February 2026, it's `1.26.0`.
 
 [Go Installation Guide](https://go.dev/doc/install)
 
@@ -39,7 +39,7 @@ Open a new terminal and execute:
 go version
 ```
 
-It should display `go1.25.2` or above.
+It should display `go1.26.0` or above.
 
 ## 2. Set Go Environment Variables
 

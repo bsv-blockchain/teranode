@@ -13,7 +13,7 @@ permissions:
 env:
   REPO: teranode
   SETTINGS_CONTEXT_DEFAULT: test
-  GO_VERSION: "1.25.2"
+  GO_VERSION: "1.26.0"
 
 jobs:
   smoketest:

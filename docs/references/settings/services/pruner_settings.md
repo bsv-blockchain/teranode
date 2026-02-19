@@ -127,6 +127,166 @@ pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_POR
 - `localhost:8096` - Listen only on localhost (more secure)
 - `0.0.0.0:8096` - Explicitly listen on all IPv4 interfaces
 
+## Behavior Control Settings
+
+### pruner_skipDuringCatchup
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Environment Variable**: `pruner_skipDuringCatchup`
+
+**Description**: Skip pruning during blockchain catchup
+
+When enabled, the pruner checks FSM state and skips all deletion operations during catchup. This prevents race conditions where block validation marks transactions as mined faster than the pruner can preserve their parents.
+
+**Values:**
+
+- `false` (default): Normal pruning during catchup (safe with retention >= 288 blocks)
+- `true`: Skip all pruning during catchup state
+
+### pruner_blockAssemblyWaitTimeout
+
+**Type**: Duration
+
+**Default**: `10m`
+
+**Environment Variable**: `pruner_blockAssemblyWaitTimeout`
+
+**Description**: Maximum wait for Block Assembly service to be ready before pruning
+
+Sets the maximum time to wait for Block Assembly to be ready before proceeding with pruning operations. Prevents pruning data that could be needed for block construction.
+
+### pruner_connectionPoolWarningThreshold
+
+**Type**: Float64
+
+**Default**: `0.7`
+
+**Environment Variable**: `pruner_connectionPoolWarningThreshold`
+
+**Description**: Connection pool utilization warning threshold (0.0-1.0)
+
+When Aerospike connection pool utilization exceeds this threshold, the pruner auto-reduces chunk group limit to prevent pool exhaustion.
+
+### pruner_block_trigger
+
+**Type**: String
+
+**Default**: `OnBlockPersisted`
+
+**Environment Variable**: `pruner_block_trigger`
+
+**Description**: When to trigger pruning operations
+
+**Values:**
+
+- `OnBlockPersisted` (default): Triggers on BlockPersisted notifications (coordinated with Block Persister)
+- `OnBlockMined`: Triggers on Block notifications with mined_set=true
+
+### pruner_force_ignore_block_persister_height
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Environment Variable**: `pruner_force_ignore_block_persister_height`
+
+**Description**: Force ignore block persister height tracking
+
+When enabled, uses Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height.
+
+### pruner_utxoSetTTL
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Environment Variable**: `pruner_utxoSetTTL`
+
+**Description**: Use TTL expiration instead of hard delete for UTXO records
+
+When enabled, sets Aerospike record TTL to 1 second instead of hard deleting. This produces optimized tombstones and reduces write amplification.
+
+### pruner_skipBlobDeletion
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Environment Variable**: `pruner_skipBlobDeletion`
+
+**Description**: Skip blob deletion scheduling
+
+When enabled, skips scheduled deletion of blob store data (transactions and subtrees) based on Delete-At-Height values.
+
+### pruner_blobDeletionSafetyWindow
+
+**Type**: uint32
+
+**Default**: `10`
+
+**Environment Variable**: `pruner_blobDeletionSafetyWindow`
+
+**Description**: Number of blocks to wait after Block Persister height before deleting blobs
+
+Provides a safety margin to ensure persisted blocks are stable before deleting their associated blobs.
+
+### pruner_blobDeletionBatchSize
+
+**Type**: Integer
+
+**Default**: `1000`
+
+**Environment Variable**: `pruner_blobDeletionBatchSize`
+
+**Description**: Maximum number of blob deletions to process per pruning trigger
+
+Limits deletions per cycle to prevent overwhelming the blob store. Remaining deletions are processed in subsequent triggers.
+
+### pruner_blobDeletionMaxRetries
+
+**Type**: Integer
+
+**Default**: `3`
+
+**Environment Variable**: `pruner_blobDeletionMaxRetries`
+
+**Description**: Maximum retry attempts for failed blob deletions
+
+### pruner_skipPreserveParents
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Environment Variable**: `pruner_skipPreserveParents`
+
+**Description**: Skip Phase 1 - preserve parents of unmined transactions
+
+When enabled, parent transactions will not be protected from deletion even if they have unmined children.
+
+### pruner_skipParentUpdates
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Environment Variable**: `pruner_skipParentUpdates`
+
+**Description**: Skip parent update operations during pruning
+
+### pruner_skipDeletions
+
+**Type**: Boolean
+
+**Default**: `false`
+
+**Environment Variable**: `pruner_skipDeletions`
+
+**Description**: Skip deletion operations during pruning
+
 ## Operation Timeout Settings
 
 ### pruner_jobTimeout
@@ -419,6 +579,30 @@ pruner_utxoProgressLogInterval = 30s
 - `1m`: Log every minute
 
 **Use Case**: Monitor progress during large pruning operations or troubleshoot slow pruning.
+
+### pruner_utxoPartitionQueries
+
+**Type**: Integer
+
+**Default**: `0` (auto-detect based on CPU cores)
+
+**Environment Variable**: `pruner_utxoPartitionQueries`
+
+**Description**: Number of parallel Aerospike partition queries for scanning prunable records
+
+Aerospike's keyspace is divided into 4096 partitions. This setting controls how many workers scan partitions in parallel. Each worker processes a range of partitions independently, achieving up to 100x performance improvement over sequential queries.
+
+**Values:**
+
+- `0` (default): Auto-detect based on CPU cores and Aerospike query-threads-limit
+- `N > 0`: Fixed number of partition workers (capped at 4096)
+
+**Tuning:**
+
+- **Higher values**: Faster scanning, more Aerospike load and connections
+- **Lower values**: Reduced cluster pressure, slower pruning
+
+**Recommendation**: Use default (`0`) for automatic scaling. Set explicitly to match your Aerospike cluster's capacity.
 
 ## Defensive Mode Settings
 

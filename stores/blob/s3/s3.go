@@ -32,7 +32,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -273,7 +272,7 @@ func (g *S3) SetFromReader(ctx context.Context, key []byte, fileType fileformat.
 	// uploadInput.Expires = &expires
 	// }
 
-	if _, err := g.client.Upload(ctx, uploadInput); err != nil {
+	if err := g.client.Upload(ctx, uploadInput); err != nil {
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data from reader", g.bucket, objectKey, err)
 	}
 
@@ -331,7 +330,7 @@ func (g *S3) Set(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	// uploadInput.Expires = &expires
 	// }
 
-	if _, err := g.client.Upload(ctx, uploadInput); err != nil {
+	if err := g.client.Upload(ctx, uploadInput); err != nil {
 		return errors.NewStorageError("[S3] [%s/%s] failed to set data", g.bucket, objectKey, err)
 	}
 
@@ -399,13 +398,10 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 		return cached, nil
 	}
 
-	buf := manager.NewWriteAtBuffer([]byte{})
-	_, err := g.client.Download(ctx, buf,
-		&s3.GetObjectInput{
-			Bucket: aws.String(g.bucket),
-			Key:    objectKey,
-		})
-
+	content, err := g.client.Download(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(g.bucket),
+		Key:    objectKey,
+	})
 	if err != nil {
 		if strings.Contains(err.Error(), "NoSuchKey") {
 			span.RecordError(errors.ErrNotFound)
@@ -417,9 +413,6 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 
 		return nil, err
 	}
-
-	// Remove header and footer from the downloaded content
-	content := buf.Bytes()
 
 	// Skip the header bytes
 	header, err := fileformat.ReadHeaderFromBytes(content)

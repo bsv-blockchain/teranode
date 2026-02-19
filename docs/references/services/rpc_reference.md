@@ -49,7 +49,6 @@
     - [freeze](#freeze) - Freezes specified UTXOs or OUTPUTs
     - [unfreeze](#unfreeze) - Unfreezes specified UTXOs or OUTPUTs
     - [reassign](#reassign) - Reassigns specified frozen UTXOs to a new address
-    - [getrawmempool](#getrawmempool) - Returns all transaction IDs available for block assembly
     - [getchaintips](#getchaintips) - Returns information about all known chain tips
 - [Unimplemented RPC Commands](#unimplemented-rpc-commands)
 - [Error Handling](#error-handling)
@@ -139,9 +138,9 @@ type RPCServer struct {
     // Used for mining-related RPC commands like getminingcandidate and generate
     blockAssemblyClient blockassembly.ClientI
 
-    // peerClient provides access to legacy peer network services
+    // legacyP2PClient provides access to legacy peer network services
     // Used for peer management and information retrieval
-    peerClient peer.ClientI
+    legacyP2PClient peer.ClientI
 
     // p2pClient provides access to the P2P network services
     // Used for modern peer management and network operations
@@ -179,7 +178,7 @@ The RPCServer is designed for concurrent operation, employing synchronization me
 ### NewServer
 
 ```go
-func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, peerClient peer.ClientI, p2pClient p2p.ClientI, txStore blob.Store, validatorClient validator.Interface) (*RPCServer, error)
+func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI, blockValidationClient blockvalidation.Interface, utxoStore utxo.Store, blockAssemblyClient blockassembly.ClientI, legacyPeerClient peer.ClientI, p2pClient p2p.ClientI, txStore blob.Store, validatorClient validator.Interface) (*RPCServer, error)
 ```
 
 Creates a new instance of the RPC Service with the necessary dependencies including logger, settings, blockchain client, block validation client, UTXO store, transaction store, validator client, and service clients.
@@ -199,7 +198,7 @@ This factory function creates a fully configured RPCServer instance, setting up:
 - `blockValidationClient`: Interface to the block validation service for block validation operations
 - `utxoStore`: Interface to the UTXO database for transaction validation
 - `blockAssemblyClient`: Interface to the block assembly service for mining operations
-- `peerClient`: Interface to the legacy peer network services
+- `legacyPeerClient`: Interface to the legacy peer network services
 - `p2pClient`: Interface to the P2P network services
 
 The RPC server requires connections to several other Teranode services to function properly, as it primarily serves as an API gateway to underlying node functionality. These dependencies are injected through this constructor to maintain proper service separation and testability.
@@ -317,7 +316,7 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 
 Handles reading and responding to RPC messages. This method is the core request processing function.
 
-!!! gear "Request Processing Steps"
+!!! info "Request Processing Steps"
     1. **Parses incoming JSON-RPC requests** from HTTP request bodies
     2. **Validates request format** and structure
     3. **Routes requests** to appropriate command handlers
@@ -355,7 +354,7 @@ Some key handlers include:
 
 ## Configuration
 
-!!! settings "RPC Configuration Settings"
+!!! example "RPC Configuration Settings"
     The RPC Service uses various configuration values:
 
     **Authentication Settings:**
@@ -389,11 +388,11 @@ Configuration values can be provided through the configuration file, environment
 
 ## Authentication
 
-!!! key "Authentication Levels"
+!!! info "Authentication Levels"
     The server supports two levels of authentication:
 
-    1. **Admin-level access** with full permissions
-    2. **Limited access** with restricted permissions
+    1. **Admin-level access** with full permissions (configured via `rpc_user` / `rpc_pass`)
+    2. **Limited access** with restricted permissions (configured via `rpc_limit_user` / `rpc_limit_pass`)
 
 Authentication is performed using HTTP Basic Auth.
 
@@ -402,6 +401,24 @@ Authentication is performed using HTTP Basic Auth.
 - **Username and password** in the HTTP header
 - **Cookie-based authentication**
 - **Configuration file settings**
+
+### Admin vs Limited Access
+
+Admin users can execute all RPC commands. Limited users can execute the following commands:
+
+**Read-only commands:**
+createrawtransaction, decoderawtransaction, decodescript, estimatefee, getbestblock, getbestblockhash,
+getblock, getblockcount, getblockhash, getblockheader, getcfilter, getcfilterheader, getcurrentnet,
+getdifficulty, getheaders, getinfo, getnettotals, getnetworkhashps, getrawmempool, getrawtransaction,
+gettxout, gettxoutproof, help, searchrawtransactions, uptime, validateaddress, verifymessage,
+verifytxoutproof, version
+
+**State-changing commands (also available to limited users):**
+sendrawtransaction, submitblock, getminingcandidate, submitminingsolution, freeze, unfreeze, reassign
+
+**Admin-only commands (not available to limited users):**
+generate, generatetoaddress, getblockbyheight, getblockchaininfo, getchaintips, getmininginfo,
+getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, clearbanned, stop
 
 ### GRPC API Key Authentication
 
@@ -1593,36 +1610,15 @@ Mines blocks immediately to a specified address (for testing only).
 
 ### help
 
-Returns help text for RPC commands.
+**Note:** This command is registered but not yet implemented. It currently returns a null result. A future release will provide help text for RPC commands.
 
 **Parameters:**
 
-1. `command` (string, optional) - The command to get help for. If not provided, returns a list of all commands.
+1. `command` (string, optional) - The command to get help for.
 
 **Returns:**
 
-- `string` - Help text for the specified command or list of all commands
-
-**Example Request:**
-
-```json
-{
-    "jsonrpc": "1.0",
-    "id": "curltest",
-    "method": "help",
-    "params": ["getblock"]
-}
-```
-
-**Example Response:**
-
-```json
-{
-    "result": "getblock \"blockhash\" ( verbosity )\n\nReturns information about a block.\n\nArguments:\n1. blockhash (string, required) The block hash\n2. verbosity (numeric, optional, default=1) 0 for hex-encoded data, 1 for a json object, 2 for json object with tx data\n\nResult:\n...",
-    "error": null,
-    "id": "curltest"
-}
-```
+- `null` - The handler is not yet functional.
 
 ### getrawmempool
 
@@ -1859,7 +1855,7 @@ Common error codes that may be returned:
 
 The RPC interface implements connection limiting to prevent resource exhaustion. Default limits:
 
-- Maximum concurrent connections: 16 (configurable via `rpc_maxClients`)
+- Maximum concurrent connections: 1 (configurable via `rpc_max_clients`)
 
 ## Version Compatibility
 
@@ -1911,3 +1907,10 @@ The RPC Service implements several security features:
 - TLS support for encrypted communications (when configured)
 
 ## Related Documents
+
+- [RPC Service Topic Documentation](../../topics/services/rpc.md)
+- [RPC Settings Reference](../settings/services/rpc_settings.md)
+- [Blockchain Reference](blockchain_reference.md)
+- [Block Assembly Reference](blockassembly_reference.md)
+- [Legacy Service Reference](legacy_reference.md)
+- [P2P Service Reference](p2p_reference.md)

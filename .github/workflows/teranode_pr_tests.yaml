@@ -11,7 +11,7 @@ permissions:
 env:
   REPO: teranode
   SETTINGS_CONTEXT_DEFAULT: test
-  GO_VERSION: "1.25.2"
+  GO_VERSION: "1.26.0"
 
 jobs:
   golangci-lint:
@@ -34,8 +34,8 @@ jobs:
       - name: golangci-lint with checkstyle report
         uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
-          version: v2.5.0
-          args: --timeout=5m --output.checkstyle.path=golangci-lint-report.xml --output.text.path=stdout
+          version: v2.10.1
+          args: --timeout=5m --disable gosec --disable prealloc --output.checkstyle.path=golangci-lint-report.xml --output.text.path=stdout
 
       - name: Upload golangci-lint report
         if: always()

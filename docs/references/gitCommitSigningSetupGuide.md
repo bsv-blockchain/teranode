@@ -33,6 +33,7 @@ gpg --full-generate-key
     - Choose DSA + ElGamal or ECC with ED 25519 for cipher
     - Set a strong passphrase and store it safely
 
+
 4. Configure repository for signed commits
 ```bash
 git config commit.gpgsign true

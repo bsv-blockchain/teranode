@@ -152,7 +152,7 @@ func TestSearch(t *testing.T) {
 		// Check response fields
 		assert.Equal(t, float64(400), responseJSON["status"])
 		assert.Equal(t, float64(1), responseJSON["code"])
-		assert.Equal(t, "INVALID_ARGUMENT (1): error reading hash -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", responseJSON["error"])
+		assert.Equal(t, "INVALID_ARGUMENT (1): error reading hash", responseJSON["error"])
 	})
 
 	t.Run("Search nothing found", func(t *testing.T) {

@@ -362,7 +362,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 				validator.WithIgnoreLocked(true),
 			)
 			if err != nil {
-				u.logger.Debugf("[CheckBlockSubtreesRequest] Failed to validate subtree %s", subtreeHash.String(), err)
+				u.logger.Debugf("[CheckBlockSubtreesRequest] Failed to validate subtree %s: %v", subtreeHash.String(), err)
 				revalidateSubtreesMutex.Lock()
 				revalidateSubtrees = append(revalidateSubtrees, subtreeHash)
 				revalidateSubtreesMutex.Unlock()

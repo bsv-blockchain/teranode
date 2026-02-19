@@ -634,7 +634,7 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			logMsg = fmt.Sprintf("[ValidateSubtreeInternal][%s] [attempt #%d] (fail fast=%v) process %d txs from subtree", v.SubtreeHash.String(), attempt, failFast, len(txHashes))
 		}
 
-		u.logger.Debugf(logMsg)
+		u.logger.Debugf("%s", logMsg)
 
 		// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
