@@ -386,7 +386,7 @@ func (m *DiskTxMap) flushAllDisks() {
 // clearRecentMapsForDisk clears recent maps for filter shards mapped to a specific disk.
 func (m *DiskTxMap) clearRecentMapsForDisk(diskIdx int) {
 	for i := range m.shards {
-		if int(uint16(i)%uint16(m.numDisks)) != diskIdx {
+		if i%m.numDisks != diskIdx {
 			continue
 		}
 		m.shards[i].mu.Lock()

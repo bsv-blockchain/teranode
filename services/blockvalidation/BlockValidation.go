@@ -277,7 +277,16 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 		validatorClient:               validatorClient,
 		subtreeValidationClient:       subtreeValidationClient,
 		subtreeDeDuplicator:           NewDeDuplicator(tSettings.GetSubtreeValidationBlockHeightRetention()),
-		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute).
+			WithEvictionFunction(func(_ chainhash.Hash, block *model.Block) bool {
+				// Close mmap-backed subtrees when block expires from cache
+				for _, st := range block.SubtreeSlices {
+					if st != nil {
+						st.Close()
+					}
+				}
+				return true // allow eviction
+			}),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute), // we keep this for 2 hours
 		invalidBlockKafkaProducer:     invalidBlockKafkaProducer,
 		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute), // we keep this for 10 minutes

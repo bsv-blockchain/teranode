@@ -404,8 +404,12 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 
 		// Phase 7: Write subtree files (shared with normal validation)
 		if err := u.writeSubtreeFilesForBatch(ctx, block, batch); err != nil {
+			batch.Close()
 			return 0, err
 		}
+
+		// Release mmap resources for completed batch
+		batch.Close()
 	}
 
 	return u.validateSubtrees(ctx, block, existingBlockID)
@@ -664,9 +668,13 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 				return err
 			})
 			if err := batchG.Wait(); err != nil {
+				batch.Close()
 				return err
 			}
 			u.logger.Infof("[pipeline:process:async][%s] batch %d-%d processed in %v (utxo=%v, build+queue=%v)", block.Hash().String(), batch.batchStart, batch.batchEnd, time.Since(start), utxoDuration, buildDuration)
+
+			// Release mmap resources for completed batch
+			batch.Close()
 		}
 		return nil
 	})
@@ -927,6 +935,15 @@ type SubtreeProcessingBatch struct {
 
 	// batchEnd is the global ending index (exclusive) in block.Subtrees
 	batchEnd int
+}
+
+// Close releases mmap-backed subtree resources in this batch.
+func (b *SubtreeProcessingBatch) Close() {
+	for _, st := range b.subtrees {
+		if st != nil {
+			st.Close()
+		}
+	}
 }
 
 // processSubtreeBatch reads and extends a batch of subtrees.
