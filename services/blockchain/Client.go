@@ -25,7 +25,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/google/uuid"
-	"github.com/ordishs/go-utils"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -188,7 +187,7 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 
 					for _, s := range c.subscribers {
 						go func(ch chan *blockchain_api.Notification, notification *blockchain_api.Notification) {
-							utils.SafeSend(ch, notification)
+							util.SafeSend(ch, notification)
 						}(s.ch, notification)
 					}
 					c.subscribersMu.Unlock()
@@ -1120,7 +1119,7 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 	if c.lastBlockNotification != nil {
 		lastNotification := c.lastBlockNotification
 		go func() {
-			utils.SafeSend(ch, lastNotification)
+			util.SafeSend(ch, lastNotification)
 			c.logger.Debugf("[Blockchain] Sent initial block notification to new subscriber %s", source)
 		}()
 	}

@@ -7,14 +7,14 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/centrifugal/centrifuge-go"
-	"github.com/ordishs/go-utils"
 )
 
 // Client represents a WebSocket client that connects to a Centrifuge server.
 // It handles real-time message processing and subscription management.
 type Client struct {
-	logger utils.Logger
+	logger ulogger.Logger
 	mu     sync.RWMutex
 	client *centrifuge.Client
 }
@@ -27,7 +27,7 @@ type Client struct {
 //
 // Returns:
 //   - *Client: A new client instance ready for configuration and connection
-func New(logger utils.Logger) *Client {
+func New(logger ulogger.Logger) *Client {
 	return &Client{
 		logger: logger,
 	}

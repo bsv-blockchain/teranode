@@ -43,8 +43,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/debugflags"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/semaphore"
 )
@@ -104,7 +104,7 @@ func (s *File) debugf(format string, args ...interface{}) {
 }
 
 func formatKeyHex(key []byte) string {
-	return utils.ReverseAndHexEncodeSlice(key)
+	return util.ReverseAndHexEncodeSlice(key)
 }
 
 // longtermStore defines the interface for a secondary storage backend that can be used
@@ -675,7 +675,7 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 
 	filename, err := s.constructFilename(key, fileType, opts)
 	if err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", util.ReverseAndHexEncodeSlice(key), err)
 	}
 
 	merged := options.MergeOptions(s.options, opts)

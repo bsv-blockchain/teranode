@@ -11,7 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
-	"github.com/dustin/go-humanize"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 func (s *Server) blobDeletionWorker() {
@@ -95,7 +95,7 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 		}
 
 		batchStartTime := time.Now()
-		s.logger.Infof("[pruner][%s:%d] blob deletion: acquired batch %d with %s deletions", blockHashStr, blockHeight, batchNum, humanize.Comma(int64(len(deletions))))
+		s.logger.Infof("[pruner][%s:%d] blob deletion: acquired batch %d with %s deletions", blockHashStr, blockHeight, batchNum, util.FormatComma(int64(len(deletions))))
 
 		// Track completed and failed deletions for this batch
 		completedIDs := make([]int64, 0, len(deletions))
@@ -108,7 +108,7 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 			storeType := storetypes.BlobStoreType(deletion.StoreType)
 
 			s.logger.Debugf("[pruner][%s:%d] blob deletion: processing deletion %s/%s (id=%d, key=%x)",
-				blockHashStr, blockHeight, humanize.Comma(int64(i+1)), humanize.Comma(int64(len(deletions))), deletion.Id, deletion.BlobKey)
+				blockHashStr, blockHeight, util.FormatComma(int64(i+1)), util.FormatComma(int64(len(deletions))), deletion.Id, deletion.BlobKey)
 
 			if err := s.processOneDeletion(ctx, deletion, blockHashStr, blockHeight); err != nil {
 				s.logger.Warnf("[pruner][%s:%d] blob deletion: failed to delete blob %x from %s (attempt %d/%d): %v",
@@ -133,7 +133,7 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 
 		// Complete the batch in a single gRPC call
 		s.logger.Infof("[pruner][%s:%d] blob deletion: completing batch %d - %s succeeded, %s failed",
-			blockHashStr, blockHeight, batchNum, humanize.Comma(successCount), humanize.Comma(int64(len(failedIDs))))
+			blockHashStr, blockHeight, batchNum, util.FormatComma(successCount), util.FormatComma(int64(len(failedIDs))))
 
 		err = s.blockchainClient.CompleteBlobDeletionBatch(ctx, batchToken, completedIDs, failedIDs, maxRetries)
 		if err != nil {
@@ -145,7 +145,7 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 
 		duration := time.Since(batchStartTime).Round(time.Second)
 		s.logger.Infof("[pruner][%s:%d] blob deletion: batch %d complete - %s succeeded, %s failed (took %s)",
-			blockHashStr, blockHeight, batchNum, humanize.Comma(successCount), humanize.Comma(failCount), duration)
+			blockHashStr, blockHeight, batchNum, util.FormatComma(successCount), util.FormatComma(failCount), duration)
 
 		// Update totals
 		totalSuccess += successCount
@@ -156,7 +156,7 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 	if batchNum > 2 {
 		totalDuration := time.Since(overallStartTime).Round(time.Second)
 		s.logger.Infof("[pruner][%s:%d] blob deletion: processed %d batches - %s total succeeded, %s total failed (took %s)",
-			blockHashStr, blockHeight, batchNum-1, humanize.Comma(totalSuccess), humanize.Comma(totalFail), totalDuration)
+			blockHashStr, blockHeight, batchNum-1, util.FormatComma(totalSuccess), util.FormatComma(totalFail), totalDuration)
 	}
 
 	// Notify observer if registered (for testing)

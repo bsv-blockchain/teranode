@@ -8,7 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils/expiringmap"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 )
 
 // Orphanage manages orphaned transactions that are missing their parent transactions.

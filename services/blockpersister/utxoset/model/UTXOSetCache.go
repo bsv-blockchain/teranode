@@ -6,7 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils/expiringmap"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 )
 
 // utxoSetCache provides a thread-safe caching mechanism for UTXOSets.

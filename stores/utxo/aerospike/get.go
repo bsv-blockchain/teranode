@@ -59,6 +59,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"slices"
 	"time"
 
 	"github.com/aerospike/aerospike-client-go/v8"
@@ -79,7 +80,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/ordishs/gocore"
-	"golang.org/x/exp/slices"
 )
 
 var (

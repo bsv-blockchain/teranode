@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/ordishs/go-utils/expiringmap"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 )
 
 type expiringConcurrentCacheWait[V any] struct {

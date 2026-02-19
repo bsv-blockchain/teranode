@@ -23,7 +23,6 @@ require (
 	github.com/btcsuite/goleveldb v1.0.0
 	github.com/centrifugal/centrifuge v0.33.2
 	github.com/centrifugal/centrifuge-go v0.10.1
-	github.com/cespare/xxhash v1.1.0
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/docker/go-connections v0.6.0
 	github.com/dolthub/swiss v0.2.1
@@ -33,18 +32,15 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0
 	github.com/jarcoal/httpmock v1.4.1
 	github.com/jellydator/ttlcache/v3 v3.3.0
-	github.com/json-iterator/go v1.1.12
-	github.com/kpango/fastime v1.1.9
+	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/lib/pq v1.10.9
 	github.com/libp2p/go-libp2p v0.46.0
 	github.com/libp2p/go-libp2p-kad-dht v0.36.0 // indirect
 	github.com/libp2p/go-libp2p-pubsub v0.15.0
-	github.com/libsv/go-bk v0.1.6 // indirect
 	github.com/looplab/fsm v1.0.2
 	github.com/mrz1836/go-datastore v1.2.2
 	github.com/mrz1836/go-logger v1.0.2
 	github.com/multiformats/go-multiaddr v0.16.1
-	github.com/ordishs/go-utils v1.0.53
 	github.com/ordishs/gocore v1.0.81
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.33.0
@@ -54,16 +50,14 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.40.0
 	github.com/testcontainers/testcontainers-go/modules/compose v0.40.0
-	github.com/uber/jaeger-client-go v2.30.0+incompatible // indirect
 	github.com/urfave/cli/v2 v2.27.7
 	go.opentelemetry.io/otel v1.39.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.38.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.38.0
 	go.opentelemetry.io/otel/sdk v1.38.0
 	go.opentelemetry.io/otel/trace v1.39.0
-	go.uber.org/atomic v1.11.0
 	golang.org/x/crypto v0.47.0
-	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93
+	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
 	golang.org/x/sync v0.19.0
 	golang.org/x/sys v0.40.0
 	golang.org/x/term v0.39.0
@@ -81,7 +75,6 @@ require (
 require (
 	bitbucket.org/simon_ordish/cryptolib v1.0.48 // indirect
 	github.com/DefangLabs/secret-detector v0.0.0-20250403165618-22662109213e // indirect
-	github.com/OneOfOne/xxhash v1.2.8 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
@@ -110,7 +103,6 @@ require (
 	github.com/go-zeromq/zmq4 v0.17.0 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/google/flatbuffers v25.2.10+incompatible // indirect
-	github.com/grpc-ecosystem/grpc-opentracing v0.0.0-20180507213350-8e809c8a8645 // indirect
 	github.com/inhies/go-bytesize v0.0.0-20220417184213-4913239db9cf // indirect
 	github.com/ipfs/boxo v0.35.2 // indirect
 	github.com/ipfs/go-cid v0.6.0 // indirect
@@ -130,7 +122,6 @@ require (
 	github.com/libp2p/go-yamux/v5 v5.1.0 // indirect
 	github.com/libp2p/zeroconf/v2 v2.2.0 // indirect
 	github.com/libsv/go-bt v1.0.8 // indirect
-	github.com/libsv/go-bt/v2 v2.2.5 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
@@ -144,7 +135,7 @@ require (
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/nxadm/tail v1.4.11 // indirect
-	github.com/opentracing/opentracing-go v1.2.0 // indirect
+	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v2 v2.2.12 // indirect
 	github.com/pion/dtls/v3 v3.0.9 // indirect
@@ -201,10 +192,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/dgraph-io/badger/v4 v4.8.0
 	github.com/felixge/fgprof v0.9.5
-	github.com/gocarina/gocsv v0.0.0-20240520201108-78e41c74b4b1
-	github.com/libsv/go-p2p v0.3.3
 	github.com/ordishs/go-bitcoin v1.0.88
-	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.40.0
 )
 
@@ -243,7 +231,7 @@ require (
 	github.com/buger/goterm v1.0.4 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/centrifugal/protocol v0.13.4 // indirect
-	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/compose-spec/compose-go/v2 v2.9.0 // indirect
 	github.com/containerd/console v1.0.5 // indirect
 	github.com/containerd/continuity v0.4.5 // indirect
@@ -318,7 +306,7 @@ require (
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
-	github.com/joho/godotenv v1.5.1
+	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/jpillora/backoff v1.0.0 // indirect
@@ -412,7 +400,6 @@ require (
 	github.com/tonistiigi/fsutil v0.0.0-20250605211040-586307ad452f // indirect
 	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea // indirect
 	github.com/tonistiigi/vt100 v0.0.0-20240514184818-90bafcd6abab // indirect
-	github.com/uber/jaeger-lib v2.4.1+incompatible // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/vektah/gqlparser/v2 v2.5.31 // indirect

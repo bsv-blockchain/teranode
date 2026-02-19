@@ -44,10 +44,10 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils/expiringmap"
 	"google.golang.org/protobuf/proto"
 )
 
