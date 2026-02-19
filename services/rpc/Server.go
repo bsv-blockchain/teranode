@@ -800,6 +800,7 @@ func (s *RPCServer) Stop(ctx context.Context) error {
 
 	close(s.quit)
 	s.wg.Wait()
+	rpcCallCache.Stop()
 	s.logger.Infof("RPC server shutdown complete")
 
 	return nil
