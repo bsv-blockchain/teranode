@@ -192,6 +192,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/tx/:hash/hex", h.GetTransaction(HEX))
 	apiGroup.GET("/tx/:hash/json", h.GetTransaction(JSON))
 
+	if tSettings.Asset.PropagationProxyEnabled && tSettings.Asset.PropagationProxyAddress != "" {
+		apiGroup.POST("/tx", h.ProxyPropagationTx())
+	}
+
 	// backwards compatibility for legacy endpoints - remove in future
 	apiGroup.POST("/txs", h.GetTransactions())       // BINARY_STREAM only
 	apiGroup.POST("/:hash/txs", h.GetTransactions()) // BINARY_STREAM only

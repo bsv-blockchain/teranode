@@ -186,6 +186,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SignHTTPResponses:       getBool("asset_sign_http_responses", false, alternativeContext...),
 			EchoDebug:               getBool("ECHO_DEBUG", false, alternativeContext...),
 			PropagationPublicURL:    getString("asset_propagation_public_url", "", alternativeContext...),
+			PropagationProxyEnabled: getBool("asset_propagation_proxy_enabled", true, alternativeContext...),
+			PropagationProxyAddress: getString("asset_propagation_proxy_address", "http://localhost:8833", alternativeContext...),
 
 			// Concurrency limits for repository methods (0 = unlimited, -1 = NumCPU(), anything else is the specific limit)
 			ConcurrencyGetTransaction:         getInt("asset_concurrency_get_transaction", 0, alternativeContext...),
