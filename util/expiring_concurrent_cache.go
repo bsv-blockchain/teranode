@@ -29,6 +29,11 @@ func NewExpiringConcurrentCache[K comparable, V any](expiration time.Duration) *
 	}
 }
 
+// Stop stops the background cleanup goroutine of the underlying ExpiringMap.
+func (c *ExpiringConcurrentCache[K, V]) Stop() {
+	c.cache.Stop()
+}
+
 // GetOrSet retrieves a value from the cache or fetches it using the provided function.
 // If multiple goroutines request the same key simultaneously, only one fetch operation occurs.
 // The fetchFunc returns (value, shouldCache, error) where shouldCache determines if the result is cached.

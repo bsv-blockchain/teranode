@@ -208,6 +208,8 @@ func (g *S3) Close(_ context.Context) error {
 	_, _, endTrace := tracing.Tracer("s3").Start(context.Background(), "Close")
 	defer endTrace()
 
+	cache.Stop()
+
 	return nil
 }
 

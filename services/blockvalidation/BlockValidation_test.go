@@ -2652,6 +2652,7 @@ func TestBlockValidation_RevalidateIsCalledOnHeaderError(t *testing.T) {
 		revalidateBlockChan:           revalidateChan,
 		stats:                         gocore.NewStat("blockvalidation"),
 	}
+	defer bv.StopCaches()
 
 	// Create a valid coinbase transaction
 	privateKey, _ := bec.NewPrivateKey()
@@ -2753,6 +2754,7 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 		revalidateBlockChan:           make(chan revalidateBlockData, 1),
 		stats:                         gocore.NewStat("blockvalidation"),
 	}
+	t.Cleanup(bv.StopCaches)
 
 	privateKey, _ := bec.NewPrivateKey()
 	address, _ := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
@@ -3626,6 +3628,7 @@ func TestBlockValidation_InvalidBlock_PublishesToKafka(t *testing.T) {
 		setMinedChan:                  make(chan *chainhash.Hash, 1),
 		stats:                         gocore.NewStat("blockvalidation"),
 	}
+	defer bv.StopCaches()
 
 	err = bv.ValidateBlock(context.Background(), block, "test")
 	t.Logf("ValidateBlock error type: %T, value: %v", err, err)

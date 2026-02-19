@@ -86,6 +86,7 @@ func TestSyncManager_HandleBlockDirect(t *testing.T) {
 		subtreeStore:     subtreeStore,
 		blockValidation:  blockValidation,
 	}
+	defer sm.orphanTxs.Stop()
 
 	msgBlock := &wire.MsgBlock{}
 	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))

@@ -835,11 +835,11 @@ func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
 func (sm *SyncManager) clearRequestedState(state *peerSyncState) {
 	// Remove requested transactions from the global map so that they will
 	// be fetched from elsewhere next time we get an inv.
-	state.requestedTxns.Clear()
+	state.requestedTxns.Stop()
 
 	// Remove requested blocks from the global map so that they will be
 	// fetched from elsewhere next time we get an inv.
-	state.requestedBlocks.Clear()
+	state.requestedBlocks.Stop()
 }
 
 // updateSyncPeer picks a new peer to sync from.
@@ -2129,6 +2129,10 @@ func (sm *SyncManager) Stop() error {
 	sm.logger.Infof("Sync manager shutting down")
 	close(sm.quit)
 	<-sm.handlerDone
+
+	sm.orphanTxs.Stop()
+	sm.requestedTxns.Stop()
+	sm.requestedBlocks.Stop()
 
 	return nil
 }

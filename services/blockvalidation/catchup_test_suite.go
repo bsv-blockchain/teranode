@@ -167,6 +167,12 @@ func (s *CatchupTestSuite) Cleanup() {
 		}
 	}
 
+	// Stop expiring map background goroutines
+	if s.Server != nil && s.Server.blockValidation != nil {
+		s.Server.blockValidation.blockExistsCache.Stop()
+		s.Server.blockValidation.lastValidatedBlocks.Stop()
+	}
+
 	// Run cleanup functions in reverse order
 	for i := len(s.CleanupFuncs) - 1; i >= 0; i-- {
 		s.CleanupFuncs[i]()

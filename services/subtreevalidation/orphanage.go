@@ -129,6 +129,11 @@ func (o *Orphanage) Cleanup() {
 	o.logger.Infof("[Orphanage] Cleanup: current size: %d/%d", o.txMap.Len(), o.maxSize)
 }
 
+// Stop stops the background cleanup goroutine of the expiring map.
+func (o *Orphanage) Stop() {
+	o.txMap.Stop()
+}
+
 // MaxSize returns the maximum size limit of the orphanage.
 func (o *Orphanage) MaxSize() int {
 	return o.maxSize

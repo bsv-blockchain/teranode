@@ -1065,6 +1065,7 @@ func (u *Server) Stop(_ context.Context) error {
 	// Wait for all background tasks in BlockValidation to complete
 	if u.blockValidation != nil {
 		u.blockValidation.Wait()
+		u.blockValidation.StopCaches()
 	}
 
 	// close the kafka consumer gracefully

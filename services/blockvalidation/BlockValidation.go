@@ -1915,3 +1915,10 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 func (u *BlockValidation) Wait() {
 	u.backgroundTasks.Wait()
 }
+
+// StopCaches stops the background cleanup goroutines for all expiring caches.
+func (u *BlockValidation) StopCaches() {
+	u.lastValidatedBlocks.Stop()
+	u.blockExistsCache.Stop()
+	u.subtreeExistsCache.Stop()
+}
