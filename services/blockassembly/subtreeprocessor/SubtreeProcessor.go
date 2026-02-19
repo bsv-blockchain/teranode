@@ -3191,8 +3191,16 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 
 // resetSubtreeState resets the current subtree state and returns the old state
 func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool) (err error) {
-	// Clear current tx map — use Clear() to preserve the DiskTxMap if active
-	stp.currentTxMap.Clear()
+	// Replace the current tx map with a fresh instance.
+	// We must create a NEW object (not Clear) because other code may hold references to the old map
+	// that are still being read (e.g., processOwnBlockNodes captures currentTxMap before reset).
+	if stp.diskTxMap != nil {
+		stp.diskTxMap.Clear()
+		// DiskTxMap.Clear() recreates internal state but keeps the same object.
+		// This is safe because DiskTxMap is only assigned once in the constructor.
+	} else {
+		stp.currentTxMap = NewSplitTxInpointsMap(splitMapBuckets)
+	}
 
 	subtreeSize := int(stp.currentItemsPerFile.Load())
 	if !createProperlySizedSubtrees {
