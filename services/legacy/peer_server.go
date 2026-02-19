@@ -626,22 +626,30 @@ func (sp *serverPeer) OnVersion(p *peer.Peer, msg *wire.MsgVersion) *wire.MsgRej
 	// the local clock to keep the network time in sync.
 	sp.server.timeSource.AddTimeSample(sp.Addr(), msg.Timestamp)
 
-	// Signal the sync manager this peer is a new sync candidate.
-	sp.server.syncManager.NewPeer(sp.Peer, nil)
-
 	// Choose whether to relay transactions before a filter command
 	// is received.
 	sp.setDisableRelayTx(msg.DisableRelayTx)
 
 	// Set up multistream association if the remote peer provided an
 	// AssociationID and block priority is enabled locally.
-	if sp.server.settings.Legacy.AllowBlockPriority && len(msg.AssociationID) > 0 {
+	isMultistream := sp.server.settings.Legacy.AllowBlockPriority && len(msg.AssociationID) > 0
+	if isMultistream {
 		assoc := peer.NewAssociation(msg.AssociationID, sp.Peer)
 		sp.Peer.SetAssociation(assoc)
 		sp.Peer.SetStreamType(wire.StreamTypeGeneral)
 		sp.server.associationMgr.Register(assoc)
 		sp.server.logger.Infof("Registered multistream association %s for peer %s",
 			assoc.ID(), sp)
+	}
+
+	// Signal the sync manager this peer is a new sync candidate.
+	// For multistream peers, defer this until OnProtoconf after stream
+	// setup completes. Registering now would race startSync (which sends
+	// getblocks) against openRequiredStreams (which creates DATA1). If
+	// getblocks arrives at svnode before DATA1 exists, svnode has no
+	// stream to route blocks on and the sync stalls.
+	if !isMultistream {
+		sp.server.syncManager.NewPeer(sp.Peer, nil)
 	}
 
 	// Add valid peer to the server.
@@ -673,14 +681,25 @@ func (sp *serverPeer) OnProtoconf(p *peer.Peer, msg *wire.MsgProtoconf) {
 					assoc.SetPolicy(wire.BlockPriorityStreamPolicy)
 					sp.server.logger.Infof("Negotiated BlockPriority stream policy with peer %s", sp)
 
-					// For outbound peers, open required streams.
+					// For outbound peers, open required streams synchronously
+					// so DATA1 is ready before the sync manager requests
+					// blocks. Running this async races with startSync,
+					// causing svnode to route blocks to a DATA1 stream that
+					// does not exist yet.
 					if !sp.Inbound() {
-						go sp.openRequiredStreams()
+						sp.openRequiredStreams()
 					}
 					break
 				}
 			}
 		}
+	}
+
+	// For multistream peers, register with the sync manager now that
+	// stream setup is complete. This was deferred from OnVersion to
+	// ensure DATA1 is established before startSync sends getblocks.
+	if sp.Peer.AssociationRef() != nil {
+		sp.server.syncManager.NewPeer(sp.Peer, nil)
 	}
 }
 

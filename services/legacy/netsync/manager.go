@@ -1125,8 +1125,22 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 	state, exists := sm.peerStates.Get(peer)
 	if !exists {
-		sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
-		return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
+		// Stream peers (e.g. BlockPriority) are not registered in peerStates
+		// directly - look up via their association's primary peer instead.
+		if assoc := peer.AssociationRef(); assoc != nil {
+			primary := assoc.PrimaryPeer()
+			if primary != nil {
+				state, exists = sm.peerStates.Get(primary)
+				if exists {
+					sm.logger.Debugf("[handleBlockMsg][%s] resolved stream peer %s to primary peer %s", bmsg.blockHash, peer, primary)
+					peer = primary
+				}
+			}
+		}
+		if !exists {
+			sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
+			return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
+		}
 	}
 
 	legacySyncMode := false
@@ -1489,8 +1503,22 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 
 	_, exists := sm.peerStates.Get(peer)
 	if !exists {
-		sm.logger.Warnf("Received headers message from unknown peer %s", peer)
-		return
+		// Stream peers (e.g. BlockPriority DATA1) are not registered in
+		// peerStates directly - resolve via their association's primary peer.
+		if assoc := peer.AssociationRef(); assoc != nil {
+			primary := assoc.PrimaryPeer()
+			if primary != nil {
+				_, exists = sm.peerStates.Get(primary)
+				if exists {
+					sm.logger.Debugf("[handleHeadersMsg] resolved stream peer %s to primary peer %s", peer, primary)
+					peer = primary
+				}
+			}
+		}
+		if !exists {
+			sm.logger.Warnf("Received headers message from unknown peer %s", peer)
+			return
+		}
 	}
 
 	// The remote peer is misbehaving if we didn't request headers.
@@ -1656,8 +1684,22 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 
 	state, exists := sm.peerStates.Get(peer)
 	if !exists {
-		sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
-		return
+		// Stream peers (e.g. BlockPriority DATA1) are not registered in
+		// peerStates directly - resolve via their association's primary peer.
+		if assoc := peer.AssociationRef(); assoc != nil {
+			primary := assoc.PrimaryPeer()
+			if primary != nil {
+				state, exists = sm.peerStates.Get(primary)
+				if exists {
+					sm.logger.Debugf("[handleInvMsg] resolved stream peer %s to primary peer %s", peer, primary)
+					peer = primary
+				}
+			}
+		}
+		if !exists {
+			sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
+			return
+		}
 	}
 
 	// Attempt to find the final block in the inventory list.  There may
