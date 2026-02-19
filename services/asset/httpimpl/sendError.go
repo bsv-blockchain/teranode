@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	tnerrors "github.com/bsv-blockchain/teranode/errors"
 	"github.com/labstack/echo/v4"
 )
 
@@ -76,7 +77,7 @@ func sendError(c echo.Context, status int, code int32, err error) error {
 	e := &errorResponse{
 		Status: int32(status), //nolint:gosec
 		Code:   code,
-		Err:    err.Error(),
+		Err:    tnerrors.UserMessage(err),
 	}
 
 	return c.JSON(status, e)

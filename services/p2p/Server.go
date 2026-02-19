@@ -1639,7 +1639,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 
 	// Fallback to libp2p client data if registry not available
 	if s.P2PClient == nil {
-		return nil, errors.NewError("[GetPeers] P2PClient is not initialised")
+		return nil, errors.WrapGRPCPublic(errors.NewError("[GetPeers] P2PClient is not initialised"))
 	}
 
 	s.logger.Debugf("Creating reply channel")
@@ -1684,7 +1684,7 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 func (s *Server) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2p_api.BanPeerResponse, error) {
 	err := s.banList.Add(ctx, peer.Addr, time.Unix(peer.Until, 0))
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPCPublic(err)
 	}
 
 	return &p2p_api.BanPeerResponse{Ok: true}, nil
@@ -1693,7 +1693,7 @@ func (s *Server) BanPeer(ctx context.Context, peer *p2p_api.BanPeerRequest) (*p2
 func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) (*p2p_api.UnbanPeerResponse, error) {
 	err := s.banList.Remove(ctx, peer.Addr)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPCPublic(err)
 	}
 
 	return &p2p_api.UnbanPeerResponse{Ok: true}, nil
@@ -1757,7 +1757,7 @@ func (s *Server) RecordBytesDownloaded(ctx context.Context, req *p2p_api.RecordB
 	peerID, err := peer.Decode(req.PeerId)
 	if err != nil {
 		s.logger.Errorf("[RecordBytesDownloaded] failed to decode peer ID %s: %v", req.PeerId, err)
-		return &p2p_api.RecordBytesDownloadedResponse{Ok: false}, errors.NewServiceError("failed to decode peer ID", err)
+		return &p2p_api.RecordBytesDownloadedResponse{Ok: false}, errors.WrapGRPCPublic(errors.NewServiceError("failed to decode peer ID", err))
 	}
 
 	// Get current peer info from registry
