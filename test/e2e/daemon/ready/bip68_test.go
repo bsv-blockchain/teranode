@@ -1,14 +1,18 @@
 package smoke
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -153,7 +157,6 @@ func waitForSync(t *testing.T, ctx context.Context, td *daemon.TestDaemon,
 
 // TestBIP68_HeightBased_Accept verifies valid height-based sequence lock is accepted
 func TestBIP68_HeightBased_Accept(t *testing.T) {
-	t.Skip("BIP68: under investigation")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
@@ -216,64 +219,83 @@ func TestBIP68_HeightBased_Accept(t *testing.T) {
 	t.Logf("SUCCESS: Both nodes accepted valid height-based sequence lock")
 }
 
-// TestBIP68_HeightBased_Reject verifies invalid height-based sequence lock is rejected
+// TestBIP68_HeightBased_Reject verifies that a block containing a tx with an unsatisfied
+// height-based sequence lock is rejected by Teranode.
+//
+// NOTE: Skipped because model.NewBlockFromMsgBlock (model/Block.go:161) only populates the
+// coinbase subtree — non-coinbase txs are invisible to block.Valid() and therefore to
+// ValidateBlock. Fix that TODO first, then remove the t.Skip.
 func TestBIP68_HeightBased_Reject(t *testing.T) {
-	t.Skip("BIP68: under investigation")
+	t.Skip("BIP68 reject: model.NewBlockFromMsgBlock (model/Block.go:161) only populates the coinbase subtree, so ValidateBlock never sees non-coinbase txs and cannot enforce BIP68 sequence locks on them")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
 	ctx := t.Context()
 
-	// Setup with CSV height = 10, generate 115 blocks before Teranode starts
-	td, sv, txCreator := setupBIP68Test(t, 10, 115)
+	// Setup: CSV active at height 10, start with 110 initial blocks
+	td, sv, txCreator := setupBIP68Test(t, 10, 110)
 	defer func() {
 		td.Stop(t)
 		_ = sv.Stop(ctx)
 	}()
 
-	// Create funding at height 116
+	// Create funding at height 111
 	fundingUTXO, err := txCreator.CreateConfirmedFunding(10.0)
 	require.NoError(t, err)
-	waitForSync(t, ctx, td, sv, 116)
+	fundingBlockHeight := uint32(111)
+	waitForSync(t, ctx, td, sv, fundingBlockHeight)
 
-	t.Logf("Created funding UTXO at height 116: %s:%d", fundingUTXO.TxID, fundingUTXO.Vout)
+	t.Logf("Created funding UTXO at height %d: %s:%d", fundingBlockHeight, fundingUTXO.TxID, fundingUTXO.Vout)
 
-	// Mine only 2 more blocks
-	_, err = sv.Generate(2)
-	require.NoError(t, err)
-	waitForSync(t, ctx, td, sv, 118)
-
-	// Create transaction with sequence = 100 (requires 100 block confirmations)
-	// UTXO at height 116, current height = 119 after mining
-	// Age = 119 - 116 = 3 blocks < 100 ✗
-	tx, err := createSequenceLockedTx(fundingUTXO, txCreator.Address(), 100, 2, td.GetPrivateKey(t))
+	// Create a tx with sequence = 200 (requires 200 block confirmations).
+	// UTXO is 1 block old, so height lock is not satisfied (1 < 200).
+	sequence := uint32(200)
+	tx, err := createSequenceLockedTx(fundingUTXO, txCreator.Address(), sequence, 2, td.GetPrivateKey(t))
 	require.NoError(t, err)
 
-	t.Logf("Testing invalid height-based lock: sequence=100, UTXO height=116, current=119 after mining")
+	t.Logf("Created tx with sequence=%d (requires %d block confirmations, UTXO is 1 block old → not satisfied)", sequence, sequence)
 
-	// Submit to SV Node - it will accept to mempool but should reject when mining
-	txHex := tx.String()
-	_, err = sv.SendRawTransaction(txHex)
-	require.NoError(t, err, "SV Node accepts to mempool (doesn't validate BIP68 in mempool)")
-
-	// Try to mine - SV Node should exclude this transaction from the block
-	blockHashes, err := sv.Generate(1)
+	// Build an offline block containing the invalid tx
+	blockCreator := svnode.NewBlockCreator(sv, txCreator.Address())
+	block, err := blockCreator.CreateBlock([]*bt.Tx{tx})
 	require.NoError(t, err)
-	t.Logf("SV Node mined block %s (should exclude invalid tx)", blockHashes[0])
+	t.Logf("Created offline block %s at height %d", block.Hash, fundingBlockHeight+1)
 
-	// Wait for sync
-	waitForSync(t, ctx, td, sv, 119)
+	// Record initial heights before submission
+	initialSVHeight, err := sv.GetBlockCount()
+	require.NoError(t, err)
+	require.Equal(t, int(fundingBlockHeight), initialSVHeight)
 
-	// Verify the transaction is still in mempool (not in block)
-	svBlockCount, _ := sv.GetBlockCount()
-	t.Logf("SV Node height: %d - transaction correctly excluded from block", svBlockCount)
+	_, initialTDMeta, err := td.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	initialTDHeight := initialTDMeta.Height
+	require.Equal(t, fundingBlockHeight, initialTDHeight)
 
-	t.Logf("SUCCESS: SV Node correctly rejected invalid height-based sequence lock by excluding from block")
+	// Submit to Teranode via ValidateBlock — the correct full-validation path (calls block.Valid()
+	// with UTXO store and subtree store). Should reject because the sequence lock is not satisfied.
+	blockBytes, err := hex.DecodeString(block.Hex)
+	require.NoError(t, err)
+	msgBlock := &wire.MsgBlock{}
+	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))
+	require.NoError(t, err)
+	modelBlock, err := model.NewBlockFromMsgBlock(msgBlock, nil)
+	require.NoError(t, err)
+	modelBlock.Height = fundingBlockHeight + 1
+
+	err = td.BlockValidationClient.ValidateBlock(ctx, modelBlock, nil)
+	require.Error(t, err, "Teranode should reject block with unsatisfied height-based sequence lock (sequence=%d, UTXO age=1 block)", sequence)
+	t.Logf("Teranode rejected block as expected: %v", err)
+
+	// Verify Teranode height is unchanged
+	_, finalTDMeta, err := td.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, initialTDHeight, finalTDMeta.Height, "Teranode height should be unchanged after rejecting invalid block")
+
+	t.Logf("SUCCESS: Teranode rejected block with unsatisfied height-based sequence lock, height remained at %d", initialTDHeight)
 }
 
 // TestBIP68_TimeBased_Accept verifies valid time-based sequence lock is accepted
 func TestBIP68_TimeBased_Accept(t *testing.T) {
-	t.Skip("BIP68: under investigation")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
@@ -286,41 +308,58 @@ func TestBIP68_TimeBased_Accept(t *testing.T) {
 		_ = sv.Stop(ctx)
 	}()
 
-	// Create funding
-	fundingUTXO, err := txCreator.CreateConfirmedFunding(10.0)
+	// Create funding UTXO (confirmed at height 121).
+	// Use 9.0 BSV (not 10.0) so this test's funding tx differs from
+	// TestBIP68_HeightBased_Accept, giving block 121 a unique hash and
+	// avoiding a subtree-quorum path collision when tests run sequentially.
+	fundingUTXO, err := txCreator.CreateConfirmedFunding(9.0)
 	require.NoError(t, err)
 	waitForSync(t, ctx, td, sv, 121)
-
 	t.Logf("Created funding UTXO at height 121: %s:%d", fundingUTXO.TxID, fundingUTXO.Vout)
 
-	// Mine 10 more blocks to provide time separation
-	_, err = sv.Generate(10)
+	// Read the timestamp of the funding block so we can advance beyond it.
+	// In regtest all blocks share the same Unix second, so MTP never advances
+	// on its own. setmocktime forces subsequent blocks to carry a later timestamp,
+	// which makes MTP advance and satisfies the time-based sequence lock.
+	fundingBlockHash, err := sv.GetBlockHash(121)
 	require.NoError(t, err)
-	waitForSync(t, ctx, td, sv, 131)
+	fundingBlockData, err := sv.GetBlock(fundingBlockHash, 1)
+	require.NoError(t, err)
+	fundingBlockTime := int64(fundingBlockData["time"].(float64))
+	t.Logf("Funding block (121) timestamp: %d", fundingBlockTime)
 
-	// Create transaction with time-based sequence lock
-	// 2 × 512 seconds = 1024 seconds (~17 minutes)
-	// With 10 blocks mined, sufficient time should have passed
+	// Advance BSV's clock by 2000 seconds (> 2 × 512 = 1024 required by the lock).
+	err = sv.SetMockTime(fundingBlockTime + 2000)
+	require.NoError(t, err, "Failed to set mock time on BSV node")
+	t.Logf("Set BSV mock time to %d (funding + 2000 s)", fundingBlockTime+2000)
+
+	// Mine 11 blocks at the new time so that MTP of the chain tip is fully at
+	// fundingBlockTime+2000 (i.e. all 11 preceding blocks carry the new timestamp).
+	_, err = sv.Generate(11)
+	require.NoError(t, err)
+	waitForSync(t, ctx, td, sv, 132)
+	t.Logf("Mined 11 blocks at mocktime; chain now at height 132")
+
+	// sequence = SequenceLockTimeTypeFlag | 2 → 2 × 512 = 1024 seconds required.
+	// MTP(132) ≈ fundingBlockTime+2000 ≥ MTP(121) + 1024 ✓
 	sequence := SequenceLockTimeTypeFlag | 2
 	tx, err := createSequenceLockedTx(fundingUTXO, txCreator.Address(), sequence, 2, td.GetPrivateKey(t))
 	require.NoError(t, err)
+	t.Logf("Testing time-based sequence lock: sequence=0x%x (2 × 512 = 1024 s, 2000 s elapsed)", sequence)
 
-	t.Logf("Testing time-based sequence lock: 2 × 512 = 1024 seconds")
-
-	// Submit and mine
+	// BSV 1.2.0 does not enforce BIP68 in mempool or submitblock, so it accepts.
 	txHex := tx.String()
 	txID, err := sv.SendRawTransaction(txHex)
-	require.NoError(t, err)
+	require.NoError(t, err, "SV Node should accept transaction to mempool")
 	t.Logf("SV Node accepted transaction %s", txID)
 
 	blockHashes, err := sv.Generate(1)
 	require.NoError(t, err)
-	t.Logf("SV Node mined block %s at height 132", blockHashes[0])
+	t.Logf("SV Node mined block %s at height 133", blockHashes[0])
 
-	// Verify BSV Node accepted the block before checking Teranode sync
 	svBlockCount, err := sv.GetBlockCount()
 	require.NoError(t, err, "Should get BSV Node block count")
-	require.Equal(t, 132, svBlockCount, "BSV Node should be at height 132")
+	require.Equal(t, 133, svBlockCount, "BSV Node should be at height 133")
 	t.Logf("BSV Node block height: %d", svBlockCount)
 
 	// Verify transaction is in the blockchain
@@ -330,64 +369,89 @@ func TestBIP68_TimeBased_Accept(t *testing.T) {
 	require.True(t, ok && confirmations >= 1, "Transaction %s should have at least 1 confirmation", txID)
 	t.Logf("Transaction %s confirmed with %v confirmations in block %v", txID, confirmations, txInfo["blockhash"])
 
-	waitForSync(t, ctx, td, sv, 132)
+	// Teranode syncs via legacy P2P; BIP68 check passes because elapsed MTP ≥ 1024 s
+	waitForSync(t, ctx, td, sv, 133)
 
 	t.Logf("SUCCESS: Both nodes accepted valid time-based sequence lock")
 }
 
-// TestBIP68_TimeBased_Reject verifies invalid time-based sequence lock is rejected
+// TestBIP68_TimeBased_Reject verifies that a block containing a tx with an unsatisfied
+// time-based sequence lock is rejected by Teranode.
+//
+// NOTE: Same prerequisite as TestBIP68_HeightBased_Reject — model.NewBlockFromMsgBlock
+// (model/Block.go:161) only populates the coinbase subtree, so ValidateBlock never sees
+// non-coinbase txs. Fix that TODO first, then remove the t.Skip.
 func TestBIP68_TimeBased_Reject(t *testing.T) {
-	t.Skip("BIP68: under investigation")
+	t.Skip("BIP68 reject: model.NewBlockFromMsgBlock (model/Block.go:161) only populates the coinbase subtree, so ValidateBlock never sees non-coinbase txs and cannot enforce BIP68 sequence locks on them")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
 	ctx := t.Context()
 
-	// Setup with CSV height = 10, generate 115 blocks before Teranode starts
-	td, sv, txCreator := setupBIP68Test(t, 10, 115)
+	// Setup: CSV active at height 10, start with 110 initial blocks
+	td, sv, txCreator := setupBIP68Test(t, 10, 110)
 	defer func() {
 		td.Stop(t)
 		_ = sv.Stop(ctx)
 	}()
 
-	// Create funding
+	// Create funding at height 111
 	fundingUTXO, err := txCreator.CreateConfirmedFunding(10.0)
 	require.NoError(t, err)
-	waitForSync(t, ctx, td, sv, 116)
+	fundingBlockHeight := uint32(111)
+	waitForSync(t, ctx, td, sv, fundingBlockHeight)
 
-	t.Logf("Created funding UTXO at height 116: %s:%d", fundingUTXO.TxID, fundingUTXO.Vout)
+	t.Logf("Created funding UTXO at height %d: %s:%d", fundingBlockHeight, fundingUTXO.TxID, fundingUTXO.Vout)
 
-	// Mine only 1 block (not enough time)
-	_, err = sv.Generate(1)
-	require.NoError(t, err)
-	waitForSync(t, ctx, td, sv, 117)
-
-	// Create transaction with large time-based sequence lock
-	// 10000 × 512 seconds = 5,120,000 seconds (~59 days)
-	sequence := SequenceLockTimeTypeFlag | 10000
+	// Create a tx with time-based sequence = 1000 units (1000 × 512 = 512000 seconds ≈ 6 days).
+	// In regtest, blocks are mined immediately so far less than 512000 seconds have elapsed.
+	sequence := SequenceLockTimeTypeFlag | 1000
 	tx, err := createSequenceLockedTx(fundingUTXO, txCreator.Address(), sequence, 2, td.GetPrivateKey(t))
 	require.NoError(t, err)
 
-	t.Logf("Testing invalid time-based lock: 10000 × 512 = 5,120,000 seconds (~59 days)")
+	t.Logf("Created tx with time-based sequence=1000 (1000 × 512 = 512000 seconds not elapsed → not satisfied)")
 
-	// Submit to SV Node
-	txHex := tx.String()
-	_, err = sv.SendRawTransaction(txHex)
-	require.NoError(t, err, "SV Node accepts to mempool")
-
-	// Try to mine - should exclude invalid transaction
-	blockHashes, err := sv.Generate(1)
+	// Build an offline block containing the invalid tx
+	blockCreator := svnode.NewBlockCreator(sv, txCreator.Address())
+	block, err := blockCreator.CreateBlock([]*bt.Tx{tx})
 	require.NoError(t, err)
-	t.Logf("SV Node mined block %s (should exclude invalid tx)", blockHashes[0])
+	t.Logf("Created offline block %s at height %d", block.Hash, fundingBlockHeight+1)
 
-	waitForSync(t, ctx, td, sv, 118)
+	// Record initial heights before submission
+	initialSVHeight, err := sv.GetBlockCount()
+	require.NoError(t, err)
+	require.Equal(t, int(fundingBlockHeight), initialSVHeight)
 
-	t.Logf("SUCCESS: SV Node correctly rejected invalid time-based sequence lock by excluding from block")
+	_, initialTDMeta, err := td.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	initialTDHeight := initialTDMeta.Height
+	require.Equal(t, fundingBlockHeight, initialTDHeight)
+
+	// Submit to Teranode via ValidateBlock — the correct full-validation path (calls block.Valid()
+	// with UTXO store and subtree store). Should reject because the time lock is not satisfied.
+	blockBytes, err := hex.DecodeString(block.Hex)
+	require.NoError(t, err)
+	msgBlock := &wire.MsgBlock{}
+	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))
+	require.NoError(t, err)
+	modelBlock, err := model.NewBlockFromMsgBlock(msgBlock, nil)
+	require.NoError(t, err)
+	modelBlock.Height = fundingBlockHeight + 1
+
+	err = td.BlockValidationClient.ValidateBlock(ctx, modelBlock, nil)
+	require.Error(t, err, "Teranode should reject block with unsatisfied time-based sequence lock (1000 × 512 seconds not elapsed)")
+	t.Logf("Teranode rejected block as expected: %v", err)
+
+	// Verify Teranode height is unchanged
+	_, finalTDMeta, err := td.BlockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, initialTDHeight, finalTDMeta.Height, "Teranode height should be unchanged after rejecting invalid block")
+
+	t.Logf("SUCCESS: Teranode rejected block with unsatisfied time-based sequence lock, height remained at %d", initialTDHeight)
 }
 
 // TestBIP68_DisableFlag verifies disable flag bypasses BIP68 enforcement
 func TestBIP68_DisableFlag(t *testing.T) {
-	t.Skip("BIP68: under investigation")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
@@ -449,7 +513,6 @@ func TestBIP68_DisableFlag(t *testing.T) {
 
 // TestBIP68_BeforeCSVHeight verifies BIP68 not enforced before CSV activation
 func TestBIP68_BeforeCSVHeight(t *testing.T) {
-	t.Skip("BIP68: under investigation")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
@@ -510,7 +573,6 @@ func TestBIP68_BeforeCSVHeight(t *testing.T) {
 
 // TestBIP68_Version1Bypass verifies version 1 transactions bypass BIP68
 func TestBIP68_Version1Bypass(t *testing.T) {
-	t.Skip("BIP68: under investigation")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
@@ -571,7 +633,6 @@ func TestBIP68_Version1Bypass(t *testing.T) {
 
 // TestBIP68_MixedInputTypes verifies mixed sequence lock types in single transaction
 func TestBIP68_MixedInputTypes(t *testing.T) {
-	t.Skip("BIP68: under investigation")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
@@ -598,10 +659,23 @@ func TestBIP68_MixedInputTypes(t *testing.T) {
 
 	t.Logf("Created 3 funding UTXOs at heights 116, 117, 118")
 
-	// Mine 10 more blocks to age the UTXOs
-	_, err = sv.Generate(10)
+	// UTXO2 carries a time-based sequence lock (2 × 512 = 1024 s).
+	// In regtest all blocks share the same Unix second, so MTP never advances.
+	// Read the timestamp of block 117 (UTXO2's confirmation block) and advance
+	// BSV's clock by 2000 s so subsequent blocks carry a later timestamp.
+	utxo2BlockHash, err := sv.GetBlockHash(117)
 	require.NoError(t, err)
-	waitForSync(t, ctx, td, sv, 128)
+	utxo2BlockData, err := sv.GetBlock(utxo2BlockHash, 1)
+	require.NoError(t, err)
+	utxo2BlockTime := int64(utxo2BlockData["time"].(float64))
+	err = sv.SetMockTime(utxo2BlockTime + 2000)
+	require.NoError(t, err, "Failed to set mock time on BSV node")
+	t.Logf("Set BSV mock time to %d (UTXO2 block + 2000 s)", utxo2BlockTime+2000)
+
+	// Mine 11 blocks at the new time so that MTP is fully at utxo2BlockTime+2000
+	_, err = sv.Generate(11)
+	require.NoError(t, err)
+	waitForSync(t, ctx, td, sv, 129)
 
 	// Create transaction with mixed input types
 	tx := bt.NewTx()
@@ -609,7 +683,7 @@ func TestBIP68_MixedInputTypes(t *testing.T) {
 
 	privKey := td.GetPrivateKey(t)
 
-	// Input 1: Height-based (5 blocks) - UTXO at 116, current will be 129, age = 13 ≥ 5 ✓
+	// Input 1: Height-based (5 blocks) - UTXO at 116, current will be 130, age = 14 ≥ 5 ✓
 	utxo1 := &bt.UTXO{
 		TxIDHash:      fundingUTXO1.Tx.TxIDChainHash(),
 		Vout:          fundingUTXO1.Vout,
@@ -658,12 +732,12 @@ func TestBIP68_MixedInputTypes(t *testing.T) {
 
 	blockHashes, err := sv.Generate(1)
 	require.NoError(t, err)
-	t.Logf("SV Node mined block %s at height 129", blockHashes[0])
+	t.Logf("SV Node mined block %s at height 130", blockHashes[0])
 
 	// Verify BSV Node accepted the block before checking Teranode sync
 	svBlockCount, err := sv.GetBlockCount()
 	require.NoError(t, err, "Should get BSV Node block count")
-	require.Equal(t, 129, svBlockCount, "BSV Node should be at height 129")
+	require.Equal(t, 130, svBlockCount, "BSV Node should be at height 130")
 	t.Logf("BSV Node block height: %d", svBlockCount)
 
 	// Verify transaction is in the blockchain
@@ -673,14 +747,13 @@ func TestBIP68_MixedInputTypes(t *testing.T) {
 	require.True(t, ok && confirmations >= 1, "Transaction %s should have at least 1 confirmation", txID)
 	t.Logf("Transaction %s confirmed with %v confirmations in block %v", txID, confirmations, txInfo["blockhash"])
 
-	waitForSync(t, ctx, td, sv, 129)
+	waitForSync(t, ctx, td, sv, 130)
 
 	t.Logf("SUCCESS: Both nodes accepted transaction with mixed sequence lock types")
 }
 
 // TestBIP68_ZeroSequence verifies zero sequence number imposes no constraint
 func TestBIP68_ZeroSequence(t *testing.T) {
-	t.Skip("BIP68: under investigation")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 
@@ -735,7 +808,6 @@ func TestBIP68_ZeroSequence(t *testing.T) {
 
 // TestBIP68_AtExactCSVHeight verifies BIP68 enforced at exact activation height
 func TestBIP68_AtExactCSVHeight(t *testing.T) {
-	t.Skip("BIP68: under investigation")
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
 

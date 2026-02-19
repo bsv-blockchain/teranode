@@ -282,6 +282,32 @@ func (d *DockerSVNode) SubmitBlock(blockHex string) (string, error) {
 	return result.Result.(string), nil
 }
 
+// SetMockTime sets BSV regtest node's internal clock (regtest-only RPC).
+// Pass 0 to reset to real time.
+func (d *DockerSVNode) SetMockTime(timestamp int64) error {
+	resp, err := helper.CallRPC(d.rpcURL, "setmocktime", []interface{}{timestamp})
+	if err != nil {
+		return err
+	}
+
+	var result struct {
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+		return errors.NewProcessingError("failed to parse setmocktime response", err)
+	}
+
+	if result.Error != nil {
+		return errors.NewProcessingError("setmocktime failed: %s", result.Error.Message)
+	}
+
+	return nil
+}
+
 // GetBlockHeader returns block header information
 func (d *DockerSVNode) GetBlockHeader(blockHash string, verbose bool) (interface{}, error) {
 	verboseInt := 0

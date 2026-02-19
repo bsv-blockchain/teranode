@@ -225,8 +225,14 @@ func (bc *BlockCreator) calculateMerkleRoot(txs []*bt.Tx) *chainhash.Hash {
 // createBlockHeader creates a block header from previous block info
 // Fetches difficulty and version from previous block
 func (bc *BlockCreator) createBlockHeader(prevBlockHash string, merkleRoot string, prevBlockHeader map[string]interface{}) (*BlockHeader, error) {
-	// Get current timestamp
+	// Get current timestamp.
+	// In regtest, blocks are mined instantly and may all share the same Unix timestamp.
+	// BSV requires block.timestamp > MTP(last 11 blocks). When all blocks share timestamp T,
+	// MTP = T, so we must use timestamp > T. Clamp to prevBlock.time+1 at minimum.
 	timestamp := uint32(time.Now().Unix())
+	if prevTime, ok := prevBlockHeader["time"].(float64); ok && timestamp <= uint32(prevTime) {
+		timestamp = uint32(prevTime) + 1
+	}
 
 	// Use same difficulty bits as previous block (regtest)
 	bitsStr := prevBlockHeader["bits"].(string)

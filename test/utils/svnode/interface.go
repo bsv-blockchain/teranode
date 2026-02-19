@@ -40,6 +40,9 @@ type SVNodeI interface {
 	SubmitBlock(blockHex string) (string, error)
 	GetBlockHeader(blockHash string, verbose bool) (interface{}, error)
 
+	// Regtest time control (test-only)
+	SetMockTime(timestamp int64) error
+
 	// Network
 	GetPeerInfo() ([]map[string]interface{}, error)
 	GetNetworkInfo() (map[string]interface{}, error)
