@@ -258,6 +258,13 @@ type GetNetworkInfoResult struct {
 	Warnings        string                 `json:"warnings"`
 }
 
+// StreamInfoResult models per-stream byte counts for multistream peers.
+type StreamInfoResult struct {
+	StreamType uint32 `json:"stream_type"`
+	BytesSent  uint64 `json:"bytessent"`
+	BytesRecv  uint64 `json:"bytesrecv"`
+}
+
 // GetPeerInfoResult models the data returned from the getpeerinfo command.
 type GetPeerInfoResult struct {
 	ID             int32   `json:"id,omitempty"`
@@ -283,7 +290,8 @@ type GetPeerInfoResult struct {
 	BanScore       int32   `json:"banscore,omitempty"`
 	Whitelisted    bool    `json:"whitelisted,omitempty"`
 	FeeFilter      int64   `json:"feefilter,omitempty"`
-	SyncNode       bool    `json:"syncnode,omitempty"`
+	SyncNode       bool               `json:"syncnode,omitempty"`
+	Streams        []StreamInfoResult `json:"streams,omitempty"`
 }
 
 // GetRawMempoolVerboseResult models the data returned from the getrawmempool

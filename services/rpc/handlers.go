@@ -1212,6 +1212,13 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 				// 	// We actually want microseconds.
 				// 	info.PingWait = wait / 1000
 				// }
+				for _, s := range p.Streams {
+					info.Streams = append(info.Streams, bsvjson.StreamInfoResult{
+						StreamType: s.StreamType,
+						BytesSent:  s.BytesSent,
+						BytesRecv:  s.BytesRecv,
+					})
+				}
 				infos = append(infos, info)
 			}
 		}
