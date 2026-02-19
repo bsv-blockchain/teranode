@@ -502,13 +502,13 @@ func (b *Blockchain) GetFSMCurrentState(ctx context.Context, _ *emptypb.Empty) (
 
 Retrieves the current state of the finite state machine.
 
-### WaitForFSMtoTransitionToGivenState (Internal Method)
+### WaitForFSMtoTransitionToGivenState (Internal Helper)
 
 ```go
 func (b *Blockchain) WaitForFSMtoTransitionToGivenState(ctx context.Context, targetState blockchain_api.FSMStateType) error
 ```
 
-Waits for the FSM to transition to a given state. **Note: This is an internal helper method and is not exposed as a gRPC endpoint.**
+Internal helper that polls until the FSM reaches the target state. The corresponding gRPC endpoint is `WaitFSMToTransitionToGivenState`, which wraps this method and accepts a `WaitFSMToTransitionRequest`.
 
 ### WaitUntilFSMTransitionFromIdleState
 
@@ -608,6 +608,110 @@ This method is commonly used during:
 - Quick validation of checkpointed blocks
 - Parallel block processing where IDs need to be reserved in advance
 - Recovery scenarios where block IDs need to be coordinated across services
+
+## Block Ancestry
+
+### CheckBlockIsAncestorOfBlock
+
+```go
+func (b *Blockchain) CheckBlockIsAncestorOfBlock(ctx context.Context, req *blockchain_api.CheckBlockIsAncestorOfBlockRequest) (*blockchain_api.CheckBlockIsAncestorOfBlockResponse, error)
+```
+
+Verifies whether specified blocks are ancestors of a given block. Used for double-spend detection on fork blocks where the check is performed against the fork's ancestor chain.
+
+## Block Persistence Tracking
+
+### SetBlockPersistedAt
+
+```go
+func (b *Blockchain) SetBlockPersistedAt(ctx context.Context, req *blockchain_api.SetBlockPersistedAtRequest) (*emptypb.Empty, error)
+```
+
+Updates the `persisted_at` timestamp for a block, recording when the block was fully persisted to blob storage.
+
+### GetBlocksNotPersisted
+
+```go
+func (b *Blockchain) GetBlocksNotPersisted(ctx context.Context, req *blockchain_api.GetBlocksNotPersistedRequest) (*blockchain_api.GetBlocksNotPersistedResponse, error)
+```
+
+Retrieves blocks that have not yet been persisted to blob storage. Used by the Block Persister service to discover blocks that still need processing.
+
+## Blob Deletion Management
+
+These gRPC methods manage scheduled blob deletions as part of the pruning workflow. The blockchain service stores deletion schedules in the database, and the pruner service uses these endpoints to coordinate blob cleanup.
+
+### ScheduleBlobDeletion
+
+```go
+func (b *Blockchain) ScheduleBlobDeletion(ctx context.Context, req *blockchain_api.ScheduleBlobDeletionRequest) (*blockchain_api.ScheduleBlobDeletionResponse, error)
+```
+
+Schedules a blob for deletion at a specific block height.
+
+### CancelBlobDeletion
+
+```go
+func (b *Blockchain) CancelBlobDeletion(ctx context.Context, req *blockchain_api.CancelBlobDeletionRequest) (*blockchain_api.CancelBlobDeletionResponse, error)
+```
+
+Cancels a previously scheduled blob deletion.
+
+### ListScheduledDeletions
+
+```go
+func (b *Blockchain) ListScheduledDeletions(ctx context.Context, req *blockchain_api.ListScheduledDeletionsRequest) (*blockchain_api.ListScheduledDeletionsResponse, error)
+```
+
+Lists all scheduled blob deletions with optional filtering.
+
+### GetPendingBlobDeletions
+
+```go
+func (b *Blockchain) GetPendingBlobDeletions(ctx context.Context, req *blockchain_api.GetPendingBlobDeletionsRequest) (*blockchain_api.GetPendingBlobDeletionsResponse, error)
+```
+
+Retrieves blob deletions that are ready for processing at a specific height.
+
+### RemoveBlobDeletion
+
+```go
+func (b *Blockchain) RemoveBlobDeletion(ctx context.Context, req *blockchain_api.RemoveBlobDeletionRequest) (*emptypb.Empty, error)
+```
+
+Removes a blob deletion from the schedule after successful deletion.
+
+### IncrementBlobDeletionRetry
+
+```go
+func (b *Blockchain) IncrementBlobDeletionRetry(ctx context.Context, req *blockchain_api.IncrementBlobDeletionRetryRequest) (*blockchain_api.IncrementBlobDeletionRetryResponse, error)
+```
+
+Increments the retry counter for a failed blob deletion.
+
+### CompleteBlobDeletions
+
+```go
+func (b *Blockchain) CompleteBlobDeletions(ctx context.Context, req *blockchain_api.CompleteBlobDeletionsRequest) (*blockchain_api.CompleteBlobDeletionsResponse, error)
+```
+
+Completes multiple blob deletions in a single call. More efficient than calling `RemoveBlobDeletion` multiple times.
+
+### AcquireBlobDeletionBatch
+
+```go
+func (b *Blockchain) AcquireBlobDeletionBatch(ctx context.Context, req *blockchain_api.AcquireBlobDeletionBatchRequest) (*blockchain_api.AcquireBlobDeletionBatchResponse, error)
+```
+
+Acquires a batch of deletions with locking for processing. Uses `SELECT...FOR UPDATE SKIP LOCKED` to ensure only one pruner instance processes each batch.
+
+### CompleteBlobDeletionBatch
+
+```go
+func (b *Blockchain) CompleteBlobDeletionBatch(ctx context.Context, req *blockchain_api.CompleteBlobDeletionBatchRequest) (*emptypb.Empty, error)
+```
+
+Completes a previously acquired batch, reporting all results (successes and failures) in a single call.
 
 ## Related Documents
 

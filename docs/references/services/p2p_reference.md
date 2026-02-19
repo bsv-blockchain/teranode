@@ -275,16 +275,16 @@ func (s *Server) AddBanScore(ctx context.Context, req *p2p_api.AddBanScoreReques
 Increments a peer's ban score. When the ban score reaches a threshold, the peer is automatically banned.
 
 ```go
-func (s *Server) ConnectPeer(ctx context.Context, req *p2p_api.ConnectPeerRequest) (*p2p_api.ConnectPeerResponse, error)
+func (c *Client) ConnectPeer(ctx context.Context, peerAddr string) error
 ```
 
-Initiates a connection to a peer using multiaddr format.
+Initiates a connection to a peer using multiaddr format. **Note: This method is available on the client only. The server-side gRPC handler is not yet implemented.**
 
 ```go
-func (s *Server) DisconnectPeer(ctx context.Context, req *p2p_api.DisconnectPeerRequest) (*p2p_api.DisconnectPeerResponse, error)
+func (c *Client) DisconnectPeer(ctx context.Context, peerID string) error
 ```
 
-Disconnects from a currently connected peer.
+Disconnects from a currently connected peer. **Note: This method is available on the client only. The server-side gRPC handler is not yet implemented.**
 
 #### Catchup Metrics and Reputation Endpoints
 
