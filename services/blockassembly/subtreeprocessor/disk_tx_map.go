@@ -37,12 +37,13 @@ type writeEntry struct {
 // diskShard is one Badger instance on a single disk, with its own writer goroutine.
 // Multiple disk shards across physical disks give linear I/O scaling.
 type diskShard struct {
-	store   *tempstore.BadgerTempStore
-	batch   *tempstore.WriteBatch
-	writeCh chan writeEntry
-	done    chan struct{}
-	path    string
-	prefix  string
+	store        *tempstore.BadgerTempStore
+	batch        *tempstore.WriteBatch
+	writeCh      chan writeEntry
+	done         chan struct{}
+	path         string
+	prefix       string
+	bytesWritten int64 // only touched by the single writer goroutine — no atomic needed
 }
 
 // DiskTxMap implements TxInpointsMap using sharded cuckoo filters for fast
@@ -55,13 +56,14 @@ type diskShard struct {
 //   - Write throughput scales linearly with disk count (~500K/s per disk)
 //   - TxInpoints read only during rare ops (reorg, removeTx)
 type DiskTxMap struct {
-	shards    [numFilterShards]filterShard
-	disks     []diskShard
-	numDisks  int
-	count     atomic.Int64
-	basePaths []string
-	prefix    string
-	capacity  uint
+	shards         [numFilterShards]filterShard
+	disks          []diskShard
+	numDisks       int
+	count          atomic.Int64
+	basePaths      []string
+	prefix         string
+	capacity       uint
+	filterMemBytes int64 // total cuckoo filter memory, computed once at construction
 }
 
 // DiskTxMapOptions configures the DiskTxMap.
@@ -136,6 +138,8 @@ func NewDiskTxMap(opts DiskTxMapOptions) (*DiskTxMap, error) {
 		m.shards[i].recent = make(map[chainhash.Hash]struct{}, 64)
 	}
 
+	m.filterMemBytes = int64(numFilterShards) * int64(dtmGetNextPow2(uint(perShard)))
+
 	// Start one writer goroutine per disk
 	for i := range m.disks {
 		go m.writerLoop(i)
@@ -161,6 +165,7 @@ func (m *DiskTxMap) writerLoop(diskIdx int) {
 
 		value := serializeTxMapValue(entry.inpoints)
 		_ = d.batch.Set(entry.key[:], value)
+		d.bytesWritten += int64(chainhash.HashSize + len(value))
 		pending++
 
 		if pending >= writerFlushThreshold {
@@ -227,15 +232,13 @@ func (m *DiskTxMap) Exists(hash chainhash.Hash) bool {
 }
 
 // Get retrieves the TxInpoints for a hash from the correct disk shard.
+//
+// This goes straight to disk without checking the cuckoo filter. The filter is
+// optimized for absence checks (SetIfNotExists duplicate detection), but Get is
+// predominantly called for hashes that ARE in the map. The filter would add
+// lock+lookup overhead on every call while almost never avoiding a disk read.
+// BadgerDB's own SST bloom filters handle the "key not found" case efficiently.
 func (m *DiskTxMap) Get(hash chainhash.Hash) (*subtreepkg.TxInpoints, bool) {
-	s := &m.shards[shardOf(hash)]
-	s.mu.Lock()
-	present := s.filter.Lookup(hash[:])
-	s.mu.Unlock()
-	if !present {
-		return nil, false
-	}
-
 	inpoints := m.getFromStore(hash)
 	if inpoints == nil {
 		return nil, false
@@ -452,4 +455,37 @@ func deserializeTxMapValue(data []byte) *subtreepkg.TxInpoints {
 	}
 
 	return inpoints
+}
+
+// DiskMapStats holds lightweight metrics for a disk-backed map.
+type DiskMapStats struct {
+	Entries          int64
+	FilterMemBytes   int64
+	DiskBytesWritten int64
+}
+
+// Stats returns current metrics. Safe to call after Flush() when writer goroutines are idle.
+func (m *DiskTxMap) Stats() DiskMapStats {
+	var diskBytes int64
+	for i := range m.disks {
+		diskBytes += m.disks[i].bytesWritten
+	}
+	return DiskMapStats{
+		Entries:          m.count.Load(),
+		FilterMemBytes:   m.filterMemBytes,
+		DiskBytesWritten: diskBytes,
+	}
+}
+
+// dtmGetNextPow2 mirrors the cuckoo filter library's unexported bucket allocation function.
+func dtmGetNextPow2(n uint) uint {
+	n--
+	n |= n >> 1
+	n |= n >> 2
+	n |= n >> 4
+	n |= n >> 8
+	n |= n >> 16
+	n |= n >> 32
+	n++
+	return n
 }

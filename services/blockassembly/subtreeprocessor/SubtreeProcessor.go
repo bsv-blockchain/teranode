@@ -473,6 +473,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 		} else {
 			stp.currentTxMap = diskMap
 			stp.diskTxMap = diskMap
+			reportDiskMapStats(diskMap.Stats())
 		}
 	}
 
@@ -3195,7 +3196,9 @@ func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool)
 	// We must create a NEW object (not Clear) because other code may hold references to the old map
 	// that are still being read (e.g., processOwnBlockNodes captures currentTxMap before reset).
 	if stp.diskTxMap != nil {
+		reportDiskMapStats(stp.diskTxMap.Stats())
 		stp.diskTxMap.Clear()
+		clearDiskMapStats()
 		// DiskTxMap.Clear() recreates internal state but keeps the same object.
 		// This is safe because DiskTxMap is only assigned once in the constructor.
 	} else {
@@ -4310,7 +4313,9 @@ func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 		}
 		// Clean up DiskTxMap
 		if stp.diskTxMap != nil {
+			reportDiskMapStats(stp.diskTxMap.Stats())
 			_ = stp.diskTxMap.Close()
+			clearDiskMapStats()
 		}
 	})
 }
