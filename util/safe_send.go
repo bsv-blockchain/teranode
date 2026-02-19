@@ -14,10 +14,13 @@ func SafeSend[T any](ch chan T, t T, timeoutOption ...time.Duration) bool {
 		return true
 	}
 
+	timer := time.NewTimer(timeoutOption[0])
+	defer timer.Stop()
+
 	select {
 	case ch <- t:
 		return true
-	case <-time.After(timeoutOption[0]):
+	case <-timer.C:
 		return false
 	}
 }
