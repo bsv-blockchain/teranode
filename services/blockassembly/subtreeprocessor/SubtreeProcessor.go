@@ -1725,9 +1725,10 @@ func (stp *SubtreeProcessor) processCompleteSubtree(skipNotification bool) (err 
 	stp.chainedSubtreeCount.Add(1)
 	stp.chainedSubtreesTotalSize.Add(currentSubtree.SizeInBytes)
 
-	// Update SubtreeIndex for all txs in this subtree so removeTxFromSubtrees can do O(1) lookup
+	// Update SubtreeIndex for all txs in this subtree so removeTxFromSubtrees can do O(1) lookup.
+	// Store chainedIdx+1 so that 0 (zero value) means "unassigned" and is safe across serialization.
 	if stp.diskTxMap != nil {
-		idx := int16(chainedIdx)
+		idx := int16(chainedIdx + 1)
 		for _, node := range currentSubtree.Nodes {
 			_ = stp.diskTxMap.UpdateSubtreeIndex(node.Hash, idx)
 		}
@@ -1944,13 +1945,17 @@ func (stp *SubtreeProcessor) removeTxFromSubtrees(ctx context.Context, hash chai
 	foundSubtreeIndex := -1
 
 	if foundIndex == -1 {
-		// Use SubtreeIndex for O(1) lookup when DiskTxMap is active
+		// Use SubtreeIndex for O(1) lookup when DiskTxMap is active.
+		// SubtreeIndex is stored as chainedIdx+1, so >0 means assigned.
 		if stp.diskTxMap != nil {
-			if inpoints, found := stp.currentTxMap.Get(hash); found && inpoints.SubtreeIndex >= 0 && int(inpoints.SubtreeIndex) < len(stp.chainedSubtrees) {
-				idx := stp.chainedSubtrees[inpoints.SubtreeIndex].NodeIndex(hash)
-				if idx >= 0 {
-					foundSubtreeIndex = int(inpoints.SubtreeIndex)
-					foundIndex = idx
+			if inpoints, found := stp.currentTxMap.Get(hash); found && inpoints.SubtreeIndex > 0 {
+				chainedIdx := int(inpoints.SubtreeIndex - 1)
+				if chainedIdx < len(stp.chainedSubtrees) {
+					idx := stp.chainedSubtrees[chainedIdx].NodeIndex(hash)
+					if idx >= 0 {
+						foundSubtreeIndex = chainedIdx
+						foundIndex = idx
+					}
 				}
 			}
 		}
