@@ -596,7 +596,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	// Start blockchain subscription before marking service as ready
 	// This ensures we don't miss any block notifications
-	blockchainSubscription, err := s.blockchainClient.Subscribe(ctx, "p2pServer")
+	blockchainSubscription, err := s.blockchainClient.Subscribe(ctx, blockchain.SubscriberP2P)
 	if err != nil {
 		return errors.NewServiceError("error subscribing to blockchain service", err)
 	}

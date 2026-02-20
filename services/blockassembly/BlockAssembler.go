@@ -267,7 +267,7 @@ func (b *BlockAssembler) GetChainedSubtreesTotalSize() uint64 {
 func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) {
 	// start a subscription for the best block header and the FSM state
 	// this will be used to reset the subtree processor when a new block is mined
-	b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
+	b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, blockchain.SubscriberBlockAssembler)
 	if err != nil {
 		return errors.NewProcessingError("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 	}

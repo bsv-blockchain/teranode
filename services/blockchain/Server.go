@@ -1703,14 +1703,35 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	for {
 		select {
 		case <-ctx.Done():
-			// Client disconnected.
+			// Client disconnected - clean up subscriber from map
 			b.logger.Infof("[Blockchain] GRPC client disconnected: %s", req.Source)
+			select {
+			case b.deadSubscriptions <- subscriber{
+				subscription: sub,
+				done:         ch,
+				source:       req.Source,
+			}:
+			case <-b.AppCtx.Done():
+				// Server is shutting down, startSubscriptions already cleaned up
+			}
 			return nil
 		case <-ch:
 			// Subscription ended.
 			return nil
 		}
 	}
+}
+
+// GetSubscribers returns the list of currently active subscriber source strings.
+func (b *Blockchain) GetSubscribers(_ context.Context, _ *emptypb.Empty) (*blockchain_api.GetSubscribersResponse, error) {
+	b.subscribersMu.RLock()
+	defer b.subscribersMu.RUnlock()
+
+	sources := make([]string, 0, len(b.subscribers))
+	for sub := range b.subscribers {
+		sources = append(sources, sub.source)
+	}
+	return &blockchain_api.GetSubscribersResponse{Sources: sources}, nil
 }
 
 // GetState retrieves a value from the blockchain state storage by its key.

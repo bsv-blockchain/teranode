@@ -299,7 +299,7 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 
 					subscribeCtx, subscribeCancel = context.WithCancel(ctx)
 
-					blockchainSubscription, err := bv.blockchainClient.Subscribe(subscribeCtx, "blockvalidation")
+					blockchainSubscription, err := bv.blockchainClient.Subscribe(subscribeCtx, blockchain.SubscriberBlockValidation)
 					if err != nil {
 						// Check if context is done before logging
 						select {

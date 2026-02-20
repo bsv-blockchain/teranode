@@ -118,6 +118,9 @@ service BlockchainAPI {
   // SendNotification broadcasts a notification to subscribers.
   rpc SendNotification(Notification) returns (google.protobuf.Empty) {}
 
+  // GetSubscribers returns the list of currently active subscriber source strings.
+  rpc GetSubscribers(google.protobuf.Empty) returns (GetSubscribersResponse) {}
+
   // GetState retrieves state data by key.
   rpc GetState(GetStateRequest) returns (StateResponse) {}
 
@@ -479,6 +482,11 @@ message Notification {
 // NotificationMetadata contains additional notification information.
 message NotificationMetadata {
   map<string, string> metadata = 1;  // Key-value pairs of metadata
+}
+
+// GetSubscribersResponse contains the list of active subscriber sources.
+message GetSubscribersResponse {
+  repeated string sources = 1;  // Source identifiers of active subscribers
 }
 
 // GetStateRequest requests state data by key.
