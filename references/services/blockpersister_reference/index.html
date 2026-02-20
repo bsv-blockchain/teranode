@@ -5054,10 +5054,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#getnextblocktoprocess" class="md-nav__link">
+  <a href="#getnextblocktoprocess-blob-persistence" class="md-nav__link">
     <span class="md-ellipsis">
       
-        getNextBlockToProcess
+        getNextBlockToProcess (blob persistence)
       
     </span>
   </a>
@@ -6948,10 +6948,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#getnextblocktoprocess" class="md-nav__link">
+  <a href="#getnextblocktoprocess-blob-persistence" class="md-nav__link">
     <span class="md-ellipsis">
       
-        getNextBlockToProcess
+        getNextBlockToProcess (blob persistence)
       
     </span>
   </a>
@@ -7335,6 +7335,7 @@
 
 
 
+<!-- markdownlint-disable MD046 -->
 <h1 id="block-persister-service-reference-documentation">Block Persister Service Reference Documentation</h1>
 <h2 id="overview">Overview</h2>
 <p>The Block Persister Service is responsible for taking blocks from the blockchain service and ensuring they are properly stored in persistent storage along with all related data (transactions, UTXOs, etc.). It plays a critical role in the overall blockchain data persistence strategy by:</p>
@@ -7507,7 +7508,7 @@
 <p class="admonition-title">Atomicity</p>
 <p>Block persistence is atomic - if any part fails, the entire operation is considered failed and should be retried after resolving the underlying issue.</p>
 </div>
-<h4 id="getnextblocktoprocess">getNextBlockToProcess</h4>
+<h4 id="getnextblocktoprocess-blob-persistence">getNextBlockToProcess (blob persistence)</h4>
 <div class="highlight"><pre><span></span><code><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">u</span><span class="w"> </span><span class="o">*</span><span class="nx">Server</span><span class="p">)</span><span class="w"> </span><span class="nx">getNextBlockToProcess</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="o">*</span><span class="nx">model</span><span class="p">.</span><span class="nx">Block</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
 </code></pre></div>
 <p>Retrieves the next block that needs to be persisted to blob storage.</p>
@@ -7592,6 +7593,7 @@
 <li><strong>Retrieve the subtree</strong> from the subtree store using its hash</li>
 <li><strong>Load transaction metadata</strong> from the UTXO store (batched or individual)</li>
 <li><strong>Stream write</strong> the subtree data file using <code>SubtreeDataWriter</code></li>
+<li><strong>Promote <code>.subtree</code> and <code>.subtreeData</code> files to permanent</strong> (DAH=0) — the persister is the only service that promotes blob files to permanent storage</li>
 <li><strong>Abort on error</strong> - incomplete files are automatically cleaned up</li>
 </ol>
 </div>
