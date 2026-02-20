@@ -1166,6 +1166,20 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 		return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to get block header", blockHash.String(), err))
 	}
 
+	// Ensure all subtree files exist before proceeding with revalidation.
+	// This handles the case where pruner has removed subtree data for old invalid blocks.
+	if u.p2pClient != nil {
+		var baseURL string
+		if peer, err := u.p2pClient.GetPeer(ctx, blockHeaderMeta.PeerID); err != nil {
+			u.logger.Warnf("[RevalidateBlock][%s] failed to get peer %s for DataHubURL, will use fallback peers: %v", block.String(), blockHeaderMeta.PeerID, err)
+		} else if peer != nil {
+			baseURL = peer.DataHubURL
+		}
+		if err := u.fetchSubtreeDataForBlock(ctx, block, blockHeaderMeta.PeerID, baseURL); err != nil {
+			return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed to fetch missing subtree data", block.String(), err))
+		}
+	}
+
 	// Create validation options
 	opts := &ValidateBlockOptions{
 		DisableOptimisticMining: true,

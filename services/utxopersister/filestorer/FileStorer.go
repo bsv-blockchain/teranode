@@ -175,7 +175,8 @@ func (f *FileStorer) Close(ctx context.Context) error {
 		return errors.NewStorageError("Error in reader goroutine", readerErr)
 	}
 
-	// Set DAH to 0 (no expiration) as per the memory about Aerospike DAH usage
+	// Set DAH to 0 (no expiration) - files created via FileStorer should not auto-expire.
+	// This is consistent with blockpersister behavior for subtreeData files.
 	if err := f.store.SetDAH(ctx, f.key, f.fileType, 0); err != nil {
 		return errors.NewStorageError("Error setting DAH on file", err)
 	}

@@ -481,6 +481,7 @@ func TestClose_SetDAHError(t *testing.T) {
 	dahError := errors.NewError("SetDAH error")
 
 	// Setup mocks for SetDAH error test - expect SetDAH to fail
+	// Note: SetDAH is only called when no DAH was provided in fileOptions
 	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
 	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
 		_, _ = io.ReadAll(reader)
