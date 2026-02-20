@@ -26,6 +26,7 @@ var _ txmap.TxMap = (*DiskTxMapUint64)(nil)
 // dtmFilterShard is one of 4096 independent existence-check segments.
 type dtmFilterShard struct {
 	mu     sync.Mutex
+	slowMu sync.Mutex // serializes slow-path (disk check) to prevent clearRecent race
 	filter *cuckoo.Filter
 	recent map[chainhash.Hash]struct{}
 }
@@ -197,17 +198,45 @@ func (m *DiskTxMapUint64) Put(hash chainhash.Hash, value uint64) error {
 		}
 
 		s.mu.Unlock()
+
+		// Serialize slow path: prevents clearRecentMapsForDisk from clearing
+		// an entry between another goroutine's insert and our re-check.
+		// Held through channel send so the next slow-path entrant's flushDisk
+		// is guaranteed to find our entry on disk (FIFO channel ordering).
+		s.slowMu.Lock()
+
+		s.mu.Lock()
+		if _, inRecent := s.recent[hash]; inRecent {
+			s.mu.Unlock()
+			s.slowMu.Unlock()
+			return txmap.ErrHashAlreadyExists
+		}
+		s.mu.Unlock()
+
 		if m.existsInStore(hash) {
+			s.slowMu.Unlock()
 			return txmap.ErrHashAlreadyExists
 		}
 
 		s.mu.Lock()
 		if _, inRecent := s.recent[hash]; inRecent {
 			s.mu.Unlock()
+			s.slowMu.Unlock()
 			return txmap.ErrHashAlreadyExists
 		}
+
+		s.filter.Insert(hash[:])
+		s.recent[hash] = struct{}{}
+		s.mu.Unlock()
+
+		m.disks[m.diskOf(hash)].writeCh <- dtmWriteEntry{key: hash, value: value}
+		m.count.Add(1)
+
+		s.slowMu.Unlock()
+		return nil
 	}
 
+	// Fast path: filter negative (new entry)
 	s.filter.Insert(hash[:])
 	s.recent[hash] = struct{}{}
 	s.mu.Unlock()

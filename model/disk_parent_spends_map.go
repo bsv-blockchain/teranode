@@ -27,6 +27,7 @@ var _ ParentSpendsMap = (*DiskParentSpendsMap)(nil)
 // dpsFilterShard is one of 4096 independent existence-check segments.
 type dpsFilterShard struct {
 	mu     sync.Mutex
+	slowMu sync.Mutex // serializes slow-path (disk check) to prevent clearRecent race
 	filter *cuckoo.Filter
 	recent map[subtreepkg.Inpoint]struct{}
 }
@@ -210,17 +211,46 @@ func (m *DiskParentSpendsMap) SetIfNotExists(inpoint subtreepkg.Inpoint) bool {
 		}
 
 		s.mu.Unlock()
+
+		// Serialize slow path: prevents clearRecentMapsForDisk from clearing
+		// an entry between another goroutine's insert and our re-check.
+		// Held through channel send so the next slow-path entrant's flushDisk
+		// is guaranteed to find our entry on disk (FIFO channel ordering).
+		s.slowMu.Lock()
+
+		s.mu.Lock()
+		if _, inRecent := s.recent[inpoint]; inRecent {
+			s.mu.Unlock()
+			s.slowMu.Unlock()
+			return false
+		}
+		s.mu.Unlock()
+
 		if m.existsInStore(inpoint) {
+			s.slowMu.Unlock()
 			return false
 		}
 
 		s.mu.Lock()
 		if _, inRecent := s.recent[inpoint]; inRecent {
 			s.mu.Unlock()
+			s.slowMu.Unlock()
 			return false
 		}
+
+		s.filter.Insert(filterBytes)
+		s.recent[inpoint] = struct{}{}
+		s.mu.Unlock()
+
+		key := inpointToKey(inpoint)
+		m.disks[m.diskOf(inpoint)].writeCh <- dpsWriteEntry{key: key}
+		m.count.Add(1)
+
+		s.slowMu.Unlock()
+		return true
 	}
 
+	// Fast path: filter negative (new entry)
 	s.filter.Insert(filterBytes)
 	s.recent[inpoint] = struct{}{}
 	s.mu.Unlock()
