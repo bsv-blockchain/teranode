@@ -248,6 +248,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	apiGroup.GET("/blockgraphdata/:period", h.GetBlockGraphData)
 	apiGroup.GET("/chainparams", h.GetChainParams)
 
+	// ARC-compatible policy endpoint (https://bitcoin-sv.github.io/arc/api.html)
+	e.GET("/v1/policy", h.GetPolicy)
+
 	apiGroup.GET("/lastblocks", h.GetLastNBlocks)
 
 	apiGroup.GET("/utxo/:hash", h.GetUTXO(BINARY_STREAM))

@@ -128,7 +128,6 @@ type Store struct {
 	incrementBatcher    batcherIfc[batchIncrement]
 	setDAHBatcher       batcherIfc[batchDAH]
 	lockedBatcher       batcherIfc[batchLocked]
-	longestChainBatcher batcherIfc[batchLongestChain]
 	externalStore       blob.Store
 	utxoBatchSize       int
 	externalTxCache     *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
@@ -327,12 +326,6 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	lockedBatchDurationStr := tSettings.UtxoStore.LockedBatcherDurationMillis
 	lockedBatchDuration := time.Duration(lockedBatchDurationStr) * time.Millisecond
 	s.lockedBatcher = batcher.New(lockedBatcherSize, lockedBatchDuration, s.setLockedBatch, true)
-
-	// Initialize longest chain batcher with dedicated settings
-	longestChainBatcherSize := tSettings.UtxoStore.LongestChainBatcherSize
-	longestChainBatchDurationStr := tSettings.UtxoStore.LongestChainBatcherDurationMillis
-	longestChainBatchDuration := time.Duration(longestChainBatchDurationStr) * time.Millisecond
-	s.longestChainBatcher = batcher.New(longestChainBatcherSize, longestChainBatchDuration, s.setLongestChainBatch, true)
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 

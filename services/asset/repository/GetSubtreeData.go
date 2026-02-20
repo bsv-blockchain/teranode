@@ -118,8 +118,8 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 	// Initialize metrics (safe to call multiple times due to sync.Once)
 	initPrometheusMetrics()
 
-	// Note: subtreeData files have DAH=0 (no expiration), set by FileStorer.Close()
-	// This is consistent with blockpersister behavior.
+	// On-demand subtreeData files are created with a finite DAH so they expire naturally
+	// on pruned nodes. Only the block persister promotes files to permanent (DAH=0).
 
 	// If quorum is available, use distributed locking
 	var release func()
@@ -209,6 +209,12 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 			_ = httpWriter.CloseWithError(closeErr)
 			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "close_failed").Inc()
 			return closeErr
+		}
+
+		// Set finite DAH so file expires naturally on pruned nodes
+		dah := repo.UtxoStore.GetBlockHeight() + repo.settings.GetSubtreeValidationBlockHeightRetention()
+		if err := repo.SubtreeStore.SetDAH(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeData, dah); err != nil {
+			repo.logger.Warnf("[GetSubtreeDataReader] Error setting DAH for %s: %v", subtreeHash.String(), err)
 		}
 
 		// Success - close HTTP pipe

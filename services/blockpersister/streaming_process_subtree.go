@@ -87,6 +87,11 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 				return errors.NewStorageError("[BlockPersister] error setting subtree data DAH for %s", subtreeHash.String(), err)
 			}
 
+			// Also promote .subtree to permanent alongside .subtreeData
+			if err = u.subtreeStore.SetDAH(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, 0); err != nil {
+				return errors.NewStorageError("[BlockPersister] error setting subtree DAH for %s", subtreeHash.String(), err)
+			}
+
 			u.logger.Debugf("[BlockPersister] Subtree data for %s already exists, skipping creation", subtreeHash.String())
 
 			return nil
@@ -208,6 +213,11 @@ func (u *Server) CreateSubtreeDataFileStreaming(ctx context.Context, subtreeHash
 
 	// Mark as successful so defer doesn't abort
 	writeSucceeded = true
+
+	// Promote .subtree to permanent now that the block is confirmed on the main chain
+	if err = u.subtreeStore.SetDAH(ctx, subtreeHash.CloneBytes(), fileformat.FileTypeSubtree, 0); err != nil {
+		return errors.NewStorageError("[BlockPersister] error setting subtree DAH for %s", subtreeHash.String(), err)
+	}
 
 	return nil
 }

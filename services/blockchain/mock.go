@@ -341,6 +341,17 @@ func (m *Mock) Subscribe(ctx context.Context, source string) (chan *blockchain_a
 	return args.Get(0).(chan *blockchain_api.Notification), args.Error(1)
 }
 
+// GetSubscribers mocks the GetSubscribers method
+func (m *Mock) GetSubscribers(ctx context.Context) ([]string, error) {
+	args := m.Called(ctx)
+
+	if args.Error(1) != nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]string), args.Error(1)
+}
+
 // GetState mocks the GetState method
 func (m *Mock) GetState(ctx context.Context, key string) ([]byte, error) {
 	args := m.Called(ctx, key)

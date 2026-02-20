@@ -2350,7 +2350,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 	// Listen to blockchain notifications for subtree announcements
 	go func() {
 		// will never return an error
-		blockchainSubscription, _ := sm.blockchainClient.Subscribe(ctx, "legacy/manager")
+		blockchainSubscription, _ := sm.blockchainClient.Subscribe(ctx, teranodeblockchain.SubscriberLegacy)
 
 		for {
 			select {

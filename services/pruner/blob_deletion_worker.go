@@ -2,6 +2,7 @@ package pruner
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -10,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/dustin/go-humanize"
 )
@@ -221,8 +223,17 @@ func (s *Server) getBlobStore(storeType storetypes.BlobStoreType) (blob.Store, e
 		return nil, errors.NewConfigurationError("blob store type %s has nil URL in settings", storeType.String())
 	}
 
-	// Create new store instance
-	store, err := blob.NewStore(s.logger, storeURL)
+	// Default hash prefix per store type (must match daemon_stores.go)
+	hashPrefix := defaultHashPrefix(storeType)
+	if storeURL.Query().Get("hashPrefix") != "" {
+		hashPrefix, err = strconv.Atoi(storeURL.Query().Get("hashPrefix"))
+		if err != nil {
+			return nil, errors.NewConfigurationError("blob store type %s has invalid hashPrefix: %v", storeType.String(), err)
+		}
+	}
+
+	// Create new store instance with hash prefix to match daemon store layout
+	store, err := blob.NewStore(s.logger, storeURL, bloboptions.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return nil, errors.NewStorageError("failed to create blob store for %s", storeType.String(), err)
 	}
@@ -232,6 +243,25 @@ func (s *Server) getBlobStore(storeType storetypes.BlobStoreType) (blob.Store, e
 	s.blobStores[storeType] = store
 
 	return store, nil
+}
+
+// defaultHashPrefix returns the default hash prefix for a given store type,
+// matching the defaults in daemon/daemon_stores.go.
+func defaultHashPrefix(storeType storetypes.BlobStoreType) int {
+	switch storeType {
+	case storetypes.TXSTORE:
+		return 2
+	case storetypes.SUBTREESTORE:
+		return 2
+	case storetypes.BLOCKSTORE:
+		return -2
+	case storetypes.TEMPSTORE:
+		return 0
+	case storetypes.BLOCKPERSISTERSTORE:
+		return 2
+	default:
+		return 2
+	}
 }
 
 func (s *Server) updateBlobDeletionMetrics() {

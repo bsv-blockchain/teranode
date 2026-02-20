@@ -1212,6 +1212,13 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 		return errors.NewStorageError("[File][Del] [%s] failed to remove file", fileName, err)
 	}
 
+	// Try to remove the hash prefix directory if now empty (best-effort, ignore errors).
+	// os.Remove on a non-empty directory returns an error, so this is safe.
+	// Only attempt if the parent is a subdirectory of the store root (i.e. a hash prefix dir).
+	if dir := filepath.Dir(fileName); dir != s.path && len(filepath.Base(dir)) <= 2 {
+		_ = os.Remove(dir)
+	}
+
 	s.logger.Debugf("[FILE_DEL] Successfully deleted file: %s", fileName)
 	s.debugf("[File] Del completed key=%s type=%s", keyHex, fileType)
 	return nil

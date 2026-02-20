@@ -129,7 +129,7 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 				return nil, errors.NewServiceError("error creating blockchain client", err)
 			}
 
-			blockchainSubscriptionCh, err = blockchainClient.Subscribe(ctx, "UTXOStore")
+			blockchainSubscriptionCh, err = blockchainClient.Subscribe(ctx, blockchain.SubscriberUTXOStore)
 			if err != nil {
 				return nil, errors.NewServiceError("error subscribing to blockchain", err)
 			}

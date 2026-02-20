@@ -387,7 +387,7 @@ func (u *Server) loadSubtreeTransactions(ctx context.Context, request *subtreeva
 		}
 
 		// Store the subtree data
-		if err = u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData, buffer.Bytes()); err != nil {
+		if err = u.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData, buffer.Bytes(), options.WithDeleteAt(dah)); err != nil {
 			return nil, errors.NewProcessingError("[loadSubtreeTransactions][%s] failed to store subtree data", subtreeHash.String(), err)
 		}
 	} else {

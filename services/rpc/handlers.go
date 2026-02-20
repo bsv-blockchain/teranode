@@ -1531,6 +1531,25 @@ func calculateMedianTime(ctx context.Context, blockchainClient blockchain.Client
 	return medianTimestampUint32, nil
 }
 
+// isSubscriberActive checks whether a blockchain subscriber whose source
+// contains substr is currently registered. This lets RPC handlers skip
+// expensive calls to services that are not running.
+// isSubscriberActive checks whether source is present in the blockchain
+// subscriber list. This lets RPC handlers skip expensive calls to services
+// that are not running.
+func isSubscriberActive(ctx context.Context, s *RPCServer, source string) bool {
+	subs, err := s.blockchainClient.GetSubscribers(ctx)
+	if err != nil {
+		return false
+	}
+	for _, src := range subs {
+		if src == source {
+			return true
+		}
+	}
+	return false
+}
+
 // handleGetInfo returns a JSON object containing various state info.
 func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetInfo",
@@ -1587,12 +1606,10 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	}
 
 	var legacyConnections *peer_api.GetPeersResponse
-	if s.legacyP2PClient != nil {
-		// create a timeout context to prevent hanging if legacy peer service is not responding
+	if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
 		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 		defer cancel()
 
-		// use a goroutine with select to handle timeouts more reliably
 		type peerResult struct {
 			resp *peer_api.GetPeersResponse
 			err  error
@@ -1607,13 +1624,11 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 		select {
 		case result := <-resultCh:
 			if result.err != nil {
-				// not critical - legacy service may not be running, so log as info
 				s.logger.Infof("error getting legacy peer info: %v", result.err)
 			} else {
 				legacyConnections = result.resp
 			}
 		case <-peerCtx.Done():
-			// timeout reached
 			s.logger.Infof("timeout getting legacy peer info from peer service")
 		}
 	}

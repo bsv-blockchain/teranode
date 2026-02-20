@@ -620,9 +620,11 @@ func (b *Blockchain) startSubscriptions() {
 		case <-b.AppCtx.Done():
 			b.logger.Infof("[Blockchain][startSubscriptions] Stopping channel listeners go routine")
 
+			b.subscribersMu.RLock()
 			for sub := range b.subscribers {
 				safeClose(sub.done)
 			}
+			b.subscribersMu.RUnlock()
 
 			return
 		case notification := <-b.notifications:
@@ -631,6 +633,7 @@ func (b *Blockchain) startSubscriptions() {
 			func() {
 				b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
 
+				b.subscribersMu.RLock()
 				for sub := range b.subscribers {
 					b.logger.Debugf("[Blockchain][startSubscriptions] Sending notification to %s in background: %s", sub.source, notification.Stringify())
 
@@ -642,6 +645,7 @@ func (b *Blockchain) startSubscriptions() {
 						}
 					}(sub)
 				}
+				b.subscribersMu.RUnlock()
 			}()
 			b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
 
@@ -677,9 +681,12 @@ func (b *Blockchain) startSubscriptions() {
 			}(s)
 
 		case s := <-b.deadSubscriptions:
+			b.subscribersMu.Lock()
 			delete(b.subscribers, s)
+			remaining := len(b.subscribers)
+			b.subscribersMu.Unlock()
 			safeClose(s.done)
-			b.logger.Infof("[Blockchain][startSubscriptions] Subscription removed (Total=%d).", len(b.subscribers))
+			b.logger.Infof("[Blockchain][startSubscriptions] Subscription removed (Total=%d).", remaining)
 		}
 	}
 }
@@ -1703,14 +1710,35 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	for {
 		select {
 		case <-ctx.Done():
-			// Client disconnected.
+			// Client disconnected - clean up subscriber from map
 			b.logger.Infof("[Blockchain] GRPC client disconnected: %s", req.Source)
+			select {
+			case b.deadSubscriptions <- subscriber{
+				subscription: sub,
+				done:         ch,
+				source:       req.Source,
+			}:
+			case <-b.AppCtx.Done():
+				// Server is shutting down, startSubscriptions already cleaned up
+			}
 			return nil
 		case <-ch:
 			// Subscription ended.
 			return nil
 		}
 	}
+}
+
+// GetSubscribers returns the list of currently active subscriber source strings.
+func (b *Blockchain) GetSubscribers(_ context.Context, _ *emptypb.Empty) (*blockchain_api.GetSubscribersResponse, error) {
+	b.subscribersMu.RLock()
+	defer b.subscribersMu.RUnlock()
+
+	sources := make([]string, 0, len(b.subscribers))
+	for sub := range b.subscribers {
+		sources = append(sources, sub.source)
+	}
+	return &blockchain_api.GetSubscribersResponse{Sources: sources}, nil
 }
 
 // GetState retrieves a value from the blockchain state storage by its key.

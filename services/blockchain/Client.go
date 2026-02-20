@@ -1151,6 +1151,15 @@ func (c *Client) Subscribe(ctx context.Context, source string) (chan *blockchain
 	return ch, nil
 }
 
+// GetSubscribers returns the list of currently active subscriber source strings.
+func (c *Client) GetSubscribers(ctx context.Context) ([]string, error) {
+	resp, err := c.client.GetSubscribers(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+	return resp.Sources, nil
+}
+
 // SubscribeToServer establishes a subscription to the blockchain server.
 // This method creates a persistent connection to the blockchain service for receiving
 // real-time notifications about blockchain events. It manages reconnection attempts

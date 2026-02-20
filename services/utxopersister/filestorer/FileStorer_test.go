@@ -85,8 +85,6 @@ func setupMockForSuccess(mockStore *MockBlobStore, ctx context.Context, key []by
 		_ = reader.Close()
 		return nil
 	}
-	// SetDAH is called during Close() if Close() succeeds
-	mockStore.On("SetDAH", ctx, key, fileType, uint32(0), mock.Anything).Return(nil).Maybe()
 	// waitUntilFileIsAvailable calls Exists repeatedly until file exists
 	mockStore.On("Exists", ctx, key, fileType).Return(true, nil).Maybe()
 }
@@ -228,7 +226,6 @@ func TestNewFileStorer_SetFromReaderError(t *testing.T) {
 		_ = reader.Close()
 		return expectedError
 	}
-	mockStore.On("SetDAH", ctx, key, fileType, uint32(0), mock.Anything).Return(nil).Maybe()
 	mockStore.On("Exists", ctx, key, fileType).Return(true, nil).Maybe()
 
 	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
@@ -417,7 +414,6 @@ func TestClose_FlushError(t *testing.T) {
 		_ = reader.Close()
 		return nil
 	}
-	mockStore.On("SetDAH", ctx, key, fileType, uint32(0), mock.Anything).Return(nil).Maybe()
 	mockStore.On("Exists", ctx, key, fileType).Return(true, nil).Maybe()
 
 	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
@@ -467,37 +463,6 @@ func TestClose_ReaderError(t *testing.T) {
 	err = fs.Close(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Error in reader goroutine")
-
-	mockStore.AssertExpectations(t)
-}
-
-func TestClose_SetDAHError(t *testing.T) {
-	ctx := createTestContext()
-	logger := ulogger.TestLogger{}
-	tSettings := createTestSettings()
-	mockStore := &MockBlobStore{}
-	key := createTestKey()
-	fileType := fileformat.FileTypeUtxoSet
-	dahError := errors.NewError("SetDAH error")
-
-	// Setup mocks for SetDAH error test - expect SetDAH to fail
-	// Note: SetDAH is only called when no DAH was provided in fileOptions
-	mockStore.On("Exists", ctx, key, fileType, mock.Anything).Return(false, nil)
-	mockStore.setFromReaderHandler = func(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, fileOptions ...options.FileOption) error {
-		_, _ = io.ReadAll(reader)
-		_ = reader.Close()
-		return nil
-	}
-	mockStore.On("SetDAH", ctx, key, fileType, uint32(0), mock.Anything).Return(dahError)
-	mockStore.On("Exists", ctx, key, fileType).Return(true, nil).Maybe()
-
-	fs, err := NewFileStorer(ctx, logger, tSettings, mockStore, key, fileType)
-	require.NoError(t, err)
-
-	// Close should fail with SetDAH error
-	err = fs.Close(ctx)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Error setting DAH")
 
 	mockStore.AssertExpectations(t)
 }

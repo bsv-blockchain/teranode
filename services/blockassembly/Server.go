@@ -43,7 +43,6 @@ import (
 	"github.com/jellydator/ttlcache/v3"
 	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
-	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -1430,17 +1429,12 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] failed to add block", jobID, block.Hash().String(), err)
 	}
 
-	// remove the subtrees from the DAH in the background
-	go func() {
-		callerDAHCtx, _, endSpanDAH := tracing.DecoupleTracingSpan(ctx, "blockassembly", "decoupleDHARemoval")
-		defer endSpanDAH()
-
-		if err := ba.removeSubtreesDAH(callerDAHCtx, block); err != nil {
-			// we don't return an error here, we have already added the block to the chain
-			// if this fails, it will be retried in the block validation service
-			ba.logger.Errorf("[BlockAssembly][%s][%s] failed to remove subtrees DAH: %v", jobID, block.Header.Hash(), err)
-		}
-	}()
+	// Mark subtrees as set — block assembly built and validated these subtrees,
+	// so they are ready for setTxMined processing. Without this, locally mined
+	// blocks would never complete the mining lifecycle.
+	if err = ba.blockchainClient.SetBlockSubtreesSet(callerCtx, block.Hash()); err != nil {
+		ba.logger.Errorf("[BlockAssembly][%s][%s] failed to set block subtrees_set: %v", jobID, block.Header.Hash(), err)
+	}
 
 	// remove jobs, we have already mined a block
 	// if we don't do this, all the subtrees will never be removed from memory
@@ -1495,74 +1489,6 @@ func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJo
 //   - int: The current number of active subtrees in the block assembler
 func (ba *BlockAssembly) SubtreeCount() int {
 	return ba.blockAssembler.SubtreeCount()
-}
-
-// removeSubtreesDAH removes subtrees from the Double-spend Attempt Handler (DAH) after block confirmation.
-// This method handles the cleanup of subtrees that have been successfully included in a confirmed block,
-// ensuring they are removed from the DAH to prevent potential double-spend detection false positives.
-// The DAH tracks subtrees to detect conflicting transactions, and once a block is confirmed, the
-// included subtrees should be cleaned up to maintain accurate double-spend detection.
-//
-// The function performs the following operations:
-// - Iterates through all subtrees included in the confirmed block
-// - Removes each subtree from the DAH's tracking system
-// - Uses decoupled tracing to allow background processing without blocking
-// - Handles errors gracefully while maintaining system stability
-//
-// This cleanup process is critical for maintaining the accuracy of double-spend detection
-// and ensuring the DAH doesn't accumulate stale subtree references over time.
-//
-// Parameters:
-//   - ctx: Context for the removal operation, allowing for cancellation and tracing
-//   - block: The confirmed block containing subtrees to be removed from DAH
-//
-// Returns:
-//   - error: Any error encountered during subtree removal from DAH
-func (ba *BlockAssembly) removeSubtreesDAH(ctx context.Context, block *model.Block) (err error) {
-	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "removeSubtreesDAH",
-		tracing.WithParentStat(ba.stats),
-		tracing.WithHistogram(prometheusBlockAssemblyUpdateSubtreesDAH),
-		tracing.WithLogMessage(ba.logger, "[removeSubtreesDAH][%s] remove subtree DAHs for %d subtrees", block.Hash().String(), len(block.Subtrees)),
-	)
-	defer deferFn()
-
-	// decouple the tracing context to not cancel the context when the subtree DAH is being saved in the background
-	callerCtx, _, endSpan := tracing.DecoupleTracingSpan(ctx, "blockassembly", "decoupleSubtreeDAH")
-	defer endSpan()
-
-	g, gCtx := errgroup.WithContext(callerCtx)
-	util.SafeSetLimit(g, ba.settings.BlockAssembly.SubtreeProcessorConcurrentReads)
-
-	errorFound := atomic.Bool{}
-
-	// update the subtree DAHs
-	for _, subtreeHash := range block.Subtrees {
-		subtreeHashBytes := subtreeHash.CloneBytes()
-		subtreeHash := subtreeHash
-
-		g.Go(func() error {
-			if err := ba.subtreeStore.SetDAH(gCtx, subtreeHashBytes, fileformat.FileTypeSubtree, 0); err != nil {
-				// we don't return an error here, we want to try to update all subtrees
-				// if this fails, it will be retried in the block validation service
-				ba.logger.Errorf("[removeSubtreesDAH][%s][%s] failed to update subtree DAH: %v", block.Hash().String(), subtreeHash.String(), err)
-				errorFound.Store(true)
-			}
-
-			return nil
-		})
-	}
-
-	// wait for all updates to finish
-	_ = g.Wait()
-
-	if !errorFound.Load() {
-		// update block subtrees_set to true
-		if err = ba.blockchainClient.SetBlockSubtreesSet(ctx, block.Hash()); err != nil {
-			return errors.WrapGRPC(errors.NewServiceError("[ValidateBlock][%s] failed to set block subtrees_set", block.Hash().String(), err))
-		}
-	}
-
-	return nil
 }
 
 func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.EmptyMessage, error) {

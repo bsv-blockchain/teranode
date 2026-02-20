@@ -285,7 +285,7 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 			subscribeCtx, subscribeCancel = context.WithCancel(ctx)
 
-			blockchainSubscription, err := u.blockchainClient.Subscribe(subscribeCtx, "subtreevalidation")
+			blockchainSubscription, err := u.blockchainClient.Subscribe(subscribeCtx, blockchain.SubscriberSubtreeValidation)
 			if err != nil {
 				ctxLogger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to subscribe to blockchain: %s", err)
 

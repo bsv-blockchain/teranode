@@ -382,7 +382,7 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 	)
 	defer deferFn()
 
-	dah := block.Height + u.settings.GlobalBlockHeightRetention
+	dah := block.Height + u.settings.GetSubtreeValidationBlockHeightRetention()
 
 	// Check if we already have the subtree
 	subtreeExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
@@ -484,7 +484,7 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	)
 	defer deferFn()
 
-	dah := block.Height + u.settings.GlobalBlockHeightRetention
+	dah := block.Height + u.settings.GetSubtreeValidationBlockHeightRetention()
 
 	// Check if we already have the subtreeData
 	subtreeDataExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
