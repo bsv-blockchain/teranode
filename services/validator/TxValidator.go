@@ -325,7 +325,8 @@ func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32,
 // Returns:
 //   - error: Validation error if sequence locks are not satisfied, nil on success
 func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error {
-	// BIP68 is only active from CSVHeight onwards
+	// BIP68 is only active from CSVHeight onwards.
+	// BSV C++ block validation: if (pindex_->GetHeight() >= consensusParams.CSVHeight)
 	if blockHeight < tv.settings.ChainCfgParams.CSVHeight {
 		return nil
 	}
@@ -336,9 +337,12 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 		return nil
 	}
 
-	// Calculate sequence locks - find the minimum block height and time
-	minHeight := int32(0)
-	minTime := int64(0)
+	// Calculate sequence locks - find the minimum block height and time.
+	// Initial value -1 means "no constraint": the semantics of nLockTime are the
+	// last INVALID height/time, so -1 means any height or time is valid.
+	// This matches BSV C++: int32_t nMinHeight = -1; int64_t nMinTime = -1;
+	minHeight := int32(-1)
+	minTime := int64(-1)
 
 	// Process each input to determine lock requirements
 	for i, input := range tx.Inputs {
@@ -374,8 +378,10 @@ func (tv *TxValidator) sequenceLocks(tx *bt.Tx, blockHeight uint32, utxoHeights 
 				return errors.NewTxInvalidError("missing height value for input %d", i)
 			}
 
-			// Add the relative height offset to the UTXO's height
-			nTxHeight := int32(utxoHeights[i]) + int32(sequenceMasked)
+			// Add the relative height offset to the UTXO's height, minus 1
+			// (matching Bitcoin Core: nMinHeight = coinHeight + nSequence - 1,
+			// so the tx is valid starting from blockHeight >= coinHeight + nSequence)
+			nTxHeight := int32(utxoHeights[i]) + int32(sequenceMasked) - 1
 
 			// Update minimum height if this input requires a later height
 			if nTxHeight > minHeight {

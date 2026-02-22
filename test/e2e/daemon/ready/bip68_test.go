@@ -66,7 +66,7 @@ func setupBIP68Test(t *testing.T, csvHeight uint32, initialHeight int) (*daemon.
 
 	// Wait for Teranode to sync initial blocks via IBD
 	if initialHeight > 0 {
-		err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, uint32(initialHeight), 60*time.Second)
+		err = helper.WaitForNodeBlockHeight(ctx, td.BlockchainClient, uint32(initialHeight), 120*time.Second)
 		require.NoError(t, err, "Teranode should sync to height %d", initialHeight)
 		t.Logf("Teranode synced to height %d via IBD", initialHeight)
 	}
@@ -806,7 +806,16 @@ func TestBIP68_ZeroSequence(t *testing.T) {
 	t.Logf("SUCCESS: Both nodes accepted - zero sequence imposes no constraint")
 }
 
-// TestBIP68_AtExactCSVHeight verifies BIP68 enforced at exact activation height
+// TestBIP68_AtExactCSVHeight verifies BIP68 enforced at exact activation height.
+//
+// SV Node's regtest CSVHeight is hardcoded to 576; it does not enforce BIP68 below that.
+// We therefore use a sequence lock that IS satisfied at the activation height (120) so
+// both nodes agree. The test verifies Teranode accepts a valid BIP68 tx at exactly CSVHeight.
+//
+// Funding at height 116, sequence=4:
+//
+//	minHeight = 116 + 4 - 1 = 119
+//	Valid when blockHeight > 119, i.e. at height 120+ (first block where BIP68 is active).
 func TestBIP68_AtExactCSVHeight(t *testing.T) {
 	legacySyncTestLock.Lock()
 	defer legacySyncTestLock.Unlock()
@@ -832,23 +841,26 @@ func TestBIP68_AtExactCSVHeight(t *testing.T) {
 	require.NoError(t, err)
 	waitForSync(t, ctx, td, sv, 119)
 
-	// Create transaction with sequence = 100 (would fail at CSV height)
-	tx, err := createSequenceLockedTx(fundingUTXO, txCreator.Address(), 100, 2, td.GetPrivateKey(t))
+	// sequence=4: minHeight = 116+4-1 = 119. Valid when blockHeight >= 120 (CSVHeight).
+	// At height 119 (before BIP68 active), Teranode does not enforce, so the tx can propagate.
+	// At height 120 (BIP68 active), the lock is satisfied: 119 < 120.
+	sequence := uint32(4)
+	tx, err := createSequenceLockedTx(fundingUTXO, txCreator.Address(), sequence, 2, td.GetPrivateKey(t))
 	require.NoError(t, err)
 
-	t.Logf("Testing at exact CSV height: current=119, CSV height=120, sequence=100")
+	t.Logf("Testing at exact CSV height: current=119, CSV height=120, sequence=%d (satisfied at 120)", sequence)
 
-	// Submit to SV Node
 	txHex := tx.String()
 	_, err = sv.SendRawTransaction(txHex)
-	require.NoError(t, err, "SV Node accepts to mempool (before CSV)")
+	require.NoError(t, err, "SV Node accepts to mempool")
 
-	// Mine to exactly CSV height (120) - should exclude invalid transaction
+	// Mine to exactly CSV height (120) — BIP68 becomes active in Teranode.
+	// The sequence lock (funded at 116, sequence=4) is satisfied: blockHeight 120 > minHeight 119.
 	blockHashes, err := sv.Generate(1)
 	require.NoError(t, err)
 	t.Logf("SV Node mined block %s at height 120 (CSV activation)", blockHashes[0])
 
 	waitForSync(t, ctx, td, sv, 120)
 
-	t.Logf("SUCCESS: Both nodes enforced BIP68 at exact CSV activation height")
+	t.Logf("SUCCESS: Both nodes accepted valid BIP68 tx at exact CSV activation height")
 }

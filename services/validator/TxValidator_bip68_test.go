@@ -311,47 +311,38 @@ func TestSequenceLocks_NotEnforcedInMempool(t *testing.T) {
 	require.NoError(t, err, "BIP68 should not be enforced in mempool (SkipPolicyChecks=false)")
 }
 
-// TestSequenceLocks_AtExactCSVHeight verifies BIP68 activates exactly at CSVHeight.
+// TestSequenceLocks_AtExactCSVHeight verifies BIP68 activates exactly at CSVHeight
+// (inclusive), matching BSV C++: if (pindex_->GetHeight() >= consensusParams.CSVHeight).
 func TestSequenceLocks_AtExactCSVHeight(t *testing.T) {
 	logger := ulogger.TestLogger{}
 	tSettings := test.CreateBaseTestSettings(t)
 	txValidator := NewTxValidator(logger, tSettings)
 
-	tx := bt.NewTx()
-	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
-	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 50))
-
-	tx.Version = 2
-	// Set sequence number requiring 10 blocks
-	tx.Inputs[0].SequenceNumber = 10
-
-	// Test at exact CSVHeight activation (MainNet = 419328)
 	blockHeight := tSettings.ChainCfgParams.CSVHeight
-	utxoHeights := []uint32{blockHeight - 50} // UTXO created 50 blocks before activation
 	utxoMTPs := []uint32{1000000}
 	blockMTP := uint32(1100000)
 
-	// Should FAIL because minHeight = (blockHeight - 50) + 10 = blockHeight - 40
-	// and blockHeight - 40 < blockHeight, so it should pass
-	// Wait, let me recalculate: utxoHeight = 419278, sequence = 10
-	// minHeight = 419278 + 10 = 419288
-	// blockHeight = 419328
-	// 419288 < 419328, so it should pass
+	// tx: sequence=10, UTXO at blockHeight-50.
+	// minHeight = (blockHeight-50) + 10 - 1 = blockHeight-41 < blockHeight → passes.
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 50))
+	tx.Version = 2
+	tx.Inputs[0].SequenceNumber = 10
+	utxoHeights := []uint32{blockHeight - 50}
+
 	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err, "BIP68 should be enforced at exact CSVHeight and pass when satisfied")
 
-	// Now test failure at exact CSVHeight
+	// tx2: sequence=100, UTXO at blockHeight-50.
+	// minHeight = (blockHeight-50) + 100 - 1 = blockHeight+49 >= blockHeight → rejected.
 	tx2 := bt.NewTx()
 	require.NoError(t, tx2.From("0000000000000000000000000000000000000000000000000000000000000001", 0, "76a914000000000000000000000000000000000000000088ac", 100))
 	require.NoError(t, tx2.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 50))
 	tx2.Version = 2
-	// Set sequence number requiring 100 blocks (will fail)
 	tx2.Inputs[0].SequenceNumber = 100
+	utxoHeights2 := []uint32{blockHeight - 50}
 
-	utxoHeights2 := []uint32{blockHeight - 50} // UTXO at 419278
-	// minHeight = 419278 + 100 = 419378
-	// blockHeight = 419328
-	// 419378 >= 419328, so should fail
 	err = txValidator.ValidateTransaction(tx2, blockHeight, utxoHeights2, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
 	require.Error(t, err, "BIP68 should be enforced at exact CSVHeight and fail when not satisfied")
 	require.Contains(t, err.Error(), "sequence lock height not satisfied")
