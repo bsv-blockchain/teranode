@@ -48,9 +48,9 @@ func TestIPOrSubnetValidation(t *testing.T) {
 	invalidSubnet = "172.19.0.0:8080"
 	assert.False(t, isIPOrSubnet(invalidSubnet))
 
-	// test subnet with port
+	// test subnet with port (not valid CIDR)
 	invalidSubnet = "172.19.0.0/24:8080"
-	assert.True(t, isIPOrSubnet(invalidSubnet))
+	assert.False(t, isIPOrSubnet(invalidSubnet))
 }
 
 func TestSanityCheckGetRawTransaction(t *testing.T) {
