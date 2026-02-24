@@ -121,7 +121,7 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 		return errors.NewProcessingError("[subtreesHandler] failed to get best block header meta during subtree validation")
 	}
 
-	gotLock, _, releaseLockFunc, err := q.TryLockIfFileNotExists(ctx, hash, fileformat.FileTypeSubtree)
+	gotLock, _, releaseLockFunc, err := u.quorum.TryLockIfFileNotExists(ctx, hash, fileformat.FileTypeSubtree)
 	if err != nil {
 		return errors.NewProcessingError("[subtreesHandler] error getting lock for Subtree %s", hash.String(), err)
 	}

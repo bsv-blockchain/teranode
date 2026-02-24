@@ -824,7 +824,8 @@ func (m *mockStoreLocateBlockHeaders) LocateBlockHeaders(
 
 type fakeServer struct {
 	blockchain_api.UnimplementedBlockchainAPIServer
-	subCh chan *blockchain_api.Notification
+	subCh    chan *blockchain_api.Notification
+	fsmState blockchain_api.FSMStateType
 }
 
 func (f *fakeServer) HealthGRPC(ctx context.Context, req *emptypb.Empty) (*blockchain_api.HealthResponse, error) {
@@ -842,6 +843,12 @@ func (f *fakeServer) Subscribe(req *blockchain_api.SubscribeRequest, stream bloc
 		}
 	}
 	return nil
+}
+
+func (f *fakeServer) GetFSMCurrentState(ctx context.Context, req *emptypb.Empty) (*blockchain_api.GetFSMStateResponse, error) {
+	return &blockchain_api.GetFSMStateResponse{
+		State: f.fsmState,
+	}, nil
 }
 
 type mockHealthClient struct {

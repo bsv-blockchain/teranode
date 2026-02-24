@@ -3791,3 +3791,47 @@ func Test_WaitUntilFSMTransitionFromIdleState(t *testing.T) {
 		})
 	}
 }
+
+// Test_BroadcastHeartbeat verifies the heartbeat broadcasting functionality.
+func Test_BroadcastHeartbeat(t *testing.T) {
+	ctx := setup(t)
+
+	// Don't start subscription manager - test the notification channel directly
+	// Call broadcastHeartbeat directly
+	ctx.server.broadcastHeartbeat()
+
+	// Verify the notification was sent to the notifications channel
+	select {
+	case notif := <-ctx.server.notifications:
+		require.NotNil(t, notif)
+		assert.Equal(t, model.NotificationType_PING, notif.Type, "Heartbeat should have PING type")
+	case <-time.After(1 * time.Second):
+		t.Fatal("Expected heartbeat notification to be sent to notifications channel")
+	}
+}
+
+// Test_HeartbeatSenderStopsOnContextCancel verifies the heartbeat sender stops when context is cancelled.
+func Test_HeartbeatSenderStopsOnContextCancel(t *testing.T) {
+	ctx := setup(t)
+
+	// Create a cancellable context
+	heartbeatCtx, cancel := context.WithCancel(context.Background())
+
+	// Start the heartbeat sender
+	done := make(chan struct{})
+	go func() {
+		ctx.server.startHeartbeatSender(heartbeatCtx)
+		close(done)
+	}()
+
+	// Cancel the context
+	cancel()
+
+	// Verify the heartbeat sender stops
+	select {
+	case <-done:
+		// Success - goroutine exited
+	case <-time.After(2 * time.Second):
+		t.Fatal("Heartbeat sender did not stop when context was cancelled")
+	}
+}

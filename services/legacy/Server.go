@@ -419,6 +419,16 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*peer_api.GetP
 			StreamPolicy: sp.streamPolicyString(),
 			Inbound:      sp.Inbound(),
 		})
+		if assoc := sp.Peer.AssociationRef(); assoc != nil {
+			p := resp.Peers[len(resp.Peers)-1]
+			for _, si := range assoc.Streams() {
+				p.Streams = append(p.Streams, &peer_api.StreamInfo{
+					StreamType: uint32(si.Type),
+					BytesSent:  si.BytesSent,
+					BytesRecv:  si.BytesRecv,
+				})
+			}
+		}
 	}
 
 	return resp, nil

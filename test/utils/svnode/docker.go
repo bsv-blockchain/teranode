@@ -107,12 +107,22 @@ func (d *DockerSVNode) Start(ctx context.Context) error {
 	return nil
 }
 
-// buildCmd returns the container command, including any -connect flags.
+// buildCmd returns the container command, including any -connect flags and additional args.
 func (d *DockerSVNode) buildCmd() []string {
 	cmd := []string{"/entrypoint.sh", "bitcoind"}
+
+	// Override ports if non-default values are specified
+	if d.opts.RPCPort != 0 && d.opts.RPCPort != DefaultRPCPort {
+		cmd = append(cmd, fmt.Sprintf("-rpcport=%d", d.opts.RPCPort))
+	}
+	if d.opts.P2PPort != 0 && d.opts.P2PPort != DefaultP2PPort {
+		cmd = append(cmd, fmt.Sprintf("-port=%d", d.opts.P2PPort))
+	}
+
 	for _, addr := range d.opts.ConnectTo {
 		cmd = append(cmd, fmt.Sprintf("-connect=%s", addr))
 	}
+	cmd = append(cmd, d.opts.AdditionalArgs...)
 	return cmd
 }
 

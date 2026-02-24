@@ -2455,6 +2455,23 @@ func (p *Peer) start() error {
 
 		return errors.NewProcessingError(reason)
 	}
+
+	// If the peer became a stream peer during negotiation (inbound
+	// CREATESTREAM), skip VERACK/PROTOCONF and go straight to message
+	// handling - stream peers don't do a version handshake.
+	if p.IsStreamPeer() {
+		p.flagsMtx.Lock()
+		p.versionKnown = true
+		p.flagsMtx.Unlock()
+
+		go p.stallHandler()
+		go p.inHandler()
+		go p.queueHandler()
+		go p.outHandler()
+		go p.pingHandler()
+		return nil
+	}
+
 	p.logger.Debugf("Connected to %s", p.Addr())
 
 	// The protocol has been negotiated successfully so start processing input

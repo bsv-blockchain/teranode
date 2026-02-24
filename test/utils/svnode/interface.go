@@ -77,6 +77,9 @@ type Options struct {
 	// Unlike addnode, -connect creates regular outbound connections that are
 	// used for initial block download in Bitcoin SV.
 	ConnectTo []string
+	// AdditionalArgs specifies extra command-line flags to pass to bitcoind.
+	// Example: []string{"-multistreams=1", "-multistreampolicies=BlockPriority,Default"}
+	AdditionalArgs []string
 }
 
 // DefaultOptions returns sensible defaults for SVNode

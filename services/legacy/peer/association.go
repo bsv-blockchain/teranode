@@ -105,6 +105,28 @@ func (a *Association) Policy() string {
 	return a.policyName
 }
 
+// StreamInfo holds a snapshot of a single stream's byte counters.
+type StreamInfo struct {
+	Type      wire.StreamType
+	BytesSent uint64
+	BytesRecv uint64
+}
+
+// Streams returns a snapshot of all streams in the association with their byte counts.
+func (a *Association) Streams() []StreamInfo {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	result := make([]StreamInfo, 0, len(a.streams))
+	for _, s := range a.streams {
+		result = append(result, StreamInfo{
+			Type:      s.Type,
+			BytesSent: s.Peer.BytesSent(),
+			BytesRecv: s.Peer.BytesReceived(),
+		})
+	}
+	return result
+}
+
 // StreamCount returns the number of active streams.
 func (a *Association) StreamCount() int {
 	a.mu.RLock()

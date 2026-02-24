@@ -22,6 +22,66 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type StreamInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StreamType    uint32                 `protobuf:"varint,1,opt,name=stream_type,json=streamType,proto3" json:"stream_type,omitempty"`
+	BytesSent     uint64                 `protobuf:"varint,2,opt,name=bytes_sent,json=bytesSent,proto3" json:"bytes_sent,omitempty"`
+	BytesRecv     uint64                 `protobuf:"varint,3,opt,name=bytes_recv,json=bytesRecv,proto3" json:"bytes_recv,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StreamInfo) Reset() {
+	*x = StreamInfo{}
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StreamInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamInfo) ProtoMessage() {}
+
+func (x *StreamInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamInfo.ProtoReflect.Descriptor instead.
+func (*StreamInfo) Descriptor() ([]byte, []int) {
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *StreamInfo) GetStreamType() uint32 {
+	if x != nil {
+		return x.StreamType
+	}
+	return 0
+}
+
+func (x *StreamInfo) GetBytesSent() uint64 {
+	if x != nil {
+		return x.BytesSent
+	}
+	return 0
+}
+
+func (x *StreamInfo) GetBytesRecv() uint64 {
+	if x != nil {
+		return x.BytesRecv
+	}
+	return 0
+}
+
 type Peer struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	Id               int32                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -51,13 +111,14 @@ type Peer struct {
 	Banscore         int32                  `protobuf:"varint,25,opt,name=banscore,proto3" json:"banscore,omitempty"`
 	Whitelisted      bool                   `protobuf:"varint,26,opt,name=whitelisted,proto3" json:"whitelisted,omitempty"`
 	FeeFilter        int64                  `protobuf:"varint,27,opt,name=feeFilter,proto3" json:"feeFilter,omitempty"`
+	Streams          []*StreamInfo          `protobuf:"bytes,28,rep,name=streams,proto3" json:"streams,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Peer) Reset() {
 	*x = Peer{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[0]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -69,7 +130,7 @@ func (x *Peer) String() string {
 func (*Peer) ProtoMessage() {}
 
 func (x *Peer) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[0]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -82,7 +143,7 @@ func (x *Peer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Peer.ProtoReflect.Descriptor instead.
 func (*Peer) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{0}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Peer) GetId() int32 {
@@ -274,6 +335,13 @@ func (x *Peer) GetFeeFilter() int64 {
 	return 0
 }
 
+func (x *Peer) GetStreams() []*StreamInfo {
+	if x != nil {
+		return x.Streams
+	}
+	return nil
+}
+
 type GetPeersResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Peers         []*Peer                `protobuf:"bytes,1,rep,name=peers,proto3" json:"peers,omitempty"`
@@ -283,7 +351,7 @@ type GetPeersResponse struct {
 
 func (x *GetPeersResponse) Reset() {
 	*x = GetPeersResponse{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[1]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -295,7 +363,7 @@ func (x *GetPeersResponse) String() string {
 func (*GetPeersResponse) ProtoMessage() {}
 
 func (x *GetPeersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[1]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -308,7 +376,7 @@ func (x *GetPeersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPeersResponse.ProtoReflect.Descriptor instead.
 func (*GetPeersResponse) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{1}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetPeersResponse) GetPeers() []*Peer {
@@ -327,7 +395,7 @@ type GetPeerCountResponse struct {
 
 func (x *GetPeerCountResponse) Reset() {
 	*x = GetPeerCountResponse{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[2]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -339,7 +407,7 @@ func (x *GetPeerCountResponse) String() string {
 func (*GetPeerCountResponse) ProtoMessage() {}
 
 func (x *GetPeerCountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[2]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -352,7 +420,7 @@ func (x *GetPeerCountResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetPeerCountResponse.ProtoReflect.Descriptor instead.
 func (*GetPeerCountResponse) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{2}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GetPeerCountResponse) GetCount() int32 {
@@ -372,7 +440,7 @@ type BanPeerRequest struct {
 
 func (x *BanPeerRequest) Reset() {
 	*x = BanPeerRequest{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[3]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -384,7 +452,7 @@ func (x *BanPeerRequest) String() string {
 func (*BanPeerRequest) ProtoMessage() {}
 
 func (x *BanPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[3]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -397,7 +465,7 @@ func (x *BanPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BanPeerRequest.ProtoReflect.Descriptor instead.
 func (*BanPeerRequest) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{3}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *BanPeerRequest) GetAddr() string {
@@ -423,7 +491,7 @@ type BanPeerResponse struct {
 
 func (x *BanPeerResponse) Reset() {
 	*x = BanPeerResponse{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[4]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -435,7 +503,7 @@ func (x *BanPeerResponse) String() string {
 func (*BanPeerResponse) ProtoMessage() {}
 
 func (x *BanPeerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[4]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -448,7 +516,7 @@ func (x *BanPeerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BanPeerResponse.ProtoReflect.Descriptor instead.
 func (*BanPeerResponse) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{4}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *BanPeerResponse) GetOk() bool {
@@ -467,7 +535,7 @@ type UnbanPeerRequest struct {
 
 func (x *UnbanPeerRequest) Reset() {
 	*x = UnbanPeerRequest{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[5]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -479,7 +547,7 @@ func (x *UnbanPeerRequest) String() string {
 func (*UnbanPeerRequest) ProtoMessage() {}
 
 func (x *UnbanPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[5]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -492,7 +560,7 @@ func (x *UnbanPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnbanPeerRequest.ProtoReflect.Descriptor instead.
 func (*UnbanPeerRequest) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{5}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *UnbanPeerRequest) GetAddr() string {
@@ -511,7 +579,7 @@ type UnbanPeerResponse struct {
 
 func (x *UnbanPeerResponse) Reset() {
 	*x = UnbanPeerResponse{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[6]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -523,7 +591,7 @@ func (x *UnbanPeerResponse) String() string {
 func (*UnbanPeerResponse) ProtoMessage() {}
 
 func (x *UnbanPeerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[6]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -536,7 +604,7 @@ func (x *UnbanPeerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnbanPeerResponse.ProtoReflect.Descriptor instead.
 func (*UnbanPeerResponse) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{6}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *UnbanPeerResponse) GetOk() bool {
@@ -555,7 +623,7 @@ type IsBannedRequest struct {
 
 func (x *IsBannedRequest) Reset() {
 	*x = IsBannedRequest{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[7]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -567,7 +635,7 @@ func (x *IsBannedRequest) String() string {
 func (*IsBannedRequest) ProtoMessage() {}
 
 func (x *IsBannedRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[7]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -580,7 +648,7 @@ func (x *IsBannedRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IsBannedRequest.ProtoReflect.Descriptor instead.
 func (*IsBannedRequest) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{7}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *IsBannedRequest) GetIpOrSubnet() string {
@@ -599,7 +667,7 @@ type IsBannedResponse struct {
 
 func (x *IsBannedResponse) Reset() {
 	*x = IsBannedResponse{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[8]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -611,7 +679,7 @@ func (x *IsBannedResponse) String() string {
 func (*IsBannedResponse) ProtoMessage() {}
 
 func (x *IsBannedResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[8]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -624,7 +692,7 @@ func (x *IsBannedResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IsBannedResponse.ProtoReflect.Descriptor instead.
 func (*IsBannedResponse) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{8}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *IsBannedResponse) GetIsBanned() bool {
@@ -643,7 +711,7 @@ type ListBannedResponse struct {
 
 func (x *ListBannedResponse) Reset() {
 	*x = ListBannedResponse{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[9]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -655,7 +723,7 @@ func (x *ListBannedResponse) String() string {
 func (*ListBannedResponse) ProtoMessage() {}
 
 func (x *ListBannedResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[9]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -668,7 +736,7 @@ func (x *ListBannedResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBannedResponse.ProtoReflect.Descriptor instead.
 func (*ListBannedResponse) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{9}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListBannedResponse) GetBanned() []string {
@@ -687,7 +755,7 @@ type ClearBannedResponse struct {
 
 func (x *ClearBannedResponse) Reset() {
 	*x = ClearBannedResponse{}
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[10]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -699,7 +767,7 @@ func (x *ClearBannedResponse) String() string {
 func (*ClearBannedResponse) ProtoMessage() {}
 
 func (x *ClearBannedResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[10]
+	mi := &file_services_legacy_peer_api_peer_api_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -712,7 +780,7 @@ func (x *ClearBannedResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClearBannedResponse.ProtoReflect.Descriptor instead.
 func (*ClearBannedResponse) Descriptor() ([]byte, []int) {
-	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{10}
+	return file_services_legacy_peer_api_peer_api_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ClearBannedResponse) GetOk() bool {
@@ -726,7 +794,15 @@ var File_services_legacy_peer_api_peer_api_proto protoreflect.FileDescriptor
 
 const file_services_legacy_peer_api_peer_api_proto_rawDesc = "" +
 	"\n" +
-	"'services/legacy/peer_api/peer_api.proto\x12\bpeer_api\x1a\x1bgoogle/protobuf/empty.proto\"\xb0\x06\n" +
+	"'services/legacy/peer_api/peer_api.proto\x12\bpeer_api\x1a\x1bgoogle/protobuf/empty.proto\"k\n" +
+	"\n" +
+	"StreamInfo\x12\x1f\n" +
+	"\vstream_type\x18\x01 \x01(\rR\n" +
+	"streamType\x12\x1d\n" +
+	"\n" +
+	"bytes_sent\x18\x02 \x01(\x04R\tbytesSent\x12\x1d\n" +
+	"\n" +
+	"bytes_recv\x18\x03 \x01(\x04R\tbytesRecv\"\xe0\x06\n" +
 	"\x04Peer\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x05R\x02id\x12\x12\n" +
 	"\x04addr\x18\x02 \x01(\tR\x04addr\x12\x1c\n" +
@@ -759,7 +835,8 @@ const file_services_legacy_peer_api_peer_api_proto_rawDesc = "" +
 	"\rcurrentHeight\x18\x18 \x01(\x05R\rcurrentHeight\x12\x1a\n" +
 	"\bbanscore\x18\x19 \x01(\x05R\bbanscore\x12 \n" +
 	"\vwhitelisted\x18\x1a \x01(\bR\vwhitelisted\x12\x1c\n" +
-	"\tfeeFilter\x18\x1b \x01(\x03R\tfeeFilter\"8\n" +
+	"\tfeeFilter\x18\x1b \x01(\x03R\tfeeFilter\x12.\n" +
+	"\astreams\x18\x1c \x03(\v2\x14.peer_api.StreamInfoR\astreams\"8\n" +
 	"\x10GetPeersResponse\x12$\n" +
 	"\x05peers\x18\x01 \x03(\v2\x0e.peer_api.PeerR\x05peers\",\n" +
 	"\x14GetPeerCountResponse\x12\x14\n" +
@@ -805,42 +882,44 @@ func file_services_legacy_peer_api_peer_api_proto_rawDescGZIP() []byte {
 	return file_services_legacy_peer_api_peer_api_proto_rawDescData
 }
 
-var file_services_legacy_peer_api_peer_api_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_services_legacy_peer_api_peer_api_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_services_legacy_peer_api_peer_api_proto_goTypes = []any{
-	(*Peer)(nil),                 // 0: peer_api.Peer
-	(*GetPeersResponse)(nil),     // 1: peer_api.GetPeersResponse
-	(*GetPeerCountResponse)(nil), // 2: peer_api.GetPeerCountResponse
-	(*BanPeerRequest)(nil),       // 3: peer_api.BanPeerRequest
-	(*BanPeerResponse)(nil),      // 4: peer_api.BanPeerResponse
-	(*UnbanPeerRequest)(nil),     // 5: peer_api.UnbanPeerRequest
-	(*UnbanPeerResponse)(nil),    // 6: peer_api.UnbanPeerResponse
-	(*IsBannedRequest)(nil),      // 7: peer_api.IsBannedRequest
-	(*IsBannedResponse)(nil),     // 8: peer_api.IsBannedResponse
-	(*ListBannedResponse)(nil),   // 9: peer_api.ListBannedResponse
-	(*ClearBannedResponse)(nil),  // 10: peer_api.ClearBannedResponse
-	(*emptypb.Empty)(nil),        // 11: google.protobuf.Empty
+	(*StreamInfo)(nil),           // 0: peer_api.StreamInfo
+	(*Peer)(nil),                 // 1: peer_api.Peer
+	(*GetPeersResponse)(nil),     // 2: peer_api.GetPeersResponse
+	(*GetPeerCountResponse)(nil), // 3: peer_api.GetPeerCountResponse
+	(*BanPeerRequest)(nil),       // 4: peer_api.BanPeerRequest
+	(*BanPeerResponse)(nil),      // 5: peer_api.BanPeerResponse
+	(*UnbanPeerRequest)(nil),     // 6: peer_api.UnbanPeerRequest
+	(*UnbanPeerResponse)(nil),    // 7: peer_api.UnbanPeerResponse
+	(*IsBannedRequest)(nil),      // 8: peer_api.IsBannedRequest
+	(*IsBannedResponse)(nil),     // 9: peer_api.IsBannedResponse
+	(*ListBannedResponse)(nil),   // 10: peer_api.ListBannedResponse
+	(*ClearBannedResponse)(nil),  // 11: peer_api.ClearBannedResponse
+	(*emptypb.Empty)(nil),        // 12: google.protobuf.Empty
 }
 var file_services_legacy_peer_api_peer_api_proto_depIdxs = []int32{
-	0,  // 0: peer_api.GetPeersResponse.peers:type_name -> peer_api.Peer
-	11, // 1: peer_api.PeerService.GetPeers:input_type -> google.protobuf.Empty
-	3,  // 2: peer_api.PeerService.BanPeer:input_type -> peer_api.BanPeerRequest
-	5,  // 3: peer_api.PeerService.UnbanPeer:input_type -> peer_api.UnbanPeerRequest
-	7,  // 4: peer_api.PeerService.IsBanned:input_type -> peer_api.IsBannedRequest
-	11, // 5: peer_api.PeerService.ListBanned:input_type -> google.protobuf.Empty
-	11, // 6: peer_api.PeerService.ClearBanned:input_type -> google.protobuf.Empty
-	11, // 7: peer_api.PeerService.GetPeerCount:input_type -> google.protobuf.Empty
-	1,  // 8: peer_api.PeerService.GetPeers:output_type -> peer_api.GetPeersResponse
-	4,  // 9: peer_api.PeerService.BanPeer:output_type -> peer_api.BanPeerResponse
-	6,  // 10: peer_api.PeerService.UnbanPeer:output_type -> peer_api.UnbanPeerResponse
-	8,  // 11: peer_api.PeerService.IsBanned:output_type -> peer_api.IsBannedResponse
-	9,  // 12: peer_api.PeerService.ListBanned:output_type -> peer_api.ListBannedResponse
-	10, // 13: peer_api.PeerService.ClearBanned:output_type -> peer_api.ClearBannedResponse
-	2,  // 14: peer_api.PeerService.GetPeerCount:output_type -> peer_api.GetPeerCountResponse
-	8,  // [8:15] is the sub-list for method output_type
-	1,  // [1:8] is the sub-list for method input_type
-	1,  // [1:1] is the sub-list for extension type_name
-	1,  // [1:1] is the sub-list for extension extendee
-	0,  // [0:1] is the sub-list for field type_name
+	0,  // 0: peer_api.Peer.streams:type_name -> peer_api.StreamInfo
+	1,  // 1: peer_api.GetPeersResponse.peers:type_name -> peer_api.Peer
+	12, // 2: peer_api.PeerService.GetPeers:input_type -> google.protobuf.Empty
+	4,  // 3: peer_api.PeerService.BanPeer:input_type -> peer_api.BanPeerRequest
+	6,  // 4: peer_api.PeerService.UnbanPeer:input_type -> peer_api.UnbanPeerRequest
+	8,  // 5: peer_api.PeerService.IsBanned:input_type -> peer_api.IsBannedRequest
+	12, // 6: peer_api.PeerService.ListBanned:input_type -> google.protobuf.Empty
+	12, // 7: peer_api.PeerService.ClearBanned:input_type -> google.protobuf.Empty
+	12, // 8: peer_api.PeerService.GetPeerCount:input_type -> google.protobuf.Empty
+	2,  // 9: peer_api.PeerService.GetPeers:output_type -> peer_api.GetPeersResponse
+	5,  // 10: peer_api.PeerService.BanPeer:output_type -> peer_api.BanPeerResponse
+	7,  // 11: peer_api.PeerService.UnbanPeer:output_type -> peer_api.UnbanPeerResponse
+	9,  // 12: peer_api.PeerService.IsBanned:output_type -> peer_api.IsBannedResponse
+	10, // 13: peer_api.PeerService.ListBanned:output_type -> peer_api.ListBannedResponse
+	11, // 14: peer_api.PeerService.ClearBanned:output_type -> peer_api.ClearBannedResponse
+	3,  // 15: peer_api.PeerService.GetPeerCount:output_type -> peer_api.GetPeerCountResponse
+	9,  // [9:16] is the sub-list for method output_type
+	2,  // [2:9] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_services_legacy_peer_api_peer_api_proto_init() }
@@ -854,7 +933,7 @@ func file_services_legacy_peer_api_peer_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_services_legacy_peer_api_peer_api_proto_rawDesc), len(file_services_legacy_peer_api_peer_api_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -409,6 +409,9 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	go b.startSubscriptions()
 
+	// Start heartbeat sender for subscription health monitoring
+	go b.startHeartbeatSender(ctx)
+
 	// Start batch token cleanup
 	go b.cleanupExpiredBatchTokens()
 
@@ -592,6 +595,43 @@ func (b *Blockchain) startKafka() {
 	b.kafkaChan = make(chan *kafka.Message, 100)
 
 	b.blocksFinalKafkaAsyncProducer.Start(b.AppCtx, b.kafkaChan)
+}
+
+// startHeartbeatSender sends periodic heartbeat (PING) notifications to all subscribers.
+// This allows clients to detect subscription staleness and reconnect if needed.
+// The heartbeat interval is configurable via settings (default: 10s).
+func (b *Blockchain) startHeartbeatSender(ctx context.Context) {
+	heartbeatInterval := b.settings.BlockChain.HeartbeatInterval
+
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+
+	b.logger.Infof("[Blockchain][startHeartbeatSender] Starting heartbeat sender with %v interval", heartbeatInterval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			b.logger.Infof("[Blockchain][startHeartbeatSender] Stopping heartbeat sender")
+			return
+		case <-ticker.C:
+			b.broadcastHeartbeat()
+		}
+	}
+}
+
+// broadcastHeartbeat sends a PING notification to all subscribers.
+func (b *Blockchain) broadcastHeartbeat() {
+	notification := &blockchain_api.Notification{
+		Type: model.NotificationType_PING,
+	}
+
+	// Use a select with default to avoid blocking if the notifications channel is full
+	select {
+	case b.notifications <- notification:
+		b.logger.Debugf("[Blockchain][broadcastHeartbeat] Heartbeat sent to subscribers")
+	default:
+		b.logger.Warnf("[Blockchain][broadcastHeartbeat] Notifications channel full, skipping heartbeat")
+	}
 }
 
 // startSubscriptions manages blockchain subscriptions in a goroutine.

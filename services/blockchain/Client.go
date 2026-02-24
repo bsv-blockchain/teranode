@@ -51,6 +51,7 @@ type Client struct {
 	subscribers           []clientSubscriber                 // List of subscribers
 	subscribersMu         sync.Mutex                         // Mutex for subscribers list
 	lastBlockNotification *blockchain_api.Notification       // Last block notification received
+	lastHeartbeat         atomic.Int64                       // Unix nano timestamp of last heartbeat
 }
 
 // BestBlockHeader represents the best block header in the blockchain.
@@ -171,6 +172,9 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 				// c.logger.Debugf("[Blockchain] Received notification for %s: %s", source, notification.Stringify())
 
 				switch notification.Type {
+				case model.NotificationType_PING:
+					// Heartbeat already updated in SubscribeToServer before sending to channel
+					c.logger.Debugf("[Blockchain] Received heartbeat for %s", source)
 				case model.NotificationType_FSMState:
 					c.logger.Debugf("[Blockchain] Received FSM state notification for %s: %s", source, notification.GetMetadata().String())
 					// update the local FSM state variable
@@ -1197,6 +1201,9 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 	// Use a buffered channel to prevent blocking on sends
 	ch := make(chan *blockchain_api.Notification, 100)
 
+	// Heartbeat timeout: 3x the server's broadcast interval (allows 3 missed heartbeats)
+	heartbeatTimeout := 3 * c.settings.BlockChain.HeartbeatInterval
+
 	// Use sync.Once to ensure channel is closed exactly once
 	var closeOnce sync.Once
 
@@ -1244,12 +1251,36 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 				continue
 			}
 
+			// Subscription established successfully - fetch current FSM state
+			c.logger.Infof("[Blockchain] Subscription established, fetching current FSM state for %s", source)
+			c.fetchAndRestoreFSMState(ctx, source)
+
+			// Don't initialize heartbeat here - let it remain 0 until first PING is received.
+			// This ensures staleness detection works correctly: if connection breaks before
+			// first PING, lastHB will be 0 and we'll properly set FSM to IDLE.
+
 			for c.running.Load() {
 				resp, err := stream.Recv()
 				if err != nil {
 					if !c.running.Load() || ctx.Err() != nil {
 						// Context cancelled or client stopped, exit gracefully
 						return
+					}
+
+					// Check if heartbeat was stale when error occurred
+					lastHB := c.lastHeartbeat.Load()
+					if lastHB == 0 {
+						// Never received a heartbeat - connection broke before first PING
+						c.logger.Warnf("[Blockchain] No heartbeat received, setting FSM to IDLE: %s", source)
+						idleState := FSMStateIDLE
+						c.fmsState.Store(&idleState)
+					} else {
+						lastHeartbeatAge := time.Since(time.Unix(0, lastHB))
+						if lastHeartbeatAge > heartbeatTimeout {
+							c.logger.Warnf("[Blockchain] Heartbeat stale (%v), setting FSM to IDLE: %s", lastHeartbeatAge, source)
+							idleState := FSMStateIDLE
+							c.fmsState.Store(&idleState)
+						}
 					}
 
 					if !strings.Contains(err.Error(), context.Canceled.Error()) {
@@ -1259,6 +1290,30 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 					c.logger.Infof("[Blockchain] retrying subscription in 1 second")
 					time.Sleep(1 * time.Second)
 					break
+				}
+
+				if resp.Type == model.NotificationType_PING {
+					// Update heartbeat immediately on receipt to avoid staleness races.
+					c.lastHeartbeat.Store(time.Now().UnixNano())
+
+					notification := &blockchain_api.Notification{
+						Type:     resp.Type,
+						Hash:     nil,
+						Base_URL: resp.Base_URL,
+						Metadata: resp.Metadata,
+					}
+
+					// Use a timeout for sending to prevent blocking
+					select {
+					case ch <- notification:
+						// Successfully sent
+					case <-time.After(5 * time.Second):
+						c.logger.Warnf("[Blockchain] timeout sending notification for %s, channel may be blocked", source)
+					case <-ctx.Done():
+						return
+					}
+
+					continue
 				}
 
 				hash, err := chainhash.NewHash(resp.Hash)
@@ -1288,6 +1343,26 @@ func (c *Client) SubscribeToServer(ctx context.Context, source string) (chan *bl
 	}()
 
 	return ch, nil
+}
+
+// fetchAndRestoreFSMState queries the blockchain service for the current FSM state
+// and updates the local cached state. This is called after successful reconnection
+// to ensure the client has the correct FSM state.
+func (c *Client) fetchAndRestoreFSMState(ctx context.Context, source string) {
+	stateCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	state, err := c.client.GetFSMCurrentState(stateCtx, &emptypb.Empty{})
+	if err != nil {
+		c.logger.Warnf("[Blockchain] Failed to fetch FSM state, setting to IDLE for safety: %v", err)
+		idleState := FSMStateIDLE
+		c.fmsState.Store(&idleState)
+		return
+	}
+
+	newState := state.State
+	c.fmsState.Store(&newState)
+	c.logger.Infof("[Blockchain] FSM state restored to %s for %s", newState.String(), source)
 }
 
 // GetState retrieves a value from the blockchain state storage by its key.

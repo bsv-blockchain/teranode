@@ -429,7 +429,7 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 		// These are transactions that are ALSO in the new main chain (don't need unmined_since set)
 		// Even though BlockValidation handles moveForward, we need this map to avoid marking
 		// transactions that appear in BOTH moveBack and moveForward as unmined
-		moveForwardTxMap := make(map[chainhash.Hash]bool)
+		moveForwardTxMap := make(map[chainhash.Hash]struct{})
 		for _, blockWithMeta := range moveForwardBlocksWithMeta {
 			if blockWithMeta.meta.Invalid {
 				continue
@@ -444,7 +444,7 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 			for _, st := range blockSubtrees {
 				for _, node := range st.Nodes {
 					if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
-						moveForwardTxMap[node.Hash] = true
+						moveForwardTxMap[node.Hash] = struct{}{}
 					}
 				}
 			}
@@ -471,7 +471,7 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 				for _, node := range st.Nodes {
 					if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
 						// Only add if NOT in moveForward (these are net unmined)
-						if !moveForwardTxMap[node.Hash] {
+						if _, inForward := moveForwardTxMap[node.Hash]; !inForward {
 							moveBackTxs = append(moveBackTxs, node.Hash)
 						}
 					}
