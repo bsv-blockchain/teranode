@@ -135,10 +135,14 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	return client, nil
 }
 
+// Stop gracefully shuts down the validator client. Currently a no-op as the
+// underlying gRPC connection lifecycle is managed externally.
 func (c *Client) Stop() {
-	// TODO
 }
 
+// Health checks the health of the remote validator service. When checkLiveness is true,
+// only a local liveness check is performed. Otherwise, a full readiness check is made
+// via gRPC to verify the validator and its dependencies are operational.
 func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	if checkLiveness {
 		// Add liveness checks here. Don't include dependency checks.
@@ -159,6 +163,8 @@ func (c *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 	return http.StatusOK, res.GetDetails(), nil
 }
 
+// GetBlockHeight returns the current block height from the remote validator service.
+// Returns zero if the gRPC call fails.
 func (c *Client) GetBlockHeight() uint32 {
 	resp, err := c.client.GetBlockHeight(context.Background(), &validator_api.EmptyMessage{})
 	if err != nil {
@@ -168,6 +174,9 @@ func (c *Client) GetBlockHeight() uint32 {
 	return resp.Height
 }
 
+// GetMedianBlockTime returns the median timestamp of the last 11 blocks from the
+// remote validator service. This value is used for transaction locktime validation.
+// Returns zero if the gRPC call fails.
 func (c *Client) GetMedianBlockTime() uint32 {
 	resp, err := c.client.GetMedianBlockTime(context.Background(), &validator_api.EmptyMessage{})
 	if err != nil {
@@ -177,12 +186,16 @@ func (c *Client) GetMedianBlockTime() uint32 {
 	return resp.MedianTime
 }
 
+// TriggerBatcher forces the transaction batch processor to immediately send any
+// queued validation requests. This is a no-op when batching is disabled (batchSize == 0).
 func (c *Client) TriggerBatcher() {
 	if c.batchSize > 0 {
 		c.batcher.Trigger()
 	}
 }
 
+// Validate performs transaction validation by applying the given options and delegating
+// to ValidateWithOptions. See ValidateWithOptions for details on the validation flow.
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*utxometa.Data, error) {
 	validationOptions := NewDefaultOptions()
 	for _, opt := range opts {
@@ -197,6 +210,10 @@ type validateBatchResponse struct {
 	err      error
 }
 
+// ValidateWithOptions validates a transaction against the remote validator service.
+// In non-batch mode, the transaction is sent directly via gRPC. In batch mode, it is
+// queued and sent as part of a batch. If the gRPC message size limit is exceeded, the
+// client falls back to HTTP validation automatically.
 func (c *Client) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHeight uint32, validationOptions *Options) (txMetaData *utxometa.Data, err error) {
 	if c.batchSize == 0 {
 		// Non-batch mode: direct validation
@@ -278,6 +295,9 @@ func (c *Client) handleValidationError(ctx context.Context, tx *bt.Tx, blockHeig
 	return errors.UnwrapGRPC(err)
 }
 
+// sendBatchToValidator sends a batch of transactions to the validator via gRPC.
+// If the batch exceeds the gRPC message size limit, it falls back to validating
+// each transaction individually over HTTP.
 func (c *Client) sendBatchToValidator(ctx context.Context, batch []*batchItem) {
 	// Prepare batch request
 	requests := make([]*validator_api.ValidateTransactionRequest, 0, len(batch))

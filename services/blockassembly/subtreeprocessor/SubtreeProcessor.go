@@ -2516,48 +2516,44 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		}
 	}
 
-	if len(allLosingTxHashes) > 0 {
-		if err = stp.utxoStore.MarkTransactionsOnLongestChain(ctx, allLosingTxHashes, false); err != nil {
-			return errors.NewProcessingError("[reorgBlocks] error marking losing conflicting transactions as not on longest chain in utxo store", err)
-		}
-	}
-
-	// everything now in block assembly is not mined on the longest chain
-	// so we need to set the unminedSince for all transactions in block assembly
+	// Consolidate all "mark as false" operations into a single call
+	// This includes: losing transactions + all transactions in block assembly (chainedSubtrees + currentSubtree)
+	subtreeNodeCount := 0
 	for _, subtree := range stp.chainedSubtrees {
-		notOnLongestChain := make([]chainhash.Hash, 0, len(subtree.Nodes))
+		subtreeNodeCount += len(subtree.Nodes)
+	}
+	currentSubtreeForCap := stp.currentSubtree.Load()
+	subtreeNodeCount += len(currentSubtreeForCap.Nodes)
+	allMarkFalse := make([]chainhash.Hash, 0, len(allLosingTxHashes)+subtreeNodeCount)
 
+	// Add losing conflicting transactions
+	allMarkFalse = append(allMarkFalse, allLosingTxHashes...)
+
+	// Add everything now in block assembly (not mined on the longest chain)
+	// Collect from chainedSubtrees
+	for _, subtree := range stp.chainedSubtrees {
 		for _, node := range subtree.Nodes {
 			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				// skip coinbase placeholder
 				continue
 			}
-
-			notOnLongestChain = append(notOnLongestChain, node.Hash)
-		}
-
-		if len(notOnLongestChain) > 0 {
-			if err = stp.markNotOnLongestChain(ctx, moveBackBlocks, moveForwardBlocks, notOnLongestChain); err != nil {
-				return err
-			}
+			allMarkFalse = append(allMarkFalse, node.Hash)
 		}
 	}
 
-	// also for the current subtree
+	// Also collect from current subtree
 	currentSubtree := stp.currentSubtree.Load()
-	notOnLongestChain := make([]chainhash.Hash, 0, len(currentSubtree.Nodes))
-
 	for _, node := range currentSubtree.Nodes {
 		if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			// skip coinbase placeholder
 			continue
 		}
-
-		notOnLongestChain = append(notOnLongestChain, node.Hash)
+		allMarkFalse = append(allMarkFalse, node.Hash)
 	}
 
-	if len(notOnLongestChain) > 0 {
-		if err = stp.markNotOnLongestChain(ctx, moveBackBlocks, moveForwardBlocks, notOnLongestChain); err != nil {
+	// Make one consolidated call instead of 3-5 separate calls
+	if len(allMarkFalse) > 0 {
+		if err = stp.markNotOnLongestChain(ctx, moveBackBlocks, moveForwardBlocks, allMarkFalse); err != nil {
 			return err
 		}
 	}
@@ -4049,11 +4045,13 @@ func (stp *SubtreeProcessor) markConflictingTxsInSubtrees(ctx context.Context, l
 						return errors.NewProcessingError("error serializing subtree %s", subtreeHash.String(), err)
 					}
 
+					dah := stp.utxoStore.GetBlockHeight() + stp.settings.GlobalBlockHeightRetention
 					if err = stp.subtreeStore.Set(gCtx,
 						subtreeHash[:],
 						fileformat.FileTypeSubtree,
 						subtreeBytes,
 						options.WithAllowOverwrite(true),
+						options.WithDeleteAt(dah),
 					); err != nil {
 						return errors.NewServiceError("error saving subtree %s", subtreeHash.String(), err)
 					}

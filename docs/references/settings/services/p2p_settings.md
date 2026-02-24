@@ -34,9 +34,10 @@
 | EnableMDNS | bool | false | p2p_enable_mdns | **CRITICAL** - mDNS peer discovery (triggers network scanning) |
 | AllowPrivateIPs | bool | false | p2p_allow_private_ips | **CRITICAL** - Allow RFC1918 private IP connections |
 | SyncCoordinatorPeriodicEvaluationInterval | time.Duration | 30s | p2p_sync_coordinator_periodic_evaluation_interval | Sync coordinator evaluation interval |
-| PeerMapMaxSize | int | 100000 | N/A | **INTERNAL** - Maximum entries in peer maps (hardcoded default) |
-| PeerMapTTL | time.Duration | 30m | N/A | **INTERNAL** - Peer map entry time-to-live (hardcoded default) |
-| PeerMapCleanupInterval | time.Duration | 5m | N/A | **INTERNAL** - Peer map cleanup frequency (hardcoded default) |
+| HealthCheckEnabled | bool | true | p2p_health_check_enabled | Enable HTTP availability checking during peer selection |
+| PeerMapMaxSize | int | 100000 | p2p_peer_map_max_size | Maximum entries in peer maps |
+| PeerMapTTL | time.Duration | 30m | p2p_peer_map_ttl | Peer map entry time-to-live |
+| PeerMapCleanupInterval | time.Duration | 5m | p2p_peer_map_cleanup_interval | Peer map cleanup frequency |
 
 ## Configuration Dependencies
 
@@ -61,7 +62,7 @@
 - `PeerMapMaxSize` limits memory usage for block/subtree peer tracking
 - `PeerMapTTL` controls peer map entry expiration (30 minutes)
 - `PeerMapCleanupInterval` sets cleanup frequency (5 minutes)
-- These settings use hardcoded defaults and are not configurable via environment variables
+- These settings have sensible defaults but can be overridden via environment variables
 
 ### Network Scanning Prevention
 

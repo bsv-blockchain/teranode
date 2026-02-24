@@ -7,7 +7,7 @@ on:
 env:
   REPO: teranode
   SETTINGS_CONTEXT_DEFAULT: default_context
-  GO_VERSION: '1.25.2'
+  GO_VERSION: '1.26.0'
   TEST_DIR: ./test/e2e/daemon/ready
 
 permissions:

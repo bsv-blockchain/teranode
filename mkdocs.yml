@@ -84,6 +84,7 @@ nav:
           - Peer Registry and Reputation: topics/features/peer_registry_reputation.md
           - UTXO Lock Records: topics/features/utxo_lock_records.md
       - Dashboard: topics/dashboard.md
+      - TUI Tools: topics/tui_tools.md
       - Core Services:
           - Alert Service: topics/services/alert.md
           - Asset Server: topics/services/assetServer.md
@@ -124,10 +125,14 @@ nav:
           - Network Consensus Rules: references/networkConsensusRules.md
           - Protobuf API:
               - Alert Proto: references/protobuf_docs/alertProto.md
+              - Asset Proto: references/protobuf_docs/assetProto.md
               - Block Assembly Proto: references/protobuf_docs/blockassemblyProto.md
               - Blockchain Proto: references/protobuf_docs/blockchainProto.md
               - Block Validation Proto: references/protobuf_docs/blockvalidationProto.md
+              - Legacy Peer Proto: references/protobuf_docs/legacyPeerProto.md
+              - P2P Proto: references/protobuf_docs/p2pProto.md
               - Propagation Proto: references/protobuf_docs/propagationProto.md
+              - Pruner Proto: references/protobuf_docs/prunerProto.md
               - Subtree Validation Proto: references/protobuf_docs/subtreevalidationProto.md
               - Validator Proto: references/protobuf_docs/validatorProto.md
       - Core Services:

@@ -58,6 +58,7 @@ const (
 	BlockchainAPI_RevalidateBlock_FullMethodName                      = "/blockchain_api.BlockchainAPI/RevalidateBlock"
 	BlockchainAPI_Subscribe_FullMethodName                            = "/blockchain_api.BlockchainAPI/Subscribe"
 	BlockchainAPI_SendNotification_FullMethodName                     = "/blockchain_api.BlockchainAPI/SendNotification"
+	BlockchainAPI_GetSubscribers_FullMethodName                       = "/blockchain_api.BlockchainAPI/GetSubscribers"
 	BlockchainAPI_GetState_FullMethodName                             = "/blockchain_api.BlockchainAPI/GetState"
 	BlockchainAPI_SetState_FullMethodName                             = "/blockchain_api.BlockchainAPI/SetState"
 	BlockchainAPI_GetBlockIsMined_FullMethodName                      = "/blockchain_api.BlockchainAPI/GetBlockIsMined"
@@ -170,6 +171,8 @@ type BlockchainAPIClient interface {
 	Subscribe(ctx context.Context, in *SubscribeRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Notification], error)
 	// SendNotification broadcasts a notification to subscribers.
 	SendNotification(ctx context.Context, in *Notification, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// GetSubscribers returns the list of currently active subscriber source strings.
+	GetSubscribers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetSubscribersResponse, error)
 	// GetState retrieves state data by key.
 	GetState(ctx context.Context, in *GetStateRequest, opts ...grpc.CallOption) (*StateResponse, error)
 	// SetState stores state data with a key.
@@ -606,6 +609,16 @@ func (c *blockchainAPIClient) SendNotification(ctx context.Context, in *Notifica
 	return out, nil
 }
 
+func (c *blockchainAPIClient) GetSubscribers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetSubscribersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSubscribersResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetSubscribers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *blockchainAPIClient) GetState(ctx context.Context, in *GetStateRequest, opts ...grpc.CallOption) (*StateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StateResponse)
@@ -1004,6 +1017,8 @@ type BlockchainAPIServer interface {
 	Subscribe(*SubscribeRequest, grpc.ServerStreamingServer[Notification]) error
 	// SendNotification broadcasts a notification to subscribers.
 	SendNotification(context.Context, *Notification) (*emptypb.Empty, error)
+	// GetSubscribers returns the list of currently active subscriber source strings.
+	GetSubscribers(context.Context, *emptypb.Empty) (*GetSubscribersResponse, error)
 	// GetState retrieves state data by key.
 	GetState(context.Context, *GetStateRequest) (*StateResponse, error)
 	// SetState stores state data with a key.
@@ -1185,6 +1200,9 @@ func (UnimplementedBlockchainAPIServer) Subscribe(*SubscribeRequest, grpc.Server
 }
 func (UnimplementedBlockchainAPIServer) SendNotification(context.Context, *Notification) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method SendNotification not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetSubscribers(context.Context, *emptypb.Empty) (*GetSubscribersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSubscribers not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetState(context.Context, *GetStateRequest) (*StateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetState not implemented")
@@ -1926,6 +1944,24 @@ func _BlockchainAPI_SendNotification_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockchainAPI_GetSubscribers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetSubscribers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetSubscribers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetSubscribers(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BlockchainAPI_GetState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetStateRequest)
 	if err := dec(in); err != nil {
@@ -2644,6 +2680,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SendNotification",
 			Handler:    _BlockchainAPI_SendNotification_Handler,
+		},
+		{
+			MethodName: "GetSubscribers",
+			Handler:    _BlockchainAPI_GetSubscribers_Handler,
 		},
 		{
 			MethodName: "GetState",

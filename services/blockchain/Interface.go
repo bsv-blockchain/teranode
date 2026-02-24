@@ -16,6 +16,21 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 )
 
+// Subscriber source identifiers passed to Subscribe(). Services use these
+// constants so that callers of GetSubscribers() can reliably detect which
+// services are currently connected.
+const (
+	SubscriberLegacy            = "legacy/manager"
+	SubscriberP2P               = "p2pServer"
+	SubscriberUTXOStore         = "UTXOStore"
+	SubscriberBlockAssembler    = "BlockAssembler"
+	SubscriberBlockValidation   = "blockvalidation"
+	SubscriberSubtreeValidation = "subtreevalidation"
+	SubscriberPruner            = "Pruner"
+	SubscriberAssetService      = "AssetService"
+	SubscriberUTXOPersister     = "utxo-persister"
+)
+
 // ClientI defines the interface for blockchain client operations.
 //
 // This interface abstracts the communication with the blockchain service, allowing clients
@@ -538,6 +553,9 @@ type ClientI interface {
 	// - Channel of Notification objects that will receive blockchain events
 	// - Error if the subscription creation fails
 	Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error)
+
+	// GetSubscribers returns the list of currently active subscriber source strings.
+	GetSubscribers(ctx context.Context) ([]string, error)
 
 	// GetState retrieves state data by key.
 	//

@@ -1584,7 +1584,7 @@ out:
 			if p.shouldHandleReadError(err) {
 				errMsg := fmt.Sprintf("Can't read message from %s: %v", p, err)
 				if err != io.ErrUnexpectedEOF {
-					p.logger.Errorf(errMsg)
+					p.logger.Errorf("%s", errMsg)
 				}
 
 				// Push a reject message for the malformed message and disconnect

@@ -37,6 +37,7 @@ type SubtreeWriteJob struct {
 	SubtreeHash   chainhash.Hash
 	SubtreeBytes  []byte
 	BlockHash     string // For logging
+	BlockHeight   uint32 // For DAH calculation
 	SubtreeIdx    int    // For logging
 	AlreadyExists bool   // Skip write if already exists
 }
@@ -56,20 +57,19 @@ func (u *BlockValidation) subtreeWriteWorker(ctx context.Context, writeJobsChan 
 			}
 
 			if job.AlreadyExists {
-				// Just need to unset DAH, file already exists
-				if err := u.subtreeStore.SetDAH(ctx, job.SubtreeHash[:], fileformat.FileTypeSubtree, 0); err != nil {
-					return errors.NewProcessingError("[subtreeWriteWorker][%s] failed to unset DAH for subtree %d (%s)", job.BlockHash, job.SubtreeIdx, job.SubtreeHash.String(), err)
-				}
+				// Subtree already exists with assembly's finite DAH — no change needed.
+				// The block persister will promote to permanent when the block is confirmed.
 				continue
 			}
 
-			// Write the subtree file
+			// Write the subtree file with finite DAH (temporary until block persister confirms)
+			dah := job.BlockHeight + u.subtreeBlockHeightRetention
 			if err := u.subtreeStore.Set(ctx,
 				job.SubtreeHash[:],
 				fileformat.FileTypeSubtree,
 				job.SubtreeBytes,
 				bloboptions.WithAllowOverwrite(true),
-				bloboptions.WithDeleteAt(0),
+				bloboptions.WithDeleteAt(dah),
 			); err != nil {
 				return errors.NewProcessingError("[subtreeWriteWorker][%s] failed to store subtree %d (%s)", job.BlockHash, job.SubtreeIdx, job.SubtreeHash.String(), err)
 			}
@@ -111,6 +111,7 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 		return &SubtreeWriteJob{
 			SubtreeHash:   subtreeHash,
 			BlockHash:     block.Hash().String(),
+			BlockHeight:   block.Height,
 			SubtreeIdx:    subtreeIdx,
 			AlreadyExists: true,
 		}, nil
@@ -155,6 +156,7 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 		SubtreeHash:   subtreeHash,
 		SubtreeBytes:  subtreeBytes,
 		BlockHash:     block.Hash().String(),
+		BlockHeight:   block.Height,
 		SubtreeIdx:    subtreeIdx,
 		AlreadyExists: false,
 	}, nil
@@ -810,12 +812,14 @@ func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *m
 			return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to serialize full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
 
+		// Write with finite DAH — block persister will promote to permanent when block is confirmed
+		dah := block.Height + u.subtreeBlockHeightRetention
 		if err = u.subtreeStore.Set(ctx,
 			subtreeHash[:],
 			fileformat.FileTypeSubtree,
 			fullSubtreeBytes,
 			bloboptions.WithAllowOverwrite(true),
-			bloboptions.WithDeleteAt(0),
+			bloboptions.WithDeleteAt(dah),
 		); err != nil {
 			return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to store full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
@@ -832,9 +836,8 @@ func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *m
 
 		block.SubtreeSlices[subtreeIdx] = fullSubtree
 
-		if err = u.subtreeStore.SetDAH(ctx, subtreeHash[:], fileformat.FileTypeSubtree, 0); err != nil {
-			return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to unset DAH for full subtree %s", block.Hash().String(), subtreeHash.String(), err)
-		}
+		// Subtree already exists with assembly's finite DAH — no change needed.
+		// The block persister will promote to permanent when the block is confirmed.
 	}
 
 	// Note: Subtree meta file (.subtreemeta) writing is intentionally skipped during quick validation

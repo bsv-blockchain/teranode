@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD046 -->
 # Block Persister Service Reference Documentation
 
 ## Overview
@@ -178,14 +179,6 @@ Returns an error if shutdown fails, or nil on successful shutdown.
 
 ### Internal Methods
 
-#### getNextBlockToProcess
-
-```go
-func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error)
-```
-
-Retrieves the next block that needs to be processed based on the current state and configuration. This method determines the next block to persist by comparing the last persisted block height with the current blockchain tip. It ensures blocks are persisted in sequence without gaps and respects the configured persistence age policy to control how far behind persistence can lag.
-
 #### persistBlock
 
 ```go
@@ -220,7 +213,7 @@ This is a core function of the blockpersister service that handles the complete 
 !!! warning "Atomicity"
     Block persistence is atomic - if any part fails, the entire operation is considered failed and should be retried after resolving the underlying issue.
 
-#### getNextBlockToProcess
+#### getNextBlockToProcess (blob persistence)
 
 ```go
 func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error)
@@ -318,7 +311,8 @@ Creates subtree data files using streaming writes. This phase runs **in parallel
     2. **Retrieve the subtree** from the subtree store using its hash
     3. **Load transaction metadata** from the UTXO store (batched or individual)
     4. **Stream write** the subtree data file using `SubtreeDataWriter`
-    5. **Abort on error** - incomplete files are automatically cleaned up
+    5. **Promote `.subtree` and `.subtreeData` files to permanent** (DAH=0) — the persister is the only service that promotes blob files to permanent storage
+    6. **Abort on error** - incomplete files are automatically cleaned up
 
 #### Phase 2: ProcessSubtreeUTXOStreaming
 
@@ -414,20 +408,25 @@ The function includes safety checks to handle nil transactions, logging errors b
 
 The service uses settings from the `settings.Settings` structure, primarily focused on the Block section. These settings control various aspects of block persistence behavior, from storage locations to processing strategies.
 
-### Block Settings
+### BlockPersister Settings
+
+All settings use the `BlockPersister` section (setting keys prefixed with `blockpersister_`).
 
 #### Storage Configuration
 
-- **`Block.BlockStore`**: Block store URL. Defines the location of the blob store used for block data.
+- **`BlockPersister.Store`**: Block persister storage URL (default: `file://./data/blockstore`). Defines the location of the blob store used for persisted block data.
 
 #### Network Configuration
 
-- **`Block.PersisterHTTPListenAddress`**: HTTP listener address for the blob server if enabled. Format should be "host:port".
+- **`BlockPersister.HTTPListenAddress`**: HTTP listener address for the blob server (default: `:8083`).
 
 #### Processing Configuration
 
-- **`Block.BlockPersisterPersistSleep`**: Sleep duration between processing attempts when no blocks are available to process. Specified in milliseconds.
-- **`Block.BatchMissingTransactions`**: When true, enables batched retrieval of transaction metadata, which improves performance for high transaction volumes by reducing individual store requests.
+- **`BlockPersister.PersistSleep`**: Sleep duration between processing attempts when no blocks are available (default: `10s`).
+- **`BlockPersister.Concurrency`**: Number of parallel persistence workers (default: `8`).
+- **`BlockPersister.BatchMissingTransactions`**: When true, enables batched retrieval of transaction metadata for better performance (default: `true`).
+- **`BlockPersister.ProcessUTXOFiles`**: When true, processes UTXO files during block persistence (default: `true`).
+- **`BlockPersister.SkipUTXODelete`**: Debug setting to skip UTXO deletion during persistence (default: `false`).
 
 ### Interaction with Other Components
 
@@ -559,7 +558,8 @@ Required components:
     - **Store connectivity verification**
     - **Service operational status**
 
-## Other Resources
+## Related Documents
 
-- [Block Persister](../../topics/services/blockPersister.md)
+- [Block Persister Topic Guide](../../topics/services/blockPersister.md)
+- [Block Persister Settings](../settings/services/blockpersister_settings.md)
 - [Prometheus Metrics](../prometheusMetrics.md)

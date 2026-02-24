@@ -417,3 +417,8 @@ The underlying `FileStorer` provides an `Abort()` method that:
 2. Signals to the blob store's `SetFromReader` that the write failed
 3. Triggers cleanup of the temporary file
 4. Ensures no incomplete UTXO data is persisted
+
+## Related Documents
+
+- [UTXO Persister Topic Guide](../../topics/services/utxoPersister.md)
+- [UTXO Persister Settings](../settings/services/utxopersister_settings.md)

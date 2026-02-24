@@ -388,7 +388,7 @@ func (c *Centrifuge) readMessages(ctx context.Context, client *atomic.Pointer[we
 
 func (c *Centrifuge) _(ctx context.Context, addr string) error {
 	// Subscribe to the blockchain service
-	blockchainSubscription, err := c.blockchainClient.Subscribe(ctx, "AssetService")
+	blockchainSubscription, err := c.blockchainClient.Subscribe(ctx, blockchain.SubscriberAssetService)
 	if err != nil {
 		return err
 	}
@@ -418,7 +418,7 @@ func (c *Centrifuge) _(ctx context.Context, addr string) error {
 
 					hash, err := chainhash.NewHash(notification.Hash)
 					if err != nil {
-						c.logger.Errorf("[Blockchain] failed to parse hash", err)
+						c.logger.Errorf("[Blockchain] failed to parse hash: %v", err)
 						continue
 					}
 

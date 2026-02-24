@@ -732,6 +732,9 @@ func (m *MockBlockchainClient) GetBlockHeaderIDs(ctx context.Context, blockHash 
 func (m *MockBlockchainClient) Subscribe(ctx context.Context, source string) (chan *blockchain_api.Notification, error) {
 	return nil, nil
 }
+func (m *MockBlockchainClient) GetSubscribers(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
 func (m *MockBlockchainClient) GetState(ctx context.Context, key string) ([]byte, error) {
 	return nil, nil
 }

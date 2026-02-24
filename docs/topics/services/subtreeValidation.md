@@ -336,7 +336,7 @@ Please refer to the [Locally Running Services Documentation](../../howto/locally
 
 ## 8. Configuration Settings
 
-For comprehensive configuration documentation including all settings, defaults, and interactions, see the [subtree Validation Settings Reference](../../references/settings/services/subtreeValidation_settings.md).
+For comprehensive configuration documentation including all settings, defaults, and interactions, see the [Subtree Validation Settings Reference](../../references/settings/services/subtreevalidation_settings.md).
 
 ## 9. Other Resources
 

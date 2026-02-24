@@ -680,7 +680,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: b.buildBlockHeaderHashesMap(deps.currentChain),
 		currentBlockHeaderIDsMap:    b.buildBlockHeaderIDsMap(deps.currentBlockHeaderIDs),
-		parentSpendsMap:             NewSplitSyncedParentMap(4096),
+		parentSpendsMap:             NewSplitSyncedParentMap(4096, b.TransactionCount*3),
 	}
 
 	concurrency := b.getValidationConcurrency(validOrderAndBlessedConcurrency)
@@ -710,7 +710,7 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	var (
 		subtreeMetaSlice    *subtreepkg.Meta
 		subtreeHash         = subtree.RootHash()
-		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes))
+		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes)/16)
 		err                 error
 	)
 

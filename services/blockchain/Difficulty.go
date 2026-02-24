@@ -188,10 +188,10 @@ func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suit
 
 	duration := int64(suitableLastBlock.Time - suitableFirstBlock.Time)
 	if duration > 288*int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds()) {
-		d.logger.Debugf("duration %d is greater than 288 * target time per block %d - setting to 288 * target time per block", duration, d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
+		d.logger.Debugf("duration %d is greater than 288 * target time per block %.0f - setting to 288 * target time per block", duration, d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
 		duration = 288 * int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
 	} else if duration < 72*int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds()) {
-		d.logger.Debugf("duration %d is less than 72 * target time per block %d - setting to 72 * target time per block", duration, d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
+		d.logger.Debugf("duration %d is less than 72 * target time per block %.0f - setting to 72 * target time per block", duration, d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
 		duration = 72 * int64(d.settings.ChainCfgParams.TargetTimePerBlock.Seconds())
 	}
 

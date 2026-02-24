@@ -109,16 +109,52 @@ pruner_skipped_total{reason="preserve_failed"} 0
 
 **Note**: When defensive mode is enabled, skipped records are logged but not tracked as a separate metric label. Monitor logs for "Defensive skip" messages.
 
-#### pruner_processed_total
+#### pruner_updating_parents_total
 
 **Type**: Counter
 
-**Description**: Total number of pruning operations completed successfully
+**Description**: Total number of parent-updating operations completed during pruning.
 
 **Example:**
 
 ```prometheus
-pruner_processed_total 1000
+pruner_updating_parents_total 1000
+```
+
+#### pruner_deleting_children_total
+
+**Type**: Counter
+
+**Description**: Total number of child-deletion operations completed during pruning.
+
+**Example:**
+
+```prometheus
+pruner_deleting_children_total 500
+```
+
+#### pruner_current_height
+
+**Type**: Gauge
+
+**Description**: The current block height being pruned.
+
+**Example:**
+
+```prometheus
+pruner_current_height 850000
+```
+
+#### pruner_active
+
+**Type**: Gauge
+
+**Description**: Whether the pruner is currently active (1) or idle (0).
+
+**Example:**
+
+```prometheus
+pruner_active 1
 ```
 
 #### pruner_errors_total
@@ -456,5 +492,5 @@ ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborti
 
 - [Pruner Service Topic Documentation](../../topics/services/pruner.md)
 - [Pruner Settings Reference](../settings/services/pruner_settings.md)
-- [UTXO Store Reference](utxo_reference.md)
-- [Prometheus Metrics Reference](../prometheusMetricsReference.md)
+- [UTXO Store Reference](../stores/utxo_reference.md)
+- [Prometheus Metrics Reference](../prometheusMetrics.md)

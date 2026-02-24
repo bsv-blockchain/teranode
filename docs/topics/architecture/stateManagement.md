@@ -105,6 +105,7 @@ The Blockchain service also exposes the following gRPC methods to interact with 
 - **LegacySync** - Transitions the FSM to the LegacySyncing state (delegates on the SendFSMEvent method)
 - **Run** - Transitions the FSM to the Running state (delegates on the SendFSMEvent method)
 - **CatchUpBlocks** - Transitions the FSM to the CatchingBlocks state (delegates on the SendFSMEvent method)
+- **Idle** - Transitions the FSM to the Idle state by sending the STOP event (delegates on the SendFSMEvent method)
 
 ### 3.3. State Machine States
 
@@ -168,9 +169,9 @@ Allowed Operations in Running State:
 - ✅ Create subtrees (or propagate them)
 - ✅ Create blocks (mine candidates)
 
-If `fsm_state_restore` setting is enabled, and if the node was previously in the `Idle` state, all services will start their operations once the FSM transitions to the `Running` state.
+Once the FSM transitions to the `Running` state, all services will start their normal operations.
 
-If the node was previously in any other state, the Block Assembler would now start mining blocks. The Block Assembler will never mine blocks under any other node state.
+The Block Assembler will only mine blocks when the node is in the `Running` state. The Block Assembler will never mine blocks under any other node state.
 
 #### 3.3.4. FSM: Catching Blocks State
 
@@ -235,22 +236,19 @@ This method is not currently used.
 
 ### 3.5. Waiting on State Machine Transitions
 
-Through internal helper methods, services can wait for the FSM to transition to a specific state before proceeding with their operations. This method is used by various services to ensure that the node is in the correct state before starting their activities.
+Through internal helper methods, services can wait for the FSM to transition out of the `Idle` state before proceeding with their operations. This method is used by various services to ensure that the node is in the correct state before starting their activities.
 
-The method blocks until the FSM transitions to the specified state or until a timeout occurs. This ensures that services are synchronized with the node's state changes and can respond accordingly.
+The method blocks until the FSM transitions from the `Idle` state to any non-Idle state (such as `Running`, `LegacySyncing`, or `CatchingBlocks`) or until a timeout occurs. This ensures that services are synchronized with the node's state changes and can respond accordingly.
 
-This method is widely used by all Teranode services to await for the blockchain to signal a transition to the `Running` state, after which all services can resume normal operations.
-
-Specifically, and subject to the `fsm_state_restore` setting being enabled, the following services wait for the FSM to transition to the `Running` state before starting their operations:
+The following services wait for the FSM to transition from the `Idle` state before starting their operations:
 
 - Asset Server
-- Block Assembly Service
 - Block Persister
 - Block Validation
-- Coinbase
 - Legacy P2P Gateway
 - P2P
 - Propagation
+- Pruner
 - Subtree Validation
 - UTXO Persister
 - Validator

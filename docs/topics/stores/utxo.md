@@ -26,7 +26,7 @@
     - [6.1. Shared Buffer Optimization](#61-shared-buffer-optimization)
 7. [Directory Structure and Main Files](#7-directory-structure-and-main-files)
 8. [Running the Store Locally](#8-running-the-store-locally)
-    - [How to run](#how-to-run)
+    - [How to run](#8-running-the-store-locally)
 9. [Configuration and Settings](#9-configuration-and-settings)
 10. [Other Resources](#10-other-resources)
 

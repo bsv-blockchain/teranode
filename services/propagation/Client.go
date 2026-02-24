@@ -343,7 +343,7 @@ func (c *Client) TriggerBatcher() {
 //   - error: Returns the input error for convenience in call chaining
 func (c *Client) handleBatchError(batch []*batchItem, err error, format string, args ...interface{}) error {
 	wrappedErr := errors.NewServiceError(format, append(args, err)...)
-	c.logger.Errorf(wrappedErr.Error())
+	c.logger.Errorf("%s", wrappedErr.Error())
 
 	for _, tx := range batch {
 		tx.done <- wrappedErr

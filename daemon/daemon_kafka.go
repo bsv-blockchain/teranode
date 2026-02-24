@@ -5,6 +5,7 @@ import (
 	"net/url"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -84,7 +85,7 @@ func getKafkaTxAsyncProducer(ctx context.Context, logger ulogger.Logger, setting
 		return nil, nil
 	}
 
-	kafkaURL, err := url.ParseRequestURI(value)
+	kafkaURL, err := urlutil.ParseMultiHostURL(value)
 	if err != nil {
 		return nil, errors.NewConfigurationError("failed to get Kafka URL for validatortxs producer - kafka_validatortxsConfig", err)
 	}

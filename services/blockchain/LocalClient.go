@@ -358,6 +358,18 @@ func (c *LocalClient) Subscribe(ctx context.Context, source string) (chan *block
 	return ch, nil
 }
 
+// GetSubscribers returns the list of currently active subscriber source strings.
+func (c *LocalClient) GetSubscribers(_ context.Context) ([]string, error) {
+	c.subscribersMu.RLock()
+	defer c.subscribersMu.RUnlock()
+
+	sources := make([]string, 0, len(c.subscribers))
+	for source := range c.subscribers {
+		sources = append(sources, source)
+	}
+	return sources, nil
+}
+
 func (c *LocalClient) GetState(ctx context.Context, key string) ([]byte, error) {
 	return c.store.GetState(ctx, key)
 }

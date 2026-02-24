@@ -2014,3 +2014,439 @@ func TestErrorChainingAndCyclePrevention(t *testing.T) {
 		// would prevent extending such accidental cycles if they existed
 	})
 }
+
+// TestUserMessage tests the UserMessage function for proper sanitization of error messages.
+func TestUserMessage(t *testing.T) {
+	t.Run("nil error returns empty string", func(t *testing.T) {
+		result := UserMessage(nil)
+		require.Equal(t, "", result)
+	})
+
+	t.Run("returns user-friendly message without wrapped chain", func(t *testing.T) {
+		innerErr := New(ERR_STORAGE_ERROR, "database connection failed at /var/db/internal.db")
+		outerErr := New(ERR_SERVICE_ERROR, "service unavailable", innerErr)
+
+		result := UserMessage(outerErr)
+
+		// Should only show the top-level error code and message
+		require.Contains(t, result, "SERVICE_ERROR")
+		require.Contains(t, result, "service unavailable")
+		// Should NOT contain wrapped error details
+		require.NotContains(t, result, "STORAGE_ERROR")
+		require.NotContains(t, result, "database connection")
+		require.NotContains(t, result, "/var/db/internal.db")
+	})
+
+	t.Run("strips file/line/function metadata", func(t *testing.T) {
+		err := New(ERR_NOT_FOUND, "resource not found")
+
+		result := UserMessage(err)
+
+		// Should not expose internal file paths or function names
+		require.NotContains(t, result, ".go")
+		require.NotContains(t, result, "errors_test")
+	})
+
+	t.Run("handles gRPC wrapped errors", func(t *testing.T) {
+		innerErr := New(ERR_TX_INVALID, "invalid signature in transaction abc123")
+		wrappedGRPC := WrapGRPC(innerErr)
+
+		result := UserMessage(wrappedGRPC)
+
+		require.Contains(t, result, "TX_INVALID")
+		require.Contains(t, result, "invalid signature")
+	})
+
+	t.Run("handles TError proto type", func(t *testing.T) {
+		tErr := &TError{
+			Code:    ERR_BLOCK_NOT_FOUND,
+			Message: "block not found",
+			File:    "/internal/path/to/file.go",
+			Line:    123,
+		}
+
+		result := UserMessage(tErr)
+
+		require.Contains(t, result, "BLOCK_NOT_FOUND")
+		require.Contains(t, result, "block not found")
+		// Should not expose file/line
+		require.NotContains(t, result, "/internal/path")
+		require.NotContains(t, result, "123")
+	})
+
+	t.Run("returns generic message for unknown error types", func(t *testing.T) {
+		stdErr := errors.New("some internal error with sensitive info: password=secret123")
+
+		result := UserMessage(stdErr)
+
+		// Should return generic message, not exposing the internal error
+		require.Equal(t, "internal error", result)
+		require.NotContains(t, result, "password")
+		require.NotContains(t, result, "secret123")
+	})
+
+	t.Run("does not leak error data", func(t *testing.T) {
+		err := New(ERR_TX_INVALID_DOUBLE_SPEND, "double spend detected")
+		err.SetData("tx_hash", "abc123def456")
+		err.SetData("spending_tx", "xyz789")
+
+		result := UserMessage(err)
+
+		// Should not contain error data
+		require.NotContains(t, result, "abc123def456")
+		require.NotContains(t, result, "xyz789")
+	})
+}
+
+// TestPublicError tests the PublicError function for proper sanitization.
+func TestPublicError(t *testing.T) {
+	t.Run("nil error returns nil", func(t *testing.T) {
+		result := PublicError(nil)
+		require.Nil(t, result)
+	})
+
+	t.Run("strips wrapped error chain", func(t *testing.T) {
+		deepErr := New(ERR_STORAGE_ERROR, "failed at internal store")
+		midErr := New(ERR_SERVICE_ERROR, "service layer failed", deepErr)
+		topErr := New(ERR_PROCESSING, "processing failed", midErr)
+
+		result := PublicError(topErr)
+
+		require.NotNil(t, result)
+		require.Equal(t, ERR_PROCESSING, result.Code())
+		require.Equal(t, "processing failed", result.Message())
+		// Should have no wrapped error
+		require.Nil(t, result.WrappedErr())
+	})
+
+	t.Run("strips file/line/function metadata", func(t *testing.T) {
+		err := New(ERR_NOT_FOUND, "resource not found")
+		// The original error has file/line/function set by New()
+		require.NotEmpty(t, err.file)
+		require.NotZero(t, err.line)
+		require.NotEmpty(t, err.function)
+
+		result := PublicError(err)
+
+		// Public error should have no file/line/function
+		require.Empty(t, result.file)
+		require.Zero(t, result.line)
+		require.Empty(t, result.function)
+	})
+
+	t.Run("strips error data", func(t *testing.T) {
+		err := New(ERR_TX_INVALID_DOUBLE_SPEND, "double spend")
+		err.SetData("spending_tx_hash", "internal_tx_123")
+		err.SetData("utxo_index", 5)
+
+		result := PublicError(err)
+
+		// Public error should have no data
+		require.Nil(t, result.Data())
+		require.Nil(t, result.GetData("spending_tx_hash"))
+		require.Nil(t, result.GetData("utxo_index"))
+	})
+
+	t.Run("handles gRPC wrapped errors", func(t *testing.T) {
+		innerErr := New(ERR_BLOCK_INVALID, "block invalid: hash mismatch")
+		wrappedGRPC := WrapGRPC(innerErr)
+
+		result := PublicError(wrappedGRPC)
+
+		require.NotNil(t, result)
+		require.Equal(t, ERR_BLOCK_INVALID, result.Code())
+		require.Equal(t, "block invalid: hash mismatch", result.Message())
+		require.Nil(t, result.WrappedErr())
+	})
+
+	t.Run("handles TError proto type", func(t *testing.T) {
+		tErr := &TError{
+			Code:     ERR_TX_NOT_FOUND,
+			Message:  "transaction not found",
+			File:     "/secret/internal/path.go",
+			Line:     999,
+			Function: "internalFunction",
+			WrappedError: &TError{
+				Code:    ERR_STORAGE_ERROR,
+				Message: "db lookup failed",
+			},
+		}
+
+		result := PublicError(tErr)
+
+		require.NotNil(t, result)
+		require.Equal(t, ERR_TX_NOT_FOUND, result.Code())
+		require.Equal(t, "transaction not found", result.Message())
+		// Should strip all internal details
+		require.Empty(t, result.file)
+		require.Zero(t, result.line)
+		require.Empty(t, result.function)
+		require.Nil(t, result.WrappedErr())
+	})
+
+	t.Run("returns generic error for unknown types", func(t *testing.T) {
+		stdErr := errors.New("sensitive internal error: api_key=12345")
+
+		result := PublicError(stdErr)
+
+		require.NotNil(t, result)
+		require.Equal(t, ERR_ERROR, result.Code())
+		require.Equal(t, "internal error", result.Message())
+		// Should not leak the sensitive info
+		require.NotContains(t, result.Error(), "api_key")
+		require.NotContains(t, result.Error(), "12345")
+	})
+
+	t.Run("preserves error code semantics", func(t *testing.T) {
+		notFoundErr := New(ERR_NOT_FOUND, "not found")
+		invalidArgErr := New(ERR_INVALID_ARGUMENT, "invalid argument")
+		thresholdErr := New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
+
+		require.Equal(t, ERR_NOT_FOUND, PublicError(notFoundErr).Code())
+		require.Equal(t, ERR_INVALID_ARGUMENT, PublicError(invalidArgErr).Code())
+		require.Equal(t, ERR_THRESHOLD_EXCEEDED, PublicError(thresholdErr).Code())
+	})
+}
+
+// TestWrapGRPCPublic tests the WrapGRPCPublic function for proper gRPC wrapping without internal details.
+func TestWrapGRPCPublic(t *testing.T) {
+	t.Run("nil error returns nil", func(t *testing.T) {
+		result := WrapGRPCPublic(nil)
+		require.Nil(t, result)
+	})
+
+	t.Run("returns gRPC status error without internal details", func(t *testing.T) {
+		innerErr := New(ERR_STORAGE_ERROR, "internal db error")
+		outerErr := New(ERR_SERVICE_ERROR, "service unavailable", innerErr)
+
+		result := WrapGRPCPublic(outerErr)
+
+		require.NotNil(t, result)
+
+		// Should be a gRPC status error
+		st, ok := status.FromError(result)
+		require.True(t, ok, "should be a gRPC status error")
+
+		// Should have correct code mapping
+		require.Equal(t, codes.Internal, st.Code())
+
+		// Message should be the top-level message only
+		require.Equal(t, "service unavailable", st.Message())
+
+		// Should not have detailed error information in status details
+		require.Empty(t, st.Details())
+	})
+
+	t.Run("maps error codes to gRPC codes correctly", func(t *testing.T) {
+		tests := []struct {
+			errCode      ERR
+			expectedGRPC codes.Code
+		}{
+			{ERR_UNKNOWN, codes.Unknown},
+			{ERR_INVALID_ARGUMENT, codes.InvalidArgument},
+			{ERR_THRESHOLD_EXCEEDED, codes.ResourceExhausted},
+			{ERR_SERVICE_ERROR, codes.Internal},
+			{ERR_NOT_FOUND, codes.Internal},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.errCode.String(), func(t *testing.T) {
+				err := New(tc.errCode, "test message")
+				result := WrapGRPCPublic(err)
+
+				st, ok := status.FromError(result)
+				require.True(t, ok)
+				require.Equal(t, tc.expectedGRPC, st.Code())
+			})
+		}
+	})
+
+	t.Run("does not expose file/line/function in gRPC error", func(t *testing.T) {
+		err := New(ERR_TX_INVALID, "invalid transaction")
+
+		result := WrapGRPCPublic(err)
+
+		// The error string should not contain internal paths
+		errStr := result.Error()
+		require.NotContains(t, errStr, "errors_test.go")
+		require.NotContains(t, errStr, "TestWrapGRPCPublic")
+	})
+
+	t.Run("does not expose wrapped error chain in gRPC error", func(t *testing.T) {
+		deepErr := New(ERR_STORAGE_ERROR, "secret database error")
+		midErr := New(ERR_SERVICE_ERROR, "internal service failed", deepErr)
+		topErr := New(ERR_PROCESSING, "processing failed", midErr)
+
+		result := WrapGRPCPublic(topErr)
+
+		errStr := result.Error()
+		require.NotContains(t, errStr, "secret database")
+		require.NotContains(t, errStr, "internal service")
+		require.Contains(t, errStr, "processing failed")
+	})
+
+	t.Run("handles standard errors safely", func(t *testing.T) {
+		stdErr := errors.New("connection string: user=admin password=secret123")
+
+		result := WrapGRPCPublic(stdErr)
+
+		require.NotNil(t, result)
+		errStr := result.Error()
+		// Should not leak sensitive info
+		require.NotContains(t, errStr, "password")
+		require.NotContains(t, errStr, "secret123")
+		require.NotContains(t, errStr, "admin")
+	})
+}
+
+// TestWrapPublic tests the WrapPublic function for proper TError creation without internal details.
+func TestWrapPublic(t *testing.T) {
+	t.Run("nil error returns nil", func(t *testing.T) {
+		result := WrapPublic(nil)
+		require.Nil(t, result)
+	})
+
+	t.Run("strips wrapped error chain from TError", func(t *testing.T) {
+		innerErr := New(ERR_STORAGE_ERROR, "internal storage failure")
+		outerErr := New(ERR_SERVICE_ERROR, "service failed", innerErr)
+
+		result := WrapPublic(outerErr)
+
+		require.NotNil(t, result)
+		require.Equal(t, ERR_SERVICE_ERROR, result.Code)
+		require.Equal(t, "service failed", result.Message)
+		// Should have no wrapped error
+		require.Nil(t, result.WrappedError)
+	})
+
+	t.Run("strips file/line/function from TError", func(t *testing.T) {
+		err := New(ERR_NOT_FOUND, "resource not found")
+
+		result := WrapPublic(err)
+
+		require.NotNil(t, result)
+		// TError should have empty metadata
+		require.Empty(t, result.File)
+		require.Zero(t, result.Line)
+		require.Empty(t, result.Function)
+	})
+
+	t.Run("strips error data from TError", func(t *testing.T) {
+		err := New(ERR_TX_INVALID, "invalid tx")
+		err.SetData("internal_key", "sensitive_value")
+
+		result := WrapPublic(err)
+
+		require.NotNil(t, result)
+		require.Nil(t, result.Data)
+	})
+
+	t.Run("handles standard errors safely", func(t *testing.T) {
+		stdErr := errors.New("internal error with secrets: api_key=abc123")
+
+		result := WrapPublic(stdErr)
+
+		require.NotNil(t, result)
+		require.Equal(t, ERR_ERROR, result.Code)
+		require.Equal(t, "internal error", result.Message)
+		// Should not leak sensitive info
+		require.NotContains(t, result.Message, "api_key")
+		require.NotContains(t, result.Message, "abc123")
+	})
+
+	t.Run("preserves error codes in TError", func(t *testing.T) {
+		tests := []ERR{
+			ERR_NOT_FOUND,
+			ERR_INVALID_ARGUMENT,
+			ERR_TX_INVALID,
+			ERR_BLOCK_INVALID,
+			ERR_SERVICE_ERROR,
+		}
+
+		for _, errCode := range tests {
+			t.Run(errCode.String(), func(t *testing.T) {
+				err := New(errCode, "test message")
+				result := WrapPublic(err)
+
+				require.Equal(t, errCode, result.Code)
+			})
+		}
+	})
+}
+
+// TestSanitizationSecurityScenarios tests real-world security scenarios.
+func TestSanitizationSecurityScenarios(t *testing.T) {
+	t.Run("database connection string not leaked", func(t *testing.T) {
+		dbErr := errors.New("connection failed: postgres://admin:secretpassword@internal-db.corp.local:5432/production")
+		serviceErr := New(ERR_SERVICE_ERROR, "database unavailable", dbErr)
+
+		// UserMessage should not leak
+		userMsg := UserMessage(serviceErr)
+		require.NotContains(t, userMsg, "postgres://")
+		require.NotContains(t, userMsg, "secretpassword")
+		require.NotContains(t, userMsg, "internal-db.corp.local")
+
+		// PublicError should not leak
+		pubErr := PublicError(serviceErr)
+		require.NotContains(t, pubErr.Error(), "postgres://")
+		require.NotContains(t, pubErr.Error(), "secretpassword")
+
+		// WrapGRPCPublic should not leak
+		grpcErr := WrapGRPCPublic(serviceErr)
+		require.NotContains(t, grpcErr.Error(), "secretpassword")
+	})
+
+	t.Run("internal file paths not leaked", func(t *testing.T) {
+		err := New(ERR_NOT_FOUND, "file not found")
+		// Original has file path
+		require.NotEmpty(t, err.file)
+		require.Contains(t, err.file, ".go")
+
+		// Sanitized versions should not expose paths
+		pubErr := PublicError(err)
+		require.Empty(t, pubErr.file)
+
+		tErr := WrapPublic(err)
+		require.Empty(t, tErr.File)
+	})
+
+	t.Run("API keys and tokens not leaked through error chains", func(t *testing.T) {
+		authErr := New(ERR_EXTERNAL, "auth failed")
+		authErr.SetData("api_key", "sk_live_abcdef123456")
+		authErr.SetData("bearer_token", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...")
+
+		wrapperErr := New(ERR_SERVICE_ERROR, "external service failed", authErr)
+
+		pubErr := PublicError(wrapperErr)
+		errStr := pubErr.Error()
+
+		require.NotContains(t, errStr, "sk_live")
+		require.NotContains(t, errStr, "abcdef123456")
+		require.NotContains(t, errStr, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9")
+	})
+
+	t.Run("stack traces not leaked", func(t *testing.T) {
+		err := New(ERR_PROCESSING, "processing failed")
+		// Using Format to get stack trace - it contains file info
+		fullTrace := fmt.Sprintf("%+v", err)
+		require.Contains(t, fullTrace, ".go:")
+		require.Contains(t, fullTrace, "processing failed")
+
+		// Sanitized should not have stack info
+		pubErr := PublicError(err)
+		pubTrace := fmt.Sprintf("%+v", pubErr)
+		// PublicError has no file/line/function, so no file paths in output
+		require.NotContains(t, pubTrace, ".go:")
+	})
+
+	t.Run("nested sensitive data not leaked", func(t *testing.T) {
+		level1 := New(ERR_STORAGE_ERROR, "encryption key: AES256-KEY-SECRET")
+		level2 := New(ERR_SERVICE_ERROR, "internal path: /var/secrets/keyfile", level1)
+		level3 := New(ERR_PROCESSING, "operation failed", level2)
+
+		userMsg := UserMessage(level3)
+		require.NotContains(t, userMsg, "AES256-KEY-SECRET")
+		require.NotContains(t, userMsg, "/var/secrets/keyfile")
+		require.Contains(t, userMsg, "operation failed")
+	})
+}

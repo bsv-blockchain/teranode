@@ -1042,6 +1042,8 @@ func Test_Start_FSMTransitionError(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
+	// Clear the gRPC listen address to prevent port conflicts during testing
+	tSettings.BlockValidation.GRPCListenAddress = ""
 
 	// Create mock blockchain client that returns error
 	mockBlockchainClient := &blockchain.Mock{}

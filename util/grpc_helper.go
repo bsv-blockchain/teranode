@@ -121,6 +121,14 @@ func GetGRPCClient(_ context.Context, address string, connectionOptions *Connect
 
 	opts = append(opts, grpc.WithTransportCredentials(tlsCredentials))
 
+	// Add client-side keepalive for faster detection of dead connections
+	// This complements application-level heartbeat by detecting transport-level issues
+	opts = append(opts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		Time:                30 * time.Second, // Send pings every 30 seconds if no activity
+		Timeout:             10 * time.Second, // Wait 10 seconds for ping ack before considering dead
+		PermitWithoutStream: true,             // Allow pings even without active streams
+	}))
+
 	// Preallocate interceptor slices with reasonable capacity
 	unaryClientInterceptors := make([]grpc.UnaryClientInterceptor, 0, 3)
 	streamClientInterceptors := make([]grpc.StreamClientInterceptor, 0, 3)

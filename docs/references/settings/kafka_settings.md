@@ -125,6 +125,7 @@ kafka://localhost:9092/blocks?partitions=4&replication=3&retention=3600000&flush
 **Consumer Group ID Pattern:** `{serviceName}.{clientName}`
 
 Examples:
+
 - `blockvalidation.defaultClientName`
 - `subtreevalidation.mynode`
 - `p2p.node1`
@@ -193,7 +194,7 @@ URL-based configuration overrides individual settings when provided:
 ## Consumer Timeout Constraints
 
 **Critical Validation Rule:**
-```
+```text
 sessionTimeout >= 3 * heartbeatInterval
 ```
 

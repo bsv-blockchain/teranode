@@ -2,8 +2,8 @@ stateDiagram-v2
     [*] --> IDLE
     IDLE --> LegacySyncing: setfsmstate legacysyncing
     LegacySyncing --> Running: Initial sync complete
-    Running --> Catching_Up: After downtime
-    Catching_Up --> Running: Sync complete
+    Running --> CatchingBlocks: After downtime
+    CatchingBlocks --> Running: Sync complete
 
     note right of LegacySyncing
         Syncs from traditional BSV node

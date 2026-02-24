@@ -435,7 +435,7 @@ For large transactions stored externally:
 
 ## 4. Technology
 
-- **Language**: Go 1.25+
+- **Language**: Go 1.26+
 - **Communication**: gRPC (port 8096), Protocol Buffers
 - **Storage**: Store-agnostic (Aerospike or SQL via interface)
 - **Metrics**: Prometheus
@@ -597,8 +597,4 @@ startPruner.docker.host.teranode2 = false
 
 ### Metrics Documentation
 
-For Prometheus metrics details, see [Prometheus Metrics Reference](../../references/prometheusMetricsReference.md).
-
-### Call Graph Visualization
-
-For visual representation of the Pruner service's function call patterns, see the [Call Graphs documentation](../../references/call_graphs.md).
+For Prometheus metrics details, see [Prometheus Metrics Reference](../../references/prometheusMetrics.md).

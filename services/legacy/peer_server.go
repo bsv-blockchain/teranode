@@ -1544,7 +1544,7 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 	if txMeta == nil || txMeta.Tx == nil {
 		err = fmt.Errorf("[pushTxMsg] tx %v is nil from transaction pool", hash)
 
-		sp.server.logger.Warnf(err.Error())
+		sp.server.logger.Warnf("%s", err.Error())
 
 		if doneChan != nil {
 			doneChan <- struct{}{}
