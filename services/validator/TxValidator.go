@@ -83,22 +83,36 @@ const (
 // policy rules across the full range of transaction properties. This includes
 // script verification, size limits, fee policies, and structure validation.
 type TxValidatorI interface {
-	// ValidateTransaction performs comprehensive validation of a transaction.
-	// This method enforces all consensus and policy rules against the transaction,
-	// including format, structure, inputs/outputs, signature verification, and fees.
-	// The validation context includes the current blockchain height and configuration
-	// options that may modify validation behavior (e.g., skip certain checks).
+	// ValidateTransaction performs comprehensive validation of a transaction,
+	// excluding BIP68 sequence-lock checks. This method enforces all consensus
+	// and policy rules including format, structure, inputs/outputs, script
+	// verification, and fees. BIP68 validation is performed separately via
+	// ValidateBIP68 so that MTP lookups are skipped when the transaction fails
+	// normal validation first.
 	//
 	// Parameters:
 	//   - tx: The transaction to validate, must be properly initialized
 	//   - blockHeight: The current block height for validation context
 	//   - utxoHeights: Block heights where each input UTXO was created (nil if not available)
-	//   - utxoMTPs: Median Time Past values for inputHeight for each UTXO (nil if not validating block)
-	//   - blockMTP: Median Time Past value for blockHeight-1 (0 if not validating block)
 	//   - validationOptions: Optional validation options to customize validation behavior
 	// Returns:
 	//   - error: Specific validation error with reason if validation fails, nil on success
-	ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32, validationOptions *Options) error
+	ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error
+
+	// ValidateBIP68 verifies that BIP68 relative lock-time constraints are satisfied.
+	// This must only be called for block validation (SkipPolicyChecks=true) and only
+	// after ValidateTransaction succeeds. Keeping BIP68 separate avoids the cost of
+	// MTP lookups when the transaction fails normal validation.
+	//
+	// Parameters:
+	//   - tx: The transaction to validate
+	//   - blockHeight: Height of the block being validated
+	//   - utxoHeights: Block heights where each input UTXO was created
+	//   - utxoMTPs: Median Time Past values for each UTXO height (stored_mtp(utxoHeight))
+	//   - blockMTP: Median Time Past for the block (stored_mtp(blockHeight-1))
+	// Returns:
+	//   - error: Validation error if sequence locks are not satisfied, nil on success
+	ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error
 
 	// ValidateTransactionScripts performs script validation for a transaction.
 	// This method specifically handles the script execution and signature verification
@@ -187,7 +201,8 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 	}
 }
 
-// ValidateTransaction performs comprehensive validation of a transaction
+// ValidateTransaction performs comprehensive validation of a transaction,
+// excluding BIP68 sequence-lock checks (use ValidateBIP68 for that).
 // This includes checking:
 //  1. Input and output presence
 //  2. Transaction size limits
@@ -197,19 +212,16 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 //  6. Script operation limits
 //  7. Script validation
 //  8. Fee requirements
-//  9. BIP68 sequence locks (for block validation only)
 //
 // Parameters:
 //   - tx: The transaction to validate
 //   - blockHeight: Current block height for validation context
 //   - utxoHeights: Block heights where each input UTXO was created
-//   - utxoMTPs: Median Time Past values for inputHeight for each UTXO (nil if not validating block)
-//   - blockMTP: Median Time Past value for blockHeight (0 if not validating block)
 //   - validationOptions: Optional validation options
 //
 // Returns:
 //   - error: Any validation errors encountered
-func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32, validationOptions *Options) error {
+func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
 	//
 	// Each node will verify every transaction against a long checklist of criteria:
 	//
@@ -270,16 +282,15 @@ func (tv *TxValidator) ValidateTransaction(tx *bt.Tx, blockHeight uint32, utxoHe
 		}
 	}
 
-	// 12) BIP68 sequence locks validation (for block validation only)
-	// When SkipPolicyChecks is true, we're validating a transaction from a block
-	// In this case, we need to verify BIP68 relative lock-time constraints
-	if validationOptions.SkipPolicyChecks {
-		if err := tv.sequenceLocks(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP); err != nil {
-			return err
-		}
-	}
-
 	return nil
+}
+
+// ValidateBIP68 verifies that BIP68 relative lock-time constraints are satisfied.
+// Must be called separately after ValidateTransaction succeeds, and only for block
+// validation (SkipPolicyChecks=true). This separation avoids the cost of MTP lookups
+// when a transaction fails normal validation.
+func (tv *TxValidator) ValidateBIP68(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, utxoMTPs []uint32, blockMTP uint32) error {
+	return tv.sequenceLocks(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 }
 
 // ValidateTransactionScripts performs script validation for all transaction inputs.

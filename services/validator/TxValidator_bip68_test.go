@@ -30,7 +30,9 @@ func TestSequenceLocks_BeforeCSVHeight(t *testing.T) {
 	blockMTP := uint32(1000100)
 
 	// Should succeed because BIP68 is not active yet
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "BIP68 should not be enforced before CSVHeight")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "BIP68 should not be enforced before CSVHeight")
 }
 
@@ -55,7 +57,9 @@ func TestSequenceLocks_Version1Transaction(t *testing.T) {
 	blockMTP := uint32(1000100)
 
 	// Should succeed because version 1 transactions bypass BIP68
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "Version 1 transactions should bypass BIP68")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "Version 1 transactions should bypass BIP68")
 }
 
@@ -79,7 +83,9 @@ func TestSequenceLocks_DisabledFlag(t *testing.T) {
 	blockMTP := uint32(1000100)
 
 	// Should succeed because disable flag is set
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "Sequence lock disable flag should bypass BIP68")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "Sequence lock disable flag should bypass BIP68")
 }
 
@@ -106,7 +112,9 @@ func TestSequenceLocks_HeightBased_Success(t *testing.T) {
 	blockMTP := uint32(1000100)
 
 	// Should succeed because enough blocks have passed
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "Height-based sequence lock should succeed when enough blocks have passed")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "Height-based sequence lock should succeed when enough blocks have passed")
 }
 
@@ -133,7 +141,9 @@ func TestSequenceLocks_HeightBased_Failure(t *testing.T) {
 	blockMTP := uint32(1000100)
 
 	// Should fail because not enough blocks have passed
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.Error(t, err, "Height-based sequence lock should fail when insufficient blocks have passed")
 	require.Contains(t, err.Error(), "sequence lock height not satisfied")
 }
@@ -162,7 +172,9 @@ func TestSequenceLocks_TimeBased_Success(t *testing.T) {
 	blockMTP := uint32(1006000)
 
 	// Should succeed because enough time has passed
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "Time-based sequence lock should succeed when enough time has passed")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "Time-based sequence lock should succeed when enough time has passed")
 }
 
@@ -189,7 +201,9 @@ func TestSequenceLocks_TimeBased_Failure(t *testing.T) {
 	blockMTP := uint32(1030000)
 
 	// Should fail because not enough time has passed
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.Error(t, err, "Time-based sequence lock should fail when insufficient time has passed")
 	require.Contains(t, err.Error(), "sequence lock time not satisfied")
 }
@@ -226,7 +240,9 @@ func TestSequenceLocks_MultipleInputs(t *testing.T) {
 	blockMTP := uint32(1003000)
 
 	// Should succeed because the most restrictive input is satisfied
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "Multiple inputs should succeed when all sequence locks are satisfied")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "Multiple inputs should succeed when all sequence locks are satisfied")
 }
 
@@ -255,7 +271,9 @@ func TestSequenceLocks_MultipleInputs_Failure(t *testing.T) {
 	blockMTP := uint32(1002000)
 
 	// Should fail because input 1's sequence lock is not satisfied
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.Error(t, err, "Multiple inputs should fail when any sequence lock is not satisfied")
 	require.Contains(t, err.Error(), "sequence lock height not satisfied")
 }
@@ -283,7 +301,9 @@ func TestSequenceLocks_MaxValue(t *testing.T) {
 	blockMTP := uint32(2000000)
 
 	// Should succeed with maximum value
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "Sequence lock with maximum value should succeed when satisfied")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "Sequence lock with maximum value should succeed when satisfied")
 }
 
@@ -303,11 +323,10 @@ func TestSequenceLocks_NotEnforcedInMempool(t *testing.T) {
 
 	blockHeight := uint32(419950)
 	utxoHeights := []uint32{419900}
-	// Note: passing nil for utxoMTPs and 0 for blockMTP simulates mempool validation
 
 	// Should succeed because SkipPolicyChecks = false means mempool validation
 	// BIP68 is only enforced during block validation (SkipPolicyChecks = true)
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, nil, 0, &Options{SkipPolicyChecks: false})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: false})
 	require.NoError(t, err, "BIP68 should not be enforced in mempool (SkipPolicyChecks=false)")
 }
 
@@ -331,7 +350,9 @@ func TestSequenceLocks_AtExactCSVHeight(t *testing.T) {
 	tx.Inputs[0].SequenceNumber = 10
 	utxoHeights := []uint32{blockHeight - 50}
 
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "BIP68 should be enforced at exact CSVHeight and pass when satisfied")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "BIP68 should be enforced at exact CSVHeight and pass when satisfied")
 
 	// tx2: sequence=100, UTXO at blockHeight-50.
@@ -343,7 +364,9 @@ func TestSequenceLocks_AtExactCSVHeight(t *testing.T) {
 	tx2.Inputs[0].SequenceNumber = 100
 	utxoHeights2 := []uint32{blockHeight - 50}
 
-	err = txValidator.ValidateTransaction(tx2, blockHeight, utxoHeights2, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err = txValidator.ValidateTransaction(tx2, blockHeight, utxoHeights2, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+	err = txValidator.ValidateBIP68(tx2, blockHeight, utxoHeights2, utxoMTPs, blockMTP)
 	require.Error(t, err, "BIP68 should be enforced at exact CSVHeight and fail when not satisfied")
 	require.Contains(t, err.Error(), "sequence lock height not satisfied")
 }
@@ -385,7 +408,9 @@ func TestSequenceLocks_MixedTypes(t *testing.T) {
 	// Input 3: 419980 + 3 = 419983 (this is the most restrictive)
 	// minHeight = 419983, blockHeight = 420000, so 419983 < 420000 ✓
 
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "Mixed sequence lock types should succeed when all constraints are satisfied")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "Mixed sequence lock types should succeed when all constraints are satisfied")
 }
 
@@ -412,7 +437,9 @@ func TestSequenceLocks_MixedTypes_Failure(t *testing.T) {
 	// minTime for input 1 = 1000000 + 512000 = 1512000
 	blockMTP := uint32(1100000) // Not enough time has passed (1100000 < 1512000)
 
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err)
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.Error(t, err, "Mixed types should fail when time-based constraint is not satisfied")
 	require.Contains(t, err.Error(), "sequence lock time not satisfied")
 }
@@ -438,7 +465,9 @@ func TestSequenceLocks_ZeroValue(t *testing.T) {
 
 	// Should succeed because sequence = 0 means minHeight = 419999 + 0 = 419999
 	// and 419999 < 420000
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "Zero sequence number should impose no additional constraint")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "Zero sequence number should impose no additional constraint")
 }
 
@@ -465,7 +494,9 @@ func TestSequenceLocks_JustBelowDisableFlag(t *testing.T) {
 	// minTime = 1000000 + (65535 << 9) = 1000000 + 33553920 = 34553920
 	blockMTP := uint32(40000000) // Sufficient time
 
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "Sequence number just below disable flag should work when satisfied")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "Sequence number just below disable flag should work when satisfied")
 }
 
@@ -491,7 +522,9 @@ func TestSequenceLocks_TypeFlagOnly(t *testing.T) {
 
 	// minTime = 1000000 + (0 << 9) = 1000000
 	// blockMTP = 1000001, so 1000000 < 1000001 ✓
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "Type flag with zero value should impose no time constraint")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "Type flag with zero value should impose no time constraint")
 }
 
@@ -519,6 +552,8 @@ func TestSequenceLocks_AllInputsDisabled(t *testing.T) {
 	blockMTP := uint32(1000001) // Very little time passed
 
 	// Should succeed because all inputs are disabled (minHeight and minTime remain 0)
-	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP, &Options{SkipPolicyChecks: true})
+	err := txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, &Options{SkipPolicyChecks: true})
+	require.NoError(t, err, "All inputs disabled should bypass all sequence lock checks")
+	err = txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 	require.NoError(t, err, "All inputs disabled should bypass all sequence lock checks")
 }

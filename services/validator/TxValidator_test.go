@@ -224,7 +224,7 @@ func TestMaxTxSizePolicy(t *testing.T) {
 	tSettings.Policy.MaxTxSizePolicy = 10 // insanely low
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
-	err := txValidator.ValidateTransaction(aTx, 10000000, nil, nil, 0, &Options{})
+	err := txValidator.ValidateTransaction(aTx, 10000000, nil, &Options{})
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, errors.New(errors.ERR_TX_INVALID, "transaction size in bytes is greater than max tx size policy 10"))
 }
@@ -243,7 +243,7 @@ func TestMaxOpsPerScriptPolicy(t *testing.T) {
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, nil, 0, &Options{})
+	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{})
 	assert.NoError(t, err)
 
 	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{})
@@ -266,7 +266,7 @@ func TestMaxScriptSizePolicy(t *testing.T) {
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, nil, 0, &Options{})
+	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{})
 	assert.NoError(t, err)
 
 	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{})
@@ -448,7 +448,7 @@ func TestMaxTxSigopsCountsPolicy(t *testing.T) {
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, nil, 0, &Options{})
+	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{})
 	assert.NoError(t, err)
 
 	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{})
@@ -466,7 +466,7 @@ func TestMaxOpsPerScriptPolicyWithConcensus(t *testing.T) {
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
-	err := txValidator.ValidateTransaction(aTx, 101, nil, nil, 0, &Options{})
+	err := txValidator.ValidateTransaction(aTx, 101, nil, &Options{})
 	assert.NoError(t, err)
 }
 
@@ -484,7 +484,7 @@ func TestReturnConsensusError(t *testing.T) {
 	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, nil, 0, &Options{})
+	err := txValidator.ValidateTransaction(testTx, testBlockHeight, testUtxoHeights, &Options{})
 	assert.NoError(t, err)
 
 	err = txValidator.ValidateTransactionScripts(testTx, testBlockHeight, testUtxoHeights, &Options{SkipPolicyChecks: true})
@@ -601,7 +601,7 @@ func Test_MinFeePolicy(t *testing.T) {
 			t.Logf("Total Transaction size: %d bytes", tx.Size())
 
 			txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-			err = txValidator.ValidateTransaction(tx, 10000000, nil, nil, 0, &Options{})
+			err = txValidator.ValidateTransaction(tx, 10000000, nil, &Options{})
 
 			if tt.expectError {
 				if assert.Error(t, err) {
@@ -628,21 +628,21 @@ func TestCheckP2SHOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	// At Genesis activation height, p2sh should not be rejected
-	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight, nil, nil, 0, &Options{})
+	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight, nil, &Options{})
 	require.NoError(t, err)
 
 	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight, &Options{})
 	require.NoError(t, err)
 
 	// After Genesis activation height, p2sh should be rejected
-	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, nil, nil, 0, &Options{})
+	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, nil, &Options{})
 	require.Error(t, err)
 
 	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, &Options{})
 	require.Error(t, err)
 
 	// After Genesis activation height, with skip policy check, p2sh should be accepted
-	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, nil, nil, 0, &Options{SkipPolicyChecks: true})
+	err = txValidator.ValidateTransaction(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, nil, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 
 	err = txValidator.checkOutputs(txP2SH, tSettings.ChainCfgParams.GenesisActivationHeight+1, &Options{SkipPolicyChecks: true})
@@ -741,7 +741,7 @@ func TestZeroSatoshiOutputRequiresOpFalseOpReturn(t *testing.T) {
 
 	t.Run("zero-satoshi output with OP_RETURN (not OP_FALSE OP_RETURN) is not rejected when genesis activation height is not reached", func(t *testing.T) {
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
-		err := txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight-1, nil, nil, 0, &Options{})
+		err := txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight-1, nil, &Options{})
 		assert.NoError(t, err)
 	})
 
@@ -751,11 +751,11 @@ func TestZeroSatoshiOutputRequiresOpFalseOpReturn(t *testing.T) {
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
 		// At Genesis activation height, should not be rejected
-		err := txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight, nil, nil, 0, &Options{})
+		err := txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight, nil, &Options{})
 		assert.NoError(t, err)
 
 		// After Genesis activation height, should be rejected
-		err = txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight+1, nil, nil, 0, &Options{})
+		err = txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight+1, nil, &Options{})
 		if assert.Error(t, err) {
 			assert.Contains(t, err.Error(), "zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix")
 		}
@@ -766,7 +766,7 @@ func TestZeroSatoshiOutputRequiresOpFalseOpReturn(t *testing.T) {
 
 		txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 
-		err := txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight, nil, nil, 0, &Options{})
+		err := txValidator.ValidateTransaction(childTx, tSettings.ChainCfgParams.GenesisActivationHeight, nil, &Options{})
 		assert.NoError(t, err)
 	})
 
@@ -787,30 +787,30 @@ func TestZeroSatoshiOutputRequiresOpFalseOpReturn(t *testing.T) {
 		afterGenesisHeight := tSettings.ChainCfgParams.GenesisActivationHeight + 1
 
 		// Case 1: Mempool validation (SkipPolicyChecks = false) - should REJECT
-		err := txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, afterGenesisHeight, nil, nil, 0, &Options{SkipPolicyChecks: false})
+		err := txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, afterGenesisHeight, nil, &Options{SkipPolicyChecks: false})
 		if assert.Error(t, err, "Expected error for mempool validation with zero-satoshi P2PKH output") {
 			assert.Contains(t, err.Error(), "zero-satoshi outputs require 'OP_FALSE OP_RETURN' prefix")
 		}
 
 		// Case 2: Block validation (SkipPolicyChecks = true) - should ACCEPT
-		err = txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, afterGenesisHeight, nil, nil, 0, &Options{SkipPolicyChecks: true})
+		err = txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, afterGenesisHeight, nil, &Options{SkipPolicyChecks: true})
 		assert.NoError(t, err, "Expected no error for block validation with zero-satoshi P2PKH output")
 
 		// Case 3: Before Genesis activation - should ACCEPT regardless of SkipPolicyChecks
 		beforeGenesisHeight := tSettings.ChainCfgParams.GenesisActivationHeight - 1
 
-		err = txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, beforeGenesisHeight, nil, nil, 0, &Options{SkipPolicyChecks: false})
+		err = txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, beforeGenesisHeight, nil, &Options{SkipPolicyChecks: false})
 		assert.NoError(t, err, "Expected no error before Genesis activation even with policy checks")
 
-		err = txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, beforeGenesisHeight, nil, nil, 0, &Options{SkipPolicyChecks: true})
+		err = txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, beforeGenesisHeight, nil, &Options{SkipPolicyChecks: true})
 		assert.NoError(t, err, "Expected no error before Genesis activation without policy checks")
 
 		// Case 4: At Genesis activation height (block 620538) - should ACCEPT
 		// (special case: transactions in the Genesis block itself were created before the rules)
-		err = txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, tSettings.ChainCfgParams.GenesisActivationHeight, nil, nil, 0, &Options{SkipPolicyChecks: false})
+		err = txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, tSettings.ChainCfgParams.GenesisActivationHeight, nil, &Options{SkipPolicyChecks: false})
 		assert.NoError(t, err, "Expected no error at Genesis activation height with policy checks")
 
-		err = txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, tSettings.ChainCfgParams.GenesisActivationHeight, nil, nil, 0, &Options{SkipPolicyChecks: true})
+		err = txValidator.ValidateTransaction(zeroSatoshiP2PKHTx, tSettings.ChainCfgParams.GenesisActivationHeight, nil, &Options{SkipPolicyChecks: true})
 		assert.NoError(t, err, "Expected no error at Genesis activation height without policy checks")
 	})
 
@@ -832,10 +832,10 @@ func TestZeroSatoshiOutputRequiresOpFalseOpReturn(t *testing.T) {
 		afterGenesisHeight := tSettings.ChainCfgParams.GenesisActivationHeight + 1
 
 		// Should be accepted for both mempool and block validation
-		err := txValidator.ValidateTransaction(zeroSatoshiOpFalseReturnTx, afterGenesisHeight, nil, nil, 0, &Options{SkipPolicyChecks: false})
+		err := txValidator.ValidateTransaction(zeroSatoshiOpFalseReturnTx, afterGenesisHeight, nil, &Options{SkipPolicyChecks: false})
 		assert.NoError(t, err, "OP_FALSE OP_RETURN should be accepted for mempool validation")
 
-		err = txValidator.ValidateTransaction(zeroSatoshiOpFalseReturnTx, afterGenesisHeight, nil, nil, 0, &Options{SkipPolicyChecks: true})
+		err = txValidator.ValidateTransaction(zeroSatoshiOpFalseReturnTx, afterGenesisHeight, nil, &Options{SkipPolicyChecks: true})
 		assert.NoError(t, err, "OP_FALSE OP_RETURN should be accepted for block validation")
 	})
 }
@@ -888,12 +888,12 @@ func TestTx5f37c7a38b5e0bc177a4c353481f30c6de1bc46db534019846d7bc829f58254a(t *t
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 	require.NoError(t, err)
 
-	err = txValidator.ValidateTransaction(tx, 687064, []uint32{687002}, nil, 0, &Options{
+	err = txValidator.ValidateTransaction(tx, 687064, []uint32{687002}, &Options{
 		SkipPolicyChecks: false,
 	})
 	require.Error(t, err)
 
-	err = txValidator.ValidateTransaction(tx, 687064, []uint32{687002}, nil, 0, &Options{
+	err = txValidator.ValidateTransaction(tx, 687064, []uint32{687002}, &Options{
 		SkipPolicyChecks: true,
 	})
 	require.NoError(t, err)
