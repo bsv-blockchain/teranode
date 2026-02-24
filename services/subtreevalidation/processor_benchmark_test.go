@@ -197,8 +197,8 @@ type blockchainMockWrapper struct {
 	*blockchain.Mock
 }
 
-// CalculateMedianTimePastForHeights overrides the mock to return dynamic values
-func (w *blockchainMockWrapper) CalculateMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+// GetMedianTimePastForHeights overrides the mock to return dynamic values
+func (w *blockchainMockWrapper) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
 	// Return a timestamp for each requested height
 	mtps := make([]uint32, len(heights))
 	for i := range mtps {

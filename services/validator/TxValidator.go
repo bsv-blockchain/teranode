@@ -93,8 +93,8 @@ type TxValidatorI interface {
 	//   - tx: The transaction to validate, must be properly initialized
 	//   - blockHeight: The current block height for validation context
 	//   - utxoHeights: Block heights where each input UTXO was created (nil if not available)
-	//   - utxoMTPs: Median Time Past values for (inputHeight-1) for each UTXO (nil if not validating block)
-	//   - blockMTP: Median Time Past value for (blockHeight-1) (0 if not validating block)
+	//   - utxoMTPs: Median Time Past values for inputHeight for each UTXO (nil if not validating block)
+	//   - blockMTP: Median Time Past value for blockHeight-1 (0 if not validating block)
 	//   - validationOptions: Optional validation options to customize validation behavior
 	// Returns:
 	//   - error: Specific validation error with reason if validation fails, nil on success
@@ -203,8 +203,8 @@ func NewTxValidator(logger ulogger.Logger, tSettings *settings.Settings, opts ..
 //   - tx: The transaction to validate
 //   - blockHeight: Current block height for validation context
 //   - utxoHeights: Block heights where each input UTXO was created
-//   - utxoMTPs: Median Time Past values for (inputHeight-1) for each UTXO (nil if not validating block)
-//   - blockMTP: Median Time Past value for (blockHeight-1) (0 if not validating block)
+//   - utxoMTPs: Median Time Past values for inputHeight for each UTXO (nil if not validating block)
+//   - blockMTP: Median Time Past value for blockHeight (0 if not validating block)
 //   - validationOptions: Optional validation options
 //
 // Returns:
@@ -319,8 +319,8 @@ func (tv *TxValidator) ValidateTransactionScripts(tx *bt.Tx, blockHeight uint32,
 //   - tx: The transaction to validate
 //   - blockHeight: Height of the block being validated
 //   - utxoHeights: Heights where each input UTXO was created
-//   - utxoMTPs: Median Time Past values for (inputHeight-1) for each UTXO
-//   - blockMTP: Median Time Past value for (blockHeight-1)
+//   - utxoMTPs: Median Time Past values for inputHeight for each UTXO
+//   - blockMTP: Median Time Past value for blockHeight
 //
 // Returns:
 //   - error: Validation error if sequence locks are not satisfied, nil on success

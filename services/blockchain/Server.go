@@ -1638,7 +1638,7 @@ func (b *Blockchain) GetMedianTimePastByHeights(ctx context.Context, req *blockc
 	)
 	defer deferFn()
 
-	mtps, err := b.CalculateMedianTimePastForHeights(ctx, req.Heights)
+	mtps, err := b.GetMedianTimePastForHeights(ctx, req.Heights)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}

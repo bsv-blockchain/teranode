@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestCalculateMedianTimePastForHeight tests the MTP calculation for a single height.
-func TestCalculateMedianTimePastForHeight(t *testing.T) {
+// TestGetMedianTimePastForHeights_Single tests MTP retrieval for a single height.
+func TestGetMedianTimePastForHeights_Single(t *testing.T) {
 	tests := []struct {
 		name           string
 		height         uint32
@@ -100,8 +100,8 @@ func TestCalculateMedianTimePastForHeight(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			// Calculate MTP
-			mtp, err := ctx.server.CalculateMedianTimePastForHeight(context.Background(), tt.height)
+			// Get MTP
+			mtps, err := ctx.server.GetMedianTimePastForHeights(context.Background(), []uint32{tt.height})
 
 			if tt.expectError {
 				require.Error(t, err)
@@ -109,6 +109,8 @@ func TestCalculateMedianTimePastForHeight(t *testing.T) {
 			}
 
 			require.NoError(t, err)
+			require.Len(t, mtps, 1)
+			mtp := mtps[0]
 
 			// For height < 11, MTP should be 0
 			if tt.height < MedianTimeBlocks {
@@ -137,8 +139,8 @@ func TestCalculateMedianTimePastForHeight(t *testing.T) {
 	}
 }
 
-// TestCalculateMedianTimePastForHeights tests batch MTP calculation.
-func TestCalculateMedianTimePastForHeights(t *testing.T) {
+// TestGetMedianTimePastForHeights_Batch tests batch MTP retrieval.
+func TestGetMedianTimePastForHeights_Batch(t *testing.T) {
 	ctx := setup(t)
 
 	// Override CSVHeight to 0 so MTP is calculated for all blocks in tests
@@ -196,7 +198,7 @@ func TestCalculateMedianTimePastForHeights(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mtps, err := ctx.server.CalculateMedianTimePastForHeights(context.Background(), tt.heights)
+			mtps, err := ctx.server.GetMedianTimePastForHeights(context.Background(), tt.heights)
 
 			if tt.expectError {
 				require.Error(t, err)
@@ -208,9 +210,10 @@ func TestCalculateMedianTimePastForHeights(t *testing.T) {
 
 			// Verify each MTP individually
 			for i, height := range tt.heights {
-				expectedMTP, err := ctx.server.CalculateMedianTimePastForHeight(context.Background(), height)
+				expected, err := ctx.server.GetMedianTimePastForHeights(context.Background(), []uint32{height})
 				require.NoError(t, err)
-				require.Equal(t, expectedMTP, mtps[i], "MTP at index %d for height %d should match individual calculation", i, height)
+				require.Len(t, expected, 1)
+				require.Equal(t, expected[0], mtps[i], "MTP at index %d for height %d should match individual calculation", i, height)
 			}
 		})
 	}
@@ -250,9 +253,10 @@ func TestMedianTimePastStorageAndRetrieval(t *testing.T) {
 		if uint32(i) < MedianTimeBlocks {
 			expectedMTPs = append(expectedMTPs, 0)
 		} else {
-			mtp, err := ctx.server.CalculateMedianTimePastForHeight(context.Background(), uint32(i))
+			blockMTPs, err := ctx.server.GetMedianTimePastForHeights(context.Background(), []uint32{uint32(i)})
 			require.NoError(t, err)
-			expectedMTPs = append(expectedMTPs, mtp)
+			require.Len(t, blockMTPs, 1)
+			expectedMTPs = append(expectedMTPs, blockMTPs[0])
 		}
 	}
 
@@ -293,24 +297,27 @@ func TestMedianTimePastCSVHeight(t *testing.T) {
 
 	t.Run("MTP returns 0 before CSVHeight", func(t *testing.T) {
 		// Height 15 is below CSVHeight (20), so MTP should be 0
-		mtp, err := ctx.server.CalculateMedianTimePastForHeight(context.Background(), 15)
+		mtps, err := ctx.server.GetMedianTimePastForHeights(context.Background(), []uint32{15})
 		require.NoError(t, err)
-		require.Equal(t, uint32(0), mtp, "MTP should be 0 before CSVHeight activation")
+		require.Len(t, mtps, 1)
+		require.Equal(t, uint32(0), mtps[0], "MTP should be 0 before CSVHeight activation")
 	})
 
 	t.Run("MTP returns 0 at CSVHeight if not enough blocks", func(t *testing.T) {
 		// Height 20 is at CSVHeight, but needs 11 previous blocks (heights 9-19)
 		// which are available, so MTP should be calculated
-		mtp, err := ctx.server.CalculateMedianTimePastForHeight(context.Background(), 20)
+		mtps, err := ctx.server.GetMedianTimePastForHeights(context.Background(), []uint32{20})
 		require.NoError(t, err)
-		require.Greater(t, mtp, uint32(0), "MTP should be calculated at CSVHeight if enough blocks exist")
+		require.Len(t, mtps, 1)
+		require.Greater(t, mtps[0], uint32(0), "MTP should be calculated at CSVHeight if enough blocks exist")
 	})
 
 	t.Run("MTP calculated after CSVHeight", func(t *testing.T) {
 		// Height 22 is above CSVHeight and has enough blocks
-		mtp, err := ctx.server.CalculateMedianTimePastForHeight(context.Background(), 22)
+		mtps, err := ctx.server.GetMedianTimePastForHeights(context.Background(), []uint32{22})
 		require.NoError(t, err)
-		require.Greater(t, mtp, uint32(0), "MTP should be calculated after CSVHeight")
+		require.Len(t, mtps, 1)
+		require.Greater(t, mtps[0], uint32(0), "MTP should be calculated after CSVHeight")
 	})
 }
 
@@ -332,10 +339,11 @@ func TestMedianTimePastEdgeCases(t *testing.T) {
 			require.NoError(t, err)
 		}
 
-		mtp, err := ctx.server.CalculateMedianTimePastForHeight(context.Background(), 12)
+		mtps, err := ctx.server.GetMedianTimePastForHeights(context.Background(), []uint32{12})
 		require.NoError(t, err)
+		require.Len(t, mtps, 1)
 		// MTP should be close to constant timestamp (genesis might have different timestamp)
-		require.Greater(t, mtp, uint32(0), "MTP should be calculated when blocks have same timestamp")
+		require.Greater(t, mtps[0], uint32(0), "MTP should be calculated when blocks have same timestamp")
 	})
 
 	t.Run("timestamps in reverse order", func(t *testing.T) {
@@ -352,9 +360,10 @@ func TestMedianTimePastEdgeCases(t *testing.T) {
 		}
 
 		// MTP should still work correctly even with reverse timestamps
-		mtp, err := ctx.server.CalculateMedianTimePastForHeight(context.Background(), 12)
+		mtps, err := ctx.server.GetMedianTimePastForHeights(context.Background(), []uint32{12})
 		require.NoError(t, err)
-		require.Greater(t, mtp, uint32(0), "MTP should be calculated even with reverse timestamps")
+		require.Len(t, mtps, 1)
+		require.Greater(t, mtps[0], uint32(0), "MTP should be calculated even with reverse timestamps")
 	})
 }
 

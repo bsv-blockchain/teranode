@@ -2356,22 +2356,8 @@ func (c *Client) CompleteBlobDeletionBatch(ctx context.Context, batchToken strin
 	return nil
 }
 
-// CalculateMedianTimePastForHeight calculates the Median Time Past (MTP) for a given block height.
-func (c *Client) CalculateMedianTimePastForHeight(ctx context.Context, height uint32) (uint32, error) {
-	mtps, err := c.CalculateMedianTimePastForHeights(ctx, []uint32{height})
-	if err != nil {
-		return 0, err
-	}
-
-	if len(mtps) != 1 {
-		return 0, errors.NewProcessingError("[Client][CalculateMedianTimePastForHeight] expected 1 MTP value, got %d", len(mtps))
-	}
-
-	return mtps[0], nil
-}
-
-// CalculateMedianTimePastForHeights calculates MTP for multiple block heights in batch.
-func (c *Client) CalculateMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+// GetMedianTimePastForHeights returns the MTP for one or more block heights.
+func (c *Client) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
 	resp, err := c.client.GetMedianTimePastByHeights(ctx, &blockchain_api.GetMedianTimePastByHeightsRequest{
 		Heights: heights,
 	})

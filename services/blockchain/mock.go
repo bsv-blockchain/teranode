@@ -1371,17 +1371,8 @@ func (m *Mock) CompleteBlobDeletionBatch(ctx context.Context, token string, comp
 	return args.Error(0)
 }
 
-// CalculateMedianTimePastForHeight mocks the CalculateMedianTimePastForHeight method
-func (m *Mock) CalculateMedianTimePastForHeight(ctx context.Context, height uint32) (uint32, error) {
-	args := m.Called(ctx, height)
-	if args.Error(1) != nil {
-		return 0, args.Error(1)
-	}
-	return uint32(args.Int(0)), args.Error(1)
-}
-
-// CalculateMedianTimePastForHeights mocks the CalculateMedianTimePastForHeights method
-func (m *Mock) CalculateMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+// GetMedianTimePastForHeights mocks the GetMedianTimePastForHeights method
+func (m *Mock) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
 	args := m.Called(ctx, heights)
 	if args.Error(1) != nil {
 		return nil, args.Error(1)

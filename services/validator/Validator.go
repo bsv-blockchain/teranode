@@ -1123,22 +1123,30 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	var utxoMTPs []uint32
 	var blockMTP uint32
 	if validationOptions.SkipPolicyChecks && v.blockchainClient != nil {
-		// Build list of heights we need MTPs for:
-		// - MTP(inputHeight-1) for each input
-		// - MTP(blockHeight-1) for the block being validated
+		// Build list of heights we need MTPs for.
+		//
+		// Teranode stores MTP(H) = median of block timestamps [H-11, H-1].
+		// BSV's GetMedianTimePast() at block H = median of [H-10, H] (includes H itself),
+		// so BSV MTP(H) == Teranode stored_mtp(H+1).
+		//
+		// For UTXO coin time: BSV uses GetAncestor(nCoinHeight-1)->GetMedianTimePast()
+		//   = median of [nCoinHeight-11, nCoinHeight-1]
+		//   = Teranode stored_mtp(nCoinHeight) → use utxoHeight directly.
+		//
+		// For block time: BSV uses block.GetPrev()->GetMedianTimePast()
+		//   = median of [blockHeight-11, blockHeight-1]
+		//   = Teranode stored_mtp(blockHeight). However, block N's MTP is only stored
+		//   AFTER block N is persisted, so during validation stored_mtp(blockHeight) is
+		//   unavailable (returns 0). We use stored_mtp(blockHeight-1) instead, which
+		//   covers [blockHeight-12, blockHeight-2] — a 1-block-shifted approximation.
 		heightsNeeded := make([]uint32, 0, len(utxoHeights)+1)
 
-		// Add MTP heights for each UTXO (inputHeight-1)
+		// Add MTP heights for each UTXO: stored_mtp(utxoHeight) = median of [utxoHeight-11, utxoHeight-1]
 		for _, utxoHeight := range utxoHeights {
-			if utxoHeight > 0 {
-				heightsNeeded = append(heightsNeeded, utxoHeight-1)
-			} else {
-				// For height 0 (genesis), MTP is 0
-				heightsNeeded = append(heightsNeeded, 0)
-			}
+			heightsNeeded = append(heightsNeeded, utxoHeight)
 		}
 
-		// Add MTP height for the block (blockHeight-1)
+		// Add MTP height for the block: use blockHeight-1 since block N is not yet persisted
 		blockMTPHeight := blockHeight
 		if blockHeight > 0 {
 			blockMTPHeight = blockHeight - 1
@@ -1146,7 +1154,7 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		heightsNeeded = append(heightsNeeded, blockMTPHeight)
 
 		// Batch fetch all MTPs
-		mtps, err := v.blockchainClient.CalculateMedianTimePastForHeights(ctx, heightsNeeded)
+		mtps, err := v.blockchainClient.GetMedianTimePastForHeights(ctx, heightsNeeded)
 		if err != nil {
 			span.RecordError(err)
 			return errors.NewProcessingError("[Validator][validateTransaction] failed to fetch MTPs for BIP68 validation", err)
