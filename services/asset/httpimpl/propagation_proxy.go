@@ -1,6 +1,7 @@
 package httpimpl
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -11,15 +12,8 @@ import (
 // ProxyPropagationTx creates an Echo handler that reverse-proxies transaction
 // submissions to the propagation service. The request path is rewritten from
 // /api/v1/tx to /tx to match the propagation service's HTTP endpoint.
-func (h *HTTP) ProxyPropagationTx() echo.HandlerFunc {
-	target, err := url.Parse(h.settings.Asset.PropagationProxyAddress)
-	if err != nil {
-		h.logger.Errorf("[Asset] failed to parse propagation proxy address %q: %v", h.settings.Asset.PropagationProxyAddress, err)
-		return func(c echo.Context) error {
-			return echo.NewHTTPError(http.StatusBadGateway, "propagation proxy misconfigured")
-		}
-	}
-
+// The target URL must be pre-validated by the caller.
+func (h *HTTP) ProxyPropagationTx(target *url.URL) echo.HandlerFunc {
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = target.Scheme
@@ -28,11 +22,19 @@ func (h *HTTP) ProxyPropagationTx() echo.HandlerFunc {
 			req.URL.RawQuery = ""
 			req.Host = target.Host
 		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			h.logger.Errorf("[Asset] propagation proxy error: %v", err)
+			prometheusAssetHTTPProxyPropagationTx.WithLabelValues("ERROR", http.StatusText(http.StatusBadGateway)).Inc()
+			w.WriteHeader(http.StatusBadGateway)
+		},
 	}
 
 	return func(c echo.Context) error {
-		prometheusAssetHTTPProxyPropagationTx.WithLabelValues("ProxyPropagationTx", "request").Inc()
 		proxy.ServeHTTP(c.Response(), c.Request())
+		status := c.Response().Status
+		if status >= 200 && status < 400 {
+			prometheusAssetHTTPProxyPropagationTx.WithLabelValues("OK", fmt.Sprintf("%d", status)).Inc()
+		}
 		return nil
 	}
 }
