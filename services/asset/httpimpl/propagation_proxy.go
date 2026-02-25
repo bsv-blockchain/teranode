@@ -32,8 +32,11 @@ func (h *HTTP) ProxyPropagationTx(target *url.URL) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		proxy.ServeHTTP(c.Response(), c.Request())
 		status := c.Response().Status
+		statusStr := fmt.Sprintf("%d", status)
 		if status >= 200 && status < 400 {
-			prometheusAssetHTTPProxyPropagationTx.WithLabelValues("OK", fmt.Sprintf("%d", status)).Inc()
+			prometheusAssetHTTPProxyPropagationTx.WithLabelValues("OK", statusStr).Inc()
+		} else if status >= 400 {
+			prometheusAssetHTTPProxyPropagationTx.WithLabelValues("ERROR", http.StatusText(status)).Inc()
 		}
 		return nil
 	}
