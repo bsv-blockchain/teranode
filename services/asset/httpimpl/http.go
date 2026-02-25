@@ -202,10 +202,6 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		}
 	}
 
-	// backwards compatibility for legacy endpoints - remove in future
-	apiGroup.POST("/txs", h.GetTransactions())       // BINARY_STREAM only
-	apiGroup.POST("/:hash/txs", h.GetTransactions()) // BINARY_STREAM only
-
 	apiGroup.GET("/txmeta/:hash/json", h.GetTransactionMeta(JSON))
 
 	apiGroup.GET("/txmeta_raw/:hash", h.GetTxMetaByTxID(BINARY_STREAM))
