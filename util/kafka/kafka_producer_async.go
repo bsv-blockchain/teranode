@@ -317,15 +317,12 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 					break
 				}
 
-				var key sarama.ByteEncoder
-				if msgBytes.Key != nil {
-					key = sarama.ByteEncoder(msgBytes.Key)
-				}
-
 				message := &sarama.ProducerMessage{
 					Topic: c.Config.Topic,
-					Key:   key,
 					Value: sarama.ByteEncoder(msgBytes.Value),
+				}
+				if msgBytes.Key != nil {
+					message.Key = sarama.ByteEncoder(msgBytes.Key)
 				}
 
 				// Check if closed again right before sending to avoid race condition

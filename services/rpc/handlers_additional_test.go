@@ -1171,11 +1171,11 @@ func TestIPOrSubnetValidationExtended(t *testing.T) {
 		{"127.0.0.1", true, "valid IPv4"},
 		{"192.168.1.0/24", true, "valid IPv4 subnet"},
 		{"::1", true, "valid IPv6 localhost"},
-		{"2001:db8::/32", false, "IPv6 subnet - function has bug with port removal"},
+		{"2001:db8::/32", true, "valid IPv6 subnet"},
 		{"256.256.256.256", false, "invalid IPv4 - out of range"},
 		{"192.168.1.0/33", false, "invalid IPv4 subnet - mask too large"},
 		{"not.an.ip", false, "completely invalid"},
-		{"", true, "empty string - function behavior"},
+		{"", false, "empty string"},
 		{"192.168.1.1:8080", false, "IPv4 with port"},
 		{"[::1]:8080", false, "IPv6 with port"},
 	}
@@ -3073,7 +3073,7 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		assert.Contains(t, rpcErr.Message, "IPOrSubnet is required")
 	})
 
-	t.Run("invalid IP format", func(t *testing.T) {
+	t.Run("invalid IP format accepted as potential PeerID", func(t *testing.T) {
 		s := &RPCServer{
 			logger: logger,
 			settings: &settings.Settings{
@@ -3082,18 +3082,52 @@ func TestHandleIsBannedComprehensive(t *testing.T) {
 		}
 
 		cmd := &bsvjson.IsBannedCmd{
-			IPOrSubnet: "not-an-ip", // Invalid IP
+			IPOrSubnet: "not-an-ip", // Not a valid IP, treated as PeerID
 		}
 
 		result, err := handleIsBanned(context.Background(), s, cmd, nil)
 
-		require.Error(t, err)
-		assert.Nil(t, result)
-
-		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.NoError(t, err)
+		banned, ok := result.(bool)
 		require.True(t, ok)
-		assert.Equal(t, bsvjson.ErrRPCInvalidParameter, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Invalid IP or subnet")
+		assert.False(t, banned) // No clients configured, so not banned
+	})
+
+	t.Run("PeerID skips legacy client", func(t *testing.T) {
+		legacyCalled := false
+		mockP2P := &mockP2PClient{
+			isBannedFunc: func(ctx context.Context, ipOrSubnet string) (bool, error) {
+				assert.Equal(t, "test-peer-id", ipOrSubnet)
+				return true, nil
+			},
+		}
+		mockPeer := &mockLegacyPeerClient{
+			isBannedFunc: func(ctx context.Context, req *peer_api.IsBannedRequest) (*peer_api.IsBannedResponse, error) {
+				legacyCalled = true
+				return &peer_api.IsBannedResponse{IsBanned: false}, nil
+			},
+		}
+
+		s := &RPCServer{
+			logger:          logger,
+			p2pClient:       mockP2P,
+			legacyP2PClient: mockPeer,
+			settings: &settings.Settings{
+				ChainCfgParams: &chaincfg.MainNetParams,
+			},
+		}
+
+		cmd := &bsvjson.IsBannedCmd{
+			IPOrSubnet: "test-peer-id", // Not a valid IP, so legacy should be skipped
+		}
+
+		result, err := handleIsBanned(context.Background(), s, cmd, nil)
+
+		require.NoError(t, err)
+		banned, ok := result.(bool)
+		require.True(t, ok)
+		assert.True(t, banned)
+		assert.False(t, legacyCalled, "legacy client should not be called for PeerID input")
 	})
 
 	t.Run("p2p client returns banned", func(t *testing.T) {

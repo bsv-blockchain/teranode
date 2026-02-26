@@ -46,6 +46,7 @@ const (
 	BlockchainAPI_GetBlockHeadersFromTill_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromTill"
 	BlockchainAPI_GetBlockHeadersFromHeight_FullMethodName            = "/blockchain_api.BlockchainAPI/GetBlockHeadersFromHeight"
 	BlockchainAPI_GetBlockHeadersByHeight_FullMethodName              = "/blockchain_api.BlockchainAPI/GetBlockHeadersByHeight"
+	BlockchainAPI_GetMedianTimePastByHeights_FullMethodName           = "/blockchain_api.BlockchainAPI/GetMedianTimePastByHeights"
 	BlockchainAPI_GetBlocksByHeight_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlocksByHeight"
 	BlockchainAPI_FindBlocksContainingSubtree_FullMethodName          = "/blockchain_api.BlockchainAPI/FindBlocksContainingSubtree"
 	BlockchainAPI_GetBlockHeaderIDs_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
@@ -146,6 +147,9 @@ type BlockchainAPIClient interface {
 	GetBlockHeadersFromHeight(ctx context.Context, in *GetBlockHeadersFromHeightRequest, opts ...grpc.CallOption) (*GetBlockHeadersFromHeightResponse, error)
 	// GetBlockHeadersByHeight retrieves block headers between two specified heights.
 	GetBlockHeadersByHeight(ctx context.Context, in *GetBlockHeadersByHeightRequest, opts ...grpc.CallOption) (*GetBlockHeadersByHeightResponse, error)
+	// GetMedianTimePastByHeights retrieves Median Time Past (MTP) values for specified block heights.
+	// This is used for BIP68 relative locktime verification.
+	GetMedianTimePastByHeights(ctx context.Context, in *GetMedianTimePastByHeightsRequest, opts ...grpc.CallOption) (*GetMedianTimePastByHeightsResponse, error)
 	// GetBlocksByHeight retrieves full blocks between two specified heights.
 	GetBlocksByHeight(ctx context.Context, in *GetBlocksByHeightRequest, opts ...grpc.CallOption) (*GetBlocksByHeightResponse, error)
 	// FindBlocksContainingSubtree finds all blocks that contain the specified subtree hash.
@@ -474,6 +478,16 @@ func (c *blockchainAPIClient) GetBlockHeadersByHeight(ctx context.Context, in *G
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockHeadersByHeightResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeadersByHeight_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) GetMedianTimePastByHeights(ctx context.Context, in *GetMedianTimePastByHeightsRequest, opts ...grpc.CallOption) (*GetMedianTimePastByHeightsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMedianTimePastByHeightsResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_GetMedianTimePastByHeights_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -992,6 +1006,9 @@ type BlockchainAPIServer interface {
 	GetBlockHeadersFromHeight(context.Context, *GetBlockHeadersFromHeightRequest) (*GetBlockHeadersFromHeightResponse, error)
 	// GetBlockHeadersByHeight retrieves block headers between two specified heights.
 	GetBlockHeadersByHeight(context.Context, *GetBlockHeadersByHeightRequest) (*GetBlockHeadersByHeightResponse, error)
+	// GetMedianTimePastByHeights retrieves Median Time Past (MTP) values for specified block heights.
+	// This is used for BIP68 relative locktime verification.
+	GetMedianTimePastByHeights(context.Context, *GetMedianTimePastByHeightsRequest) (*GetMedianTimePastByHeightsResponse, error)
 	// GetBlocksByHeight retrieves full blocks between two specified heights.
 	GetBlocksByHeight(context.Context, *GetBlocksByHeightRequest) (*GetBlocksByHeightResponse, error)
 	// FindBlocksContainingSubtree finds all blocks that contain the specified subtree hash.
@@ -1164,6 +1181,9 @@ func (UnimplementedBlockchainAPIServer) GetBlockHeadersFromHeight(context.Contex
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeadersByHeight(context.Context, *GetBlockHeadersByHeightRequest) (*GetBlockHeadersByHeightResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlockHeadersByHeight not implemented")
+}
+func (UnimplementedBlockchainAPIServer) GetMedianTimePastByHeights(context.Context, *GetMedianTimePastByHeightsRequest) (*GetMedianTimePastByHeightsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMedianTimePastByHeights not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBlocksByHeight(context.Context, *GetBlocksByHeightRequest) (*GetBlocksByHeightResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlocksByHeight not implemented")
@@ -1731,6 +1751,24 @@ func _BlockchainAPI_GetBlockHeadersByHeight_Handler(srv interface{}, ctx context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetBlockHeadersByHeight(ctx, req.(*GetBlockHeadersByHeightRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_GetMedianTimePastByHeights_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMedianTimePastByHeightsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).GetMedianTimePastByHeights(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_GetMedianTimePastByHeights_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).GetMedianTimePastByHeights(ctx, req.(*GetMedianTimePastByHeightsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2636,6 +2674,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockHeadersByHeight",
 			Handler:    _BlockchainAPI_GetBlockHeadersByHeight_Handler,
+		},
+		{
+			MethodName: "GetMedianTimePastByHeights",
+			Handler:    _BlockchainAPI_GetMedianTimePastByHeights_Handler,
 		},
 		{
 			MethodName: "GetBlocksByHeight",

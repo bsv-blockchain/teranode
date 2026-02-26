@@ -2035,15 +2035,9 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 	}
 
-	// validate ip or subnet
-	if !isIPOrSubnet(c.IPOrSubnet) {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInvalidParameter,
-			Message: "Invalid IP or subnet",
-		}
-	}
+	isIP := isIPOrSubnet(c.IPOrSubnet)
 
-	// check if P2P service is available
+	// P2P service handles both IPs and PeerIDs (checks banList and banManager)
 	var p2pBanned bool
 
 	if s.p2pClient != nil {
@@ -2055,10 +2049,10 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 	}
 
-	// check if legacy peer service is available
+	// Legacy service only handles IPs
 	var peerBanned bool
 
-	if s.legacyP2PClient != nil {
+	if isIP && s.legacyP2PClient != nil {
 		isBannedLegacy, err := s.legacyP2PClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
 		if err != nil {
 			s.logger.Warnf("Failed to check if banned in legacy peer service: %v", err)
@@ -2696,19 +2690,19 @@ func calculateHashRate(difficulty float64, blockTime float64) float64 {
 // Returns:
 //   - bool: true if the string is a valid IP or subnet, false otherwise
 func isIPOrSubnet(ipOrSubnet string) bool {
+	if ipOrSubnet == "" {
+		return false
+	}
+
 	// no slash means ip
 	if !strings.Contains(ipOrSubnet, "/") {
 		_, err := net.ResolveIPAddr("ip", ipOrSubnet)
 		return err == nil
 	}
 
-	if strings.Contains(ipOrSubnet, ":") {
-		// remove port
-		ipOrSubnet = strings.Split(ipOrSubnet, ":")[0]
-	}
-
+	// CIDR notation never includes ports, so pass directly to ParseCIDR.
+	// The previous port-stripping logic broke IPv6 CIDR (e.g. "2001:db8::/32").
 	_, _, err := net.ParseCIDR(ipOrSubnet)
-
 	return err == nil
 }
 

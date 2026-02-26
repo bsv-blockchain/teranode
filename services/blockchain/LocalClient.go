@@ -592,3 +592,38 @@ func (c *LocalClient) AcquireBlobDeletionBatch(ctx context.Context, height uint3
 func (c *LocalClient) CompleteBlobDeletionBatch(ctx context.Context, batchToken string, completedIDs []int64, failedIDs []int64, maxRetries int) error {
 	return errors.NewProcessingError("not implemented")
 }
+
+// GetMedianTimePastForHeights returns the MTP for one or more block heights.
+// MTP values are read from pre-stored block metadata rather than recomputed on demand.
+func (c *LocalClient) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	if len(heights) == 0 {
+		return []uint32{}, nil
+	}
+
+	minHeight, maxHeight := heights[0], heights[0]
+	for _, h := range heights[1:] {
+		if h < minHeight {
+			minHeight = h
+		}
+		if h > maxHeight {
+			maxHeight = h
+		}
+	}
+
+	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, minHeight, maxHeight)
+	if err != nil {
+		return nil, errors.NewProcessingError("[LocalClient][GetMedianTimePastForHeights] failed to get block headers from %d to %d", minHeight, maxHeight, err)
+	}
+
+	mtpByHeight := make(map[uint32]uint32, len(metas))
+	for _, meta := range metas {
+		mtpByHeight[meta.Height] = meta.MedianTimePast
+	}
+
+	mtps := make([]uint32, len(heights))
+	for i, height := range heights {
+		mtps[i] = mtpByHeight[height]
+	}
+
+	return mtps, nil
+}

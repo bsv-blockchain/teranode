@@ -42,7 +42,7 @@ func createTestClient(mockClient *mockBlockAssemblyAPIClient, batchSize int) *Cl
 			client.sendBatchToBlockAssembly(context.Background(), batch)
 		}
 		duration := time.Duration(100) * time.Millisecond
-		client.batcher = *batcher.New(batchSize, duration, sendBatch, true)
+		client.batcher = batcher.New(batchSize, duration, sendBatch, true)
 	}
 
 	return client

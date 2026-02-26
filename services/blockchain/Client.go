@@ -608,13 +608,14 @@ func (c *Client) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *m
 	}
 
 	meta := &model.BlockHeaderMeta{
-		Height:      resp.Height,
-		TxCount:     resp.TxCount,
-		SizeInBytes: resp.SizeInBytes,
-		Miner:       resp.Miner,
-		BlockTime:   resp.BlockTime,
-		Timestamp:   resp.Timestamp,
-		ChainWork:   resp.ChainWork,
+		Height:         resp.Height,
+		TxCount:        resp.TxCount,
+		SizeInBytes:    resp.SizeInBytes,
+		Miner:          resp.Miner,
+		BlockTime:      resp.BlockTime,
+		Timestamp:      resp.Timestamp,
+		ChainWork:      resp.ChainWork,
+		MedianTimePast: resp.MedianTimePast,
 	}
 
 	return header, meta, nil
@@ -692,18 +693,19 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 	}
 
 	meta := &model.BlockHeaderMeta{
-		ID:          resp.Id,
-		Height:      resp.Height,
-		TxCount:     resp.TxCount,
-		SizeInBytes: resp.SizeInBytes,
-		Miner:       resp.Miner,
-		PeerID:      resp.PeerId,
-		BlockTime:   resp.BlockTime,
-		Timestamp:   resp.Timestamp,
-		ChainWork:   resp.ChainWork,
-		MinedSet:    resp.MinedSet,
-		SubtreesSet: resp.SubtreesSet,
-		Invalid:     resp.Invalid,
+		ID:             resp.Id,
+		Height:         resp.Height,
+		TxCount:        resp.TxCount,
+		SizeInBytes:    resp.SizeInBytes,
+		Miner:          resp.Miner,
+		PeerID:         resp.PeerId,
+		BlockTime:      resp.BlockTime,
+		Timestamp:      resp.Timestamp,
+		ChainWork:      resp.ChainWork,
+		MinedSet:       resp.MinedSet,
+		SubtreesSet:    resp.SubtreesSet,
+		Invalid:        resp.Invalid,
+		MedianTimePast: resp.MedianTimePast,
 	}
 
 	if resp.ProcessedAt != nil {
@@ -2352,4 +2354,16 @@ func (c *Client) CompleteBlobDeletionBatch(ctx context.Context, batchToken strin
 	}
 
 	return nil
+}
+
+// GetMedianTimePastForHeights returns the MTP for one or more block heights.
+func (c *Client) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	resp, err := c.client.GetMedianTimePastByHeights(ctx, &blockchain_api.GetMedianTimePastByHeightsRequest{
+		Heights: heights,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.MedianTimePast, nil
 }

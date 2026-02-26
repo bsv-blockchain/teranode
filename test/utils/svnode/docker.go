@@ -2,6 +2,7 @@ package svnode
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	helper "github.com/bsv-blockchain/teranode/test/utils"
 	"github.com/docker/docker/api/types/container"
@@ -70,7 +72,6 @@ func (d *DockerSVNode) Start(ctx context.Context) error {
 				nat.Port(rpcPortStr): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", d.opts.RPCPort)}},
 				nat.Port(p2pPortStr): []nat.PortBinding{{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", d.opts.P2PPort)}},
 			}
-			// Use host network mode for easier connectivity with teranode running on host
 			hc.NetworkMode = "host"
 			// Mount the config file (not read-only as entrypoint needs to chown it)
 			hc.Binds = []string{
@@ -250,6 +251,86 @@ func (d *DockerSVNode) Generate(numBlocks int) ([]string, error) {
 	return result.Result, nil
 }
 
+// SubmitBlock submits a raw block to the network
+func (d *DockerSVNode) SubmitBlock(blockHex string) (string, error) {
+	resp, err := helper.CallRPC(d.rpcURL, "submitblock", []interface{}{blockHex})
+	if err != nil {
+		return "", err
+	}
+
+	var result struct {
+		Result interface{} `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+		return "", errors.NewProcessingError("failed to parse submitblock response", err)
+	}
+
+	if result.Error != nil {
+		return "", errors.NewProcessingError("submitblock failed: %s", result.Error.Message)
+	}
+
+	// submitblock returns null on success, or an error string on failure
+	if result.Result == nil {
+		return "", nil // Success
+	}
+
+	return result.Result.(string), nil
+}
+
+// SetMockTime sets BSV regtest node's internal clock (regtest-only RPC).
+// Pass 0 to reset to real time.
+func (d *DockerSVNode) SetMockTime(timestamp int64) error {
+	resp, err := helper.CallRPC(d.rpcURL, "setmocktime", []interface{}{timestamp})
+	if err != nil {
+		return err
+	}
+
+	var result struct {
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+		return errors.NewProcessingError("failed to parse setmocktime response", err)
+	}
+
+	if result.Error != nil {
+		return errors.NewProcessingError("setmocktime failed: %s", result.Error.Message)
+	}
+
+	return nil
+}
+
+// GetBlockHeader returns block header information
+func (d *DockerSVNode) GetBlockHeader(blockHash string, verbose bool) (interface{}, error) {
+	verboseInt := 0
+	if verbose {
+		verboseInt = 1
+	}
+
+	resp, err := helper.CallRPC(d.rpcURL, "getblockheader", []interface{}{blockHash, verboseInt})
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Result interface{} `json:"result"`
+	}
+
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+		return nil, errors.NewProcessingError("failed to parse getblockheader response", err)
+	}
+
+	return result.Result, nil
+}
+
 // GetBlockchainInfo returns blockchain information
 func (d *DockerSVNode) GetBlockchainInfo() (map[string]interface{}, error) {
 	resp, err := helper.CallRPC(d.rpcURL, "getblockchaininfo", []interface{}{})
@@ -382,6 +463,73 @@ func (d *DockerSVNode) SendRawTransaction(txHex string) (string, error) {
 
 	if err := json.Unmarshal([]byte(resp), &result); err != nil {
 		return "", errors.NewProcessingError("failed to parse sendrawtransaction response", err)
+	}
+
+	return result.Result, nil
+}
+
+// SendToAddress sends an amount to a given address
+func (d *DockerSVNode) SendToAddress(address string, amount float64) (string, error) {
+	resp, err := helper.CallRPC(d.rpcURL, "sendtoaddress", []interface{}{address, amount})
+	if err != nil {
+		return "", err
+	}
+
+	var result struct {
+		Result string `json:"result"`
+	}
+
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+		return "", errors.NewProcessingError("failed to parse sendtoaddress response", err)
+	}
+
+	return result.Result, nil
+}
+
+// GetRawTransaction gets a raw transaction by txid
+func (d *DockerSVNode) GetRawTransaction(txid string) (*bt.Tx, error) {
+	// Get raw transaction as hex (verbosity 0)
+	resp, err := helper.CallRPC(d.rpcURL, "getrawtransaction", []interface{}{txid, 0})
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Result string `json:"result"`
+	}
+
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+		return nil, errors.NewProcessingError("failed to parse getrawtransaction response", err)
+	}
+
+	// Decode hex to transaction
+	txBytes, err := hex.DecodeString(result.Result)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to decode transaction hex", err)
+	}
+
+	tx, err := bt.NewTxFromBytes(txBytes)
+	if err != nil {
+		return nil, errors.NewProcessingError("failed to parse transaction bytes", err)
+	}
+
+	return tx, nil
+}
+
+// GetRawTransactionVerbose gets verbose transaction info by txid (requires txindex=1)
+// Returns the full transaction details including confirmations, blockhash, etc.
+func (d *DockerSVNode) GetRawTransactionVerbose(txid string) (map[string]interface{}, error) {
+	resp, err := helper.CallRPC(d.rpcURL, "getrawtransaction", []interface{}{txid, 1})
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Result map[string]interface{} `json:"result"`
+	}
+
+	if err := json.Unmarshal([]byte(resp), &result); err != nil {
+		return nil, errors.NewProcessingError("failed to parse getrawtransaction verbose response", err)
 	}
 
 	return result.Result, nil

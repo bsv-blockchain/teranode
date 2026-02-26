@@ -3,6 +3,8 @@ package svnode
 import (
 	"context"
 	"time"
+
+	"github.com/bsv-blockchain/go-bt/v2"
 )
 
 const (
@@ -35,6 +37,11 @@ type SVNodeI interface {
 
 	// Block generation
 	Generate(numBlocks int) ([]string, error)
+	SubmitBlock(blockHex string) (string, error)
+	GetBlockHeader(blockHash string, verbose bool) (interface{}, error)
+
+	// Regtest time control (test-only)
+	SetMockTime(timestamp int64) error
 
 	// Network
 	GetPeerInfo() ([]map[string]interface{}, error)
@@ -45,6 +52,9 @@ type SVNodeI interface {
 
 	// Transactions
 	SendRawTransaction(txHex string) (string, error)
+	SendToAddress(address string, amount float64) (string, error)
+	GetRawTransaction(txid string) (*bt.Tx, error)
+	GetRawTransactionVerbose(txid string) (map[string]interface{}, error)
 
 	// Waiting helpers
 	WaitForBlockHeight(ctx context.Context, height int, timeout time.Duration) error
