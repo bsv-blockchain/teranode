@@ -489,7 +489,6 @@ func TestBanListRPCAbsoluteTimeE2E(t *testing.T) {
 //
 // Workaround: Use gRPC P2P client (see TestBanListGRPCE2E) for IPv6 subnet bans.
 func TestBanListRPCIPv6SubnetBug(t *testing.T) {
-	t.Skip("KNOWN BUG: isIPOrSubnet in handlers.go:2681-2684 incorrectly parses IPv6 CIDR notation")
 
 	RunSequentialTest(t, func(t *testing.T) {
 		const testAPIKey = "test-ipv6-subnet-bug-api-key" //nolint:gosec // test API key, not a real credential
@@ -541,7 +540,6 @@ func TestBanListRPCIPv6SubnetBug(t *testing.T) {
 // 2. Remove IP validation and accept PeerID strings for banManager check
 // 3. Support both: check banList for IP format, banManager for PeerID format
 func TestIsBannedRPCBug(t *testing.T) {
-	t.Skip("KNOWN BUG: 'isbanned' RPC validates for IP format but checks PeerID-based bans - see handlers.go:2019-2030")
 
 	RunSequentialTest(t, func(t *testing.T) {
 		const testAPIKey = "test-isbanned-rpc-api-key"
