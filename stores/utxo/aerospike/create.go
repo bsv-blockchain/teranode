@@ -219,14 +219,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		done:         errCh,
 	}
 
-	if s.storeBatcher != nil {
-		s.storeBatcher.Put(item)
-	} else {
-		// if the batcher is disabled, we still want to process the request in a go routine
-		go func() {
-			s.sendStoreBatch([]*BatchStoreItem{item})
-		}()
-	}
+	s.storeBatcher.Put(item)
 
 	err = <-errCh
 	if err != nil {

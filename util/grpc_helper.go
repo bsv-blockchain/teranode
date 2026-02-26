@@ -99,6 +99,9 @@ func GetGRPCClient(_ context.Context, address string, connectionOptions *Connect
 		connectionOptions.MaxMessageSize = oneGigabyte
 	}
 
+	// Get GRPC tuning parameters from settings (respects HighThroughputMode)
+	grpcSettings := &tSettings.GRPC
+
 	opts := []grpc.DialOption{
 		// grpc.WithDefaultServiceConfig(`{"loadBalancingPolicy":"round_robin"}`),
 		grpc.WithDefaultServiceConfig(`{"loadBalancingConfig": [{"round_robin":{}}]}`),
@@ -107,6 +110,15 @@ func GetGRPCClient(_ context.Context, address string, connectionOptions *Connect
 			grpc.MaxCallRecvMsgSize(connectionOptions.MaxMessageSize),
 		),
 		grpc.WithDisableServiceConfig(),
+
+		// HTTP/2 flow control windows - larger values allow more data in-flight
+		// Values are determined by grpc_high_throughput_mode setting
+		grpc.WithInitialWindowSize(grpcSettings.GetInitialWindowSize()),
+		grpc.WithInitialConnWindowSize(grpcSettings.GetInitialConnWindowSize()),
+
+		// Read/write buffer sizes - larger values reduce syscall overhead
+		grpc.WithReadBufferSize(grpcSettings.GetReadBufferSize()),
+		grpc.WithWriteBufferSize(grpcSettings.GetWriteBufferSize()),
 	}
 
 	if connectionOptions.SecurityLevel == 0 {
@@ -123,10 +135,11 @@ func GetGRPCClient(_ context.Context, address string, connectionOptions *Connect
 
 	// Add client-side keepalive for faster detection of dead connections
 	// This complements application-level heartbeat by detecting transport-level issues
+	// Note: Time must be >= server's MinTime enforcement policy
 	opts = append(opts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
-		Time:                30 * time.Second, // Send pings every 30 seconds if no activity
-		Timeout:             10 * time.Second, // Wait 10 seconds for ping ack before considering dead
-		PermitWithoutStream: true,             // Allow pings even without active streams
+		Time:                time.Duration(grpcSettings.KeepaliveTime) * time.Second,
+		Timeout:             time.Duration(grpcSettings.KeepaliveTimeout) * time.Second,
+		PermitWithoutStream: grpcSettings.PermitWithoutStream,
 	}))
 
 	// Preallocate interceptor slices with reasonable capacity
@@ -223,16 +236,39 @@ func getGRPCServer(connectionOptions *ConnectionOptions, opts []grpc.ServerOptio
 		connectionOptions.MaxMessageSize = oneGigabyte
 	}
 
+	// Get GRPC tuning parameters from settings (respects HighThroughputMode)
+	grpcSettings := &tSettings.GRPC
+
 	opts = append(opts,
 		grpc.MaxSendMsgSize(connectionOptions.MaxMessageSize),
 		grpc.MaxRecvMsgSize(connectionOptions.MaxMessageSize),
+
+		// HTTP/2 flow control and buffer settings - values determined by grpc_high_throughput_mode
+		grpc.InitialWindowSize(grpcSettings.GetInitialWindowSize()),
+		grpc.InitialConnWindowSize(grpcSettings.GetInitialConnWindowSize()),
+		grpc.ReadBufferSize(grpcSettings.GetReadBufferSize()),
+		grpc.WriteBufferSize(grpcSettings.GetWriteBufferSize()),
+		grpc.MaxConcurrentStreams(grpcSettings.GetMaxConcurrentStreams()),
 	)
 
-	if connectionOptions.MaxConnectionAge > 0 {
-		opts = append(opts, grpc.KeepaliveParams(keepalive.ServerParameters{
-			MaxConnectionAge: connectionOptions.MaxConnectionAge,
-		}))
+	// Server keepalive parameters for connection management
+	serverParams := keepalive.ServerParameters{
+		MaxConnectionIdle:     time.Duration(grpcSettings.MaxConnectionIdleSeconds) * time.Second,
+		MaxConnectionAgeGrace: 30 * time.Second, // Allow 30 seconds for pending RPCs to complete after MaxConnectionAge
+		Time:                  60 * time.Second, // Server pings client every 60 seconds if no activity
+		Timeout:               time.Duration(grpcSettings.KeepaliveTimeout) * time.Second,
 	}
+	if connectionOptions.MaxConnectionAge > 0 {
+		serverParams.MaxConnectionAge = connectionOptions.MaxConnectionAge
+	}
+	opts = append(opts, grpc.KeepaliveParams(serverParams))
+
+	// Enforcement policy allows clients to send pings at the configured rate
+	// This prevents ENHANCE_YOUR_CALM / "too_many_pings" errors from client keepalives
+	opts = append(opts, grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+		MinTime:             time.Duration(grpcSettings.ServerMinPingTime) * time.Second,
+		PermitWithoutStream: grpcSettings.PermitWithoutStream,
+	}))
 
 	// Interceptors.  The order may be important here.
 	unaryInterceptors := make([]grpc.UnaryServerInterceptor, 0, 2)
