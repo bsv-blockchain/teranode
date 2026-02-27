@@ -13,10 +13,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.8
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0
-	github.com/bsv-blockchain/go-bt/v2 v2.5.3
+	github.com/bsv-blockchain/go-bt/v2 v2.6.0
 	github.com/bsv-blockchain/go-chaincfg v1.5.3
-	github.com/bsv-blockchain/go-sdk v1.2.17
-	github.com/bsv-blockchain/go-subtree v1.1.12
+	github.com/bsv-blockchain/go-sdk v1.2.18
+	github.com/bsv-blockchain/go-subtree v1.2.0
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.3.2
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
@@ -61,12 +61,12 @@ require (
 	go.opentelemetry.io/otel/sdk v1.38.0
 	go.opentelemetry.io/otel/trace v1.39.0
 	go.uber.org/atomic v1.11.0
-	golang.org/x/crypto v0.47.0
+	golang.org/x/crypto v0.48.0
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96
 	golang.org/x/sync v0.19.0
-	golang.org/x/sys v0.40.0
-	golang.org/x/term v0.39.0
-	golang.org/x/text v0.33.0
+	golang.org/x/sys v0.41.0
+	golang.org/x/term v0.40.0
+	golang.org/x/text v0.34.0
 	golang.org/x/time v0.14.0
 	google.golang.org/grpc v1.77.0
 	google.golang.org/protobuf v1.36.11
@@ -197,7 +197,7 @@ require (
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.7
 	github.com/bsv-blockchain/go-safe-conversion v1.1.2
 	github.com/bsv-blockchain/go-tx-map v1.3.2
-	github.com/bsv-blockchain/go-wire v1.1.4
+	github.com/bsv-blockchain/go-wire v1.2.0
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
