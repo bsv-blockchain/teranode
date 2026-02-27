@@ -281,7 +281,7 @@ func logMemStats(t *testing.T, label string, stats *runtime.MemStats) {
 //	go tool pprof -http=:8080 handleblockdirect_testnet_cpu.prof
 //	go tool pprof -http=:8081 handleblockdirect_testnet_mem.prof
 func TestHandleBlockDirect_TestnetLargeBlock(t *testing.T) {
-	// t.Skip("Skipping: requires a running BSV testnet node with RPC enabled. Set TESTNET_RPC_HOST/PORT/USER/PASS env vars and remove this skip to run.")
+	t.Skip("Skipping: requires a running BSV testnet node with RPC enabled. Set TESTNET_RPC_HOST/PORT/USER/PASS env vars and remove this skip to run.")
 
 	benchStartTime := time.Now()
 
