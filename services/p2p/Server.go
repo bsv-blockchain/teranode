@@ -1700,9 +1700,10 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *p2p_api.UnbanPeerRequest) 
 }
 
 func (s *Server) IsBanned(ctx context.Context, peer *p2p_api.IsBannedRequest) (*p2p_api.IsBannedResponse, error) {
-	// Only check PeerID-based bans
-	// Note: The field is still called IpOrSubnet for backward compatibility, but we only accept PeerIDs
-	return &p2p_api.IsBannedResponse{IsBanned: s.banManager.IsBanned(peer.IpOrSubnet)}, nil
+	// Check both IP-based bans (banList) and PeerID-based bans (banManager)
+	return &p2p_api.IsBannedResponse{
+		IsBanned: s.banList.IsBanned(peer.IpOrSubnet) || s.banManager.IsBanned(peer.IpOrSubnet),
+	}, nil
 }
 
 func (s *Server) ListBanned(ctx context.Context, _ *emptypb.Empty) (*p2p_api.ListBannedResponse, error) {

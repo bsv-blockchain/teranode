@@ -105,6 +105,7 @@ var (
 type batcherIfc[T any] interface {
 	Put(item *T, payloadSize ...int)
 	Trigger()
+	SetDrainMode(enabled bool)
 }
 
 // Store implements the UTXO store interface using Aerospike.
@@ -262,16 +263,12 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	storeBatchSize := tSettings.UtxoStore.StoreBatcherSize
 	storeBatchDuration := tSettings.Aerospike.StoreBatcherDuration
 
-	if storeBatchSize > 1 {
-		s.storeBatcher = batcher.New(storeBatchSize, storeBatchDuration, s.sendStoreBatch, true)
-	} else {
-		s.logger.Warnf("Store batch size is set to %d, store batching is disabled", storeBatchSize)
-	}
+	s.storeBatcher = batcher.New(storeBatchSize, storeBatchDuration, s.sendStoreBatch, !tSettings.BatcherDrainMode)
 
 	getBatchSize := s.settings.UtxoStore.GetBatcherSize
 	getBatchDurationStr := s.settings.UtxoStore.GetBatcherDurationMillis
 	getBatchDuration := time.Duration(getBatchDurationStr) * time.Millisecond
-	s.getBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendGetBatch, true)
+	s.getBatcher = batcher.New(getBatchSize, getBatchDuration, s.sendGetBatch, !tSettings.BatcherDrainMode)
 
 	// Make sure the udf lua scripts are installed in the cluster
 	// update the version of the lua script when a new version is launched, do not re-use the old one
@@ -297,7 +294,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	spendBatchSize := s.settings.UtxoStore.SpendBatcherSize
 	spendBatchDurationStr := s.settings.UtxoStore.SpendBatcherDurationMillis
 	spendBatchDuration := time.Duration(spendBatchDurationStr) * time.Millisecond
-	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, true)
+	s.spendBatcher = batcher.New(spendBatchSize, spendBatchDuration, s.sendSpendBatchLua, !tSettings.BatcherDrainMode)
 
 	if failureThreshold := tSettings.UtxoStore.SpendCircuitBreakerFailureCount; failureThreshold > 0 {
 		s.spendCircuitBreaker = newCircuitBreaker(
@@ -325,7 +322,14 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	lockedBatcherSize := tSettings.UtxoStore.LockedBatcherSize
 	lockedBatchDurationStr := tSettings.UtxoStore.LockedBatcherDurationMillis
 	lockedBatchDuration := time.Duration(lockedBatchDurationStr) * time.Millisecond
-	s.lockedBatcher = batcher.New(lockedBatcherSize, lockedBatchDuration, s.setLockedBatch, true)
+	s.lockedBatcher = batcher.New(lockedBatcherSize, lockedBatchDuration, s.setLockedBatch, !tSettings.BatcherDrainMode)
+
+	if tSettings.BatcherDrainMode {
+		s.getBatcher.SetDrainMode(true)
+		s.spendBatcher.SetDrainMode(true)
+		s.lockedBatcher.SetDrainMode(true)
+		s.storeBatcher.SetDrainMode(true)
+	}
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 

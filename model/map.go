@@ -8,6 +8,12 @@ import (
 	"github.com/dolthub/swiss"
 )
 
+// ParentSpendsMap is the interface for tracking spent inpoints during block validation.
+// Both SplitSyncedParentMap (in-memory) and DiskParentSpendsMap (disk-backed) implement this.
+type ParentSpendsMap interface {
+	SetIfNotExists(inpoint subtreepkg.Inpoint) bool
+}
+
 type swissInpointBucket struct {
 	mu sync.Mutex
 	m  *swiss.Map[subtreepkg.Inpoint, struct{}]
