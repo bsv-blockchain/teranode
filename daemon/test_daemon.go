@@ -1538,6 +1538,14 @@ finished:
 }
 
 func (td *TestDaemon) WaitForBlockStateChange(t *testing.T, expectedBlock *model.Block, timeout time.Duration) {
+	// Check if block assembly is already at the expected block before waiting
+	// This prevents missing state changes that occurred before the channel was registered
+	currentHeader, currentHeight := td.BlockAssembler.CurrentBlock()
+	if currentHeader != nil && currentHeader.Hash().IsEqual(expectedBlock.Header.Hash()) {
+		t.Logf("Block assembly already at expected block: Height=%d, Hash=%s", currentHeight, currentHeader.Hash().String())
+		return
+	}
+
 	stateChangeCh := make(chan blockassembly.BestBlockInfo)
 	td.BlockAssembler.SetStateChangeCh(stateChangeCh)
 
