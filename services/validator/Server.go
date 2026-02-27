@@ -341,7 +341,7 @@ func (v *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		tx, err := bt.NewTxFromBytes(kafkaMsg.Tx)
 		if err != nil {
 			prometheusInvalidTransactions.Inc()
-			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %w", err)
+			v.logger.Errorf("[Validator] failed to parse transaction from bytes: %v", err)
 
 			return err
 		}

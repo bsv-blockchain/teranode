@@ -37,6 +37,7 @@ type SubtreeWriteJob struct {
 	SubtreeHash   chainhash.Hash
 	SubtreeBytes  []byte
 	BlockHash     string // For logging
+	BlockHeight   uint32 // For DAH calculation
 	SubtreeIdx    int    // For logging
 	AlreadyExists bool   // Skip write if already exists
 }
@@ -56,20 +57,19 @@ func (u *BlockValidation) subtreeWriteWorker(ctx context.Context, writeJobsChan 
 			}
 
 			if job.AlreadyExists {
-				// Just need to unset DAH, file already exists
-				if err := u.subtreeStore.SetDAH(ctx, job.SubtreeHash[:], fileformat.FileTypeSubtree, 0); err != nil {
-					return errors.NewProcessingError("[subtreeWriteWorker][%s] failed to unset DAH for subtree %d (%s)", job.BlockHash, job.SubtreeIdx, job.SubtreeHash.String(), err)
-				}
+				// Subtree already exists with assembly's finite DAH — no change needed.
+				// The block persister will promote to permanent when the block is confirmed.
 				continue
 			}
 
-			// Write the subtree file
+			// Write the subtree file with finite DAH (temporary until block persister confirms)
+			dah := job.BlockHeight + u.subtreeBlockHeightRetention
 			if err := u.subtreeStore.Set(ctx,
 				job.SubtreeHash[:],
 				fileformat.FileTypeSubtree,
 				job.SubtreeBytes,
 				bloboptions.WithAllowOverwrite(true),
-				bloboptions.WithDeleteAt(0),
+				bloboptions.WithDeleteAt(dah),
 			); err != nil {
 				return errors.NewProcessingError("[subtreeWriteWorker][%s] failed to store subtree %d (%s)", job.BlockHash, job.SubtreeIdx, job.SubtreeHash.String(), err)
 			}
@@ -101,7 +101,7 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 			return nil, errors.NewProcessingError("[buildSubtreeAndQueueWrite][%s] failed to get existing full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
 
-		fullSubtree, err := subtreepkg.NewSubtreeFromBytes(fullSubtreeBytes)
+		fullSubtree, err := u.newSubtreeFromBytes(fullSubtreeBytes)
 		if err != nil {
 			return nil, errors.NewProcessingError("[buildSubtreeAndQueueWrite][%s] failed to deserialize full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
@@ -111,6 +111,7 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 		return &SubtreeWriteJob{
 			SubtreeHash:   subtreeHash,
 			BlockHash:     block.Hash().String(),
+			BlockHeight:   block.Height,
 			SubtreeIdx:    subtreeIdx,
 			AlreadyExists: true,
 		}, nil
@@ -155,6 +156,7 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 		SubtreeHash:   subtreeHash,
 		SubtreeBytes:  subtreeBytes,
 		BlockHash:     block.Hash().String(),
+		BlockHeight:   block.Height,
 		SubtreeIdx:    subtreeIdx,
 		AlreadyExists: false,
 	}, nil
@@ -404,8 +406,12 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 
 		// Phase 7: Write subtree files (shared with normal validation)
 		if err := u.writeSubtreeFilesForBatch(ctx, block, batch); err != nil {
+			batch.Close()
 			return 0, err
 		}
+
+		// Release mmap resources for completed batch
+		batch.Close()
 	}
 
 	return u.validateSubtrees(ctx, block, existingBlockID)
@@ -664,9 +670,13 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 				return err
 			})
 			if err := batchG.Wait(); err != nil {
+				batch.Close()
 				return err
 			}
 			u.logger.Infof("[pipeline:process:async][%s] batch %d-%d processed in %v (utxo=%v, build+queue=%v)", block.Hash().String(), batch.batchStart, batch.batchEnd, time.Since(start), utxoDuration, buildDuration)
+
+			// Release mmap resources for completed batch
+			batch.Close()
 		}
 		return nil
 	})
@@ -716,7 +726,18 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	}()
 
 	// subtree only contains the tx hashes (nodes) of the subtree
-	subtree, err := subtreepkg.NewSubtreeFromReader(bufferedReader)
+	var subtree *subtreepkg.Subtree
+	if u.mmapDir != "" {
+		subtree, err = subtreepkg.NewSubtreeFromReaderMmap(bufferedReader, u.mmapDir)
+		if err != nil {
+			// Fallback to heap on mmap failure — reset reader and retry
+			u.logger.Warnf("[getBlockTransactions][%s] mmap deserialization failed for subtree %s, falling back to heap: %v", block.Hash().String(), subtreeHash.String(), err)
+			bufferedReader.Reset(subtreeReader)
+			subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
+		}
+	} else {
+		subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
+	}
 	if err != nil {
 		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree %s", block.Hash().String(), subtreeHash.String(), err)}
 	}
@@ -810,12 +831,14 @@ func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *m
 			return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to serialize full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
 
+		// Write with finite DAH — block persister will promote to permanent when block is confirmed
+		dah := block.Height + u.subtreeBlockHeightRetention
 		if err = u.subtreeStore.Set(ctx,
 			subtreeHash[:],
 			fileformat.FileTypeSubtree,
 			fullSubtreeBytes,
 			bloboptions.WithAllowOverwrite(true),
-			bloboptions.WithDeleteAt(0),
+			bloboptions.WithDeleteAt(dah),
 		); err != nil {
 			return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to store full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
@@ -825,16 +848,15 @@ func (u *BlockValidation) writeSubtreeFilesFromTxs(ctx context.Context, block *m
 			return errors.NewNotFoundError("[writeSubtreeFilesFromTxs][%s] failed to get full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
 
-		fullSubtree, err := subtreepkg.NewSubtreeFromBytes(fullSubtreeBytes)
+		fullSubtree, err := u.newSubtreeFromBytes(fullSubtreeBytes)
 		if err != nil {
 			return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to deserialize full subtree %s", block.Hash().String(), subtreeHash.String(), err)
 		}
 
 		block.SubtreeSlices[subtreeIdx] = fullSubtree
 
-		if err = u.subtreeStore.SetDAH(ctx, subtreeHash[:], fileformat.FileTypeSubtree, 0); err != nil {
-			return errors.NewProcessingError("[writeSubtreeFilesFromTxs][%s] failed to unset DAH for full subtree %s", block.Hash().String(), subtreeHash.String(), err)
-		}
+		// Subtree already exists with assembly's finite DAH — no change needed.
+		// The block persister will promote to permanent when the block is confirmed.
 	}
 
 	// Note: Subtree meta file (.subtreemeta) writing is intentionally skipped during quick validation
@@ -916,6 +938,15 @@ type SubtreeProcessingBatch struct {
 
 	// batchEnd is the global ending index (exclusive) in block.Subtrees
 	batchEnd int
+}
+
+// Close releases mmap-backed subtree resources in this batch.
+func (b *SubtreeProcessingBatch) Close() {
+	for _, st := range b.subtrees {
+		if st != nil {
+			st.Close()
+		}
+	}
 }
 
 // processSubtreeBatch reads and extends a batch of subtrees.

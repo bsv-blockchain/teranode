@@ -28,28 +28,35 @@ type BlockchainInfo struct {
 	ID    interface{} `json:"id"`
 }
 
+type StreamInfoNode struct {
+	StreamType int `json:"stream_type"`
+	BytesSent  int `json:"bytessent"`
+	BytesRecv  int `json:"bytesrecv"`
+}
+
 type P2PNode struct {
-	ID             int    `json:"id"`
-	Addr           string `json:"addr"`
-	AddrLocal      string `json:"addrlocal"`
-	Services       string `json:"services"`
-	ServicesStr    string `json:"servicesStr"`
-	RelayTxes      bool   `json:"relaytxes"`
-	LastSend       int64  `json:"lastsend"`
-	LastRecv       int64  `json:"lastrecv"`
-	BytesSent      int    `json:"bytessent"`
-	BytesRecv      int    `json:"bytesrecv"`
-	ConnTime       int64  `json:"conntime"`
-	TimeOffset     int    `json:"timeoffset"`
-	PingTime       int    `json:"pingtime"`
-	Version        int    `json:"version"`
-	SubVer         string `json:"subver"`
-	Inbound        bool   `json:"inbound"`
-	StartingHeight int    `json:"startingheight"`
-	BanScore       int    `json:"banscore"`
-	Whitelisted    bool   `json:"whitelisted"`
-	FeeFilter      int    `json:"feefilter"`
-	SyncNode       bool   `json:"syncnode"`
+	ID             int              `json:"id"`
+	Addr           string           `json:"addr"`
+	AddrLocal      string           `json:"addrlocal"`
+	Services       string           `json:"services"`
+	ServicesStr    string           `json:"servicesStr"`
+	RelayTxes      bool             `json:"relaytxes"`
+	LastSend       int64            `json:"lastsend"`
+	LastRecv       int64            `json:"lastrecv"`
+	BytesSent      int              `json:"bytessent"`
+	BytesRecv      int              `json:"bytesrecv"`
+	ConnTime       int64            `json:"conntime"`
+	TimeOffset     int              `json:"timeoffset"`
+	PingTime       int              `json:"pingtime"`
+	Version        int              `json:"version"`
+	SubVer         string           `json:"subver"`
+	Inbound        bool             `json:"inbound"`
+	StartingHeight int              `json:"startingheight"`
+	BanScore       int              `json:"banscore"`
+	Whitelisted    bool             `json:"whitelisted"`
+	FeeFilter      int              `json:"feefilter"`
+	SyncNode       bool             `json:"syncnode"`
+	Streams        []StreamInfoNode `json:"streams,omitempty"`
 }
 
 type P2PRPCResponse struct {

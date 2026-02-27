@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
@@ -187,10 +186,6 @@ func TestServerNew(t *testing.T) {
 	})
 
 	t.Run("successful creation with quorum path", func(t *testing.T) {
-		// Reset the once to allow quorum initialization
-		once = sync.Once{}
-		q = nil
-
 		common := testutil.NewCommonTestSetup(t)
 		tSettings := common.Settings
 		tSettings.SubtreeValidation.QuorumPath = "/tmp/test-quorum"
@@ -226,10 +221,6 @@ func TestServerNew(t *testing.T) {
 	})
 
 	t.Run("with tx meta cache enabled", func(t *testing.T) {
-		// Reset the once to allow quorum initialization
-		once = sync.Once{}
-		q = nil
-
 		common := testutil.NewCommonTestSetup(t)
 		tSettings := common.Settings
 		tSettings.SubtreeValidation.QuorumPath = "/tmp/test-quorum"
@@ -255,10 +246,6 @@ func TestServerNew(t *testing.T) {
 	})
 
 	t.Run("with invalid subtree kafka producer", func(t *testing.T) {
-		// Reset the once to allow quorum initialization
-		once = sync.Once{}
-		q = nil
-
 		common := testutil.NewCommonTestSetup(t)
 		tSettings := common.Settings
 		tSettings.SubtreeValidation.QuorumPath = "/tmp/test-quorum"

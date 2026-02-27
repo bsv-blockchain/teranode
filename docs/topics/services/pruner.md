@@ -435,7 +435,7 @@ For large transactions stored externally:
 
 ## 4. Technology
 
-- **Language**: Go 1.25+
+- **Language**: Go 1.26+
 - **Communication**: gRPC (port 8096), Protocol Buffers
 - **Storage**: Store-agnostic (Aerospike or SQL via interface)
 - **Metrics**: Prometheus

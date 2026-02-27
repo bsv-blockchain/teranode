@@ -83,6 +83,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		UsePrometheusGRPCMetrics:   getBool("use_prometheus_grpc_metrics", true, alternativeContext...),
 		GRPCAdminAPIKey:            getString("grpc_admin_api_key", "", alternativeContext...),
 		GlobalBlockHeightRetention: globalBlockHeightRetention,
+		BatcherDrainMode:           getBool("batcher_drainMode", false, alternativeContext...),
 
 		ChainCfgParams: params,
 		Policy: &PolicySettings{
@@ -222,6 +223,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			FileStoreReadConcurrency:              getInt("filestore_read_concurrency", 768, alternativeContext...),
 			FileStoreWriteConcurrency:             getInt("filestore_write_concurrency", 256, alternativeContext...),
 			FileStoreUseSystemLimits:              getBool("filestore_use_system_limits", true, alternativeContext...),
+			DiskMapDirs:                           getMultiString("block_diskMapDirs", "|", []string{}, alternativeContext...),
 		},
 		BlockPersister: BlockPersisterSettings{
 			Store:                    getURL("blockpersister_store", "file://./data/blockstore", alternativeContext...),
@@ -285,6 +287,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			StoreDBTimeoutMillis:  getInt("blockchain_store_dbTimeoutMillis", 5000, alternativeContext...),
 			InitializeNodeInState: getString("blockchain_initializeNodeInState", "", alternativeContext...),
 			PostgresPool:          getPostgresPoolSettings("blockchain", alternativeContext...),
+			HeartbeatInterval:     getDuration("blockchain_heartbeat_interval", 10*time.Second, alternativeContext...),
 		},
 		BlockValidation: BlockValidationSettings{
 			MaxRetries:                                getInt("blockValidationMaxRetries", 3, alternativeContext...),
@@ -587,6 +590,19 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DevServerPorts: getIntSlice("dashboard_devServerPorts", []int{5173, 4173}, alternativeContext...),
 			WebSocketPort:  getString("dashboard_websocketPort", "8090", alternativeContext...),
 			WebSocketPath:  getString("dashboard_websocketPath", "/connection/websocket", alternativeContext...),
+		},
+		GRPC: GRPCSettings{
+			HighThroughputMode:       getBool("grpc_high_throughput_mode", false, alternativeContext...),
+			InitialWindowSize:        getInt32("grpc_initial_window_size", 0, alternativeContext...),
+			InitialConnWindowSize:    getInt32("grpc_initial_conn_window_size", 0, alternativeContext...),
+			MaxConcurrentStreams:     getUint32("grpc_max_concurrent_streams", 0, alternativeContext...),
+			ReadBufferSize:           getInt("grpc_read_buffer_size", 0, alternativeContext...),
+			WriteBufferSize:          getInt("grpc_write_buffer_size", 0, alternativeContext...),
+			KeepaliveTime:            getInt("grpc_keepalive_time_seconds", 30, alternativeContext...),
+			KeepaliveTimeout:         getInt("grpc_keepalive_timeout_seconds", 20, alternativeContext...),
+			ServerMinPingTime:        getInt("grpc_server_min_ping_time_seconds", 30, alternativeContext...),
+			PermitWithoutStream:      getBool("grpc_permit_without_stream", true, alternativeContext...),
+			MaxConnectionIdleSeconds: getInt("grpc_max_connection_idle_seconds", 300, alternativeContext...),
 		},
 	}
 }

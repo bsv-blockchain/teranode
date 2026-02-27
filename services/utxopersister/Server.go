@@ -262,7 +262,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		if s.blockchainClient == nil {
 			ch = make(chan *blockchain.Notification) // Create a dummy channel
 		} else {
-			ch, err = s.blockchainClient.Subscribe(ctx, "utxo-persister")
+			ch, err = s.blockchainClient.Subscribe(ctx, blockchain.SubscriberUTXOPersister)
 			if err != nil {
 				return err
 			}

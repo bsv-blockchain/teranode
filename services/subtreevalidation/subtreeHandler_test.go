@@ -172,7 +172,7 @@ func TestSubtreesHandler(t *testing.T) {
 			server.Server.currentBlockIDsMap.Store(&blockIDsMap)
 			server.Server.bestBlockHeaderMeta.Store(&model.BlockHeaderMeta{Height: 100})
 
-			q, _ = NewQuorum(
+			server.Server.quorum, _ = NewQuorum(
 				logger,
 				subtreeStore,
 				tSettings.SubtreeValidation.QuorumPath,

@@ -1218,6 +1218,13 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 				// 	// We actually want microseconds.
 				// 	info.PingWait = wait / 1000
 				// }
+				for _, s := range p.Streams {
+					info.Streams = append(info.Streams, bsvjson.StreamInfoResult{
+						StreamType: s.StreamType,
+						BytesSent:  s.BytesSent,
+						BytesRecv:  s.BytesRecv,
+					})
+				}
 				infos = append(infos, info)
 			}
 		}
@@ -1537,6 +1544,25 @@ func calculateMedianTime(ctx context.Context, blockchainClient blockchain.Client
 	return medianTimestampUint32, nil
 }
 
+// isSubscriberActive checks whether a blockchain subscriber whose source
+// contains substr is currently registered. This lets RPC handlers skip
+// expensive calls to services that are not running.
+// isSubscriberActive checks whether source is present in the blockchain
+// subscriber list. This lets RPC handlers skip expensive calls to services
+// that are not running.
+func isSubscriberActive(ctx context.Context, s *RPCServer, source string) bool {
+	subs, err := s.blockchainClient.GetSubscribers(ctx)
+	if err != nil {
+		return false
+	}
+	for _, src := range subs {
+		if src == source {
+			return true
+		}
+	}
+	return false
+}
+
 // handleGetInfo returns a JSON object containing various state info.
 func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetInfo",
@@ -1593,12 +1619,10 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	}
 
 	var legacyConnections *peer_api.GetPeersResponse
-	if s.legacyP2PClient != nil {
-		// create a timeout context to prevent hanging if legacy peer service is not responding
+	if s.legacyP2PClient != nil && isSubscriberActive(ctx, s, blockchain.SubscriberLegacy) {
 		peerCtx, cancel := context.WithTimeout(ctx, s.settings.RPC.ClientCallTimeout)
 		defer cancel()
 
-		// use a goroutine with select to handle timeouts more reliably
 		type peerResult struct {
 			resp *peer_api.GetPeersResponse
 			err  error
@@ -1613,13 +1637,11 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 		select {
 		case result := <-resultCh:
 			if result.err != nil {
-				// not critical - legacy service may not be running, so log as info
 				s.logger.Infof("error getting legacy peer info: %v", result.err)
 			} else {
 				legacyConnections = result.resp
 			}
 		case <-peerCtx.Done():
-			// timeout reached
 			s.logger.Infof("timeout getting legacy peer info from peer service")
 		}
 	}
@@ -2019,15 +2041,9 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 	}
 
-	// validate ip or subnet
-	if !isIPOrSubnet(c.IPOrSubnet) {
-		return nil, &bsvjson.RPCError{
-			Code:    bsvjson.ErrRPCInvalidParameter,
-			Message: "Invalid IP or subnet",
-		}
-	}
+	isIP := isIPOrSubnet(c.IPOrSubnet)
 
-	// check if P2P service is available
+	// P2P service handles both IPs and PeerIDs (checks banList and banManager)
 	var p2pBanned bool
 
 	if s.p2pClient != nil {
@@ -2039,10 +2055,10 @@ func handleIsBanned(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		}
 	}
 
-	// check if legacy peer service is available
+	// Legacy service only handles IPs
 	var peerBanned bool
 
-	if s.legacyP2PClient != nil {
+	if isIP && s.legacyP2PClient != nil {
 		isBannedLegacy, err := s.legacyP2PClient.IsBanned(ctx, &peer_api.IsBannedRequest{IpOrSubnet: c.IPOrSubnet})
 		if err != nil {
 			s.logger.Warnf("Failed to check if banned in legacy peer service: %v", err)
@@ -2680,19 +2696,19 @@ func calculateHashRate(difficulty float64, blockTime float64) float64 {
 // Returns:
 //   - bool: true if the string is a valid IP or subnet, false otherwise
 func isIPOrSubnet(ipOrSubnet string) bool {
+	if ipOrSubnet == "" {
+		return false
+	}
+
 	// no slash means ip
 	if !strings.Contains(ipOrSubnet, "/") {
 		_, err := net.ResolveIPAddr("ip", ipOrSubnet)
 		return err == nil
 	}
 
-	if strings.Contains(ipOrSubnet, ":") {
-		// remove port
-		ipOrSubnet = strings.Split(ipOrSubnet, ":")[0]
-	}
-
+	// CIDR notation never includes ports, so pass directly to ParseCIDR.
+	// The previous port-stripping logic broke IPv6 CIDR (e.g. "2001:db8::/32").
 	_, _, err := net.ParseCIDR(ipOrSubnet)
-
 	return err == nil
 }
 

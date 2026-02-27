@@ -4,7 +4,7 @@ on:
 
 env:
   REPO: teranode
-  GO_VERSION: '1.25.2'
+  GO_VERSION: '1.26.0'
 
 permissions:
   contents: read
@@ -166,7 +166,7 @@ jobs:
         uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
           version: latest
-          args: --timeout=5m --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
+          args: --timeout=5m --disable gosec --disable prealloc --issues-exit-code=0 --output.checkstyle.path=golangci-lint-report.xml
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6

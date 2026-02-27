@@ -36,7 +36,7 @@ func NewAuthHandler(logger ulogger.Logger, settings *settings.Settings) *AuthHan
 
 		logger.Debugf("Auth initialized with user: %s", rpcUser)
 	} else {
-		logger.Warnf("RPC authentication not configured properly. User: %s, Pass: %s",
+		logger.Warnf("RPC authentication not configured properly. User set: %v, Pass set: %v",
 			rpcUser != "", rpcPass != "")
 	}
 

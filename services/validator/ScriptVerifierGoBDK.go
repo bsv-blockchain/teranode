@@ -194,7 +194,7 @@ func (v *scriptVerifierGoBDK) VerifyScript(tx *bt.Tx, blockHeight uint32, consen
 		utxoInfoStr := strings.Join(utxoHeighstStr, "|")
 		errorLogMsg := fmt.Sprintf("%v \n\n TxID : %v\n\nBlock Height : %v\n\nUTXO Heights : %v\n\nerror:\n%v\n\n", errMsgInvalidTx, tx.TxID(), blockHeight, utxoInfoStr, errVerify)
 
-		v.logger.Warnf(errorLogMsg)
+		v.logger.Warnf("%s", errorLogMsg)
 
 		errCode := errVerify.Code()
 		policyRelatedError := (errCode == bdkscript.SCRIPT_ERR_OP_COUNT ||

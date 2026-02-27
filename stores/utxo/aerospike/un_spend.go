@@ -118,7 +118,7 @@ func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 			if spend != nil {
 				s.logger.Warnf("un-spending utxo %s of tx %s:%d, spending data: %v", spend.UTXOHash.String(), spend.TxID.String(), spend.Vout, spend.SpendingData)
 
-				if err = s.unspendLua(spend); err != nil {
+				if err = s.unspendLua(ctx, spend); err != nil {
 					// just return the raw error, should already be wrapped
 					return err
 				}
@@ -144,7 +144,7 @@ func (s *Store) unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 // Metrics:
 //   - prometheusUtxoMapReset: Successful unspends
 //   - prometheusUtxoMapErrors: Failed operations
-func (s *Store) unspendLua(spend *utxo.Spend) error {
+func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 	policy := util.GetAerospikeWritePolicy(s.settings, 0)
 
 	keySource := uaerospike.CalculateKeySource(spend.TxID, spend.Vout, s.utxoBatchSize)
@@ -185,10 +185,12 @@ func (s *Store) unspendLua(spend *utxo.Spend) error {
 	if res.Status == LuaStatusOK {
 		// Handle signal if present
 		if res.Signal == LuaSignalNotAllSpent {
-			if err := s.SetDAHForChildRecords(spend.TxID, res.ChildCount, 0); err != nil {
+			// Decrement spentExtraRecs on the master record since this child
+			// record transitioned from ALLSPENT back to NOTALLSPENT.
+			// This mirrors the +1 increment done in handleSpendSignal for ALLSPENT.
+			if err := s.handleExtraRecords(ctx, spend.TxID, -1); err != nil {
 				return err
 			}
-			// External store DAH is disabled - lifecycle managed by pruner service
 		}
 	} else if res.Status == LuaStatusError {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()

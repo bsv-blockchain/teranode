@@ -265,7 +265,7 @@ func (t *TeranodeTestEnv) getServiceAddress(serviceName string, port string) (st
 	// In local mode, use localhost with mapped ports
 	mappedPort, err := t.GetMappedPort(serviceName, nat.Port(port))
 	if err != nil {
-		t.Logger.Errorf("Failed to get mapped port", "error", err)
+		t.Logger.Errorf("Failed to get mapped port: %v", err)
 		return "", err
 	}
 
@@ -494,7 +494,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 		// Get the mapped port for the aerospike instance
 		mappedPort, err := t.GetMappedPort(aerospikeHost, nat.Port(aerospikePort+"/tcp"))
 		if err != nil {
-			t.Logger.Errorf("Failed to get mapped port for %s", aerospikeHost, "error", err)
+			t.Logger.Errorf("Failed to get mapped port for %s: %v", aerospikeHost, err)
 			return err
 		}
 
@@ -547,7 +547,7 @@ func (t *TeranodeTestEnv) setupStores(node *TeranodeTestClient) error {
 		// Get the mapped port for the postgres instance
 		mappedPort, err = t.GetMappedPort(postgresHost, nat.Port(postgresPort+"/tcp"))
 		if err != nil {
-			t.Logger.Errorf("Failed to get mapped port for %s", postgresHost, "error", err)
+			t.Logger.Errorf("Failed to get mapped port for %s: %v", postgresHost, err)
 			return err
 		}
 
@@ -650,7 +650,7 @@ func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) erro
 			t.Nodes[idx].Settings = settings
 			t.Logger.Infof("Settings context: %s", envSettings[key])
 			t.Logger.Infof("Node name: %s", nodeNames[idx])
-			t.Logger.Infof("Node settings: %s", t.Nodes[idx].Settings)
+			t.Logger.Infof("Node settings: %v", t.Nodes[idx].Settings)
 		}
 	}
 
@@ -674,7 +674,7 @@ func (t *TeranodeTestEnv) StartNode(nodeName string) error {
 		for idx := range nodeNames {
 			t.Nodes[idx].Name = nodeNames[idx]
 			t.Logger.Infof("Node name: %s", nodeNames[idx])
-			t.Logger.Infof("Node settings: %s", t.Nodes[idx].Settings)
+			t.Logger.Infof("Node settings: %v", t.Nodes[idx].Settings)
 		}
 	}
 

@@ -3273,6 +3273,67 @@ func TestIsBannedCoverage(t *testing.T) {
 	assert.False(t, resp.IsBanned)
 }
 
+func TestIsBannedChecksBothBanSystems(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("banned by banList only", func(t *testing.T) {
+		mockBanList := &MockBanList{}
+		mockBanList.On("IsBanned", "192.168.1.100").Return(true)
+
+		mockBanMgr := &MockPeerBanManager{}
+		mockBanMgr.On("IsBanned", "192.168.1.100").Return(false)
+
+		server := &Server{
+			logger:     ulogger.New("test"),
+			settings:   &settings.Settings{},
+			banList:    mockBanList,
+			banManager: mockBanMgr,
+		}
+
+		resp, err := server.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: "192.168.1.100"})
+		require.NoError(t, err)
+		assert.True(t, resp.IsBanned)
+	})
+
+	t.Run("banned by banManager only", func(t *testing.T) {
+		mockBanList := &MockBanList{}
+		mockBanList.On("IsBanned", "test-peer-id").Return(false)
+
+		mockBanMgr := &MockPeerBanManager{}
+		mockBanMgr.On("IsBanned", "test-peer-id").Return(true)
+
+		server := &Server{
+			logger:     ulogger.New("test"),
+			settings:   &settings.Settings{},
+			banList:    mockBanList,
+			banManager: mockBanMgr,
+		}
+
+		resp, err := server.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: "test-peer-id"})
+		require.NoError(t, err)
+		assert.True(t, resp.IsBanned)
+	})
+
+	t.Run("not banned by either", func(t *testing.T) {
+		mockBanList := &MockBanList{}
+		mockBanList.On("IsBanned", "192.168.1.200").Return(false)
+
+		mockBanMgr := &MockPeerBanManager{}
+		mockBanMgr.On("IsBanned", "192.168.1.200").Return(false)
+
+		server := &Server{
+			logger:     ulogger.New("test"),
+			settings:   &settings.Settings{},
+			banList:    mockBanList,
+			banManager: mockBanMgr,
+		}
+
+		resp, err := server.IsBanned(ctx, &p2p_api.IsBannedRequest{IpOrSubnet: "192.168.1.200"})
+		require.NoError(t, err)
+		assert.False(t, resp.IsBanned)
+	})
+}
+
 func TestListBannedCoverage(t *testing.T) {
 	ctx := context.Background()
 	server := createTestServer(t)

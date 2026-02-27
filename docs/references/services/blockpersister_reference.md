@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD046 -->
 # Block Persister Service Reference Documentation
 
 ## Overview
@@ -212,7 +213,7 @@ This is a core function of the blockpersister service that handles the complete 
 !!! warning "Atomicity"
     Block persistence is atomic - if any part fails, the entire operation is considered failed and should be retried after resolving the underlying issue.
 
-#### getNextBlockToProcess
+#### getNextBlockToProcess (blob persistence)
 
 ```go
 func (u *Server) getNextBlockToProcess(ctx context.Context) (*model.Block, error)
@@ -310,7 +311,8 @@ Creates subtree data files using streaming writes. This phase runs **in parallel
     2. **Retrieve the subtree** from the subtree store using its hash
     3. **Load transaction metadata** from the UTXO store (batched or individual)
     4. **Stream write** the subtree data file using `SubtreeDataWriter`
-    5. **Abort on error** - incomplete files are automatically cleaned up
+    5. **Promote `.subtree` and `.subtreeData` files to permanent** (DAH=0) — the persister is the only service that promotes blob files to permanent storage
+    6. **Abort on error** - incomplete files are automatically cleaned up
 
 #### Phase 2: ProcessSubtreeUTXOStreaming
 

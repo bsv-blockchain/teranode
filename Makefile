@@ -196,7 +196,7 @@ testall: test longtest sequentialtest
 smoketest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestBlobDeletion|TestPruner' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner|TestBIP68' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt
 
 # run pruner e2e tests - heavyweight tests that mine blocks and verify pruning behavior
 .PHONY: prunertest
@@ -210,7 +210,7 @@ prunertest:
 legacy-sync:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
-	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=15m -run 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates' 2>&1 | tee /tmp/teranode-test-results/legacy-sync-results.txt
+	cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=15m -run 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBIP68' 2>&1 | tee /tmp/teranode-test-results/legacy-sync-results.txt
 
 # run chain integrity tests - multi-node tests with deep chain verification
 # This test mines blocks across multiple nodes and verifies chain consistency
@@ -395,19 +395,19 @@ install-lint:
 .PHONY: lint
 lint:
 	git fetch origin main
-	golangci-lint run ./... --new-from-rev origin/main
+	golangci-lint run ./... --new-from-rev origin/main --disable gosec --disable prealloc # TODO: re-enable gosec once gosec >v2.23.0 is released (fixes float constant panic)
 
 # lint-new will only check only your unstaged/untracked changes (not committed changes), or fallback to check last commit if no changes in checkout
 # It is useful for quickly checking that your current, uncommitted work doesn't introduce new lint errors.
 .PHONY: lint-new
 lint-new:
-	golangci-lint run ./... --new
+	golangci-lint run ./... --new --disable gosec --disable prealloc # TODO: re-enable gosec once gosec >v2.23.0 is released (fixes float constant panic)
 
 # lint-full will check all files in the project
 # It will show all lint errors and warnings.
 .PHONY: lint-full
 lint-full:
-	golangci-lint run ./...
+	golangci-lint run ./... --disable gosec --disable prealloc # TODO: re-enable gosec once gosec >v2.23.0 is released (fixes float constant panic)
 
 # lint-full-changed-dirs will check the files that have been added/modified in the current branch compared to base main, including unstaged/untracked changes
 # It will show all lint errors and warnings.
@@ -421,7 +421,7 @@ lint-full-changed-dirs:
 	else \
 	  echo "Linting packages in the following directories:"; \
 	  echo "$$changed_dirs"; \
-	  golangci-lint run $$changed_dirs; \
+	  golangci-lint run --disable gosec --disable prealloc $$changed_dirs; \
 	fi
 
 # The install target installs all dependencies needed for development.

@@ -22,6 +22,12 @@ package peer_api;
 	// "currentheight": n,  (numeric) the latest block height the peer is known to have relayed since connected
 	// "syncnode": true_or_false,  (boolean) whether or not t
 
+message StreamInfo {
+  uint32 stream_type = 1;
+  uint64 bytes_sent = 2;
+  uint64 bytes_recv = 3;
+}
+
 message Peer {
   int32 id = 1;
   string addr = 2;
@@ -50,6 +56,7 @@ message Peer {
   int32 banscore = 25;
   bool whitelisted = 26;
   int64 feeFilter = 27;
+  repeated StreamInfo streams = 28;
   // ConnTime:       sp.ConnTime().Unix(),
 	// 		PingTime:       sp.PingTime(),
 	// 		TimeOffset:     sp.TimeOffset(),

@@ -1584,7 +1584,7 @@ out:
 			if p.shouldHandleReadError(err) {
 				errMsg := fmt.Sprintf("Can't read message from %s: %v", p, err)
 				if err != io.ErrUnexpectedEOF {
-					p.logger.Errorf(errMsg)
+					p.logger.Errorf("%s", errMsg)
 				}
 
 				// Push a reject message for the malformed message and disconnect
@@ -2455,6 +2455,23 @@ func (p *Peer) start() error {
 
 		return errors.NewProcessingError(reason)
 	}
+
+	// If the peer became a stream peer during negotiation (inbound
+	// CREATESTREAM), skip VERACK/PROTOCONF and go straight to message
+	// handling - stream peers don't do a version handshake.
+	if p.IsStreamPeer() {
+		p.flagsMtx.Lock()
+		p.versionKnown = true
+		p.flagsMtx.Unlock()
+
+		go p.stallHandler()
+		go p.inHandler()
+		go p.queueHandler()
+		go p.outHandler()
+		go p.pingHandler()
+		return nil
+	}
+
 	p.logger.Debugf("Connected to %s", p.Addr())
 
 	// The protocol has been negotiated successfully so start processing input

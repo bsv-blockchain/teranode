@@ -192,7 +192,15 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		return nil, err
 	}
 
-	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
+	var stpOpts []subtreeprocessor.Options
+	if tSettings.BlockAssembly.SubtreeMmapDir != "" {
+		stpOpts = append(stpOpts, subtreeprocessor.WithMmapDir(tSettings.BlockAssembly.SubtreeMmapDir))
+	}
+	if len(tSettings.BlockAssembly.TxMapDirs) > 0 {
+		stpOpts = append(stpOpts, subtreeprocessor.WithTxMapDirs(tSettings.BlockAssembly.TxMapDirs))
+	}
+
+	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan, stpOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +275,7 @@ func (b *BlockAssembler) GetChainedSubtreesTotalSize() uint64 {
 func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) {
 	// start a subscription for the best block header and the FSM state
 	// this will be used to reset the subtree processor when a new block is mined
-	b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, "BlockAssembler")
+	b.blockchainSubscriptionCh, err = b.blockchainClient.Subscribe(ctx, blockchain.SubscriberBlockAssembler)
 	if err != nil {
 		return errors.NewProcessingError("[BlockAssembler] error subscribing to blockchain notifications: %v", err)
 	}
@@ -421,7 +429,7 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 		// These are transactions that are ALSO in the new main chain (don't need unmined_since set)
 		// Even though BlockValidation handles moveForward, we need this map to avoid marking
 		// transactions that appear in BOTH moveBack and moveForward as unmined
-		moveForwardTxMap := make(map[chainhash.Hash]bool)
+		moveForwardTxMap := make(map[chainhash.Hash]struct{})
 		for _, blockWithMeta := range moveForwardBlocksWithMeta {
 			if blockWithMeta.meta.Invalid {
 				continue
@@ -436,7 +444,7 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 			for _, st := range blockSubtrees {
 				for _, node := range st.Nodes {
 					if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
-						moveForwardTxMap[node.Hash] = true
+						moveForwardTxMap[node.Hash] = struct{}{}
 					}
 				}
 			}
@@ -463,7 +471,7 @@ func (b *BlockAssembler) reset(ctx context.Context, fullScan bool) error {
 				for _, node := range st.Nodes {
 					if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
 						// Only add if NOT in moveForward (these are net unmined)
-						if !moveForwardTxMap[node.Hash] {
+						if _, inForward := moveForwardTxMap[node.Hash]; !inForward {
 							moveBackTxs = append(moveBackTxs, node.Hash)
 						}
 					}

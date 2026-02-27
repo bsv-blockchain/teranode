@@ -27,7 +27,7 @@ This guide assists you in setting up the Teranode project on your machine. The b
 
 ## 1. Install Go
 
-Download and install the latest version of Go. As of October 2025, it's `1.25.2`.
+Download and install the latest version of Go. As of February 2026, it's `1.26.0`.
 
 [Go Installation Guide](https://go.dev/doc/install)
 
@@ -39,7 +39,7 @@ Open a new terminal and execute:
 go version
 ```
 
-It should display `go1.25.2` or above.
+It should display `go1.26.0` or above.
 
 ## 2. Set Go Environment Variables
 

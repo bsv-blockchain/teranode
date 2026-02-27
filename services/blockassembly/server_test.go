@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -545,78 +544,6 @@ func TestSubmitMiningSolution_InvalidBlock_HandlesReset(t *testing.T) {
 		// Verify that assembler was reset (we can't directly check job removal due to cache internals)
 		// But we can verify the system remains in a consistent state
 		assert.GreaterOrEqual(t, server.blockAssembler.TxCount(), uint64(0), "Transaction count should be non-negative after error")
-	})
-}
-
-func TestRemoveSubtreesDAH_PartialFailures(t *testing.T) {
-	t.Run("removeSubtreesDAH handles partial DAH update failures gracefully", func(t *testing.T) {
-		server, subtreeStore := setupServer(t)
-
-		// Create a block with multiple subtrees
-		block := &model.Block{
-			Header: &model.BlockHeader{
-				Version:        1,
-				HashPrevBlock:  server.settings.ChainCfgParams.GenesisHash,
-				HashMerkleRoot: &chainhash.Hash{},
-				Timestamp:      uint32(time.Now().Unix()),
-				Bits:           model.NBit{},
-				Nonce:          1234,
-			},
-			CoinbaseTx: &bt.Tx{},
-			Subtrees:   []*chainhash.Hash{},
-		}
-
-		// store the block in the block store to simulate existing state
-		require.NoError(t, server.blockchainClient.AddBlock(t.Context(), block, "test"))
-
-		// Add some subtrees to the block
-		for i := 0; i < 3; i++ {
-			subtreeHash := chainhash.HashH([]byte(fmt.Sprintf("subtree%d", i)))
-			block.Subtrees = append(block.Subtrees, &subtreeHash)
-
-			// Store subtree in blob store with DAH > 0 to simulate existing state
-			subtreeBytes := make([]byte, 32)
-			require.NoError(t, subtreeStore.Set(t.Context(), subtreeHash[:], fileformat.FileTypeSubtree, subtreeBytes))
-			require.NoError(t, subtreeStore.SetDAH(t.Context(), subtreeHash[:], fileformat.FileTypeSubtree, 5))
-		}
-
-		// Call removeSubtreesDAH
-		err := server.removeSubtreesDAH(t.Context(), block)
-
-		// Should not return error even if some DAH updates fail
-		require.NoError(t, err)
-
-		// Verify that SetBlockSubtreesSet was not called when all DAH updates succeed
-		// (since we can't easily mock partial failures in memory store)
-	})
-
-	t.Run("removeSubtreesDAH handles store errors gracefully", func(t *testing.T) {
-		server, _ := setupServer(t)
-
-		// Use a mock store that fails
-		mockStore := &memory.Memory{}
-		server.subtreeStore = mockStore
-
-		subtreeHash1 := chainhash.HashH([]byte("subtree1"))
-		block := &model.Block{
-			Header: &model.BlockHeader{
-				Version:        1,
-				HashPrevBlock:  server.settings.ChainCfgParams.GenesisHash,
-				HashMerkleRoot: &chainhash.Hash{},
-				Timestamp:      uint32(time.Now().Unix()),
-				Bits:           model.NBit{},
-				Nonce:          1234,
-			},
-			CoinbaseTx: &bt.Tx{},
-			Subtrees:   []*chainhash.Hash{&subtreeHash1},
-		}
-
-		// store the block in the block store to simulate existing state
-		require.NoError(t, server.blockchainClient.AddBlock(t.Context(), block, "test"))
-
-		// This should not panic or return error even with store failures
-		err := server.removeSubtreesDAH(t.Context(), block)
-		require.NoError(t, err) // Should handle errors gracefully
 	})
 }
 

@@ -335,6 +335,7 @@ func TestMarkConflictingTxsInSubtrees(t *testing.T) {
 	// Setup
 	mockBlockchainClient := new(blockchain.Mock)
 	mockUtxoStore := new(utxo.MockUtxostore)
+	mockUtxoStore.On("GetBlockHeight").Return(uint32(100))
 
 	blobStore := blob_memory.New()
 	settings := test.CreateBaseTestSettings(t)

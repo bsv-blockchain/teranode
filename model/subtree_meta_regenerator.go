@@ -34,21 +34,26 @@ type SubtreeStoreWriter interface {
 
 // SubtreeMetaRegenerator handles regenerating missing subtree meta files
 type SubtreeMetaRegenerator struct {
-	logger       ulogger.Logger
-	subtreeStore SubtreeStoreWriter
-	peerURLs     []string
-	httpClient   *http.Client
-	apiPrefix    string
+	logger               ulogger.Logger
+	subtreeStore         SubtreeStoreWriter
+	peerURLs             []string
+	httpClient           *http.Client
+	apiPrefix            string
+	getBlockHeight       func() uint32
+	blockHeightRetention uint32
 }
 
 // NewSubtreeMetaRegenerator creates a new SubtreeMetaRegenerator instance
-func NewSubtreeMetaRegenerator(logger ulogger.Logger, subtreeStore SubtreeStoreWriter, peerURLs []string, apiPrefix string) *SubtreeMetaRegenerator {
+func NewSubtreeMetaRegenerator(logger ulogger.Logger, subtreeStore SubtreeStoreWriter, peerURLs []string, apiPrefix string,
+	getBlockHeight func() uint32, blockHeightRetention uint32) *SubtreeMetaRegenerator {
 	return &SubtreeMetaRegenerator{
-		logger:       logger.New("meta_regenerator"),
-		subtreeStore: subtreeStore,
-		peerURLs:     peerURLs,
-		apiPrefix:    apiPrefix,
-		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		logger:               logger.New("meta_regenerator"),
+		subtreeStore:         subtreeStore,
+		peerURLs:             peerURLs,
+		apiPrefix:            apiPrefix,
+		httpClient:           &http.Client{Timeout: 30 * time.Second},
+		getBlockHeight:       getBlockHeight,
+		blockHeightRetention: blockHeightRetention,
 	}
 }
 
@@ -167,7 +172,8 @@ func (r *SubtreeMetaRegenerator) storeRegeneratedMeta(ctx context.Context, subtr
 		return
 	}
 
-	if err := r.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta, metaBytes, options.WithDeleteAt(0)); err != nil {
+	dah := r.getBlockHeight() + r.blockHeightRetention
+	if err := r.subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeMeta, metaBytes, options.WithDeleteAt(dah)); err != nil {
 		r.logger.Warnf("[storeRegeneratedMeta][%s] failed to store meta: %v", subtreeHash.String(), err)
 	}
 }

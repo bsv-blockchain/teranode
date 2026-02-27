@@ -109,11 +109,14 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 
 	currentBlockHeight := s.blockHeight.Load()
 
-	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(txids))
+	batchRecordsPtr := getBatchRecordsSlice(len(txids))
+	batchRecords := (*batchRecordsPtr)[:0]
 
 	for _, txid := range txids {
 		key, err := aerospike.NewKey(s.namespace, s.setName, txid[:])
 		if err != nil {
+			*batchRecordsPtr = batchRecords
+			putBatchRecordsSlice(batchRecordsPtr)
 			return errors.NewProcessingError("failed to init new aerospike key for txMeta", err)
 		}
 
@@ -125,6 +128,8 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 	}
 
 	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+		*batchRecordsPtr = batchRecords
+		putBatchRecordsSlice(batchRecordsPtr)
 		return errors.NewStorageError("[IncrementSpentRecordsMulti] error in aerospike batch", err)
 	}
 
@@ -149,6 +154,9 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 		}
 	}
 
+	*batchRecordsPtr = batchRecords
+	putBatchRecordsSlice(batchRecordsPtr)
+
 	return aggErr
 }
 
@@ -171,6 +179,10 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 	}
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, total)
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	dahBinName := fields.DeleteAtHeight.String()
+	// Pre-create the "unset" operation since it's identical for all unset cases
+	unsetOp := aerospike.PutOp(aerospike.NewBin(dahBinName, nil))
 
 	for _, it := range items {
 		for i := uint32(1); i <= uint32(it.ChildCount); i++ { // nolint: gosec
@@ -180,11 +192,10 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 				return errors.NewProcessingError("[SetDAHForChildRecordsMulti][%s] failed to create key for pagination record %d: %v", it.TxID.String(), i, err)
 			}
 
-			batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 			if it.DeleteAtHeight > 0 {
-				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), it.DeleteAtHeight))))
+				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(dahBinName, it.DeleteAtHeight))))
 			} else {
-				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil))))
+				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, unsetOp))
 			}
 		}
 	}
@@ -982,6 +993,9 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 
 	// Create batch records with individual TTLs
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
+	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	dahBinName := fields.DeleteAtHeight.String()
+	unsetOp := aerospike.PutOp(aerospike.NewBin(dahBinName, nil))
 
 	for i, b := range batch {
 		keySource := uaerospike.CalculateKeySourceInternal(b.txID, b.childIdx)
@@ -992,12 +1006,10 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 			continue
 		}
 
-		batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
-
 		if b.deleteAtHeight > 0 {
-			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), b.deleteAtHeight)))
+			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(dahBinName, b.deleteAtHeight)))
 		} else {
-			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
+			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, unsetOp)
 		}
 	}
 

@@ -7,7 +7,7 @@
     ```bash
     # Install required tools
     docker compose
-    go 1.21 or higher
+    go 1.26 or higher
     make
     ```
 

@@ -1474,7 +1474,7 @@ func (s *Store) sendGetBatch(batch []*batchGetItem) {
 			if retries < 3 {
 				retries++
 
-				s.logger.Errorf("failed to get batch of txmeta", err)
+				s.logger.Errorf("failed to get batch of txmeta: %v", err)
 				time.Sleep(time.Duration(retries) * time.Second)
 
 				continue

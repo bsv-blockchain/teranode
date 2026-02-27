@@ -133,7 +133,7 @@ func TestSubtreeMetaRegenerator_RegenerateMeta_FromLocal(t *testing.T) {
 
 	logger := ulogger.TestLogger{}
 
-	regenerator := NewSubtreeMetaRegenerator(logger, mockStore, nil, "")
+	regenerator := NewSubtreeMetaRegenerator(logger, mockStore, nil, "", func() uint32 { return 100 }, 288)
 
 	// Test regeneration
 	meta, err := regenerator.RegenerateMeta(context.Background(), subtreeHash, subtree)
@@ -194,7 +194,7 @@ func TestSubtreeMetaRegenerator_RegenerateMeta_FromPeer(t *testing.T) {
 	mockStore := newMockSubtreeStoreWriter()
 	logger := ulogger.TestLogger{}
 
-	regenerator := NewSubtreeMetaRegenerator(logger, mockStore, []string{server.URL}, "/api/v1")
+	regenerator := NewSubtreeMetaRegenerator(logger, mockStore, []string{server.URL}, "/api/v1", func() uint32 { return 100 }, 288)
 
 	// Test regeneration
 	meta, err := regenerator.RegenerateMeta(context.Background(), subtreeHash, subtree)
@@ -232,7 +232,7 @@ func TestSubtreeMetaRegenerator_RegenerateMeta_AllSourcesFail(t *testing.T) {
 	mockStore := newMockSubtreeStoreWriter()
 	logger := ulogger.TestLogger{}
 
-	regenerator := NewSubtreeMetaRegenerator(logger, mockStore, []string{server.URL}, "/api/v1")
+	regenerator := NewSubtreeMetaRegenerator(logger, mockStore, []string{server.URL}, "/api/v1", func() uint32 { return 100 }, 288)
 
 	// Test regeneration should fail
 	meta, err := regenerator.RegenerateMeta(context.Background(), subtreeHash, subtree)
@@ -268,7 +268,7 @@ func TestSubtreeMetaRegenerator_RegenerateMeta_NilStore_PeerFallback(t *testing.
 	logger := ulogger.TestLogger{}
 
 	// Create regenerator with nil store - should still work via peer
-	regenerator := NewSubtreeMetaRegenerator(logger, nil, []string{server.URL}, "/api/v1")
+	regenerator := NewSubtreeMetaRegenerator(logger, nil, []string{server.URL}, "/api/v1", func() uint32 { return 100 }, 288)
 
 	meta, err := regenerator.RegenerateMeta(context.Background(), subtreeHash, subtree)
 
@@ -281,8 +281,10 @@ func TestSubtreeMetaRegenerator_StoreRegeneratedMeta_Success(t *testing.T) {
 	logger := ulogger.TestLogger{}
 
 	regenerator := &SubtreeMetaRegenerator{
-		logger:       logger,
-		subtreeStore: mockStore,
+		logger:               logger,
+		subtreeStore:         mockStore,
+		getBlockHeight:       func() uint32 { return 100 },
+		blockHeightRetention: 288,
 	}
 
 	// Create a simple subtree and meta
