@@ -199,6 +199,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 			logger.Errorf("[Asset] failed to parse propagation proxy address %q: %v", tSettings.Asset.PropagationProxyAddress, err)
 		} else {
 			apiGroup.POST("/tx", h.ProxyPropagationTx(proxyTarget))
+			apiGroup.POST("/txs", h.ProxyPropagationTx(proxyTarget))
 		}
 	}
 
