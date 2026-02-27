@@ -1,6 +1,7 @@
 package block_assembly
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -64,11 +65,25 @@ func submitTransactionWithRetry(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx) 
 		lastErr = err
 
 		// Check if it's an Aerospike readiness error
-		if !isAerospikeNotReadyError(err) {
+		isRetryable := isAerospikeNotReadyError(err)
+		if !isRetryable {
 			// Different error type - fail immediately
-			// Log both the error and its full string representation to help debug error detection
+			// Log detailed error information to help debug error detection
 			t.Logf("Non-retryable error, failing immediately: %v", err)
-			t.Logf("Full error string: %s", err.Error())
+			t.Logf("Error with %%+v: %+v", err)
+
+			// Try to show unwrapped errors
+			current := err
+			depth := 0
+			for current != nil && depth < 5 {
+				t.Logf("  Unwrapped [%d]: %v", depth, current)
+				if unwrapper, ok := current.(interface{ Unwrap() error }); ok {
+					current = unwrapper.Unwrap()
+				} else {
+					break
+				}
+				depth++
+			}
 			return err
 		}
 
@@ -83,16 +98,37 @@ func isAerospikeNotReadyError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// Get the full error string which includes the entire error chain
-	// This is important because Aerospike errors are often deeply wrapped:
-	// "failed to validate transaction" -> "error registering tx" -> "FAIL_FORBIDDEN: Operation not allowed"
+
+	// Try multiple ways to get the full error information since errors may be wrapped
+	// in ways that hide the underlying Aerospike error details
+
+	// Method 1: Standard Error() string
 	errStr := err.Error()
 
-	// Check for specific Aerospike "not ready" error messages anywhere in the error chain
-	hasOperationNotAllowed := strings.Contains(errStr, "Operation not allowed at this time")
-	hasFailedLock := strings.Contains(errStr, "failed to acquire lock")
-	hasForbidden := strings.Contains(errStr, "FAIL_FORBIDDEN")
-	hasResultCodeForbidden := strings.Contains(errStr, "ResultCode: FAIL_FORBIDDEN")
+	// Method 2: Try fmt.Sprintf with %+v to get verbose error output
+	verboseErr := fmt.Sprintf("%+v", err)
+
+	// Method 3: Unwrap the error chain manually
+	unwrappedStr := ""
+	current := err
+	for current != nil {
+		unwrappedStr += current.Error() + " | "
+		// Try to unwrap using standard library
+		if unwrapper, ok := current.(interface{ Unwrap() error }); ok {
+			current = unwrapper.Unwrap()
+		} else {
+			break
+		}
+	}
+
+	// Combine all representations
+	fullErrStr := errStr + " | " + verboseErr + " | " + unwrappedStr
+
+	// Check for specific Aerospike "not ready" error messages anywhere in any representation
+	hasOperationNotAllowed := strings.Contains(fullErrStr, "Operation not allowed at this time")
+	hasFailedLock := strings.Contains(fullErrStr, "failed to acquire lock")
+	hasForbidden := strings.Contains(fullErrStr, "FAIL_FORBIDDEN")
+	hasResultCodeForbidden := strings.Contains(fullErrStr, "ResultCode: FAIL_FORBIDDEN")
 
 	// Only retry if we see one of the specific Aerospike readiness errors
 	return hasOperationNotAllowed || hasFailedLock || hasForbidden || hasResultCodeForbidden
