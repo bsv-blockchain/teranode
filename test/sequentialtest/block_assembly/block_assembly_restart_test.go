@@ -186,9 +186,9 @@ func verifyTxInpointsViaIterator(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx,
 	require.True(t, found, "Transaction %s should be found in unmined tx iterator", expectedTxHash.String())
 }
 func TestBlockAssemblyRestartWithExternalTransactionsAerospike(t *testing.T) {
-	// t.Run("external tx reload after reset", func(t *testing.T) {
-	// 	testBlockAssemblyRestartWithExternalTx(t, "aerospike")
-	// })
+	t.Run("external tx reload after reset", func(t *testing.T) {
+		testBlockAssemblyRestartWithExternalTx(t, "aerospike")
+	})
 }
 
 func testBlockAssemblyRestartWithExternalTx(t *testing.T, utxoStoreType string) {
@@ -328,9 +328,9 @@ func testBlockAssemblyRestartWithExternalTx(t *testing.T, utxoStoreType string) 
 }
 
 func TestBlockAssemblyRestartWithMultipleExternalTransactionsAerospike(t *testing.T) {
-	// t.Run("multiple external tx reload after reset", func(t *testing.T) {
-	// 	testBlockAssemblyRestartWithMultipleExternalTx(t, "aerospike")
-	// })
+	t.Run("multiple external tx reload after reset", func(t *testing.T) {
+		testBlockAssemblyRestartWithMultipleExternalTx(t, "aerospike")
+	})
 }
 
 func testBlockAssemblyRestartWithMultipleExternalTx(t *testing.T, utxoStoreType string) {

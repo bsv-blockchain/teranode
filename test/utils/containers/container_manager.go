@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	aero "github.com/aerospike/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
@@ -106,6 +107,11 @@ func (cm *ContainerManager) initializeAerospike(ctx context.Context) (*url.URL, 
 	parsedURL, err := url.Parse(cm.containerURL)
 	if err != nil {
 		return nil, errors.NewExternalError("failed to parse Aerospike URL: %v", err)
+	}
+
+	// Validate that Aerospike is ready to accept write operations
+	if err := cm.validateAerospikeReadiness(client, 10); err != nil {
+		return nil, errors.NewExternalError("Aerospike validation failed: %v", err)
 	}
 
 	return parsedURL, nil
@@ -234,6 +240,70 @@ func (cm *ContainerManager) validateDatabaseConnection(connStr string, maxRetrie
 	}
 
 	return errors.NewProcessingError("failed to validate database connection after %d attempts: %v", maxRetries, err)
+}
+
+// validateAerospikeReadiness attempts to perform write/read operations to verify Aerospike
+// is truly ready to accept transactions. It will retry with exponential backoff.
+// This is necessary because Aerospike may accept connections but still reject operations
+// with FAIL_FORBIDDEN during initialization.
+func (cm *ContainerManager) validateAerospikeReadiness(client *uaerospike.Client, maxRetries int) error {
+	namespace := "test"
+	setName := "readiness_check"
+	testKeyValue := "readiness_test_key"
+
+	// Create an Aerospike key once (outside the loop)
+	key, keyErr := aero.NewKey(namespace, setName, testKeyValue)
+	if keyErr != nil {
+		return errors.NewProcessingError("failed to create Aerospike key: %v", keyErr)
+	}
+
+	for i := 0; i < maxRetries; i++ {
+		// Try to perform a write operation
+		binMap := aero.BinMap{
+			"test_field": "test_value",
+			"timestamp":  time.Now().Unix(),
+		}
+		err := client.Put(nil, key, binMap)
+
+		if err == nil {
+			// Write succeeded, try to read it back
+			_, err := client.Get(nil, key)
+			if err == nil {
+				// Both write and read succeeded, Aerospike is ready
+				// Clean up the test record
+				_, _ = client.Delete(nil, key)
+				return nil
+			}
+		}
+
+		// Check if this is a "not ready" error that we should retry
+		if err != nil {
+			if !isAerospikeNotReadyError(err) {
+				// Different error type - fail immediately
+				return errors.NewProcessingError("Aerospike readiness check failed with non-retryable error: %v", err)
+			}
+		}
+
+		// Wait with exponential backoff before retry
+		delay := time.Duration(100*(1<<uint(i))) * time.Millisecond
+		if delay > 2*time.Second {
+			delay = 2 * time.Second // Cap at 2 seconds
+		}
+		time.Sleep(delay)
+	}
+
+	return errors.NewProcessingError("Aerospike failed to become ready after %d attempts", maxRetries)
+}
+
+// isAerospikeNotReadyError checks if an error indicates Aerospike is not ready for operations.
+func isAerospikeNotReadyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "Operation not allowed") ||
+		strings.Contains(errStr, "FAIL_FORBIDDEN") ||
+		strings.Contains(errStr, "failed to acquire lock")
 }
 
 // initializeSQLite returns a SQLite in-memory URL (no container needed)
