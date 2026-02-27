@@ -65,10 +65,11 @@ func submitTransactionWithRetry(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx) 
 		// Check if it's an Aerospike readiness error
 		if !isAerospikeNotReadyError(err) {
 			// Different error type - fail immediately
+			t.Logf("Non-retryable error, failing immediately: %v", err)
 			return err
 		}
 
-		t.Logf("Aerospike not ready, will retry: %v", err)
+		t.Logf("Aerospike not ready (attempt %d/%d), will retry: %v", attempt, maxRetries, err)
 	}
 
 	return lastErr
@@ -80,11 +81,14 @@ func isAerospikeNotReadyError(err error) bool {
 		return false
 	}
 	errStr := err.Error()
-	// Check for common Aerospike "not ready" error messages
-	// These can be wrapped in other errors, so use Contains instead of prefix matching
-	return strings.Contains(errStr, "Operation not allowed at this time") ||
-		strings.Contains(errStr, "failed to acquire lock") ||
-		strings.Contains(errStr, "FAIL_FORBIDDEN")
+	// Check for specific Aerospike "not ready" error messages
+	// The actual error is often wrapped, so we check if ANY of these appear in the message
+	hasOperationNotAllowed := strings.Contains(errStr, "Operation not allowed at this time")
+	hasFailedLock := strings.Contains(errStr, "failed to acquire lock")
+	hasForbidden := strings.Contains(errStr, "FAIL_FORBIDDEN")
+
+	// Only retry if we see one of the specific Aerospike readiness errors
+	return hasOperationNotAllowed || hasFailedLock || hasForbidden
 }
 
 // waitForTransactionInIterator polls the unmined tx iterator until the transaction appears.
