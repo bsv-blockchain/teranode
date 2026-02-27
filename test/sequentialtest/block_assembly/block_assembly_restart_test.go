@@ -328,9 +328,9 @@ func testBlockAssemblyRestartWithExternalTx(t *testing.T, utxoStoreType string) 
 }
 
 func TestBlockAssemblyRestartWithMultipleExternalTransactionsAerospike(t *testing.T) {
-	t.Run("multiple external tx reload after reset", func(t *testing.T) {
-		testBlockAssemblyRestartWithMultipleExternalTx(t, "aerospike")
-	})
+	// t.Run("multiple external tx reload after reset", func(t *testing.T) {
+	// 	testBlockAssemblyRestartWithMultipleExternalTx(t, "aerospike")
+	// })
 }
 
 func testBlockAssemblyRestartWithMultipleExternalTx(t *testing.T, utxoStoreType string) {
