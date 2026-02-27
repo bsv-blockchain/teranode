@@ -69,14 +69,14 @@ func TestLargeTxReorgPostgres(t *testing.T) {
 // spent by two CONFLICTING transactions (double-spend) in competing forks.
 //
 // Bug scenario:
-// 1. Mine largeTx in common block
-// 2. Fork A: spendingTxA spends all outputs → spentExtraRecs = totalExtraRecs
-// 3. Fork B wins: spendingTxB spends same outputs (conflicts with A) → ProcessConflicting() → Unspend(spendingTxA)
-//    Expected: spentExtraRecs = totalExtraRecs (B's spends replace A's spends)
-//    BUG: If Lua doesn't signal NOTALLSPENT during unspend, spentExtraRecs stays inflated
-// 4. Fork A wins again → ProcessConflicting() → Unspend(spendingTxB) + Spend(spendingTxA)
-//    Expected: spentExtraRecs = totalExtraRecs
-//    BUG: Without proper signals, spentExtraRecs could exceed totalExtraRecs → PANIC
+//  1. Mine largeTx in common block
+//  2. Fork A: spendingTxA spends all outputs → spentExtraRecs = totalExtraRecs
+//  3. Fork B wins: spendingTxB spends same outputs (conflicts with A) → ProcessConflicting() → Unspend(spendingTxA)
+//     Expected: spentExtraRecs = totalExtraRecs (B's spends replace A's spends)
+//     BUG: If Lua doesn't signal NOTALLSPENT during unspend, spentExtraRecs stays inflated
+//  4. Fork A wins again → ProcessConflicting() → Unspend(spendingTxB) + Spend(spendingTxA)
+//     Expected: spentExtraRecs = totalExtraRecs
+//     BUG: Without proper signals, spentExtraRecs could exceed totalExtraRecs → PANIC
 //
 // This tests the actual code path through ProcessConflicting() and Unspend() that the production bug affected.
 func testSimpleLargeTransactionReorg(t *testing.T, utxoStoreType string) {
