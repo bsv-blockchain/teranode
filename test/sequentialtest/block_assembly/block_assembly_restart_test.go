@@ -26,7 +26,62 @@ const (
 	numOutputsForExternalTx = 5
 
 	blockWait = 10 * time.Second
+
+	// Log messages
+	msgSubmittingExternalTx = "Submitting external transaction to propagation"
+
+	// Retry configuration for Aerospike readiness
+	maxRetries        = 5
+	initialRetryDelay = 500 * time.Millisecond
 )
+
+// submitTransactionWithRetry attempts to submit a transaction with retry logic for Aerospike readiness.
+// Aerospike may return "Operation not allowed at this time" immediately after daemon startup,
+// even if WaitForBlockHeight has completed. This function retries with exponential backoff.
+func submitTransactionWithRetry(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx) error {
+	t.Helper()
+
+	var lastErr error
+	retryDelay := initialRetryDelay
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			t.Logf("Retrying transaction submission (attempt %d/%d) after %v", attempt, maxRetries, retryDelay)
+			time.Sleep(retryDelay)
+			retryDelay *= 2 // Exponential backoff
+		}
+
+		err := td.PropagationClient.ProcessTransaction(td.Ctx, tx)
+		if err == nil {
+			if attempt > 0 {
+				t.Logf("Transaction %s submitted successfully after %d retries", tx.TxIDChainHash().String(), attempt)
+			}
+			return nil
+		}
+
+		lastErr = err
+
+		// Check if it's an Aerospike readiness error
+		if !isAerospikeNotReadyError(err) {
+			// Different error type - fail immediately
+			return err
+		}
+
+		t.Logf("Aerospike not ready, will retry: %v", err)
+	}
+
+	return lastErr
+}
+
+// isAerospikeNotReadyError checks if the error is due to Aerospike not being ready.
+func isAerospikeNotReadyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return (len(errStr) > 0 && (len(errStr) >= 32 && errStr[:32] == "Operation not allowed at this ti")) ||
+		(len(errStr) >= 19 && errStr[:19] == "failed to acquire l")
+}
 
 func verifyTxInpointsViaIterator(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx, expectedParentTxHash *chainhash.Hash) {
 	t.Helper()
@@ -133,9 +188,9 @@ func testBlockAssemblyRestartWithExternalTx(t *testing.T, utxoStoreType string) 
 	t.Logf("Created transaction %s with %d outputs", externalTx.TxIDChainHash().String(), len(externalTx.Outputs))
 	require.Equal(t, numOutputsForExternalTx, len(externalTx.Outputs), "Transaction should have expected number of outputs")
 
-	// Step 2: Submit the transaction
-	t.Log("Submitting external transaction to propagation")
-	err = td.PropagationClient.ProcessTransaction(td.Ctx, externalTx)
+	// Step 2: Submit the transaction with retry logic for Aerospike readiness
+	t.Log(msgSubmittingExternalTx)
+	err = submitTransactionWithRetry(t, td, externalTx)
 	require.NoError(t, err)
 
 	// Create child
@@ -144,9 +199,9 @@ func testBlockAssemblyRestartWithExternalTx(t *testing.T, utxoStoreType string) 
 		transactions.WithP2PKHOutputs(numOutputsForExternalTx, 1000),
 	)
 
-	// Step 2: Submit the transaction
-	t.Log("Submitting external transaction to propagation")
-	err = td.PropagationClient.ProcessTransaction(td.Ctx, childTx)
+	// Submit the child transaction with retry logic
+	t.Log(msgSubmittingExternalTx)
+	err = submitTransactionWithRetry(t, td, childTx)
 	require.NoError(t, err)
 
 	// Step 3: Wait for transaction to appear in block assembly
@@ -577,9 +632,9 @@ func testExternalTransactionTxInpointsParsingViaIterator(t *testing.T, utxoStore
 	// Verify the transaction has exactly 1 input (spending from coinbase)
 	require.Equal(t, 1, len(externalTx.Inputs), "Transaction should have exactly 1 input")
 
-	// Submit the transaction
-	t.Log("Submitting external transaction to propagation")
-	err = td.PropagationClient.ProcessTransaction(td.Ctx, externalTx)
+	// Submit the transaction with retry logic for Aerospike readiness
+	t.Log(msgSubmittingExternalTx)
+	err = submitTransactionWithRetry(t, td, externalTx)
 	require.NoError(t, err)
 
 	// Wait for transaction to appear in block assembly
