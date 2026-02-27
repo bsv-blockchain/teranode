@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/test"
@@ -99,16 +100,24 @@ func isAerospikeNotReadyError(err error) bool {
 		return false
 	}
 
-	// Try multiple ways to get the full error information since errors may be wrapped
-	// in ways that hide the underlying Aerospike error details
+	// Try multiple ways to get the full error information since errors may be wrapped,
+	// especially through gRPC boundaries
 
-	// Method 1: Standard Error() string
+	// Method 1: Unwrap gRPC errors first - this is critical for errors from gRPC services
+	// like PropagationClient.ProcessTransaction which return gRPC status errors
+	grpcErr := errors.UnwrapGRPC(err)
+	grpcErrStr := ""
+	if grpcErr != nil {
+		grpcErrStr = grpcErr.Error()
+	}
+
+	// Method 2: Standard Error() string
 	errStr := err.Error()
 
-	// Method 2: Try fmt.Sprintf with %+v to get verbose error output
+	// Method 3: Try fmt.Sprintf with %+v to get verbose error output
 	verboseErr := fmt.Sprintf("%+v", err)
 
-	// Method 3: Unwrap the error chain manually
+	// Method 4: Unwrap the error chain manually
 	unwrappedStr := ""
 	current := err
 	for current != nil {
@@ -121,8 +130,8 @@ func isAerospikeNotReadyError(err error) bool {
 		}
 	}
 
-	// Combine all representations
-	fullErrStr := errStr + " | " + verboseErr + " | " + unwrappedStr
+	// Combine all representations including gRPC unwrapped version
+	fullErrStr := grpcErrStr + " | " + errStr + " | " + verboseErr + " | " + unwrappedStr
 
 	// Check for specific Aerospike "not ready" error messages anywhere in any representation
 	hasOperationNotAllowed := strings.Contains(fullErrStr, "Operation not allowed at this time")
