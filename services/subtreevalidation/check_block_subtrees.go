@@ -124,9 +124,13 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	} else if block.TransactionCount > 0 && len(block.Subtrees) > 0 {
 		// Calculate exact txs per subtree using block metadata
 		txsPerSubtree := int(block.TransactionCount / uint64(len(block.Subtrees)))
-		subtreesBatchSize = txBatchSize / txsPerSubtree
-		if subtreesBatchSize == 0 {
-			subtreesBatchSize = 1 // Minimum 1 subtree per batch
+		if txsPerSubtree == 0 {
+			subtreesBatchSize = 1
+		} else {
+			subtreesBatchSize = txBatchSize / txsPerSubtree
+			if subtreesBatchSize == 0 {
+				subtreesBatchSize = 1 // Minimum 1 subtree per batch
+			}
 		}
 	} else {
 		// Fallback if metadata not available (shouldn't happen)

@@ -997,6 +997,18 @@ handled:
 
 	// Execute the handler in a goroutine
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.logger.Errorf("Recovered from panic in RPC handler '%s': %v", cmd.method, r)
+				select {
+				case <-timeoutCtx.Done():
+					return
+				default:
+					resultCh <- nil
+					errCh <- errors.NewServiceError("internal error: RPC handler panicked")
+				}
+			}
+		}()
 		result, err := handler(timeoutCtx, s, cmd.cmd, closeChan)
 		select {
 		case <-timeoutCtx.Done():

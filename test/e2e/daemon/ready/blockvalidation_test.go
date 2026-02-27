@@ -2,6 +2,7 @@ package smoke
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/test"
@@ -54,6 +55,14 @@ func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
 
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, childTx2)
 	require.NoError(t, err, "failed to submit child transaction 2")
+
+	// Wait for all transactions to be processed by block assembly before mining
+	err = td.WaitForTransactionInBlockAssembly(parentTx, 10*time.Second)
+	require.NoError(t, err, "parent transaction not in block assembly")
+	err = td.WaitForTransactionInBlockAssembly(childTx1, 10*time.Second)
+	require.NoError(t, err, "child transaction 1 not in block assembly")
+	err = td.WaitForTransactionInBlockAssembly(childTx2, 10*time.Second)
+	require.NoError(t, err, "child transaction 2 not in block assembly")
 
 	t.Log("Mining block containing parent and child transactions...")
 	block := td.MineAndWait(t, 1)

@@ -273,12 +273,14 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		e.GET(h.settings.StatsPrefix+"*", AdaptStdHandler(gocore.HandleOther))
 	}
 
+	// Create auth handler for protecting admin endpoints (used regardless of dashboard state)
+	authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
+
 	if h.settings.Dashboard.Enabled {
 		// Initialize dashboard with settings
 		dashboard.InitDashboard(h.settings)
 
 		// Apply authentication middleware for all POST endpoints
-		authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
 		apiGroup.Use(authHandler.PostAuthMiddleware)
 
 		// Register dashboard-compatible API routes that need auth protection
@@ -327,11 +329,15 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		pathFsmStates = "/fsm/states"
 	)
 
-	// Register FSM API endpoints
+	// Register FSM read-only endpoints (no auth required)
 	apiGroup.GET(pathFsmState, fsmHandler.GetFSMState)
-	apiGroup.POST(pathFsmState, fsmHandler.SendFSMEvent)
 	apiGroup.GET(pathFsmEvents, fsmHandler.GetFSMEvents)
 	apiGroup.GET(pathFsmStates, fsmHandler.GetFSMStates)
+
+	// Register FSM write endpoint with auth (requires authentication regardless of dashboard state)
+	apiAdminGroup := e.Group(apiPrefix)
+	apiAdminGroup.Use(authHandler.RequireAuthMiddleware)
+	apiAdminGroup.POST(pathFsmState, fsmHandler.SendFSMEvent)
 
 	// Add OPTIONS handlers for CORS preflight requests
 	apiGroup.OPTIONS(pathFsmState, func(c echo.Context) error {
@@ -347,9 +353,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Create and register block handler for block operations
 	blockHandler := NewBlockHandler(repo.BlockchainClient, repo.BlockvalidationClient, logger)
 
-	// Register block invalidation/revalidation endpoints
-	apiGroup.POST("/block/invalidate", blockHandler.InvalidateBlock)
-	apiGroup.POST("/block/revalidate", blockHandler.RevalidateBlock)
+	// Register block invalidation/revalidation endpoints (requires authentication)
+	apiAdminGroup.POST("/block/invalidate", blockHandler.InvalidateBlock)
+	apiAdminGroup.POST("/block/revalidate", blockHandler.RevalidateBlock)
 	apiGroup.GET("/blocks/invalid", blockHandler.GetLastNInvalidBlocks)
 
 	// Register catchup status endpoint
@@ -363,7 +369,6 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 
 	// Register settings handler for settings portal (always requires authentication)
 	settingsHandler := NewSettingsHandler(tSettings, logger)
-	authHandler := dashboard.NewAuthHandler(logger, tSettings)
 	apiSettingsGroup := e.Group(apiPrefix + "/settings")
 	apiSettingsGroup.Use(authHandler.RequireAuthMiddleware)
 	apiSettingsGroup.GET("", settingsHandler.GetSettings)

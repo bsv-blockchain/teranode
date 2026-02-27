@@ -1067,3 +1067,38 @@ func TestStart(t *testing.T) {
 		assert.Equal(t, int32(3), atomic.LoadInt32(&s.started))
 	})
 }
+
+func TestStandardCmdResult_PanicRecovery(t *testing.T) {
+	logger := mocklogger.NewTestLogger()
+
+	s := &RPCServer{
+		logger: logger,
+		settings: &settings.Settings{
+			RPC: settings.RPCSettings{
+				RPCTimeout: 5 * time.Second,
+			},
+		},
+		requestProcessShutdown: make(chan struct{}, 1),
+	}
+
+	err := s.Init(context.Background())
+	require.NoError(t, err)
+
+	// Inject a panicking handler
+	rpcHandlers["__test_panic"] = func(_ context.Context, _ *RPCServer, _ interface{}, _ <-chan struct{}) (interface{}, error) {
+		panic("test panic in handler")
+	}
+	defer delete(rpcHandlers, "__test_panic")
+
+	closeChan := make(chan struct{})
+	parsedCmd := &parsedRPCCmd{
+		method: "__test_panic",
+		cmd:    nil,
+	}
+
+	result, err := s.standardCmdResult(context.Background(), parsedCmd, closeChan)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "internal error: RPC handler panicked")
+}
