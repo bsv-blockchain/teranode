@@ -502,6 +502,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	ports := []int{getPortFromString(appSettings.HealthCheckHTTPListenAddress)}
 	require.NoError(t, WaitForHealthLiveness(ports, 10*time.Second))
 
+	// If using Aerospike, add a brief delay to allow it to stabilize after daemon services connect
+	// Aerospike may accept connections but still reject operations immediately after multiple
+	// services start connecting simultaneously. Combined with retry logic in tests, this ensures
+	// reliability across different environments (local development and resource-constrained CI).
+	if containerManager != nil && containerManager.GetStoreType() == containers.UTXOStoreAerospike {
+		time.Sleep(1 * time.Second)
+	}
+
 	var blockchainClient blockchain.ClientI
 
 	blockchainClient, err = blockchain.NewClient(ctx, logger, appSettings, "test")

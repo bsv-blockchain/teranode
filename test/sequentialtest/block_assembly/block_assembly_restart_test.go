@@ -32,7 +32,8 @@ const (
 	msgSubmittingExternalTx = "Submitting external transaction to propagation"
 
 	// Retry configuration for Aerospike readiness
-	maxRetries        = 5
+	// Use higher values to handle resource-constrained CI environments
+	maxRetries        = 10
 	initialRetryDelay = 500 * time.Millisecond
 )
 
@@ -65,7 +66,9 @@ func submitTransactionWithRetry(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx) 
 		// Check if it's an Aerospike readiness error
 		if !isAerospikeNotReadyError(err) {
 			// Different error type - fail immediately
+			// Log both the error and its full string representation to help debug error detection
 			t.Logf("Non-retryable error, failing immediately: %v", err)
+			t.Logf("Full error string: %s", err.Error())
 			return err
 		}
 
@@ -80,15 +83,19 @@ func isAerospikeNotReadyError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Get the full error string which includes the entire error chain
+	// This is important because Aerospike errors are often deeply wrapped:
+	// "failed to validate transaction" -> "error registering tx" -> "FAIL_FORBIDDEN: Operation not allowed"
 	errStr := err.Error()
-	// Check for specific Aerospike "not ready" error messages
-	// The actual error is often wrapped, so we check if ANY of these appear in the message
+
+	// Check for specific Aerospike "not ready" error messages anywhere in the error chain
 	hasOperationNotAllowed := strings.Contains(errStr, "Operation not allowed at this time")
 	hasFailedLock := strings.Contains(errStr, "failed to acquire lock")
 	hasForbidden := strings.Contains(errStr, "FAIL_FORBIDDEN")
+	hasResultCodeForbidden := strings.Contains(errStr, "ResultCode: FAIL_FORBIDDEN")
 
 	// Only retry if we see one of the specific Aerospike readiness errors
-	return hasOperationNotAllowed || hasFailedLock || hasForbidden
+	return hasOperationNotAllowed || hasFailedLock || hasForbidden || hasResultCodeForbidden
 }
 
 // waitForTransactionInIterator polls the unmined tx iterator until the transaction appears.
