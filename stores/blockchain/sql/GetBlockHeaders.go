@@ -111,6 +111,7 @@ func (s *SQL) GetBlockHeaders(ctx context.Context, blockHashFrom *chainhash.Hash
 			,b.subtrees_set
 			,b.invalid
 			,b.processed_at
+			,b.median_time_past
 		FROM blocks b
 		WHERE id IN (
 			SELECT id FROM blocks
@@ -191,6 +192,7 @@ func (s *SQL) processBlockHeadersRows(rows *sql.Rows, numberOfHeaders uint64, ha
 			&blockHeaderMeta.SubtreesSet,
 			&blockHeaderMeta.Invalid,
 			&processedAt,
+			&blockHeaderMeta.MedianTimePast,
 		}
 
 		// Add coinbase_tx if it's in the query

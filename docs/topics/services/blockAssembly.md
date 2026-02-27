@@ -240,7 +240,7 @@ Once a miner solves the mining challenge, it submits a solution to the Block Ass
 
 - The block is added to the blockchain via the Blockchain Client. This will be propagated to other nodes via the P2P service.
 
-- Subtree TTLs are removed, effectively setting the subtrees for removal from the Subtree Store.
+- Subtrees retain their finite DAH (Delete-At-Height) from assembly. The block persister will promote them to permanent (DAH=0) when it processes the block.
 - All jobs in the Job Store are deleted.
 - In case of an error at any point in the process, the block is invalidated through the Blockchain Client.
 

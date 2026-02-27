@@ -44,10 +44,10 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils/expiringmap"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -835,11 +835,11 @@ func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
 func (sm *SyncManager) clearRequestedState(state *peerSyncState) {
 	// Remove requested transactions from the global map so that they will
 	// be fetched from elsewhere next time we get an inv.
-	state.requestedTxns.Clear()
+	state.requestedTxns.Stop()
 
 	// Remove requested blocks from the global map so that they will be
 	// fetched from elsewhere next time we get an inv.
-	state.requestedBlocks.Clear()
+	state.requestedBlocks.Stop()
 }
 
 // updateSyncPeer picks a new peer to sync from.
@@ -1125,8 +1125,22 @@ func (sm *SyncManager) handleBlockMsg(bmsg *blockQueueMsg) error {
 
 	state, exists := sm.peerStates.Get(peer)
 	if !exists {
-		sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
-		return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
+		// Stream peers (e.g. BlockPriority) are not registered in peerStates
+		// directly - look up via their association's primary peer instead.
+		if assoc := peer.AssociationRef(); assoc != nil {
+			primary := assoc.PrimaryPeer()
+			if primary != nil {
+				state, exists = sm.peerStates.Get(primary)
+				if exists {
+					sm.logger.Debugf("[handleBlockMsg][%s] resolved stream peer %s to primary peer %s", bmsg.blockHash, peer, primary)
+					peer = primary
+				}
+			}
+		}
+		if !exists {
+			sm.logger.Errorf("[handleBlockMsg][%s] Received block message from unknown peer %s", bmsg.blockHash, peer)
+			return errors.NewServiceError("[handleBlockMsg] Received block message from unknown peer %s", peer)
+		}
 	}
 
 	legacySyncMode := false
@@ -1489,8 +1503,22 @@ func (sm *SyncManager) handleHeadersMsg(hmsg *headersMsg) {
 
 	_, exists := sm.peerStates.Get(peer)
 	if !exists {
-		sm.logger.Warnf("Received headers message from unknown peer %s", peer)
-		return
+		// Stream peers (e.g. BlockPriority DATA1) are not registered in
+		// peerStates directly - resolve via their association's primary peer.
+		if assoc := peer.AssociationRef(); assoc != nil {
+			primary := assoc.PrimaryPeer()
+			if primary != nil {
+				_, exists = sm.peerStates.Get(primary)
+				if exists {
+					sm.logger.Debugf("[handleHeadersMsg] resolved stream peer %s to primary peer %s", peer, primary)
+					peer = primary
+				}
+			}
+		}
+		if !exists {
+			sm.logger.Warnf("Received headers message from unknown peer %s", peer)
+			return
+		}
 	}
 
 	// The remote peer is misbehaving if we didn't request headers.
@@ -1656,8 +1684,22 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 
 	state, exists := sm.peerStates.Get(peer)
 	if !exists {
-		sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
-		return
+		// Stream peers (e.g. BlockPriority DATA1) are not registered in
+		// peerStates directly - resolve via their association's primary peer.
+		if assoc := peer.AssociationRef(); assoc != nil {
+			primary := assoc.PrimaryPeer()
+			if primary != nil {
+				state, exists = sm.peerStates.Get(primary)
+				if exists {
+					sm.logger.Debugf("[handleInvMsg] resolved stream peer %s to primary peer %s", peer, primary)
+					peer = primary
+				}
+			}
+		}
+		if !exists {
+			sm.logger.Warnf("[handleInvMsg] Received inv message from unknown peer %s", peer)
+			return
+		}
 	}
 
 	// Attempt to find the final block in the inventory list.  There may
@@ -2130,6 +2172,10 @@ func (sm *SyncManager) Stop() error {
 	close(sm.quit)
 	<-sm.handlerDone
 
+	sm.orphanTxs.Stop()
+	sm.requestedTxns.Stop()
+	sm.requestedBlocks.Stop()
+
 	return nil
 }
 
@@ -2350,7 +2396,7 @@ func (sm *SyncManager) startKafkaListeners(ctx context.Context, _ error) {
 	// Listen to blockchain notifications for subtree announcements
 	go func() {
 		// will never return an error
-		blockchainSubscription, _ := sm.blockchainClient.Subscribe(ctx, "legacy/manager")
+		blockchainSubscription, _ := sm.blockchainClient.Subscribe(ctx, teranodeblockchain.SubscriberLegacy)
 
 		for {
 			select {

@@ -398,11 +398,6 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 	})
 
 	g.Go(func() error {
-		subtreeDataBytes, err := subtreeData.Serialize()
-		if err != nil {
-			return errors.NewStorageError("[writeSubtree][%s] failed to serialize subtree data", subtree.RootHash().String(), err)
-		}
-
 		dah := uint32(block.Height()) + sm.settings.GlobalBlockHeightRetention // nolint: gosec
 
 		storer, err := filestorer.NewFileStorer(
@@ -432,8 +427,11 @@ func (sm *SyncManager) writeSubtree(ctx context.Context, block *bsvutil.Block, s
 
 		// TODO Write header extra - , *subtreeData.RootHash(), uint32(block.Height())
 
-		if _, err := storer.Write(subtreeDataBytes); err != nil {
-			return errors.NewStorageError("error writing subtree data to disk", err)
+		// Stream transactions directly to the file storer instead of serializing
+		// into a single large buffer. This eliminates the ~10.9 GB intermediate
+		// allocation that Serialize() creates for large blocks.
+		if err := subtreeData.WriteTransactionsToWriter(storer, 0, subtreeData.Subtree.Length()); err != nil {
+			return errors.NewStorageError("error streaming subtree data to disk", err)
 		}
 
 		if err = storer.Close(ctx); err != nil {

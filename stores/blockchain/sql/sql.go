@@ -216,6 +216,7 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
     	,inserted_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 		,processed_at   TIMESTAMPTZ NULL
 		,persisted_at   TIMESTAMPTZ NULL
+		,median_time_past BIGINT NOT NULL DEFAULT 0
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -250,6 +251,20 @@ func createPostgresSchema(db *usql.DB, withIndexes bool) error {
 			}
 		} else {
 			return errors.NewStorageError("could not check for persisted_at column in blocks table", err)
+		}
+	}
+
+	// add the median_time_past column to the blocks table if it does not exist
+	err = db.QueryRow("SELECT column_name FROM information_schema.columns WHERE table_name='blocks' AND column_name='median_time_past'").Scan(new(string))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err := db.Exec(`ALTER TABLE blocks ADD COLUMN median_time_past BIGINT NOT NULL DEFAULT 0;`)
+			if err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add median_time_past column to blocks table", err)
+			}
+		} else {
+			return errors.NewStorageError("could not check for median_time_past column in blocks table", err)
 		}
 	}
 
@@ -446,6 +461,7 @@ func createSqliteSchema(db *usql.DB) error {
         ,inserted_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 		,processed_at   TEXT NULL
 		,persisted_at   TEXT NULL
+		,median_time_past BIGINT NOT NULL DEFAULT 0
 	  );
 	`); err != nil {
 		_ = db.Close()
@@ -477,6 +493,20 @@ func createSqliteSchema(db *usql.DB) error {
 			}
 		} else {
 			return errors.NewStorageError("could not check for persisted_at column in blocks table", err)
+		}
+	}
+
+	// add the median_time_past column to the blocks table if it does not exist
+	err = db.QueryRow("SELECT name FROM pragma_table_info('blocks') WHERE name='median_time_past'").Scan(new(string))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			_, err := db.Exec(`ALTER TABLE blocks ADD COLUMN median_time_past BIGINT NOT NULL DEFAULT 0;`)
+			if err != nil {
+				_ = db.Close()
+				return errors.NewStorageError("could not add median_time_past column to blocks table", err)
+			}
+		} else {
+			return errors.NewStorageError("could not check for median_time_past column in blocks table", err)
 		}
 	}
 

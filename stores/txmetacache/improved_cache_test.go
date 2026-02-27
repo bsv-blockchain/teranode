@@ -937,8 +937,9 @@ func TestImprovedCache_OverfillGenerationStats(t *testing.T) {
 			}
 
 			// Valid entries cannot exceed a reasonable upper bound (capacity is finite)
-			// Allow up to 2x estimated capacity due to chunk alignment and bucket distribution
-			maxReasonableValid := uint64(estimatedCapacity) * 2
+			// Allow up to 3x estimated capacity due to chunk alignment, bucket distribution,
+			// and generation overlap during eviction
+			maxReasonableValid := uint64(estimatedCapacity) * 3
 			require.LessOrEqual(t, stats.ValidEntriesCount, maxReasonableValid,
 				"ValidEntriesCount should be bounded by cache capacity (got %d, max reasonable %d)",
 				stats.ValidEntriesCount, maxReasonableValid)

@@ -45,7 +45,6 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/looplab/fsm"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -409,6 +408,9 @@ func (b *Blockchain) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	go b.startSubscriptions()
 
+	// Start heartbeat sender for subscription health monitoring
+	go b.startHeartbeatSender(ctx)
+
 	// Start batch token cleanup
 	go b.cleanupExpiredBatchTokens()
 
@@ -594,6 +596,43 @@ func (b *Blockchain) startKafka() {
 	b.blocksFinalKafkaAsyncProducer.Start(b.AppCtx, b.kafkaChan)
 }
 
+// startHeartbeatSender sends periodic heartbeat (PING) notifications to all subscribers.
+// This allows clients to detect subscription staleness and reconnect if needed.
+// The heartbeat interval is configurable via settings (default: 10s).
+func (b *Blockchain) startHeartbeatSender(ctx context.Context) {
+	heartbeatInterval := b.settings.BlockChain.HeartbeatInterval
+
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+
+	b.logger.Infof("[Blockchain][startHeartbeatSender] Starting heartbeat sender with %v interval", heartbeatInterval)
+
+	for {
+		select {
+		case <-ctx.Done():
+			b.logger.Infof("[Blockchain][startHeartbeatSender] Stopping heartbeat sender")
+			return
+		case <-ticker.C:
+			b.broadcastHeartbeat()
+		}
+	}
+}
+
+// broadcastHeartbeat sends a PING notification to all subscribers.
+func (b *Blockchain) broadcastHeartbeat() {
+	notification := &blockchain_api.Notification{
+		Type: model.NotificationType_PING,
+	}
+
+	// Use a select with default to avoid blocking if the notifications channel is full
+	select {
+	case b.notifications <- notification:
+		b.logger.Debugf("[Blockchain][broadcastHeartbeat] Heartbeat sent to subscribers")
+	default:
+		b.logger.Warnf("[Blockchain][broadcastHeartbeat] Notifications channel full, skipping heartbeat")
+	}
+}
+
 // startSubscriptions manages blockchain subscriptions in a goroutine.
 //
 // This method handles all subscription management including:
@@ -620,9 +659,11 @@ func (b *Blockchain) startSubscriptions() {
 		case <-b.AppCtx.Done():
 			b.logger.Infof("[Blockchain][startSubscriptions] Stopping channel listeners go routine")
 
+			b.subscribersMu.RLock()
 			for sub := range b.subscribers {
 				safeClose(sub.done)
 			}
+			b.subscribersMu.RUnlock()
 
 			return
 		case notification := <-b.notifications:
@@ -631,6 +672,7 @@ func (b *Blockchain) startSubscriptions() {
 			func() {
 				b.logger.Debugf("[Blockchain Server] Sending notification: %s", notification)
 
+				b.subscribersMu.RLock()
 				for sub := range b.subscribers {
 					b.logger.Debugf("[Blockchain][startSubscriptions] Sending notification to %s in background: %s", sub.source, notification.Stringify())
 
@@ -642,6 +684,7 @@ func (b *Blockchain) startSubscriptions() {
 						}
 					}(sub)
 				}
+				b.subscribersMu.RUnlock()
 			}()
 			b.stats.NewStat("channel-subscription.Send", true).AddTime(start)
 
@@ -677,9 +720,12 @@ func (b *Blockchain) startSubscriptions() {
 			}(s)
 
 		case s := <-b.deadSubscriptions:
+			b.subscribersMu.Lock()
 			delete(b.subscribers, s)
+			remaining := len(b.subscribers)
+			b.subscribersMu.Unlock()
 			safeClose(s.done)
-			b.logger.Infof("[Blockchain][startSubscriptions] Subscription removed (Total=%d).", len(b.subscribers))
+			b.logger.Infof("[Blockchain][startSubscriptions] Subscription removed (Total=%d).", remaining)
 		}
 	}
 }
@@ -876,7 +922,7 @@ func (b *Blockchain) GetBlock(ctx context.Context, request *blockchain_api.GetBl
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlock),
-		tracing.WithDebugLogMessage(b.logger, "[GetBlock] called for %s", utils.ReverseAndHexEncodeSlice(request.Hash)),
+		tracing.WithDebugLogMessage(b.logger, "[GetBlock] called for %s", util.ReverseAndHexEncodeSlice(request.Hash)),
 	)
 	defer deferFn()
 
@@ -916,7 +962,7 @@ func (b *Blockchain) GetBlocks(ctx context.Context, req *blockchain_api.GetBlock
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlocks",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeaders),
-		tracing.WithLogMessage(b.logger, "[GetBlocks] called for %s", utils.ReverseAndHexEncodeSlice(req.Hash)),
+		tracing.WithLogMessage(b.logger, "[GetBlocks] called for %s", util.ReverseAndHexEncodeSlice(req.Hash)),
 	)
 	defer deferFn()
 
@@ -1196,14 +1242,15 @@ func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Con
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader: blockHeader.Bytes(),
-		Height:      meta.Height,
-		TxCount:     meta.TxCount,
-		SizeInBytes: meta.SizeInBytes,
-		Miner:       meta.Miner,
-		ChainWork:   meta.ChainWork,
-		BlockTime:   meta.BlockTime,
-		Timestamp:   meta.Timestamp,
+		BlockHeader:    blockHeader.Bytes(),
+		Height:         meta.Height,
+		TxCount:        meta.TxCount,
+		SizeInBytes:    meta.SizeInBytes,
+		Miner:          meta.Miner,
+		ChainWork:      meta.ChainWork,
+		BlockTime:      meta.BlockTime,
+		Timestamp:      meta.Timestamp,
+		MedianTimePast: meta.MedianTimePast,
 	}, nil
 }
 
@@ -1283,14 +1330,15 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader: chainTip.Bytes(),
-		Height:      meta.Height,
-		TxCount:     meta.TxCount,
-		SizeInBytes: meta.SizeInBytes,
-		Miner:       meta.Miner,
-		BlockTime:   meta.BlockTime,
-		Timestamp:   meta.Timestamp,
-		ChainWork:   meta.ChainWork,
+		BlockHeader:    chainTip.Bytes(),
+		Height:         meta.Height,
+		TxCount:        meta.TxCount,
+		SizeInBytes:    meta.SizeInBytes,
+		Miner:          meta.Miner,
+		BlockTime:      meta.BlockTime,
+		Timestamp:      meta.Timestamp,
+		ChainWork:      meta.ChainWork,
+		MedianTimePast: meta.MedianTimePast,
 	}, nil
 }
 
@@ -1378,20 +1426,21 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader: blockHeader.Bytes(),
-		Id:          meta.ID,
-		Height:      meta.Height,
-		TxCount:     meta.TxCount,
-		SizeInBytes: meta.SizeInBytes,
-		Miner:       meta.Miner,
-		PeerId:      meta.PeerID,
-		BlockTime:   meta.BlockTime,
-		Timestamp:   meta.Timestamp,
-		MinedSet:    meta.MinedSet,
-		ChainWork:   meta.ChainWork,
-		SubtreesSet: meta.SubtreesSet,
-		Invalid:     meta.Invalid,
-		ProcessedAt: processedAt,
+		BlockHeader:    blockHeader.Bytes(),
+		Id:             meta.ID,
+		Height:         meta.Height,
+		TxCount:        meta.TxCount,
+		SizeInBytes:    meta.SizeInBytes,
+		Miner:          meta.Miner,
+		PeerId:         meta.PeerID,
+		BlockTime:      meta.BlockTime,
+		Timestamp:      meta.Timestamp,
+		MinedSet:       meta.MinedSet,
+		ChainWork:      meta.ChainWork,
+		SubtreesSet:    meta.SubtreesSet,
+		Invalid:        meta.Invalid,
+		ProcessedAt:    processedAt,
+		MedianTimePast: meta.MedianTimePast,
 	}, nil
 }
 
@@ -1570,6 +1619,34 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 	}, nil
 }
 
+// GetMedianTimePastByHeights retrieves MTP values for multiple block heights in batch.
+// This method implements the gRPC service endpoint for efficiently fetching Median Time Past
+// values for a list of block heights. This is useful for BIP68 relative locktime validation
+// where the validator needs MTP values for multiple blocks.
+//
+// Parameters:
+//   - ctx: Request context for timeout and cancellation
+//   - req: GetMedianTimePastByHeightsRequest containing array of heights
+//
+// Returns:
+//   - GetMedianTimePastByHeightsResponse containing MTP values (0 for height < 11)
+//   - error: Any error encountered during MTP calculation
+func (b *Blockchain) GetMedianTimePastByHeights(ctx context.Context, req *blockchain_api.GetMedianTimePastByHeightsRequest) (*blockchain_api.GetMedianTimePastByHeightsResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetMedianTimePastByHeights",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	mtps, err := b.GetMedianTimePastForHeights(ctx, req.Heights)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.GetMedianTimePastByHeightsResponse{
+		MedianTimePast: mtps,
+	}, nil
+}
+
 // GetBlocksByHeight retrieves full blocks within a specified height range.
 // This method implements the gRPC service endpoint for fetching complete blocks
 // between two heights in a single efficient operation. It delegates to the
@@ -1703,14 +1780,35 @@ func (b *Blockchain) Subscribe(req *blockchain_api.SubscribeRequest, sub blockch
 	for {
 		select {
 		case <-ctx.Done():
-			// Client disconnected.
+			// Client disconnected - clean up subscriber from map
 			b.logger.Infof("[Blockchain] GRPC client disconnected: %s", req.Source)
+			select {
+			case b.deadSubscriptions <- subscriber{
+				subscription: sub,
+				done:         ch,
+				source:       req.Source,
+			}:
+			case <-b.AppCtx.Done():
+				// Server is shutting down, startSubscriptions already cleaned up
+			}
 			return nil
 		case <-ch:
 			// Subscription ended.
 			return nil
 		}
 	}
+}
+
+// GetSubscribers returns the list of currently active subscriber source strings.
+func (b *Blockchain) GetSubscribers(_ context.Context, _ *emptypb.Empty) (*blockchain_api.GetSubscribersResponse, error) {
+	b.subscribersMu.RLock()
+	defer b.subscribersMu.RUnlock()
+
+	sources := make([]string, 0, len(b.subscribers))
+	for sub := range b.subscribers {
+		sources = append(sources, sub.source)
+	}
+	return &blockchain_api.GetSubscribersResponse{Sources: sources}, nil
 }
 
 // GetState retrieves a value from the blockchain state storage by its key.
@@ -1925,7 +2023,7 @@ func (b *Blockchain) InvalidateBlock(ctx context.Context, request *blockchain_ap
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "InvalidateBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainInvalidateBlock),
-		tracing.WithDebugLogMessage(b.logger, "[InvalidateBlock] called with hash %s", utils.ReverseAndHexEncodeSlice(request.BlockHash)),
+		tracing.WithDebugLogMessage(b.logger, "[InvalidateBlock] called with hash %s", util.ReverseAndHexEncodeSlice(request.BlockHash)),
 	)
 	defer deferFn()
 
@@ -2102,7 +2200,7 @@ func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.N
 	_, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "RevalidateBlock",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainSendNotification),
-		tracing.WithLogMessage(b.logger, "[SendNotification] called for %s notification type %s", utils.ReverseAndHexEncodeSlice(req.Hash), req.Type.String()),
+		tracing.WithLogMessage(b.logger, "[SendNotification] called for %s notification type %s", util.ReverseAndHexEncodeSlice(req.Hash), req.Type.String()),
 	)
 	defer deferFn()
 

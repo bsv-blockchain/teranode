@@ -25,12 +25,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -131,14 +130,10 @@ type Server struct {
 	// p2pClient interfaces with the P2P service
 	// Used to report successful subtree fetches to improve peer reputation
 	p2pClient P2PClientI
-}
 
-var (
-	// once ensures the quorum is initialized only once
-	once sync.Once
-	// q is a singleton instance of the quorum manager used for subtree validation
-	q *Quorum
-)
+	// quorum manages distributed locking for subtree validation
+	quorum *Quorum
+}
 
 // New creates a new Server instance with the provided dependencies.
 //
@@ -204,22 +199,18 @@ func New(
 		return nil, errors.NewConfigurationError("Failed to create orphanage: %v", err)
 	}
 
-	once.Do(func() {
-		quorumPath := tSettings.SubtreeValidation.QuorumPath
-		if quorumPath == "" {
-			err = errors.NewConfigurationError("No subtree_quorum_path specified")
-			return
-		}
+	quorumPath := tSettings.SubtreeValidation.QuorumPath
+	if quorumPath == "" {
+		err = errors.NewConfigurationError("No subtree_quorum_path specified")
+		return nil, err
+	}
 
-		var absoluteQuorumTimeout = tSettings.SubtreeValidation.QuorumAbsoluteTimeout
-
-		q, err = NewQuorum(
-			u.logger,
-			u.subtreeStore,
-			quorumPath,
-			WithAbsoluteTimeout(absoluteQuorumTimeout),
-		)
-	})
+	u.quorum, err = NewQuorum(
+		u.logger,
+		u.subtreeStore,
+		quorumPath,
+		WithAbsoluteTimeout(tSettings.SubtreeValidation.QuorumAbsoluteTimeout),
+	)
 
 	if err != nil {
 		return nil, err
@@ -285,7 +276,7 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 
 			subscribeCtx, subscribeCancel = context.WithCancel(ctx)
 
-			blockchainSubscription, err := u.blockchainClient.Subscribe(subscribeCtx, "subtreevalidation")
+			blockchainSubscription, err := u.blockchainClient.Subscribe(subscribeCtx, blockchain.SubscriberSubtreeValidation)
 			if err != nil {
 				ctxLogger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to subscribe to blockchain: %s", err)
 
@@ -561,6 +552,13 @@ func (u *Server) Stop(_ context.Context) error {
 		}
 	}
 
+	if u.invalidSubtreeDeDuplicateMap != nil {
+		u.invalidSubtreeDeDuplicateMap.Stop()
+	}
+	if u.orphanage != nil {
+		u.orphanage.Stop()
+	}
+
 	return nil
 }
 
@@ -640,7 +638,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "checkSubtree",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
-		tracing.WithLogMessage(u.logger, "[checkSubtree] called for subtree %s (block %s / height %d)", utils.ReverseAndHexEncodeSlice(request.Hash), utils.ReverseAndHexEncodeSlice(request.BlockHash), request.BlockHeight),
+		tracing.WithLogMessage(u.logger, "[checkSubtree] called for subtree %s (block %s / height %d)", util.ReverseAndHexEncodeSlice(request.Hash), util.ReverseAndHexEncodeSlice(request.BlockHash), request.BlockHeight),
 	)
 	defer func() {
 		deferFn(err)
@@ -685,7 +683,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	}()
 
 	// Note we are not giving up, we either need to see the file exists or we get the lock
-	gotLock, exists, releaseLockFunc, err := q.TryLockIfNotExistsWithTimeout(ctx, hash, fileformat.FileTypeSubtree)
+	gotLock, exists, releaseLockFunc, err := u.quorum.TryLockIfNotExistsWithTimeout(ctx, hash, fileformat.FileTypeSubtree)
 	if err != nil {
 		return false, errors.NewError("[CheckSubtree] error getting lock for Subtree %s", hash.String(), err)
 	}

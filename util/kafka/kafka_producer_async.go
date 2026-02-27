@@ -21,7 +21,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
 	"github.com/bsv-blockchain/teranode/util/retry"
-	"github.com/ordishs/go-utils"
 	"github.com/rcrowley/go-metrics"
 )
 
@@ -317,15 +316,12 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 					break
 				}
 
-				var key sarama.ByteEncoder
-				if msgBytes.Key != nil {
-					key = sarama.ByteEncoder(msgBytes.Key)
-				}
-
 				message := &sarama.ProducerMessage{
 					Topic: c.Config.Topic,
-					Key:   key,
 					Value: sarama.ByteEncoder(msgBytes.Value),
+				}
+				if msgBytes.Key != nil {
+					message.Key = sarama.ByteEncoder(msgBytes.Key)
 				}
 
 				// Check if closed again right before sending to avoid race condition
@@ -432,7 +428,7 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 	defer c.channelMu.RUnlock()
 
 	if c.publishChannel != nil {
-		utils.SafeSend(c.publishChannel, msg)
+		util.SafeSend(c.publishChannel, msg)
 	}
 }
 

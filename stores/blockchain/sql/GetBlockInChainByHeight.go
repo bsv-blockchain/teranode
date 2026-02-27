@@ -20,8 +20,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
 )
 
 // GetBlockInChainByHeightHash retrieves a block at a specific height in a particular chain.
@@ -74,9 +74,9 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 			SELECT id, parent_id, height
 			FROM blocks
 			WHERE hash = $2
-			
+
 			UNION ALL
-			
+
 			SELECT bb.id, bb.parent_id, bb.height
 			FROM blocks bb
 			JOIN ChainBlocks cb ON bb.id = cb.parent_id
@@ -146,12 +146,12 @@ func (s *SQL) GetBlockInChainByHeightHash(ctx context.Context, height uint32, st
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, false, errors.NewInvalidArgumentError("[GetBlockInChainByHeightHash][%s:%d] failed to convert hashPrevBlock: %s", startHash.String(), height, utils.ReverseAndHexEncodeSlice(hashPrevBlock), err)
+		return nil, false, errors.NewInvalidArgumentError("[GetBlockInChainByHeightHash][%s:%d] failed to convert hashPrevBlock: %s", startHash.String(), height, util.ReverseAndHexEncodeSlice(hashPrevBlock), err)
 	}
 
 	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, false, errors.NewInvalidArgumentError("[GetBlockInChainByHeightHash][%s:%d] failed to convert hashMerkleRoot: %s", startHash.String(), height, utils.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
+		return nil, false, errors.NewInvalidArgumentError("[GetBlockInChainByHeightHash][%s:%d] failed to convert hashMerkleRoot: %s", startHash.String(), height, util.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
 	}
 
 	block.TransactionCount = transactionCount

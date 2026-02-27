@@ -2,22 +2,22 @@ package blockvalidation
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/atomic"
 )
 
 func TestDeDuplicatorDeduplicate(t *testing.T) {
 	t.Run("test", func(t *testing.T) {
-		nrCalled := atomic.NewUint32(0)
+		nrCalled := &atomic.Uint32{}
 
 		fn := func() error {
 			time.Sleep(100 * time.Millisecond)
-			nrCalled.Inc()
+			nrCalled.Add(1)
 
 			return nil
 		}
@@ -39,11 +39,11 @@ func TestDeDuplicatorDeduplicate(t *testing.T) {
 }
 
 func TestDeDuplicatorGoroutines(t *testing.T) {
-	nrCalled := atomic.NewUint32(0)
+	nrCalled := &atomic.Uint32{}
 
 	fn := func() error {
 		time.Sleep(100 * time.Millisecond)
-		nrCalled.Inc()
+		nrCalled.Add(1)
 		return nil
 	}
 

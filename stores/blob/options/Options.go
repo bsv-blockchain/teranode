@@ -15,7 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // Options represents the complete set of configuration options for blob operations.
@@ -366,7 +366,7 @@ func (o *Options) ConstructFilename(basePath string, key []byte, fileType filefo
 	if len(o.Filename) > 0 {
 		filename = o.Filename
 	} else {
-		filename = utils.ReverseAndHexEncodeSlice(key)
+		filename = util.ReverseAndHexEncodeSlice(key)
 	}
 
 	// For negative HashPrefix, take characters from the end

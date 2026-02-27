@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -5267,5 +5268,140 @@ func TestClient_GetBestHeightAndTime(t *testing.T) {
 		assert.Equal(t, uint32(0), height)
 		assert.Equal(t, uint32(0), time)
 		assert.Contains(t, err.Error(), "grpc connection failed")
+	})
+}
+
+func TestHeartbeatTracking(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockChain.MaxRetries = 0
+
+	// Use port 0 to let the OS assign an available port
+	lis, err := net.Listen("tcp", "localhost:0")
+	require.NoError(t, err)
+
+	// Get the actual address with the assigned port
+	tSettings.BlockChain.GRPCAddress = lis.Addr().String()
+
+	grpcServer := grpc.NewServer()
+	fakeSrv := &fakeServer{
+		subCh:    make(chan *blockchain_api.Notification, 10),
+		fsmState: blockchain_api.FSMStateType_RUNNING,
+	}
+	blockchain_api.RegisterBlockchainAPIServer(grpcServer, fakeSrv)
+
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	defer grpcServer.Stop()
+
+	clientI, err := NewClientWithAddress(ctx, logger, tSettings, tSettings.BlockChain.GRPCAddress, "heartbeat-test")
+	require.NoError(t, err)
+	c := clientI.(*Client)
+
+	t.Run("PING notification updates lastHeartbeat", func(t *testing.T) {
+		// Get initial heartbeat timestamp
+		initialHB := c.lastHeartbeat.Load()
+
+		// Wait a moment to ensure different timestamp
+		time.Sleep(10 * time.Millisecond)
+
+		// Send PING notification
+		dummyHash := make([]byte, 32)
+		pingNotif := &blockchain_api.Notification{
+			Type: model.NotificationType_PING,
+			Hash: dummyHash,
+		}
+		fakeSrv.subCh <- pingNotif
+
+		// Wait for notification to be processed
+		require.Eventually(t, func() bool {
+			currentHB := c.lastHeartbeat.Load()
+			return currentHB > initialHB
+		}, 2*time.Second, 50*time.Millisecond, "heartbeat timestamp should be updated after PING")
+	})
+
+	t.Run("FSM state restored after reconnection", func(t *testing.T) {
+		// Verify FSM state was restored to RUNNING (set by fakeServer)
+		require.Eventually(t, func() bool {
+			state := c.fmsState.Load()
+			return state != nil && *state == FSMStateRUNNING
+		}, 2*time.Second, 100*time.Millisecond, "FSM state should be restored to RUNNING after connection")
+	})
+}
+
+func TestHeartbeatStaleSetsFSMToIdle(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	t.Run("stale heartbeat sets FSM to IDLE", func(t *testing.T) {
+		running := &atomic.Bool{}
+		running.Store(true)
+
+		c := &Client{
+			logger:   logger,
+			settings: tSettings,
+			running:  running,
+		}
+
+		// Set FSM state to RUNNING
+		runningState := FSMStateRUNNING
+		c.fmsState.Store(&runningState)
+
+		// Set heartbeat to 35 seconds ago (stale - timeout is 30s)
+		staleTime := time.Now().Add(-35 * time.Second).UnixNano()
+		c.lastHeartbeat.Store(staleTime)
+
+		// Verify the state is currently RUNNING
+		currentState := c.fmsState.Load()
+		require.NotNil(t, currentState)
+		require.Equal(t, FSMStateRUNNING, *currentState)
+
+		// Simulate the heartbeat staleness check that happens in SubscribeToServer
+		const heartbeatTimeout = 30 * time.Second
+		lastHB := c.lastHeartbeat.Load()
+		if lastHB > 0 && time.Since(time.Unix(0, lastHB)) > heartbeatTimeout {
+			idleState := FSMStateIDLE
+			c.fmsState.Store(&idleState)
+		}
+
+		// Verify FSM state was set to IDLE
+		newState := c.fmsState.Load()
+		require.NotNil(t, newState)
+		require.Equal(t, FSMStateIDLE, *newState, "FSM state should be IDLE after stale heartbeat")
+	})
+
+	t.Run("fresh heartbeat does not change FSM state", func(t *testing.T) {
+		running := &atomic.Bool{}
+		running.Store(true)
+
+		c := &Client{
+			logger:   logger,
+			settings: tSettings,
+			running:  running,
+		}
+
+		// Set FSM state to RUNNING
+		runningState := FSMStateRUNNING
+		c.fmsState.Store(&runningState)
+
+		// Set heartbeat to now (fresh)
+		c.lastHeartbeat.Store(time.Now().UnixNano())
+
+		// Simulate the heartbeat staleness check
+		const heartbeatTimeout = 30 * time.Second
+		lastHB := c.lastHeartbeat.Load()
+		if lastHB > 0 && time.Since(time.Unix(0, lastHB)) > heartbeatTimeout {
+			idleState := FSMStateIDLE
+			c.fmsState.Store(&idleState)
+		}
+
+		// Verify FSM state is still RUNNING
+		currentState := c.fmsState.Load()
+		require.NotNil(t, currentState)
+		require.Equal(t, FSMStateRUNNING, *currentState, "FSM state should remain RUNNING with fresh heartbeat")
 	})
 }

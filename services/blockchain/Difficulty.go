@@ -14,7 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // DifficultyAdjustmentWindow defines the number of blocks to consider for difficulty adjustment.
@@ -117,7 +117,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 		return nil, errors.NewProcessingError("[Difficulty] lastSuitableBlock is nil", nil)
 	}
 
-	d.logger.Debugf("[Difficulty] lastSuitableBlock.Hash: %s, lastSuitableBlock.Height: %d, lastSuitableBlock.Time: %d", utils.ReverseAndHexEncodeSlice(lastSuitableBlock.Hash), lastSuitableBlock.Height, lastSuitableBlock.Time)
+	d.logger.Debugf("[Difficulty] lastSuitableBlock.Hash: %s, lastSuitableBlock.Height: %d, lastSuitableBlock.Time: %d", util.ReverseAndHexEncodeSlice(lastSuitableBlock.Hash), lastSuitableBlock.Height, lastSuitableBlock.Time)
 
 	ancestorHash, err := d.store.GetHashOfAncestorBlock(ctx, blockHeader.Hash(), DifficultyAdjustmentWindow)
 	if err != nil {
@@ -144,7 +144,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 		return d.powLimitnBits, nil
 	}
 
-	d.logger.Debugf("[Difficulty] firstSuitableBlock.Hash: %s, firstSuitableBlock.Height: %d, firstSuitableBlock.Time: %d", utils.ReverseAndHexEncodeSlice(firstSuitableBlock.Hash), firstSuitableBlock.Height, firstSuitableBlock.Time)
+	d.logger.Debugf("[Difficulty] firstSuitableBlock.Hash: %s, firstSuitableBlock.Height: %d, firstSuitableBlock.Time: %d", util.ReverseAndHexEncodeSlice(firstSuitableBlock.Hash), firstSuitableBlock.Height, firstSuitableBlock.Time)
 
 	nBits, err := d.computeTarget(firstSuitableBlock, lastSuitableBlock)
 	if err != nil {

@@ -43,8 +43,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/debugflags"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/semaphore"
 )
@@ -104,7 +104,7 @@ func (s *File) debugf(format string, args ...interface{}) {
 }
 
 func formatKeyHex(key []byte) string {
-	return utils.ReverseAndHexEncodeSlice(key)
+	return util.ReverseAndHexEncodeSlice(key)
 }
 
 // longtermStore defines the interface for a secondary storage backend that can be used
@@ -675,7 +675,7 @@ func (s *File) SetFromReader(ctx context.Context, key []byte, fileType fileforma
 
 	filename, err := s.constructFilename(key, fileType, opts)
 	if err != nil {
-		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", utils.ReverseAndHexEncodeSlice(key), err)
+		return errors.NewStorageError("[File][SetFromReader] [%s] failed to get file name", util.ReverseAndHexEncodeSlice(key), err)
 	}
 
 	merged := options.MergeOptions(s.options, opts)
@@ -1210,6 +1210,13 @@ func (s *File) Del(ctx context.Context, key []byte, fileType fileformat.FileType
 
 		s.logger.Debugf("[FILE_DEL] Failed to remove file: %s error=%v", fileName, err)
 		return errors.NewStorageError("[File][Del] [%s] failed to remove file", fileName, err)
+	}
+
+	// Try to remove the hash prefix directory if now empty (best-effort, ignore errors).
+	// os.Remove on a non-empty directory returns an error, so this is safe.
+	// Only attempt if the parent is a subdirectory of the store root (i.e. a hash prefix dir).
+	if dir := filepath.Dir(fileName); dir != s.path && len(filepath.Base(dir)) <= 2 {
+		_ = os.Remove(dir)
 	}
 
 	s.logger.Debugf("[FILE_DEL] Successfully deleted file: %s", fileName)

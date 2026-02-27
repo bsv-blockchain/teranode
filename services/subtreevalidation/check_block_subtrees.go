@@ -261,7 +261,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 					}
 
 					// Process transactions directly from the stream while storing to disk
-					err = u.processSubtreeDataStream(gCtx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx])
+					err = u.processSubtreeDataStream(gCtx, subtreeToCheck, countingBody, &subtreeTxs[subtreeIdx], dah)
 					_ = countingBody.Close()
 
 					// Track bytes downloaded from peer after stream is consumed
@@ -463,7 +463,7 @@ func (u *Server) extractAndCollectTransactions(ctx context.Context, subtree *sub
 // processSubtreeDataStream downloads subtreeData and simultaneously stores to disk while parsing transactions.
 // PHASE 1: Concurrent streaming - eliminates storage read-back by writing to disk while parsing.
 func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreepkg.Subtree,
-	body io.ReadCloser, allTransactions *[]*bt.Tx) error {
+	body io.ReadCloser, allTransactions *[]*bt.Tx, dah uint32) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processSubtreeDataStream",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[processSubtreeDataStream] called for subtree %s", subtree.RootHash().String()),
@@ -478,7 +478,7 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 
 	// Goroutine to write to storage concurrently
 	go func() {
-		err := u.subtreeStore.SetFromReader(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeData, pr)
+		err := u.subtreeStore.SetFromReader(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeData, pr, options.WithDeleteAt(dah))
 		storeDone <- err
 		// If storage failed, close pipe writer to unblock any pending writes
 		// This prevents deadlock when SetFromReader returns an error without fully draining the pipe reader

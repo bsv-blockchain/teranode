@@ -19,7 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/util/rand"
@@ -200,7 +200,7 @@ func TestFileSetWithSubdirectoryOptionIgnored(t *testing.T) {
 
 		// Construct the expected file path in the subdirectory
 		expectedDir := filepath.Join(tempDir, subDir)
-		expectedFilePath := filepath.Join(expectedDir, utils.ReverseAndHexEncodeSlice(key)+"."+fileformat.FileTypeTesting.String())
+		expectedFilePath := filepath.Join(expectedDir, util.ReverseAndHexEncodeSlice(key)+"."+fileformat.FileTypeTesting.String())
 
 		_, err = os.Stat(expectedFilePath)
 		require.NoError(t, err)
