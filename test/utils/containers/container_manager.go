@@ -33,11 +33,12 @@ const (
 
 // ContainerManager manages test container lifecycle for various store backends
 type ContainerManager struct {
-	storeType         UTXOStoreType
-	containerURL      string
-	cleanupFunc       func() error
-	aerospikeClient   *uaerospike.Client
-	postgresContainer *postgres.PostgresContainer
+	storeType          UTXOStoreType
+	containerURL       string
+	cleanupFunc        func() error
+	aerospikeClient    *uaerospike.Client
+	postgresContainer  *postgres.PostgresContainer
+	externalStorePath  string // Path for Aerospike external storage (test-specific)
 }
 
 // NewContainerManager creates a new container manager for the specified store type
@@ -48,10 +49,17 @@ func NewContainerManager(storeType UTXOStoreType) (*ContainerManager, error) {
 	}
 
 	cm := &ContainerManager{
-		storeType: storeType,
+		storeType:         storeType,
+		externalStorePath: "./data/externalStore", // Default path
 	}
 
 	return cm, nil
+}
+
+// SetExternalStorePath sets the external storage path for Aerospike
+// This should be called before Initialize() to use a test-specific path
+func (cm *ContainerManager) SetExternalStorePath(path string) {
+	cm.externalStorePath = path
 }
 
 // Initialize starts the appropriate container and returns the connection URL
@@ -100,9 +108,11 @@ func (cm *ContainerManager) initializeAerospike(ctx context.Context) (*url.URL, 
 	}
 	cm.aerospikeClient = client
 
-	// Build Aerospike connection URL
-	cm.containerURL = fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%s&externalStore=file://./data/externalStore",
-		host, port, "test", "test", "10m")
+	// Build Aerospike connection URL with test-specific external store path
+	// Use file:/// prefix for absolute paths to ensure files are written to test-specific directories
+	externalStoreURL := fmt.Sprintf("file:///%s", cm.externalStorePath)
+	cm.containerURL = fmt.Sprintf("aerospike://%s:%d/%s?set=%s&expiration=%s&externalStore=%s",
+		host, port, "test", "test", "10m", externalStoreURL)
 
 	parsedURL, err := url.Parse(cm.containerURL)
 	if err != nil {

@@ -222,6 +222,9 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, parentTx)
 	require.NoError(t, err, "Failed to send parent transaction")
 
+	// Wait for the parent transaction to be processed by block assembly before mining
+	td.WaitForBlockAssemblyToProcessTx(t, parentTx.TxIDChainHash().String())
+
 	// Generate a block to confirm the parent transaction
 	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})
 	require.NoError(t, err)
@@ -262,6 +265,9 @@ func TestDeleteAtHeightHappyPath(t *testing.T) {
 	require.NoError(t, err)
 	err = td.PropagationClient.ProcessTransaction(td.Ctx, spendingTx)
 	require.NoError(t, err)
+
+	// Wait for the spending transaction to be processed by block assembly before mining
+	td.WaitForBlockAssemblyToProcessTx(t, spendingTx.TxIDChainHash().String())
 
 	// Generate a block to confirm the spending transaction
 	_, err = td.CallRPC(td.Ctx, "generate", []interface{}{1})

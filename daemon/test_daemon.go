@@ -362,7 +362,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	// Override QuorumPath to ensure it uses the test-specific directory
 	// This prevents tests from sharing the same quorum directory
-	// appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
+	appSettings.SubtreeValidation.QuorumPath = filepath.Join(path, "subtree_quorum")
 
 	absPath, err := filepath.Abs(path)
 	require.NoError(t, err)
@@ -401,6 +401,13 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	} else if opts.UTXOStoreType != "" {
 		containerManager, err = containers.NewContainerManager(containers.UTXOStoreType(opts.UTXOStoreType))
 		require.NoError(t, err, "Failed to create container manager")
+
+		// Set test-specific external storage path for Aerospike to avoid conflicts between parallel tests
+		// Use absolute path to ensure files are written to the correct location
+		externalStorePath := filepath.Join(appSettings.DataFolder, "externalStore")
+		absExternalStorePath, err := filepath.Abs(externalStorePath)
+		require.NoError(t, err, "Failed to get absolute path for external storage")
+		containerManager.SetExternalStorePath(absExternalStorePath)
 
 		utxoStoreURL, err := containerManager.Initialize(ctx)
 		require.NoError(t, err, "Failed to initialize container")
