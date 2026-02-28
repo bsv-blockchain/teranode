@@ -48,6 +48,24 @@ fi
 # Try different patterns to extract failed tests
 FAILED_TESTS_RAW=$(grep "^FAIL" "$OUTPUT_FILE" || true)
 
+# Check if there was a race condition detected
+RACE_DETECTED=$(grep -i "WARNING: DATA RACE" "$OUTPUT_FILE" || true)
+
+if [ -n "$RACE_DETECTED" ]; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "⚠️  RACE CONDITION DETECTED"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "The test run detected a data race condition."
+    echo "Race conditions are concurrency bugs that need to be fixed in the code."
+    echo "Retrying will not help - the race needs to be fixed."
+    echo ""
+    echo "See race detector output in test logs for details."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    rm -rf "$TMPDIR"
+    exit 1
+fi
+
 if [ -z "$FAILED_TESTS_RAW" ]; then
     echo "Could not parse failed tests from output. Exiting with failure."
     echo "Check $OUTPUT_FILE for details"
