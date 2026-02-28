@@ -8,7 +8,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/labstack/echo/v4"
-	"github.com/libsv/go-p2p/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -21,7 +20,7 @@ func TestGetTransaction(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
 		// set mock response
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil)
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
 		// set echo context
 		echoContext.SetPath("/tx/hash/:hash")
@@ -43,13 +42,13 @@ func TestGetTransaction(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		tx1, err := bt.NewTxFromString(test.TX1Raw)
+		tx1, err := bt.NewTxFromString(testTX1Raw)
 		require.NoError(t, err)
 
 		// Check response fields
 		require.NotNil(t, response)
-		assert.Equal(t, test.TX1Hash.String(), response["txid"])
-		assert.Equal(t, test.TX1Raw, response["hex"])
+		assert.Equal(t, testTX1Hash.String(), response["txid"])
+		assert.Equal(t, testTX1Raw, response["hex"])
 		assert.Equal(t, float64(1), response["version"])
 		assert.Equal(t, float64(0), response["lockTime"])
 
@@ -74,7 +73,7 @@ func TestGetTransaction(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
 		// set mock response
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil)
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
 		// set echo context
 		echoContext.SetPath("/tx/hash/:hash")
@@ -91,14 +90,14 @@ func TestGetTransaction(t *testing.T) {
 		assert.Equal(t, http.StatusOK, responseRecorder.Code)
 
 		// Check response body
-		assert.Equal(t, test.TX1RawBytes, responseRecorder.Body.Bytes())
+		assert.Equal(t, testTX1RawBytes, responseRecorder.Body.Bytes())
 	})
 
 	t.Run("Hex success", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
 
 		// set mock response
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(test.TX1RawBytes, nil)
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(testTX1RawBytes, nil)
 
 		// set echo context
 		echoContext.SetPath("/tx/hash/:hash")
@@ -116,14 +115,14 @@ func TestGetTransaction(t *testing.T) {
 		assert.Equal(t, "text/plain; charset=UTF-8", responseRecorder.Header().Get("Content-Type"))
 
 		// Check response body
-		assert.Equal(t, test.TX1Raw, responseRecorder.Body.String())
+		assert.Equal(t, testTX1Raw, responseRecorder.Body.String())
 	})
 
 	t.Run("JSON with invalid tx bytes", func(t *testing.T) {
 		httpServer, mockRepo, echoContext, _ := GetMockHTTP(t, nil)
 
 		// set mock response
-		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(append([]byte{0x10, 0x11, 0x12}, test.TX1RawBytes...), nil)
+		mockRepo.On("GetTransaction", mock.Anything, mock.Anything).Return(append([]byte{0x10, 0x11, 0x12}, testTX1RawBytes...), nil)
 
 		// set echo context
 		echoContext.SetPath("/tx/hash/:hash")

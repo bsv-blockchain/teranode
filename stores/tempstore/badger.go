@@ -85,6 +85,13 @@ func (s *BadgerTempStore) Put(key, value []byte) error {
 	})
 }
 
+// Delete removes a key from the store.
+func (s *BadgerTempStore) Delete(key []byte) error {
+	return s.db.Update(func(txn *badger.Txn) error {
+		return txn.Delete(key)
+	})
+}
+
 // Get retrieves a value by key.
 // Returns nil, nil if the key does not exist.
 func (s *BadgerTempStore) Get(key []byte) ([]byte, error) {

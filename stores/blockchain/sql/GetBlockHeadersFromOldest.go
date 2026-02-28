@@ -112,6 +112,7 @@ func (s *SQL) GetBlockHeadersFromOldest(ctx context.Context, chainTipHash, targe
 			,b.subtrees_set
 			,b.invalid
 			,b.processed_at
+			,b.median_time_past
 			,b.coinbase_tx
 		FROM blocks b
 		WHERE id IN (

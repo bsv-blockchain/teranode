@@ -39,7 +39,8 @@
       "staticcheck",
       "gocognit",
       "goconst",
-      "gocritic"
+      "gocritic",
+      "gosec"
     ],
     "exclusions": {
       "generated": "lax",

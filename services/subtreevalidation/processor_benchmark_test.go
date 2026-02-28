@@ -192,6 +192,21 @@ func setupRealServer(t *testing.T) (*Server, blob.Store, func()) {
 	return setupRealServerWithIterationID(t, 0)
 }
 
+// blockchainMockWrapper wraps the blockchain.Mock to provide dynamic MTP calculation
+type blockchainMockWrapper struct {
+	*blockchain.Mock
+}
+
+// GetMedianTimePastForHeights overrides the mock to return dynamic values
+func (w *blockchainMockWrapper) GetMedianTimePastForHeights(ctx context.Context, heights []uint32) ([]uint32, error) {
+	// Return a timestamp for each requested height
+	mtps := make([]uint32, len(heights))
+	for i := range mtps {
+		mtps[i] = 1000000 // Simple mock timestamp
+	}
+	return mtps, nil
+}
+
 // setupRealServerWithIterationID creates a server with a unique database per iteration
 func setupRealServerWithIterationID(t *testing.T, iterationID int) (*Server, blob.Store, func()) {
 	ctx := context.Background()
@@ -217,7 +232,8 @@ func setupRealServerWithIterationID(t *testing.T, iterationID int) (*Server, blo
 	subtreeStore := blobmemory.New()
 
 	// Use a mock blockchain client for benchmark setup
-	mockBlockchainClient := &blockchain.Mock{}
+	baseMock := &blockchain.Mock{}
+	mockBlockchainClient := &blockchainMockWrapper{Mock: baseMock}
 
 	// Create a real validator for proper transaction chain validation
 	validatorClient, err := validator.New(ctx, logger, tSettings, utxoStore, nil, nil, nil, mockBlockchainClient)
@@ -225,33 +241,33 @@ func setupRealServerWithIterationID(t *testing.T, iterationID int) (*Server, blo
 		panic(err)
 	}
 
-	// Set up default mocks for the blockchain client
+	// Set up default mocks for the blockchain client (on the underlying Mock)
 	testHeaders := testhelpers.CreateTestHeaders(t, 1)
 
 	// The generated blocks use this genesis hash as their parent
 	genesisHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
-	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
+	baseMock.On("GetBestBlockHeader", mock.Anything).
 		Return(testHeaders[0], &model.BlockHeaderMeta{ID: 100}, nil).Maybe()
 
-	mockBlockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).
+	baseMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).
 		Return([]uint32{100, 99, 98}, nil).Maybe()
 
-	mockBlockchainClient.On("IsFSMCurrentState", mock.Anything, blockchain.FSMStateRUNNING).
+	baseMock.On("IsFSMCurrentState", mock.Anything, blockchain.FSMStateRUNNING).
 		Return(true, nil).Maybe()
 
 	runningState := blockchain.FSMStateRUNNING
-	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).
+	baseMock.On("GetFSMCurrentState", mock.Anything).
 		Return(&runningState, nil).Maybe()
 
-	mockBlockchainClient.On("GetBlockExists", mock.Anything, mock.Anything).
+	baseMock.On("GetBlockExists", mock.Anything, mock.Anything).
 		Return(true, nil).Maybe()
 
 	// Mock GetBlockHeader for the genesis hash (used by generated blocks)
-	mockBlockchainClient.On("GetBlockHeader", mock.Anything, genesisHash).
+	baseMock.On("GetBlockHeader", mock.Anything, genesisHash).
 		Return(testHeaders[0], &model.BlockHeaderMeta{ID: 99}, nil).Maybe()
 
-	mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).
+	baseMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).
 		Return(true, nil).Maybe()
 
 	// Create server directly without subscription to avoid blockchain errors

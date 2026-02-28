@@ -14,6 +14,12 @@ var (
 	prometheusBlockCheckMerkleRoot        prometheus.Histogram
 	prometheusBlockGetSubtrees            prometheus.Histogram
 	prometheusBlockGetAndValidateSubtrees prometheus.Histogram
+	prometheusTxMapEntries                prometheus.Gauge
+	prometheusTxMapFilterRAM              prometheus.Gauge
+	prometheusTxMapDiskWritten            prometheus.Gauge
+	prometheusParentSpendsMapEntries      prometheus.Gauge
+	prometheusParentSpendsMapFilterRAM    prometheus.Gauge
+	prometheusParentSpendsMapDiskWritten  prometheus.Gauge
 )
 
 var (
@@ -78,4 +84,86 @@ func _initPrometheusMetrics() {
 			Buckets:   util.MetricsBucketsMilliSeconds,
 		},
 	)
+
+	prometheusTxMapEntries = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "block",
+			Name:      "txmap_entries",
+			Help:      "Number of entries in disk-backed txMap during block validation",
+		},
+	)
+
+	prometheusTxMapFilterRAM = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "block",
+			Name:      "txmap_filter_ram_bytes",
+			Help:      "Cuckoo filter memory in bytes for disk-backed txMap during block validation",
+		},
+	)
+
+	prometheusTxMapDiskWritten = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "block",
+			Name:      "txmap_disk_written_bytes",
+			Help:      "Data bytes written to disk for disk-backed txMap during block validation",
+		},
+	)
+
+	prometheusParentSpendsMapEntries = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "block",
+			Name:      "parentspends_entries",
+			Help:      "Number of entries in disk-backed parentSpendsMap during block validation",
+		},
+	)
+
+	prometheusParentSpendsMapFilterRAM = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "block",
+			Name:      "parentspends_filter_ram_bytes",
+			Help:      "Cuckoo filter memory in bytes for disk-backed parentSpendsMap during block validation",
+		},
+	)
+
+	prometheusParentSpendsMapDiskWritten = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "block",
+			Name:      "parentspends_disk_written_bytes",
+			Help:      "Data bytes written to disk for disk-backed parentSpendsMap during block validation",
+		},
+	)
+}
+
+// ReportTxMapStats sets Prometheus gauges for the disk-backed txMap.
+func ReportTxMapStats(stats DiskMapStats) {
+	prometheusTxMapEntries.Set(float64(stats.Entries))
+	prometheusTxMapFilterRAM.Set(float64(stats.FilterMemBytes))
+	prometheusTxMapDiskWritten.Set(float64(stats.DiskBytesWritten))
+}
+
+// ClearTxMapStats zeroes Prometheus gauges for the disk-backed txMap.
+func ClearTxMapStats() {
+	prometheusTxMapEntries.Set(0)
+	prometheusTxMapFilterRAM.Set(0)
+	prometheusTxMapDiskWritten.Set(0)
+}
+
+// ReportParentSpendsMapStats sets Prometheus gauges for the disk-backed parentSpendsMap.
+func ReportParentSpendsMapStats(stats DiskMapStats) {
+	prometheusParentSpendsMapEntries.Set(float64(stats.Entries))
+	prometheusParentSpendsMapFilterRAM.Set(float64(stats.FilterMemBytes))
+	prometheusParentSpendsMapDiskWritten.Set(float64(stats.DiskBytesWritten))
+}
+
+// ClearParentSpendsMapStats zeroes Prometheus gauges for the disk-backed parentSpendsMap.
+func ClearParentSpendsMapStats() {
+	prometheusParentSpendsMapEntries.Set(0)
+	prometheusParentSpendsMapFilterRAM.Set(0)
+	prometheusParentSpendsMapDiskWritten.Set(0)
 }

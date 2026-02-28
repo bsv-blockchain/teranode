@@ -263,30 +263,32 @@ func TestValidate_RejectedTransactionChannel(t *testing.T) {
 	tx, err := bt.NewTxFromString(txHex)
 	require.NoError(t, err)
 
-	// set previous sats to 0, which makes the tx invalid
-	tx.Inputs[0].PreviousTxSatoshis = 0
+	// Calculate actual input amount
+	inputAmount := tx.Inputs[0].PreviousTxSatoshis
 
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(t)
+	// Make the transaction invalid by making output satoshis exceed input satoshis
+	// This will fail the basic sanity check: sum(outputs) must be <= sum(inputs)
+	for _, output := range tx.Outputs {
+		output.Satoshis = inputAmount * 2 // Make total outputs > inputs
+	}
 
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("mainnet")
-
-	utxoStoreURL, err := url.Parse("sqlitememory:///test")
-	require.NoError(t, err)
-
-	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
-	require.NoError(t, err)
+	utxoStore, _ := nullstore.NewNullStore()
+	_ = utxoStore.SetBlockHeight(257727)
+	//nolint:gosec
+	_ = utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))
 
 	initPrometheusMetrics()
+
+	tSettings := settings.NewSettings()
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
 
 	txmetaKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 	rejectedTxKafkaProducerClient := kafka.NewKafkaAsyncProducerMock()
 
 	v := &Validator{
-		logger:                        logger,
+		logger:                        ulogger.TestLogger{},
 		settings:                      tSettings,
-		txValidator:                   NewTxValidator(logger, tSettings),
+		txValidator:                   NewTxValidator(ulogger.TestLogger{}, tSettings),
 		utxoStore:                     utxoStore,
 		blockAssembler:                nil,
 		stats:                         gocore.NewStat("validator"),

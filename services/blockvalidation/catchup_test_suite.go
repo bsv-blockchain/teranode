@@ -17,9 +17,9 @@ import (
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	testutil "github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -165,6 +165,12 @@ func (s *CatchupTestSuite) Cleanup() {
 		case <-time.After(100 * time.Millisecond):
 			// Timeout - cache was likely never started
 		}
+	}
+
+	// Stop expiring map background goroutines
+	if s.Server != nil && s.Server.blockValidation != nil {
+		s.Server.blockValidation.blockExistsCache.Stop()
+		s.Server.blockValidation.lastValidatedBlocks.Stop()
 	}
 
 	// Run cleanup functions in reverse order

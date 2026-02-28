@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/go-batcher"
@@ -137,6 +138,11 @@ type Validator struct {
 
 	// txmetaKafkaBatcher batches TxMeta Kafka messages for efficient publishing
 	txmetaKafkaBatcher *batcher.Batcher[txmetaBatchItem]
+
+	// mtpCache caches Median Time Past values keyed by block height.
+	// MTP values are immutable once stored, so entries never need invalidation.
+	// Caching avoids repeated gRPC calls for the same heights across all transactions in a block.
+	mtpCache sync.Map
 }
 
 // New creates a new Validator instance with the provided configuration.
@@ -504,17 +510,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 	}
 
-	// validate the transaction format, consensus rules etc.
-	// this does not validate the signatures in the transaction yet
-	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
-		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
-		span.RecordError(err)
-
-		return nil, err
-	}
-
 	// if the transaction was extended, we still need to get the block heights of the inputs
-	// since that processing did not happen before the validateTransaction step
+	// since that processing did not happen before extending the transaction
+	// This must be done BEFORE validateTransaction to ensure BIP68 sequence lock validation has the required heights
 	if len(utxoHeights) == 0 {
 		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
 			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
@@ -522,6 +520,15 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 			return nil, err
 		}
+	}
+
+	// validate the transaction format, consensus rules etc.
+	// this does not validate the signatures in the transaction yet
+	if err = v.validateTransaction(ctx, tx, blockHeight, utxoHeights, validationOptions); err != nil {
+		err = errors.NewProcessingError("[Validate][%s] error validating transaction", txID, err)
+		span.RecordError(err)
+
+		return nil, err
 	}
 
 	// validate the transaction scripts and signatures
@@ -1098,9 +1105,13 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
-// validateTransaction performs transaction-level validation checks.
-// Ensures transaction is properly extended and meets all validation rules.
-// Returns error if validation fails.
+// validateTransaction performs transaction-level validation checks in two phases:
+//  1. Full transaction validation (structure, scripts, fees) via txValidator.ValidateTransaction.
+//  2. BIP68 sequence-lock validation (block context only) via txValidator.ValidateBIP68.
+//
+// Phase 2 is only executed when phase 1 succeeds and SkipPolicyChecks is true (block context).
+// This avoids the cost of MTP lookups when a transaction fails normal validation.
+// MTP values are cached in v.mtpCache to avoid repeated gRPC calls for the same heights.
 func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
 	ctx, span, deferFn := tracing.Tracer("validator").Start(ctx, "validateTransaction",
 		tracing.WithHistogram(prometheusTransactionValidate),
@@ -1118,8 +1129,88 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 		}
 	}
 
-	// run the internal tx validation, checking policies, scripts, signatures etc.
-	return v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions)
+	// Phase 1: run the internal tx validation, checking policies, scripts, signatures etc.
+	if err := v.txValidator.ValidateTransaction(tx, blockHeight, utxoHeights, validationOptions); err != nil {
+		span.RecordError(err)
+		return err
+	}
+
+	// Phase 2: BIP68 sequence-lock validation — only for block context (SkipPolicyChecks == true).
+	// Performed after phase 1 so that MTP lookups are skipped for invalid transactions.
+	if !validationOptions.SkipPolicyChecks || v.blockchainClient == nil {
+		return nil
+	}
+
+	// Build the list of distinct heights we need MTPs for, resolving cache hits first.
+	//
+	// Teranode stores MTP(H) = median of block timestamps [H-11, H-1].
+	// BSV's GetMedianTimePast() at block H = median of [H-10, H] (includes H itself),
+	// so BSV MTP(H) == Teranode stored_mtp(H+1).
+	//
+	// For UTXO coin time: BSV uses GetAncestor(nCoinHeight-1)->GetMedianTimePast()
+	//   = median of [nCoinHeight-11, nCoinHeight-1]
+	//   = Teranode stored_mtp(nCoinHeight) → use utxoHeight directly.
+	//
+	// For block time: BSV uses block.GetPrev()->GetMedianTimePast()
+	//   = median of [blockHeight-11, blockHeight-1]
+	//   = Teranode stored_mtp(blockHeight). However, block N's MTP is only stored
+	//   AFTER block N is persisted, so during validation stored_mtp(blockHeight) is
+	//   unavailable (returns 0). We use stored_mtp(blockHeight-1) instead, which
+	//   covers [blockHeight-12, blockHeight-2] — a 1-block-shifted approximation.
+	blockMTPHeight := blockHeight
+	if blockHeight > 0 {
+		blockMTPHeight = blockHeight - 1
+	}
+
+	// Gather all required heights (utxo heights + block MTP height).
+	allHeights := make([]uint32, 0, len(utxoHeights)+1)
+	allHeights = append(allHeights, utxoHeights...)
+	allHeights = append(allHeights, blockMTPHeight)
+
+	// Resolve from cache; collect uncached heights for batch fetch.
+	resolved := make(map[uint32]uint32, len(allHeights))
+	uncached := make([]uint32, 0, len(allHeights))
+	for _, h := range allHeights {
+		if val, ok := v.mtpCache.Load(h); ok {
+			resolved[h] = val.(uint32)
+		} else {
+			uncached = append(uncached, h)
+		}
+	}
+
+	// Deduplicate uncached heights before the gRPC call.
+	seen := make(map[uint32]struct{}, len(uncached))
+	deduped := uncached[:0]
+	for _, h := range uncached {
+		if _, exists := seen[h]; !exists {
+			seen[h] = struct{}{}
+			deduped = append(deduped, h)
+		}
+	}
+
+	if len(deduped) > 0 {
+		fetched, err := v.blockchainClient.GetMedianTimePastForHeights(ctx, deduped)
+		if err != nil {
+			span.RecordError(err)
+			return errors.NewProcessingError("[Validator][validateTransaction] failed to fetch MTPs for BIP68 validation", err)
+		}
+		if len(fetched) != len(deduped) {
+			return errors.NewProcessingError("[Validator][validateTransaction] MTP count mismatch: expected %d, got %d", len(deduped), len(fetched))
+		}
+		for i, h := range deduped {
+			v.mtpCache.Store(h, fetched[i])
+			resolved[h] = fetched[i]
+		}
+	}
+
+	// Build utxoMTPs and blockMTP from the resolved map.
+	utxoMTPs := make([]uint32, len(utxoHeights))
+	for i, h := range utxoHeights {
+		utxoMTPs[i] = resolved[h]
+	}
+	blockMTP := resolved[blockMTPHeight]
+
+	return v.txValidator.ValidateBIP68(tx, blockHeight, utxoHeights, utxoMTPs, blockMTP)
 }
 
 // validateTransactionScripts performs script validation for a transaction

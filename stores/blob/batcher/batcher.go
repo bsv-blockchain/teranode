@@ -16,6 +16,7 @@ package batcher
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"io"
@@ -29,8 +30,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils"
-	"golang.org/x/exp/rand"
+	"github.com/bsv-blockchain/teranode/util"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -254,7 +254,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 	g.Go(func() error {
 		b.logger.Debugf("flushing batch of %d bytes", len(currentBatch))
 		// we need to reverse the bytes of the key, since this is not a transaction ID
-		if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), fileformat.FileTypeBatchData, currentBatch); err != nil {
+		if err := b.blobStore.Set(gCtx, util.ReverseSlice(batchKey), fileformat.FileTypeBatchData, currentBatch); err != nil {
 			return errors.NewStorageError("error putting batch", err)
 		}
 
@@ -265,7 +265,7 @@ func (b *Batcher) writeBatch(currentBatch []byte, batchKeys []byte) error {
 		// flush current batch keys
 		g.Go(func() error {
 			// we need to reverse the bytes of the key, since this is not a transaction ID, but a batch ID
-			if err := b.blobStore.Set(gCtx, utils.ReverseSlice(batchKey), fileformat.FileTypeBatchKeys, batchKeys); err != nil {
+			if err := b.blobStore.Set(gCtx, util.ReverseSlice(batchKey), fileformat.FileTypeBatchKeys, batchKeys); err != nil {
 				return errors.NewStorageError("error putting batch keys", err)
 			}
 

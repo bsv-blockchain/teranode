@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"encoding/csv"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +17,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/gocarina/gocsv"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -211,16 +211,34 @@ func getTxsData(csvDataFile string) ([]CsvDataRecord, error) {
 	}
 	defer file.Close()
 
-	if err := gocsv.UnmarshalFile(file, &ret); err != nil {
+	reader := csv.NewReader(file)
+
+	// Read and discard header row
+	if _, err := reader.Read(); err != nil {
+		return ret, errors.NewUnknownError("error reading CSV header: " + err.Error())
+	}
+
+	records, err := reader.ReadAll()
+	if err != nil {
 		return ret, errors.NewUnknownError("error parsing file : " + csvDataFile + ". error : " + err.Error())
 	}
 
-	// Post process, trim all leading and trailing whitespace
-	for i := 0; i < len(ret); i++ {
-		ret[i].ChainNet = strings.TrimSpace(ret[i].ChainNet)
-		ret[i].TXID = strings.TrimSpace(ret[i].TXID)
-		ret[i].TxHexExtended = strings.TrimSpace(ret[i].TxHexExtended)
-		ret[i].UTXOHeights = strings.TrimSpace(ret[i].UTXOHeights)
+	ret = make([]CsvDataRecord, len(records))
+	for i, record := range records {
+		if len(record) < 5 {
+			return ret, errors.NewUnknownError("invalid CSV record at line " + strconv.Itoa(i+2))
+		}
+		blockHeight, err := strconv.ParseUint(strings.TrimSpace(record[1]), 10, 32)
+		if err != nil {
+			return ret, errors.NewUnknownError("error parsing BlockHeight at line " + strconv.Itoa(i+2) + ": " + err.Error())
+		}
+		ret[i] = CsvDataRecord{
+			ChainNet:      strings.TrimSpace(record[0]),
+			BlockHeight:   uint32(blockHeight),
+			TXID:          strings.TrimSpace(record[2]),
+			TxHexExtended: strings.TrimSpace(record[3]),
+			UTXOHeights:   strings.TrimSpace(record[4]),
+		}
 
 		// Preparse binary tx
 		tx, err := bt.NewTxFromString(ret[i].TxHexExtended)

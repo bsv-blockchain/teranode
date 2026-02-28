@@ -21,7 +21,6 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/model/time"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"golang.org/x/exp/constraints"
 )
 
 // GetBlockHeadersByHeight retrieves block headers within a specified height range.
@@ -101,6 +100,7 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 		,b.peer_id
 		,b.block_time
 		,b.inserted_at
+		,b.median_time_past
 		FROM blocks b
 		WHERE id IN (
 			SELECT id FROM blocks
@@ -166,6 +166,7 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 			&blockHeaderMeta.PeerID,
 			&blockHeaderMeta.BlockTime,
 			&insertedAt,
+			&blockHeaderMeta.MedianTimePast,
 		); err != nil {
 			return nil, nil, errors.NewStorageError("failed to scan row", err)
 		}
@@ -191,26 +192,4 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	cacheOp.Set([2]interface{}{blockHeaders, blockMetas}, s.cacheTTL)
 
 	return blockHeaders, blockMetas, nil
-}
-
-// max returns the larger of two ordered values.
-// This is a generic helper function that works with any ordered type (integers, floats, etc.)
-// and is used to safely calculate capacity for slices when dealing with height ranges.
-//
-// The function uses Go's generics feature with the constraints.Ordered constraint to ensure
-// that only types that support ordering operations (>, <, ==, etc.) can be used with this function.
-// This approach provides type safety while allowing the function to work with different numeric types.
-//
-// Parameters:
-//   - a: First value to compare
-//   - b: Second value to compare
-//
-// Returns:
-//   - T: The larger of the two input values
-func max[T constraints.Ordered](a, b T) T {
-	if a > b {
-		return a
-	}
-
-	return b
 }
