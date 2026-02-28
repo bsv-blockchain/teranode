@@ -46,6 +46,29 @@ make testall
 
 # Run a single test
 go test -v -race -tags "testtxmetacache" -run TestNameHere ./path/to/package
+
+# Test Retry Support (for flaky tests)
+# Automatically retry failed tests to handle timing/race issues
+# Default: 3 retries with 2s delay between attempts
+
+# Run sequential tests with retry (default: 3 retries)
+make sequentialtest
+
+# Custom retry settings
+make sequentialtest TEST_RETRY_COUNT=5 TEST_RETRY_DELAY=3
+
+# Run smoke tests with retry
+make smoketest TEST_RETRY_COUNT=3
+
+# Disable retries (1 attempt only)
+make sequentialtest TEST_RETRY_COUNT=1
+
+# Database-specific tests with retry
+make sequentialtest-aerospike TEST_RETRY_COUNT=5
+make sequentialtest-postgres TEST_RETRY_COUNT=3
+make sequentialtest-sqlite TEST_RETRY_COUNT=3
+
+# See docs/testing/test-retry-mechanism.md for full documentation
 ```
 
 ### Linting Commands
