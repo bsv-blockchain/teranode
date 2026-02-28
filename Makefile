@@ -204,13 +204,14 @@ testall: test longtest sequentialtest
 #   TEST_RETRY_COUNT - Number of retry attempts for failed tests (default: 3, set to 1 to disable retries)
 #   TEST_RETRY_DELAY - Delay between retries in seconds (default: 2)
 # Example: make smoketest TEST_RETRY_COUNT=5
+# Note: With retries enabled, timeout is increased to 20m to accommodate retry attempts
 .PHONY: smoketest
 smoketest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	@mkdir -p /tmp/teranode-test-results
 	@if [ "$(TEST_RETRY_COUNT)" != "1" ]; then \
 		echo "Running smoketest with retry support (TEST_RETRY_COUNT=$(TEST_RETRY_COUNT))"; \
-		cd test/e2e/daemon/ready && TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) ../../../../test/scripts/gotestsum_with_retry.sh --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \
+		cd test/e2e/daemon/ready && TEST_RETRY_COUNT=$(TEST_RETRY_COUNT) TEST_RETRY_DELAY=$(TEST_RETRY_DELAY) ../../../../test/scripts/gotestsum_with_retry.sh --format pkgname -- -v -count=1 -race -timeout=20m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \
 	else \
 		echo "Running smoketest without retry (TEST_RETRY_COUNT=1)"; \
 		cd test/e2e/daemon/ready && gotestsum --format pkgname -- -v -count=1 -race -timeout=10m -parallel 1 -skip 'TestLegacySync|TestSVNodeSync|TestBidirectionalSync|TestSVNodeValidates|TestMultistreamLegacySync|TestMultistreamSVNodeSyncFromTeranode|TestMultistreamBackwardCompatibility|TestMultistreamDisabledRejectsConnection|TestMultistreamMixedPeers|TestMultistreamOnlyStandardPeer|TestMultistreamOnlyMultistreamPeer|TestMultistreamLongestChainSelection|TestBlobDeletion|TestPruner' -run . 2>&1 | tee /tmp/teranode-test-results/smoketest-results.txt; \

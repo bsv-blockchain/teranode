@@ -14,7 +14,7 @@
 # 3. Retries only the failed tests up to TEST_RETRY_COUNT times
 # 4. Reports flaky tests that passed on retry
 
-set -euo pipefail
+set -eo pipefail
 
 # Configuration
 RETRY_COUNT=${TEST_RETRY_COUNT:-3}
@@ -57,8 +57,8 @@ fi
 
 # Parse failed tests - format can be:
 # "FAIL TestName" or "FAIL package/path TestName"
-declare -a FAILED_TEST_LIST
-declare -a FAILED_PACKAGE_LIST
+declare -a FAILED_TEST_LIST=()
+declare -a FAILED_PACKAGE_LIST=()
 
 while IFS= read -r line; do
     # Extract test name from various gotestsum output formats
@@ -98,8 +98,8 @@ done
 echo ""
 
 # Track flaky and permanently failed tests
-declare -a FLAKY_TESTS
-declare -a PERMANENTLY_FAILED_TESTS
+declare -a FLAKY_TESTS=()
+declare -a PERMANENTLY_FAILED_TESTS=()
 
 # Extract package path from original command
 PACKAGE_PATH="."
