@@ -33,12 +33,12 @@ const (
 
 // ContainerManager manages test container lifecycle for various store backends
 type ContainerManager struct {
-	storeType          UTXOStoreType
-	containerURL       string
-	cleanupFunc        func() error
-	aerospikeClient    *uaerospike.Client
-	postgresContainer  *postgres.PostgresContainer
-	externalStorePath  string // Path for Aerospike external storage (test-specific)
+	storeType         UTXOStoreType
+	containerURL      string
+	cleanupFunc       func() error
+	aerospikeClient   *uaerospike.Client
+	postgresContainer *postgres.PostgresContainer
+	externalStorePath string // Path for Aerospike external storage (test-specific)
 }
 
 // NewContainerManager creates a new container manager for the specified store type
