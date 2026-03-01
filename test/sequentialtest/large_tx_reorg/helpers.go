@@ -36,6 +36,7 @@ const (
 // large transactions that span multiple Aerospike records.
 // Returns a TestDaemon and block3 for building forks.
 func setupLargeTransactionTest(t *testing.T, utxoStoreType string) (*daemon.TestDaemon, *model.Block) {
+	t.Helper()
 	// Default to aerospike if not specified
 	if utxoStoreType == "" {
 		utxoStoreType = "aerospike"
