@@ -49,24 +49,29 @@ go test -v -race -tags "testtxmetacache" -run TestNameHere ./path/to/package
 
 # Test Retry Support (for flaky tests)
 # Automatically retry failed tests to handle timing/race issues
-# Default: 3 retries with 2s delay between attempts
+# Default: 3 retries for all test targets
 
-# Run sequential tests with retry (default: 3 retries)
-make sequentialtest
+# Unit tests with retry (gotestsum native --rerun-fails)
+make test TEST_RETRY_COUNT=3
+make longtest TEST_RETRY_COUNT=5
 
-# Custom retry settings
+# E2E tests with retry (custom retry wrapper with timeout extension)
+make smoketest TEST_RETRY_COUNT=3
 make sequentialtest TEST_RETRY_COUNT=5 TEST_RETRY_DELAY=3
 
-# Run smoke tests with retry
-make smoketest TEST_RETRY_COUNT=3
+# Disable retries (set to 0 or 1)
+make test TEST_RETRY_COUNT=0
+make smoketest TEST_RETRY_COUNT=1
 
-# Disable retries (1 attempt only)
-make sequentialtest TEST_RETRY_COUNT=1
-
-# Database-specific tests with retry
+# Database-specific sequential tests with retry
 make sequentialtest-aerospike TEST_RETRY_COUNT=5
 make sequentialtest-postgres TEST_RETRY_COUNT=3
 make sequentialtest-sqlite TEST_RETRY_COUNT=3
+
+# Flaky test reports (JSON format):
+# - Unit tests: /tmp/teranode-test-results/unit-test-flaky.json
+# - Long tests: /tmp/teranode-test-results/longtest-flaky.json
+# - Sequential tests: console output with flaky test summary
 
 # See docs/testing/test-retry-mechanism.md for full documentation
 ```

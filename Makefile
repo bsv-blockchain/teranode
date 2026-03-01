@@ -158,16 +158,39 @@ install-tools:
 	go install github.com/ctrf-io/go-ctrf-json-reporter/cmd/go-ctrf-json-reporter@latest
 	go install gotest.tools/gotestsum@latest
 
+# run unit tests with automatic retry support for flaky tests
+# Environment variables:
+#   TEST_RETRY_COUNT - Number of retry attempts for failed tests (default: 3, set to 0 to disable)
+# Example: make test TEST_RETRY_COUNT=5
+# Flaky test report: /tmp/teranode-test-results/unit-test-flaky.json
 .PHONY: test
 test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
+	@mkdir -p /tmp/teranode-test-results
+	@if [ "$(TEST_RETRY_COUNT)" = "0" ]; then \
+		echo "Running unit tests without retry"; \
+		SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort); \
+	else \
+		echo "Running unit tests with retry support (max $(TEST_RETRY_COUNT) attempts)"; \
+		SETTINGS_CONTEXT=test gotestsum --format pkgname --rerun-fails=$(TEST_RETRY_COUNT) --rerun-fails-max-failures=10 --rerun-fails-report=/tmp/teranode-test-results/unit-test-flaky.json --packages="./..." -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort); \
+	fi
 
 # run tests in the test/longtest directory
+# Environment variables:
+#   TEST_RETRY_COUNT - Number of retry attempts for failed tests (default: 3, set to 0 to disable)
+# Example: make longtest TEST_RETRY_COUNT=5
+# Flaky test report: /tmp/teranode-test-results/longtest-flaky.json
 .PHONY: longtest
 longtest:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
-	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"
+	@mkdir -p /tmp/teranode-test-results
+	@if [ "$(TEST_RETRY_COUNT)" = "0" ]; then \
+		echo "Running longtest without retry"; \
+		SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"; \
+	else \
+		echo "Running longtest with retry support (max $(TEST_RETRY_COUNT) attempts)"; \
+		SETTINGS_CONTEXT=test gotestsum --format pkgname --rerun-fails=$(TEST_RETRY_COUNT) --rerun-fails-max-failures=5 --rerun-fails-report=/tmp/teranode-test-results/longtest-flaky.json --packages="./test/longtest/..." -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out ./test/longtest/... 2>&1 | grep -v "ld: warning:"; \
+	fi
 
 # run tests in the test/sequentialtest directory in order, one by one
 # Environment variables:
