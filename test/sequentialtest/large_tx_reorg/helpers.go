@@ -88,6 +88,7 @@ func setupLargeTransactionTest(t *testing.T, utxoStoreType string) (*daemon.Test
 // For non-Aerospike stores (postgres):
 // - Skips verification (counters don't apply)
 func verifySpentExtraRecs(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx, expectedSpentRecs int, expectedTotalRecs int) {
+	t.Helper()
 	// Only Aerospike uses the spentExtraRecs/totalExtraRecs counters
 	// Check if UTXO store URL scheme is aerospike
 	if td.Settings.UtxoStore.UtxoStore == nil || td.Settings.UtxoStore.UtxoStore.Scheme != "aerospike" {
