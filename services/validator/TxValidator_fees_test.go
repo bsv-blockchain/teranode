@@ -230,6 +230,7 @@ func TestTxValidator_Fees_ConsolidationExemption(t *testing.T) {
 			policy := settings.NewPolicySettings()
 			policy.MinConsolidationFactor = tt.consolidationFactor
 			policy.MinMiningTxFee = tt.minFeeRate
+			// Note: Other consolidation settings use defaults from NewPolicySettings()
 
 			tSettings := &settings.Settings{
 				Policy:         policy,
@@ -344,11 +345,23 @@ func TestTxValidator_Fees_DustReturn(t *testing.T) {
 	// Create a dust return transaction (single 0-satoshi unspendable output)
 	tx := bt.NewTx()
 
-	// Add some inputs
+	// Add some inputs with P2PKH scripts (25 bytes each)
 	for i := 0; i < 5; i++ {
+		// Create P2PKH locking script: OP_DUP OP_HASH160 <20 bytes> OP_EQUALVERIFY OP_CHECKSIG
+		p2pkhScript := make(bscript.Script, 25)
+		p2pkhScript[0] = 0x76 // OP_DUP
+		p2pkhScript[1] = 0xa9 // OP_HASH160
+		p2pkhScript[2] = 0x14 // Push 20 bytes
+		// 20 bytes of pubkey hash (can be any bytes for this test)
+		for j := 3; j < 23; j++ {
+			p2pkhScript[j] = byte(i)
+		}
+		p2pkhScript[23] = 0x88 // OP_EQUALVERIFY
+		p2pkhScript[24] = 0xac // OP_CHECKSIG
+
 		input := &bt.Input{
 			PreviousTxSatoshis: 1000,
-			PreviousTxScript:   &bscript.Script{},
+			PreviousTxScript:   &p2pkhScript,
 			UnlockingScript:    &bscript.Script{},
 			SequenceNumber:     0xfffffffe,
 			PreviousTxOutIndex: uint32(i),
@@ -357,8 +370,8 @@ func TestTxValidator_Fees_DustReturn(t *testing.T) {
 		tx.Inputs = append(tx.Inputs, input)
 	}
 
-	// Add single 0-satoshi OP_FALSE OP_RETURN output
-	dustScript, _ := bscript.NewFromASM("OP_FALSE OP_RETURN")
+	// Add dust return output: OP_FALSE OP_RETURN OP_PUSHDATA(4) 'dust'
+	dustScript := &bscript.Script{0x00, 0x6a, 0x04, 0x64, 0x75, 0x73, 0x74}
 	tx.Outputs = append(tx.Outputs, &bt.Output{
 		Satoshis:      0,
 		LockingScript: dustScript,
@@ -366,7 +379,7 @@ func TestTxValidator_Fees_DustReturn(t *testing.T) {
 
 	// Create validator with fee policy
 	policy := settings.NewPolicySettings()
-	policy.MinConsolidationFactor = 20
+	// MinConsolidationFactor uses default (20) from NewPolicySettings()
 	policy.MinMiningTxFee = 0.00000500 // 500 satoshis/kB
 
 	tSettings := &settings.Settings{

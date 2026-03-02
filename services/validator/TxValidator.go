@@ -645,9 +645,10 @@ func (tv *TxValidator) checkInputs(tx *bt.Tx, blockHeight uint32, validationOpti
 // checkTxSize validates that the transaction size complies with consensus and policy limits.
 // This method enforces two types of checks:
 // 1. Consensus check (ALWAYS enforced): Ensures transaction doesn't exceed consensus size limit
-//    - Before Genesis: 1 MB (MaxTxSizeConsensusBeforeGenesis)
-//    - After Genesis: 1 GB (MaxTxSizeConsensusAfterGenesis)
-//    - Matches C++ bitcoin-sv: CheckTransactionCommon in validation.cpp:536
+//   - Before Genesis: 1 MB (MaxTxSizeConsensusBeforeGenesis)
+//   - After Genesis: 1 GB (MaxTxSizeConsensusAfterGenesis)
+//   - Matches C++ bitcoin-sv: CheckTransactionCommon in validation.cpp:536
+//
 // 2. Policy check (only when skipPolicy=false): Ensures transaction doesn't exceed policy size limit
 //
 // Parameters:
@@ -812,10 +813,10 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 		return false
 	}
 
-	// Allow disabling free consolidation txns via configuring the consolidation factor to zero
+	// Allow disabling free consolidation txns via configuring the consolidation factor to zero or negative
 	minConsolidationFactor := tv.settings.Policy.GetMinConsolidationFactor()
-	if minConsolidationFactor == 0 {
-		tv.logger.Debugf("Consolidation disabled: minConsolidationFactor is 0")
+	if minConsolidationFactor <= 0 {
+		tv.logger.Debugf("Consolidation disabled: minConsolidationFactor is %d", minConsolidationFactor)
 		return false
 	}
 
@@ -939,11 +940,11 @@ func (tv *TxValidator) isConsolidationTx(tx *bt.Tx, utxoHeights []uint32, curren
 // 3. P2SH redeem scripts (pre-Genesis only) - GetP2SHSigOpCount
 //
 // Differences from C++ implementation:
-// - No MEMPOOL_HEIGHT constant needed: teranode always has actual utxoHeights from UTXO store,
-//   so we can always determine the protocol era for each UTXO
-// - Script number parsing: Implements CScriptNum-compatible parsing (little-endian with sign bit)
-//   via helper functions checkMinimalEncoding() and parseScriptNumber() to handle non-OP_N
-//   multisig operands with full validation (size checks, minimal encoding, negative value rejection)
+//   - No MEMPOOL_HEIGHT constant needed: teranode always has actual utxoHeights from UTXO store,
+//     so we can always determine the protocol era for each UTXO
+//   - Script number parsing: Implements CScriptNum-compatible parsing (little-endian with sign bit)
+//     via helper functions checkMinimalEncoding() and parseScriptNumber() to handle non-OP_N
+//     multisig operands with full validation (size checks, minimal encoding, negative value rejection)
 //
 // This implementation provides 100% compatibility with the C++ bitcoin-sv sigops counting logic.
 func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, blockHeight uint32, utxoHeights []uint32, validationOptions *Options) error {
@@ -1076,9 +1077,9 @@ func (tv *TxValidator) sigOpsCheck(tx *bt.Tx, blockHeight uint32, utxoHeights []
 //   - Pre-Genesis (fAccurate=false): Count as 20 (MAX_PUBKEYS_PER_MULTISIG_BEFORE_GENESIS)
 //   - Pre-Genesis (fAccurate=true): If previous op is OP_1 to OP_16, count as N; else count as 20
 //   - Post-Genesis: Always accurate with full validation:
-//     * OP_0: count as 0
-//     * OP_1 to OP_16: decode as N (1-16)
-//     * Push data: parse as CScriptNum with size check, minimal encoding validation, and negative check
+//   - OP_0: count as 0
+//   - OP_1 to OP_16: decode as N (1-16)
+//   - Push data: parse as CScriptNum with size check, minimal encoding validation, and negative check
 func (tv *TxValidator) countSigOpsInScript(script *bscript.Script, fAccurate bool, isPostGenesis bool) (uint64, error) {
 	if script == nil {
 		return 0, nil
@@ -1113,7 +1114,7 @@ func (tv *TxValidator) countSigOpsInScript(script *bscript.Script, fAccurate boo
 
 			// Track scope depth for IF/ENDIF blocks
 			if opcode == bscript.OpIF || opcode == bscript.OpNOTIF ||
-			   opcode == bscript.OpVERIF || opcode == bscript.OpVERNOTIF {
+				opcode == bscript.OpVERIF || opcode == bscript.OpVERNOTIF {
 				scopeDepth++
 			} else if opcode == bscript.OpENDIF {
 				scopeDepth--

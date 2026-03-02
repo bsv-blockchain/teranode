@@ -13,12 +13,14 @@ import (
 )
 
 func TestCheckConsensusSigops_PreGenesis(t *testing.T) {
-	// Create settings with Genesis activation at height 1000
+	// Create settings with Genesis activation at height 1000.
+	// Copy MainNetParams to avoid mutating the global variable.
+	mainNetParamsCopy := chaincfg.MainNetParams
+	mainNetParamsCopy.GenesisActivationHeight = 1000
 	tSettings := &settings.Settings{
 		Policy:         settings.NewPolicySettings(),
-		ChainCfgParams: &chaincfg.MainNetParams,
+		ChainCfgParams: &mainNetParamsCopy,
 	}
-	tSettings.ChainCfgParams.GenesisActivationHeight = 1000
 
 	tv := &TxValidator{
 		logger:   ulogger.TestLogger{},
@@ -116,7 +118,7 @@ func TestCheckConsensusSigops_PreGenesis(t *testing.T) {
 
 	t.Run("counts sigops in both inputs and outputs", func(t *testing.T) {
 		tx := bt.NewTx()
-		
+
 		// Input with 5,000 OP_CHECKSIG
 		unlockingScript := &bscript.Script{}
 		for i := 0; i < 5000; i++ {
@@ -127,7 +129,7 @@ func TestCheckConsensusSigops_PreGenesis(t *testing.T) {
 			PreviousTxScript:   &bscript.Script{},
 			UnlockingScript:    unlockingScript,
 		})
-		
+
 		// Output with 15,001 OP_CHECKSIG (total = 20,001, should fail)
 		lockingScript := &bscript.Script{}
 		for i := 0; i < 15001; i++ {

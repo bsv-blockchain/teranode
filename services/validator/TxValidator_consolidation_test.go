@@ -53,10 +53,10 @@ func TestTxValidator_isDustReturnTx(t *testing.T) {
 				}
 				_ = input.PreviousTxIDAdd(&chainhash.Hash{})
 				tx.Inputs = append(tx.Inputs, input)
-				// Add unspendable output with 0 satoshis
+				// Add dust return output: OP_FALSE OP_RETURN OP_PUSHDATA(4) 'dust'
 				tx.Outputs = append(tx.Outputs, &bt.Output{
 					Satoshis:      0,
-					LockingScript: &bscript.Script{0x00, 0x6a}, // OP_FALSE OP_RETURN
+					LockingScript: &bscript.Script{0x00, 0x6a, 0x04, 0x64, 0x75, 0x73, 0x74},
 				})
 				return tx
 			},
@@ -503,10 +503,10 @@ func TestTxValidator_isConsolidationTx(t *testing.T) {
 					_ = input.PreviousTxIDAdd(&chainhash.Hash{})
 					tx.Inputs = append(tx.Inputs, input)
 				}
-				// Add 1 output with 0 satoshis and unspendable script
+				// Add dust return output: OP_FALSE OP_RETURN OP_PUSHDATA(4) 'dust'
 				output := &bt.Output{
 					Satoshis:      0,
-					LockingScript: &bscript.Script{0x00, 0x6a}, // OP_FALSE OP_RETURN
+					LockingScript: &bscript.Script{0x00, 0x6a, 0x04, 0x64, 0x75, 0x73, 0x74},
 				}
 				tx.Outputs = append(tx.Outputs, output)
 				return tx
@@ -641,9 +641,7 @@ func TestTxValidator_isConsolidationTx(t *testing.T) {
 			// Create policy settings with the specified minConsolidationFactor
 			policy := settings.NewPolicySettings()
 			policy.MinConsolidationFactor = tt.minConsolidationFactor
-			policy.MaxConsolidationInputScriptSize = 150
-			policy.MinConfConsolidationInput = 6
-			policy.AcceptNonStdConsolidationInput = false
+			// Note: Other consolidation settings use defaults from NewPolicySettings()
 
 			// Create settings with the policy
 			tSettings := &settings.Settings{

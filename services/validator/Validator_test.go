@@ -400,7 +400,7 @@ func TestValidateTx4da809a914526f0c4770ea19b5f25f89e9acf82a4184e86a0a3ae8ad250e3
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
+	err = v.validateTransaction(ctx, tx, height, utxos, &Options{})
 	require.NoError(t, err)
 
 	err = v.validateTransactionScripts(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
@@ -431,7 +431,7 @@ func TestValidateTxda47bd83967d81f3cf6520f4ff81b3b6c4797bfe7ac2b5969aedbf01a840c
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
+	err = v.validateTransaction(ctx, tx, height, utxos, &Options{})
 	require.NoError(t, err)
 
 	err = v.validateTransactionScripts(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
@@ -462,7 +462,7 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
+	err = v.validateTransaction(ctx, tx, height, []uint32{height}, &Options{})
 	require.NoError(t, err)
 
 	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
@@ -479,6 +479,7 @@ func TestValidateTx7f4244335dec8d941e3fc1847ac3d020fac9347a0c0335294bf56ede8aa58
 	assert.Equal(t, txid, tx.TxID())
 
 	var height uint32 = 1553037
+	utxos := []uint32{1553030, 1550102}
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams, _ = chaincfg.GetChainParams("testnet")
@@ -490,10 +491,10 @@ func TestValidateTx7f4244335dec8d941e3fc1847ac3d020fac9347a0c0335294bf56ede8aa58
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
+	err = v.validateTransaction(ctx, tx, height, utxos, &Options{})
 	require.NoError(t, err)
 
-	err = v.validateTransactionScripts(ctx, tx, height, []uint32{1553030, 1550102}, &Options{SkipPolicyChecks: true})
+	err = v.validateTransactionScripts(ctx, tx, height, utxos, &Options{SkipPolicyChecks: true})
 	require.NoError(t, err)
 }
 
@@ -521,7 +522,7 @@ func TestValidateTx956685dffd466d3051c8372c4f3bdf0e061775ed054d7e8f0bc5695ca747d
 	ctx, _, endSpan := tracing.Tracer("validator").Start(ctx, "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
+	err = v.validateTransaction(ctx, tx, height, []uint32{height}, &Options{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "transaction fee is too low")
 }
@@ -611,7 +612,7 @@ func TestValidateTxba4f9786bb34571bd147448ab3c303ae4228b9c22c89e58cc50e26ff7538b
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
+	err = v.validateTransaction(ctx, tx, height, []uint32{height}, &Options{})
 	require.NoError(t, err)
 
 	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})
@@ -639,7 +640,7 @@ func TestValidateTx944d2299bbc9fbd46ce18de462690907341cad4730a4d3008d70637f41a36
 	ctx, _, endSpan := tracing.Tracer("validator").Start(context.Background(), "Test")
 	defer endSpan()
 
-	err = v.validateTransaction(ctx, tx, height, nil, &Options{})
+	err = v.validateTransaction(ctx, tx, height, []uint32{height}, &Options{})
 	require.NoError(t, err)
 
 	err = v.validateTransactionScripts(ctx, tx, height, []uint32{height}, &Options{SkipPolicyChecks: true})

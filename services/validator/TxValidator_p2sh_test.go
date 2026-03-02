@@ -13,12 +13,14 @@ import (
 )
 
 func TestCheckOutputs_P2SH_PostGenesis(t *testing.T) {
-	// Create settings with Genesis activation at height 1000
+	// Create settings with Genesis activation at height 1000.
+	// Copy MainNetParams to avoid mutating the global variable.
+	mainNetParamsCopy := chaincfg.MainNetParams
+	mainNetParamsCopy.GenesisActivationHeight = 1000
 	tSettings := &settings.Settings{
 		Policy:         settings.NewPolicySettings(),
-		ChainCfgParams: &chaincfg.MainNetParams,
+		ChainCfgParams: &mainNetParamsCopy,
 	}
-	tSettings.ChainCfgParams.GenesisActivationHeight = 1000
 
 	tv := &TxValidator{
 		logger:   ulogger.TestLogger{},

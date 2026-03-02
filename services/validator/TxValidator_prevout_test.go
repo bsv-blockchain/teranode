@@ -20,7 +20,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 
 	t.Run("rejects null prevout (all zeros txid and max uint32 index)", func(t *testing.T) {
 		tx := bt.NewTx()
-		
+
 		// Create input with null prevout
 		// txid = all zeros, output index = 0xFFFFFFFF
 		input := &bt.Input{
@@ -31,7 +31,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 		}
 		// Add all-zero hash
 		_ = input.PreviousTxIDAdd(&chainhash.Hash{}) // Hash{} is all zeros
-		
+
 		tx.Inputs = append(tx.Inputs, input)
 		tx.Outputs = append(tx.Outputs, &bt.Output{
 			Satoshis:      500,
@@ -45,7 +45,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 
 	t.Run("allows valid prevout (non-zero txid)", func(t *testing.T) {
 		tx := bt.NewTx()
-		
+
 		// Create input with valid prevout
 		input := &bt.Input{
 			PreviousTxOutIndex: 0xFFFFFFFF, // max index but non-zero txid
@@ -56,7 +56,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 		// Add non-zero hash
 		hash := chainhash.Hash{1, 2, 3, 4, 5} // Non-zero hash
 		_ = input.PreviousTxIDAdd(&hash)
-		
+
 		tx.Inputs = append(tx.Inputs, input)
 		tx.Outputs = append(tx.Outputs, &bt.Output{
 			Satoshis:      500,
@@ -69,7 +69,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 
 	t.Run("allows valid prevout (zero txid but non-max index)", func(t *testing.T) {
 		tx := bt.NewTx()
-		
+
 		// Create input with valid prevout
 		input := &bt.Input{
 			PreviousTxOutIndex: 0, // valid index, even though txid is zero
@@ -79,7 +79,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 		}
 		// Add zero hash (but index is not max)
 		_ = input.PreviousTxIDAdd(&chainhash.Hash{})
-		
+
 		tx.Inputs = append(tx.Inputs, input)
 		tx.Outputs = append(tx.Outputs, &bt.Output{
 			Satoshis:      500,
@@ -92,7 +92,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 
 	t.Run("allows normal transaction with valid inputs", func(t *testing.T) {
 		tx := bt.NewTx()
-		
+
 		// Create input with normal prevout
 		input := &bt.Input{
 			PreviousTxOutIndex: 1,
@@ -102,7 +102,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 		}
 		hash := chainhash.Hash{0xaa, 0xbb, 0xcc}
 		_ = input.PreviousTxIDAdd(&hash)
-		
+
 		tx.Inputs = append(tx.Inputs, input)
 		tx.Outputs = append(tx.Outputs, &bt.Output{
 			Satoshis:      500,
@@ -115,7 +115,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 
 	t.Run("rejects transaction with one null and one valid prevout", func(t *testing.T) {
 		tx := bt.NewTx()
-		
+
 		// Add valid input first
 		validInput := &bt.Input{
 			PreviousTxOutIndex: 1,
@@ -126,7 +126,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 		validHash := chainhash.Hash{0xaa, 0xbb, 0xcc}
 		_ = validInput.PreviousTxIDAdd(&validHash)
 		tx.Inputs = append(tx.Inputs, validInput)
-		
+
 		// Add null input
 		nullInput := &bt.Input{
 			PreviousTxOutIndex: 0xFFFFFFFF,
@@ -136,7 +136,7 @@ func TestCheckPrevOutputs_NullPrevout(t *testing.T) {
 		}
 		_ = nullInput.PreviousTxIDAdd(&chainhash.Hash{}) // all zeros
 		tx.Inputs = append(tx.Inputs, nullInput)
-		
+
 		tx.Outputs = append(tx.Outputs, &bt.Output{
 			Satoshis:      1500,
 			LockingScript: &bscript.Script{},

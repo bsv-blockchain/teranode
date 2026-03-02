@@ -31,8 +31,13 @@ type PolicySettings struct {
 }
 
 func NewPolicySettings() *PolicySettings {
+	// Default values from C++ bitcoin-sv implementation
+	// See: bitcoin-sv/src/policy/policy.h
 	return &PolicySettings{
-		// TODO set defaults
+		MinConsolidationFactor:          20,    // DEFAULT_MIN_CONSOLIDATION_FACTOR
+		MaxConsolidationInputScriptSize: 150,   // DEFAULT_MAX_CONSOLIDATION_INPUT_SCRIPT_SIZE
+		MinConfConsolidationInput:       6,     // DEFAULT_MIN_CONF_CONSOLIDATION_INPUT
+		AcceptNonStdConsolidationInput:  false, // DEFAULT_ACCEPT_NON_STD_CONSOLIDATION_INPUT
 	}
 }
 
