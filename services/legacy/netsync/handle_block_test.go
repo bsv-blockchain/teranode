@@ -25,9 +25,9 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/ordishs/go-bitcoin"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -86,6 +86,7 @@ func TestSyncManager_HandleBlockDirect(t *testing.T) {
 		subtreeStore:     subtreeStore,
 		blockValidation:  blockValidation,
 	}
+	defer sm.orphanTxs.Stop()
 
 	msgBlock := &wire.MsgBlock{}
 	err = msgBlock.Deserialize(bytes.NewReader(blockBytes))

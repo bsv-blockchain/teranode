@@ -55,14 +55,20 @@ import (
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
-	cache "github.com/patrickmn/go-cache"
+	"github.com/jellydator/ttlcache/v3"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-// live items expire after 10s, cleanup runs every minute
-var rpcCallCache = cache.New(10*time.Second, time.Minute)
+// live items expire after 10s
+var rpcCallCache = newRPCCache()
+
+func newRPCCache() *ttlcache.Cache[string, any] {
+	c := ttlcache.New[string, any](ttlcache.WithTTL[string, any](10 * time.Second))
+	go c.Start()
+	return c
+}
 
 // handleGetBlock implements the getblock command, which retrieves information about a block
 // from the blockchain based on its hash.
@@ -486,8 +492,8 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 	)
 	defer deferFn()
 
-	if cached, found := rpcCallCache.Get("getbestblockhash"); found {
-		return cached.(string), nil
+	if cached := rpcCallCache.Get("getbestblockhash"); cached != nil {
+		return cached.Value().(string), nil
 	}
 
 	bh, _, err := s.blockchainClient.GetBestBlockHeader(ctx)
@@ -498,7 +504,7 @@ func handleGetBestBlockHash(ctx context.Context, s *RPCServer, _ interface{}, _ 
 	hash := bh.Hash()
 
 	if s.settings.RPC.CacheEnabled {
-		rpcCallCache.Set("getbestblockhash", hash.String(), cache.DefaultExpiration)
+		rpcCallCache.Set("getbestblockhash", hash.String(), ttlcache.DefaultTTL)
 	}
 
 	return hash.String(), nil
@@ -1050,11 +1056,11 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 	merkleProofStrings := make([]string, len(mc.MerkleProof))
 
 	for i, hash := range mc.MerkleProof {
-		merkleProofStrings[i] = utils.ReverseAndHexEncodeSlice(hash)
+		merkleProofStrings[i] = util.ReverseAndHexEncodeSlice(hash)
 	}
 
 	jsonMap := map[string]interface{}{
-		"id":                  utils.ReverseAndHexEncodeSlice(mc.Id),
+		"id":                  util.ReverseAndHexEncodeSlice(mc.Id),
 		"prevhash":            ph.String(),
 		"coinbaseValue":       mc.CoinbaseValue,
 		"version":             mc.Version,
@@ -1079,7 +1085,7 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 	if *c.Verbosity == uint32(1) {
 		subtreeHashes := make([]string, len(mc.SubtreeHashes))
 		for i, hash := range mc.SubtreeHashes {
-			subtreeHashes[i] = utils.ReverseAndHexEncodeSlice(hash)
+			subtreeHashes[i] = util.ReverseAndHexEncodeSlice(hash)
 		}
 
 		jsonMap["subtreeHashes"] = subtreeHashes
@@ -1125,8 +1131,8 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 	)
 	defer deferFn()
 
-	if cached, found := rpcCallCache.Get("getpeerinfo"); found {
-		return cached, nil
+	if cached := rpcCallCache.Get("getpeerinfo"); cached != nil {
+		return cached.Value(), nil
 	}
 
 	// use a goroutine with select to handle timeouts more reliably
@@ -1387,8 +1393,8 @@ func handleGetblockchaininfo(ctx context.Context, s *RPCServer, cmd interface{},
 	)
 	defer deferFn()
 
-	if cached, found := rpcCallCache.Get("getblockchaininfo"); found {
-		return cached.(map[string]interface{}), nil
+	if cached := rpcCallCache.Get("getblockchaininfo"); cached != nil {
+		return cached.Value().(map[string]interface{}), nil
 	}
 
 	bestBlockHeader, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
@@ -1567,8 +1573,8 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	defer deferFn()
 
 	// use a cache that expires after 10 seconds
-	if cached, found := rpcCallCache.Get("getinfo"); found {
-		return cached.(map[string]interface{}), nil
+	if cached := rpcCallCache.Get("getinfo"); cached != nil {
+		return cached.Value().(map[string]interface{}), nil
 	}
 
 	bestBlockHeader, bestBlockMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
@@ -1666,7 +1672,7 @@ func handleGetInfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan 
 	}
 
 	if s.settings.RPC.CacheEnabled {
-		rpcCallCache.Set("getinfo", jsonMap, cache.DefaultExpiration)
+		rpcCallCache.Set("getinfo", jsonMap, ttlcache.DefaultTTL)
 	}
 
 	return jsonMap, nil
@@ -1714,7 +1720,7 @@ func handleSubmitMiningSolution(ctx context.Context, s *RPCServer, cmd interface
 
 	s.logger.Debugf("in handleSubmitMiningSolution: cmd: %s", c.MiningSolution.String())
 
-	id, err := utils.DecodeAndReverseHexString(c.MiningSolution.ID)
+	id, err := util.DecodeAndReverseHexString(c.MiningSolution.ID)
 	if err != nil {
 		return nil, rpcDecodeHexError(c.MiningSolution.ID)
 	}
@@ -2715,8 +2721,8 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	)
 	defer deferFn()
 
-	if cached, found := rpcCallCache.Get("getchaintips"); found {
-		return cached, nil
+	if cached := rpcCallCache.Get("getchaintips"); cached != nil {
+		return cached.Value(), nil
 	}
 
 	_, ok := cmd.(*bsvjson.GetChainTipsCmd)

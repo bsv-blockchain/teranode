@@ -107,14 +107,8 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 	authsha := sha256.Sum256([]byte(authHeader))
 	isValid := authsha == h.authsha
 
-	// Add debug logging
 	if !isValid {
-		expectedAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", rpcUser, rpcPass)))
-		expectedHash := sha256.Sum256([]byte(expectedAuth))
-
-		h.logger.Debugf("Auth validation failed. Got: %x, Expected: %x", authsha, expectedHash)
-		h.logger.Debugf("Username comparison: '%s' vs '%s'", username, rpcUser)
-		h.logger.Debugf("Password comparison: '%s' vs '%s'", password, rpcPass)
+		h.logger.Debugf("Auth validation failed for user")
 	}
 
 	return isValid
@@ -212,9 +206,9 @@ func (h *AuthHandler) LogoutHandler(c echo.Context) error {
 func (h *AuthHandler) CheckAuthHandler(c echo.Context) error {
 	h.logger.Debugf("Auth check request received")
 
-	// Log all cookies for debugging
+	// Log cookie names for debugging (values omitted for security)
 	for _, cookie := range c.Cookies() {
-		h.logger.Debugf("Cookie found: %s = %s", cookie.Name, cookie.Value)
+		h.logger.Debugf("Cookie found: %s", cookie.Name)
 	}
 
 	// Log auth header if present

@@ -6,7 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils/expiringmap"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 )
 
 // utxoSetCache provides a thread-safe caching mechanism for UTXOSets.
@@ -38,6 +38,11 @@ func (c *utxoSetCache) Get(hash chainhash.Hash) (*UTXOSet, bool) {
 	}
 
 	return utxoSet, true
+}
+
+// Stop stops the background cleanup goroutine.
+func (c *utxoSetCache) Stop() {
+	c.m.Stop()
 }
 
 // Put stores a UTXOSet in the cache with its hash as the key.

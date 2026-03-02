@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 const dateFormat = "2006-01-02T15:04:05.000Z" // ISO 8601
@@ -19,11 +19,11 @@ func (mc *MiningCandidate) Stringify(long bool) string {
 		sb.WriteString(fmt.Sprintf("Mining Candidate (%.0f transactions)", math.Pow(2, float64(len(mc.MerkleProof)))))
 	} else {
 		sb.WriteString(fmt.Sprintf("Mining Candidate (%.0f transactions)\n\t", math.Pow(2, float64(len(mc.MerkleProof)))))
-		sb.WriteString(fmt.Sprintf("Job ID:         %s\n\t", utils.ReverseAndHexEncodeSlice(mc.Id)))
-		sb.WriteString(fmt.Sprintf("Previous hash:  %s\n\t", utils.ReverseAndHexEncodeSlice(mc.PreviousHash)))
+		sb.WriteString(fmt.Sprintf("Job ID:         %s\n\t", util.ReverseAndHexEncodeSlice(mc.Id)))
+		sb.WriteString(fmt.Sprintf("Previous hash:  %s\n\t", util.ReverseAndHexEncodeSlice(mc.PreviousHash)))
 		sb.WriteString(fmt.Sprintf("Coinbase value: %d\n\t", mc.CoinbaseValue))
 		sb.WriteString(fmt.Sprintf("Version:        %d\n\t", mc.Version))
-		sb.WriteString(fmt.Sprintf("nBits:          %s\n\t", utils.ReverseAndHexEncodeSlice(mc.NBits)))
+		sb.WriteString(fmt.Sprintf("nBits:          %s\n\t", util.ReverseAndHexEncodeSlice(mc.NBits)))
 		sb.WriteString(fmt.Sprintf("Time:           %d\n\t", mc.Time))
 		sb.WriteString(fmt.Sprintf("Height:         %d\n", mc.Height))
 	}
@@ -41,10 +41,10 @@ func (ms *MiningSolution) Stringify(long bool) string {
 
 	if !long {
 		sb.WriteString("Mining Solution for job ")
-		sb.WriteString(utils.ReverseAndHexEncodeSlice(ms.Id))
+		sb.WriteString(util.ReverseAndHexEncodeSlice(ms.Id))
 	} else {
 		sb.WriteString("Mining Solution\n\t")
-		sb.WriteString(fmt.Sprintf("Job ID:         %s\n\t", utils.ReverseAndHexEncodeSlice(ms.Id)))
+		sb.WriteString(fmt.Sprintf("Job ID:         %s\n\t", util.ReverseAndHexEncodeSlice(ms.Id)))
 		sb.WriteString(fmt.Sprintf("Nonce:          %d\n\t", ms.Nonce))
 		if ms.Time != nil {
 			sb.WriteString(fmt.Sprintf("Time:           %d\n\t", *ms.Time))

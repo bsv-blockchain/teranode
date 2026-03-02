@@ -25,12 +25,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -553,6 +552,13 @@ func (u *Server) Stop(_ context.Context) error {
 		}
 	}
 
+	if u.invalidSubtreeDeDuplicateMap != nil {
+		u.invalidSubtreeDeDuplicateMap.Stop()
+	}
+	if u.orphanage != nil {
+		u.orphanage.Stop()
+	}
+
 	return nil
 }
 
@@ -632,7 +638,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "checkSubtree",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
-		tracing.WithLogMessage(u.logger, "[checkSubtree] called for subtree %s (block %s / height %d)", utils.ReverseAndHexEncodeSlice(request.Hash), utils.ReverseAndHexEncodeSlice(request.BlockHash), request.BlockHeight),
+		tracing.WithLogMessage(u.logger, "[checkSubtree] called for subtree %s (block %s / height %d)", util.ReverseAndHexEncodeSlice(request.Hash), util.ReverseAndHexEncodeSlice(request.BlockHash), request.BlockHeight),
 	)
 	defer func() {
 		deferFn(err)

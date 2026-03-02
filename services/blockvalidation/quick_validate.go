@@ -35,11 +35,11 @@ var bufioReaderPool = sync.Pool{
 // but the actual I/O can be deferred to a background worker pool.
 type SubtreeWriteJob struct {
 	SubtreeHash   chainhash.Hash
-	SubtreeBytes  []byte
-	BlockHash     string // For logging
-	BlockHeight   uint32 // For DAH calculation
-	SubtreeIdx    int    // For logging
-	AlreadyExists bool   // Skip write if already exists
+	Subtree       *subtreepkg.Subtree // Serialized lazily by write worker to avoid holding bytes in channel
+	BlockHash     string              // For logging
+	BlockHeight   uint32              // For DAH calculation
+	SubtreeIdx    int                 // For logging
+	AlreadyExists bool                // Skip write if already exists
 }
 
 // subtreeWriteWorker processes subtree write jobs from a channel.
@@ -62,12 +62,18 @@ func (u *BlockValidation) subtreeWriteWorker(ctx context.Context, writeJobsChan 
 				continue
 			}
 
+			// Serialize lazily at write time to avoid holding bytes in the channel buffer
+			subtreeBytes, err := job.Subtree.Serialize()
+			if err != nil {
+				return errors.NewProcessingError("[subtreeWriteWorker][%s] failed to serialize subtree %d (%s)", job.BlockHash, job.SubtreeIdx, job.SubtreeHash.String(), err)
+			}
+
 			// Write the subtree file with finite DAH (temporary until block persister confirms)
 			dah := job.BlockHeight + u.subtreeBlockHeightRetention
 			if err := u.subtreeStore.Set(ctx,
 				job.SubtreeHash[:],
 				fileformat.FileTypeSubtree,
-				job.SubtreeBytes,
+				subtreeBytes,
 				bloboptions.WithAllowOverwrite(true),
 				bloboptions.WithDeleteAt(dah),
 			); err != nil {
@@ -146,15 +152,9 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 	// Set on block for merkle validation (synchronous)
 	block.SubtreeSlices[subtreeIdx] = fullSubtree
 
-	// Serialize for async write
-	subtreeBytes, err := fullSubtree.Serialize()
-	if err != nil {
-		return nil, errors.NewProcessingError("[buildSubtreeAndQueueWrite][%s] failed to serialize full subtree %s", block.Hash().String(), subtreeHash.String(), err)
-	}
-
 	return &SubtreeWriteJob{
 		SubtreeHash:   subtreeHash,
-		SubtreeBytes:  subtreeBytes,
+		Subtree:       fullSubtree,
 		BlockHash:     block.Hash().String(),
 		BlockHeight:   block.Height,
 		SubtreeIdx:    subtreeIdx,
