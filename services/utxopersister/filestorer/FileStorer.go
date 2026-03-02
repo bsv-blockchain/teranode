@@ -17,8 +17,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/bytesize"
-	"github.com/ordishs/go-utils"
 )
 
 // FileStorer handles the storage and management of blockchain-related files.
@@ -74,7 +74,7 @@ func NewFileStorer(ctx context.Context, logger ulogger.Logger, tSettings *settin
 	}
 
 	if exists {
-		return nil, errors.NewBlobAlreadyExistsError("%s.%s already exists", utils.ReverseAndHexEncodeSlice(key), fileType)
+		return nil, errors.NewBlobAlreadyExistsError("%s.%s already exists", util.ReverseAndHexEncodeSlice(key), fileType)
 	}
 
 	utxopersisterBufferSize := tSettings.Block.UTXOPersisterBufferSize
@@ -223,5 +223,5 @@ func (f *FileStorer) waitUntilFileIsAvailable(ctx context.Context) error {
 		time.Sleep(retryInterval)
 	}
 
-	return errors.NewStorageError("file %s.%s is not available", utils.ReverseAndHexEncodeSlice(f.key), f.fileType)
+	return errors.NewStorageError("file %s.%s is not available", util.ReverseAndHexEncodeSlice(f.key), f.fileType)
 }

@@ -45,12 +45,12 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1049,6 +1049,9 @@ func Test_Start_FSMTransitionError(t *testing.T) {
 	mockBlockchainClient := &blockchain.Mock{}
 	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(errors.New(errors.ERR_BLOCK_NOT_FOUND, "FSM not ready"))
 
+	// set the GRPC listen address to a random local port to avoid conflicts during testing
+	tSettings.BlockValidation.GRPCListenAddress = "localhost:0"
+
 	server := &Server{
 		logger:           logger,
 		settings:         tSettings,
@@ -1134,6 +1137,7 @@ func Test_BlockFound(t *testing.T) {
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		}
+		defer bv.blockExistsCache.Stop()
 
 		// Mark block as existing
 		err := bv.SetBlockExists(&hash)
@@ -1166,6 +1170,7 @@ func Test_BlockFound(t *testing.T) {
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1208,6 +1213,7 @@ func Test_BlockFound(t *testing.T) {
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1248,6 +1254,7 @@ func Test_BlockFound(t *testing.T) {
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			blockchainClient:              mockBlockchainClient,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1329,6 +1336,7 @@ func Test_ProcessBlock(t *testing.T) {
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1372,6 +1380,7 @@ func Test_ProcessBlock(t *testing.T) {
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1473,6 +1482,7 @@ func Test_ValidateBlock(t *testing.T) {
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1543,6 +1553,7 @@ func Test_ValidateBlock(t *testing.T) {
 			blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
 			stats:                         gocore.NewStat("test"),
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1598,6 +1609,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1650,6 +1662,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,
@@ -1687,6 +1700,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 			blockchainClient:              mockBlockchainClient,
 			logger:                        logger,
 		}
+		defer bv.blockExistsCache.Stop()
 
 		server := &Server{
 			logger:              logger,

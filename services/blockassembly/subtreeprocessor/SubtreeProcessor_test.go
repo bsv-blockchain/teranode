@@ -28,7 +28,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1011,7 +1010,7 @@ func TestCompareMerkleProofsToSubtrees(t *testing.T) {
 	}, cmp)
 
 	merkleRootFromProofs := util.BuildMerkleRootFromCoinbase(coinbaseHash[:], cmpB)
-	assert.Equal(t, expectedMerkleRoot, utils.ReverseAndHexEncodeSlice(merkleRootFromProofs))
+	assert.Equal(t, expectedMerkleRoot, util.ReverseAndHexEncodeSlice(merkleRootFromProofs))
 
 	topTree, err := subtreepkg.NewIncompleteTreeByLeafCount(len(subtrees))
 	require.NoError(t, err)

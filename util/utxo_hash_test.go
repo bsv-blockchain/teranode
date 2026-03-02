@@ -8,7 +8,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/ordishs/go-utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -66,7 +65,7 @@ func TestGetOutputUtxoHash(t *testing.T) {
 		vOut   uint32
 	}
 
-	txID, _ := utils.DecodeAndReverseHexString("2fb09ea4d1d282f55b4f4b5b1eec92fa314e1ba5a5a009e897f63d155b4dba82")
+	txID, _ := DecodeAndReverseHexString("2fb09ea4d1d282f55b4f4b5b1eec92fa314e1ba5a5a009e897f63d155b4dba82")
 
 	tests := []struct {
 		name    string

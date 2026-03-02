@@ -192,7 +192,15 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		return nil, err
 	}
 
-	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
+	var stpOpts []subtreeprocessor.Options
+	if tSettings.BlockAssembly.SubtreeMmapDir != "" {
+		stpOpts = append(stpOpts, subtreeprocessor.WithMmapDir(tSettings.BlockAssembly.SubtreeMmapDir))
+	}
+	if len(tSettings.BlockAssembly.TxMapDirs) > 0 {
+		stpOpts = append(stpOpts, subtreeprocessor.WithTxMapDirs(tSettings.BlockAssembly.TxMapDirs))
+	}
+
+	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan, stpOpts...)
 	if err != nil {
 		return nil, err
 	}

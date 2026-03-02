@@ -9,8 +9,8 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/usql"
-	"github.com/dustin/go-humanize"
 )
 
 // Ensure Store implements the Pruner Service interface
@@ -121,7 +121,7 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 	}
 
 	s.logger.Infof("[pruner][%s:%d] phase 2: completed cleanup in %v: deleted %s records (%s)",
-		blockHashStr, blockHeight, elapsed, humanize.Comma(deletedCount), tpsStr)
+		blockHashStr, blockHeight, elapsed, util.FormatComma(deletedCount), tpsStr)
 
 	return deletedCount, nil
 }

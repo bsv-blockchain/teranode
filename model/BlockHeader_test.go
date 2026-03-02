@@ -12,7 +12,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -312,7 +312,7 @@ func TestChainhashAssumptions(t *testing.T) {
 	h1, err := chainhash.NewHashFromStr(s)
 	require.NoError(t, err)
 
-	b, err := utils.DecodeAndReverseHashString(s)
+	b, err := util.DecodeAndReverseHashString(s)
 	require.NoError(t, err)
 
 	h2 := chainhash.Hash(b)
