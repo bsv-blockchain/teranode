@@ -7,7 +7,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
-	"github.com/ordishs/go-utils"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +28,7 @@ func TestCreateTransaction(t *testing.T) {
 		)
 
 		assert.Equal(t, 1, len(tx.Inputs))
-		assert.Equal(t, baseTx1.TxID(), utils.ReverseAndHexEncodeSlice(tx.Inputs[0].PreviousTxID()))
+		assert.Equal(t, baseTx1.TxID(), util.ReverseAndHexEncodeSlice(tx.Inputs[0].PreviousTxID()))
 		assert.Equal(t, 1, len(tx.Outputs))
 		assert.Equal(t, uint64(1000), tx.Outputs[0].Satoshis)
 	})
@@ -43,7 +43,7 @@ func TestCreateTransaction(t *testing.T) {
 		)
 
 		assert.Equal(t, 1, len(tx.Inputs))
-		assert.Equal(t, baseTx1.TxID(), utils.ReverseAndHexEncodeSlice(tx.Inputs[0].PreviousTxID()))
+		assert.Equal(t, baseTx1.TxID(), util.ReverseAndHexEncodeSlice(tx.Inputs[0].PreviousTxID()))
 		assert.Equal(t, 5, len(tx.Outputs))
 		assert.Equal(t, uint64(1000), tx.Outputs[0].Satoshis)
 		assert.Equal(t, uint64(0), tx.Outputs[1].Satoshis)
@@ -61,8 +61,8 @@ func TestCreateTransaction(t *testing.T) {
 		)
 
 		assert.Equal(t, 2, len(tx.Inputs))
-		assert.Equal(t, baseTx1.TxID(), utils.ReverseAndHexEncodeSlice(tx.Inputs[0].PreviousTxID()))
-		assert.Equal(t, baseTx2.TxID(), utils.ReverseAndHexEncodeSlice(tx.Inputs[1].PreviousTxID()))
+		assert.Equal(t, baseTx1.TxID(), util.ReverseAndHexEncodeSlice(tx.Inputs[0].PreviousTxID()))
+		assert.Equal(t, baseTx2.TxID(), util.ReverseAndHexEncodeSlice(tx.Inputs[1].PreviousTxID()))
 		assert.Equal(t, 2, len(tx.Outputs))
 		assert.Equal(t, uint64(1000), tx.Outputs[0].Satoshis)
 		assert.Equal(t, uint64(0), tx.Outputs[1].Satoshis)
@@ -78,7 +78,7 @@ func TestCreateTransaction(t *testing.T) {
 		)
 
 		assert.Equal(t, 1, len(tx.Inputs))
-		assert.Equal(t, baseTx1.TxID(), utils.ReverseAndHexEncodeSlice(tx.Inputs[0].PreviousTxID()))
+		assert.Equal(t, baseTx1.TxID(), util.ReverseAndHexEncodeSlice(tx.Inputs[0].PreviousTxID()))
 		assert.Equal(t, 2, len(tx.Outputs))
 		assert.Equal(t, uint64(10000), tx.Outputs[0].Satoshis)
 		assert.Equal(t, uint64(0), tx.Outputs[1].Satoshis)

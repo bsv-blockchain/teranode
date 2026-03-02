@@ -223,6 +223,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			FileStoreReadConcurrency:              getInt("filestore_read_concurrency", 768, alternativeContext...),
 			FileStoreWriteConcurrency:             getInt("filestore_write_concurrency", 256, alternativeContext...),
 			FileStoreUseSystemLimits:              getBool("filestore_use_system_limits", true, alternativeContext...),
+			DiskMapDirs:                           getMultiString("block_diskMapDirs", "|", []string{}, alternativeContext...),
 		},
 		BlockPersister: BlockPersisterSettings{
 			Store:                    getURL("blockpersister_store", "file://./data/blockstore", alternativeContext...),

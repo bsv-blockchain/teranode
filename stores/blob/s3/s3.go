@@ -38,9 +38,9 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
-	"github.com/ordishs/go-utils/expiringmap"
 )
 
 // S3 implements the blob.Store interface using Amazon S3 or compatible object storage services.
@@ -206,6 +206,8 @@ func (g *S3) Health(ctx context.Context, checkLiveness bool) (int, string, error
 func (g *S3) Close(_ context.Context) error {
 	_, _, endTrace := tracing.Tracer("s3").Start(context.Background(), "Close")
 	defer endTrace()
+
+	cache.Stop()
 
 	return nil
 }
@@ -389,7 +391,7 @@ func (g *S3) Get(ctx context.Context, key []byte, fileType fileformat.FileType, 
 	objectKey := g.getObjectKey(key, fileType, merged)
 
 	// We log this, since this should not happen in a healthy system. Subtrees should be retrieved from the local ttl cache
-	// g.logger.Warnf("[S3][%s] Getting object from S3: %s", utils.ReverseAndHexEncodeSlice(key), *objectKey)
+	// g.logger.Warnf("[S3][%s] Getting object from S3: %s", util.ReverseAndHexEncodeSlice(key), *objectKey)
 
 	// check cache
 	cached, ok := cache.Get(*objectKey)
@@ -532,7 +534,7 @@ func (g *S3) getObjectKey(hash []byte, fileType fileformat.FileType, o *options.
 	if o.Filename != "" {
 		key = o.Filename
 	} else {
-		key = fmt.Sprintf("%s%s", utils.ReverseAndHexEncodeSlice(hash), ext)
+		key = fmt.Sprintf("%s%s", util.ReverseAndHexEncodeSlice(hash), ext)
 
 		prefix = o.CalculatePrefix(key)
 	}

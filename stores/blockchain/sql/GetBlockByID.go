@@ -22,8 +22,8 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils"
 )
 
 // GetBlockByID retrieves a complete block from the database using its internal database ID.
@@ -148,12 +148,12 @@ func (s *SQL) GetBlockByID(ctx context.Context, id uint64) (*model.Block, error)
 
 	block.Header.HashPrevBlock, err = chainhash.NewHash(hashPrevBlock)
 	if err != nil {
-		return nil, errors.NewInvalidArgumentError("failed to convert hashPrevBlock: %s", utils.ReverseAndHexEncodeSlice(hashPrevBlock), err)
+		return nil, errors.NewInvalidArgumentError("failed to convert hashPrevBlock: %s", util.ReverseAndHexEncodeSlice(hashPrevBlock), err)
 	}
 
 	block.Header.HashMerkleRoot, err = chainhash.NewHash(hashMerkleRoot)
 	if err != nil {
-		return nil, errors.NewInvalidArgumentError("failed to convert hashMerkleRoot: %s", utils.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
+		return nil, errors.NewInvalidArgumentError("failed to convert hashMerkleRoot: %s", util.ReverseAndHexEncodeSlice(hashMerkleRoot), err)
 	}
 
 	block.TransactionCount = transactionCount

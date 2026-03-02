@@ -27,10 +27,10 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1043,6 +1043,8 @@ func TestCatchup(t *testing.T) {
 		subtreeStore:                  blobmemory.New(),
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 	}
+	defer bv.blockExistsCache.Stop()
+	defer bv.lastValidatedBlocks.Stop()
 
 	// Create server instance
 	server := &Server{
@@ -1209,6 +1211,7 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 			blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 			utxoStore:                     mockUTXOStore,
 		}
+		t.Cleanup(bv.blockExistsCache.Stop)
 
 		// Create circuit breaker for testing
 		cbConfig := catchup.DefaultCircuitBreakerConfig()
@@ -3121,8 +3124,9 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 			_ = bv.subtreeStore.Close(context.Background())
 		}
 
-		// Note: expiringmap doesn't have a Stop method, so we can't stop its goroutine
-		// This is a known limitation of the library
+		// Stop expiring map background goroutines
+		bv.blockExistsCache.Stop()
+		bv.lastValidatedBlocks.Stop()
 	}
 
 	return server, mockBlockchainClient, mockUTXOStore, cleanup
@@ -3221,8 +3225,9 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		close(server.blockFoundCh)
 		close(server.catchupCh)
 
-		// Note: expiringmap doesn't have a Stop method, so we can't stop its goroutine
-		// This is a known limitation of the library
+		// Stop expiring map background goroutines
+		bv.blockExistsCache.Stop()
+		bv.lastValidatedBlocks.Stop()
 	}
 
 	return server, mockBlockchainClient, mockUTXOStore, cleanup

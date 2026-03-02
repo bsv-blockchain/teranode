@@ -1,13 +1,61 @@
 package smoke
 
 import (
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/daemon"
 	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/require"
 )
+
+const (
+	maxSubmitRetries        = 5
+	initialSubmitRetryDelay = 500 * time.Millisecond
+)
+
+// submitTransactionWithRetry attempts to submit a transaction with retry logic for Aerospike readiness.
+func submitTransactionWithRetry(t *testing.T, td *daemon.TestDaemon, tx *bt.Tx) error {
+	t.Helper()
+
+	var lastErr error
+	retryDelay := initialSubmitRetryDelay
+
+	for attempt := 0; attempt <= maxSubmitRetries; attempt++ {
+		if attempt > 0 {
+			t.Logf("Retrying transaction submission (attempt %d/%d) after %v", attempt, maxSubmitRetries, retryDelay)
+			time.Sleep(retryDelay)
+			retryDelay *= 2
+		}
+
+		err := td.PropagationClient.ProcessTransaction(td.Ctx, tx)
+		if err == nil {
+			if attempt > 0 {
+				t.Logf("Transaction %s submitted successfully after %d retries", tx.TxIDChainHash().String(), attempt)
+			}
+			return nil
+		}
+
+		lastErr = err
+
+		// Check if it's an Aerospike readiness error
+		errStr := err.Error()
+		isRetryable := strings.Contains(errStr, "Operation not allowed at this time") ||
+			strings.Contains(errStr, "failed to acquire lock") ||
+			strings.Contains(errStr, "FAIL_FORBIDDEN")
+
+		if !isRetryable {
+			return err
+		}
+
+		t.Logf("Aerospike not ready, will retry: %v", err)
+	}
+
+	return lastErr
+}
 
 func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
@@ -45,15 +93,24 @@ func TestBlockValidationWithParentAndChildrenTxs(t *testing.T) {
 	)
 
 	t.Log("Testing valid block with parent and child transactions...")
-	// Submit all transactions to mempool first
-	err = td.PropagationClient.ProcessTransaction(td.Ctx, parentTx)
+	// Submit all transactions to mempool with retry logic for Aerospike readiness
+	err = submitTransactionWithRetry(t, td, parentTx)
 	require.NoError(t, err, "failed to submit parent transaction")
 
-	err = td.PropagationClient.ProcessTransaction(td.Ctx, childTx1)
+	err = submitTransactionWithRetry(t, td, childTx1)
 	require.NoError(t, err, "failed to submit child transaction 1")
 
-	err = td.PropagationClient.ProcessTransaction(td.Ctx, childTx2)
+	err = submitTransactionWithRetry(t, td, childTx2)
 	require.NoError(t, err, "failed to submit child transaction 2")
+
+	// Wait for all transactions to be processed by block assembly before mining
+	t.Log("Waiting for transactions to be processed by block assembly...")
+	err = td.WaitForTransactionInBlockAssembly(parentTx, 10*time.Second)
+	require.NoError(t, err, "parent transaction not processed by block assembly")
+	err = td.WaitForTransactionInBlockAssembly(childTx1, 10*time.Second)
+	require.NoError(t, err, "child transaction 1 not processed by block assembly")
+	err = td.WaitForTransactionInBlockAssembly(childTx2, 10*time.Second)
+	require.NoError(t, err, "child transaction 2 not processed by block assembly")
 
 	t.Log("Mining block containing parent and child transactions...")
 	block := td.MineAndWait(t, 1)
