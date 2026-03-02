@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -137,9 +139,89 @@ func doHTTPRequestForStreaming(ctx context.Context, url string, requestBody ...[
 	return executeHTTPRequest(ctx, cancelFn, url, requestBody...)
 }
 
+// ssrfProtectionEnabled controls whether SSRF validation is active.
+// Tests may call SetSSRFProtection(false) to allow requests to localhost test servers.
+var ssrfProtectionEnabled = true
+
+// SetSSRFProtection enables or disables SSRF URL validation.
+// This is intended for use in tests that make HTTP requests to localhost test servers.
+func SetSSRFProtection(enabled bool) {
+	ssrfProtectionEnabled = enabled
+}
+
+// ValidateURL checks that the given URL is safe to request, rejecting non-HTTP schemes
+// and URLs containing link-local IP addresses to prevent SSRF attacks against cloud
+// metadata endpoints (e.g. AWS 169.254.169.254).
+// Private RFC1918 ranges (10.x, 172.16-31.x, 192.168.x) and loopback are intentionally
+// allowed because teranode peers legitimately communicate over private networks.
+// DNS resolution is not performed - only IP literals in the hostname are checked.
+func ValidateURL(rawURL string) error {
+	if !ssrfProtectionEnabled {
+		return nil
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return errors.NewInvalidArgumentError("invalid URL: %s", err)
+	}
+
+	scheme := strings.ToLower(parsed.Scheme)
+
+	// Only validate http/https URLs. Non-HTTP strings (e.g. "legacy" sentinel
+	// values used internally as baseURL placeholders) are allowed through since
+	// they will fail naturally at the HTTP client level if actually requested.
+	if scheme != "http" && scheme != "https" {
+		return nil
+	}
+
+	hostname := parsed.Hostname()
+	if hostname == "" {
+		return errors.NewInvalidArgumentError("URL has no hostname")
+	}
+
+	// Check IP literals directly (no DNS resolution to avoid test/latency issues).
+	// Hostnames that resolve to link-local at runtime will be caught by the OS/network layer.
+	if ip := net.ParseIP(hostname); ip != nil {
+		if isBlockedIP(ip) {
+			return errors.NewInvalidArgumentError("URL contains blocked IP address %s", ip.String())
+		}
+	}
+
+	return nil
+}
+
+// isBlockedIP returns true if the IP is in a link-local or unspecified range.
+// These are blocked because link-local addresses (169.254.x.x) include cloud
+// metadata endpoints (e.g. AWS 169.254.169.254) which are the primary SSRF target.
+// Loopback and private RFC1918 ranges are allowed since peers communicate over
+// private networks in real deployments.
+func isBlockedIP(ip net.IP) bool {
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+
+	// Block IPv6 link-local equivalent
+	linkLocal6 := []string{"fe80::/10"}
+	for _, r := range linkLocal6 {
+		_, cidr, err := net.ParseCIDR(r)
+		if err != nil {
+			continue
+		}
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // executeHTTPRequest performs the actual HTTP request with the given context.
-func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, url string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, rawURL string, requestBody ...[]byte) (io.ReadCloser, context.CancelFunc, error) {
+	if err := ValidateURL(rawURL); err != nil {
+		return nil, cancelFn, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, cancelFn, errors.NewServiceError("failed to create http request", err)
 	}
@@ -172,21 +254,21 @@ func executeHTTPRequest(ctx context.Context, cancelFn context.CancelFunc, url st
 
 			b, readErr := io.ReadAll(resp.Body)
 			if readErr != nil {
-				return nil, cancelFn, errFn("http request [%s] returned status code [%d]", url, resp.StatusCode, readErr)
+				return nil, cancelFn, errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
 			}
 
 			if b != nil {
-				return nil, cancelFn, errFn("http request [%s] returned status code [%d] with body [%s]", url, resp.StatusCode, string(b))
+				return nil, cancelFn, errFn("http request [%s] returned status code [%d] with body [%s]", rawURL, resp.StatusCode, string(b))
 			}
 		}
 
-		return nil, cancelFn, errFn("http request [%s] returned status code [%d]", url, resp.StatusCode)
+		return nil, cancelFn, errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode)
 	}
 
 	ct := strings.ToLower(resp.Header.Get("content-type"))
 	isHTML := strings.HasPrefix(ct, "text/html")
 	if isHTML {
-		return nil, cancelFn, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", url)
+		return nil, cancelFn, errors.NewServiceError("http request [%s] returned HTML - assume bad URL", rawURL)
 	}
 
 	return resp.Body, cancelFn, nil

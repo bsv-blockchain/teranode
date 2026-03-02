@@ -409,9 +409,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
-				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
-				InsecureSkipVerify: true,
-				ClientAuth:         tls.RequireAnyClientCert,
+				ClientAuth:   tls.RequireAnyClientCert,
+				MinVersion:   tls.VersionTLS12,
 			}), nil
 		} else {
 			// Load the server's CA certificate from disk
@@ -430,9 +429,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
-				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
-				InsecureSkipVerify: true,
-				RootCAs:            caCertPool,
+				RootCAs:      caCertPool,
+				MinVersion:   tls.VersionTLS12,
 			}), nil
 		}
 	case 3:
@@ -454,10 +452,9 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
-				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
-				InsecureSkipVerify: true,
-				ClientAuth:         tls.RequireAndVerifyClientCert,
-				ClientCAs:          caCertPool,
+				ClientAuth:   tls.RequireAndVerifyClientCert,
+				ClientCAs:    caCertPool,
+				MinVersion:   tls.VersionTLS12,
 			}), nil
 		} else {
 			// Load the server's CA certificate from disk
@@ -476,9 +473,8 @@ func loadTLSCredentials(connectionData *ConnectionOptions, isServer bool) (crede
 
 			return credentials.NewTLS(&tls.Config{
 				Certificates: []tls.Certificate{cert},
-				//nolint:gosec //  G402: TLS InsecureSkipVerify set true. (gosec)
-				InsecureSkipVerify: true,
-				RootCAs:            caCertPool,
+				RootCAs:      caCertPool,
+				MinVersion:   tls.VersionTLS12,
 			}), nil
 		}
 	}

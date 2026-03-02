@@ -1116,8 +1116,14 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 
 		wg.Wait()
 
-		_, _, err := testItems.blockAssembler.GetMiningCandidate(ctx)
-		require.Error(t, err)
+		// Retry GetMiningCandidate until the subtree processor has precomputed
+		// the mining data. Without this, the call may return an empty block
+		// template (no error) because precomputed data is not yet available.
+		var err error
+		require.Eventually(t, func() bool {
+			_, _, err = testItems.blockAssembler.GetMiningCandidate(ctx)
+			return err != nil
+		}, 5*time.Second, 100*time.Millisecond, "expected GetMiningCandidate to return an error when subtree exceeds max block size")
 
 		assert.Equal(t, "PROCESSING (4): max block size is less than the size of the subtree", err.Error())
 	})
