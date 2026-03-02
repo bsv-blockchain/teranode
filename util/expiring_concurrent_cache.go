@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/ordishs/go-utils/expiringmap"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 )
 
 type expiringConcurrentCacheWait[V any] struct {
@@ -27,6 +27,11 @@ func NewExpiringConcurrentCache[K comparable, V any](expiration time.Duration) *
 		cache: expiringmap.New[K, V](expiration),
 		wg:    make(map[K]*expiringConcurrentCacheWait[V]),
 	}
+}
+
+// Stop stops the background cleanup goroutine of the underlying ExpiringMap.
+func (c *ExpiringConcurrentCache[K, V]) Stop() {
+	c.cache.Stop()
 }
 
 // GetOrSet retrieves a value from the cache or fetches it using the provided function.

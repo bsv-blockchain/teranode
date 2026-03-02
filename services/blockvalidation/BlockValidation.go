@@ -43,11 +43,11 @@ import (
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
@@ -1937,4 +1937,11 @@ func (u *BlockValidation) checkOldBlockIDs(ctx context.Context, oldBlockIDsMap *
 // This should be called during shutdown to ensure graceful termination.
 func (u *BlockValidation) Wait() {
 	u.backgroundTasks.Wait()
+}
+
+// StopCaches stops the background cleanup goroutines for all expiring caches.
+func (u *BlockValidation) StopCaches() {
+	u.lastValidatedBlocks.Stop()
+	u.blockExistsCache.Stop()
+	u.subtreeExistsCache.Stop()
 }

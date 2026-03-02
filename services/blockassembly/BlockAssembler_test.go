@@ -33,7 +33,6 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
-	"github.com/ordishs/go-utils"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -442,7 +441,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		assert.NotNil(t, subtrees)
 		assert.Equal(t, uint64(5000001332), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
-		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Len(t, subtrees, 2)
 		assert.Len(t, subtrees[0].Nodes, 4)
 		assert.Len(t, subtrees[1].Nodes, 4)
@@ -456,7 +455,7 @@ func TestBlockAssembly_AddTx(t *testing.T) {
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
-		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+		hashStr := util.ReverseAndHexEncodeSlice(blockHash)
 
 		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
 		target := bits.CalculateTarget()
@@ -819,7 +818,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		// The first complete subtree contains: auto-added coinbase placeholder (fee 0) + test coinbase (5B) + tx2 (222) + tx3 (334)
 		assert.Equal(t, uint64(10000000556), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
-		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		// Only 1 complete subtree is returned; incomplete subtrees are not included when there are complete subtrees
 		assert.Len(t, subtree, 1)
 		assert.Len(t, subtree[0].Nodes, 4)
@@ -833,7 +832,7 @@ func TestBlockAssembly_ShouldNotAllowMoreThanOneCoinbaseTx(t *testing.T) {
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
-		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+		hashStr := util.ReverseAndHexEncodeSlice(blockHash)
 
 		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
 		target := bits.CalculateTarget()
@@ -916,7 +915,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.NotNil(t, miningCandidate)
-		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Equal(t, uint64(5000000999), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, uint32(3), miningCandidate.NumTxs)
@@ -948,7 +947,7 @@ func TestBlockAssembly_GetMiningCandidate(t *testing.T) {
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
-		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+		hashStr := util.ReverseAndHexEncodeSlice(blockHash)
 
 		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
 		target := bits.CalculateTarget()
@@ -1022,7 +1021,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.NotNil(t, miningCandidate)
-		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", utils.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
+		assert.Equal(t, "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206", util.ReverseAndHexEncodeSlice(miningCandidate.PreviousHash))
 		assert.Equal(t, uint64(8000000000), miningCandidate.CoinbaseValue)
 		assert.Equal(t, uint32(1), miningCandidate.Height)
 		assert.Equal(t, uint32(3), miningCandidate.NumTxs)
@@ -1054,7 +1053,7 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 		require.NoError(t, err)
 
 		blockHash := util.Sha256d(blockHeader)
-		hashStr := utils.ReverseAndHexEncodeSlice(blockHash)
+		hashStr := util.ReverseAndHexEncodeSlice(blockHash)
 
 		bits, _ := model.NewNBitFromSlice(miningCandidate.NBits)
 		target := bits.CalculateTarget()

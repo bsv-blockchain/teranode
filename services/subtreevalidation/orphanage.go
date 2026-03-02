@@ -8,7 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/ordishs/go-utils/expiringmap"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 )
 
 // Orphanage manages orphaned transactions that are missing their parent transactions.
@@ -127,6 +127,11 @@ func (o *Orphanage) Cleanup() {
 	defer o.lock.Unlock()
 
 	o.logger.Infof("[Orphanage] Cleanup: current size: %d/%d", o.txMap.Len(), o.maxSize)
+}
+
+// Stop stops the background cleanup goroutine of the expiring map.
+func (o *Orphanage) Stop() {
+	o.txMap.Stop()
 }
 
 // MaxSize returns the maximum size limit of the orphanage.

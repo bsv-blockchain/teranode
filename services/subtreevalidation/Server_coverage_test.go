@@ -17,11 +17,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/testutil"
-	"github.com/ordishs/go-utils/expiringmap"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -604,6 +604,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 			// blockchainClient is nil, so FSM check is skipped and message is published
 			invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
 		}
+		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 		server.publishInvalidSubtree(context.Background(), "hash", "peer", "reason")
 		require.True(t, publishCalled) // With nil blockchain client, message should be published
@@ -621,6 +622,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 			// blockchainClient: nil, // Will cause FSM check to return false
 			invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
 		}
+		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 		server.publishInvalidSubtree(context.Background(), "hash123", "peer456", "test reason")
 		require.NotNil(t, publishedMsg)
@@ -648,6 +650,7 @@ func TestPublishInvalidSubtree(t *testing.T) {
 			blockchainClient:             testutil.NewMemorySQLiteBlockchainClient(common.Logger, common.Settings, t),
 			invalidSubtreeDeDuplicateMap: expiringmap.New[string, struct{}](time.Minute),
 		}
+		defer server.invalidSubtreeDeDuplicateMap.Stop()
 
 		// First publish
 		server.publishInvalidSubtree(context.Background(), "hash123", "peer", "reason")

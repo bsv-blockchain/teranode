@@ -3,9 +3,9 @@ package subtreeprocessor
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/bsv-blockchain/go-subtree"
-	"github.com/kpango/fastime"
 )
 
 // LockFreeQueue represents a FIFO structure for batches of transactions.
@@ -59,7 +59,7 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 	batch := &TxBatch{
 		nodes:      nodes,
 		txInpoints: txInpoints,
-		time:       fastime.Now().UnixMilli(),
+		time:       time.Now().UnixMilli(),
 	}
 	batch.next.Store(nil)
 
