@@ -195,6 +195,13 @@ func (c *Client) TriggerBatcher() {
 	}
 }
 
+// EnsureMTPLoaded is a no-op on the gRPC client. The remote validator service manages
+// its own in-memory MTP store; EnsureMTPLoaded is called server-side before concurrent
+// per-transaction goroutines start.
+func (c *Client) EnsureMTPLoaded(_ context.Context, _ uint32) error {
+	return nil
+}
+
 // Validate performs transaction validation by applying the given options and delegating
 // to ValidateWithOptions. See ValidateWithOptions for details on the validation flow.
 func (c *Client) Validate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...Option) (*utxometa.Data, error) {

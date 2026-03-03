@@ -2435,3 +2435,28 @@ func (c *Client) GetMedianTimePastForHeights(ctx context.Context, heights []uint
 
 	return resp.MedianTimePast, nil
 }
+
+// GetMedianTimePastRange returns the MTP values for all blocks in [fromHeight, toHeight].
+// Returns a dense slice where result[i] = MTP for height (fromHeight + i).
+// Internally builds a full heights array to reuse the existing GetMedianTimePastByHeights RPC,
+// avoiding the need for a new proto endpoint.
+func (c *Client) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
+	if toHeight < fromHeight {
+		return []uint32{}, nil
+	}
+
+	count := toHeight - fromHeight + 1
+	heights := make([]uint32, count)
+	for i := range heights {
+		heights[i] = fromHeight + uint32(i)
+	}
+
+	resp, err := c.client.GetMedianTimePastByHeights(ctx, &blockchain_api.GetMedianTimePastByHeightsRequest{
+		Heights: heights,
+	})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.MedianTimePast, nil
+}

@@ -112,6 +112,25 @@ type Interface interface {
 	// This method does not return any values and executes asynchronously. The actual
 	// batch processing results can be monitored through metrics and logging systems.
 	TriggerBatcher()
+
+	// EnsureMTPLoaded pre-warms the in-memory MTP store up to (blockHeight - 1).
+	// This must be called once per block, before concurrent per-transaction goroutines start,
+	// so that BIP68 MTP lookups inside each goroutine are pure array reads with no gRPC calls.
+	//
+	// If BIP68 is not yet active (blockHeight < CSVHeight) or no blockchain client is
+	// configured, this is a no-op.
+	//
+	// When the store already covers the needed range this is a fast O(1) no-op.
+	// When new heights extend beyond the loaded range, only the missing chunk is fetched
+	// in a single gRPC call.
+	//
+	// Parameters:
+	//   - ctx: Context for the operation, used for cancellation and tracing
+	//   - blockHeight: The block being validated; the store is loaded up to (blockHeight - 1)
+	//
+	// Returns:
+	//   - error: Error if the MTP fetch fails; the caller should abort block validation
+	EnsureMTPLoaded(ctx context.Context, blockHeight uint32) error
 }
 
 // Type assertion to ensure MockValidator implements Interface
@@ -183,3 +202,9 @@ func (mv *MockValidator) GetMedianBlockTime() uint32 {
 // TriggerBatcher implements mock batch triggering
 // No-op implementation that does nothing
 func (mv *MockValidator) TriggerBatcher() {}
+
+// EnsureMTPLoaded implements mock MTP store pre-warming
+// No-op implementation that does nothing
+func (mv *MockValidator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) error {
+	return nil
+}

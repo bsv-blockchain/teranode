@@ -487,6 +487,12 @@ func (v *Server) validateTransaction(ctx context.Context, req *validator_api.Val
 		validationOptions.SkipTxMetaPublishing = *req.SkipTxmetaPublishing
 	}
 
+	// Pre-warm the MTP store for BIP68 validation before running transaction validation.
+	// EnsureMTPLoaded is a no-op when BIP68 is not yet active for this blockHeight.
+	if err := v.validator.EnsureMTPLoaded(ctx, req.BlockHeight); err != nil {
+		return nil, err
+	}
+
 	txMetaData, err := v.validator.ValidateWithOptions(ctx, tx, req.BlockHeight, validationOptions)
 	if err != nil {
 		prometheusInvalidTransactions.Inc()
@@ -540,6 +546,16 @@ func (v *Server) ValidateTransactionBatch(ctx context.Context, req *validator_ap
 		tracing.WithDebugLogMessage(v.logger, "[ValidateTransactionBatch] called for %d transactions", len(req.GetTransactions())),
 	)
 	defer deferFn()
+
+	// Pre-warm the MTP store for BIP68 validation before spawning per-transaction goroutines.
+	// All transactions in a block share the same blockHeight; loading the store here (serially)
+	// means the concurrent goroutines below can look up MTPs via direct array reads, with no
+	// locking and no per-transaction gRPC calls.
+	if len(req.GetTransactions()) > 0 {
+		if err := v.validator.EnsureMTPLoaded(ctx, req.GetTransactions()[0].GetBlockHeight()); err != nil {
+			return nil, err
+		}
+	}
 
 	g, gCtx := errgroup.WithContext(ctx)
 

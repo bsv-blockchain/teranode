@@ -207,6 +207,18 @@ func (w *blockchainMockWrapper) GetMedianTimePastForHeights(ctx context.Context,
 	return mtps, nil
 }
 
+// GetMedianTimePastRange overrides the mock to return dynamic values for a contiguous range
+func (w *blockchainMockWrapper) GetMedianTimePastRange(_ context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
+	if toHeight < fromHeight {
+		return []uint32{}, nil
+	}
+	result := make([]uint32, toHeight-fromHeight+1)
+	for i := range result {
+		result[i] = 1000000 // Simple mock timestamp
+	}
+	return result, nil
+}
+
 // setupRealServerWithIterationID creates a server with a unique database per iteration
 func setupRealServerWithIterationID(t *testing.T, iterationID int) (*Server, blob.Store, func()) {
 	ctx := context.Background()

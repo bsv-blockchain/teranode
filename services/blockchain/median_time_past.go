@@ -55,3 +55,24 @@ func (b *Blockchain) GetMedianTimePastForHeights(ctx context.Context, heights []
 
 	return mtps, nil
 }
+
+// GetMedianTimePastRange returns the MTP values for all blocks in [fromHeight, toHeight].
+// Returns a dense slice where result[i] = MTP for height (fromHeight + i).
+// Blocks missing from the canonical chain (e.g. heights below 11) are left as zero.
+func (b *Blockchain) GetMedianTimePastRange(ctx context.Context, fromHeight, toHeight uint32) ([]uint32, error) {
+	if toHeight < fromHeight {
+		return []uint32{}, nil
+	}
+
+	_, metas, err := b.store.GetBlockHeadersByHeight(ctx, fromHeight, toHeight)
+	if err != nil {
+		return nil, errors.NewProcessingError("[Blockchain][GetMedianTimePastRange] failed to get block headers from %d to %d", fromHeight, toHeight, err)
+	}
+
+	result := make([]uint32, toHeight-fromHeight+1)
+	for _, meta := range metas {
+		result[meta.Height-fromHeight] = meta.MedianTimePast
+	}
+
+	return result, nil
+}

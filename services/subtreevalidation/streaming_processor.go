@@ -138,6 +138,12 @@ func (u *Server) processMissingSubtreesStreaming(ctx context.Context, request *s
 
 	sp.validatorOptions = validator.ProcessOptions(validatorOptions...)
 
+	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
+	// can read mtpStore[h] without locking and without making gRPC calls.
+	if err = u.validatorClient.EnsureMTPLoaded(ctx, block.Height); err != nil {
+		return nil, errors.NewProcessingError("[processMissingSubtreesStreaming] failed to pre-load MTP store: %v", err)
+	}
+
 	dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
 
 	// Phase 1 & 2: Stream, filter, and process transactions in pipeline

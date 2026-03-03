@@ -1048,6 +1048,12 @@ func (u *Server) processMissingTransactions(ctx context.Context, subtreeHash cha
 		firstErrorOnce   sync.Once
 	)
 
+	// Pre-warm the MTP store once before spawning per-transaction goroutines, so each goroutine
+	// can read mtpStore[h] without locking and without making gRPC calls.
+	if err = u.validatorClient.EnsureMTPLoaded(ctx, blockHeight); err != nil {
+		return errors.NewProcessingError("[processMissingTransactions][%s] failed to pre-load MTP store: %v", subtreeHash.String(), err)
+	}
+
 	for level := uint32(0); level <= maxLevel; level++ {
 		g, gCtx := errgroup.WithContext(ctx)
 		util.SafeSetLimit(g, u.settings.SubtreeValidation.SpendBatcherSize*2)
