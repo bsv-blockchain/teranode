@@ -317,9 +317,17 @@ func (h *AuthHandler) LogoutHandler(c echo.Context) error {
 func (h *AuthHandler) CheckAuthHandler(c echo.Context) error {
 	h.logger.Debugf("Auth check request received")
 
-	// Log auth header presence (not value)
-	if c.Request().Header.Get("Authorization") != "" {
-		h.logger.Debugf("Auth header present")
+	// Log cookie names for debugging (values omitted for security)
+	for _, cookie := range c.Cookies() {
+		h.logger.Debugf("Cookie found: %s", cookie.Name)
+	}
+
+	// Log auth header if present
+	authHeader := c.Request().Header.Get("Authorization")
+	if authHeader != "" {
+		h.logger.Debugf("Auth header found: %s", authHeader[:10]+"...")
+	} else {
+		h.logger.Debugf("No auth header found")
 	}
 
 	if h.CheckAuth(c.Request()) {

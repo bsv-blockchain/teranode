@@ -275,12 +275,14 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		e.GET(h.settings.StatsPrefix+"*", AdaptStdHandler(gocore.HandleOther))
 	}
 
+	// Create auth handler for protecting admin endpoints (used regardless of dashboard state)
+	authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
+
 	if h.settings.Dashboard.Enabled {
 		// Initialize dashboard with settings
 		dashboard.InitDashboard(h.settings)
 
 		// Apply authentication middleware for all POST endpoints
-		authHandler := dashboard.NewAuthHandler(h.logger, h.settings)
 		apiGroup.Use(authHandler.PostAuthMiddleware)
 
 		// Register dashboard-compatible API routes that need auth protection
@@ -329,11 +331,15 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		pathFsmStates = "/fsm/states"
 	)
 
-	// Register FSM API endpoints
+	// Register FSM read-only endpoints (no auth required)
 	apiGroup.GET(pathFsmState, fsmHandler.GetFSMState)
-	apiGroup.POST(pathFsmState, fsmHandler.SendFSMEvent)
 	apiGroup.GET(pathFsmEvents, fsmHandler.GetFSMEvents)
 	apiGroup.GET(pathFsmStates, fsmHandler.GetFSMStates)
+
+	// Register FSM write endpoint with auth (requires authentication regardless of dashboard state)
+	apiAdminGroup := e.Group(apiPrefix)
+	apiAdminGroup.Use(authHandler.RequireAuthMiddleware)
+	apiAdminGroup.POST(pathFsmState, fsmHandler.SendFSMEvent)
 
 	// Add OPTIONS handlers for CORS preflight requests
 	apiGroup.OPTIONS(pathFsmState, func(c echo.Context) error {
