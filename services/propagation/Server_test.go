@@ -1057,28 +1057,6 @@ func TestTxSanityChecks(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("invalid transaction version 0", func(t *testing.T) {
-		// Create a transaction and set invalid version
-		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
-		tx := txs[1]
-		tx.Version = 0
-
-		err := ps.txSanityChecks(tx)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid transaction version")
-	})
-
-	t.Run("invalid transaction version 3", func(t *testing.T) {
-		// Create a transaction and set invalid version
-		txs := transactions.CreateTestTransactionChainWithCount(t, 3)
-		tx := txs[1]
-		tx.Version = 3
-
-		err := ps.txSanityChecks(tx)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid transaction version")
-	})
-
 	t.Run("no inputs", func(t *testing.T) {
 		// Transaction with no inputs
 		tx := bt.NewTx()

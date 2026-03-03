@@ -1046,12 +1046,6 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 }
 
 func (ps *PropagationServer) txSanityChecks(btTx *bt.Tx) error {
-	// Check transaction version is valid (1 or 2 for Bitcoin SV)
-	if btTx.Version != 1 && btTx.Version != 2 {
-		prometheusInvalidTransactions.Inc()
-		return errors.NewTxInvalidError("[ProcessTransaction][%s] invalid transaction version: %d (must be 1 or 2)", btTx.TxID(), btTx.Version)
-	}
-
 	if len(btTx.Inputs) == 0 {
 		prometheusInvalidTransactions.Inc()
 		return errors.NewTxInvalidError("[ProcessTransaction][%s] received transaction with no inputs", btTx.TxID())
