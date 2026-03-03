@@ -355,9 +355,6 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	// Create and register block handler for block operations
 	blockHandler := NewBlockHandler(repo.BlockchainClient, repo.BlockvalidationClient, logger)
 
-	// Create auth handler for protecting admin endpoints
-	authHandler := dashboard.NewAuthHandler(logger, tSettings)
-
 	// Register block invalidation/revalidation endpoints under authenticated group
 	// These are admin operations that could disrupt the blockchain state
 	apiBlockAdminGroup := e.Group(apiPrefix + "/block")
