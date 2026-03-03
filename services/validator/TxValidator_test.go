@@ -617,6 +617,9 @@ func Test_MinFeePolicy(t *testing.T) {
 func TestCheckP2SHOutput(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.ChainCfgParams.RequireStandard = true
+	// Disable BIP68 for this test (set CSVHeight above test heights)
+	// This test is about P2SH validation, not BIP68
+	tSettings.ChainCfgParams.CSVHeight = 1000000
 
 	txValidator := NewTxValidator(ulogger.TestLogger{}, tSettings)
 

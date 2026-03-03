@@ -91,6 +91,7 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 			,b.peer_id
 			,b.block_time
 			,b.inserted_at
+			,b.median_time_past
 		FROM blocks b
 		WHERE id NOT IN (
 			SELECT id FROM blocks
@@ -148,6 +149,7 @@ func (s *SQL) GetForkedBlockHeaders(ctx context.Context, blockHashFrom *chainhas
 			&blockHeaderMeta.Miner,
 			&blockHeaderMeta.BlockTime,
 			&insertedAt,
+			&blockHeaderMeta.MedianTimePast,
 		); err != nil {
 			return nil, nil, errors.NewStorageError("failed to scan row", err)
 		}
