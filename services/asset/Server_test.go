@@ -71,7 +71,7 @@ func testSetup(t *testing.T) *testCtx {
 	blockchainClient, err := blockchain.NewLocalClient(logger, settings, blockchainStore, nil, nil)
 	require.NoError(t, err)
 
-	server := NewServer(logger, settings, utxoStore, txSore, subtreeStore, blockPersisterStore, blockchainClient, nil, nil)
+	server := NewServer(logger, settings, utxoStore, txSore, subtreeStore, blockPersisterStore, blockchainClient, nil, nil, nil)
 
 	return &testCtx{
 		server:           server,
@@ -211,6 +211,7 @@ func TestHealth_LivenessCheck(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 
 	status, msg, err := server.Health(context.Background(), true)
@@ -223,6 +224,7 @@ func TestHealth_ReadinessWithNoDependencies(t *testing.T) {
 	server := NewServer(
 		ulogger.New("asset"),
 		test.CreateBaseTestSettings(t),
+		nil,
 		nil,
 		nil,
 		nil,
@@ -532,6 +534,7 @@ func TestHealth_ErrorCases(t *testing.T) {
 			nil, // blockchainClient is nil - will cause health check to report error
 			nil, // blockvalidationClient
 			nil, // p2pClient
+			nil, // banList
 		)
 
 		// Readiness check should still return OK status even with nil dependencies

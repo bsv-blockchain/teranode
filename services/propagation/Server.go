@@ -33,6 +33,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/internal/banlist"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/propagation/propagation_api"
@@ -120,6 +121,7 @@ type PropagationServer struct {
 	validatorKafkaProducerClient kafka.KafkaAsyncProducerI
 	httpServer                   *echo.Echo
 	validatorHTTPAddr            *url.URL
+	banList                      banlist.Interface
 }
 
 // New creates a new PropagationServer instance with the specified dependencies.
@@ -135,7 +137,7 @@ type PropagationServer struct {
 //
 // Returns:
 //   - *PropagationServer: configured server instance
-func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI) *PropagationServer {
+func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI, bl banlist.Interface) *PropagationServer {
 	initPrometheusMetrics()
 
 	return &PropagationServer{
@@ -147,6 +149,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		blockchainClient:             blockchainClient,
 		validatorKafkaProducerClient: validatorKafkaProducerClient,
 		validatorHTTPAddr:            tSettings.Validator.HTTPAddress,
+		banList:                      bl,
 	}
 }
 
@@ -315,12 +318,22 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 		}
 	}
 
+	// Build auth options with ban list interceptor if available
+	var authOptions *util.AuthOptions
+	if ps.banList != nil {
+		authOptions = &util.AuthOptions{
+			ExtraUnaryInterceptors: []grpc.UnaryServerInterceptor{
+				banlist.CreateGRPCUnaryInterceptor(ps.banList),
+			},
+		}
+	}
+
 	// this will block
 	maxConnectionAge := ps.settings.Propagation.GRPCMaxConnectionAge
 	if err = util.StartGRPCServer(ctx, ps.logger, ps.settings, "propagation", ps.settings.Propagation.GRPCListenAddress, func(server *grpc.Server) {
 		propagation_api.RegisterPropagationAPIServer(server, ps)
 		closeOnce.Do(func() { close(readyCh) })
-	}, nil, maxConnectionAge); err != nil {
+	}, authOptions, maxConnectionAge); err != nil {
 		return err
 	}
 
@@ -639,6 +652,11 @@ func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses 
 	ps.httpServer = echo.New()
 	ps.httpServer.Debug = false
 	ps.httpServer.HideBanner = true
+
+	// Ban list middleware - reject requests from banned IPs early
+	if ps.banList != nil {
+		ps.httpServer.Use(banlist.CreateEchoMiddleware(ps.banList))
+	}
 
 	// Configure middleware and timeouts
 	if ps.settings.Propagation.HTTPRateLimit > 0 {

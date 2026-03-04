@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/internal/banlist"
 	"github.com/bsv-blockchain/teranode/internal/profiling"
 	"github.com/bsv-blockchain/teranode/services/alert"
 	"github.com/bsv-blockchain/teranode/services/asset"
@@ -409,6 +410,20 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		return err
 	}
 
+	// Create ban list for the Asset service
+	var bl banlist.Interface
+	assetBanList, err := banlist.NewFromSettings(createLogger("asset_banlist"), appSettings)
+	if err != nil {
+		createLogger(serviceAsset).Warnf("failed to create ban list for asset service: %v", err)
+	} else {
+		if err := assetBanList.Init(ctx); err != nil {
+			createLogger(serviceAsset).Warnf("failed to init ban list for asset service: %v", err)
+		} else {
+			assetBanList.StartPeriodicReload(ctx, 30*time.Second)
+			bl = assetBanList
+		}
+	}
+
 	// Initialize the Asset service with the necessary parts
 	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
 		createLogger(serviceAsset),
@@ -420,6 +435,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockchainClient,
 		blockvalidationClient,
 		p2pClient,
+		bl,
 	))
 }
 
@@ -991,6 +1007,20 @@ func (d *Daemon) startPropagationService(
 		return err
 	}
 
+	// Create ban list for the Propagation service
+	var propBl banlist.Interface
+	propBanList, err := banlist.NewFromSettings(createLogger("propagation_banlist"), appSettings)
+	if err != nil {
+		createLogger(loggerPropagation).Warnf("failed to create ban list for propagation service: %v", err)
+	} else {
+		if err := propBanList.Init(ctx); err != nil {
+			createLogger(loggerPropagation).Warnf("failed to init ban list for propagation service: %v", err)
+		} else {
+			propBanList.StartPeriodicReload(ctx, 30*time.Second)
+			propBl = propBanList
+		}
+	}
+
 	// Add the Propagation service to the ServiceManager
 	return d.ServiceManager.AddService(servicePropagationFormal, propagation.New(
 		createLogger(loggerPropagation),
@@ -999,6 +1029,7 @@ func (d *Daemon) startPropagationService(
 		validatorClient,
 		blockchainClient,
 		validatorKafkaProducerClient,
+		propBl,
 	))
 }
 

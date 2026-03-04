@@ -66,7 +66,7 @@ func TestNew(t *testing.T) {
 		repoWrapper := &repository.Repository{}
 
 		// Call the function to be tested
-		httpServer, err := New(logger, testSettings, repoWrapper)
+		httpServer, err := New(logger, testSettings, repoWrapper, nil)
 
 		// Assert that the HTTP server was created successfully
 		assert.NoError(t, err)
@@ -109,7 +109,7 @@ func TestNew(t *testing.T) {
 		repoWrapper := &repository.Repository{}
 
 		// Call the function to be tested
-		httpServer, err := New(logger, testSettings, repoWrapper)
+		httpServer, err := New(logger, testSettings, repoWrapper, nil)
 
 		// Assert that the HTTP server was created successfully
 		assert.NoError(t, err)
@@ -178,7 +178,7 @@ func TestNewWithSigningEnabled(t *testing.T) {
 	repoWrapper := &repository.Repository{}
 
 	// Call the function to be tested
-	httpServer, err := New(logger, testSettings, repoWrapper)
+	httpServer, err := New(logger, testSettings, repoWrapper, nil)
 
 	// Assert that the HTTP server was created successfully
 	assert.NoError(t, err)

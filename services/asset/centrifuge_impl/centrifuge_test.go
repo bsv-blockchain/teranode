@@ -30,7 +30,7 @@ func createTestHTTP(logger ulogger.Logger, repo *repository.Repository) (*httpim
 		},
 	}
 
-	return httpimpl.New(logger, testSettings, repo)
+	return httpimpl.New(logger, testSettings, repo, nil)
 }
 
 // MockWebSocketServer creates a test WebSocket server for P2P simulation
