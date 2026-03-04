@@ -643,15 +643,20 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			}
 		}()
 
+		// Track early-exit error to return after cleanup
+		var earlyExitMsg string
+
 		// Read transactions with the bt reader in a loop
 		for {
 			// Check limits BEFORE reading the next transaction to prevent bypass attacks
 			if totalNrTransactions >= maxTransactionsPerRequest {
-				return c.String(http.StatusBadRequest, "Invalid request body: too many transactions")
+				earlyExitMsg = "Invalid request body: too many transactions"
+				break
 			}
 
 			if totalBytesRead >= maxDataPerRequest {
-				return c.String(http.StatusBadRequest, "Invalid request body: too much data")
+				earlyExitMsg = "Invalid request body: too much data"
+				break
 			}
 
 			tx := &bt.Tx{}
@@ -696,11 +701,16 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			processTxs <- tx
 		}
 
+		// Close processTxs to signal the processing goroutine to exit,
+		// then wait for all in-flight work and errors to drain
+		close(processTxs)
 		processingWg.Wait()
+		close(processErrors)
 		processingErrorWg.Wait()
 
-		close(processTxs)
-		close(processErrors)
+		if earlyExitMsg != "" {
+			return c.String(http.StatusBadRequest, earlyExitMsg)
+		}
 
 		if len(errMsgs) > 0 {
 			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+strings.Join(errMsgs, "\n")+"\n")
