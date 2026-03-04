@@ -156,9 +156,6 @@ func (b *BanList) reloadFromDatabase() error {
 }
 
 func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime time.Time) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	subnet, err := parseAddress(ipOrSubnet)
 	if err != nil {
 		b.logger.Errorf("error parsing ip or subnet: %v", err)
@@ -170,7 +167,9 @@ func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime tim
 		Subnet:         subnet,
 	}
 
+	b.mu.Lock()
 	b.bannedPeers[ipOrSubnet] = banInfo
+	b.mu.Unlock()
 
 	event := BanEvent{Action: "add", IP: ipOrSubnet, Subnet: subnet}
 	go func() {
@@ -181,20 +180,19 @@ func (b *BanList) Add(ctx context.Context, ipOrSubnet string, expirationTime tim
 }
 
 func (b *BanList) Remove(ctx context.Context, ipOrSubnet string) error {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	subnet, err := parseAddress(ipOrSubnet)
 	if err != nil {
 		b.logger.Errorf("invalid IP address or subnet: %s", ipOrSubnet)
 		return err
 	}
 
+	b.mu.Lock()
 	if _, ok := b.bannedPeers[ipOrSubnet]; !ok {
+		b.mu.Unlock()
 		return nil
 	}
-
 	delete(b.bannedPeers, ipOrSubnet)
+	b.mu.Unlock()
 
 	event := BanEvent{Action: "remove", IP: ipOrSubnet, Subnet: subnet}
 	go func() {
@@ -270,8 +268,8 @@ func (b *BanList) IsBanned(ipStr string) bool {
 }
 
 func (b *BanList) ListBanned() []string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 
 	banned := make([]string, 0, len(b.bannedPeers))
 	for key := range b.bannedPeers {
@@ -300,10 +298,9 @@ func (b *BanList) Unsubscribe(ch chan BanEvent) {
 
 func (b *BanList) Clear() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	b.bannedPeers = make(map[string]BanInfo)
 	b.subscribers = make(map[chan BanEvent]struct{})
+	b.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
