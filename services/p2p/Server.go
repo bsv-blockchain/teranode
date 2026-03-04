@@ -897,6 +897,12 @@ func (s *Server) updateBytesReceived(from string, originatorPeerID string, messa
 }
 
 func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID string) {
+	// Check message size before parsing to prevent memory exhaustion
+	if len(m) > maxP2PMessageSize {
+		s.logger.Errorf("[handleNodeStatusTopic] message size %d exceeds max %d from peer %s", len(m), maxP2PMessageSize, peerID)
+		return
+	}
+
 	var nodeStatusMessage NodeStatusMessage
 
 	if err := json.Unmarshal(m, &nodeStatusMessage); err != nil {
@@ -907,12 +913,24 @@ func (s *Server) handleNodeStatusTopic(_ context.Context, m []byte, peerID strin
 	// Check if this is our own message
 	isSelf := peerID == s.P2PClient.GetID()
 
-	// If sender ID doesn't match node status ID log an error and return
-	// In future, consider banning this peer as they are maliciously spoofing
+	// Check that sender ID matches the claimed peer ID
 	if peerID != nodeStatusMessage.PeerID {
-		s.logger.Errorf("[handleNodeStatusTopic] node_status peerID %s does not match message ID %s",
-			peerID, nodeStatusMessage.PeerID)
+		s.logger.Errorf("[handleNodeStatusTopic] peer ID spoofing detected: from=%s claimed=%s", peerID, nodeStatusMessage.PeerID)
+		if s.banManager != nil {
+			s.banManager.AddScore(peerID, ReasonProtocolViolation)
+		}
 		return
+	}
+
+	// Validate BaseURL to prevent SSRF attacks
+	if nodeStatusMessage.BaseURL != "" {
+		if err := s.validateDataHubURL(nodeStatusMessage.BaseURL); err != nil {
+			s.logger.Errorf("[handleNodeStatusTopic] invalid BaseURL from peer %s: %v", peerID, err)
+			if s.banManager != nil {
+				s.banManager.AddScore(peerID, ReasonProtocolViolation)
+			}
+			return
+		}
 	}
 
 	// Skip further processing for our own messages (peer height updates, etc.)

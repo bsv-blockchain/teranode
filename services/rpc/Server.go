@@ -1330,7 +1330,10 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		// Timeout connections which don't complete the initial
 		// handshake within the allowed timeframe.
-		ReadTimeout: time.Second * rpcAuthTimeoutSeconds,
+		ReadTimeout:       time.Second * rpcAuthTimeoutSeconds,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	rpcServeMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

@@ -125,6 +125,8 @@ type PropagationServer struct {
 	httpServer                   *echo.Echo
 	validatorHTTPAddr            *url.URL
 	udpWorkerPool                chan struct{} // Semaphore for limiting UDP processing goroutines
+	udpConns                     []*net.UDPConn
+	udpConnsMu                   sync.Mutex
 }
 
 // New creates a new PropagationServer instance with the specified dependencies.
@@ -355,12 +357,14 @@ func parseAllowedSources(sources []string) ([]*net.IPNet, error) {
 			return nil, errors.NewConfigurationError("invalid IP or CIDR in allowed sources: %s", src)
 		}
 
-		// Convert single IP to /32 (IPv4) or /128 (IPv6) CIDR
-		bits := 128
-		if ip.To4() != nil {
-			bits = 32
+		// Normalize IPv4-mapped IPv6 addresses to IPv4 for consistent matching
+		// in dual-stack environments
+		if ip4 := ip.To4(); ip4 != nil {
+			ip = ip4
+			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)})
+		} else {
+			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)})
 		}
-		nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
 	}
 	return nets, nil
 }
@@ -428,6 +432,11 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 			return errors.NewServiceError("error starting listener", err)
 		}
 
+		// Track connection for cleanup on shutdown
+		ps.udpConnsMu.Lock()
+		ps.udpConns = append(ps.udpConns, conn)
+		ps.udpConnsMu.Unlock()
+
 		go func(conn *net.UDPConn, allowedNets []*net.IPNet) {
 			// Loop forever reading from the socket
 			var (
@@ -447,6 +456,10 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 			for {
 				n, _, _, src, err = conn.ReadMsgUDP(buffer, oobB)
 				if err != nil {
+					if errors.Is(err, net.ErrClosed) {
+						ps.logger.Infof("UDP listener shutting down")
+						return
+					}
 					ps.logger.Errorf("ReadMsgUDP failed: %v", err)
 					continue
 				}
@@ -513,8 +526,7 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 	return nil
 }
 
-// Stop gracefully stops the PropagationServer.
-// Currently a no-op, reserved for future cleanup operations.
+// Stop gracefully stops the PropagationServer, closing UDP listeners.
 //
 // Parameters:
 //   - ctx: context for stop operation (unused)
@@ -522,6 +534,14 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 // Returns:
 //   - error: always returns nil in current implementation
 func (ps *PropagationServer) Stop(_ context.Context) error {
+	ps.udpConnsMu.Lock()
+	defer ps.udpConnsMu.Unlock()
+	for _, conn := range ps.udpConns {
+		if err := conn.Close(); err != nil {
+			ps.logger.Errorf("Error closing UDP connection: %v", err)
+		}
+	}
+	ps.udpConns = nil
 	return nil
 }
 
@@ -728,6 +748,7 @@ func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses 
 	}
 
 	ps.httpServer.Server.ReadTimeout = 30 * time.Second
+	ps.httpServer.Server.ReadHeaderTimeout = 10 * time.Second
 	ps.httpServer.Server.WriteTimeout = 30 * time.Second
 	ps.httpServer.Server.IdleTimeout = 120 * time.Second
 

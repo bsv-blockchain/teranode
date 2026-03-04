@@ -72,9 +72,12 @@ func (h *SettingsHandler) GetSettings(c echo.Context) error {
 	// Export all settings with metadata
 	registry := h.settings.ExportMetadata()
 
+	// Redact sensitive values before any filtering to prevent search-based leakage
+	redacted := redactSensitiveSettings(registry.Settings)
+
 	// Filter settings
-	filtered := make([]settings.SettingMetadata, 0, len(registry.Settings))
-	for _, setting := range registry.Settings {
+	filtered := make([]settings.SettingMetadata, 0, len(redacted))
+	for _, setting := range redacted {
 		// Filter by category if specified
 		if category != "" && !strings.EqualFold(setting.Category, category) {
 			continue
@@ -126,7 +129,7 @@ func (h *SettingsHandler) GetSettings(c echo.Context) error {
 	})
 
 	response := SettingsResponse{
-		Settings:   redactSensitiveSettings(filtered),
+		Settings:   filtered,
 		Categories: registry.Categories,
 		Total:      len(registry.Settings),
 		Filtered:   len(filtered),

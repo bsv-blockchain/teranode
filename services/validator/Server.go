@@ -848,6 +848,7 @@ func (v *Server) startHTTPServer(ctx context.Context, httpAddresses string) erro
 	}
 
 	v.httpServer.Server.ReadTimeout = 5 * time.Second
+	v.httpServer.Server.ReadHeaderTimeout = 5 * time.Second
 	v.httpServer.Server.WriteTimeout = 10 * time.Second
 	v.httpServer.Server.IdleTimeout = 120 * time.Second
 

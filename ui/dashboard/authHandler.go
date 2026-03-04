@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -154,8 +155,10 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 	username := parts[0]
 	password := parts[1]
 
-	// Direct credential comparison
-	if username == rpcUser && password == rpcPass {
+	// Constant-time credential comparison to prevent timing attacks
+	userMatch := subtle.ConstantTimeCompare([]byte(username), []byte(rpcUser))
+	passMatch := subtle.ConstantTimeCompare([]byte(password), []byte(rpcPass))
+	if userMatch == 1 && passMatch == 1 {
 		h.logger.Debugf("Direct credential match successful")
 		return true
 	}
@@ -191,15 +194,15 @@ func isLoginRateLimited(ip string) bool {
 // recordFailedLogin records a failed login attempt for the given IP.
 func recordFailedLogin(ip string) {
 	now := time.Now()
-	val, ok := failedLogins.Load(ip)
-	if !ok {
-		failedLogins.Store(ip, &loginAttempt{count: 1, firstAt: now})
+	newAttempt := &loginAttempt{count: 1, firstAt: now}
+	val, loaded := failedLogins.LoadOrStore(ip, newAttempt)
+	if !loaded {
 		return
 	}
 	attempt := val.(*loginAttempt)
 	if now.Sub(attempt.firstAt) > time.Duration(loginWindowSeconds)*time.Second {
 		// Window expired, reset
-		failedLogins.Store(ip, &loginAttempt{count: 1, firstAt: now})
+		failedLogins.Store(ip, newAttempt)
 		return
 	}
 	atomic.AddInt32(&attempt.count, 1)
@@ -233,8 +236,10 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 		// Form-based authentication
 		h.logger.Debugf("Form-based login attempt for user: %s", username)
 
-		// Check if credentials match
-		if username == h.settings.RPC.RPCUser && password == h.settings.RPC.RPCPass {
+		// Constant-time credential comparison to prevent timing attacks
+		userMatch := subtle.ConstantTimeCompare([]byte(username), []byte(h.settings.RPC.RPCUser))
+		passMatch := subtle.ConstantTimeCompare([]byte(password), []byte(h.settings.RPC.RPCPass))
+		if userMatch == 1 && passMatch == 1 {
 			// Create auth header for cookie
 			authHeader := "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password))
 
