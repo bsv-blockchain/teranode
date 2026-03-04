@@ -11,10 +11,10 @@ import (
 
 // CreateGRPCUnaryInterceptor returns a gRPC unary server interceptor that
 // rejects requests from banned IPs with codes.PermissionDenied.
-func CreateGRPCUnaryInterceptor(bl Interface) grpc.UnaryServerInterceptor {
+func CreateGRPCUnaryInterceptor(banList Interface) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
-			if bl.IsBanned(p.Addr.String()) {
+			if banList.IsBanned(p.Addr.String()) {
 				return nil, status.Error(codes.PermissionDenied, "banned")
 			}
 		}

@@ -411,18 +411,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 	}
 
 	// Create ban list for the Asset service
-	var bl banlist.Interface
-	assetBanList, err := banlist.NewFromSettings(createLogger("asset_banlist"), appSettings)
-	if err != nil {
-		createLogger(serviceAsset).Warnf("failed to create ban list for asset service: %v", err)
-	} else {
-		if err := assetBanList.Init(ctx); err != nil {
-			createLogger(serviceAsset).Warnf("failed to init ban list for asset service: %v", err)
-		} else {
-			assetBanList.StartPeriodicReload(ctx, 30*time.Second)
-			bl = assetBanList
-		}
-	}
+	banList := createBanList(ctx, createLogger("asset_banlist"), appSettings)
 
 	// Initialize the Asset service with the necessary parts
 	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
@@ -435,7 +424,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockchainClient,
 		blockvalidationClient,
 		p2pClient,
-		bl,
+		banList,
 	))
 }
 
@@ -1008,18 +997,7 @@ func (d *Daemon) startPropagationService(
 	}
 
 	// Create ban list for the Propagation service
-	var propBl banlist.Interface
-	propBanList, err := banlist.NewFromSettings(createLogger("propagation_banlist"), appSettings)
-	if err != nil {
-		createLogger(loggerPropagation).Warnf("failed to create ban list for propagation service: %v", err)
-	} else {
-		if err := propBanList.Init(ctx); err != nil {
-			createLogger(loggerPropagation).Warnf("failed to init ban list for propagation service: %v", err)
-		} else {
-			propBanList.StartPeriodicReload(ctx, 30*time.Second)
-			propBl = propBanList
-		}
-	}
+	propBanList := createBanList(ctx, createLogger("propagation_banlist"), appSettings)
 
 	// Add the Propagation service to the ServiceManager
 	return d.ServiceManager.AddService(servicePropagationFormal, propagation.New(
@@ -1029,7 +1007,7 @@ func (d *Daemon) startPropagationService(
 		validatorClient,
 		blockchainClient,
 		validatorKafkaProducerClient,
-		propBl,
+		propBanList,
 	))
 }
 
@@ -1158,4 +1136,22 @@ func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.S
 		blockchainClient,
 		blockAssemblyClient,
 	))
+}
+
+// createBanList creates, initializes, and starts periodic reload for a ban list.
+// Returns nil if creation or initialization fails (service continues without bans).
+func createBanList(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) banlist.Interface {
+	bl, err := banlist.NewFromSettings(logger, appSettings)
+	if err != nil {
+		logger.Warnf("failed to create ban list: %v", err)
+		return nil
+	}
+
+	if err := bl.Init(ctx); err != nil {
+		logger.Warnf("failed to init ban list: %v", err)
+		return nil
+	}
+
+	bl.StartPeriodicReload(ctx, 30*time.Second)
+	return bl
 }

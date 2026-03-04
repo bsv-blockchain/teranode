@@ -425,7 +425,7 @@ func (b *BanList) LoadFromDatabase(ctx context.Context) error {
 }
 
 // FormatBanListInfo returns a formatted string with ban list statistics.
-func FormatBanListInfo(bl Interface) string {
-	banned := bl.ListBanned()
+func FormatBanListInfo(banList Interface) string {
+	banned := banList.ListBanned()
 	return fmt.Sprintf("ban list active with %d entries", len(banned))
 }

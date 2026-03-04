@@ -102,7 +102,7 @@ type HTTP struct {
 //   - Custom request logging in debug mode
 //   - Prometheus metrics
 //   - Statistical tracking with reset capability
-func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository, bl banlist.Interface) (*HTTP, error) {
+func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.Repository, banList banlist.Interface) (*HTTP, error) {
 	initPrometheusMetrics()
 
 	// TODO: change logger name
@@ -123,8 +123,8 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	e.Use(middleware.Recover())
 
 	// Ban list middleware - reject requests from banned IPs early
-	if bl != nil {
-		e.Use(banlist.CreateEchoMiddleware(bl))
+	if banList != nil {
+		e.Use(banlist.CreateEchoMiddleware(banList))
 	}
 
 	// Default CORS config for non-dashboard endpoints

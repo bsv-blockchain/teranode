@@ -137,7 +137,7 @@ type PropagationServer struct {
 //
 // Returns:
 //   - *PropagationServer: configured server instance
-func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI, bl banlist.Interface) *PropagationServer {
+func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store, validatorClient validator.Interface, blockchainClient blockchain.ClientI, validatorKafkaProducerClient kafka.KafkaAsyncProducerI, banList banlist.Interface) *PropagationServer {
 	initPrometheusMetrics()
 
 	return &PropagationServer{
@@ -149,7 +149,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		blockchainClient:             blockchainClient,
 		validatorKafkaProducerClient: validatorKafkaProducerClient,
 		validatorHTTPAddr:            tSettings.Validator.HTTPAddress,
-		banList:                      bl,
+		banList:                      banList,
 	}
 }
 

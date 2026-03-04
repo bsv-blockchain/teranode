@@ -83,7 +83,7 @@ type Server struct {
 //   - *Server: A fully initialized Server instance ready for use
 func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore utxo.Store, txStore blob.Store,
 	subtreeStore blob.Store, blockPersisterStore blob.Store, blockchainClient blockchain.ClientI,
-	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI, bl banlist.Interface) *Server {
+	blockvalidationClient blockvalidation.Interface, p2pClient p2p.ClientI, banList banlist.Interface) *Server {
 	s := &Server{
 		logger:                logger,
 		settings:              tSettings,
@@ -94,7 +94,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		blockchainClient:      blockchainClient,
 		blockvalidationClient: blockvalidationClient,
 		p2pClient:             p2pClient,
-		banList:               bl,
+		banList:               banList,
 	}
 
 	return s
