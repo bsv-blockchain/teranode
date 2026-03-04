@@ -1127,6 +1127,15 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 	return nil
 }
 
+// mtpReorgOverlap is the number of already-stored MTP values that EnsureMTPLoaded
+// re-fetches on every extension call to detect and repair reorg-invalidated entries.
+//
+// A block reorg at depth D invalidates MTP values for the following 11 heights
+// (one full MTP window). Overlapping by D+11 therefore catches any reorg of depth D.
+// BSV reorgs are extremely shallow in practice (depth ≤ 1–2), so 12 is a safe,
+// cheap constant that covers the realistic worst case.
+const mtpReorgOverlap = 12
+
 // EnsureMTPLoaded pre-warms the in-memory MTP store up to (blockHeight - 1).
 // This must be called once per block, before concurrent per-transaction goroutines start,
 // so that BIP68 MTP lookups inside each goroutine are pure array reads with no gRPC calls.
@@ -1135,8 +1144,10 @@ func (v *Validator) extendTransaction(ctx context.Context, tx *bt.Tx) error {
 // configured, this is a no-op.
 //
 // When the store already covers the needed range this is a fast O(1) no-op.
-// When new heights extend beyond the loaded range, only the missing chunk is fetched
-// in a single call.
+// When new heights extend beyond the loaded range, the fetch includes a backward
+// overlap of mtpReorgOverlap heights. Any already-stored values that differ from
+// the freshly fetched ones (reorg-invalidated) are corrected in-place before the
+// new tail is appended.
 func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) error {
 	csvHeight := uint32(v.settings.ChainCfgParams.CSVHeight)
 	if v.blockchainClient == nil || blockHeight == 0 || blockHeight < csvHeight {
@@ -1148,13 +1159,21 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 	//   - blockMTPHeight = blockHeight - 1 (see validateTransaction for the full derivation)
 	needed := blockHeight - 1
 
-	// Fast path: store already covers needed height.
-	if uint32(len(v.mtpStore)) > needed {
+	// Fast path: store already covers the needed height.
+	currentLen := uint32(len(v.mtpStore))
+	if currentLen > needed {
 		return nil
 	}
 
-	// Fetch only the missing chunk [len(mtpStore) .. needed] and append.
-	fromHeight := uint32(len(v.mtpStore))
+	// Compute the fetch start, extending back by mtpReorgOverlap so we re-check
+	// recently stored values. This repairs any MTP entries that were invalidated by
+	// a chain reorg: a reorg at depth D corrupts stored MTP values for the next 11
+	// heights, so overlapping by 12 catches reorgs of depth ≤ 1 (the realistic case).
+	var fromHeight uint32
+	if currentLen > mtpReorgOverlap {
+		fromHeight = currentLen - mtpReorgOverlap
+	}
+
 	fetched, err := v.blockchainClient.GetMedianTimePastRange(ctx, fromHeight, needed)
 	if err != nil {
 		return errors.NewProcessingError("[Validator][EnsureMTPLoaded] failed to fetch MTPs from height %d to %d", fromHeight, needed, err)
@@ -1165,7 +1184,15 @@ func (v *Validator) EnsureMTPLoaded(ctx context.Context, blockHeight uint32) err
 		return errors.NewProcessingError("[Validator][EnsureMTPLoaded] MTP count mismatch: expected %d, got %d", expected, len(fetched))
 	}
 
-	v.mtpStore = append(v.mtpStore, fetched...)
+	// Patch any overlap values that changed (reorg-invalidated entries).
+	for i := fromHeight; i < currentLen; i++ {
+		if v.mtpStore[i] != fetched[i-fromHeight] {
+			v.mtpStore[i] = fetched[i-fromHeight]
+		}
+	}
+
+	// Append the new tail beyond the previously loaded range.
+	v.mtpStore = append(v.mtpStore, fetched[currentLen-fromHeight:]...)
 	return nil
 }
 

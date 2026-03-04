@@ -121,8 +121,8 @@ type Interface interface {
 	// configured, this is a no-op.
 	//
 	// When the store already covers the needed range this is a fast O(1) no-op.
-	// When new heights extend beyond the loaded range, only the missing chunk is fetched
-	// in a single gRPC call.
+	// When new heights extend beyond the loaded range, the fetch includes a backward
+	// overlap window to detect and repair any MTP values invalidated by a chain reorg.
 	//
 	// Parameters:
 	//   - ctx: Context for the operation, used for cancellation and tracing

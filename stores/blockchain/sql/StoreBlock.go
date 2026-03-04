@@ -795,11 +795,13 @@ func (s *SQL) calculateMedianTimePastForHeight(ctx context.Context, height uint3
 	startHeight := height - medianTimeBlocks
 	endHeight := height - 1
 
-	// Fetch block timestamps for the range
+	// Fetch block timestamps for the canonical chain in the range.
+	// Filter invalid = FALSE to exclude orphan/stale blocks that may share the same height.
 	q := `
 		SELECT block_time
 		FROM blocks
 		WHERE height >= $1 AND height <= $2
+		  AND invalid = FALSE
 		ORDER BY height ASC
 	`
 	rows, err := s.db.QueryContext(ctx, q, startHeight, endHeight)
