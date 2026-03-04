@@ -133,7 +133,6 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		,b.invalid
 		,b.inserted_at
 		,b.processed_at
-		,b.median_time_past
 		FROM blocks b
 		WHERE b.hash = $1
 	`
@@ -170,7 +169,6 @@ func (s *SQL) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*m
 		&blockHeaderMeta.Invalid,
 		&insertedAt,
 		&processedAt,
-		&blockHeaderMeta.MedianTimePast,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil, errors.NewBlockNotFoundError("error in GetBlockHeader", errors.ErrNotFound)

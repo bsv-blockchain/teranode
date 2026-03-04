@@ -125,7 +125,7 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, confli
 
 	// - 2: un-spend txa, marking the input txs as not spendable (txp & txq)
 	if err = s.Unspend(ctx, affectedParentSpends, true); err != nil {
-		return nil, errors.NewTxLockedError("error unspending affected parent spends", err)
+		return nil, errors.NewProcessingError("error unspending affected parent spends", err)
 	}
 
 	// get the unique hashes of the transactions that were marked as not spendable
