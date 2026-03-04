@@ -32,6 +32,7 @@
 | PauseTimeout | time.Duration | 5m | subtreevalidation_pauseTimeout | **CRITICAL** - Maximum pause duration |
 | TxBatchSize | int | 1048576 | subtreevalidation_check_block_subtrees_tx_batch_size | Transaction batch size for CheckBlockSubtrees (0 = no batching) |
 | UseOrderedLevelAlgorithm | bool | true | subtreevalidation_useOrderedLevelAlgorithm | **CRITICAL** - Optimized O(V*I) algorithm for ordered transactions |
+| BlocksOnly | bool | false | subtreevalidation_blocks_only | Only process subtrees from blocks, skip peer-announced subtrees |
 
 ## Configuration Dependencies
 
