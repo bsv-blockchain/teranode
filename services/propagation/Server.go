@@ -107,6 +107,10 @@ var (
 // validation, and error handling to ensure system stability under high load.
 //
 // Thread Safety:
+// udpWorkerPoolSize limits concurrent goroutines for UDP transaction processing
+// to prevent resource exhaustion from high-volume UDP traffic.
+const udpWorkerPoolSize = 100
+
 // The PropagationServer is designed for concurrent operation and maintains internal
 // synchronization for shared resources. Multiple goroutines can safely process
 // transactions simultaneously through the same server instance.
@@ -122,6 +126,9 @@ type PropagationServer struct {
 	httpServer                   *echo.Echo
 	validatorHTTPAddr            *url.URL
 	banList                      banlist.Interface
+	udpWorkerPool                chan struct{} // Semaphore for limiting UDP processing goroutines
+	udpConns                     []*net.UDPConn
+	udpConnsMu                   sync.Mutex
 }
 
 // New creates a new PropagationServer instance with the specified dependencies.
@@ -150,6 +157,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		validatorKafkaProducerClient: validatorKafkaProducerClient,
 		validatorHTTPAddr:            tSettings.Validator.HTTPAddress,
 		banList:                      banList,
+		udpWorkerPool:                make(chan struct{}, udpWorkerPoolSize),
 	}
 }
 
@@ -340,6 +348,55 @@ func (ps *PropagationServer) Start(ctx context.Context, readyCh chan<- struct{})
 	return nil
 }
 
+// parseAllowedSources parses a list of IP addresses and CIDR ranges into net.IPNet structures.
+func parseAllowedSources(sources []string) ([]*net.IPNet, error) {
+	nets := make([]*net.IPNet, 0, len(sources))
+	for _, src := range sources {
+		src = strings.TrimSpace(src)
+		if src == "" {
+			continue
+		}
+
+		// Try parsing as CIDR first
+		_, ipNet, err := net.ParseCIDR(src)
+		if err == nil {
+			nets = append(nets, ipNet)
+			continue
+		}
+
+		// If not CIDR, treat as single IP
+		ip := net.ParseIP(src)
+		if ip == nil {
+			return nil, errors.NewConfigurationError("invalid IP or CIDR in allowed sources: %s", src)
+		}
+
+		// Normalize IPv4-mapped IPv6 addresses to IPv4 for consistent matching
+		// in dual-stack environments
+		if ip4 := ip.To4(); ip4 != nil {
+			ip = ip4
+			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(32, 32)})
+		} else {
+			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)})
+		}
+	}
+	return nets, nil
+}
+
+// isIPAllowed checks if an IP address is allowed based on the allowlist.
+// Returns true if the allowlist is empty (allow all) or if the IP matches any entry.
+func isIPAllowed(ip net.IP, allowedNets []*net.IPNet) bool {
+	// Empty allowlist means allow all
+	if len(allowedNets) == 0 {
+		return true
+	}
+	for _, ipNet := range allowedNets {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // StartUDP6Listeners initializes IPv6 multicast listeners for transaction propagation.
 // It creates UDP listeners on specified interfaces and addresses, processing incoming
 // transactions in separate goroutines.
@@ -364,6 +421,18 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 		return errors.NewConfigurationError("error resolving interface", err)
 	}
 
+	// Parse allowed source IPs/CIDRs
+	allowedSources := ps.settings.Propagation.IPv6AllowedSources
+	allowedNets, err := parseAllowedSources(allowedSources)
+	if err != nil {
+		return err
+	}
+	if len(allowedNets) > 0 {
+		ps.logger.Infof("UDP6 source allowlist configured with %d entries", len(allowedNets))
+	} else {
+		ps.logger.Infof("UDP6 source allowlist not configured, accepting from all sources")
+	}
+
 	for _, ipv6Address := range strings.Split(ipv6Addresses, ",") {
 		var conn *net.UDPConn
 
@@ -376,7 +445,12 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 			return errors.NewServiceError("error starting listener", err)
 		}
 
-		go func(conn *net.UDPConn) {
+		// Track connection for cleanup on shutdown
+		ps.udpConnsMu.Lock()
+		ps.udpConns = append(ps.udpConns, conn)
+		ps.udpConnsMu.Unlock()
+
+		go func(conn *net.UDPConn, allowedNets []*net.IPNet) {
 			// Loop forever reading from the socket
 			var (
 				// numBytes int
@@ -395,7 +469,17 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 			for {
 				n, _, _, src, err = conn.ReadMsgUDP(buffer, oobB)
 				if err != nil {
+					if errors.Is(err, net.ErrClosed) {
+						ps.logger.Infof("UDP listener shutting down")
+						return
+					}
 					ps.logger.Errorf("ReadMsgUDP failed: %v", err)
+					continue
+				}
+
+				// Check if source IP is in allowlist
+				if !isIPAllowed(src.IP, allowedNets) {
+					ps.logger.Warnf("Dropping UDP packet from unauthorized source: %s", src.IP.String())
 					continue
 				}
 				// ps.logger.Infof("read %d bytes from %s, out of bounds data len %d", len(buffer), src.String(), len(oobB))
@@ -433,24 +517,29 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 						continue
 					}
 
-					// Process the received bytes
-					go func(txb []byte) {
-						if _, err = ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
-							Tx: txb,
-						}); err != nil {
-							ps.logger.Errorf("error processing transaction: %v", err)
-						}
-					}(txBytes.Bytes())
+					// Process the received bytes using worker pool to limit concurrency
+					select {
+					case ps.udpWorkerPool <- struct{}{}:
+						go func(txb []byte) {
+							defer func() { <-ps.udpWorkerPool }()
+							if _, err := ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
+								Tx: txb,
+							}); err != nil {
+								ps.logger.Errorf("error processing transaction: %v", err)
+							}
+						}(txBytes.Bytes())
+					default:
+						ps.logger.Warnf("UDP worker pool full, dropping transaction from %s", src.String())
+					}
 				}
 			}
-		}(conn)
+		}(conn, allowedNets)
 	}
 
 	return nil
 }
 
-// Stop gracefully stops the PropagationServer.
-// Currently a no-op, reserved for future cleanup operations.
+// Stop gracefully stops the PropagationServer, closing UDP listeners.
 //
 // Parameters:
 //   - ctx: context for stop operation (unused)
@@ -458,6 +547,14 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 // Returns:
 //   - error: always returns nil in current implementation
 func (ps *PropagationServer) Stop(_ context.Context) error {
+	ps.udpConnsMu.Lock()
+	defer ps.udpConnsMu.Unlock()
+	for _, conn := range ps.udpConns {
+		if err := conn.Close(); err != nil {
+			ps.logger.Errorf("Error closing UDP connection: %v", err)
+		}
+	}
+	ps.udpConns = nil
 	return nil
 }
 
@@ -559,8 +656,22 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			}
 		}()
 
+		// Track early-exit error to return after cleanup
+		var earlyExitMsg string
+
 		// Read transactions with the bt reader in a loop
 		for {
+			// Check limits BEFORE reading the next transaction to prevent bypass attacks
+			if totalNrTransactions >= maxTransactionsPerRequest {
+				earlyExitMsg = "Invalid request body: too many transactions"
+				break
+			}
+
+			if totalBytesRead >= maxDataPerRequest {
+				earlyExitMsg = "Invalid request body: too much data"
+				break
+			}
+
 			tx := &bt.Tx{}
 
 			// Read transaction from request body with panic recovery
@@ -598,24 +709,21 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			totalNrTransactions++
 			totalBytesRead += bytesRead
 
-			if totalNrTransactions > maxTransactionsPerRequest {
-				return c.String(http.StatusBadRequest, "Invalid request body: too many transactions")
-			}
-
-			if totalBytesRead > maxDataPerRequest {
-				return c.String(http.StatusBadRequest, "Invalid request body: too much data")
-			}
-
 			// Send transaction to processing channel
 			processingWg.Add(1)
 			processTxs <- tx
 		}
 
+		// Close processTxs to signal the processing goroutine to exit,
+		// then wait for all in-flight work and errors to drain
+		close(processTxs)
 		processingWg.Wait()
+		close(processErrors)
 		processingErrorWg.Wait()
 
-		close(processTxs)
-		close(processErrors)
+		if earlyExitMsg != "" {
+			return c.String(http.StatusBadRequest, earlyExitMsg)
+		}
 
 		if len(errMsgs) > 0 {
 			return c.String(http.StatusInternalServerError, "Failed to process transactions:\n"+strings.Join(errMsgs, "\n")+"\n")
@@ -663,7 +771,12 @@ func (ps *PropagationServer) startHTTPServer(ctx context.Context, httpAddresses 
 		ps.httpServer.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStore(rate.Limit(ps.settings.Propagation.HTTPRateLimit))))
 	}
 
+	if ps.settings.Propagation.HTTPBodyLimit != "" {
+		ps.httpServer.Use(middleware.BodyLimit(ps.settings.Propagation.HTTPBodyLimit))
+	}
+
 	ps.httpServer.Server.ReadTimeout = 30 * time.Second
+	ps.httpServer.Server.ReadHeaderTimeout = 10 * time.Second
 	ps.httpServer.Server.WriteTimeout = 30 * time.Second
 	ps.httpServer.Server.IdleTimeout = 120 * time.Second
 
@@ -867,6 +980,18 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 	defer endSpan()
 
 	timeStart := time.Now()
+	txSize := len(req.Tx)
+
+	// Check transaction size BEFORE parsing to avoid wasting CPU on oversized transactions
+	if ps.settings != nil && ps.settings.Policy != nil {
+		maxTxSize := ps.settings.Policy.GetMaxTxSizePolicy()
+		if maxTxSize > 0 && txSize > maxTxSize {
+			prometheusInvalidTransactions.Inc()
+			err := errors.NewTxInvalidError("[ProcessTransaction] transaction size %d exceeds maximum allowed size %d", txSize, maxTxSize)
+			span.RecordError(err)
+			return err
+		}
+	}
 
 	var btTx *bt.Tx
 	var err error
@@ -894,7 +1019,7 @@ func (ps *PropagationServer) processTransaction(ctx context.Context, req *propag
 		return err
 	}
 
-	prometheusTransactionSize.Observe(float64(len(req.Tx)))
+	prometheusTransactionSize.Observe(float64(txSize))
 	prometheusProcessedTransactions.Observe(float64(time.Since(timeStart).Microseconds()) / 1_000_000)
 
 	return nil
@@ -980,6 +1105,43 @@ func (ps *PropagationServer) txSanityChecks(btTx *bt.Tx) error {
 		return errors.NewTxInvalidError("[ProcessTransaction][%s] received transaction with no outputs", btTx.TxID())
 	}
 
+	// Check for duplicate inputs (same prevTxID and vout)
+	if err := ps.checkDuplicateInputs(btTx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// checkDuplicateInputs verifies that a transaction doesn't spend the same output twice.
+// Optimized to avoid allocations for the common case of no duplicates.
+func (ps *PropagationServer) checkDuplicateInputs(btTx *bt.Tx) error {
+	numInputs := len(btTx.Inputs)
+
+	// Fast path: single input can't have duplicates
+	if numInputs <= 1 {
+		return nil
+	}
+
+	// Use a map with pre-allocated capacity
+	// Key format: 32 bytes prevTxID + 4 bytes vout = 36 bytes, use [36]byte as key to avoid string alloc
+	type inputKey struct {
+		prevTxID [32]byte
+		vout     uint32
+	}
+
+	seen := make(map[inputKey]struct{}, numInputs)
+	for _, input := range btTx.Inputs {
+		var key inputKey
+		copy(key.prevTxID[:], input.PreviousTxID())
+		key.vout = input.PreviousTxOutIndex
+
+		if _, exists := seen[key]; exists {
+			prometheusInvalidTransactions.Inc()
+			return errors.NewTxInvalidError("[ProcessTransaction][%s] duplicate input found: %x:%d", btTx.TxID(), key.prevTxID, key.vout)
+		}
+		seen[key] = struct{}{}
+	}
 	return nil
 }
 

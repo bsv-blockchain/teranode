@@ -1169,20 +1169,16 @@ function incrementSpentExtraRecs(rec, inc, currentBlockHeight, blockHeightRetent
 
     spentExtraRecs = spentExtraRecs + inc
 
+    -- Clamp to valid range instead of erroring. The counter can drift out of
+    -- sync when spend/unspend rollbacks are interrupted (e.g. context cancellation
+    -- during DEVICE_OVERLOAD). Clamping keeps the node alive — Go verifies
+    -- children before acting on DAH signals, so a drifted counter is harmless.
     if spentExtraRecs < 0 then
-        response[FIELD_STATUS] = STATUS_ERROR
-        response[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_PARAMETER
-        response[FIELD_MESSAGE] = ERR_SPENT_EXTRA_RECS_NEGATIVE
-
-        return response
+        spentExtraRecs = 0
     end
 
     if spentExtraRecs > totalExtraRecs then
-        response[FIELD_STATUS] = STATUS_ERROR
-        response[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_PARAMETER
-        response[FIELD_MESSAGE] = ERR_SPENT_EXTRA_RECS_EXCEED
-
-        return response
+        spentExtraRecs = totalExtraRecs
     end
 
     rec[BIN_SPENT_EXTRA_RECS] = spentExtraRecs

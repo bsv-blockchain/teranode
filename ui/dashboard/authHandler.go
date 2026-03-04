@@ -2,11 +2,15 @@ package dashboard
 
 import (
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -15,6 +19,24 @@ import (
 
 const cookieName = "auth"
 
+const (
+	maxLoginAttempts      = 5
+	loginWindowSeconds    = 15 * 60 // 15 minutes
+	loginCleanupInterval  = 5 * time.Minute
+	maxFailedLoginEntries = 10000
+)
+
+// loginAttempt tracks failed login attempts for rate limiting.
+type loginAttempt struct {
+	count   int32
+	firstAt time.Time
+}
+
+// failedLogins tracks per-IP failed login attempts.
+var failedLogins sync.Map
+
+var loginCleanupOnce sync.Once
+
 // AuthHandler handles authentication for the dashboard UI
 type AuthHandler struct {
 	logger   ulogger.Logger
@@ -22,8 +44,44 @@ type AuthHandler struct {
 	authsha  [sha256.Size]byte
 }
 
+func startLoginCleanup() {
+	ticker := time.NewTicker(loginCleanupInterval)
+
+	go func() {
+		for range ticker.C {
+			now := time.Now()
+			windowDuration := time.Duration(loginWindowSeconds) * time.Second
+			remaining := 0
+
+			failedLogins.Range(func(key, value any) bool {
+				attempt := value.(*loginAttempt)
+				if now.Sub(attempt.firstAt) > windowDuration {
+					failedLogins.Delete(key)
+				} else {
+					remaining++
+				}
+				return true
+			})
+
+			if remaining > maxFailedLoginEntries {
+				excess := remaining - maxFailedLoginEntries
+				failedLogins.Range(func(key, _ any) bool {
+					if excess <= 0 {
+						return false
+					}
+					failedLogins.Delete(key)
+					excess--
+					return true
+				})
+			}
+		}
+	}()
+}
+
 // NewAuthHandler creates a new authentication handler
 func NewAuthHandler(logger ulogger.Logger, settings *settings.Settings) *AuthHandler {
+	loginCleanupOnce.Do(startLoginCleanup)
+
 	var authsha [sha256.Size]byte
 
 	rpcUser := settings.RPC.RPCUser
@@ -97,8 +155,10 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 	username := parts[0]
 	password := parts[1]
 
-	// Direct credential comparison
-	if username == rpcUser && password == rpcPass {
+	// Constant-time credential comparison to prevent timing attacks
+	userMatch := subtle.ConstantTimeCompare([]byte(username), []byte(rpcUser))
+	passMatch := subtle.ConstantTimeCompare([]byte(password), []byte(rpcPass))
+	if userMatch == 1 && passMatch == 1 {
 		h.logger.Debugf("Direct credential match successful")
 		return true
 	}
@@ -108,15 +168,65 @@ func (h *AuthHandler) CheckAuth(r *http.Request) bool {
 	isValid := authsha == h.authsha
 
 	if !isValid {
-		h.logger.Debugf("Auth validation failed for user")
+		h.logger.Debugf("Auth validation failed for user: %s", username)
 	}
 
 	return isValid
 }
 
+// isLoginRateLimited checks if the given IP has exceeded the login attempt limit.
+// Returns true if the IP should be rate limited.
+func isLoginRateLimited(ip string) bool {
+	now := time.Now()
+	val, ok := failedLogins.Load(ip)
+	if !ok {
+		return false
+	}
+	attempt := val.(*loginAttempt)
+	if now.Sub(attempt.firstAt) > time.Duration(loginWindowSeconds)*time.Second {
+		// Window expired, clean up stale entry
+		failedLogins.Delete(ip)
+		return false
+	}
+	return atomic.LoadInt32(&attempt.count) >= int32(maxLoginAttempts)
+}
+
+// recordFailedLogin records a failed login attempt for the given IP.
+func recordFailedLogin(ip string) {
+	now := time.Now()
+	newAttempt := &loginAttempt{count: 1, firstAt: now}
+	val, loaded := failedLogins.LoadOrStore(ip, newAttempt)
+	if !loaded {
+		return
+	}
+	attempt := val.(*loginAttempt)
+	if now.Sub(attempt.firstAt) > time.Duration(loginWindowSeconds)*time.Second {
+		// Window expired, reset
+		failedLogins.Store(ip, newAttempt)
+		return
+	}
+	atomic.AddInt32(&attempt.count, 1)
+}
+
+// clearFailedLogins resets the failed login counter for the given IP.
+func clearFailedLogins(ip string) {
+	failedLogins.Delete(ip)
+}
+
 // LoginHandler handles login requests
 func (h *AuthHandler) LoginHandler(c echo.Context) error {
 	h.logger.Infof("Login attempt received")
+
+	clientIP := c.RealIP()
+
+	// Check rate limit before processing
+	if isLoginRateLimited(clientIP) {
+		h.logger.Warnf("Login rate limit exceeded for IP: %s", clientIP)
+		return c.JSON(http.StatusTooManyRequests, map[string]interface{}{
+			"success": false,
+			"error":   "Too many failed login attempts. Please try again later.",
+		})
+	}
 
 	// Check if this is a form submission
 	username := c.FormValue("username")
@@ -126,8 +236,10 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 		// Form-based authentication
 		h.logger.Debugf("Form-based login attempt for user: %s", username)
 
-		// Check if credentials match
-		if username == h.settings.RPC.RPCUser && password == h.settings.RPC.RPCPass {
+		// Constant-time credential comparison to prevent timing attacks
+		userMatch := subtle.ConstantTimeCompare([]byte(username), []byte(h.settings.RPC.RPCUser))
+		passMatch := subtle.ConstantTimeCompare([]byte(password), []byte(h.settings.RPC.RPCPass))
+		if userMatch == 1 && passMatch == 1 {
 			// Create auth header for cookie
 			authHeader := "Basic " + base64.StdEncoding.EncodeToString([]byte(username+":"+password))
 
@@ -142,14 +254,16 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 			cookie.MaxAge = 86400 // 24 hours
 			c.SetCookie(cookie)
 
-			h.logger.Infof("Form-based login successful, cookie set: %s", cookie.Name)
+			clearFailedLogins(clientIP)
+			h.logger.Infof("Form-based login successful for user: %s", username)
 
 			return c.JSON(http.StatusOK, map[string]interface{}{
 				"success": true,
 			})
 		}
 
-		h.logger.Infof("Form-based login failed")
+		recordFailedLogin(clientIP)
+		h.logger.Infof("Form-based login failed for user: %s", username)
 
 		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
 			"success": false,
@@ -171,13 +285,15 @@ func (h *AuthHandler) LoginHandler(c echo.Context) error {
 		cookie.MaxAge = 86400 // 24 hours
 		c.SetCookie(cookie)
 
-		h.logger.Infof("Login successful, cookie set: %s", cookie.Name)
+		clearFailedLogins(clientIP)
+		h.logger.Infof("Login successful")
 
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"success": true,
 		})
 	}
 
+	recordFailedLogin(clientIP)
 	h.logger.Infof("Login failed")
 
 	return c.JSON(http.StatusUnauthorized, map[string]interface{}{
@@ -383,6 +499,11 @@ func (h *AuthHandler) PostAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc
 // RequireAuthMiddleware is a middleware that requires authentication for all requests
 func (h *AuthHandler) RequireAuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
+		// Skip authentication for OPTIONS requests (CORS preflight)
+		if c.Request().Method == http.MethodOptions {
+			return next(c)
+		}
+
 		if !h.CheckAuth(c.Request()) {
 			return c.JSON(http.StatusUnauthorized, map[string]interface{}{
 				"success": false,

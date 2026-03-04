@@ -1242,15 +1242,14 @@ func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Con
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader:    blockHeader.Bytes(),
-		Height:         meta.Height,
-		TxCount:        meta.TxCount,
-		SizeInBytes:    meta.SizeInBytes,
-		Miner:          meta.Miner,
-		ChainWork:      meta.ChainWork,
-		BlockTime:      meta.BlockTime,
-		Timestamp:      meta.Timestamp,
-		MedianTimePast: meta.MedianTimePast,
+		BlockHeader: blockHeader.Bytes(),
+		Height:      meta.Height,
+		TxCount:     meta.TxCount,
+		SizeInBytes: meta.SizeInBytes,
+		Miner:       meta.Miner,
+		ChainWork:   meta.ChainWork,
+		BlockTime:   meta.BlockTime,
+		Timestamp:   meta.Timestamp,
 	}, nil
 }
 
@@ -1330,15 +1329,14 @@ func (b *Blockchain) GetBestBlockHeader(ctx context.Context, empty *emptypb.Empt
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader:    chainTip.Bytes(),
-		Height:         meta.Height,
-		TxCount:        meta.TxCount,
-		SizeInBytes:    meta.SizeInBytes,
-		Miner:          meta.Miner,
-		BlockTime:      meta.BlockTime,
-		Timestamp:      meta.Timestamp,
-		ChainWork:      meta.ChainWork,
-		MedianTimePast: meta.MedianTimePast,
+		BlockHeader: chainTip.Bytes(),
+		Height:      meta.Height,
+		TxCount:     meta.TxCount,
+		SizeInBytes: meta.SizeInBytes,
+		Miner:       meta.Miner,
+		BlockTime:   meta.BlockTime,
+		Timestamp:   meta.Timestamp,
+		ChainWork:   meta.ChainWork,
 	}, nil
 }
 
@@ -1426,21 +1424,20 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 	}
 
 	return &blockchain_api.GetBlockHeaderResponse{
-		BlockHeader:    blockHeader.Bytes(),
-		Id:             meta.ID,
-		Height:         meta.Height,
-		TxCount:        meta.TxCount,
-		SizeInBytes:    meta.SizeInBytes,
-		Miner:          meta.Miner,
-		PeerId:         meta.PeerID,
-		BlockTime:      meta.BlockTime,
-		Timestamp:      meta.Timestamp,
-		MinedSet:       meta.MinedSet,
-		ChainWork:      meta.ChainWork,
-		SubtreesSet:    meta.SubtreesSet,
-		Invalid:        meta.Invalid,
-		ProcessedAt:    processedAt,
-		MedianTimePast: meta.MedianTimePast,
+		BlockHeader: blockHeader.Bytes(),
+		Id:          meta.ID,
+		Height:      meta.Height,
+		TxCount:     meta.TxCount,
+		SizeInBytes: meta.SizeInBytes,
+		Miner:       meta.Miner,
+		PeerId:      meta.PeerID,
+		BlockTime:   meta.BlockTime,
+		Timestamp:   meta.Timestamp,
+		MinedSet:    meta.MinedSet,
+		ChainWork:   meta.ChainWork,
+		SubtreesSet: meta.SubtreesSet,
+		Invalid:     meta.Invalid,
+		ProcessedAt: processedAt,
 	}, nil
 }
 
@@ -1616,34 +1613,6 @@ func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchai
 	return &blockchain_api.GetBlockHeadersByHeightResponse{
 		BlockHeaders: blockHeaderBytes,
 		Metas:        metasBytes,
-	}, nil
-}
-
-// GetMedianTimePastByHeights retrieves MTP values for multiple block heights in batch.
-// This method implements the gRPC service endpoint for efficiently fetching Median Time Past
-// values for a list of block heights. This is useful for BIP68 relative locktime validation
-// where the validator needs MTP values for multiple blocks.
-//
-// Parameters:
-//   - ctx: Request context for timeout and cancellation
-//   - req: GetMedianTimePastByHeightsRequest containing array of heights
-//
-// Returns:
-//   - GetMedianTimePastByHeightsResponse containing MTP values (0 for height < 11)
-//   - error: Any error encountered during MTP calculation
-func (b *Blockchain) GetMedianTimePastByHeights(ctx context.Context, req *blockchain_api.GetMedianTimePastByHeightsRequest) (*blockchain_api.GetMedianTimePastByHeightsResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetMedianTimePastByHeights",
-		tracing.WithParentStat(b.stats),
-	)
-	defer deferFn()
-
-	mtps, err := b.GetMedianTimePastForHeights(ctx, req.Heights)
-	if err != nil {
-		return nil, errors.WrapGRPC(err)
-	}
-
-	return &blockchain_api.GetMedianTimePastByHeightsResponse{
-		MedianTimePast: mtps,
 	}, nil
 }
 
