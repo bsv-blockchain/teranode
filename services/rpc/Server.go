@@ -666,6 +666,9 @@ type RPCServer struct {
 	// This setting helps prevent resource exhaustion from too many simultaneous connections
 	rpcMaxClients int
 
+	// rpcMaxRequestSize is the maximum allowed size in bytes for RPC request bodies
+	rpcMaxRequestSize int64
+
 	// rpcQuirks enables backwards-compatible quirks in the RPC server when true
 	// This improves compatibility with clients expecting legacy Bitcoin Core behavior
 	rpcQuirks bool
@@ -1099,6 +1102,11 @@ func (s *RPCServer) jsonRPCRead(w http.ResponseWriter, r *http.Request, isAdmin 
 		return
 	}
 
+	// Limit request body size to prevent memory exhaustion
+	if s.rpcMaxRequestSize > 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, s.rpcMaxRequestSize)
+	}
+
 	// Use context-aware logger for trace correlation
 	ctx := r.Context()
 	ctxLogger := s.logger.WithTraceContext(ctx)
@@ -1322,7 +1330,10 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		// Timeout connections which don't complete the initial
 		// handshake within the allowed timeframe.
-		ReadTimeout: time.Second * rpcAuthTimeoutSeconds,
+		ReadTimeout:       time.Second * rpcAuthTimeoutSeconds,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	rpcServeMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -1483,6 +1494,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 	// rpc.cfg.Chain.Subscribe(rpc.handleBlockchainNotification)
 
 	rpc.rpcMaxClients = tSettings.RPC.RPCMaxClients
+	rpc.rpcMaxRequestSize = int64(tSettings.RPC.RPCMaxRequestSize)
 
 	rpc.rpcQuirks = tSettings.RPC.RPCQuirks
 

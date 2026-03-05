@@ -14,7 +14,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/bitcoin-sv/bdk/module/gobdk v1.2.0
 	github.com/bsv-blockchain/go-bt/v2 v2.6.0
-	github.com/bsv-blockchain/go-chaincfg v1.5.3
+	github.com/bsv-blockchain/go-chaincfg v1.5.5
 	github.com/bsv-blockchain/go-sdk v1.2.18
 	github.com/bsv-blockchain/go-subtree v1.2.0
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.3.2

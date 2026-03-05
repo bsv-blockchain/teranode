@@ -343,8 +343,8 @@ func (s *Store) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Da
 // Implementation Details:
 // The method creates a batchGetItem with the request parameters and sends it to the
 // getBatcher for processing. It then waits on a done channel for the result.
-func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []fields.FieldName) (*meta.Data, error) {
-	done := make(chan batchGetItemData)
+func (s *Store) get(ctx context.Context, hash *chainhash.Hash, bins []fields.FieldName) (*meta.Data, error) {
+	done := make(chan batchGetItemData, 1)
 	item := &batchGetItem{hash: *hash, fields: bins, done: done}
 
 	if s.getBatcher != nil {
@@ -356,18 +356,22 @@ func (s *Store) get(_ context.Context, hash *chainhash.Hash, bins []fields.Field
 		}()
 	}
 
-	data := <-done
-	if data.Err != nil {
-		if e, ok := data.Err.(*errors.Error); ok {
-			prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", e.Code().Enum().String()).Inc()
+	select {
+	case data := <-done:
+		if data.Err != nil {
+			if e, ok := data.Err.(*errors.Error); ok {
+				prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", e.Code().Enum().String()).Inc()
+			} else {
+				prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", "unknown").Inc()
+			}
 		} else {
-			prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", "unknown").Inc()
+			prometheusTxMetaAerospikeMapGet.Inc()
 		}
-	} else {
-		prometheusTxMetaAerospikeMapGet.Inc()
+		return data.Data, data.Err
+	case <-ctx.Done():
+		prometheusTxMetaAerospikeMapErrors.WithLabelValues("Get", "ContextCanceled").Inc()
+		return nil, ctx.Err()
 	}
-
-	return data.Data, data.Err
 }
 
 // getTxFromBins reconstructs a Bitcoin transaction from Aerospike bin data.

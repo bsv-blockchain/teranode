@@ -50,6 +50,26 @@ func TestIsRetryableError(t *testing.T) {
 			expected: false,
 		},
 		{
+			name:     "storage error - retryable",
+			err:      NewStorageError("DEVICE_OVERLOAD"),
+			expected: true,
+		},
+		{
+			name:     "wrapped storage error - retryable",
+			err:      NewProcessingError("spend failed", NewStorageError("DEVICE_OVERLOAD")),
+			expected: true,
+		},
+		{
+			name:     "deeply wrapped storage error - retryable",
+			err:      NewProcessingError("validate failed", NewProcessingError("spend failed", NewStorageError("DEVICE_OVERLOAD"))),
+			expected: true,
+		},
+		{
+			name:     "processing error without storage - not retryable",
+			err:      NewProcessingError("validation failed"),
+			expected: false,
+		},
+		{
 			name:     "context canceled - not retryable",
 			err:      context.Canceled,
 			expected: false,

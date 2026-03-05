@@ -86,6 +86,25 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 	blockMetas := make([]*model.BlockHeaderMeta, 0, capacity)
 
 	q := `
+		WITH RECURSIVE ChainBlocks AS (
+			SELECT id, parent_id, height
+			FROM blocks
+			WHERE invalid = false
+			AND hash = (
+				SELECT b.hash
+				FROM blocks b
+				WHERE b.invalid = false
+				ORDER BY chain_work DESC, peer_id ASC, id ASC
+				LIMIT 1
+			)
+			UNION ALL
+			SELECT bb.id, bb.parent_id, bb.height
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			WHERE bb.id != cb.id
+			  AND bb.invalid = false
+			  AND bb.height >= $1
+		)
 		SELECT
 		 b.version
 		,b.block_time
@@ -101,33 +120,9 @@ func (s *SQL) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeigh
 		,b.block_time
 		,b.inserted_at
 		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE invalid = false
-					AND hash = (
-						SELECT b.hash
-						FROM blocks b
-						WHERE b.invalid = false
-						ORDER BY chain_work DESC, peer_id ASC, id ASC
-						LIMIT 1
-					)
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-					  AND bb.invalid = false
-				)
-				SELECT id FROM ChainBlocks
-				WHERE height >= $1 AND height <= $2
-				  AND invalid = FALSE
-				ORDER BY height ASC
-			)
-		)
+		JOIN ChainBlocks cb ON b.id = cb.id
+		WHERE cb.height >= $1 AND cb.height <= $2
+		ORDER BY cb.height ASC
 	`
 	rows, err := s.db.QueryContext(ctx, q, startHeight, endHeight)
 	if err != nil {

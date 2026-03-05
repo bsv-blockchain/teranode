@@ -117,14 +117,15 @@ func (s *SQL) GetBlockHeaderIDs(ctx context.Context, blockHashFrom *chainhash.Ha
 
 	q := `
 		WITH RECURSIVE ChainBlocks AS (
-			SELECT id, parent_id
+			SELECT id, parent_id, 1 AS depth
 			FROM blocks
 			WHERE hash = $1
 			UNION ALL
-			SELECT bb.id, bb.parent_id
+			SELECT bb.id, bb.parent_id, cb.depth + 1
 			FROM blocks bb
 			JOIN ChainBlocks cb ON bb.id = cb.parent_id
 			WHERE bb.id != cb.id
+			  AND cb.depth < $2
 		)
 		SELECT id FROM ChainBlocks
 		LIMIT $2

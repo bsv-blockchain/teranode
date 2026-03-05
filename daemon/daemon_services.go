@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/internal/banlist"
 	"github.com/bsv-blockchain/teranode/internal/profiling"
 	"github.com/bsv-blockchain/teranode/services/alert"
 	"github.com/bsv-blockchain/teranode/services/asset"
@@ -409,6 +410,9 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		return err
 	}
 
+	// Create ban list for the Asset service
+	banList := createBanList(ctx, createLogger("asset_banlist"), appSettings)
+
 	// Initialize the Asset service with the necessary parts
 	return d.ServiceManager.AddService(serviceAssetFormal, asset.NewServer(
 		createLogger(serviceAsset),
@@ -420,6 +424,7 @@ func (d *Daemon) startAssetService(ctx context.Context, appSettings *settings.Se
 		blockchainClient,
 		blockvalidationClient,
 		p2pClient,
+		banList,
 	))
 }
 
@@ -991,6 +996,9 @@ func (d *Daemon) startPropagationService(
 		return err
 	}
 
+	// Create ban list for the Propagation service
+	propBanList := createBanList(ctx, createLogger("propagation_banlist"), appSettings)
+
 	// Add the Propagation service to the ServiceManager
 	return d.ServiceManager.AddService(servicePropagationFormal, propagation.New(
 		createLogger(loggerPropagation),
@@ -999,6 +1007,7 @@ func (d *Daemon) startPropagationService(
 		validatorClient,
 		blockchainClient,
 		validatorKafkaProducerClient,
+		propBanList,
 	))
 }
 
@@ -1127,4 +1136,22 @@ func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.S
 		blockchainClient,
 		blockAssemblyClient,
 	))
+}
+
+// createBanList creates, initializes, and starts periodic reload for a ban list.
+// Returns nil if creation or initialization fails (service continues without bans).
+func createBanList(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) banlist.Interface {
+	bl, err := banlist.NewFromSettings(logger, appSettings)
+	if err != nil {
+		logger.Warnf("failed to create ban list: %v", err)
+		return nil
+	}
+
+	if err := bl.Init(ctx); err != nil {
+		logger.Warnf("failed to init ban list: %v", err)
+		return nil
+	}
+
+	bl.StartPeriodicReload(ctx, 30*time.Second)
+	return bl
 }

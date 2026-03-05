@@ -329,9 +329,9 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 			// Exponential backoff: 10ms, 20ms, 40ms
 			backoff := time.Duration(1<<attempt) * baseBackoff
 			if attempt < 2 {
-				ctxLogger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
+				ctxLogger.Debugf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d): %v", tx.TxID(), backoff, attempt+1, maxRetries, err)
 			} else {
-				ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d)", tx.TxID(), backoff, attempt+1, maxRetries)
+				ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s, retrying in %v (attempt %d/%d): %v", tx.TxID(), backoff, attempt+1, maxRetries, err)
 			}
 
 			select {
@@ -341,7 +341,7 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 				// Continue to next attempt
 			}
 		} else {
-			ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d attempts, giving up", tx.TxID(), maxRetries)
+			ctxLogger.Warnf("[ValidateWithOptions] TX_LOCKED for tx %s after %d attempts, giving up: %v", tx.TxID(), maxRetries, err)
 		}
 	}
 
@@ -694,6 +694,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	if txMetaData.Locked {
 		if err = v.twoPhaseCommitTransaction(decoupledCtx, tx, txID); err != nil {
+			v.logger.Warnf("[Validate][%s] error during two phase commit, transaction will be marked as spendable on next block: %v", txID, err)
+
 			return txMetaData, err
 		}
 

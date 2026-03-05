@@ -9,6 +9,8 @@ import (
 
 // IsRetryableError determines if an error is transient and the operation should be retried.
 // This includes network timeouts, temporary unavailability, and other transient conditions.
+// It walks the entire wrapped error chain so that e.g. a ProcessingError wrapping a
+// StorageError is correctly identified as retryable.
 func IsRetryableError(err error) bool {
 	if err == nil {
 		return false
@@ -19,22 +21,32 @@ func IsRetryableError(err error) bool {
 		return false
 	}
 
-	// Check for specific error codes that are retryable
-	var tErr *Error
-	if As(err, &tErr) {
+	// Walk the entire error chain checking for retryable error codes
+	for current := err; current != nil; {
+		var tErr *Error
+		if !errors.As(current, &tErr) {
+			break
+		}
+
 		switch tErr.Code() {
 		case ERR_NETWORK_TIMEOUT,
 			ERR_NETWORK_ERROR,
 			ERR_SERVICE_UNAVAILABLE,
-			ERR_STORAGE_UNAVAILABLE:
+			ERR_STORAGE_UNAVAILABLE,
+			ERR_STORAGE_ERROR:
 			return true
 		case ERR_NETWORK_CONNECTION_REFUSED:
-			// Connection refused might be retryable if the service is starting up
 			return true
 		case ERR_NETWORK_INVALID_RESPONSE,
 			ERR_NETWORK_PEER_MALICIOUS:
-			// These are not retryable - indicates a problem with the peer
 			return false
+		}
+
+		// Move to the wrapped error
+		if tErr.wrappedErr != nil {
+			current = tErr.wrappedErr
+		} else {
+			break
 		}
 	}
 
