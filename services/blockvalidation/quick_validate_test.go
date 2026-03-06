@@ -30,7 +30,7 @@ func TestQuickValidateBlock(t *testing.T) {
 
 		block := testhelpers.CreateTestBlocks(t, 1)[0]
 
-		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test")
+		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
 		assert.NoError(t, err, "Should successfully quick validate an empty block")
 
 		// Verify AddBlock was called with correct parameters
@@ -124,7 +124,7 @@ func TestQuickValidateBlock(t *testing.T) {
 		// Setup validator to return no errors (one for each transaction: coinbase + 2 regular)
 		suite.MockValidator.Errors = []error{nil, nil, nil}
 
-		err = suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test")
+		err = suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test", "")
 		assert.NoError(t, err, "Should successfully quick validate a block with transactions")
 
 		// Verify AddBlock was called with correct parameters

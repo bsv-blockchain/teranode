@@ -77,6 +77,7 @@ func (s *SQL) GetBlockGraphData(ctx context.Context, periodMillis uint64) (*mode
 			FROM blocks b
 			INNER JOIN ChainBlocks cb ON b.id = cb.parent_id
 			WHERE b.parent_id != 0
+			  AND b.block_time >= $1
 		)
 		SELECT block_time, tx_count FROM ChainBlocks
 		WHERE block_time >= $1

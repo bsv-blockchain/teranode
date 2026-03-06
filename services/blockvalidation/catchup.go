@@ -1019,7 +1019,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 			cachedHeaders, _ := u.headerChainCache.GetValidationHeaders(block.Hash())
 
 			// Try quick validation if applicable
-			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, baseURL, writeJobsChan)
+			tryNormalValidation, err := u.tryQuickValidation(gCtx, block, catchupCtx, peerID, baseURL, writeJobsChan)
 			if err != nil {
 				return err
 			}
@@ -1076,7 +1076,7 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan *model.Block, g
 
 // tryQuickValidation attempts quick validation for checkpointed blocks
 // Returns true if normal validation should be tried, false if quick validation succeeded
-func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) (bool, error) {
+func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) (bool, error) {
 	// Determine if this specific block can use quick validation
 	// A block can use quick validation if it's at or below the highest verified checkpoint height
 	canUseQuickValidation := catchupCtx.useQuickValidation && block.Height <= catchupCtx.highestCheckpointHeight
@@ -1103,7 +1103,7 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 	}
 
 	// Quick validation: create UTXOs for the block and validate transactions in parallel
-	if err := u.blockValidation.quickValidateBlockAsync(ctx, block, baseURL, writeJobsChan); err != nil {
+	if err := u.blockValidation.quickValidateBlockAsync(ctx, block, peerID, baseURL, writeJobsChan); err != nil {
 		if prometheusCatchupErrors != nil {
 			prometheusCatchupErrors.WithLabelValues(baseURL, "validation_failure").Inc()
 		}

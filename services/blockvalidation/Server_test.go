@@ -1023,7 +1023,7 @@ func Test_Start(t *testing.T) {
 	}
 
 	// Create a context with quick timeout since Start() blocks on GRPC server
-	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
 	readyCh := make(chan struct{})

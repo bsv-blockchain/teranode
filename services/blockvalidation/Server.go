@@ -1168,8 +1168,8 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 
 	// Ensure all subtree files exist before proceeding with revalidation.
 	// This handles the case where pruner has removed subtree data for old invalid blocks.
+	var baseURL string
 	if u.p2pClient != nil {
-		var baseURL string
 		if peer, err := u.p2pClient.GetPeer(ctx, blockHeaderMeta.PeerID); err != nil {
 			u.logger.Warnf("[RevalidateBlock][%s] failed to get peer %s for DataHubURL, will use fallback peers: %v", block.String(), blockHeaderMeta.PeerID, err)
 		} else if peer != nil {
@@ -1184,9 +1184,10 @@ func (u *Server) RevalidateBlock(ctx context.Context, request *blockvalidation_a
 	opts := &ValidateBlockOptions{
 		DisableOptimisticMining: true,
 		IsRevalidation:          true,
+		PeerID:                  blockHeaderMeta.PeerID,
 	}
 
-	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, blockHeaderMeta.PeerID, opts)
+	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewServiceError("[RevalidateBlock][%s] failed block re-validation", block.String(), err))
 	}
@@ -1404,6 +1405,7 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	opts := &ValidateBlockOptions{
 		DisableOptimisticMining: baseURL == "legacy",
 		IsRevalidation:          false, // processBlockFound is for new blocks, not revalidation
+		PeerID:                  peerID,
 	}
 
 	err = u.blockValidation.ValidateBlockWithOptions(ctx, block, baseURL, opts)

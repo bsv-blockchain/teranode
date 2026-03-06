@@ -127,6 +127,7 @@ type Service struct {
 	partitionQueries               int     // Number of parallel partition queries (0 = auto-detect)
 	connectionPoolWarningThreshold float64 // Threshold for connection pool auto-adjustment (0.0-1.0)
 	utxoSetTTL                     bool    // Use TTL expiration instead of hard delete
+	skipParentUpdates              bool    // Skip parent update operations and input fetching
 
 	// Cached field names (avoid repeated String() allocations in hot paths)
 	fieldTxID, fieldUtxos, fieldInputs, fieldDeletedChildren, fieldExternal        string
@@ -269,6 +270,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		partitionQueries:               settings.Pruner.UTXOPartitionQueries,
 		connectionPoolWarningThreshold: settings.Pruner.ConnectionPoolWarningThreshold,
 		utxoSetTTL:                     settings.Pruner.UTXOSetTTL,
+		skipParentUpdates:              settings.Pruner.SkipParentUpdates,
 		fieldTxID:                      fields.TxID.String(),
 		fieldUtxos:                     fields.Utxos.String(),
 		fieldInputs:                    fields.Inputs.String(),
@@ -454,9 +456,12 @@ func (s *Service) partitionWorker(
 		return 0, 0, err
 	}
 
-	// Fetch bins based on defensive mode
+	// Fetch bins based on defensive mode and skipParentUpdates setting
 	// Note: DeleteAtHeight is only used in query filter (server-side), not in processing logic
-	binNames := []string{s.fieldTxID, s.fieldExternal, s.fieldTotalExtraRecs, s.fieldInputs}
+	binNames := []string{s.fieldTxID, s.fieldExternal, s.fieldTotalExtraRecs}
+	if !s.skipParentUpdates {
+		binNames = append(binNames, s.fieldInputs)
+	}
 	if s.defensiveEnabled {
 		binNames = append(binNames, s.fieldUtxos, s.fieldDeletedChildren)
 	}
@@ -487,7 +492,6 @@ func (s *Service) partitionWorker(
 	util.SafeSetLimit(chunkGroup, s.chunkGroupLimit) // 10 concurrent chunks per worker
 
 	submitChunk := func(chunkToProcess []*aerospike.Result) {
-		// No copy needed - chunks are read-only (optimization: saves 160K allocations per pruning operation)
 		chunkGroup.Go(func() error {
 			processed, skipped, err := s.processRecordChunk(ctx, blockHeight, chunkToProcess)
 			if err != nil {
@@ -566,7 +570,7 @@ func (s *Service) partitionWorker(
 		chunk = append(chunk, rec)
 		if len(chunk) >= s.chunkSize {
 			submitChunk(chunk)
-			chunk = chunk[:0]
+			chunk = make([]*aerospike.Result, 0, s.chunkSize)
 		}
 	}
 
@@ -854,9 +858,12 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	}
 
 	// Step 3: Accumulate operations for entire chunk, then flush once (efficient batching)
-	allParentUpdates := make(map[string]*parentUpdateInfo, 1000) // Accumulate all parent updates for chunk
-	allDeletions := make([]*aerospike.Key, 0, 1000)              // Accumulate all deletions for chunk
-	allExternalFiles := make([]*externalFileInfo, 0, 10)         // Accumulate external files (<1%)
+	var allParentUpdates map[string]*parentUpdateInfo
+	if !s.skipParentUpdates {
+		allParentUpdates = make(map[string]*parentUpdateInfo, 1000) // Accumulate all parent updates for chunk
+	}
+	allDeletions := make([]*aerospike.Key, 0, 1000)      // Accumulate all deletions for chunk
+	allExternalFiles := make([]*externalFileInfo, 0, 10) // Accumulate external files (<1%)
 	processedCount := 0
 	skippedCount := 0
 
@@ -908,31 +915,38 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		}
 
 		// Safe to delete - get inputs for parent updates
-		inputs, err := s.getTxInputsFromBins(ctx, blockHeight, rec.Record.Bins, txHash)
-		if err != nil {
-			return 0, 0, err
-		}
+		var inputs []*bt.Input
+		if !s.skipParentUpdates {
+			var err error
+			inputs, err = s.getTxInputsFromBins(ctx, blockHeight, rec.Record.Bins, txHash)
+			if err != nil {
+				return 0, 0, err
+			}
 
-		// Accumulate parent updates
-		for _, input := range inputs {
-			keySource := uaerospike.CalculateKeySource(input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, s.utxoBatchSize)
-			parentKeyStr := string(keySource)
+			// Accumulate parent updates
+			for _, input := range inputs {
+				keySource := uaerospike.CalculateKeySource(input.PreviousTxIDChainHash(), input.PreviousTxOutIndex, s.utxoBatchSize)
+				parentKeyStr := string(keySource)
 
-			if existing, ok := allParentUpdates[parentKeyStr]; ok {
-				existing.childHashes = append(existing.childHashes, txHash)
-			} else {
-				parentKey, err := aerospike.NewKey(s.namespace, s.set, keySource)
-				if err != nil {
-					return 0, 0, err
-				}
-				allParentUpdates[parentKeyStr] = &parentUpdateInfo{
-					key:         parentKey,
-					childHashes: []*chainhash.Hash{txHash},
+				if existing, ok := allParentUpdates[parentKeyStr]; ok {
+					existing.childHashes = append(existing.childHashes, txHash)
+				} else {
+					parentKey, err := aerospike.NewKey(s.namespace, s.set, keySource)
+					if err != nil {
+						return 0, 0, err
+					}
+					allParentUpdates[parentKeyStr] = &parentUpdateInfo{
+						key:         parentKey,
+						childHashes: []*chainhash.Hash{txHash},
+					}
 				}
 			}
 		}
 
 		// Accumulate external files
+		// NOTE: When skipParentUpdates=true, inputs are not fetched, so all external
+		// files are classified as FileTypeOutputs. This is acceptable because
+		// skipParentUpdates is only used when external file support is not needed.
 		external, isExternal := rec.Record.Bins[s.fieldExternal].(bool)
 		if isExternal && external {
 			fileType := fileformat.FileTypeOutputs
@@ -1322,7 +1336,7 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 
 // flushCleanupBatches flushes accumulated parent updates, external file deletions, and Aerospike deletions
 func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[string]*parentUpdateInfo, deletions []*aerospike.Key, externalFiles []*externalFileInfo) error { // Execute parent updates first
-	if !s.settings.Pruner.SkipParentUpdates {
+	if !s.skipParentUpdates {
 		if len(parentUpdates) > 0 {
 			if err := s.executeBatchParentUpdates(ctx, parentUpdates); err != nil {
 				return err

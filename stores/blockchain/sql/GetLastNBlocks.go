@@ -71,7 +71,7 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 
 	fromHeightQuery := ""
 	if fromHeight > 0 {
-		fromHeightQuery = fmt.Sprintf("WHERE height <= %d", fromHeight)
+		fromHeightQuery = fmt.Sprintf("WHERE b.height <= %d", fromHeight)
 	}
 
 	var q string
@@ -97,6 +97,24 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 	`
 	} else {
 		q = `
+		WITH RECURSIVE tip_block AS (
+			SELECT id, parent_id, height
+			FROM blocks
+			WHERE invalid = false
+			ORDER BY chain_work DESC, peer_id ASC, id ASC
+			LIMIT 1
+		),
+		ChainBlocks AS (
+			SELECT id, parent_id, height FROM tip_block
+			UNION ALL
+			SELECT bb.id, bb.parent_id, bb.height
+			FROM blocks bb
+			JOIN ChainBlocks cb ON bb.id = cb.parent_id
+			CROSS JOIN tip_block tb
+			WHERE bb.id != cb.id
+			  AND bb.invalid = false
+			  AND bb.height >= tb.height - $1
+		)
 		SELECT
 		 b.version
 		,b.block_time
@@ -110,33 +128,10 @@ func (s *SQL) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, 
 		,b.height
 		,b.inserted_at
 		FROM blocks b
-		WHERE id IN (
-			SELECT id FROM blocks
-			WHERE id IN (
-				WITH RECURSIVE ChainBlocks AS (
-					SELECT id, parent_id, height
-					FROM blocks
-					WHERE invalid = false
-					AND hash = (
-						SELECT b.hash
-						FROM blocks b
-						WHERE b.invalid = false
-						ORDER BY chain_work DESC, peer_id ASC, id ASC
-						LIMIT 1
-					)
-					UNION ALL
-					SELECT bb.id, bb.parent_id, bb.height
-					FROM blocks bb
-					JOIN ChainBlocks cb ON bb.id = cb.parent_id
-					WHERE bb.id != cb.id
-					  AND bb.invalid = false
-				)
-				SELECT id FROM ChainBlocks
-				` + fromHeightQuery + `
-				LIMIT $1
-			)
-		)
-		ORDER BY height DESC
+		JOIN ChainBlocks cb ON b.id = cb.id
+		` + fromHeightQuery + `
+		ORDER BY b.height DESC
+		LIMIT $1
 	`
 	}
 

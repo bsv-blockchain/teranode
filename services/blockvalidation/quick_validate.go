@@ -174,12 +174,17 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 //
 // Returns:
 //   - error: If validation fails
-func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.Block, baseURL string) error {
+func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.Block, peerID, baseURL string) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "quickValidateBlock",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[quickValidateBlock][%s] performing quick validation for checkpointed block at height %d", block.Hash().String(), block.Height),
 	)
 	defer deferFn()
+
+	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
+	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
+		return errors.NewBlockInvalidError("[quickValidateBlock][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	}
 
 	var (
 		err error
@@ -210,7 +215,7 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 	// add block directly to blockchain
 	if err = u.blockchainClient.AddBlock(ctx,
 		block,
-		baseURL,
+		peerID,
 		options.WithSubtreesSet(true),
 		options.WithMinedSet(true),
 		options.WithID(uint64(block.ID)),
@@ -255,12 +260,17 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 //
 // Returns:
 //   - error: If validation fails or context is cancelled
-func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *model.Block, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) error {
+func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *model.Block, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "quickValidateBlockAsync",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[quickValidateBlockAsync][%s] performing async quick validation for checkpointed block at height %d", block.Hash().String(), block.Height),
 	)
 	defer deferFn()
+
+	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
+	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
+		return errors.NewBlockInvalidError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	}
 
 	var (
 		err error
@@ -291,7 +301,7 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 	// add block directly to blockchain
 	if err = u.blockchainClient.AddBlock(ctx,
 		block,
-		baseURL,
+		peerID,
 		options.WithSubtreesSet(true),
 		options.WithMinedSet(true),
 		options.WithID(uint64(block.ID)),
