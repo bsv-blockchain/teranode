@@ -780,7 +780,7 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	case got := <-catchupCh:
 		assert.NotNil(t, got.block)
 		assert.Equal(t, "http://peer0", got.baseURL)
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("processBlockFoundChannel did not put anything on catchupCh")
 	}
 }

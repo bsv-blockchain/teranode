@@ -1768,7 +1768,7 @@ func TestRetryLogicIntensive(t *testing.T) {
 		select {
 		case <-subtreeRetryChan:
 			t.Fatal("Should not have queued retry when exhausted")
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(500 * time.Millisecond):
 			// Good, nothing was queued
 		}
 	})
@@ -2003,7 +2003,7 @@ func TestStoreRetryErrorPaths(t *testing.T) {
 		select {
 		case <-subtreeRetryChan:
 			t.Fatal("Should not have queued retry when exhausted")
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(500 * time.Millisecond):
 			// Good, nothing was queued
 		}
 	})
@@ -2172,7 +2172,7 @@ func TestAdditionalCoveragePaths(t *testing.T) {
 		server, _ := setupServer(t)
 
 		// Test with immediate timeout to cover timeout path
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 		defer cancel()
 
 		previousHash := chainhash.HashH([]byte("previous"))

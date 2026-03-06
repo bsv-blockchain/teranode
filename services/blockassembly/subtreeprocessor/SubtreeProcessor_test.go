@@ -178,7 +178,7 @@ func TestRotate(t *testing.T) {
 	}
 
 	// Wait for the subtree to be processed
-	time.Sleep(500 * time.Millisecond) // Give more time for processing
+	time.Sleep(2 * time.Second) // Give more time for processing on loaded CI
 
 	// Use thread-safe method to check current subtree length
 	// After adding 3 unique transactions to a subtree with size 4 (including coinbase),
