@@ -51,6 +51,13 @@ import (
 const splitMapBuckets = 4 * 1024
 const maxBatchesPerIteration = 64
 
+// cancelHolder wraps context.CancelFunc for use with atomic.Pointer to avoid
+// data races between Stop() reading cancel and the main loop (e.g. resetSubtreeState
+// or upstream closeChainedSubtrees) touching the same field.
+type cancelHolder struct {
+	f context.CancelFunc
+}
+
 // Job represents a mining job with its associated data.
 // A Job encapsulates all the information needed for a miner to attempt finding a valid
 // proof-of-work solution, including the block template and associated transaction subtrees.
@@ -270,8 +277,10 @@ type SubtreeProcessor struct {
 	// announcementTicker periodically triggers currentSubtree announcements
 	announcementTicker *time.Ticker
 
-	// cancel is the cancel function for the processor context
-	cancel context.CancelFunc
+	// cancelPtr holds the processor context's cancel function. Uses atomic.Pointer
+	// so Stop() can read it without racing with the main loop (which may write
+	// to shutdown-related state in resetSubtreeState / moveForwardBlock).
+	cancelPtr atomic.Pointer[cancelHolder]
 
 	// stopOnce ensures Stop() is only executed once
 	stopOnce sync.Once
@@ -494,7 +503,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 
 		// Create a child context with cancel for managing the processor lifecycle
 		processorCtx, cancel := context.WithCancel(ctx)
-		stp.cancel = cancel
+		stp.cancelPtr.Store(&cancelHolder{f: cancel})
 
 		stp.setCurrentRunningState(StateRunning)
 
@@ -4235,8 +4244,11 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16, h
 //   - ctx: Context for the stop operation (currently unused, for future extensibility)
 func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 	stp.stopOnce.Do(func() {
-		if stp.cancel != nil {
-			stp.cancel()
+		// Swap(nil) atomically reads and clears; avoids race with main loop
+		// (e.g. resetSubtreeState / closeChainedSubtrees in upstream).
+		h := stp.cancelPtr.Swap(nil)
+		if h != nil && h.f != nil {
+			h.f()
 		}
 		// Clean up mmap-backed subtrees
 		for _, st := range stp.chainedSubtrees {
