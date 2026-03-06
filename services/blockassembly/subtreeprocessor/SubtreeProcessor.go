@@ -2397,7 +2397,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		return errors.NewProcessingError("you must pass in blocks to move up the chain")
 	}
 
-	stp.logger.Infof("reorgBlocks with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks))
+	// trace the entire reorg process, which can be long-running for large reorgs, to help identify bottlenecks and monitor performance
+	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "reorgBlocks",
+		tracing.WithAlwaysSample(),
+		tracing.WithParentStat(stp.stats),
+		tracing.WithLogMessage(stp.logger, "[SubtreeProcessor][reorgBlocks] starting reorg with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks)),
+	)
+	defer deferFn()
 
 	if len(moveForwardBlocks) > 0 && len(moveBackBlocks) == 0 {
 		// wait for the last block to be processed first, mined_set etc.
@@ -2739,6 +2745,7 @@ func (stp *SubtreeProcessor) moveBackBlock(ctx context.Context, block *model.Blo
 	}
 
 	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "moveBackBlock",
+		tracing.WithAlwaysSample(),
 		tracing.WithCounter(prometheusSubtreeProcessorMoveBackBlock),
 		tracing.WithHistogram(prometheusSubtreeProcessorMoveBackBlockDuration),
 		tracing.WithLogMessage(stp.logger, "[moveBackBlock][%s] with %d subtrees", block.String(), len(block.Subtrees)),
@@ -3324,6 +3331,7 @@ func (stp *SubtreeProcessor) moveForwardBlock(ctx context.Context, block *model.
 	}
 
 	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "moveForwardBlock",
+		tracing.WithAlwaysSample(),
 		tracing.WithParentStat(stp.stats),
 		tracing.WithCounter(prometheusSubtreeProcessorMoveForwardBlock),
 		tracing.WithHistogram(prometheusSubtreeProcessorMoveForwardBlockDuration),

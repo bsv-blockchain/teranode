@@ -68,6 +68,7 @@ type TraceOptions struct {
 	Logger           ulogger.Logger          // logger to be used when starting the span and when the span is finished
 	LogMessages      []logMessage            // log messages to be added to the span
 	Timeout          time.Duration           // timeout for the span, if set
+	SampleRate       *float64                // per-span sample rate override (nil = use default)
 }
 
 // addLogMessage adds a log message to the trace options
@@ -143,7 +144,9 @@ func InitTracer(appSettings *settings.Settings) error {
 		// Create trace provider with the exporter
 		tp = sdktrace.NewTracerProvider(
 			sdktrace.WithBatcher(exporter, sdktrace.WithBatchTimeout(time.Second)), // Send batches every second
-			sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(appSettings.TracingSampleRate))),
+			sdktrace.WithSampler(newOverrideSampler(
+				sdktrace.ParentBased(sdktrace.TraceIDRatioBased(appSettings.TracingSampleRate)),
+			)),
 			sdktrace.WithResource(res),
 		)
 
@@ -253,6 +256,30 @@ func WithWarnLogMessage(logger ulogger.Logger, message string, args ...interface
 func WithDebugLogMessage(logger ulogger.Logger, message string, args ...interface{}) Options {
 	return func(s *TraceOptions) {
 		s.addLogMessage(logger, message, "DEBUG", args)
+	}
+}
+
+// WithSampleRate overrides the global sample rate for this specific span.
+// rate is clamped to [0.0, 1.0]. When rate >= 1.0, the span is always sampled
+// regardless of the global rate or parent sampling decision.
+func WithSampleRate(rate float64) Options {
+	return func(s *TraceOptions) {
+		if rate < 0 {
+			rate = 0
+		}
+		if rate > 1 {
+			rate = 1
+		}
+		s.SampleRate = &rate
+	}
+}
+
+// WithAlwaysSample forces this span to always be sampled, regardless of
+// the global sample rate or parent sampling decision.
+func WithAlwaysSample() Options {
+	return func(s *TraceOptions) {
+		rate := 1.0
+		s.SampleRate = &rate
 	}
 }
 
@@ -366,6 +393,11 @@ func (u *UTracer) Start(ctx context.Context, spanName string, opts ...Options) (
 
 	// add the start time to the context
 	ctx = context.WithValue(ctx, StartTime, start)
+
+	// inject sample rate override into context for the custom sampler
+	if options.SampleRate != nil {
+		ctx = context.WithValue(ctx, sampleRateOverrideKey{}, options.SampleRate)
+	}
 
 	var span trace.Span
 
