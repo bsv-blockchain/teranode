@@ -51,9 +51,6 @@ import (
 const splitMapBuckets = 4 * 1024
 const maxBatchesPerIteration = 64
 
-// cancelHolder wraps context.CancelFunc for use with atomic.Pointer to avoid
-// data races between Stop() reading cancel and the main loop (e.g. resetSubtreeState
-// or upstream closeChainedSubtrees) touching the same field.
 type cancelHolder struct {
 	f context.CancelFunc
 }
@@ -277,9 +274,6 @@ type SubtreeProcessor struct {
 	// announcementTicker periodically triggers currentSubtree announcements
 	announcementTicker *time.Ticker
 
-	// cancelPtr holds the processor context's cancel function. Uses atomic.Pointer
-	// so Stop() can read it without racing with the main loop (which may write
-	// to shutdown-related state in resetSubtreeState / moveForwardBlock).
 	cancelPtr atomic.Pointer[cancelHolder]
 
 	// stopOnce ensures Stop() is only executed once
@@ -4244,8 +4238,6 @@ func DeserializeHashesFromReaderIntoBuckets(reader io.Reader, nBuckets uint16, h
 //   - ctx: Context for the stop operation (currently unused, for future extensibility)
 func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 	stp.stopOnce.Do(func() {
-		// Swap(nil) atomically reads and clears; avoids race with main loop
-		// (e.g. resetSubtreeState / closeChainedSubtrees in upstream).
 		h := stp.cancelPtr.Swap(nil)
 		if h != nil && h.f != nil {
 			h.f()
