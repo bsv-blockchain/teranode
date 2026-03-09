@@ -24,6 +24,9 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+// errCodeMsgFmt is the format string for error code and message: "NAME (code): message".
+const errCodeMsgFmt = "%s (%d): %s"
+
 // Error represents a custom error type with additional context.
 type Error struct {
 	code       ERR
@@ -436,10 +439,10 @@ func (x *TError) Error() string {
 	}
 
 	if x.WrappedError == nil {
-		return fmt.Sprintf("%s (%d): %s", x.Code.String(), x.Code, x.Message)
+		return fmt.Sprintf(errCodeMsgFmt, x.Code.String(), x.Code, x.Message)
 	}
 
-	return fmt.Sprintf("%s (%d): %s -> %v", x.Code.String(), x.Code, x.Message, x.WrappedError)
+	return fmt.Sprintf(errCodeMsgFmt+" -> %v", x.Code.String(), x.Code, x.Message, x.WrappedError)
 }
 
 // IsNil checks if the TError is nil or has no meaningful content.
@@ -678,12 +681,12 @@ func UserMessage(err error) string {
 
 	var tErr *Error
 	if errors.As(err, &tErr) && tErr != nil {
-		return fmt.Sprintf("%s (%d): %s", tErr.code.String(), tErr.code, tErr.message)
+		return fmt.Sprintf(errCodeMsgFmt, tErr.code.String(), tErr.code, tErr.message)
 	}
 
 	var tProtoErr *TError
 	if errors.As(err, &tProtoErr) && tProtoErr != nil {
-		return fmt.Sprintf("%s (%d): %s", tProtoErr.Code.String(), tProtoErr.Code, tProtoErr.Message)
+		return fmt.Sprintf(errCodeMsgFmt, tProtoErr.Code.String(), tProtoErr.Code, tProtoErr.Message)
 	}
 
 	return "internal error"
