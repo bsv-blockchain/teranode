@@ -521,7 +521,7 @@ func (u *UTracer) logEndMessage(ctx context.Context, options *TraceOptions, star
 	// Duplicate the logger to ensure the skip frame is correct, since we are calling this from
 	// a closure and we want to skip the frame of this function.
 	// Then enrich with trace context for log-trace correlation.
-	logger := options.Logger.Duplicate(ulogger.WithSkipFrameIncrement(1)).WithTraceContext(ctx)
+	logger := options.Logger.Duplicate(ulogger.WithSkipFrameIncrement(2)).WithTraceContext(ctx)
 
 	var done string
 	if err != nil {
