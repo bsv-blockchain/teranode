@@ -269,7 +269,7 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 			return errFn("http request [%s] returned status code [%d]", rawURL, resp.StatusCode, readErr)
 		}
 
-		if len(b) > 0 {
+		if b != nil {
 			return errFn("http request [%s] returned status code [%d] with body [%s]", rawURL, resp.StatusCode, string(b))
 		}
 	}
