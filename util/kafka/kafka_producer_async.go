@@ -275,7 +275,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 	c.publishWg.Add(1) // Track the publish goroutine
 
 	go func() {
-		context, cancel := context.WithCancel(ctx)
+		producerCtx, cancel := context.WithCancel(ctx)
 
 		defer cancel()
 
@@ -335,7 +335,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 					}
 
 					c.Producer.Input() <- message
-				case <-context.Done():
+				case <-producerCtx.Done():
 					return
 				}
 			}
@@ -353,7 +353,7 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 		case <-signals:
 			c.Config.Logger.Infof("[kafka] Received signal, shutting down producer %v ...", c.Config.URL)
 			cancel() // Ensure the context is canceled
-		case <-context.Done():
+		case <-producerCtx.Done():
 			c.Config.Logger.Infof("[kafka] Context done, shutting down producer %v ...", c.Config.URL)
 		}
 
@@ -414,7 +414,12 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 		return
 	}
 
-	util.SafeSend(c.publishChannel, msg)
+	// Non-blocking send to avoid blocking publishers (aligned with lock-free goal).
+	select {
+	case c.publishChannel <- msg:
+	default:
+		c.Config.Logger.Debugf("[kafka] publish channel full, dropping message for topic %s", c.Config.Topic)
+	}
 }
 
 // createTopic creates a new Kafka topic with the specified configuration.
