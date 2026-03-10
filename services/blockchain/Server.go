@@ -889,9 +889,12 @@ func (b *Blockchain) sendKafkaBlockFinalNotification(block *model.Block) error {
 			b.logger.Warnf("[AddBlock] blocks-final message size %d bytes maybe too large for Kafka, block hash: %s (height: %d)", len(value), block.Header.Hash(), block.Height)
 		}
 
-		b.kafkaChan <- &kafka.Message{
-			Key:   []byte(key),
-			Value: value,
+		// Lock-free send: channel is never closed (producer exits via context).
+		// Non-blocking to avoid blocking when buffer full (e.g. during shutdown).
+		select {
+		case b.kafkaChan <- &kafka.Message{Key: []byte(key), Value: value}:
+		default:
+			b.logger.Warnf("[AddBlock] blocks-final channel full, dropping notification for block %s (height: %d)", block.Header.Hash(), block.Height)
 		}
 	}
 

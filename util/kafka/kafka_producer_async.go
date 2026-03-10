@@ -311,43 +311,33 @@ func (c *KafkaAsyncProducer) Start(ctx context.Context, ch chan *Message) {
 			ch := c.publishChannel
 			c.channelMu.RUnlock()
 
-			for msgBytes := range ch {
-				if c.closed.Load() {
-					break
-				}
+			// Exit via context.Done() to avoid closing the channel - enables lock-free sends.
+			for {
+				select {
+				case msgBytes, ok := <-ch:
+					if !ok {
+						return
+					}
+					if c.closed.Load() {
+						return
+					}
 
-				message := &sarama.ProducerMessage{
-					Topic: c.Config.Topic,
-					Value: sarama.ByteEncoder(msgBytes.Value),
-				}
-				if msgBytes.Key != nil {
-					message.Key = sarama.ByteEncoder(msgBytes.Key)
-				}
+					message := &sarama.ProducerMessage{
+						Topic: c.Config.Topic,
+						Value: sarama.ByteEncoder(msgBytes.Value),
+					}
+					if msgBytes.Key != nil {
+						message.Key = sarama.ByteEncoder(msgBytes.Key)
+					}
 
-				// Check if closed again right before sending to avoid race condition
-				// where Close() is called between the check above and the send below
-				if c.closed.Load() {
-					break
-				}
+					if c.closed.Load() {
+						return
+					}
 
-				// Use a function with recover to safely handle sends to potentially closed channel
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							// Check if this is the expected "send on closed channel" panic
-							panicMsg := fmt.Sprint(r)
-							if strings.Contains(panicMsg, "closed channel") {
-								// Expected during shutdown, log at debug level
-								c.Config.Logger.Debugf("[kafka] Recovered from send to closed channel during shutdown")
-							} else {
-								// Unexpected panic - log error and re-throw to expose the bug
-								c.Config.Logger.Errorf("[kafka] Unexpected panic while sending message: %v", r)
-								panic(r)
-							}
-						}
-					}()
 					c.Producer.Input() <- message
-				}()
+				case <-context.Done():
+					return
+				}
 			}
 		}()
 
@@ -424,12 +414,7 @@ func (c *KafkaAsyncProducer) Publish(msg *Message) {
 		return
 	}
 
-	c.channelMu.RLock()
-	defer c.channelMu.RUnlock()
-
-	if c.publishChannel != nil {
-		util.SafeSend(c.publishChannel, msg)
-	}
+	util.SafeSend(c.publishChannel, msg)
 }
 
 // createTopic creates a new Kafka topic with the specified configuration.
