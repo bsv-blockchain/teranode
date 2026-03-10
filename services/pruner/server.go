@@ -280,46 +280,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Trigger initial pruning if there's work to do
 	// This ensures the pruner starts working immediately on startup
 	// rather than waiting for the next block notification
-	go func() {
-		var currentHeight uint32
-		var blockHash chainhash.Hash
-
-		// Determine height based on trigger mode
-		blockTrigger := s.settings.Pruner.BlockTrigger
-
-		if blockTrigger == settings.PrunerBlockTriggerOnBlockPersisted {
-			// OnBlockPersisted mode: Use persisted height from block persister
-			currentHeight = s.lastPersistedHeight.Load()
-
-		} else if blockTrigger == settings.PrunerBlockTriggerOnBlockMined {
-			// OnBlockMined mode: Get current blockchain height
-			if tipHeader, tipMeta, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil && tipHeader != nil && tipMeta != nil {
-				currentHeight = tipMeta.Height
-				blockHash = *tipHeader.Hash()
-			} else {
-				s.logger.Warnf("[pruner] failed to get best block header for initial pruning: %v", err)
-				return
-			}
-		}
-
-		// Send initial pruning signal if we have a valid height
-		if currentHeight > 0 && currentHeight > s.lastProcessedHeight.Load() {
-			sig := pruneSignal{blockHeight: currentHeight, blockHash: blockHash}
-
-			select {
-			case s.pruneNotify <- sig:
-				s.logger.Infof("[pruner][%s:%d] triggered initial pruning on startup (mode: %s)", blockHash.String(), currentHeight, blockTrigger)
-			case <-time.After(5 * time.Second):
-				s.logger.Warnf("[pruner] failed to queue initial pruning request (timeout)")
-			case <-ctx.Done():
-				return
-			}
-		} else if currentHeight == 0 {
-			s.logger.Infof("[pruner] no initial pruning needed (current height: 0)")
-		} else {
-			s.logger.Debugf("[pruner] no initial pruning needed (current height: %d, last processed: %d)", currentHeight, s.lastProcessedHeight.Load())
-		}
-	}()
+	go s.triggerInitialPruning(ctx)
 
 	// Start blob deletion worker
 	go s.blobDeletionWorker()
@@ -342,6 +303,46 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	return nil
+}
+
+// triggerInitialPruning sends an initial pruning signal on startup if there's work to do.
+func (s *Server) triggerInitialPruning(ctx context.Context) {
+	var currentHeight uint32
+	var blockHash chainhash.Hash
+
+	blockTrigger := s.settings.Pruner.BlockTrigger
+
+	switch blockTrigger {
+	case settings.PrunerBlockTriggerOnBlockPersisted:
+		currentHeight = s.lastPersistedHeight.Load()
+	case settings.PrunerBlockTriggerOnBlockMined:
+		tipHeader, tipMeta, err := s.blockchainClient.GetBestBlockHeader(ctx)
+		if err != nil || tipHeader == nil || tipMeta == nil {
+			s.logger.Warnf("[pruner] failed to get best block header for initial pruning: %v", err)
+			return
+		}
+		currentHeight = tipMeta.Height
+		blockHash = *tipHeader.Hash()
+	}
+
+	if currentHeight == 0 {
+		s.logger.Infof("[pruner] no initial pruning needed (current height: 0)")
+		return
+	}
+
+	if currentHeight <= s.lastProcessedHeight.Load() {
+		s.logger.Debugf("[pruner] no initial pruning needed (current height: %d, last processed: %d)", currentHeight, s.lastProcessedHeight.Load())
+		return
+	}
+
+	sig := pruneSignal{blockHeight: currentHeight, blockHash: blockHash}
+	select {
+	case s.pruneNotify <- sig:
+		s.logger.Infof("[pruner][%s:%d] triggered initial pruning on startup (mode: %s)", blockHash.String(), currentHeight, blockTrigger)
+	case <-time.After(5 * time.Second):
+		s.logger.Warnf("[pruner] failed to queue initial pruning request (timeout)")
+	case <-ctx.Done():
+	}
 }
 
 // Stop gracefully shuts down the pruner service. Context cancellation will stop
