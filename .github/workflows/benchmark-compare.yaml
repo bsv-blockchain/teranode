@@ -2,216 +2,166 @@ name: Benchmark Comparison
 
 on:
   pull_request:
-    paths:
-      - 'services/asset/**'
-      - '.github/workflows/benchmark-compare.yaml'
-      - 'cmd/parse-benchmarks/**'
-      - 'cmd/compare-benchmarks/**'
-
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-
-env:
-  GO_VERSION: '1.25.2'
+    types: [opened, synchronize, reopened]
 
 jobs:
-  # Run benchmarks on the PR feature branch
-  benchmark-feature:
-    name: Benchmark Feature Branch
+  benchmarks:
+    name: Benchmark Comparison
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
-      - name: Checkout feature branch
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: '1.25.2'
           cache: false
 
-      - name: Display branch info
+      - name: Display PR branch info
         run: |
           echo "Branch: $(git rev-parse --abbrev-ref HEAD)"
           echo "Commit: $(git rev-parse HEAD)"
 
-      - name: Run benchmarks
+      - name: Run PR benchmarks
         run: |
-          echo "=== Running benchmarks on feature branch ==="
-          go test -bench=. -benchmem -benchtime=5s -timeout=30m -run=^$ \
+          go test -bench=. -benchmem -benchtime=3s -timeout=30m -count=1 -run=^$ \
+            -tags "testtxmetacache" \
+            ./errors \
+            ./model \
             ./services/asset/httpimpl \
-            | tee feature-benchmark-output.txt
+            ./services/blockassembly \
+            ./services/blockassembly/mining \
+            ./services/blockassembly/subtreeprocessor \
+            ./services/blockchain/work \
+            ./services/blockpersister \
+            ./services/blockvalidation \
+            ./services/legacy/bsvec \
+            ./services/legacy/bsvutil/hdkeychain \
+            ./services/legacy/netsync \
+            ./services/legacy/peer \
+            ./services/subtreevalidation \
+            ./services/validator \
+            ./stores/blob/null \
+            ./stores/blockchain/options \
+            ./stores/blockchain/sql \
+            ./stores/txmetacache \
+            ./stores/utxo \
+            ./stores/utxo/meta \
+            ./test/consensus \
+            ./ulogger \
+            ./util \
+            ./util/health \
+            ./util/servicemanager \
+            ./util/usql \
+            | tee pr-benchmark-output.txt
 
-      - name: Parse results
-        continue-on-error: true
+      - name: Parse PR results
         run: |
-          if [ -d ./cmd/parse-benchmarks ]; then
-            go run ./cmd/parse-benchmarks \
-              -input feature-benchmark-output.txt \
-              -output feature-benchmarks.json \
-              -commit "${{ github.sha }}" \
-              -branch "PR-${{ github.event.pull_request.number }}" \
-              -pr "${{ github.event.pull_request.number }}"
-          else
-            echo "Parse script not yet available, will use mock data"
-          fi
+          go run ./cmd/parse-benchmarks \
+            -input pr-benchmark-output.txt \
+            -output pr-benchmarks.json \
+            -commit "${{ github.sha }}" \
+            -branch "PR-${{ github.event.pull_request.number }}" \
+            -pr "${{ github.event.pull_request.number }}"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: feature-benchmarks
-          path: feature-benchmarks.json
-          retention-days: 30
-
-  # Run benchmarks on main branch as baseline
-  benchmark-main:
-    name: Benchmark Main Branch
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    steps:
-      - name: Checkout main branch
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - name: Checkout main baseline
+        uses: actions/checkout@v4
         with:
           ref: main
-          fetch-depth: 0
+          path: main
 
-      - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
-      - name: Display branch info
+      - name: Display main branch info
         run: |
-          echo "Branch: $(git rev-parse --abbrev-ref HEAD)"
-          echo "Commit: $(git rev-parse HEAD)"
+          echo "Branch: main"
+          echo "Commit: $(cd main && git rev-parse HEAD)"
 
-      - name: Run benchmarks
+      - name: Run main benchmarks
         run: |
-          echo "=== Running benchmarks on main branch ==="
-          go test -bench=. -benchmem -benchtime=5s -timeout=30m -run=^$ \
+          cd main
+          go test -bench=. -benchmem -benchtime=3s -timeout=30m -count=1 -run=^$ \
+            -tags "testtxmetacache" \
+            ./errors \
+            ./model \
             ./services/asset/httpimpl \
-            | tee main-benchmark-output.txt
+            ./services/blockassembly \
+            ./services/blockassembly/mining \
+            ./services/blockassembly/subtreeprocessor \
+            ./services/blockchain/work \
+            ./services/blockpersister \
+            ./services/blockvalidation \
+            ./services/legacy/bsvec \
+            ./services/legacy/bsvutil/hdkeychain \
+            ./services/legacy/netsync \
+            ./services/legacy/peer \
+            ./services/subtreevalidation \
+            ./services/validator \
+            ./stores/blob/null \
+            ./stores/blockchain/options \
+            ./stores/blockchain/sql \
+            ./stores/txmetacache \
+            ./stores/utxo \
+            ./stores/utxo/meta \
+            ./test/consensus \
+            ./ulogger \
+            ./util \
+            ./util/health \
+            ./util/servicemanager \
+            ./util/usql \
+            | tee ../main-benchmark-output.txt
 
-      - name: Parse results
-        continue-on-error: true
+      - name: Capture baseline SHA
+        id: baseline_sha
+        run: echo "value=$(cd main && git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Parse main results
         run: |
-          if [ -d ./cmd/parse-benchmarks ]; then
-            go run ./cmd/parse-benchmarks \
-              -input main-benchmark-output.txt \
-              -output main-benchmarks.json \
-              -commit "$(git rev-parse HEAD)" \
-              -branch "main"
-          else
-            echo "Parse script not yet available, will use mock data"
-          fi
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: main-benchmarks
-          path: main-benchmarks.json
-          retention-days: 30
-
-  # Compare results and post report
-  compare:
-    name: Compare & Report
-    runs-on: ubuntu-latest
-    needs: [benchmark-feature, benchmark-main]
-    if: always()
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-
-      - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: false
-
-      - name: Download feature benchmarks
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: feature-benchmarks
-        continue-on-error: true
-
-      - name: Download main benchmarks
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: main-benchmarks
-        continue-on-error: true
-
-      - name: Use mock benchmarks if artifacts unavailable
-        run: |
-          if [ ! -f feature-benchmarks.json ]; then
-            echo "Creating mock feature benchmarks"
-            cp .github/workflows/mock-main-benchmarks.json feature-benchmarks.json
-            sed -i 's/"main"/"feature"/g; s/59718/60000/g; s/abc1234/def5678/g' feature-benchmarks.json
-          fi
-          if [ ! -f main-benchmarks.json ]; then
-            echo "Creating mock main benchmarks"
-            cp .github/workflows/mock-main-benchmarks.json main-benchmarks.json
-          fi
-          echo "Benchmarks ready for comparison"
-          ls -la *.json
+          go run ./cmd/parse-benchmarks \
+            -input main-benchmark-output.txt \
+            -output main-benchmarks.json \
+            -commit "${{ steps.baseline_sha.outputs.value }}" \
+            -branch "main"
 
       - name: Compare benchmarks
         id: compare
-        continue-on-error: true
         run: |
-          echo "=== Comparing Feature vs Main ==="
-          if [ -d ./cmd/compare-benchmarks ]; then
-            go run ./cmd/compare-benchmarks \
-              -current feature-benchmarks.json \
-              -baseline main-benchmarks.json \
-              -output comparison-report.md \
-              -threshold 5.0
-          else
-            echo "Compare script not yet available, generating placeholder report"
-            {
-              echo "## Benchmark Comparison Report"
-              echo ""
-              echo "**Status:** Mock data (actual scripts not yet deployed)"
-              echo ""
-              echo "- Regressions: 0"
-              echo "- Improvements: 0"
-              echo "- Unchanged: 3"
-              echo ""
-              echo "*First run with real data coming soon*"
-            } > comparison-report.md
-          fi
+          go run ./cmd/compare-benchmarks \
+            -current pr-benchmarks.json \
+            -baseline main-benchmarks.json \
+            -output benchmark-report.md \
+            -threshold 5.0
 
       - name: Display report
         if: always()
-        run: |
-          echo "=== Benchmark Comparison Report ==="
-          cat comparison-report.md
+        run: cat benchmark-report.md
 
-      - name: Post comment on PR
-        uses: actions/github-script@v7
+      - name: Upload benchmark artifacts
         if: always()
-        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            pr-benchmarks.json
+            main-benchmarks.json
+            benchmark-report.md
+          retention-days: 30
+
+      - name: Comment on PR
+        if: always() && github.event.pull_request.number != ''
+        uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const report = fs.readFileSync('comparison-report.md', 'utf8');
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: report
+            const body = fs.readFileSync('benchmark-report.md', 'utf8');
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.payload.pull_request.number,
+              body
             });
-
-      - name: Fail on regressions
-        if: failure() || steps.compare.outcome == 'failure'
-        run: |
-          if grep -q "REGRESSION DETECTED" comparison-report.md; then
-            echo "❌ Performance regressions detected!"
-            exit 1
-          fi
