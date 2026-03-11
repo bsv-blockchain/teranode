@@ -31,7 +31,7 @@ jobs:
 
       - name: Run PR benchmarks
         run: |
-          go test -bench=. -benchmem -benchtime=3s -timeout=30m -count=1 -run=^$ \
+          go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=1 -run=^$ \
             -tags "testtxmetacache" \
             ./errors \
             ./model \
@@ -85,7 +85,7 @@ jobs:
       - name: Run main benchmarks
         run: |
           cd main
-          go test -bench=. -benchmem -benchtime=3s -timeout=30m -count=1 -run=^$ \
+          go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=1 -run=^$ \
             -tags "testtxmetacache" \
             ./errors \
             ./model \
