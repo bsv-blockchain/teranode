@@ -504,6 +504,7 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 		go func() {
 			// Recover from panics (e.g., send on closed channel during shutdown)
 			defer func() {
+				stp.stopped.Store(true) // Must be set on any exit so Stop() does not hang
 				if r := recover(); r != nil {
 					logger.Warnf("[SubtreeProcessor] goroutine recovered from panic: %v", r)
 				}
@@ -4243,8 +4244,13 @@ func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 			h.f()
 			// Wait for the main goroutine to exit before cleaning up chainedSubtrees
 			// to avoid data race with closeChainedSubtrees()
+			deadline := time.Now().Add(5 * time.Second)
 			for !stp.stopped.Load() {
-				runtime.Gosched()
+				if time.Now().After(deadline) {
+					stp.logger.Warnf("[SubtreeProcessor] Stop timeout waiting for goroutine to exit")
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
 			}
 		}
 		// Clean up mmap-backed subtrees
