@@ -12,7 +12,7 @@ This package is typically used as a command-line tool to set the FSM state of th
 ## Development
 
 - See `set_fsm_state.go` for the main logic and entry points.
-- Run tests with `go test ./...` in this directory.
+- Run tests with `go test -race -tags testtxmetacache ./...` in this directory, or use `make test` from the project root.
 
 ---
 

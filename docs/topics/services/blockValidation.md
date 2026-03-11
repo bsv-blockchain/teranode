@@ -65,7 +65,11 @@ The block validator is a service that validates blocks. After validating them, i
 
 ![block_validation_p2p_block_found.svg](img/plantuml/blockvalidation/block_validation_p2p_block_found.svg)
 
-- The Legacy Service is responsible for receiving new blocks from the network. When a new block is found, it will notify the block validation service via the `BlockFound()` gRPC endpoint.
+Block validation receives new blocks through two distinct paths:
+
+1. **P2P-discovered blocks (primary)**: The P2P service publishes block announcements to a Kafka topic. Block validation consumes this topic via `consumerMessageHandler`, which calls `blockHandler()` to queue blocks for processing via `blockFoundCh`.
+2. **Legacy-synced blocks**: The Legacy service's netsync manager calls `blockValidation.ProcessBlock()` directly when it downloads a complete block from a legacy Bitcoin peer.
+
 - The block validation service will then check if the block is already known. If not, it will start the validation process.
 - The block is added to a channel for processing. The channel is used to ensure that the block validation process is asynchronous and non-blocking.
 
@@ -126,7 +130,7 @@ The optimistic path is implemented in `ValidateBlock()` (services/blockvalidatio
 
 **Configuration:**
 
-- **Setting**: `blockvalidation_optimisticMining` (default: `false`)
+- **Setting**: `blockvalidation_optimistic_mining` (default: `true`)
 - **Runtime Override**: Can be disabled per-block via `ValidateBlockOptions.DisableOptimisticMining`
 - **Automatic Disable**: Always disabled during catchup mode for better reliability
 

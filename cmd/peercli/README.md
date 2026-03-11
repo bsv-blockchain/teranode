@@ -14,7 +14,7 @@ This package is typically used as a CLI tool to establish connections with Bitco
 ## Development
 
 - See `main.go` for the main logic and entry points.
-- Run tests with `go test ./...` in this directory.
+- Run tests with `go test -race -tags testtxmetacache ./...` in this directory, or use `make test` from the project root.
 
 ## Example
 

@@ -72,7 +72,7 @@ This Makefile facilitates a variety of development and build tasks for the Teran
 
     - `TXMETA_SMALL_TAG=true`: Uses `smalltxmetacache`
     - `TXMETA_TEST_TAG=true`: Uses `testtxmetacache`
-    - Default: Uses `largetxmetacache`
+    - Default: Uses `largetxmetacache` (note: this tag is a no-op in the compiler; the large cache is selected by the absence of the other two tags)
 
 ### Build All Components
 
@@ -103,15 +103,17 @@ This Makefile facilitates a variety of development and build tasks for the Teran
 ### Building Tools and Utilities
 
 - **build-chainintegrity**: Builds the chain integrity testing tool at `./compose/cmd/chainintegrity/`.
-- **build-tx-blaster**: Builds the transaction blaster performance testing tool at `./cmd/txblaster/`.
-- **build-blockchainstatus**: Builds the blockchain status utility at `./cmd/blockchainstatus/`.
+- **build-tx-blaster**: Builds the transaction blaster performance testing tool at `./cmd/txblaster/`. **Note:** the `./cmd/txblaster/` source directory does not currently exist; this target will fail if invoked.
+- **build-blockchainstatus**: Builds the blockchain status utility at `./cmd/blockchainstatus/`. **Note:** the `./cmd/blockchainstatus/` source directory does not currently exist; this target will fail if invoked.
 
 ### Testing
 
 - **test**: Runs unit tests with race detection and configurable output format. Excludes tests in the `test/` directory. Uses `testtxmetacache` tag and `SETTINGS_CONTEXT=test`.
-- **buildtest**: Builds tests without running them for separate execution.
 - **sequentialtest**: Executes tests in the `test/sequentialtest/` directory sequentially for more stable results.
-- **longtest**: Executes long-running tests in the `test/longtest/` directory with 5-minute timeout.
+- **sequentialtest-sqlite**: Runs sequential tests using the SQLite database backend only.
+- **sequentialtest-postgres**: Runs sequential tests using the PostgreSQL database backend only.
+- **sequentialtest-aerospike**: Runs sequential tests using the Aerospike database backend only.
+- **longtest**: Executes long-running tests in the `test/longtest/` directory with 10-minute timeout.
 - **testall**: Runs all test suites: `test`, `longtest`, and `sequentialtest`.
 - **nightly-tests**: Runs comprehensive tests typically scheduled for nightly builds. Builds Docker images and uses CTRF JSON reporter for results.
 - **smoketest**: Runs smoke tests in the `test/e2e/daemon/ready/` directory focused on basic functionality.
@@ -152,12 +154,6 @@ The chain integrity test suite validates that multiple Teranode instances mainta
     - Stops Docker Compose services
     - Use this to reset between test runs
 
-- **ecr-login**: AWS ECR login for pulling required Docker images:
-
-    - Logs into AWS ECR (eu-north-1 region)
-    - Required before building or pulling ECR-hosted images
-    - Uses AWS CLI credentials
-
 - **show-hashes**: Displays hash analysis results from chainintegrity test:
 
     - Extracts hash information from test output
@@ -181,6 +177,7 @@ The chain integrity test suite validates that multiple Teranode instances mainta
     - `services/alert/alert_api/alert_api.proto`
     - `services/legacy/peer_api/peer_api.proto`
     - `services/p2p/p2p_api/p2p_api.proto`
+    - `services/pruner/pruner_api/pruner_api.proto`
     - `util/kafka/kafka_message/kafka_messages.proto`
 
 ### Cleanup
@@ -347,6 +344,14 @@ make testall
 # Run only smoke tests
 make smoketest
 
+# Run smoke tests with retry support (TEST_RETRY_DELAY is seconds between retries)
+make smoketest TEST_RETRY_COUNT=3 TEST_RETRY_DELAY=5
+
+# Run sequential tests against a specific database backend
+make sequentialtest-sqlite
+make sequentialtest-postgres
+make sequentialtest-aerospike TEST_RETRY_COUNT=5
+
 # Run tests in specific directory
 go test -v -race -tags "testtxmetacache" -count=1 ./services/validator/...
 ```
@@ -402,8 +407,8 @@ make lint-full-changed-dirs
 # Generate FSM state machine diagram
 make generate_fsm_diagram
 
-# Login to AWS ECR
-make ecr-login
+# Login to AWS ECR (no make target — must be done manually)
+aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin <your-ecr-registry>
 
 # Reset test data
 make reset-data
@@ -415,7 +420,7 @@ make reset-data
 
 - **Go modules**: The Makefile uses `-mod=readonly` for production builds to ensure reproducible builds and prevent accidental dependency changes.
 
-- **Build tags**: Several build commands use tags like `aerospike` and transaction metadata cache tags (`smalltxmetacache`, `testtxmetacache`, `largetxmetacache`) to control conditional compilation.
+- **Build tags**: Several build commands use tags like `aerospike` and transaction metadata cache tags (`smalltxmetacache`, `testtxmetacache`) to control conditional compilation. The `largetxmetacache` tag is passed by the Makefile by default but is not used as a positive constraint in any source file — the large cache is selected by the absence of `smalltxmetacache` and `testtxmetacache`. Passing `-tags largetxmetacache` has no effect on the build.
 
 - **Race detection**: The `-race` flag is only used in CI builds (`build-teranode-ci`) and test commands to detect race conditions. It's not enabled in standard development builds due to performance overhead.
 

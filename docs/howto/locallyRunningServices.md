@@ -109,6 +109,8 @@ Teranode supports different transaction metadata cache sizes through build tags:
   SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
   ```
 
+  > **Note**: The large cache is the default — it is selected by the *absence* of `smalltxmetacache` or `testtxmetacache`. There is no `largetxmetacache` build tag; passing it has no effect.
+
 - **Small Cache**: Reduces memory usage with a smaller transaction metadata cache
 
   ```shell
@@ -147,10 +149,12 @@ network=testnet SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
 
 For running various test suites (not typically needed for development):
 
-- `test_all`: Runs all tests
-- `test_smoke_rpc`: Runs smoke tests for RPC functionality
-- `test_services`: Tests specific to services
-- `test_longlong`: For extended duration tests
+- `test_tna` - TNA integration test suite (`test/tna/`)
+- `test_tec` - TEC integration test suite (`test/tec/`)
+- `test_tnd` - TND integration test suite (`test/tnd/`)
+- `test_tnf` - TNF integration test suite (`test/tnf/`)
+- `test_smoke` - Smoke tests (docker-based, see `test/e2e/docker/`)
+- `test_functional` - Functional tests (subset of smoke tests)
 
 ### Component Options
 

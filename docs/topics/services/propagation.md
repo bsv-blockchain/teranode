@@ -55,16 +55,16 @@ The Propagation service can work with the Validator in two different configurati
 
 1. **Local Validator**:
 
-    - When `useLocalValidator=true` (recommended for production)
+    - When `useLocalValidator=true`
     - The Validator is instantiated directly within the Propagation service
     - Direct method calls are used without network overhead
-    - This provides the best performance and lowest latency
+    - Recommended for single-machine deployments or development/testing
 
 2. **Remote Validator Service**:
 
     - When `useLocalValidator=false`
     - The Propagation service connects to a separate Validator service via gRPC
-    - Useful for development, testing, or specialized deployment scenarios
+    - Recommended for production distributed deployments (allows independent scaling)
     - Has higher latency due to additional network calls
 
 This configuration is controlled by the settings passed to `GetValidatorClient()` in daemon.go.
@@ -143,7 +143,7 @@ Main technologies involved:
 2. **Peer-to-Peer (P2P) Networking**:
 
     - The service is designed for a P2P network environment, where nodes (computers) in the network communicate directly with each other without central coordination.
-    - `bsv-blockchain/go-p2p/wire` is used for P2P transaction propagation in the Teranode BSV network.
+    - Transaction propagation uses gRPC (via protobuf API), HTTP (via Echo framework), and raw UDP for IPv6 multicast propagation.
 
 3. **Networking Protocols (HTTP)**
 
@@ -161,6 +161,7 @@ Main technologies involved:
 ./services/propagation
 │
 ├── Client.go                            - Contains the client-side logic for interacting with the propagation service.
+├── ClientInterface.go                   - Defines the client interface for the propagation service.
 ├── Client_test.go                       - Unit tests for the Client.go functionality.
 ├── Server.go                            - Contains the main server-side implementation for the propagation service.
 ├── Server_test.go                       - Unit tests for the Server.go functionality.
@@ -180,7 +181,7 @@ Main technologies involved:
 To run the Propagation Service locally, you can execute the following command:
 
 ```shell
-SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -Propagation=1
+SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -propagation=1
 ```
 
 Please refer to the [Locally Running Services Documentation](../../howto/locallyRunningServices.md) document for more information on running the Propagation Service locally.

@@ -25,11 +25,16 @@ teranode/
 │   ├── getfsmstate/              # Tool to get FSM state
 │   ├── keygen/                   # Key generation utility
 │   ├── keypairgen/               # Key pair generation utility
+│   ├── logs/                     # TUI log viewer (used by teranodecli logs command)
+│   ├── memanalyzer/              # Memory analysis utility
+│   ├── monitor/                  # TUI node status monitor (used by teranodecli monitor command)
 │   ├── peercli/                  # Peer network command-line interface
+│   ├── reconsiderblock/          # Tool to reconsider a block
 │   ├── resetblockassembly/       # Tool to reset block assembly state
 │   ├── seeder/                   # Seeder functionality
 │   ├── setfsmstate/              # Tool to set FSM state
 │   ├── settings/                 # Settings management tools
+│   ├── subtreeanalyzer/          # Tool to analyze scheduled blob deletions
 │   ├── teranode/                 # Teranode main executable
 │   ├── teranodecli/              # Teranode command-line interface
 │   ├── utxopersister/            # UTXO persistence utility
@@ -54,6 +59,7 @@ teranode/
 ├── stores/                       # Data storage implementations
 │   ├── blob/                     # Blob storage implementation
 │   ├── blockchain/               # Blockchain storage implementation
+│   ├── tempstore/                # Temporary storage implementation (Badger)
 │   ├── txmetacache/             # Transaction metadata cache implementation
 │   └── utxo/                     # UTXO storage implementation
 │

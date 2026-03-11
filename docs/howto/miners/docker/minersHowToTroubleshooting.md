@@ -95,20 +95,22 @@ docker compose logs [service_name]
 
 For Docker Compose, replace `[service_name]` with the appropriate service or pod name:
 
-- Propagation Service (service name: `propagation`)
 - Blockchain Service (service name: `blockchain`)
 - Asset Service (service name: `asset`)
 - Block Validation Service (service name: `blockvalidation`)
-- P2P Service (service name: `p2p`)
 - Block Assembly Service (service name: `blockassembly`)
 - Subtree Validation Service (service name: `subtreevalidation`)
+- Legacy Gateway (service name: `legacy`)
 - RPC Server (service name: `rpc`)
+- Pruner (service name: `pruner`)
 - Postgres Database (service name: `postgres`)          [*Only in Docker*]
 - Aerospike Database (service name: `aerospike`)        [*Only in Docker*]
 - Kafka   (service name: `kafka-shared`)                [*Only in Docker*]
 - Kafka Console (service name: `kafka-console-shared`)  [*Only in Docker*]
 - Prometheus (service name: `prometheus`)               [*Only in Docker*]
 - Grafana  (service name: `grafana`)                    [*Only in Docker*]
+
+> **Note:** The Propagation and P2P services are not deployed as separate Docker containers in the standard testnet/mainnet configurations. Their functionality runs embedded within the main Teranode binary.
 
 ##### Redirecting Logs to a File
 

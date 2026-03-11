@@ -373,9 +373,10 @@ The project uses `golangci-lint` for enforcing code quality. Key [configurations
 - **Enabled Linters**:
 
   - `depguard`: Prevents importing disallowed packages like `errors` (use standard `errors` instead).
-  - `forbidigo`: Disallows use of `fmt.Errorf` (use `errors.New` instead).
-  - `gocognit`: Flags functions exceeding complexity threshold (200).
-  - Additional linters for style, security, imports, and error handling (`gosec`, `goimports`, `errcheck`, etc.).
+  - `forbidigo`: Disallows use of `fmt.Errorf` (use `errors.New` instead). **Exception:** disabled for `pkg/` and `errors/` directories.
+  - `gocognit`: Flags functions exceeding complexity threshold (50).
+  - Additional linters for style and imports (`gci`, `goimports`, `misspell`, `asciicheck`, etc.).
+  - Note: `gosec`, `staticcheck`, `goconst`, `gocritic`, `unconvert`, and `whitespace` are listed but currently **disabled** in the active configuration.
 
 ###### Exceptions
 
@@ -461,6 +462,7 @@ These rules are to be used on the Teranode project for Go conventions and best p
   * Linter configuration includes the following rules:
     • depguard: Prevents use of disallowed packages (e.g., "errors" package is blocked in favor of the standard library)
     • forbidigo: Blocks use of fmt.Errorf; enforces errors.New instead
-    • gocognit: Flags functions with high cognitive complexity (threshold set at 200)
-    • Other enabled linters include: asciicheck, errcheck, goconst, gocritic, gci, goimports, gosec, misspell, prealloc, unconvert, whitespace, wsl
+    • gocognit: Flags functions with high cognitive complexity (threshold set at 50)
+    • Currently active linters include: asciicheck, depguard, forbidigo, misspell, prealloc, gci, goimports
+    • Disabled in current config (do not rely on these): gosec, staticcheck, goconst, gocritic, unconvert, whitespace, gocognit
 ```

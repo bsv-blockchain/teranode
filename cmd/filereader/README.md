@@ -14,7 +14,7 @@ This package is typically used as a command-line tool to read and process blockc
 ## Development
 
 - See `file_reader.go` for the main logic and entry points.
-- Run tests with `go test ./...` in this directory.
+- Run tests with `go test -race -tags testtxmetacache ./...` in this directory, or use `make test` from the project root.
 
 ---
 

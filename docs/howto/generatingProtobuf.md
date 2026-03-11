@@ -16,28 +16,29 @@ Before proceeding, make sure the following tools and resources are available:
 The project uses `.proto` files to define the structure of its services and messages. Each service is typically located in the `services` directory, and they follow the pattern:
 
 ```text
-services/<service_name>/<service_name>_api.proto
+services/<service_name>/<service_name>_api/<service_name>_api.proto
 ```
 
-For example, the file `services/subtreevalidation/subtreevalidation_api.proto` defines the RPC services and message types for the `SubtreeValidationService`.
+For example, the file `services/subtreevalidation/subtreevalidation_api/subtreevalidation_api.proto` defines the RPC services and message types for the subtree validation service.
 
 ```proto
 syntax = "proto3";
 
-package subtreevalidation;
+option go_package = "./;subtreevalidation_api";
 
-service SubtreeValidationService {
-rpc ValidateSubtree (SubtreeValidationRequest) returns (SubtreeValidationResponse);
+package subtreevalidation_api;
+
+service SubtreeValidationAPI {
+  rpc CheckSubtreeFromBlock (CheckSubtreeFromBlockRequest) returns (CheckSubtreeFromBlockResponse) {}
 }
 
-message SubtreeValidationRequest {
-string tree_id = 1;
-int32 max_depth = 2;
+message CheckSubtreeFromBlockRequest {
+  string subtree_hash = 1;
+  string base_url = 2;
 }
 
-message SubtreeValidationResponse {
-bool is_valid = 1;
-string validation_message = 2;
+message CheckSubtreeFromBlockResponse {
+  bool blessed = 1;
 }
 ```
 

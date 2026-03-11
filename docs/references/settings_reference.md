@@ -39,6 +39,27 @@ The configuration system uses a layered approach with the following priority:
 2. `SETTING_NAME.base`: General override
 3. `SETTING_NAME`: Base setting (lowest priority)
 
+### Context Names and Suffixes
+
+Base contexts:
+
+| Context | Description |
+|---------|-------------|
+| `dev` | Local development |
+| `test` | Unit/integration test runs |
+| `docker` | Docker Compose deployments |
+| `operator` | Kubernetes/production deployments |
+
+Contexts support dot-notation suffixes to target specific deployment sub-configurations:
+
+| Suffix | Meaning | Example |
+|--------|---------|---------|
+| `.m` | Multi-node Docker Compose setup | `KAFKA_HOSTS.docker.m` |
+| `.ss.teranode1` | Single-service deployment, first instance | `KAFKA_BLOCKS.docker.ss.teranode1` |
+| `.testrunner` | CI test runner environment | `DATADIR.docker.context.testrunner` |
+
+Suffixes are combined with base contexts using dots, e.g., `docker.m` means "multi-node Docker Compose". Settings are resolved by matching the longest applicable suffix chain.
+
 ### Environment Variables
 
 Most settings can be configured via environment variables using the pattern:
@@ -63,6 +84,7 @@ For detailed service-specific configuration documentation, see:
 - **[P2P](settings/services/p2p_settings.md)** - Peer-to-peer networking configuration
 - **[Propagation](settings/services/propagation_settings.md)** - Transaction propagation configuration
 - **[RPC](settings/services/rpc_settings.md)** - JSON-RPC server configuration
+- **[Pruner](settings/services/pruner_settings.md)** - UTXO and block data pruning configuration
 - **[Subtree Validation](settings/services/subtreevalidation_settings.md)** - Subtree validation configuration
 - **[UTXO Persister](settings/services/utxopersister_settings.md)** - UTXO set persistence configuration
 - **[Validator](settings/services/validator_settings.md)** - Transaction validation configuration

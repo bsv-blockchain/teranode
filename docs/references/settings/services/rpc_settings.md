@@ -10,12 +10,13 @@
 | RPCPass | string | "" | rpc_pass | Full access authentication password |
 | RPCLimitUser | string | "" | rpc_limit_user | Limited access authentication username |
 | RPCLimitPass | string | "" | rpc_limit_pass | Limited access authentication password |
-| RPCMaxClients | int | 1 | rpc_max_clients | Maximum concurrent RPC connections |
+| RPCMaxClients | int | 1 (Code default; settings.conf ships with 3) | rpc_max_clients | Maximum concurrent RPC connections |
 | RPCQuirks | bool | true | rpc_quirks | Legacy client compatibility behavior |
 | RPCListenerURL | *url.URL | "" | rpc_listener_url | **CRITICAL** - RPC server network binding |
 | CacheEnabled | bool | true | rpc_cache_enabled | **CRITICAL** - Response caching for performance |
 | RPCTimeout | time.Duration | 30s | rpc_timeout | **CRITICAL** - RPC call execution timeout |
 | ClientCallTimeout | time.Duration | 5s | rpc_client_call_timeout | **CRITICAL** - Service client call timeout |
+| RPCMaxRequestSize | int | 10485760 (10MB) | rpc_maxRequestSize | Maximum RPC request body size in bytes (prevents OOM on oversized requests) |
 
 ## Configuration Dependencies
 
@@ -64,7 +65,7 @@
 ### Basic Configuration
 
 ```text
-rpc_listener_url = "http://localhost:8332"
+rpc_listener_url = "http://localhost:9292"
 rpc_max_clients = 10
 ```
 
