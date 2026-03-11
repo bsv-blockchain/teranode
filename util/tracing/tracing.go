@@ -494,7 +494,9 @@ func DecoupleTracingSpan(ctx context.Context, name string, spanName string) (con
 	// Fast path: if tracing is disabled, return immediately
 	if !IsTracingEnabled() {
 		noopSpan := trace.SpanFromContext(ctx)
-		return ctx, noopSpan, func(...error) {}
+		return ctx, noopSpan, func(...error) {
+			// no-op cleanup: tracing is disabled
+		}
 	}
 
 	// Extract the current span from context
@@ -519,7 +521,7 @@ func (u *UTracer) logEndMessage(ctx context.Context, options *TraceOptions, star
 	// Duplicate the logger to ensure the skip frame is correct, since we are calling this from
 	// a closure and we want to skip the frame of this function.
 	// Then enrich with trace context for log-trace correlation.
-	logger := options.Logger.Duplicate(ulogger.WithSkipFrameIncrement(1)).WithTraceContext(ctx)
+	logger := options.Logger.Duplicate(ulogger.WithSkipFrameIncrement(2)).WithTraceContext(ctx)
 
 	var done string
 	if err != nil {
@@ -529,25 +531,31 @@ func (u *UTracer) logEndMessage(ctx context.Context, options *TraceOptions, star
 	}
 
 	for _, l := range options.LogMessages {
-		switch l.level {
-		case "WARN":
-			if err != nil && logger.LogLevel() == ulogger.LogLevelWarning {
-				logger.Errorf(l.message+done, l.args...)
-			} else {
-				logger.Warnf(l.message+done, l.args...)
-			}
-		case "DEBUG":
-			if err != nil && logger.LogLevel() == ulogger.LogLevelDebug {
-				logger.Errorf(l.message+done, l.args...)
-			} else {
-				logger.Debugf(l.message+done, l.args...)
-			}
-		default:
-			if err != nil {
-				logger.Errorf(l.message+done, l.args...)
-			} else {
-				logger.Infof(l.message+done, l.args...)
-			}
+		logTraceMessage(logger, l, done, err)
+	}
+}
+
+// logTraceMessage logs a single trace message at the appropriate level.
+func logTraceMessage(logger ulogger.Logger, l logMessage, done string, err error) {
+	msg := l.message + done
+	switch l.level {
+	case "WARN":
+		if err != nil && logger.LogLevel() == ulogger.LogLevelWarning {
+			logger.Errorf(msg, l.args...)
+		} else {
+			logger.Warnf(msg, l.args...)
+		}
+	case "DEBUG":
+		if err != nil && logger.LogLevel() == ulogger.LogLevelDebug {
+			logger.Errorf(msg, l.args...)
+		} else {
+			logger.Debugf(msg, l.args...)
+		}
+	default:
+		if err != nil {
+			logger.Errorf(msg, l.args...)
+		} else {
+			logger.Infof(msg, l.args...)
 		}
 	}
 }
