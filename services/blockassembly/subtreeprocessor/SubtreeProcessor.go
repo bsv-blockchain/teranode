@@ -4241,6 +4241,11 @@ func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 		h := stp.cancelPtr.Swap(nil)
 		if h != nil && h.f != nil {
 			h.f()
+			// Wait for the main goroutine to exit before cleaning up chainedSubtrees
+			// to avoid data race with closeChainedSubtrees()
+			for !stp.stopped.Load() {
+				runtime.Gosched()
+			}
 		}
 		// Clean up mmap-backed subtrees
 		for _, st := range stp.chainedSubtrees {
