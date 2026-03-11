@@ -32,35 +32,18 @@ jobs:
 
       - name: Run PR benchmarks
         run: |
+          # Full package list (uncomment after verifying PR comment works):
+          # ./model ./services/asset/httpimpl ./services/blockassembly
+          # ./services/blockassembly/mining ./services/blockassembly/subtreeprocessor
+          # ./services/blockchain/work ./services/blockpersister ./services/blockvalidation
+          # ./services/legacy/bsvec ./services/legacy/bsvutil/hdkeychain
+          # ./services/legacy/netsync ./services/legacy/peer ./services/subtreevalidation
+          # ./services/validator ./stores/blob/null ./stores/blockchain/options
+          # ./stores/blockchain/sql ./stores/txmetacache ./stores/utxo ./stores/utxo/meta
+          # ./test/consensus ./ulogger ./util ./util/health ./util/servicemanager ./util/usql
           go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=1 -run=^$ \
             -tags "testtxmetacache" \
             ./errors \
-            # ./model \
-            # ./services/asset/httpimpl \
-            # ./services/blockassembly \
-            # ./services/blockassembly/mining \
-            # ./services/blockassembly/subtreeprocessor \
-            # ./services/blockchain/work \
-            # ./services/blockpersister \
-            # ./services/blockvalidation \
-            # ./services/legacy/bsvec \
-            # ./services/legacy/bsvutil/hdkeychain \
-            # ./services/legacy/netsync \
-            # ./services/legacy/peer \
-            # ./services/subtreevalidation \
-            # ./services/validator \
-            # ./stores/blob/null \
-            # ./stores/blockchain/options \
-            # ./stores/blockchain/sql \
-            # ./stores/txmetacache \
-            # ./stores/utxo \
-            # ./stores/utxo/meta \
-            # ./test/consensus \
-            # ./ulogger \
-            # ./util \
-            # ./util/health \
-            # ./util/servicemanager \
-            # ./util/usql \
             | tee pr-benchmark-output.txt
 
       - name: Parse PR results
@@ -89,32 +72,6 @@ jobs:
           go test -bench=. -benchmem -benchtime=1s -short -timeout=30m -count=1 -run=^$ \
             -tags "testtxmetacache" \
             ./errors \
-            # ./model \
-            # ./services/asset/httpimpl \
-            # ./services/blockassembly \
-            # ./services/blockassembly/mining \
-            # ./services/blockassembly/subtreeprocessor \
-            # ./services/blockchain/work \
-            # ./services/blockpersister \
-            # ./services/blockvalidation \
-            # ./services/legacy/bsvec \
-            # ./services/legacy/bsvutil/hdkeychain \
-            # ./services/legacy/netsync \
-            # ./services/legacy/peer \
-            # ./services/subtreevalidation \
-            # ./services/validator \
-            # ./stores/blob/null \
-            # ./stores/blockchain/options \
-            # ./stores/blockchain/sql \
-            # ./stores/txmetacache \
-            # ./stores/utxo \
-            # ./stores/utxo/meta \
-            # ./test/consensus \
-            # ./ulogger \
-            # ./util \
-            # ./util/health \
-            # ./util/servicemanager \
-            # ./util/usql \
             | tee ../main-benchmark-output.txt
 
       - name: Capture baseline SHA
