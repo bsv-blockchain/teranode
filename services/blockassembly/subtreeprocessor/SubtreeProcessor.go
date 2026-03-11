@@ -221,7 +221,9 @@ type SubtreeProcessor struct {
 	newSubtreeChan chan NewSubtreeRequest
 
 	// chainedSubtrees stores the ordered list of completed subtrees
-	chainedSubtrees []*subtreepkg.Subtree
+	// chainedSubtreesMu protects chainedSubtrees from races between Stop() and closeChainedSubtrees()
+	chainedSubtrees   []*subtreepkg.Subtree
+	chainedSubtreesMu sync.Mutex
 
 	// chainedSubtreeCount tracks the number of chained subtrees atomically
 	chainedSubtreeCount atomic.Int32
@@ -4238,8 +4240,12 @@ func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 		if stp.cancel != nil {
 			stp.cancel()
 		}
-		// Clean up mmap-backed subtrees
-		for _, st := range stp.chainedSubtrees {
+		// Clean up mmap-backed subtrees (hold mutex to avoid race with closeChainedSubtrees)
+		stp.chainedSubtreesMu.Lock()
+		toClose := stp.chainedSubtrees
+		stp.chainedSubtrees = nil
+		stp.chainedSubtreesMu.Unlock()
+		for _, st := range toClose {
 			st.Close()
 		}
 		if cs := stp.currentSubtree.Load(); cs != nil {
@@ -4270,10 +4276,13 @@ func (stp *SubtreeProcessor) newSubtree(leafCount int) (*subtreepkg.Subtree, err
 
 // closeChainedSubtrees closes all mmap-backed chained subtrees and resets the slice.
 func (stp *SubtreeProcessor) closeChainedSubtrees() {
-	for _, st := range stp.chainedSubtrees {
-		st.Close()
-	}
+	stp.chainedSubtreesMu.Lock()
+	toClose := stp.chainedSubtrees
 	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees)
 	stp.chainedSubtreeCount.Store(0)
 	stp.chainedSubtreesTotalSize.Store(0)
+	stp.chainedSubtreesMu.Unlock()
+	for _, st := range toClose {
+		st.Close()
+	}
 }
