@@ -248,31 +248,38 @@ func GetErrorCategory(err error) string {
 
 	var tErr *Error
 	if As(err, &tErr) {
-		// Group by error code ranges
-		code := tErr.Code()
-		switch {
-		case code >= 10 && code <= 19:
-			return "block"
-		case code >= 20 && code <= 29:
-			return "subtree"
-		case code >= 30 && code <= 49:
-			return "transaction"
-		case code >= 50 && code <= 59:
-			return "service"
-		case code >= 60 && code <= 69:
-			return "storage"
-		case code >= 70 && code <= 79:
-			return "utxo"
-		case code >= 80 && code <= 89:
-			return "kafka"
-		case code >= 90 && code <= 99:
-			return "blob"
-		case code >= 100 && code <= 109:
-			return "state"
-		case code >= 110 && code <= 119:
-			return "network"
+		if category := errorCodeCategory(tErr.Code()); category != "" {
+			return category
 		}
 	}
 
 	return "unknown"
+}
+
+// errorCodeCategory maps an error code to its category string.
+func errorCodeCategory(code ERR) string {
+	switch {
+	case code >= 10 && code <= 19:
+		return "block"
+	case code >= 20 && code <= 29:
+		return "subtree"
+	case code >= 30 && code <= 49:
+		return "transaction"
+	case code >= 50 && code <= 59:
+		return "service"
+	case code >= 60 && code <= 69:
+		return "storage"
+	case code >= 70 && code <= 79:
+		return "utxo"
+	case code >= 80 && code <= 89:
+		return "kafka"
+	case code >= 90 && code <= 99:
+		return "blob"
+	case code >= 100 && code <= 109:
+		return "state"
+	case code >= 110 && code <= 119:
+		return "network"
+	default:
+		return ""
+	}
 }

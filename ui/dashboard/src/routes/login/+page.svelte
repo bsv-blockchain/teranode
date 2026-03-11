@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { goto } from '$app/navigation'
   import { page } from '$app/stores'
-  import { login, authError, isAuthenticated } from '$internal/stores/authStore'
+  import { login, authError, isAuthenticated, checkAuthentication } from '$internal/stores/authStore'
   import { fade } from 'svelte/transition'
   import { browser } from '$app/environment'
   import { validateUrl } from '$internal/utils/urlUtils'
@@ -113,7 +113,7 @@
     goto('/')
   }
 
-  onMount(() => {
+  onMount(async () => {
     // Get the redirect URL from the query parameter
     if (browser) {
       const params = new URLSearchParams($page.url.search)
@@ -126,7 +126,8 @@
       csrfToken = generateCSRFToken()
 
       // Check if already authenticated
-      if ($isAuthenticated) {
+      const alreadyAuthenticated = await checkAuthentication()
+      if (alreadyAuthenticated) {
         // Validate and sanitize the redirect URL
         const validatedUrl = validateUrl(redirectUrl)
         if (validatedUrl) {

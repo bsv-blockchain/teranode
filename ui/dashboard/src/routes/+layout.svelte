@@ -23,12 +23,9 @@
   import { init as initLib } from '$lib'
 
   import { connectToP2PServer } from '$internal/stores/p2pStore'
-  import { checkAuthentication } from '$internal/stores/authStore'
 
-  onMount(async () => {
+  onMount(() => {
     connectToP2PServer()
-    // Check authentication status on app load
-    await checkAuthentication()
   })
 
   // web fonts
