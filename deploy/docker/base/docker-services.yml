@@ -190,6 +190,10 @@ services:
     entrypoint: ["asd", "--foreground", "--config-file", "/etc/aerospike.conf"]
     privileged: true  # Allow the container to access raw devices
     hostname: aerospike
+    ulimits:
+      nofile:
+        soft: 15000
+        hard: 15000
 
   aerospike-exporter:
     image: aerospike/aerospike-prometheus-exporter:latest
